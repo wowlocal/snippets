@@ -15,6 +15,26 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private let rowHeight: CGFloat = 36
     private let panelWidth: CGFloat = 280
 
+	private var maxVisibleRowsOnScreen: Int {
+		let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.visibleFrame, false) })
+		?? NSScreen.main
+
+		guard let visibleFrame = screen?.visibleFrame else { return 8 }
+
+		// Keep some margin so the panel doesn’t try to fill the whole screen
+		let maxHeight = visibleFrame.height * 0.5
+
+		let spacing = tableView.intercellSpacing.height
+		let perRow = rowHeight + spacing
+
+		// subtract scroll insets
+		let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
+		let usable = max(0, maxHeight - insets)
+
+		return max(1, Int(floor(usable / perRow)))
+	}
+
+
     var onSelect: ((Snippet) -> Void)?
 
     override init() {
@@ -75,30 +95,38 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     var isVisible: Bool { panel.isVisible }
 
-    func show(items: [SuggestionItem]) {
-        self.items = items
-        tableView.reloadData()
+	func show(items: [SuggestionItem]) {
+		self.items = items
+		tableView.reloadData()
 
-        let visibleCount = min(items.count, maxVisible)
-        guard visibleCount > 0 else {
-            dismiss()
-            return
-        }
+		let count = items.count
+		guard count > 0 else { dismiss(); return }
 
-        let intercell: CGFloat = 2
-        let height = CGFloat(visibleCount) * (rowHeight + intercell) + 12 // +12 for content insets
-        panel.setContentSize(NSSize(width: panelWidth, height: height))
+		let visibleCount = min(count, maxVisible)
 
-        positionPanel()
+		// Make sure the table has computed row geometry
+		tableView.noteNumberOfRowsChanged()
+		tableView.layoutSubtreeIfNeeded()
+		scrollView.layoutSubtreeIfNeeded()
 
-        if !panel.isVisible {
-            panel.orderFront(nil)
-        }
+		// Compute exact content height using real row rects
+		let lastRowIndex = visibleCount - 1
+		let lastRowRect = tableView.rect(ofRow: lastRowIndex)
 
-        if !items.isEmpty {
-            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        }
-    }
+		let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
+		let safety: CGFloat = 4 // prevents 1-row clipping due to rounding / visual effect view
+
+		let height = lastRowRect.maxY + insets + safety
+
+		panel.setContentSize(NSSize(width: panelWidth, height: height))
+		positionPanel()
+
+		scrollView.hasVerticalScroller = (count > visibleCount)
+
+		if !panel.isVisible { panel.orderFront(nil) }
+		tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+	}
+
 
     func dismiss() {
         panel.orderOut(nil)
