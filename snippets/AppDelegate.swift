@@ -1,7 +1,8 @@
 import Cocoa
+import ServiceManagement
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let store = SnippetStore()
     lazy var expansionEngine = SnippetExpansionEngine(store: store)
 
@@ -30,6 +31,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @IBAction func newDocument(_ sender: Any?) {
         NotificationCenter.default.post(name: .snippetsCreateNew, object: nil)
+    }
+
+    @IBAction func toggleLaunchAtLogin(_ sender: Any?) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            NSLog("Launch at login toggle failed: \(error)")
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleLaunchAtLogin(_:)) {
+            menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            return true
+        }
+        return true
     }
 
     private func showMainWindow() {
