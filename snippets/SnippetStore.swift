@@ -46,7 +46,7 @@ final class SnippetStore {
     }
 
     func addSnippet() -> Snippet {
-        let snippet = Snippet(name: "", keyword: "\\", content: "")
+        let snippet = Snippet(name: "", keyword: "", content: "")
         snippets.insert(snippet, at: 0)
         persist(immediately: true)
         return snippet
