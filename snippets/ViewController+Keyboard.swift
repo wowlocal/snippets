@@ -28,6 +28,11 @@ extension ViewController {
             return nil
         }
 
+        if flags == [.command] && lowerCharacters == "f" {
+            view.window?.makeFirstResponder(searchField)
+            return nil
+        }
+
         if flags == [.command] && lowerCharacters == "n" {
             createSnippet(nil)
             return nil

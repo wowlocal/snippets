@@ -263,6 +263,11 @@ struct SnippetsRootView: View {
             }
             .keyboardShortcut("k", modifiers: [.command])
 
+            Button("Focus Search") {
+                focusedField = .search
+            }
+            .keyboardShortcut("f", modifiers: [.command])
+
             Button("Create New Snippet") {
                 createSnippet()
             }
