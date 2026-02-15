@@ -202,14 +202,11 @@ final class SnippetExpansionEngine {
 
         // Backspace
         if event.keyCode == UInt16(kVK_Delete) {
-            if suggestionQuery.isEmpty {
-                dismissSuggestions()
-                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
-            } else {
+            if !suggestionQuery.isEmpty {
                 suggestionQuery.removeLast()
                 if !typedBuffer.isEmpty { typedBuffer.removeLast() }
-                updateSuggestionResults()
             }
+            updateSuggestionResults()
             return
         }
 
