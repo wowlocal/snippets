@@ -189,14 +189,29 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
         let focused = focusedValue as! AXUIElement
 
+        // Try precise caret bounds via AXBoundsForRange
+        if let point = boundsForRange(of: focused) {
+            return point
+        }
+
+        // Fallback: use the focused element's own position/size (works in Chrome omnibox, etc.)
+        if let point = elementPosition(of: focused) {
+            return point
+        }
+
+        return nil
+    }
+
+    /// Precise caret position using AXBoundsForRange – not supported by all apps (e.g. Chrome omnibox).
+    private func boundsForRange(of element: AXUIElement) -> NSPoint? {
         var rangeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success else {
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success else {
             return nil
         }
 
         var bounds = CGRect.zero
         var boundsValue: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(focused, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue!, &boundsValue) == .success else {
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue!, &boundsValue) == .success else {
             return nil
         }
 
@@ -204,12 +219,41 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             return nil
         }
 
-        // AX coordinates have origin at top-left of main screen; convert to bottom-left
+        // Reject zero-size rects – some apps return success with garbage data
+        guard bounds.width > 0 || bounds.height > 0 else { return nil }
+
+        return axRectToAppKit(bounds)
+    }
+
+    /// Fallback: use AXPosition + AXSize of the focused element itself.
+    private func elementPosition(of element: AXUIElement) -> NSPoint? {
+        var posValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success else {
+            return nil
+        }
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success else {
+            return nil
+        }
+
+        var pos = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(posValue as! AXValue, .cgPoint, &pos),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
+            return nil
+        }
+
+        // Use the left edge, bottom of the element (below the text field)
+        let rect = CGRect(origin: pos, size: size)
+        return axRectToAppKit(rect)
+    }
+
+    /// Convert an AX rectangle (top-left origin) to an AppKit point (bottom-left origin) at its lower-left corner.
+    private func axRectToAppKit(_ rect: CGRect) -> NSPoint? {
         guard let mainScreen = NSScreen.main else { return nil }
         let screenHeight = mainScreen.frame.height
-        let flippedY = screenHeight - bounds.origin.y - bounds.size.height
-
-        return NSPoint(x: bounds.origin.x, y: flippedY)
+        let flippedY = screenHeight - rect.origin.y - rect.size.height
+        return NSPoint(x: rect.origin.x, y: flippedY)
     }
 
     private func mousePosition() -> NSPoint {
