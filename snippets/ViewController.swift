@@ -154,6 +154,8 @@ final class ViewController: NSViewController {
     private func buildPermissionBanner() -> NSView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.15).cgColor
 
         let stack = NSStackView()
         stack.orientation = .horizontal
@@ -169,6 +171,7 @@ final class ViewController: NSViewController {
         permissionTitleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         permissionStatusLabel.font = .systemFont(ofSize: 13)
         permissionStatusLabel.textColor = .secondaryLabelColor
+        permissionStatusLabel.lineBreakMode = .byTruncatingTail
 
         let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refreshPermissions))
         let requestButton = NSButton(title: "Request Permission", target: self, action: #selector(requestPermission))
@@ -176,6 +179,7 @@ final class ViewController: NSViewController {
         let inputButton = NSButton(title: "Input Monitoring", target: self, action: #selector(openInputSettings))
 
         [refreshButton, requestButton, accessibilityButton, inputButton].forEach {
+            $0.controlSize = .small
             $0.bezelStyle = .rounded
             stack.addArrangedSubview($0)
         }
@@ -203,6 +207,8 @@ final class ViewController: NSViewController {
     private func buildSidebar() -> NSView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.12).cgColor
 
         let rootStack = NSStackView()
         rootStack.orientation = .vertical
@@ -215,16 +221,24 @@ final class ViewController: NSViewController {
         headerStack.alignment = .centerY
 
         let titleLabel = NSTextField(labelWithString: "Snippets")
-        titleLabel.font = .systemFont(ofSize: 33, weight: .bold)
+        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
 
         let importButton = NSButton(title: "Import", target: self, action: #selector(runImport))
+        importButton.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: nil)
+        importButton.imagePosition = .imageLeading
         importButton.bezelStyle = .rounded
 
         let exportButton = NSButton(title: "Export", target: self, action: #selector(runExport))
+        exportButton.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
+        exportButton.imagePosition = .imageLeading
         exportButton.bezelStyle = .rounded
 
         let newButton = NSButton(title: "New", target: self, action: #selector(createSnippet))
-        newButton.bezelStyle = .texturedRounded
+        newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        newButton.imagePosition = .imageLeading
+        newButton.bezelStyle = .rounded
+        newButton.bezelColor = .systemBlue
+        newButton.contentTintColor = .white
         newButton.keyEquivalent = "n"
         newButton.keyEquivalentModifierMask = [.command]
 
@@ -236,10 +250,12 @@ final class ViewController: NSViewController {
 
         searchField.placeholderString = "Search snippets"
         searchField.delegate = self
+        searchField.controlSize = .regular
 
         let tableScrollView = NSScrollView()
         tableScrollView.translatesAutoresizingMaskIntoConstraints = false
         tableScrollView.borderType = .noBorder
+        tableScrollView.drawsBackground = false
         tableScrollView.hasVerticalScroller = true
         tableScrollView.autohidesScrollers = true
 
@@ -249,9 +265,10 @@ final class ViewController: NSViewController {
         tableView.focusRingType = .none
         tableView.usesAlternatingRowBackgroundColors = false
         tableView.selectionHighlightStyle = .regular
+        tableView.backgroundColor = .clear
         tableView.allowsEmptySelection = true
-        tableView.rowHeight = 56
-        tableView.intercellSpacing = NSSize(width: 0, height: 4)
+        tableView.rowHeight = 52
+        tableView.intercellSpacing = NSSize(width: 0, height: 6)
         tableView.delegate = self
         tableView.dataSource = self
 
@@ -260,6 +277,8 @@ final class ViewController: NSViewController {
 
         deleteButton.target = self
         deleteButton.action = #selector(deleteSelectedSnippet)
+        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
+        deleteButton.imagePosition = .imageLeading
         deleteButton.bezelStyle = .rounded
 
         let footerTopRow = NSStackView(views: [deleteButton, NSView(), lastActionLabel])
@@ -272,7 +291,7 @@ final class ViewController: NSViewController {
         lastActionLabel.lineBreakMode = .byTruncatingTail
 
         let mapLabel = NSTextField(labelWithString: "Raycast map: ↩ copy, ⌘K actions, ⌘N new, arrows move, Esc back")
-        mapLabel.font = .systemFont(ofSize: 12)
+        mapLabel.font = .systemFont(ofSize: 11)
         mapLabel.textColor = .secondaryLabelColor
         mapLabel.lineBreakMode = .byWordWrapping
         mapLabel.maximumNumberOfLines = 2
@@ -326,13 +345,15 @@ final class ViewController: NSViewController {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let nameLabel = NSTextField(labelWithString: "Name")
-        nameLabel.font = .systemFont(ofSize: 34, weight: .bold)
+        nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        nameLabel.textColor = .secondaryLabelColor
 
         nameField.delegate = self
         nameField.placeholderString = "Temporary Password"
 
         let snippetLabel = NSTextField(labelWithString: "Snippet")
-        snippetLabel.font = .systemFont(ofSize: 30, weight: .bold)
+        snippetLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        snippetLabel.textColor = .secondaryLabelColor
 
         let snippetScrollView = NSScrollView()
         snippetScrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -359,7 +380,8 @@ final class ViewController: NSViewController {
         placeholderLabel.textColor = .secondaryLabelColor
 
         let keywordLabel = NSTextField(labelWithString: "Keyword")
-        keywordLabel.font = .systemFont(ofSize: 30, weight: .bold)
+        keywordLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        keywordLabel.textColor = .secondaryLabelColor
 
         keywordField.delegate = self
         keywordField.placeholderString = "\\tp"
@@ -368,7 +390,8 @@ final class ViewController: NSViewController {
         enabledCheckbox.action = #selector(enabledStateChanged)
 
         let previewLabel = NSTextField(labelWithString: "Preview")
-        previewLabel.font = .systemFont(ofSize: 30, weight: .bold)
+        previewLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        previewLabel.textColor = .secondaryLabelColor
 
         let previewContainer = NSView()
         previewContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -432,21 +455,23 @@ final class ViewController: NSViewController {
     private func buildActionOverlay(in rootView: NSView) {
         actionOverlayView.translatesAutoresizingMaskIntoConstraints = false
         actionOverlayView.wantsLayer = true
-        actionOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.3).cgColor
+        actionOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.2).cgColor
         actionOverlayView.isHidden = true
         actionOverlayView.onBackgroundClick = { [weak self] in
             self?.closeActionPanel()
         }
 
         actionPanelView.translatesAutoresizingMaskIntoConstraints = false
-        actionPanelView.material = .hudWindow
+        actionPanelView.material = .menu
         actionPanelView.blendingMode = .withinWindow
         actionPanelView.state = .active
         actionPanelView.wantsLayer = true
-        actionPanelView.layer?.cornerRadius = 14
+        actionPanelView.layer?.cornerRadius = 12
+        actionPanelView.layer?.borderWidth = 1
+        actionPanelView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
 
         let actionTitle = NSTextField(labelWithString: "Actions")
-        actionTitle.font = .systemFont(ofSize: 20, weight: .bold)
+        actionTitle.font = .systemFont(ofSize: 18, weight: .semibold)
 
         let actionStack = NSStackView(views: [
             actionTitle,
@@ -478,7 +503,7 @@ final class ViewController: NSViewController {
 
             actionPanelView.centerXAnchor.constraint(equalTo: actionOverlayView.centerXAnchor),
             actionPanelView.centerYAnchor.constraint(equalTo: actionOverlayView.centerYAnchor),
-            actionPanelView.widthAnchor.constraint(equalToConstant: 320),
+            actionPanelView.widthAnchor.constraint(equalToConstant: 380),
 
             actionStack.leadingAnchor.constraint(equalTo: actionPanelView.leadingAnchor, constant: 18),
             actionStack.trailingAnchor.constraint(equalTo: actionPanelView.trailingAnchor, constant: -18),
@@ -929,6 +954,10 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
         visibleSnippets.count
     }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        SnippetTableRowView()
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard visibleSnippets.indices.contains(row) else { return nil }
 
@@ -989,6 +1018,14 @@ private final class SnippetRowCellView: NSTableCellView {
     private let indicatorView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
+    private var isSelectedStyle = false
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet {
+            isSelectedStyle = backgroundStyle == .emphasized
+            applyTextColors()
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -998,7 +1035,6 @@ private final class SnippetRowCellView: NSTableCellView {
         nameLabel.lineBreakMode = .byTruncatingTail
 
         keywordLabel.font = .systemFont(ofSize: 12)
-        keywordLabel.textColor = .secondaryLabelColor
         keywordLabel.lineBreakMode = .byTruncatingTail
 
         indicatorView.translatesAutoresizingMaskIntoConstraints = false
@@ -1041,6 +1077,29 @@ private final class SnippetRowCellView: NSTableCellView {
             indicatorView.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
             indicatorView.contentTintColor = snippet.isEnabled ? .systemGreen : .secondaryLabelColor
         }
+
+        applyTextColors()
+    }
+
+    private func applyTextColors() {
+        if isSelectedStyle {
+            nameLabel.textColor = .white
+            keywordLabel.textColor = .white.withAlphaComponent(0.74)
+        } else {
+            nameLabel.textColor = .labelColor
+            keywordLabel.textColor = .secondaryLabelColor
+        }
+    }
+}
+
+private final class SnippetTableRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+
+        let selectionRect = bounds.insetBy(dx: 4, dy: 1)
+        let path = NSBezierPath(roundedRect: selectionRect, xRadius: 10, yRadius: 10)
+        NSColor.controlAccentColor.withAlphaComponent(0.95).setFill()
+        path.fill()
     }
 }
 
@@ -1060,6 +1119,7 @@ private final class ActionShortcutRow: NSView {
         translatesAutoresizingMaskIntoConstraints = false
 
         titleField.stringValue = title
+        titleField.font = .systemFont(ofSize: 14, weight: .medium)
         let shortcutField = NSTextField(labelWithString: shortcut)
         shortcutField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         shortcutField.textColor = .secondaryLabelColor
