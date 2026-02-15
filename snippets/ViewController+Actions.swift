@@ -66,10 +66,6 @@ extension ViewController {
         engine.openAccessibilitySettings()
     }
 
-    @objc func openInputSettings() {
-        engine.openInputMonitoringSettings()
-    }
-
     @objc func handleCreateNewNotification() {
         createSnippet(nil)
     }

@@ -90,10 +90,6 @@ struct SnippetsRootView: View {
             Button("Accessibility") {
                 engine.openAccessibilitySettings()
             }
-
-            Button("Input Monitoring") {
-                engine.openInputMonitoringSettings()
-            }
         }
         .padding(12)
     }

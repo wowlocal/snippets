@@ -66,12 +66,6 @@ final class SnippetExpansionEngine {
         NSWorkspace.shared.open(url)
     }
 
-    func openInputMonitoringSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") else {
-            return
-        }
-        NSWorkspace.shared.open(url)
-    }
 
     func copySnippetToClipboard(_ snippet: Snippet) {
         let rendered = PlaceholderResolver.resolve(template: snippet.content)

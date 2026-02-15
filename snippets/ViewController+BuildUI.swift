@@ -78,9 +78,8 @@ extension ViewController {
         let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refreshPermissions))
         let requestButton = NSButton(title: "Request Permission", target: self, action: #selector(requestPermission))
         let accessibilityButton = NSButton(title: "Accessibility", target: self, action: #selector(openAccessibilitySettings))
-        let inputButton = NSButton(title: "Input Monitoring", target: self, action: #selector(openInputSettings))
 
-        [refreshButton, requestButton, accessibilityButton, inputButton].forEach {
+        [refreshButton, requestButton, accessibilityButton].forEach {
             $0.controlSize = .small
             $0.bezelStyle = .rounded
             stack.addArrangedSubview($0)
