@@ -19,6 +19,7 @@ struct SnippetsRootView: View {
     @State private var importExportErrorMessage = ""
     @State private var showingImportExportError = false
     @State private var searchText = ""
+    @State private var showingActionPanel = false
 
     @FocusState private var focusedField: KeyboardFocusField?
 
@@ -35,6 +36,11 @@ struct SnippetsRootView: View {
         .overlay(alignment: .topLeading) {
             shortcutHandlers
         }
+        .overlay {
+            if showingActionPanel {
+                actionPanelOverlay
+            }
+        }
         .frame(minWidth: 980, minHeight: 640)
         .onAppear {
             engine.startIfNeeded()
@@ -45,6 +51,12 @@ struct SnippetsRootView: View {
         }
         .onChange(of: visibleSnippets.map(\.id)) { _, ids in
             reconcileSelection(availableIDs: ids)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .snippetsCreateNew)) { _ in
+            createSnippet()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .snippetsToggleActions)) { _ in
+            toggleActionPanel()
         }
         .alert("Import / Export Failed", isPresented: $showingImportExportError) {
             Button("OK", role: .cancel) {}
@@ -116,7 +128,6 @@ struct SnippetsRootView: View {
                     Label("New", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
-                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
@@ -125,9 +136,6 @@ struct SnippetsRootView: View {
                 .textFieldStyle(.roundedBorder)
                 .focused($focusedField, equals: .search)
                 .padding(.horizontal, 12)
-                .onSubmit {
-                    focusedField = .list
-                }
 
             List(selection: $selectedSnippetID) {
                 ForEach(visibleSnippets) { snippet in
@@ -150,7 +158,7 @@ struct SnippetsRootView: View {
                 Spacer()
 
                 if let lastExpansionName = engine.lastExpansionName {
-                    Text("Last expanded: \(lastExpansionName)")
+                    Text("Last action: \(lastExpansionName)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -159,7 +167,7 @@ struct SnippetsRootView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
-            Text("⌘⇧N New  ⌘⇧I Import  ⌘⇧E Export  ⌘1-4 Focus  ⌃J/K Move  Esc List")
+            Text("Raycast map: ↩ copy, ⌘K actions, ⌘N new, arrows move, Esc back")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -198,56 +206,99 @@ struct SnippetsRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var visibleSnippets: [Snippet] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return store.snippets }
+    private var actionPanelOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    closeActionPanel()
+                }
 
-        return store.snippets.filter { snippet in
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Actions")
+                    .font(.title3.weight(.semibold))
+
+                ActionRow(title: "Paste Snippet", shortcut: "⌘↩")
+                ActionRow(title: "Edit Snippet", shortcut: "⌘E")
+                ActionRow(title: "Duplicate Snippet", shortcut: "⌘D")
+                ActionRow(title: selectedSnippet?.isPinned == true ? "Unpin Snippet" : "Pin Snippet", shortcut: "⌘.")
+                ActionRow(title: "Create New Snippet", shortcut: "⌘N")
+
+                Text("Esc to close")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(18)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .frame(width: 320)
+        }
+    }
+
+    private var visibleSnippets: [Snippet] {
+        let sorted = store.snippetsSortedForDisplay()
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return sorted }
+
+        return sorted.filter { snippet in
             snippet.displayName.lowercased().contains(query)
                 || snippet.normalizedKeyword.lowercased().contains(query)
                 || snippet.content.lowercased().contains(query)
         }
     }
 
+    private var selectedSnippet: Snippet? {
+        guard let selectedSnippetID else { return nil }
+        return store.snippet(id: selectedSnippetID)
+    }
+
+    private var isListContext: Bool {
+        focusedField == .list || focusedField == .search || focusedField == nil
+    }
+
     private var shortcutHandlers: some View {
         Group {
-            Button("Focus Search") {
-                focusedField = .search
+            Button("Open Actions") {
+                toggleActionPanel()
             }
-            .keyboardShortcut("l", modifiers: [.command])
+            .keyboardShortcut("k", modifiers: [.command])
 
-            Button("Focus List") {
-                focusedField = .list
+            Button("Create New Snippet") {
+                createSnippet()
             }
-            .keyboardShortcut("1", modifiers: [.command])
+            .keyboardShortcut("n", modifiers: [.command])
 
-            Button("Focus Name") {
-                focusedField = .name
+            if isListContext {
+                Button("Copy Snippet") {
+                    copySelectedSnippet()
+                }
+                .keyboardShortcut(.return, modifiers: [])
             }
-            .keyboardShortcut("2", modifiers: [.command])
 
-            Button("Focus Snippet") {
-                focusedField = .snippet
+            if showingActionPanel {
+                Button("Paste Snippet") {
+                    pasteSelectedSnippet()
+                }
+                .keyboardShortcut(.return, modifiers: [.command])
+
+                Button("Edit Snippet") {
+                    editSelectedSnippet()
+                }
+                .keyboardShortcut("e", modifiers: [.command])
+
+                Button("Duplicate Snippet") {
+                    duplicateSelectedSnippet()
+                }
+                .keyboardShortcut("d", modifiers: [.command])
+
+                Button("Pin Toggle") {
+                    togglePinnedSelectedSnippet()
+                }
+                .keyboardShortcut(".", modifiers: [.command])
             }
-            .keyboardShortcut("3", modifiers: [.command])
 
-            Button("Focus Keyword") {
-                focusedField = .keyword
-            }
-            .keyboardShortcut("4", modifiers: [.command])
-
-            Button("Select Next Snippet") {
-                selectNextSnippet()
-            }
-            .keyboardShortcut("j", modifiers: [.control])
-
-            Button("Select Previous Snippet") {
-                selectPreviousSnippet()
-            }
-            .keyboardShortcut("k", modifiers: [.control])
-
-            Button("Back To List") {
-                focusedField = .list
+            Button("Escape") {
+                handleEscape()
             }
             .keyboardShortcut(.escape, modifiers: [])
         }
@@ -259,9 +310,36 @@ struct SnippetsRootView: View {
         .accessibilityHidden(true)
     }
 
+    private func handleEscape() {
+        if showingActionPanel {
+            closeActionPanel()
+        } else {
+            focusedField = .list
+        }
+    }
+
+    private func toggleActionPanel() {
+        if showingActionPanel {
+            closeActionPanel()
+        } else {
+            openActionPanel()
+        }
+    }
+
+    private func openActionPanel() {
+        showingActionPanel = true
+        focusedField = .list
+    }
+
+    private func closeActionPanel() {
+        showingActionPanel = false
+        focusedField = .list
+    }
+
     private func createSnippet() {
         let snippet = store.addSnippet()
         selectedSnippetID = snippet.id
+        showingActionPanel = false
         focusedField = .name
         importExportMessage = nil
     }
@@ -273,27 +351,38 @@ struct SnippetsRootView: View {
         focusedField = .list
     }
 
-    private func selectNextSnippet() {
-        moveSelection(offset: 1)
+    private func editSelectedSnippet() {
+        guard selectedSnippet != nil else { return }
+        focusedField = .name
+        closeActionPanel()
     }
 
-    private func selectPreviousSnippet() {
-        moveSelection(offset: -1)
+    private func duplicateSelectedSnippet() {
+        guard let selectedSnippetID, let duplicate = store.duplicate(snippetID: selectedSnippetID) else { return }
+        self.selectedSnippetID = duplicate.id
+        importExportMessage = "Duplicated \(duplicate.displayName)."
+        closeActionPanel()
+        focusedField = .name
     }
 
-    private func moveSelection(offset: Int) {
-        let ids = visibleSnippets.map(\.id)
-        guard !ids.isEmpty else { return }
+    private func togglePinnedSelectedSnippet() {
+        guard let selectedSnippetID else { return }
+        store.togglePinned(snippetID: selectedSnippetID)
+        importExportMessage = selectedSnippet?.isPinned == true ? "Pinned snippet." : "Unpinned snippet."
+        closeActionPanel()
+    }
 
-        if let selectedSnippetID,
-           let currentIndex = ids.firstIndex(of: selectedSnippetID) {
-            let nextIndex = max(0, min(ids.count - 1, currentIndex + offset))
-            self.selectedSnippetID = ids[nextIndex]
-        } else {
-            selectedSnippetID = ids.first
-        }
+    private func copySelectedSnippet() {
+        guard let selectedSnippet else { return }
+        engine.copySnippetToClipboard(selectedSnippet)
+        importExportMessage = "Copied \(selectedSnippet.displayName) to clipboard."
+    }
 
-        focusedField = .list
+    private func pasteSelectedSnippet() {
+        guard let selectedSnippet else { return }
+        engine.pasteSnippetIntoFrontmostApp(selectedSnippet)
+        importExportMessage = "Pasting \(selectedSnippet.displayName)."
+        closeActionPanel()
     }
 
     private func reconcileSelection(availableIDs: [UUID]) {
@@ -350,9 +439,15 @@ private struct SnippetRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(snippet.isEnabled ? Color.green : Color.gray)
-                .frame(width: 9, height: 9)
+            if snippet.isPinned {
+                Image(systemName: "pin.fill")
+                    .foregroundStyle(.yellow)
+                    .font(.caption)
+            } else {
+                Circle()
+                    .fill(snippet.isEnabled ? Color.green : Color.gray)
+                    .frame(width: 9, height: 9)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(snippet.displayName)
@@ -367,6 +462,21 @@ private struct SnippetRow: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
+    }
+}
+
+private struct ActionRow: View {
+    let title: String
+    let shortcut: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(shortcut)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

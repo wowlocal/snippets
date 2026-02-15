@@ -14,6 +14,7 @@ This project now implements a local snippet expander app for macOS.
   - `~/Library/Application Support/SnippetsClone/snippets.json`
 - Imports snippets from JSON.
 - Exports snippets to JSON.
+- Pins snippets to keep them at the top.
 - Supports dynamic placeholders:
   - `{clipboard}`
   - `{date}`
@@ -47,18 +48,22 @@ Open `/Users/mike/src/tries/2026-02-15-snippets/snippets/snippets.xcodeproj` in 
 
 ## Keyboard Navigation
 
-- `⌘⇧N`: create a new snippet.
-- `⌘⇧I`: import snippets from JSON.
-- `⌘⇧E`: export snippets to JSON.
-- `⌘⌫`: delete selected snippet.
-- `⌘L`: focus search.
-- `⌘1`: focus snippet list.
-- `⌘2`: focus Name field.
-- `⌘3`: focus Snippet editor.
-- `⌘4`: focus Keyword field.
-- `⌃J`: select next snippet.
-- `⌃K`: select previous snippet.
-- `Esc`: return focus to snippet list.
+- Raycast-style list navigation:
+  - `↑/↓`: move between snippets.
+  - `↩`: copy selected snippet.
+  - `⌘K`: open actions panel.
+  - `⌘N`: create a new snippet.
+  - `Esc`: close actions panel / return to list focus.
+- Raycast-style actions panel keymap:
+  - `⌘↩`: paste selected snippet.
+  - `⌘E`: edit selected snippet.
+  - `⌘D`: duplicate selected snippet.
+  - `⌘.`: pin or unpin selected snippet.
+  - `⌘N`: create a new snippet.
+- App-specific convenience shortcuts:
+  - `⌘⇧I`: import snippets from JSON.
+  - `⌘⇧E`: export snippets to JSON.
+  - `⌘⌫`: delete selected snippet.
 
 ## Notes
 

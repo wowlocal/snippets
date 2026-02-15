@@ -12,4 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
     }
+
+    @IBAction func newDocument(_ sender: Any?) {
+        NotificationCenter.default.post(name: .snippetsCreateNew, object: nil)
+    }
 }

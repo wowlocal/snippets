@@ -51,8 +51,20 @@ final class SnippetStore: ObservableObject {
 
     func update(_ snippet: Snippet) {
         guard let index = snippets.firstIndex(where: { $0.id == snippet.id }) else { return }
+        let existing = snippets[index]
+
         var updated = snippet
         updated.keyword = updated.normalizedKeyword
+
+        let didChange =
+            existing.name != updated.name ||
+            existing.keyword != updated.keyword ||
+            existing.content != updated.content ||
+            existing.isEnabled != updated.isEnabled ||
+            existing.isPinned != updated.isPinned
+
+        guard didChange else { return }
+
         updated.updatedAt = Date()
         snippets[index] = updated
         persist()
@@ -63,8 +75,38 @@ final class SnippetStore: ObservableObject {
         persist()
     }
 
+    @discardableResult
+    func duplicate(snippetID: UUID) -> Snippet? {
+        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return nil }
+
+        let source = snippets[index]
+        let duplicate = Snippet(
+            name: source.displayName + " Copy",
+            keyword: source.keyword,
+            content: source.content,
+            isEnabled: source.isEnabled,
+            isPinned: source.isPinned
+        )
+        snippets.insert(duplicate, at: index + 1)
+        persist()
+        return duplicate
+    }
+
+    func togglePinned(snippetID: UUID) {
+        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
+        snippets[index].isPinned.toggle()
+        snippets[index].updatedAt = Date()
+        persist()
+    }
+
     func snippet(id: UUID) -> Snippet? {
         snippets.first { $0.id == id }
+    }
+
+    func snippetsSortedForDisplay() -> [Snippet] {
+        let pinned = snippets.filter(\.isPinned)
+        let unpinned = snippets.filter { !$0.isPinned }
+        return pinned + unpinned
     }
 
     func enabledSnippetsSorted() -> [Snippet] {

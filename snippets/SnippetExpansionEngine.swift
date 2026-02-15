@@ -72,6 +72,30 @@ final class SnippetExpansionEngine: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func copySnippetToClipboard(_ snippet: Snippet) {
+        let rendered = PlaceholderResolver.resolve(template: snippet.content)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(rendered, forType: .string)
+
+        lastExpansionName = snippet.displayName
+        statusText = "Copied \(snippet.displayName)."
+    }
+
+    func pasteSnippetIntoFrontmostApp(_ snippet: Snippet) {
+        let rendered = PlaceholderResolver.resolve(template: snippet.content)
+
+        if frontmostProcessIsThisApp() {
+            NSApp.hide(nil)
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            self.paste(rendered)
+            self.lastExpansionName = snippet.displayName
+            self.statusText = "Pasted \(snippet.displayName)."
+        }
+    }
+
     private func handle(event: NSEvent) {
         guard listening, !isInjecting else { return }
 
