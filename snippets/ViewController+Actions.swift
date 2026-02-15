@@ -66,6 +66,18 @@ extension ViewController {
         engine.openAccessibilitySettings()
     }
 
+    @objc func showMoreMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        let importItem = NSMenuItem(title: "Import...", action: #selector(runImport), keyEquivalent: "I")
+        importItem.keyEquivalentModifierMask = [.command, .shift]
+        let exportItem = NSMenuItem(title: "Export...", action: #selector(runExport), keyEquivalent: "E")
+        exportItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(importItem)
+        menu.addItem(exportItem)
+        let location = NSPoint(x: 0, y: sender.bounds.height + 4)
+        menu.popUp(positioning: nil, at: location, in: sender)
+    }
+
     @objc func handleCreateNewNotification() {
         createSnippet(nil)
     }

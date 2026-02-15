@@ -79,10 +79,12 @@ extension ViewController {
         let requestButton = NSButton(title: "Request Permission", target: self, action: #selector(requestPermission))
         let accessibilityButton = NSButton(title: "Accessibility", target: self, action: #selector(openAccessibilitySettings))
 
+        permissionButtonsStack.orientation = .horizontal
+        permissionButtonsStack.spacing = 8
         [refreshButton, requestButton, accessibilityButton].forEach {
             $0.controlSize = .small
             $0.bezelStyle = .rounded
-            stack.addArrangedSubview($0)
+            permissionButtonsStack.addArrangedSubview($0)
         }
 
         let leadingStatusStack = NSStackView(views: [permissionIconView, permissionTitleLabel, permissionStatusLabel])
@@ -90,8 +92,9 @@ extension ViewController {
         leadingStatusStack.spacing = 8
         leadingStatusStack.alignment = .centerY
 
-        stack.insertArrangedSubview(leadingStatusStack, at: 0)
-        stack.insertArrangedSubview(NSView(), at: 1)
+        stack.addArrangedSubview(leadingStatusStack)
+        stack.addArrangedSubview(NSView())
+        stack.addArrangedSubview(permissionButtonsStack)
 
         container.addSubview(stack)
 
@@ -124,15 +127,10 @@ extension ViewController {
         let titleLabel = NSTextField(labelWithString: "Snippets")
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
 
-        let importButton = NSButton(title: "Import", target: self, action: #selector(runImport))
-        importButton.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: nil)
-        importButton.imagePosition = .imageLeading
-        importButton.bezelStyle = .rounded
-
-        let exportButton = NSButton(title: "Export", target: self, action: #selector(runExport))
-        exportButton.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
-        exportButton.imagePosition = .imageLeading
-        exportButton.bezelStyle = .rounded
+        let moreButton = NSButton(image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!, target: self, action: #selector(showMoreMenu(_:)))
+        moreButton.bezelStyle = .rounded
+        moreButton.isBordered = false
+        moreButton.toolTip = "Import, Export..."
 
         let newButton = NSButton(title: "New", target: self, action: #selector(createSnippet))
         newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
@@ -145,8 +143,7 @@ extension ViewController {
 
         headerStack.addArrangedSubview(titleLabel)
         headerStack.addArrangedSubview(NSView())
-        headerStack.addArrangedSubview(importButton)
-        headerStack.addArrangedSubview(exportButton)
+        headerStack.addArrangedSubview(moreButton)
         headerStack.addArrangedSubview(newButton)
 
         searchField.placeholderString = "Search snippets"
@@ -168,7 +165,7 @@ extension ViewController {
         tableView.selectionHighlightStyle = .regular
         tableView.backgroundColor = .clear
         tableView.allowsEmptySelection = true
-        tableView.rowHeight = 52
+        tableView.rowHeight = 58
         tableView.intercellSpacing = NSSize(width: 0, height: 6)
         tableView.delegate = self
         tableView.dataSource = self
@@ -182,20 +179,19 @@ extension ViewController {
         deleteButton.imagePosition = .imageLeading
         deleteButton.bezelStyle = .rounded
 
-        let footerTopRow = NSStackView(views: [deleteButton, NSView(), lastActionLabel])
+        let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: nil, action: nil)
+        helpButton.bezelStyle = .rounded
+        helpButton.isBordered = false
+        helpButton.toolTip = "↩ Copy  ⌘K Actions  ⌘N New  ⌘F Search  ⌘⌫ Delete  ↑↓ Navigate  ⎋ Back"
+
+        let footerTopRow = NSStackView(views: [deleteButton, helpButton, NSView(), lastActionLabel])
         footerTopRow.orientation = .horizontal
-        footerTopRow.spacing = 8
+        footerTopRow.spacing = 6
         footerTopRow.alignment = .centerY
 
         lastActionLabel.font = .systemFont(ofSize: 12)
         lastActionLabel.textColor = .secondaryLabelColor
         lastActionLabel.lineBreakMode = .byTruncatingTail
-
-        let mapLabel = NSTextField(labelWithString: "Raycast map: ↩ copy, ⌘K actions, ⌘N new, arrows move, Esc back")
-        mapLabel.font = .systemFont(ofSize: 11)
-        mapLabel.textColor = .secondaryLabelColor
-        mapLabel.lineBreakMode = .byWordWrapping
-        mapLabel.maximumNumberOfLines = 2
 
         importExportMessageLabel.font = .systemFont(ofSize: 12)
         importExportMessageLabel.textColor = .secondaryLabelColor
@@ -207,7 +203,6 @@ extension ViewController {
         rootStack.addArrangedSubview(searchField)
         rootStack.addArrangedSubview(tableScrollView)
         rootStack.addArrangedSubview(footerTopRow)
-        rootStack.addArrangedSubview(mapLabel)
         rootStack.addArrangedSubview(importExportMessageLabel)
 
         rootStack.setCustomSpacing(12, after: headerStack)
@@ -327,24 +322,31 @@ extension ViewController {
             previewValueField.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor, constant: -8)
         ])
 
+        let separator = NSBox()
+        separator.boxType = .separator
+
+        previewSectionStack.orientation = .vertical
+        previewSectionStack.spacing = 8
+        previewSectionStack.alignment = .leading
+        previewSectionStack.addArrangedSubview(previewLabel)
+        previewSectionStack.addArrangedSubview(previewContainer)
+        previewContainer.widthAnchor.constraint(equalTo: previewSectionStack.widthAnchor).isActive = true
+
         stack.addArrangedSubview(nameLabel)
         stack.addArrangedSubview(nameField)
-        stack.addArrangedSubview(snippetLabel)
-        stack.addArrangedSubview(snippetScrollView)
-        stack.addArrangedSubview(placeholderLabel)
         stack.addArrangedSubview(keywordLabel)
         stack.addArrangedSubview(keywordField)
         stack.addArrangedSubview(enabledCheckbox)
-        let separator = NSBox()
-        separator.boxType = .separator
+        stack.addArrangedSubview(snippetLabel)
+        stack.addArrangedSubview(snippetScrollView)
+        stack.addArrangedSubview(placeholderLabel)
         stack.addArrangedSubview(separator)
-        stack.addArrangedSubview(previewLabel)
-        stack.addArrangedSubview(previewContainer)
+        stack.addArrangedSubview(previewSectionStack)
 
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, snippetScrollView, placeholderLabel, keywordField, separator, previewContainer].forEach {
+        [nameField, keywordField, snippetScrollView, placeholderLabel, separator, previewSectionStack].forEach {
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
@@ -355,8 +357,8 @@ extension ViewController {
         preferredEditorWidth.isActive = true
 
         stack.setCustomSpacing(8, after: nameLabel)
-        stack.setCustomSpacing(10, after: snippetLabel)
         stack.setCustomSpacing(8, after: keywordLabel)
+        stack.setCustomSpacing(10, after: snippetLabel)
         stack.setCustomSpacing(8, after: separator)
 
         NSLayoutConstraint.activate([

@@ -4,11 +4,11 @@ final class SnippetRowCellView: NSTableCellView {
     private let indicatorView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
-    private var isSelectedStyle = false
+    private let contentPreviewLabel = NSTextField(labelWithString: "")
+    private var isDisabledSnippet = false
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {
-            isSelectedStyle = backgroundStyle == .emphasized
             applyTextColors()
         }
     }
@@ -17,23 +17,35 @@ final class SnippetRowCellView: NSTableCellView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
 
-        nameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        nameLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         nameLabel.lineBreakMode = .byTruncatingTail
 
-        keywordLabel.font = .systemFont(ofSize: 12)
+        keywordLabel.font = .systemFont(ofSize: 11, weight: .medium)
         keywordLabel.lineBreakMode = .byTruncatingTail
+        keywordLabel.setContentHuggingPriority(.required, for: .horizontal)
+        keywordLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        contentPreviewLabel.font = .systemFont(ofSize: 12)
+        contentPreviewLabel.lineBreakMode = .byTruncatingTail
+        contentPreviewLabel.maximumNumberOfLines = 1
 
         indicatorView.translatesAutoresizingMaskIntoConstraints = false
-        indicatorView.widthAnchor.constraint(equalToConstant: 12).isActive = true
-        indicatorView.heightAnchor.constraint(equalToConstant: 12).isActive = true
+        indicatorView.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        indicatorView.heightAnchor.constraint(equalToConstant: 10).isActive = true
 
-        let labelsStack = NSStackView(views: [nameLabel, keywordLabel])
+        let topRow = NSStackView(views: [nameLabel, keywordLabel])
+        topRow.orientation = .horizontal
+        topRow.spacing = 6
+        topRow.alignment = .firstBaseline
+
+        let labelsStack = NSStackView(views: [topRow, contentPreviewLabel])
         labelsStack.orientation = .vertical
         labelsStack.spacing = 2
+        labelsStack.alignment = .leading
 
         let rootStack = NSStackView(views: [indicatorView, labelsStack])
         rootStack.orientation = .horizontal
-        rootStack.spacing = 10
+        rootStack.spacing = 8
         rootStack.alignment = .centerY
         rootStack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -53,8 +65,20 @@ final class SnippetRowCellView: NSTableCellView {
     }
 
     func configure(with snippet: Snippet) {
+        isDisabledSnippet = !snippet.isEnabled
+
         nameLabel.stringValue = snippet.displayName
-        keywordLabel.stringValue = snippet.normalizedKeyword
+
+        let keyword = snippet.normalizedKeyword
+        keywordLabel.stringValue = keyword
+        keywordLabel.isHidden = keyword.isEmpty
+
+        let preview = snippet.content
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines)
+            .first ?? ""
+        contentPreviewLabel.stringValue = preview
+        contentPreviewLabel.isHidden = preview.isEmpty
 
         if snippet.isPinned {
             indicatorView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: nil)
@@ -68,8 +92,15 @@ final class SnippetRowCellView: NSTableCellView {
     }
 
     private func applyTextColors() {
-        nameLabel.textColor = .labelColor
-        keywordLabel.textColor = .secondaryLabelColor
+        if isDisabledSnippet {
+            nameLabel.textColor = .secondaryLabelColor
+            keywordLabel.textColor = .tertiaryLabelColor
+            contentPreviewLabel.textColor = .tertiaryLabelColor
+        } else {
+            nameLabel.textColor = .labelColor
+            keywordLabel.textColor = .secondaryLabelColor
+            contentPreviewLabel.textColor = .tertiaryLabelColor
+        }
     }
 }
 

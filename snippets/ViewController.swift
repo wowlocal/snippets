@@ -34,6 +34,7 @@ final class ViewController: NSViewController {
     let permissionIconView = NSImageView()
     let permissionTitleLabel = NSTextField(labelWithString: "")
     let permissionStatusLabel = NSTextField(labelWithString: "")
+    let permissionButtonsStack = NSStackView()
 
     let searchField = NSSearchField()
     let tableView = NSTableView()
@@ -46,6 +47,7 @@ final class ViewController: NSViewController {
     let keywordField = NSTextField(string: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
+    let previewSectionStack = NSStackView()
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSVisualEffectView()

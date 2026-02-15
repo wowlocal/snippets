@@ -7,11 +7,13 @@ extension ViewController {
             permissionIconView.contentTintColor = .systemGreen
             permissionTitleLabel.stringValue = "Permissions Ready"
             permissionTitleLabel.textColor = .systemGreen
+            permissionButtonsStack.isHidden = true
         } else {
             permissionIconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
             permissionIconView.contentTintColor = .systemOrange
             permissionTitleLabel.stringValue = "Permissions Required"
             permissionTitleLabel.textColor = .systemOrange
+            permissionButtonsStack.isHidden = false
         }
         permissionStatusLabel.stringValue = engine.statusText
     }
@@ -87,10 +89,6 @@ extension ViewController {
         snippetTextView.isEditable = enabled
         keywordField.isEnabled = enabled
         enabledCheckbox.isEnabled = enabled
-
-        if !enabled {
-            previewValueField.stringValue = "Preview appears here once snippet text is entered"
-        }
     }
 
     var selectedSnippet: Snippet? {
@@ -118,9 +116,9 @@ extension ViewController {
 
     func updatePreview(withTemplate template: String) {
         let rendered = PlaceholderResolver.resolve(template: template)
-        previewValueField.stringValue = rendered.isEmpty
-            ? "Preview appears here once snippet text is entered"
-            : rendered
+        let hasDynamicContent = !template.isEmpty && rendered != template
+        previewSectionStack.isHidden = !hasDynamicContent
+        previewValueField.stringValue = rendered
     }
 
     var isEditingDetails: Bool {
