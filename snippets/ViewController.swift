@@ -88,7 +88,7 @@ final class ViewController: NSViewController {
         super.viewDidAppear()
 
         view.window?.title = "Snippets"
-        view.window?.minSize = NSSize(width: 980, height: 640)
+        view.window?.minSize = NSSize(width: 620, height: 420)
 
         installKeyboardMonitorIfNeeded()
 

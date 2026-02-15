@@ -41,7 +41,7 @@ struct SnippetsRootView: View {
                 actionPanelOverlay
             }
         }
-        .frame(minWidth: 980, minHeight: 640)
+        .frame(minWidth: 620, minHeight: 420)
         .onAppear {
             engine.startIfNeeded()
             reconcileSelection(availableIDs: visibleSnippets.map(\.id))
