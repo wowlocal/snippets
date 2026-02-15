@@ -7,7 +7,8 @@
       "Bash(git commit:*)",
       "WebSearch",
       "WebFetch(domain:www.chromium.org)",
-      "Bash(swift build:*)"
+      "Bash(swift build:*)",
+      "Bash(plutil:*)"
     ]
   }
 }
