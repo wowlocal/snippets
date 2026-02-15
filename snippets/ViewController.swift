@@ -1,26 +1,32 @@
-//
-//  ViewController.swift
-//  snippets
-//
-//  Created by Misha on 2/15/26.
-//
-
 import Cocoa
+import SwiftUI
 
-class ViewController: NSViewController {
+final class ViewController: NSViewController {
+    private lazy var store: SnippetStore = {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            return appDelegate.store
+        }
+        return SnippetStore()
+    }()
 
-	override func viewDidLoad() {
-		super.viewDidLoad()
+    private lazy var engine: SnippetExpansionEngine = {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            return appDelegate.expansionEngine
+        }
+        return SnippetExpansionEngine(store: store)
+    }()
 
-		// Do any additional setup after loading the view.
-	}
+    override func viewDidLoad() {
+        super.viewDidLoad()
 
-	override var representedObject: Any? {
-		didSet {
-		// Update the view, if already loaded.
-		}
-	}
+        let rootView = SnippetsRootView(store: store, engine: engine)
+        view = NSHostingView(rootView: rootView)
+    }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
 
+        view.window?.title = "Snippets"
+        view.window?.minSize = NSSize(width: 980, height: 640)
+    }
 }
-
