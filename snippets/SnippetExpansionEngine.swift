@@ -19,6 +19,11 @@ final class SnippetExpansionEngine {
     private let maxBufferLength = 120
     private var isInjecting = false
 
+    // Suggestion overlay state
+    private var suggestionActive = false
+    private var suggestionQuery = ""
+    private lazy var suggestionPanel = SuggestionPanelController()
+
     init(store: SnippetStore) {
         self.store = store
         refreshAccessibilityStatus(prompt: false)
@@ -96,11 +101,19 @@ final class SnippetExpansionEngine {
 
         if frontmostProcessIsThisApp() {
             typedBuffer = ""
+            dismissSuggestions()
             return
         }
 
         if !event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty {
             typedBuffer = ""
+            dismissSuggestions()
+            return
+        }
+
+        // Suggestion mode handling
+        if suggestionActive {
+            handleSuggestionEvent(event)
             return
         }
 
@@ -123,6 +136,12 @@ final class SnippetExpansionEngine {
         typedBuffer.append(character)
         trimBufferIfNeeded()
 
+        // Activate suggestion mode on backslash, only if a text field is focused
+        if character == "\\" && focusedElementIsTextInput() {
+            activateSuggestions()
+            return
+        }
+
         if let immediateMatch = matchForImmediateExpansion() {
             expand(snippet: immediateMatch, deleteCount: immediateMatch.normalizedKeyword.count)
             typedBuffer = ""
@@ -132,6 +151,112 @@ final class SnippetExpansionEngine {
         if isTriggerCharacter(character), let delimiterMatch = matchForDelimiterExpansion(trigger: character) {
             expand(snippet: delimiterMatch, deleteCount: delimiterMatch.normalizedKeyword.count + 1)
             typedBuffer = ""
+        }
+    }
+
+    // MARK: - Suggestion Mode
+
+    private func activateSuggestions() {
+        suggestionActive = true
+        suggestionQuery = ""
+        updateSuggestionResults()
+    }
+
+    private func dismissSuggestions() {
+        guard suggestionActive else { return }
+        suggestionActive = false
+        suggestionQuery = ""
+        suggestionPanel.dismiss()
+    }
+
+    private func handleSuggestionEvent(_ event: NSEvent) {
+        // Arrow keys navigate the list
+        if event.keyCode == UInt16(kVK_DownArrow) {
+            suggestionPanel.moveSelectionDown()
+            return
+        }
+        if event.keyCode == UInt16(kVK_UpArrow) {
+            suggestionPanel.moveSelectionUp()
+            return
+        }
+
+        // Escape dismisses
+        if event.keyCode == UInt16(kVK_Escape) {
+            dismissSuggestions()
+            typedBuffer = ""
+            return
+        }
+
+        // Return/Tab selects
+        if event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) || event.keyCode == UInt16(kVK_Tab) {
+            if let snippet = suggestionPanel.selectedSnippet() {
+                let deleteCount = 1 + suggestionQuery.count // backslash + query
+                dismissSuggestions()
+                expand(snippet: snippet, deleteCount: deleteCount)
+                typedBuffer = ""
+            } else {
+                dismissSuggestions()
+            }
+            return
+        }
+
+        // Backspace
+        if event.keyCode == UInt16(kVK_Delete) {
+            if suggestionQuery.isEmpty {
+                dismissSuggestions()
+                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
+            } else {
+                suggestionQuery.removeLast()
+                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
+                updateSuggestionResults()
+            }
+            return
+        }
+
+        guard let character = typedCharacter(from: event) else {
+            dismissSuggestions()
+            return
+        }
+
+        // Only allow word characters in suggestion query
+        if isWordCharacter(character) {
+            suggestionQuery.append(character)
+            typedBuffer.append(character)
+            trimBufferIfNeeded()
+            updateSuggestionResults()
+        } else {
+            // Non-word character typed — dismiss suggestions and let normal handling proceed
+            dismissSuggestions()
+            typedBuffer.append(character)
+            trimBufferIfNeeded()
+        }
+    }
+
+    private func updateSuggestionResults() {
+        let snippets = store.enabledSnippetsSorted()
+
+        let scored: [SuggestionItem]
+        if suggestionQuery.isEmpty {
+            // Show all enabled snippets when no query yet
+            scored = snippets.prefix(8).map { SuggestionItem(snippet: $0, score: 0) }
+        } else {
+            scored = snippets.compactMap { snippet in
+                let nameResult = FuzzyMatch.score(query: suggestionQuery, target: snippet.displayName)
+                let keywordResult = FuzzyMatch.score(query: suggestionQuery, target: snippet.normalizedKeyword)
+                let best = max(nameResult.score, keywordResult.score)
+                let matched = nameResult.matched || keywordResult.matched
+                guard matched else { return nil }
+                return SuggestionItem(snippet: snippet, score: best)
+            }
+            .sorted { $0.score > $1.score }
+            .prefix(8)
+            .map { $0 }
+        }
+
+        if scored.isEmpty {
+            dismissSuggestions()
+        } else {
+            suggestionPanel.show(items: Array(scored))
         }
     }
 
@@ -306,5 +431,24 @@ final class SnippetExpansionEngine {
 
     private func frontmostProcessIsThisApp() -> Bool {
         NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+    }
+
+    private func focusedElementIsTextInput() -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success else {
+            return false
+        }
+        let focused = focusedValue as! AXUIElement
+
+        var roleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused, kAXRoleAttribute as CFString, &roleValue) == .success else {
+            return false
+        }
+        let role = roleValue as? String ?? ""
+
+        return role == kAXTextFieldRole || role == kAXTextAreaRole || role == kAXComboBoxRole
     }
 }
