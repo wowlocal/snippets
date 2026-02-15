@@ -51,6 +51,9 @@ final class ViewController: NSViewController {
 
     private let actionOverlayView = ActionOverlayView()
     private let actionPanelView = NSVisualEffectView()
+    private let actionPasteRow = ActionShortcutRow(title: "Paste Snippet", shortcut: "⌘↩")
+    private let actionEditRow = ActionShortcutRow(title: "Edit Snippet", shortcut: "⌘E")
+    private let actionDuplicateRow = ActionShortcutRow(title: "Duplicate Snippet", shortcut: "⌘D")
     private let actionPinRow = ActionShortcutRow(title: "Pin Snippet", shortcut: "⌘.")
 
     override func viewDidLoad() {
@@ -505,9 +508,9 @@ final class ViewController: NSViewController {
 
         let actionStack = NSStackView(views: [
             actionTitle,
-            ActionShortcutRow(title: "Paste Snippet", shortcut: "⌘↩"),
-            ActionShortcutRow(title: "Edit Snippet", shortcut: "⌘E"),
-            ActionShortcutRow(title: "Duplicate Snippet", shortcut: "⌘D"),
+            actionPasteRow,
+            actionEditRow,
+            actionDuplicateRow,
             actionPinRow,
             ActionShortcutRow(title: "Create New Snippet", shortcut: "⌘N"),
             NSTextField(labelWithString: "Esc to close")
@@ -839,8 +842,11 @@ final class ViewController: NSViewController {
     }
 
     private func openActionPanel() {
-        guard selectedSnippet != nil else { return }
+        let hasSelection = selectedSnippet != nil
         updateActionPanelPinLabel()
+        [actionPasteRow, actionEditRow, actionDuplicateRow, actionPinRow].forEach {
+            $0.alphaValue = hasSelection ? 1.0 : 0.3
+        }
         actionOverlayView.isHidden = false
         view.window?.makeFirstResponder(tableView)
     }
