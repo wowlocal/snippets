@@ -9,6 +9,8 @@ final class SnippetStore {
     private let saveURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private var persistWorkItem: DispatchWorkItem?
+    private let persistDelay: TimeInterval = 0.3
 
     enum ImportExportError: LocalizedError {
         case emptyImport
@@ -46,7 +48,7 @@ final class SnippetStore {
     func addSnippet() -> Snippet {
         let snippet = Snippet(name: "", keyword: "\\", content: "")
         snippets.insert(snippet, at: 0)
-        persist()
+        persist(immediately: true)
         return snippet
     }
 
@@ -73,7 +75,7 @@ final class SnippetStore {
 
     func delete(snippetID: UUID) {
         snippets.removeAll { $0.id == snippetID }
-        persist()
+        persist(immediately: true)
     }
 
     @discardableResult
@@ -89,7 +91,7 @@ final class SnippetStore {
             isPinned: source.isPinned
         )
         snippets.insert(duplicate, at: index + 1)
-        persist()
+        persist(immediately: true)
         return duplicate
     }
 
@@ -97,7 +99,7 @@ final class SnippetStore {
         guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
         snippets[index].isPinned.toggle()
         snippets[index].updatedAt = Date()
-        persist()
+        persist(immediately: true)
     }
 
     func snippet(id: UUID) -> Snippet? {
@@ -164,7 +166,7 @@ final class SnippetStore {
         }
 
         snippets = merged
-        persist()
+        persist(immediately: true)
         return importedCount
     }
 
@@ -231,13 +233,37 @@ final class SnippetStore {
         return normalized
     }
 
-    private func persist() {
+    private func persist(immediately: Bool = false) {
+        onChange?()
+        persistWorkItem?.cancel()
+
+        if immediately {
+            writeToDisk()
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.writeToDisk()
+            }
+        }
+        persistWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + persistDelay, execute: workItem)
+    }
+
+    private func writeToDisk() {
         do {
             let data = try encoder.encode(snippets)
             try data.write(to: saveURL, options: .atomic)
         } catch {
             NSLog("Failed to save snippets: \(error.localizedDescription)")
         }
-        onChange?()
+    }
+
+    func flushPendingWrites() {
+        guard persistWorkItem != nil else { return }
+        persistWorkItem?.cancel()
+        persistWorkItem = nil
+        writeToDisk()
     }
 }

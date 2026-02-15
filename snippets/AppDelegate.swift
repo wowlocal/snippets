@@ -9,6 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         expansionEngine.startIfNeeded()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        store.flushPendingWrites()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
