@@ -278,16 +278,16 @@ struct SnippetsRootView: View {
                 .keyboardShortcut(.return, modifiers: [])
             }
 
+            Button("Edit Snippet") {
+                editSelectedSnippet()
+            }
+            .keyboardShortcut("e", modifiers: [.command])
+
             if showingActionPanel {
                 Button("Paste Snippet") {
                     pasteSelectedSnippet()
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
-
-                Button("Edit Snippet") {
-                    editSelectedSnippet()
-                }
-                .keyboardShortcut("e", modifiers: [.command])
 
                 Button("Duplicate Snippet") {
                     duplicateSelectedSnippet()

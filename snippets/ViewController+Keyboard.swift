@@ -53,14 +53,15 @@ extension ViewController {
             return nil
         }
 
+        if flags == [.command] && lowerCharacters == "e" {
+            editSelectedSnippet()
+            return nil
+        }
+
         if !actionOverlayView.isHidden {
             if flags == [.command] && isReturnKey(event) {
                 pasteSelectedSnippet()
                 closeActionPanel()
-                return nil
-            }
-            if flags == [.command] && lowerCharacters == "e" {
-                editSelectedSnippet()
                 return nil
             }
             if flags == [.command] && lowerCharacters == "d" {
