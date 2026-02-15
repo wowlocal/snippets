@@ -141,6 +141,10 @@ final class ViewController: NSViewController {
 
         rootStack.addArrangedSubview(splitView)
 
+        [banner, divider, splitView].forEach {
+            $0.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
+        }
+
         NSLayoutConstraint.activate([
             rootStack.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             rootStack.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
