@@ -135,9 +135,9 @@ final class ViewController: NSViewController {
         splitView.addArrangedSubview(sidebar)
         splitView.addArrangedSubview(editor)
 
-        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
-        sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 420).isActive = true
-        splitView.setPosition(360, ofDividerAt: 0)
+        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+        sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 390).isActive = true
+        splitView.setPosition(330, ofDividerAt: 0)
 
         rootStack.addArrangedSubview(splitView)
 
@@ -342,23 +342,28 @@ final class ViewController: NSViewController {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.spacing = 12
+        stack.alignment = .leading
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let nameLabel = NSTextField(labelWithString: "Name")
         nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         nameLabel.textColor = .secondaryLabelColor
+        nameLabel.alignment = .left
 
         nameField.delegate = self
         nameField.placeholderString = "Temporary Password"
+        nameField.controlSize = .large
 
         let snippetLabel = NSTextField(labelWithString: "Snippet")
         snippetLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         snippetLabel.textColor = .secondaryLabelColor
+        snippetLabel.alignment = .left
 
         let snippetScrollView = NSScrollView()
         snippetScrollView.translatesAutoresizingMaskIntoConstraints = false
         snippetScrollView.hasVerticalScroller = true
         snippetScrollView.borderType = .bezelBorder
+        snippetScrollView.scrollerStyle = .overlay
 
         snippetTextView.delegate = self
         snippetTextView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
@@ -366,32 +371,37 @@ final class ViewController: NSViewController {
         snippetTextView.isAutomaticQuoteSubstitutionEnabled = false
         snippetTextView.isAutomaticTextReplacementEnabled = false
         snippetTextView.isAutomaticDataDetectionEnabled = false
-        snippetTextView.minSize = NSSize(width: 0, height: 280)
+        snippetTextView.minSize = NSSize(width: 0, height: 220)
         snippetTextView.isVerticallyResizable = true
         snippetTextView.textContainerInset = NSSize(width: 8, height: 8)
         snippetTextView.textContainer?.widthTracksTextView = true
         snippetTextView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
 
         snippetScrollView.documentView = snippetTextView
-        snippetScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
+        snippetScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
 
         let placeholderLabel = NSTextField(labelWithString: "Dynamic placeholders: {clipboard}, {date}, {time}, {datetime}, {date:yyyy-MM-dd}")
         placeholderLabel.font = .systemFont(ofSize: 12)
         placeholderLabel.textColor = .secondaryLabelColor
+        placeholderLabel.alignment = .left
 
         let keywordLabel = NSTextField(labelWithString: "Keyword")
         keywordLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         keywordLabel.textColor = .secondaryLabelColor
+        keywordLabel.alignment = .left
 
         keywordField.delegate = self
         keywordField.placeholderString = "\\tp"
+        keywordField.controlSize = .large
 
         enabledCheckbox.target = self
         enabledCheckbox.action = #selector(enabledStateChanged)
+        enabledCheckbox.setContentHuggingPriority(.required, for: .horizontal)
 
         let previewLabel = NSTextField(labelWithString: "Preview")
         previewLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         previewLabel.textColor = .secondaryLabelColor
+        previewLabel.alignment = .left
 
         let previewContainer = NSView()
         previewContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -433,6 +443,21 @@ final class ViewController: NSViewController {
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
+        [nameField, snippetScrollView, placeholderLabel, keywordField, separator, previewContainer].forEach {
+            $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+
+        previewContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true
+        stack.widthAnchor.constraint(lessThanOrEqualToConstant: 820).isActive = true
+        let preferredEditorWidth = stack.widthAnchor.constraint(equalTo: contentView.widthAnchor, constant: -40)
+        preferredEditorWidth.priority = .defaultHigh
+        preferredEditorWidth.isActive = true
+
+        stack.setCustomSpacing(8, after: nameLabel)
+        stack.setCustomSpacing(10, after: snippetLabel)
+        stack.setCustomSpacing(8, after: keywordLabel)
+        stack.setCustomSpacing(8, after: separator)
+
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -443,8 +468,9 @@ final class ViewController: NSViewController {
             contentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             contentView.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor),
 
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -20),
+            stack.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 18),
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20)
         ])
