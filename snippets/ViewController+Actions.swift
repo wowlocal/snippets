@@ -64,6 +64,10 @@ extension ViewController {
         exportItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(importItem)
         menu.addItem(exportItem)
+        menu.addItem(.separator())
+        let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(loginItem)
         let location = NSPoint(x: 0, y: sender.bounds.height + 4)
         menu.popUp(positioning: nil, at: location, in: sender)
     }
@@ -186,6 +190,5 @@ extension ViewController {
         } catch {
             NSLog("Launch at login toggle failed: \(error)")
         }
-        launchAtLoginCheckbox.state = service.status == .enabled ? .on : .off
     }
 }

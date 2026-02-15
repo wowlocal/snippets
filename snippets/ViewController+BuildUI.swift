@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 
 extension ViewController {
     func buildUI() {
@@ -184,11 +183,6 @@ extension ViewController {
         helpButton.isBordered = false
         helpButton.toolTip = "↩ Copy  ⌘K Actions  ⌘N New  ⌘F Search  ⌘⌫ Delete  ↑↓ Navigate  ⎋ Back"
 
-        launchAtLoginCheckbox.controlSize = .small
-        launchAtLoginCheckbox.target = self
-        launchAtLoginCheckbox.action = #selector(toggleLaunchAtLogin)
-        launchAtLoginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
-
         let footerTopRow = NSStackView(views: [deleteButton, helpButton, NSView(), lastActionLabel])
         footerTopRow.orientation = .horizontal
         footerTopRow.spacing = 6
@@ -208,7 +202,6 @@ extension ViewController {
         rootStack.addArrangedSubview(searchField)
         rootStack.addArrangedSubview(tableScrollView)
         rootStack.addArrangedSubview(footerTopRow)
-        rootStack.addArrangedSubview(launchAtLoginCheckbox)
         rootStack.addArrangedSubview(importExportMessageLabel)
 
         rootStack.setCustomSpacing(12, after: headerStack)
