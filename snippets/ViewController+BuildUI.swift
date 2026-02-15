@@ -287,7 +287,7 @@ extension ViewController {
         keywordLabel.alignment = .left
 
         keywordField.delegate = self
-        keywordField.placeholderString = "\\tp"
+        keywordField.placeholderString = "tp"
         keywordField.controlSize = .large
 
         enabledCheckbox.target = self

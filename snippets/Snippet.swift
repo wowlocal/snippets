@@ -33,7 +33,7 @@ struct Snippet: Identifiable, Codable, Equatable {
     static var starterSnippet: Snippet {
         Snippet(
             name: "Temporary Password",
-            keyword: "\\tp",
+            keyword: "tp",
             content: "TP-{date:yyyyMMdd}-{clipboard}"
         )
     }

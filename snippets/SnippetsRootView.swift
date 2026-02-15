@@ -513,7 +513,7 @@ private struct SnippetEditorView: View {
                 Text("Keyword")
                     .font(.headline)
 
-                TextField("\\tp", text: $snippet.keyword)
+                TextField("tp", text: $snippet.keyword)
                     .textFieldStyle(.roundedBorder)
                     .focused(focusedField, equals: .keyword)
                     .onChange(of: snippet.keyword) { _, keyword in
