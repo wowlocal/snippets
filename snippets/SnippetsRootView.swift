@@ -11,8 +11,8 @@ private enum KeyboardFocusField: Hashable {
 }
 
 struct SnippetsRootView: View {
-    @ObservedObject var store: SnippetStore
-    @ObservedObject var engine: SnippetExpansionEngine
+    var store: SnippetStore
+    var engine: SnippetExpansionEngine
 
     @State private var selectedSnippetID: UUID?
     @State private var importExportMessage: String?

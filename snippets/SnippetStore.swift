@@ -1,9 +1,10 @@
 import Foundation
-import Combine
 
 @MainActor
-final class SnippetStore: ObservableObject {
-    @Published private(set) var snippets: [Snippet] = []
+final class SnippetStore {
+    private(set) var snippets: [Snippet] = []
+
+    var onChange: (() -> Void)?
 
     private let saveURL: URL
     private let encoder = JSONEncoder()
@@ -237,5 +238,6 @@ final class SnippetStore: ObservableObject {
         } catch {
             NSLog("Failed to save snippets: \(error.localizedDescription)")
         }
+        onChange?()
     }
 }

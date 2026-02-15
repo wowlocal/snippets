@@ -1,6 +1,5 @@
 import AppKit
 import Carbon.HIToolbox
-import Combine
 import UniformTypeIdentifiers
 
 @MainActor
@@ -19,7 +18,6 @@ final class ViewController: NSViewController {
         return SnippetExpansionEngine(store: store)
     }()
 
-    private var cancellables = Set<AnyCancellable>()
     private var localKeyMonitor: Any?
 
     private var visibleSnippets: [Snippet] = []
@@ -504,7 +502,18 @@ final class ViewController: NSViewController {
         actionPanelView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
 
         let actionTitle = NSTextField(labelWithString: "Actions")
-        actionTitle.font = .systemFont(ofSize: 18, weight: .semibold)
+        actionTitle.font = .systemFont(ofSize: 16, weight: .semibold)
+        actionTitle.alignment = .center
+
+        let separator = NSBox()
+        separator.boxType = .separator
+
+        let actionNewRow = ActionShortcutRow(title: "Create New Snippet", shortcut: "⌘N")
+
+        let tip = NSTextField(labelWithString: "esc to dismiss")
+        tip.font = .systemFont(ofSize: 11)
+        tip.textColor = .tertiaryLabelColor
+        tip.alignment = .center
 
         let actionStack = NSStackView(views: [
             actionTitle,
@@ -512,16 +521,20 @@ final class ViewController: NSViewController {
             actionEditRow,
             actionDuplicateRow,
             actionPinRow,
-            ActionShortcutRow(title: "Create New Snippet", shortcut: "⌘N"),
-            NSTextField(labelWithString: "Esc to close")
+            separator,
+            actionNewRow,
+            tip
         ])
         actionStack.orientation = .vertical
-        actionStack.spacing = 10
+        actionStack.spacing = 2
         actionStack.translatesAutoresizingMaskIntoConstraints = false
 
-        if let tip = actionStack.arrangedSubviews.last as? NSTextField {
-            tip.font = .systemFont(ofSize: 12)
-            tip.textColor = .secondaryLabelColor
+        actionStack.setCustomSpacing(10, after: actionTitle)
+        actionStack.setCustomSpacing(6, after: separator)
+        actionStack.setCustomSpacing(8, after: actionNewRow)
+
+        [actionTitle, separator, tip].forEach {
+            $0.widthAnchor.constraint(equalTo: actionStack.widthAnchor).isActive = true
         }
 
         actionPanelView.addSubview(actionStack)
@@ -536,43 +549,30 @@ final class ViewController: NSViewController {
 
             actionPanelView.centerXAnchor.constraint(equalTo: actionOverlayView.centerXAnchor),
             actionPanelView.centerYAnchor.constraint(equalTo: actionOverlayView.centerYAnchor),
-            actionPanelView.widthAnchor.constraint(equalToConstant: 380),
+            actionPanelView.widthAnchor.constraint(equalToConstant: 340),
 
-            actionStack.leadingAnchor.constraint(equalTo: actionPanelView.leadingAnchor, constant: 18),
-            actionStack.trailingAnchor.constraint(equalTo: actionPanelView.trailingAnchor, constant: -18),
-            actionStack.topAnchor.constraint(equalTo: actionPanelView.topAnchor, constant: 16),
-            actionStack.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor, constant: -16)
+            actionStack.leadingAnchor.constraint(equalTo: actionPanelView.leadingAnchor, constant: 10),
+            actionStack.trailingAnchor.constraint(equalTo: actionPanelView.trailingAnchor, constant: -10),
+            actionStack.topAnchor.constraint(equalTo: actionPanelView.topAnchor, constant: 14),
+            actionStack.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor, constant: -10)
         ])
     }
 
     private func bindState() {
-        store.$snippets
-            .sink { [weak self] _ in
-                guard let self else { return }
-                reloadVisibleSnippets(keepSelection: true)
-                if !isEditingDetails {
-                    applySelectedSnippetToEditor()
-                }
+        store.onChange = { [weak self] in
+            guard let self else { return }
+            reloadVisibleSnippets(keepSelection: true)
+            if !isEditingDetails {
+                applySelectedSnippetToEditor()
             }
-            .store(in: &cancellables)
+        }
 
-        engine.$accessibilityGranted
-            .sink { [weak self] _ in
-                self?.updatePermissionBanner()
-            }
-            .store(in: &cancellables)
-
-        engine.$statusText
-            .sink { [weak self] text in
-                self?.permissionStatusLabel.stringValue = text
-            }
-            .store(in: &cancellables)
-
-        engine.$lastExpansionName
-            .sink { [weak self] name in
-                self?.lastActionLabel.stringValue = name.map { "Last action: \($0)" } ?? ""
-            }
-            .store(in: &cancellables)
+        engine.onStateChange = { [weak self] in
+            guard let self else { return }
+            updatePermissionBanner()
+            permissionStatusLabel.stringValue = engine.statusText
+            lastActionLabel.stringValue = engine.lastExpansionName.map { "Last action: \($0)" } ?? ""
+        }
     }
 
     private func updatePermissionBanner() {
@@ -1153,12 +1153,14 @@ private final class ActionShortcutRow: NSView {
     init(title: String, shortcut: String) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 6
 
         titleField.stringValue = title
         titleField.font = .systemFont(ofSize: 14, weight: .medium)
         let shortcutField = NSTextField(labelWithString: shortcut)
-        shortcutField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        shortcutField.textColor = .secondaryLabelColor
+        shortcutField.font = .systemFont(ofSize: 14, weight: .regular)
+        shortcutField.textColor = .tertiaryLabelColor
 
         let stack = NSStackView(views: [titleField, NSView(), shortcutField])
         stack.orientation = .horizontal
@@ -1169,10 +1171,10 @@ private final class ActionShortcutRow: NSView {
         addSubview(stack)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor)
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
         ])
     }
 

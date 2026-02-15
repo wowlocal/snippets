@@ -1,14 +1,15 @@
 import AppKit
 import Carbon.HIToolbox
-import Combine
 import Foundation
 
 @MainActor
-final class SnippetExpansionEngine: ObservableObject {
-    @Published private(set) var accessibilityGranted = false
-    @Published private(set) var listening = false
-    @Published private(set) var lastExpansionName: String?
-    @Published private(set) var statusText = "Grant Accessibility permissions to start snippet expansion."
+final class SnippetExpansionEngine {
+    private(set) var accessibilityGranted = false { didSet { onStateChange?() } }
+    private(set) var listening = false
+    private(set) var lastExpansionName: String? { didSet { onStateChange?() } }
+    private(set) var statusText = "Grant Accessibility permissions to start snippet expansion." { didSet { onStateChange?() } }
+
+    var onStateChange: (() -> Void)?
 
     private let store: SnippetStore
     private var globalMonitor: Any?
