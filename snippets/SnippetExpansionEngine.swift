@@ -187,8 +187,8 @@ final class SnippetExpansionEngine {
             return
         }
 
-        // Return/Tab selects
-        if event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) || event.keyCode == UInt16(kVK_Tab) {
+        // Tab selects
+        if event.keyCode == UInt16(kVK_Tab) {
             if let snippet = suggestionPanel.selectedSnippet() {
                 let deleteCount = 1 + suggestionQuery.count // backslash + query
                 dismissSuggestions()
