@@ -8,7 +8,11 @@
       "WebSearch",
       "WebFetch(domain:www.chromium.org)",
       "Bash(swift build:*)",
-      "Bash(plutil:*)"
+      "Bash(plutil:*)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:balatero.com)"
     ]
   }
 }
