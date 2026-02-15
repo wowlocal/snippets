@@ -6,7 +6,6 @@ extension ViewController {
         selectedSnippetID = id
         syncTableSelectionWithSelectedSnippet()
         applySelectedSnippetToEditor()
-        updateActionPanelPinLabel()
 
         if focusEditorName {
             view.window?.makeFirstResponder(nameField)
@@ -35,11 +34,6 @@ extension ViewController {
     }
 
     func openActionPanel() {
-        let hasSelection = selectedSnippet != nil
-        updateActionPanelPinLabel()
-        [actionPasteRow, actionEditRow, actionDuplicateRow, actionPinRow].forEach {
-            $0.alphaValue = hasSelection ? 1.0 : 0.3
-        }
         actionOverlayView.isHidden = false
         view.window?.makeFirstResponder(tableView)
     }
@@ -47,11 +41,6 @@ extension ViewController {
     func closeActionPanel() {
         actionOverlayView.isHidden = true
         view.window?.makeFirstResponder(tableView)
-    }
-
-    func updateActionPanelPinLabel() {
-        let isPinned = selectedSnippet?.isPinned == true
-        actionPinRow.setTitle(isPinned ? "Unpin Snippet" : "Pin Snippet")
     }
 
     @objc func refreshPermissions() {

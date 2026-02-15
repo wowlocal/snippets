@@ -30,14 +30,14 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
         guard row >= 0, row < visibleSnippets.count else {
             selectedSnippetID = nil
             applySelectedSnippetToEditor()
-            updateActionPanelPinLabel()
+    
             deleteButton.isEnabled = false
             return
         }
 
         selectedSnippetID = visibleSnippets[row].id
         applySelectedSnippetToEditor()
-        updateActionPanelPinLabel()
+
         deleteButton.isEnabled = true
     }
 }

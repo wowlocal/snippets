@@ -41,7 +41,6 @@ extension ViewController {
 
         tableView.reloadData()
         syncTableSelectionWithSelectedSnippet()
-        updateActionPanelPinLabel()
         deleteButton.isEnabled = selectedSnippetID != nil
     }
 

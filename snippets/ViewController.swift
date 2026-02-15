@@ -53,10 +53,6 @@ final class ViewController: NSViewController {
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSVisualEffectView()
-    let actionPasteRow = ActionShortcutRow(title: "Paste Snippet", shortcut: "⌘↩")
-    let actionEditRow = ActionShortcutRow(title: "Edit Snippet", shortcut: "⌘E")
-    let actionDuplicateRow = ActionShortcutRow(title: "Duplicate Snippet", shortcut: "⌘D")
-    let actionPinRow = ActionShortcutRow(title: "Pin Snippet", shortcut: "⌘.")
 
     override func viewDidLoad() {
         super.viewDidLoad()

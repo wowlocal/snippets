@@ -398,14 +398,9 @@ extension ViewController {
         actionPanelView.layer?.borderWidth = 1
         actionPanelView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
 
-        let actionTitle = NSTextField(labelWithString: "Actions")
+        let actionTitle = NSTextField(labelWithString: "Keyboard Shortcuts")
         actionTitle.font = .systemFont(ofSize: 16, weight: .semibold)
         actionTitle.alignment = .center
-
-        let separator = NSBox()
-        separator.boxType = .separator
-
-        let actionNewRow = ActionShortcutRow(title: "Create New Snippet", shortcut: "⌘N")
 
         let tip = NSTextField(labelWithString: "esc to dismiss")
         tip.font = .systemFont(ofSize: 11)
@@ -414,12 +409,16 @@ extension ViewController {
 
         let actionStack = NSStackView(views: [
             actionTitle,
-            actionPasteRow,
-            actionEditRow,
-            actionDuplicateRow,
-            actionPinRow,
-            separator,
-            actionNewRow,
+            ActionShortcutRow(title: "Copy Snippet", shortcut: "↩"),
+            ActionShortcutRow(title: "Paste Snippet", shortcut: "⌘↩"),
+            ActionShortcutRow(title: "Edit Snippet", shortcut: "⌘E"),
+            ActionShortcutRow(title: "Duplicate Snippet", shortcut: "⌘D"),
+            ActionShortcutRow(title: "Pin / Unpin", shortcut: "⌘."),
+            ActionShortcutRow(title: "Create New Snippet", shortcut: "⌘N"),
+            ActionShortcutRow(title: "Delete Snippet", shortcut: "⌘⌫"),
+            ActionShortcutRow(title: "Search", shortcut: "⌘F"),
+            ActionShortcutRow(title: "Import", shortcut: "⇧⌘I"),
+            ActionShortcutRow(title: "Export", shortcut: "⇧⌘E"),
             tip
         ])
         actionStack.orientation = .vertical
@@ -427,10 +426,9 @@ extension ViewController {
         actionStack.translatesAutoresizingMaskIntoConstraints = false
 
         actionStack.setCustomSpacing(10, after: actionTitle)
-        actionStack.setCustomSpacing(6, after: separator)
-        actionStack.setCustomSpacing(8, after: actionNewRow)
+        actionStack.setCustomSpacing(8, after: actionStack.arrangedSubviews[actionStack.arrangedSubviews.count - 2])
 
-        [actionTitle, separator, tip].forEach {
+        [actionTitle, tip].forEach {
             $0.widthAnchor.constraint(equalTo: actionStack.widthAnchor).isActive = true
         }
 

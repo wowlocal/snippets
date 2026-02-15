@@ -58,21 +58,19 @@ extension ViewController {
             return nil
         }
 
-        if !actionOverlayView.isHidden {
-            if flags == [.command] && isReturnKey(event) {
-                pasteSelectedSnippet()
-                closeActionPanel()
-                return nil
-            }
-            if flags == [.command] && lowerCharacters == "d" {
-                duplicateSelectedSnippet()
-                return nil
-            }
-            if flags == [.command] && lowerCharacters == "." {
-                togglePinnedSelectedSnippet()
-                return nil
-            }
-            return event
+        if flags == [.command] && isReturnKey(event) {
+            pasteSelectedSnippet()
+            return nil
+        }
+
+        if flags == [.command] && lowerCharacters == "d" {
+            duplicateSelectedSnippet()
+            return nil
+        }
+
+        if flags == [.command] && lowerCharacters == "." {
+            togglePinnedSelectedSnippet()
+            return nil
         }
 
         if flags == [.control] && lowerCharacters == "n" && isListContext {

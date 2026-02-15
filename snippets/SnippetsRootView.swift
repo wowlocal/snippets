@@ -212,19 +212,26 @@ struct SnippetsRootView: View {
                     closeActionPanel()
                 }
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Actions")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Keyboard Shortcuts")
                     .font(.title3.weight(.semibold))
+                    .padding(.bottom, 4)
 
+                ActionRow(title: "Copy Snippet", shortcut: "↩")
                 ActionRow(title: "Paste Snippet", shortcut: "⌘↩")
                 ActionRow(title: "Edit Snippet", shortcut: "⌘E")
                 ActionRow(title: "Duplicate Snippet", shortcut: "⌘D")
-                ActionRow(title: selectedSnippet?.isPinned == true ? "Unpin Snippet" : "Pin Snippet", shortcut: "⌘.")
+                ActionRow(title: "Pin / Unpin", shortcut: "⌘.")
                 ActionRow(title: "Create New Snippet", shortcut: "⌘N")
+                ActionRow(title: "Delete Snippet", shortcut: "⌘⌫")
+                ActionRow(title: "Search", shortcut: "⌘F")
+                ActionRow(title: "Import", shortcut: "⇧⌘I")
+                ActionRow(title: "Export", shortcut: "⇧⌘E")
 
                 Text("Esc to close")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.top, 4)
             }
             .padding(18)
             .background(.regularMaterial)
@@ -283,22 +290,20 @@ struct SnippetsRootView: View {
             }
             .keyboardShortcut("e", modifiers: [.command])
 
-            if showingActionPanel {
-                Button("Paste Snippet") {
-                    pasteSelectedSnippet()
-                }
-                .keyboardShortcut(.return, modifiers: [.command])
-
-                Button("Duplicate Snippet") {
-                    duplicateSelectedSnippet()
-                }
-                .keyboardShortcut("d", modifiers: [.command])
-
-                Button("Pin Toggle") {
-                    togglePinnedSelectedSnippet()
-                }
-                .keyboardShortcut(".", modifiers: [.command])
+            Button("Paste Snippet") {
+                pasteSelectedSnippet()
             }
+            .keyboardShortcut(.return, modifiers: [.command])
+
+            Button("Duplicate Snippet") {
+                duplicateSelectedSnippet()
+            }
+            .keyboardShortcut("d", modifiers: [.command])
+
+            Button("Pin Toggle") {
+                togglePinnedSelectedSnippet()
+            }
+            .keyboardShortcut(".", modifiers: [.command])
 
             Button("Escape") {
                 handleEscape()
