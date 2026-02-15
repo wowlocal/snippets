@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		272782D72F41F9F1000B9989 /* snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = snippets.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Snippets.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +40,7 @@
 		272782D82F41F9F1000B9989 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				272782D72F41F9F1000B9989 /* snippets.app */,
+				272782D72F41F9F1000B9989 /* Snippets.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		272782D62F41F9F1000B9989 /* snippets */ = {
+		272782D62F41F9F1000B9989 /* Snippets */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 272782E52F41F9F2000B9989 /* Build configuration list for PBXNativeTarget "snippets" */;
+			buildConfigurationList = 272782E52F41F9F2000B9989 /* Build configuration list for PBXNativeTarget "Snippets" */;
 			buildPhases = (
 				272782D32F41F9F1000B9989 /* Sources */,
 				272782D42F41F9F1000B9989 /* Frameworks */,
@@ -63,11 +63,11 @@
 			fileSystemSynchronizedGroups = (
 				272782D92F41F9F1000B9989 /* snippets */,
 			);
-			name = snippets;
+			name = Snippets;
 			packageProductDependencies = (
 			);
 			productName = snippets;
-			productReference = 272782D72F41F9F1000B9989 /* snippets.app */;
+			productReference = 272782D72F41F9F1000B9989 /* Snippets.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "snippets" */;
+			buildConfigurationList = 272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "Snippets" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				272782D62F41F9F1000B9989 /* snippets */,
+				272782D62F41F9F1000B9989 /* Snippets */,
 			);
 		};
 /* End PBXProject section */
@@ -320,7 +320,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "snippets" */ = {
+		272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "Snippets" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				272782E32F41F9F2000B9989 /* Debug */,
@@ -329,7 +329,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		272782E52F41F9F2000B9989 /* Build configuration list for PBXNativeTarget "snippets" */ = {
+		272782E52F41F9F2000B9989 /* Build configuration list for PBXNativeTarget "Snippets" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				272782E62F41F9F2000B9989 /* Debug */,
