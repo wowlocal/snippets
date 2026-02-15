@@ -202,11 +202,15 @@ final class SnippetExpansionEngine {
 
         // Backspace
         if event.keyCode == UInt16(kVK_Delete) {
-            if !suggestionQuery.isEmpty {
+            if suggestionQuery.isEmpty {
+                // Query is empty — deleting the backslash, so dismiss
+                dismissSuggestions()
+                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
+            } else {
                 suggestionQuery.removeLast()
                 if !typedBuffer.isEmpty { typedBuffer.removeLast() }
+                updateSuggestionResults()
             }
-            updateSuggestionResults()
             return
         }
 
