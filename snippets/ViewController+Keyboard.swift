@@ -69,6 +69,16 @@ extension ViewController {
             return event
         }
 
+        if flags == [.control] && lowerCharacters == "n" && isListContext {
+            selectAdjacentSnippet(direction: .down)
+            return nil
+        }
+
+        if flags == [.control] && lowerCharacters == "p" && isListContext {
+            selectAdjacentSnippet(direction: .up)
+            return nil
+        }
+
         if flags.isEmpty && isReturnKey(event) && isListContext {
             copySelectedSnippet()
             return nil
@@ -101,5 +111,21 @@ extension ViewController {
 
     func isReturnKey(_ event: NSEvent) -> Bool {
         event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
+    }
+
+    enum TableDirection { case up, down }
+
+    func selectAdjacentSnippet(direction: TableDirection) {
+        guard !visibleSnippets.isEmpty else { return }
+        let current = tableView.selectedRow
+        let next: Int
+        switch direction {
+        case .down:
+            next = current < visibleSnippets.count - 1 ? current + 1 : current
+        case .up:
+            next = current > 0 ? current - 1 : 0
+        }
+        tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
+        tableView.scrollRowToVisible(next)
     }
 }
