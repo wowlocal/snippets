@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import UniformTypeIdentifiers
 
 extension ViewController {
@@ -172,5 +173,19 @@ extension ViewController {
 
     @objc func enabledStateChanged() {
         updateSelectedSnippetFromEditor()
+    }
+
+    @objc func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            NSLog("Launch at login toggle failed: \(error)")
+        }
+        launchAtLoginCheckbox.state = service.status == .enabled ? .on : .off
     }
 }

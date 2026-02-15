@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import ServiceManagement
 import UniformTypeIdentifiers
 
 @MainActor
@@ -50,6 +51,8 @@ final class ViewController: NSViewController {
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
     let previewSectionStack = NSStackView()
+
+    let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch at Login", target: nil, action: nil)
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSVisualEffectView()
