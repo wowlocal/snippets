@@ -3,19 +3,18 @@ import AppKit
 extension ViewController {
     func updatePermissionBanner() {
         if engine.accessibilityGranted {
-            permissionIconView.image = NSImage(systemSymbolName: "checkmark.seal.fill", accessibilityDescription: nil)
-            permissionIconView.contentTintColor = .systemGreen
-            permissionTitleLabel.stringValue = "Permissions Ready"
-            permissionTitleLabel.textColor = .systemGreen
-            permissionButtonsStack.isHidden = true
+            permissionBannerContainer.isHidden = true
+            permissionBannerDivider.isHidden = true
         } else {
+            permissionBannerContainer.isHidden = false
+            permissionBannerDivider.isHidden = false
             permissionIconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
             permissionIconView.contentTintColor = .systemOrange
             permissionTitleLabel.stringValue = "Permissions Required"
             permissionTitleLabel.textColor = .systemOrange
             permissionButtonsStack.isHidden = false
+            permissionStatusLabel.stringValue = engine.statusText
         }
-        permissionStatusLabel.stringValue = engine.statusText
     }
 
     func reloadVisibleSnippets(keepSelection: Bool) {

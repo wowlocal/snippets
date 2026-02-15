@@ -31,6 +31,8 @@ final class ViewController: NSViewController {
         }
     }
 
+    let permissionBannerContainer = NSView()
+    let permissionBannerDivider = NSBox()
     let permissionIconView = NSImageView()
     let permissionTitleLabel = NSTextField(labelWithString: "")
     let permissionStatusLabel = NSTextField(labelWithString: "")

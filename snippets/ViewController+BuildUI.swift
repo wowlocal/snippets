@@ -15,9 +15,8 @@ extension ViewController {
         let banner = buildPermissionBanner()
         rootStack.addArrangedSubview(banner)
 
-        let divider = NSBox()
-        divider.boxType = .separator
-        rootStack.addArrangedSubview(divider)
+        permissionBannerDivider.boxType = .separator
+        rootStack.addArrangedSubview(permissionBannerDivider)
 
         let splitView = NSSplitView()
         splitView.isVertical = true
@@ -39,7 +38,7 @@ extension ViewController {
 
         rootStack.addArrangedSubview(splitView)
 
-        [banner, divider, splitView].forEach {
+        [banner, permissionBannerDivider, splitView].forEach {
             $0.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
         }
 
@@ -54,7 +53,7 @@ extension ViewController {
     }
 
     func buildPermissionBanner() -> NSView {
-        let container = NSView()
+        let container = permissionBannerContainer
         container.translatesAutoresizingMaskIntoConstraints = false
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.15).cgColor

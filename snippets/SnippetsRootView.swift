@@ -25,8 +25,10 @@ struct SnippetsRootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            permissionsBanner
-            Divider()
+            if !engine.accessibilityGranted {
+                permissionsBanner
+                Divider()
+            }
 
             HSplitView {
                 sidebar
