@@ -4,7 +4,10 @@
       "Bash(wc:*)",
       "Bash(xcodebuild:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebSearch",
+      "WebFetch(domain:www.chromium.org)",
+      "Bash(swift build:*)"
     ]
   }
 }
