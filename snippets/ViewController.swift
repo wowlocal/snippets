@@ -1118,13 +1118,8 @@ private final class SnippetRowCellView: NSTableCellView {
     }
 
     private func applyTextColors() {
-        if isSelectedStyle {
-            nameLabel.textColor = .white
-            keywordLabel.textColor = .white.withAlphaComponent(0.74)
-        } else {
-            nameLabel.textColor = .labelColor
-            keywordLabel.textColor = .secondaryLabelColor
-        }
+        nameLabel.textColor = .labelColor
+        keywordLabel.textColor = .secondaryLabelColor
     }
 }
 
@@ -1133,8 +1128,8 @@ private final class SnippetTableRowView: NSTableRowView {
         guard selectionHighlightStyle != .none else { return }
 
         let selectionRect = bounds.insetBy(dx: 4, dy: 1)
-        let path = NSBezierPath(roundedRect: selectionRect, xRadius: 10, yRadius: 10)
-        NSColor.controlAccentColor.withAlphaComponent(0.95).setFill()
+        let path = NSBezierPath(roundedRect: selectionRect, xRadius: 8, yRadius: 8)
+        NSColor.white.withAlphaComponent(0.10).setFill()
         path.fill()
     }
 }
