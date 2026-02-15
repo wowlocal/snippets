@@ -12,6 +12,8 @@ This project now implements a local snippet expander app for macOS.
 - Expands snippets globally in other apps by replacing the typed keyword with snippet content.
 - Persists snippets to:
   - `~/Library/Application Support/SnippetsClone/snippets.json`
+- Imports snippets from JSON.
+- Exports snippets to JSON.
 - Supports dynamic placeholders:
   - `{clipboard}`
   - `{date}`
@@ -36,6 +38,27 @@ Open `/Users/mike/src/tries/2026-02-15-snippets/snippets/snippets.xcodeproj` in 
 
 - Keywords that start with punctuation (like `\\tp`) can expand immediately when fully typed.
 - Any keyword can also expand when followed by `Space`, `Tab`, or `Return`.
+
+## Import / Export
+
+- Use the `Import` button to load snippets from a `.json` file.
+- Use the `Export` button to save all current snippets into a `.json` file.
+- Import merges by snippet `id` first, then by `keyword` (case-insensitive) if IDs differ.
+
+## Keyboard Navigation
+
+- `⌘⇧N`: create a new snippet.
+- `⌘⇧I`: import snippets from JSON.
+- `⌘⇧E`: export snippets to JSON.
+- `⌘⌫`: delete selected snippet.
+- `⌘L`: focus search.
+- `⌘1`: focus snippet list.
+- `⌘2`: focus Name field.
+- `⌘3`: focus Snippet editor.
+- `⌘4`: focus Keyword field.
+- `⌃J`: select next snippet.
+- `⌃K`: select previous snippet.
+- `Esc`: return focus to snippet list.
 
 ## Notes
 

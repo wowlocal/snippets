@@ -9,6 +9,27 @@ final class SnippetStore: ObservableObject {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
+    enum ImportExportError: LocalizedError {
+        case emptyImport
+        case invalidFormat
+        case cannotAccessFile
+
+        var errorDescription: String? {
+            switch self {
+            case .emptyImport:
+                return "The selected file does not contain any snippets."
+            case .invalidFormat:
+                return "Unsupported file format. Expected JSON exported from this app."
+            case .cannotAccessFile:
+                return "Could not read or write the selected file."
+            }
+        }
+    }
+
+    private struct SnippetCollection: Codable {
+        let snippets: [Snippet]
+    }
+
     init() {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
@@ -57,6 +78,65 @@ final class SnippetStore: ObservableObject {
             }
     }
 
+    @discardableResult
+    func importSnippets(from url: URL) throws -> Int {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw ImportExportError.cannotAccessFile
+        }
+
+        var imported = try decodeImportData(data)
+        imported = normalizeImportedSnippets(imported)
+
+        guard !imported.isEmpty else {
+            throw ImportExportError.emptyImport
+        }
+
+        var merged = snippets
+        var importedCount = 0
+
+        for incoming in imported {
+            if let idIndex = merged.firstIndex(where: { $0.id == incoming.id }) {
+                merged[idIndex] = incoming
+                importedCount += 1
+                continue
+            }
+
+            if !incoming.normalizedKeyword.isEmpty,
+               let keywordIndex = merged.firstIndex(where: {
+                   $0.normalizedKeyword.caseInsensitiveCompare(incoming.normalizedKeyword) == .orderedSame
+               }) {
+                var replacement = incoming
+                replacement.id = merged[keywordIndex].id
+                replacement.createdAt = merged[keywordIndex].createdAt
+                merged[keywordIndex] = replacement
+                importedCount += 1
+                continue
+            }
+
+            merged.insert(incoming, at: 0)
+            importedCount += 1
+        }
+
+        snippets = merged
+        persist()
+        return importedCount
+    }
+
+    @discardableResult
+    func exportSnippets(to url: URL) throws -> Int {
+        do {
+            let payload = SnippetCollection(snippets: snippets)
+            let data = try encoder.encode(payload)
+            try data.write(to: url, options: .atomic)
+            return snippets.count
+        } catch {
+            throw ImportExportError.cannotAccessFile
+        }
+    }
+
     private func load() {
         guard FileManager.default.fileExists(atPath: saveURL.path) else {
             snippets = [Snippet.starterSnippet]
@@ -66,11 +146,46 @@ final class SnippetStore: ObservableObject {
 
         do {
             let data = try Data(contentsOf: saveURL)
-            snippets = try decoder.decode([Snippet].self, from: data)
+            snippets = try decodeImportData(data)
         } catch {
             snippets = [Snippet.starterSnippet]
             persist()
         }
+    }
+
+    private func decodeImportData(_ data: Data) throws -> [Snippet] {
+        if let directArray = try? decoder.decode([Snippet].self, from: data) {
+            return directArray
+        }
+
+        if let collection = try? decoder.decode(SnippetCollection.self, from: data) {
+            return collection.snippets
+        }
+
+        throw ImportExportError.invalidFormat
+    }
+
+    private func normalizeImportedSnippets(_ imported: [Snippet]) -> [Snippet] {
+        var normalized: [Snippet] = []
+        var seenIDs = Set<UUID>()
+
+        for item in imported {
+            var snippet = item
+            snippet.keyword = snippet.normalizedKeyword
+
+            if seenIDs.contains(snippet.id) {
+                snippet.id = UUID()
+            }
+            seenIDs.insert(snippet.id)
+
+            if snippet.updatedAt < snippet.createdAt {
+                snippet.updatedAt = snippet.createdAt
+            }
+
+            normalized.append(snippet)
+        }
+
+        return normalized
     }
 
     private func persist() {
