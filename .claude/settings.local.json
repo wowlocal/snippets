@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(wc:*)",
-      "Bash(xcodebuild:*)"
+      "Bash(xcodebuild:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
