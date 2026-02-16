@@ -298,8 +298,8 @@ final class SnippetExpansionEngine {
             return true
         }
 
-        // Tab selects — suppress so target app doesn't move focus
-        if event.keyCode == UInt16(kVK_Tab) {
+        // Tab or Return selects — suppress so target app doesn't act on the key
+        if event.keyCode == UInt16(kVK_Tab) || event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
             if let snippet = suggestionPanel.selectedSnippet() {
                 let deleteCount = 1 + suggestionQuery.count // backslash + query
                 dismissSuggestions()
