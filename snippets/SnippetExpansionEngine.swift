@@ -171,15 +171,16 @@ final class SnippetExpansionEngine {
             return false
         }
 
+        // Suggestion mode handling — check before modifier guard so
+        // Ctrl+N / Ctrl+P can navigate the list.
+        if suggestionActive {
+            return handleSuggestionEvent(event)
+        }
+
         if !event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty {
             typedBuffer = ""
             dismissSuggestions()
             return false
-        }
-
-        // Suggestion mode handling
-        if suggestionActive {
-            return handleSuggestionEvent(event)
         }
 
         if event.keyCode == UInt16(kVK_Delete) {
@@ -238,14 +239,23 @@ final class SnippetExpansionEngine {
 
     /// Returns `true` if the event should be suppressed (consumed by us).
     private func handleSuggestionEvent(_ event: NSEvent) -> Bool {
-        // Arrow keys navigate the list — suppress so target app doesn't see them
-        if event.keyCode == UInt16(kVK_DownArrow) {
+        let ctrl = event.modifierFlags.contains(.control)
+
+        // Arrow keys / Ctrl+N/P navigate the list — suppress so target app doesn't see them
+        if event.keyCode == UInt16(kVK_DownArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_N)) {
             suggestionPanel.moveSelectionDown()
             return true
         }
-        if event.keyCode == UInt16(kVK_UpArrow) {
+        if event.keyCode == UInt16(kVK_UpArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_P)) {
             suggestionPanel.moveSelectionUp()
             return true
+        }
+
+        // Any other modifier combo while suggestions are active — dismiss
+        if !event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty {
+            typedBuffer = ""
+            dismissSuggestions()
+            return false
         }
 
         // Escape dismisses — suppress
