@@ -26,7 +26,7 @@ extension ViewController {
         }
     }
 
-    func toggleActionPanel() {
+    @objc func toggleActionPanel() {
         if actionOverlayView.isHidden {
             openActionPanel()
         } else {

@@ -1,7 +1,19 @@
 import AppKit
 
+private final class DotView: NSView {
+    var color: NSColor = .secondaryLabelColor {
+        didSet { needsDisplay = true }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        NSBezierPath(ovalIn: bounds).fill()
+    }
+}
+
 final class SnippetRowCellView: NSTableCellView {
-    private let indicatorView = NSImageView()
+    private let dotView = DotView()
+    private let pinView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
     private let contentPreviewLabel = NSTextField(labelWithString: "")
@@ -29,9 +41,20 @@ final class SnippetRowCellView: NSTableCellView {
         contentPreviewLabel.lineBreakMode = .byTruncatingTail
         contentPreviewLabel.maximumNumberOfLines = 1
 
-        indicatorView.translatesAutoresizingMaskIntoConstraints = false
-        indicatorView.widthAnchor.constraint(equalToConstant: 10).isActive = true
-        indicatorView.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        dotView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            dotView.widthAnchor.constraint(equalToConstant: 10),
+            dotView.heightAnchor.constraint(equalToConstant: 10),
+        ])
+
+        pinView.translatesAutoresizingMaskIntoConstraints = false
+        pinView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: nil)
+        pinView.contentTintColor = .systemYellow
+        pinView.symbolConfiguration = .init(pointSize: 10, weight: .regular)
+        NSLayoutConstraint.activate([
+            pinView.widthAnchor.constraint(equalToConstant: 10),
+            pinView.heightAnchor.constraint(equalToConstant: 10),
+        ])
 
         let topRow = NSStackView(views: [nameLabel, keywordLabel])
         topRow.orientation = .horizontal
@@ -43,7 +66,7 @@ final class SnippetRowCellView: NSTableCellView {
         labelsStack.spacing = 2
         labelsStack.alignment = .leading
 
-        let rootStack = NSStackView(views: [indicatorView, labelsStack])
+        let rootStack = NSStackView(views: [dotView, pinView, labelsStack])
         rootStack.orientation = .horizontal
         rootStack.spacing = 8
         rootStack.alignment = .centerY
@@ -81,11 +104,12 @@ final class SnippetRowCellView: NSTableCellView {
         contentPreviewLabel.isHidden = preview.isEmpty
 
         if snippet.isPinned {
-            indicatorView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: nil)
-            indicatorView.contentTintColor = .systemYellow
+            dotView.isHidden = true
+            pinView.isHidden = false
         } else {
-            indicatorView.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
-            indicatorView.contentTintColor = snippet.isEnabled ? .systemGreen : .secondaryLabelColor
+            dotView.isHidden = false
+            pinView.isHidden = true
+            dotView.color = snippet.isEnabled ? .systemGreen : .secondaryLabelColor
         }
 
         applyTextColors()
@@ -105,12 +129,21 @@ final class SnippetRowCellView: NSTableCellView {
 }
 
 final class SnippetTableRowView: NSTableRowView {
+    override var isEmphasized: Bool {
+        get { false }
+        set {}
+    }
+
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
 
         let selectionRect = bounds.insetBy(dx: 4, dy: 1)
         let path = NSBezierPath(roundedRect: selectionRect, xRadius: 8, yRadius: 8)
-        NSColor.white.withAlphaComponent(0.10).setFill()
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let color = isDark
+            ? NSColor.white.withAlphaComponent(0.10)
+            : NSColor.black.withAlphaComponent(0.06)
+        color.setFill()
         path.fill()
     }
 }

@@ -131,12 +131,19 @@ extension ViewController {
         moreButton.isBordered = false
         moreButton.toolTip = "Import, Export..."
 
-        let newButton = NSButton(title: "New", target: self, action: #selector(createSnippet))
-        newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        let newButton = NSButton(title: "", target: self, action: #selector(createSnippet))
+        let plusConfig = NSImage.SymbolConfiguration(pointSize: NSFont.systemFontSize, weight: .semibold)
+            .applying(.init(paletteColors: [.white]))
+        newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
+            .withSymbolConfiguration(plusConfig)
         newButton.imagePosition = .imageLeading
+        newButton.imageHugsTitle = true
         newButton.bezelStyle = .rounded
         newButton.bezelColor = .systemBlue
-        newButton.contentTintColor = .white
+        newButton.attributedTitle = NSAttributedString(string: "New", attributes: [
+            .foregroundColor: NSColor.white,
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+        ])
         newButton.keyEquivalent = "n"
         newButton.keyEquivalentModifierMask = [.command]
 
@@ -178,7 +185,7 @@ extension ViewController {
         deleteButton.imagePosition = .imageLeading
         deleteButton.bezelStyle = .rounded
 
-        let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: nil, action: nil)
+        let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: self, action: #selector(toggleActionPanel))
         helpButton.bezelStyle = .rounded
         helpButton.isBordered = false
         helpButton.toolTip = "↩ Copy  ⌘K Actions  ⌘N New  ⌘F Search  ⌘⌫ Delete  ↑↓ Navigate  ⎋ Back"
