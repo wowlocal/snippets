@@ -36,6 +36,9 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
 
     var onSelect: ((Snippet) -> Void)?
+    var onDismiss: (() -> Void)?
+    private var globalClickMonitor: Any?
+    private var localClickMonitor: Any?
 
     override init() {
         panel = NSPanel(
@@ -91,6 +94,15 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.target = self
+        tableView.action = #selector(rowClicked)
+    }
+
+    @objc private func rowClicked() {
+        let row = tableView.clickedRow
+        guard row >= 0, row < items.count else { return }
+        let snippet = items[row].snippet
+        onSelect?(snippet)
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -123,12 +135,16 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
 		scrollView.hasVerticalScroller = (count > visibleCount)
 
-		if !panel.isVisible { panel.orderFront(nil) }
+		if !panel.isVisible {
+			panel.orderFront(nil)
+			installClickMonitors()
+		}
 		tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
 	}
 
 
     func dismiss() {
+        removeClickMonitors()
         panel.orderOut(nil)
         items = []
     }
@@ -151,6 +167,30 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         let row = tableView.selectedRow
         guard row >= 0, row < items.count else { return nil }
         return items[row].snippet
+    }
+
+    // MARK: - Click-Outside Dismissal
+
+    private func installClickMonitors() {
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.handleOutsideClick(event)
+        }
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.handleOutsideClick(event)
+            return event
+        }
+    }
+
+    private func removeClickMonitors() {
+        if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
+        if let m = localClickMonitor { NSEvent.removeMonitor(m); localClickMonitor = nil }
+    }
+
+    private func handleOutsideClick(_ event: NSEvent) {
+        guard panel.isVisible else { return }
+        let mouseLocation = NSEvent.mouseLocation
+        if panel.frame.contains(mouseLocation) { return }
+        onDismiss?()
     }
 
     // MARK: - Positioning

@@ -227,7 +227,22 @@ final class SnippetExpansionEngine {
     private func activateSuggestions() {
         suggestionActive = true
         suggestionQuery = ""
+
+        suggestionPanel.onSelect = { [weak self] snippet in
+            self?.selectSuggestion(snippet)
+        }
+        suggestionPanel.onDismiss = { [weak self] in
+            self?.dismissSuggestions()
+        }
+
         updateSuggestionResults()
+    }
+
+    private func selectSuggestion(_ snippet: Snippet) {
+        let deleteCount = 1 + suggestionQuery.count // backslash + query
+        dismissSuggestions()
+        expand(snippet: snippet, deleteCount: deleteCount)
+        typedBuffer = ""
     }
 
     private func dismissSuggestions() {
