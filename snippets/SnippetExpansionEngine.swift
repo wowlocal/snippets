@@ -12,7 +12,8 @@ final class SnippetExpansionEngine {
     var onStateChange: (() -> Void)?
 
     private let store: SnippetStore
-    private var globalMonitor: Any?
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
     private var localMonitor: Any?
 
     private var typedBuffer = ""
@@ -30,12 +31,8 @@ final class SnippetExpansionEngine {
     }
 
     func startIfNeeded() {
-        if globalMonitor == nil {
-            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                Task { @MainActor in
-                    self?.handle(event: event)
-                }
-            }
+        if eventTap == nil {
+            installEventTap()
         }
 
         if localMonitor == nil {
@@ -49,14 +46,63 @@ final class SnippetExpansionEngine {
         refreshAccessibilityStatus(prompt: false)
     }
 
+    /// Install a CGEvent tap so we can intercept (suppress) keys like TAB
+    /// while the suggestion overlay is active.
+    private func installEventTap() {
+        // Store a raw pointer to self for the C callback. The tap lives as
+        // long as the engine, so the unretained reference is safe.
+        let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,          // active tap — can modify/suppress events
+            eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
+            callback: { _, _, event, refcon -> Unmanaged<CGEvent>? in
+                guard let refcon else { return Unmanaged.passUnretained(event) }
+                let engine = Unmanaged<SnippetExpansionEngine>.fromOpaque(refcon).takeUnretainedValue()
+                // Must dispatch to main actor synchronously — we need the
+                // return value now to decide whether to suppress the event.
+                // CGEvent tap callbacks run on the run loop thread (main).
+                let consumed = engine.handleEventTap(event)
+                return consumed ? nil : Unmanaged.passUnretained(event)
+            },
+            userInfo: refcon
+        ) else { return }
+
+        eventTap = tap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    /// Called from the CGEvent tap callback on the main thread.
+    /// Returns `true` if the event should be suppressed (consumed by us).
+    nonisolated private func handleEventTap(_ cgEvent: CGEvent) -> Bool {
+        // We're on the main thread (run loop), so we can safely access
+        // MainActor-isolated state via MainActor.assumeIsolated.
+        return MainActor.assumeIsolated {
+            guard listening, !isInjecting else { return false }
+            if frontmostProcessIsThisApp() { return false }
+
+            guard let nsEvent = NSEvent(cgEvent: cgEvent) else { return false }
+            return handle(event: nsEvent)
+        }
+    }
+
     func requestAccessibilityPermission() {
         refreshAccessibilityStatus(prompt: true)
     }
 
     private func restartEventMonitors() {
-        if let monitor = globalMonitor {
-            NSEvent.removeMonitor(monitor)
-            globalMonitor = nil
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            if let source = runLoopSource {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            }
+            runLoopSource = nil
+            eventTap = nil
         }
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)
@@ -114,41 +160,42 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func handle(event: NSEvent) {
-        guard listening, !isInjecting else { return }
+    /// Returns `true` if the event was consumed and should be suppressed.
+    @discardableResult
+    private func handle(event: NSEvent) -> Bool {
+        guard listening, !isInjecting else { return false }
 
         if frontmostProcessIsThisApp() {
             typedBuffer = ""
             dismissSuggestions()
-            return
+            return false
         }
 
         if !event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty {
             typedBuffer = ""
             dismissSuggestions()
-            return
+            return false
         }
 
         // Suggestion mode handling
         if suggestionActive {
-            handleSuggestionEvent(event)
-            return
+            return handleSuggestionEvent(event)
         }
 
         if event.keyCode == UInt16(kVK_Delete) {
             if !typedBuffer.isEmpty {
                 typedBuffer.removeLast()
             }
-            return
+            return false
         }
 
         if event.keyCode == UInt16(kVK_Escape) {
             typedBuffer = ""
-            return
+            return false
         }
 
         guard let character = typedCharacter(from: event) else {
-            return
+            return false
         }
 
         typedBuffer.append(character)
@@ -157,19 +204,21 @@ final class SnippetExpansionEngine {
         // Activate suggestion mode on backslash, only if a text field is focused
         if character == "\\" && focusedElementIsTextInput() {
             activateSuggestions()
-            return
+            return false
         }
 
         if let immediateMatch = matchForImmediateExpansion() {
             expand(snippet: immediateMatch, deleteCount: immediateMatch.normalizedKeyword.count)
             typedBuffer = ""
-            return
+            return false
         }
 
         if isTriggerCharacter(character), let delimiterMatch = matchForDelimiterExpansion(trigger: character) {
             expand(snippet: delimiterMatch, deleteCount: delimiterMatch.normalizedKeyword.count + 1)
             typedBuffer = ""
         }
+
+        return false
     }
 
     // MARK: - Suggestion Mode
@@ -187,25 +236,26 @@ final class SnippetExpansionEngine {
         suggestionPanel.dismiss()
     }
 
-    private func handleSuggestionEvent(_ event: NSEvent) {
-        // Arrow keys navigate the list
+    /// Returns `true` if the event should be suppressed (consumed by us).
+    private func handleSuggestionEvent(_ event: NSEvent) -> Bool {
+        // Arrow keys navigate the list — suppress so target app doesn't see them
         if event.keyCode == UInt16(kVK_DownArrow) {
             suggestionPanel.moveSelectionDown()
-            return
+            return true
         }
         if event.keyCode == UInt16(kVK_UpArrow) {
             suggestionPanel.moveSelectionUp()
-            return
+            return true
         }
 
-        // Escape dismisses
+        // Escape dismisses — suppress
         if event.keyCode == UInt16(kVK_Escape) {
             dismissSuggestions()
             typedBuffer = ""
-            return
+            return true
         }
 
-        // Tab selects
+        // Tab selects — suppress so target app doesn't move focus
         if event.keyCode == UInt16(kVK_Tab) {
             if let snippet = suggestionPanel.selectedSnippet() {
                 let deleteCount = 1 + suggestionQuery.count // backslash + query
@@ -215,10 +265,10 @@ final class SnippetExpansionEngine {
             } else {
                 dismissSuggestions()
             }
-            return
+            return true
         }
 
-        // Backspace
+        // Backspace — let through to target app (it needs to delete characters too)
         if event.keyCode == UInt16(kVK_Delete) {
             if suggestionQuery.isEmpty {
                 // Query is empty — deleting the backslash, so dismiss
@@ -229,12 +279,12 @@ final class SnippetExpansionEngine {
                 if !typedBuffer.isEmpty { typedBuffer.removeLast() }
                 updateSuggestionResults()
             }
-            return
+            return false
         }
 
         guard let character = typedCharacter(from: event) else {
             dismissSuggestions()
-            return
+            return false
         }
 
         // Only allow word characters in suggestion query
@@ -249,6 +299,7 @@ final class SnippetExpansionEngine {
             typedBuffer.append(character)
             trimBufferIfNeeded()
         }
+        return false
     }
 
     private func updateSuggestionResults() {
