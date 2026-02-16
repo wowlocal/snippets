@@ -262,10 +262,13 @@ extension ViewController {
 
         snippetTextView.delegate = self
         snippetTextView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        snippetTextView.textColor = .textColor
+        snippetTextView.backgroundColor = .textBackgroundColor
         snippetTextView.isRichText = false
         snippetTextView.isAutomaticQuoteSubstitutionEnabled = false
         snippetTextView.isAutomaticTextReplacementEnabled = false
         snippetTextView.isAutomaticDataDetectionEnabled = false
+        snippetTextView.autoresizingMask = [.width]
         snippetTextView.minSize = NSSize(width: 0, height: 220)
         snippetTextView.isVerticallyResizable = true
         snippetTextView.textContainerInset = NSSize(width: 8, height: 8)
