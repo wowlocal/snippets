@@ -470,7 +470,10 @@ final class SnippetExpansionEngine {
     private func replaceTypedText(characterCount: Int, with replacement: String) {
         isInjecting = true
 
-        deleteBackward(characterCount: characterCount)
+        // Select the characters to replace using Shift+Left Arrow, then paste
+        // over the selection. This is more reliable than pressing Delete N times
+        // because some apps drop individual delete events when they arrive too fast.
+        selectBackward(characterCount: characterCount)
         paste(replacement)
 
         Task { @MainActor [weak self] in
@@ -479,10 +482,10 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func deleteBackward(characterCount: Int) {
+    private func selectBackward(characterCount: Int) {
         guard characterCount > 0 else { return }
         for _ in 0..<characterCount {
-            postKeyStroke(keyCode: UInt16(kVK_Delete))
+            postKeyStroke(keyCode: UInt16(kVK_LeftArrow), flags: .maskShift)
         }
     }
 
