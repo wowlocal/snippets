@@ -147,8 +147,14 @@ extension ViewController {
         newButton.keyEquivalent = "n"
         newButton.keyEquivalentModifierMask = [.command]
 
+        let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: self, action: #selector(toggleActionPanel))
+        helpButton.bezelStyle = .rounded
+        helpButton.isBordered = false
+        helpButton.toolTip = "Keyboard Shortcuts (⌘K)"
+
         headerStack.addArrangedSubview(titleLabel)
         headerStack.addArrangedSubview(NSView())
+        headerStack.addArrangedSubview(helpButton)
         headerStack.addArrangedSubview(moreButton)
         headerStack.addArrangedSubview(newButton)
 
@@ -185,12 +191,7 @@ extension ViewController {
         deleteButton.imagePosition = .imageLeading
         deleteButton.bezelStyle = .rounded
 
-        let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: self, action: #selector(toggleActionPanel))
-        helpButton.bezelStyle = .rounded
-        helpButton.isBordered = false
-        helpButton.toolTip = "↩ Copy  ⌘K Actions  ⌘N New  ⌘F Search  ⌘⌫ Delete  ↑↓ Navigate  ⎋ Back"
-
-        let footerTopRow = NSStackView(views: [deleteButton, helpButton, NSView(), lastActionLabel])
+        let footerTopRow = NSStackView(views: [deleteButton, NSView(), lastActionLabel])
         footerTopRow.orientation = .horizontal
         footerTopRow.spacing = 6
         footerTopRow.alignment = .centerY
