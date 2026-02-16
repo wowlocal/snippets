@@ -53,11 +53,29 @@ final class SnippetExpansionEngine {
         refreshAccessibilityStatus(prompt: true)
     }
 
+    private func restartEventMonitors() {
+        if let monitor = globalMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalMonitor = nil
+        }
+        if let monitor = localMonitor {
+            NSEvent.removeMonitor(monitor)
+            localMonitor = nil
+        }
+        startIfNeeded()
+    }
+
     func refreshAccessibilityStatus(prompt: Bool) {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt] as CFDictionary
+        let wasGranted = accessibilityGranted
         accessibilityGranted = AXIsProcessTrustedWithOptions(options)
 
         if accessibilityGranted {
+            // Permission was just granted — restart event monitors so they
+            // pick up the new trust status without requiring an app relaunch.
+            if !wasGranted {
+                restartEventMonitors()
+            }
             statusText = listening ? "Listening for snippet keywords in all apps." : "Ready to start listening."
         } else {
             statusText = "Accessibility access is required to watch typing and insert snippets."
