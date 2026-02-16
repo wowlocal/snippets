@@ -367,7 +367,7 @@ final class SnippetExpansionEngine {
         }
 
         if scored.isEmpty {
-            suggestionPanel.dismiss()
+            suggestionPanel.hide()
         } else {
             suggestionPanel.show(items: Array(scored))
         }
