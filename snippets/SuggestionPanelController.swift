@@ -39,6 +39,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     var onDismiss: (() -> Void)?
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
+    private var anchorRect: NSRect?
 
     override init() {
         panel = NSPanel(
@@ -131,7 +132,13 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 		let height = lastRowRect.maxY + insets + safety
 
 		panel.setContentSize(NSSize(width: panelWidth, height: height))
-		positionPanel()
+
+		// Position using the anchor from when suggestions first activated.
+		// This prevents the panel from jumping as the caret moves.
+		if anchorRect == nil {
+			anchorRect = caretScreenRect() ?? fallbackCaretRect()
+		}
+		positionPanelAtAnchor()
 
 		scrollView.hasVerticalScroller = (count > visibleCount)
 
@@ -143,10 +150,17 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 	}
 
 
-    func dismiss() {
+    /// Temporarily hide the panel (e.g. no results), preserving anchor position.
+    func hide() {
         removeClickMonitors()
         panel.orderOut(nil)
         items = []
+    }
+
+    /// Fully end the suggestion session — clears anchor so next activation repositions.
+    func dismiss() {
+        hide()
+        anchorRect = nil
     }
 
     func moveSelectionUp() {
@@ -195,14 +209,21 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     // MARK: - Positioning
 
-    private func positionPanel() {
-        var origin = caretScreenPosition() ?? mousePosition()
+    private func positionPanelAtAnchor() {
+        guard let rect = anchorRect else {
+            // Last resort: use mouse position
+            var origin = mousePosition()
+            origin.y -= panel.frame.height + 4
+            panel.setFrameOrigin(origin)
+            return
+        }
 
-        // Place panel below the caret
-        origin.y -= panel.frame.height + 4
+        // In AppKit coords: rect.origin is bottom-left, rect.maxY is top.
+        // Place panel below the caret line (below rect.origin.y).
+        var origin = NSPoint(x: rect.origin.x, y: rect.origin.y - panel.frame.height - 4)
 
         // Keep on screen
-        if let screen = NSScreen.screens.first(where: { NSMouseInRect(origin, $0.visibleFrame, false) }) ?? NSScreen.main {
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(NSPoint(x: rect.midX, y: rect.midY), $0.visibleFrame, false) }) ?? NSScreen.main {
             let visible = screen.visibleFrame
             if origin.x + panelWidth > visible.maxX {
                 origin.x = visible.maxX - panelWidth
@@ -212,14 +233,15 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             }
             if origin.y < visible.minY {
                 // Show above caret instead
-                origin.y += panel.frame.height + 8 + 20
+                origin.y = rect.maxY + 4
             }
         }
 
         panel.setFrameOrigin(origin)
     }
 
-    private func caretScreenPosition() -> NSPoint? {
+    /// Try to get precise caret rect using AXBoundsForRange.
+    private func caretScreenRect() -> NSRect? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
 
@@ -229,29 +251,39 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
         let focused = focusedValue as! AXUIElement
 
-        // Try precise caret bounds via AXBoundsForRange
-        if let point = boundsForRange(of: focused) {
-            return point
+        var rangeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success else {
+            return nil
         }
 
-        // Fallback: use the focused element's own position/size (works in Chrome omnibox, etc.)
-        if let point = elementPosition(of: focused) {
-            return point
+        // Get the CFRange so we can create alternative ranges if needed
+        var cfRange = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &cfRange) else {
+            return nil
+        }
+
+        // Try the selected range first
+        if let rect = boundsForRange(of: focused, range: rangeValue!) {
+            return rect
+        }
+
+        // Zero-length selection may fail in some apps (Safari, etc.)
+        // Try a 1-char range ending at the insertion point
+        if cfRange.length == 0 && cfRange.location > 0 {
+            var altRange = CFRange(location: cfRange.location - 1, length: 1)
+            if let altRangeValue = AXValueCreate(.cfRange, &altRange) {
+                // This gives us the rect of the character just before the cursor
+                return boundsForRange(of: focused, range: altRangeValue as CFTypeRef)
+            }
         }
 
         return nil
     }
 
-    /// Precise caret position using AXBoundsForRange – not supported by all apps (e.g. Chrome omnibox).
-    private func boundsForRange(of element: AXUIElement) -> NSPoint? {
-        var rangeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success else {
-            return nil
-        }
-
+    private func boundsForRange(of element: AXUIElement, range: CFTypeRef) -> NSRect? {
         var bounds = CGRect.zero
         var boundsValue: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue!, &boundsValue) == .success else {
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, range, &boundsValue) == .success else {
             return nil
         }
 
@@ -262,17 +294,29 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         // Reject zero-size rects – some apps return success with garbage data
         guard bounds.width > 0 || bounds.height > 0 else { return nil }
 
+        // Ensure a minimum height so the panel doesn't overlap the text
+        if bounds.height < 14 { bounds.size.height = 14 }
+
         return axRectToAppKit(bounds)
     }
 
-    /// Fallback: use AXPosition + AXSize of the focused element itself.
-    private func elementPosition(of element: AXUIElement) -> NSPoint? {
+    /// Fallback: use the focused element's own position/size (works in Chrome omnibox, etc.)
+    private func fallbackCaretRect() -> NSRect? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success else {
+            return nil
+        }
+        let focused = focusedValue as! AXUIElement
+
         var posValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success else {
+        guard AXUIElementCopyAttributeValue(focused, kAXPositionAttribute as CFString, &posValue) == .success else {
             return nil
         }
         var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success else {
+        guard AXUIElementCopyAttributeValue(focused, kAXSizeAttribute as CFString, &sizeValue) == .success else {
             return nil
         }
 
@@ -283,19 +327,15 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             return nil
         }
 
-        // Use the left edge, bottom of the element (below the text field)
-        let rect = CGRect(origin: pos, size: size)
-        return axRectToAppKit(rect)
+        return axRectToAppKit(CGRect(origin: pos, size: size))
     }
 
-    /// Convert an AX rectangle (top-left origin) to an AppKit point (bottom-left origin) at its lower-left corner.
-    private func axRectToAppKit(_ rect: CGRect) -> NSPoint? {
-        // Must use the primary screen (screens[0]) — both AX and AppKit coordinate
-        // systems are anchored to the primary screen, not whichever screen has focus.
+    /// Convert an AX rectangle (top-left origin) to an AppKit rect (bottom-left origin).
+    private func axRectToAppKit(_ rect: CGRect) -> NSRect? {
         guard let primaryScreen = NSScreen.screens.first else { return nil }
         let screenHeight = primaryScreen.frame.height
         let flippedY = screenHeight - rect.origin.y - rect.size.height
-        return NSPoint(x: rect.origin.x, y: flippedY)
+        return NSRect(x: rect.origin.x, y: flippedY, width: rect.size.width, height: rect.size.height)
     }
 
     private func mousePosition() -> NSPoint {

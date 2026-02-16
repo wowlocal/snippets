@@ -266,10 +266,28 @@ final class SnippetExpansionEngine {
             return true
         }
 
-        // Any other modifier combo while suggestions are active — dismiss
-        if !event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty {
+        // Emacs Ctrl+H — treat as backspace
+        if ctrl && event.keyCode == UInt16(kVK_ANSI_H) {
+            if suggestionQuery.isEmpty {
+                dismissSuggestions()
+                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
+            } else {
+                suggestionQuery.removeLast()
+                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
+                updateSuggestionResults()
+            }
+            return false
+        }
+
+        // Command/Option combos dismiss (Cmd+Z, Option produces special chars, etc.)
+        if !event.modifierFlags.intersection([.command, .option]).isEmpty {
             typedBuffer = ""
             dismissSuggestions()
+            return false
+        }
+
+        // Other Ctrl combos and function keys — ignore without dismissing
+        if ctrl {
             return false
         }
 
@@ -280,8 +298,8 @@ final class SnippetExpansionEngine {
             return true
         }
 
-        // Tab selects — suppress so target app doesn't move focus
-        if event.keyCode == UInt16(kVK_Tab) {
+        // Tab or Return selects — suppress so target app doesn't act on the key
+        if event.keyCode == UInt16(kVK_Tab) || event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
             if let snippet = suggestionPanel.selectedSnippet() {
                 let deleteCount = 1 + suggestionQuery.count // backslash + query
                 dismissSuggestions()
@@ -308,7 +326,7 @@ final class SnippetExpansionEngine {
         }
 
         guard let character = typedCharacter(from: event) else {
-            dismissSuggestions()
+            // No printable character (e.g. language switch, function key) — ignore
             return false
         }
 
@@ -349,7 +367,7 @@ final class SnippetExpansionEngine {
         }
 
         if scored.isEmpty {
-            dismissSuggestions()
+            suggestionPanel.hide()
         } else {
             suggestionPanel.show(items: Array(scored))
         }
