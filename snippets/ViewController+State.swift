@@ -100,7 +100,7 @@ extension ViewController {
         snippet.name = nameField.stringValue
         snippet.content = snippetTextView.string
 
-        let sanitizedKeyword = keywordField.stringValue.replacingOccurrences(of: " ", with: "")
+        let sanitizedKeyword = keywordField.stringValue.replacingOccurrences(of: " ", with: "-")
         if sanitizedKeyword != keywordField.stringValue {
             keywordField.stringValue = sanitizedKeyword
         }

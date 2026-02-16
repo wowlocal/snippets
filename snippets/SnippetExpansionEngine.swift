@@ -297,14 +297,14 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Only allow word characters in suggestion query
-        if isWordCharacter(character) {
+        // Allow any character that is valid in a keyword (non-space); dismiss on space
+        if isValidKeywordCharacter(character) {
             suggestionQuery.append(character)
             typedBuffer.append(character)
             trimBufferIfNeeded()
             updateSuggestionResults()
         } else {
-            // Non-word character typed — dismiss suggestions and let normal handling proceed
+            // Space or other disallowed character — dismiss suggestions
             dismissSuggestions()
             typedBuffer.append(character)
             trimBufferIfNeeded()
@@ -405,6 +405,10 @@ final class SnippetExpansionEngine {
 
     private func isTriggerCharacter(_ character: Character) -> Bool {
         character == " " || character == "\n" || character == "\t"
+    }
+
+    private func isValidKeywordCharacter(_ character: Character) -> Bool {
+        !character.isWhitespace && !character.isNewline
     }
 
     private func isWordCharacter(_ character: Character) -> Bool {
