@@ -279,6 +279,12 @@ final class SnippetExpansionEngine {
             return false
         }
 
+        // Language/input-source switch (Cmd+Space, Ctrl+Space, Option+Space) — ignore without dismissing
+        if event.keyCode == UInt16(kVK_Space) &&
+            !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            return false
+        }
+
         // Command/Option combos dismiss (Cmd+Z, Option produces special chars, etc.)
         if !event.modifierFlags.intersection([.command, .option]).isEmpty {
             typedBuffer = ""
