@@ -268,6 +268,7 @@ extension ViewController {
         snippetTextView.isAutomaticQuoteSubstitutionEnabled = false
         snippetTextView.isAutomaticTextReplacementEnabled = false
         snippetTextView.isAutomaticDataDetectionEnabled = false
+        snippetTextView.allowsUndo = true
         snippetTextView.autoresizingMask = [.width]
         snippetTextView.minSize = NSSize(width: 0, height: 220)
         snippetTextView.isVerticallyResizable = true

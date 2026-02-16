@@ -38,7 +38,7 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && event.keyCode == UInt16(kVK_Delete) {
+        if flags == [.command] && event.keyCode == UInt16(kVK_Delete) && isListContext {
             deleteSelectedSnippet(nil)
             return nil
         }
