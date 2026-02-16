@@ -250,8 +250,10 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     /// Convert an AX rectangle (top-left origin) to an AppKit point (bottom-left origin) at its lower-left corner.
     private func axRectToAppKit(_ rect: CGRect) -> NSPoint? {
-        guard let mainScreen = NSScreen.main else { return nil }
-        let screenHeight = mainScreen.frame.height
+        // Must use the primary screen (screens[0]) — both AX and AppKit coordinate
+        // systems are anchored to the primary screen, not whichever screen has focus.
+        guard let primaryScreen = NSScreen.screens.first else { return nil }
+        let screenHeight = primaryScreen.frame.height
         let flippedY = screenHeight - rect.origin.y - rect.size.height
         return NSPoint(x: rect.origin.x, y: flippedY)
     }
