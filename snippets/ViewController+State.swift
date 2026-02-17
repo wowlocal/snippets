@@ -62,10 +62,18 @@ extension ViewController {
     func applySelectedSnippetToEditor() {
         guard let snippet = selectedSnippet else {
             isApplyingSnippetToEditor = true
-            nameField.stringValue = ""
-            snippetTextView.string = ""
-            keywordField.stringValue = ""
-            enabledCheckbox.state = .off
+            if !nameField.stringValue.isEmpty {
+                nameField.stringValue = ""
+            }
+            if !snippetTextView.string.isEmpty {
+                snippetTextView.string = ""
+            }
+            if !keywordField.stringValue.isEmpty {
+                keywordField.stringValue = ""
+            }
+            if enabledCheckbox.state != .off {
+                enabledCheckbox.state = .off
+            }
             updatePreview(withTemplate: "")
             setEditorEnabled(false)
             isApplyingSnippetToEditor = false
@@ -73,10 +81,19 @@ extension ViewController {
         }
 
         isApplyingSnippetToEditor = true
-        nameField.stringValue = snippet.name
-        snippetTextView.string = snippet.content
-        keywordField.stringValue = snippet.normalizedKeyword
-        enabledCheckbox.state = snippet.isEnabled ? .on : .off
+        if nameField.stringValue != snippet.name {
+            nameField.stringValue = snippet.name
+        }
+        if snippetTextView.string != snippet.content {
+            snippetTextView.string = snippet.content
+        }
+        if keywordField.stringValue != snippet.normalizedKeyword {
+            keywordField.stringValue = snippet.normalizedKeyword
+        }
+        let targetEnabledState: NSControl.StateValue = snippet.isEnabled ? .on : .off
+        if enabledCheckbox.state != targetEnabledState {
+            enabledCheckbox.state = targetEnabledState
+        }
         updatePreview(withTemplate: snippet.content)
         updateKeywordWarning(for: snippet)
         setEditorEnabled(true)

@@ -28,15 +28,23 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
     func tableViewSelectionDidChange(_ notification: Notification) {
         let row = tableView.selectedRow
         guard row >= 0, row < visibleSnippets.count else {
+            let hadSelection = selectedSnippetID != nil
             selectedSnippetID = nil
-            applySelectedSnippetToEditor()
+            if hadSelection {
+                applySelectedSnippetToEditor()
+            }
     
             deleteButton.isEnabled = false
             return
         }
 
-        selectedSnippetID = visibleSnippets[row].id
-        applySelectedSnippetToEditor()
+        let nextSelectionID = visibleSnippets[row].id
+        let didChangeSelection = nextSelectionID != selectedSnippetID
+        selectedSnippetID = nextSelectionID
+
+        if didChangeSelection || !isEditingDetails {
+            applySelectedSnippetToEditor()
+        }
 
         deleteButton.isEnabled = true
     }
