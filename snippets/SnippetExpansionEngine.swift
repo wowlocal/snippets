@@ -208,17 +208,6 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        if let immediateMatch = matchForImmediateExpansion() {
-            expand(snippet: immediateMatch, deleteCount: immediateMatch.normalizedKeyword.count)
-            typedBuffer = ""
-            return false
-        }
-
-        if isTriggerCharacter(character), let delimiterMatch = matchForDelimiterExpansion(trigger: character) {
-            expand(snippet: delimiterMatch, deleteCount: delimiterMatch.normalizedKeyword.count + 1)
-            typedBuffer = ""
-        }
-
         return false
     }
 
@@ -284,7 +273,7 @@ final class SnippetExpansionEngine {
             !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
             return false
         }
-
+		
         // Command/Option combos dismiss (Cmd+Z, Option produces special chars, etc.)
         if !event.modifierFlags.intersection([.command, .option]).isEmpty {
             typedBuffer = ""
@@ -341,6 +330,13 @@ final class SnippetExpansionEngine {
             suggestionQuery.append(character)
             typedBuffer.append(character)
             trimBufferIfNeeded()
+
+            // Auto-expand if the query is an unambiguous exact match
+            if let snippet = unambiguousExactMatch(for: suggestionQuery) {
+                selectSuggestion(snippet)
+                return false
+            }
+
             updateSuggestionResults()
         } else {
             // Space or other disallowed character — dismiss suggestions
@@ -349,6 +345,26 @@ final class SnippetExpansionEngine {
             trimBufferIfNeeded()
         }
         return false
+    }
+
+    /// Returns a snippet only if `query` exactly matches one keyword and no other keyword starts with `query`.
+    private func unambiguousExactMatch(for query: String) -> Snippet? {
+        let snippets = store.enabledSnippetsSorted()
+        let lowered = query.lowercased()
+
+        var exactMatch: Snippet?
+        for snippet in snippets {
+            let keyword = snippet.normalizedKeyword.lowercased()
+            guard !keyword.isEmpty else { continue }
+
+            if keyword == lowered {
+                exactMatch = snippet
+            } else if keyword.hasPrefix(lowered) {
+                // Another keyword extends this one — ambiguous
+                return nil
+            }
+        }
+        return exactMatch
     }
 
     private func updateSuggestionResults() {
@@ -409,59 +425,11 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func matchForImmediateExpansion() -> Snippet? {
-        for snippet in store.enabledSnippetsSorted() {
-            let keyword = snippet.normalizedKeyword
-            guard !keyword.isEmpty else { continue }
-
-            let startsWithWordChar = keyword.first.map { isWordCharacter($0) } ?? false
-            guard !startsWithWordChar else { continue }
-
-            guard typedBuffer.hasSuffix(keyword) else { continue }
-
-            let previousCharacter = typedBuffer.dropLast(keyword.count).last
-            if previousCharacter == nil || isBoundaryCharacter(previousCharacter!) {
-                return snippet
-            }
-        }
-
-        return nil
-    }
-
-    private func matchForDelimiterExpansion(trigger: Character) -> Snippet? {
-        for snippet in store.enabledSnippetsSorted() {
-            let keyword = snippet.normalizedKeyword
-            guard !keyword.isEmpty else { continue }
-
-            let expectedSuffix = keyword + String(trigger)
-            if typedBuffer.hasSuffix(expectedSuffix) {
-                return snippet
-            }
-        }
-
-        return nil
-    }
-
-    private func isTriggerCharacter(_ character: Character) -> Bool {
-        character == " " || character == "\n" || character == "\t"
-    }
 
     private func isValidKeywordCharacter(_ character: Character) -> Bool {
         !character.isWhitespace && !character.isNewline
     }
 
-    private func isWordCharacter(_ character: Character) -> Bool {
-        character == "_" || character.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) }
-    }
-
-    private func isBoundaryCharacter(_ character: Character) -> Bool {
-        if character.isWhitespace || character.isNewline {
-            return true
-        }
-
-        let boundarySet = CharacterSet.punctuationCharacters.union(.symbols)
-        return character.unicodeScalars.allSatisfy { boundarySet.contains($0) }
-    }
 
     private func expand(snippet: Snippet, deleteCount: Int) {
         guard deleteCount > 0 else { return }
