@@ -47,6 +47,8 @@ final class ViewController: NSViewController {
     let nameField = NSTextField(string: "")
     let snippetTextView = NSTextView()
     let keywordField = NSTextField(string: "")
+    let keywordPrefixLabel = NSTextField(labelWithString: "\\")
+    let keywordWarningLabel = NSTextField(labelWithString: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
     let previewSectionStack = NSStackView()

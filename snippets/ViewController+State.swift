@@ -78,6 +78,7 @@ extension ViewController {
         keywordField.stringValue = snippet.normalizedKeyword
         enabledCheckbox.state = snippet.isEnabled ? .on : .off
         updatePreview(withTemplate: snippet.content)
+        updateKeywordWarning(for: snippet)
         setEditorEnabled(true)
         isApplyingSnippetToEditor = false
     }
@@ -110,6 +111,28 @@ extension ViewController {
 
         store.update(snippet)
         updatePreview(withTemplate: snippet.content)
+        updateKeywordWarning(for: snippet)
+    }
+
+    func updateKeywordWarning(for snippet: Snippet) {
+        let keyword = snippet.normalizedKeyword.lowercased()
+        guard !keyword.isEmpty else {
+            keywordWarningLabel.isHidden = true
+            return
+        }
+
+        let conflicting = store.enabledSnippetsSorted().filter { other in
+            guard other.id != snippet.id else { return false }
+            let otherKeyword = other.normalizedKeyword.lowercased()
+            return otherKeyword.hasPrefix(keyword) || keyword.hasPrefix(otherKeyword)
+        }
+
+        if let first = conflicting.first {
+            keywordWarningLabel.stringValue = "Overlaps with \\\(first.normalizedKeyword) — won't auto-expand"
+            keywordWarningLabel.isHidden = false
+        } else {
+            keywordWarningLabel.isHidden = true
+        }
     }
 
     func updatePreview(withTemplate template: String) {

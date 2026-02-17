@@ -93,7 +93,7 @@ final class SnippetRowCellView: NSTableCellView {
         nameLabel.stringValue = snippet.displayName
 
         let keyword = snippet.normalizedKeyword
-        keywordLabel.stringValue = keyword
+        keywordLabel.stringValue = keyword.isEmpty ? "" : "\\\(keyword)"
         keywordLabel.isHidden = keyword.isEmpty
 
         let preview = snippet.content

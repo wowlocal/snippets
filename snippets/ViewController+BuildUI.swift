@@ -297,9 +297,19 @@ extension ViewController {
         keywordLabel.textColor = .secondaryLabelColor
         keywordLabel.alignment = .left
 
+        keywordPrefixLabel.font = .monospacedSystemFont(ofSize: 16, weight: .medium)
+        keywordPrefixLabel.textColor = .tertiaryLabelColor
+        keywordPrefixLabel.setContentHuggingPriority(.required, for: .horizontal)
+        keywordPrefixLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         keywordField.delegate = self
         keywordField.placeholderString = "tp"
         keywordField.controlSize = .large
+
+        keywordWarningLabel.font = .systemFont(ofSize: 12)
+        keywordWarningLabel.textColor = .systemOrange
+        keywordWarningLabel.alignment = .left
+        keywordWarningLabel.isHidden = true
 
         enabledCheckbox.target = self
         enabledCheckbox.action = #selector(enabledStateChanged)
@@ -343,10 +353,16 @@ extension ViewController {
         previewSectionStack.addArrangedSubview(previewContainer)
         previewContainer.widthAnchor.constraint(equalTo: previewSectionStack.widthAnchor).isActive = true
 
+        let keywordRow = NSStackView(views: [keywordPrefixLabel, keywordField])
+        keywordRow.orientation = .horizontal
+        keywordRow.spacing = 2
+        keywordRow.alignment = .firstBaseline
+
         stack.addArrangedSubview(nameLabel)
         stack.addArrangedSubview(nameField)
         stack.addArrangedSubview(keywordLabel)
-        stack.addArrangedSubview(keywordField)
+        stack.addArrangedSubview(keywordRow)
+        stack.addArrangedSubview(keywordWarningLabel)
         stack.addArrangedSubview(enabledCheckbox)
         stack.addArrangedSubview(snippetLabel)
         stack.addArrangedSubview(snippetScrollView)
@@ -357,7 +373,7 @@ extension ViewController {
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, keywordField, snippetScrollView, placeholderLabel, separator, previewSectionStack].forEach {
+        [nameField, keywordRow, keywordWarningLabel, snippetScrollView, placeholderLabel, separator, previewSectionStack].forEach {
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
@@ -369,6 +385,7 @@ extension ViewController {
 
         stack.setCustomSpacing(8, after: nameLabel)
         stack.setCustomSpacing(8, after: keywordLabel)
+        stack.setCustomSpacing(4, after: keywordRow)
         stack.setCustomSpacing(10, after: snippetLabel)
         stack.setCustomSpacing(8, after: separator)
 
