@@ -27,7 +27,6 @@ final class ViewController: NSViewController {
     var importExportMessage: String? {
         didSet {
             importExportMessageLabel.stringValue = importExportMessage ?? ""
-            importExportMessageLabel.isHidden = importExportMessage == nil
         }
     }
 
@@ -41,7 +40,6 @@ final class ViewController: NSViewController {
     let searchField = NSSearchField()
     let tableView = NSTableView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
-    let lastActionLabel = NSTextField(labelWithString: "")
     let importExportMessageLabel = NSTextField(labelWithString: "")
 
     let nameField = NSTextField(string: "")
@@ -120,7 +118,6 @@ final class ViewController: NSViewController {
             guard let self else { return }
             updatePermissionBanner()
             permissionStatusLabel.stringValue = engine.statusText
-            lastActionLabel.stringValue = engine.lastExpansionName.map { "Last action: \($0)" } ?? ""
         }
     }
 }

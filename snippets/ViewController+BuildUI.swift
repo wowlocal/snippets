@@ -191,26 +191,22 @@ extension ViewController {
         deleteButton.imagePosition = .imageLeading
         deleteButton.bezelStyle = .rounded
 
-        let footerTopRow = NSStackView(views: [deleteButton, NSView(), lastActionLabel])
+        let footerTopRow = NSStackView(views: [deleteButton, NSView(), importExportMessageLabel])
         footerTopRow.orientation = .horizontal
         footerTopRow.spacing = 6
         footerTopRow.alignment = .centerY
 
-        lastActionLabel.font = .systemFont(ofSize: 12)
-        lastActionLabel.textColor = .secondaryLabelColor
-        lastActionLabel.lineBreakMode = .byTruncatingTail
-
         importExportMessageLabel.font = .systemFont(ofSize: 12)
         importExportMessageLabel.textColor = .secondaryLabelColor
-        importExportMessageLabel.lineBreakMode = .byWordWrapping
-        importExportMessageLabel.maximumNumberOfLines = 2
-        importExportMessageLabel.isHidden = true
+        importExportMessageLabel.alignment = .right
+        importExportMessageLabel.lineBreakMode = .byTruncatingTail
+        importExportMessageLabel.maximumNumberOfLines = 1
+        importExportMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         rootStack.addArrangedSubview(headerStack)
         rootStack.addArrangedSubview(searchField)
         rootStack.addArrangedSubview(tableScrollView)
         rootStack.addArrangedSubview(footerTopRow)
-        rootStack.addArrangedSubview(importExportMessageLabel)
 
         rootStack.setCustomSpacing(12, after: headerStack)
         rootStack.setCustomSpacing(8, after: searchField)
