@@ -11,6 +11,11 @@ extension ViewController {
     }
 
     func handleKeyEvent(_ event: NSEvent) -> NSEvent? {
+        // Let modal alerts/sheets consume keyboard events (Enter/Escape/etc).
+        if NSApp.modalWindow != nil {
+            return event
+        }
+
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let lowerCharacters = event.charactersIgnoringModifiers?.lowercased() ?? ""
 

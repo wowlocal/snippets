@@ -143,9 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.messageText = "What should Cmd+Q do?"
         alert.informativeText = "Hide removes Snippets from the Dock and keeps it running in the menu bar. Quit completely stops Snippets."
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Hide (Keep Running)")
+        let hideButton = alert.addButton(withTitle: "Hide (Keep Running)")
         alert.addButton(withTitle: "Quit Completely")
-        alert.addButton(withTitle: "Cancel")
+        let cancelButton = alert.addButton(withTitle: "Cancel")
+        hideButton.keyEquivalent = "\r"
+        cancelButton.keyEquivalent = "\u{1b}"
         alert.showsSuppressionButton = true
         alert.suppressionButton?.title = "Remember choice"
 
