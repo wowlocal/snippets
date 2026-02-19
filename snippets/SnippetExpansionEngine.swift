@@ -24,6 +24,7 @@ final class SnippetExpansionEngine {
     private var suggestionActive = false
     private var suggestionQuery = ""
     private lazy var suggestionPanel = SuggestionPanelController()
+    private let optionDeleteWordCharacterSet = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
 
     init(store: SnippetStore) {
         self.store = store
@@ -244,6 +245,8 @@ final class SnippetExpansionEngine {
     /// Returns `true` if the event should be suppressed (consumed by us).
     private func handleSuggestionEvent(_ event: NSEvent) -> Bool {
         let ctrl = event.modifierFlags.contains(.control)
+        let command = event.modifierFlags.contains(.command)
+        let option = event.modifierFlags.contains(.option)
 
         // Arrow keys / Ctrl+N/P navigate the list — suppress so target app doesn't see them
         if event.keyCode == UInt16(kVK_DownArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_N)) {
@@ -273,9 +276,22 @@ final class SnippetExpansionEngine {
             !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
             return false
         }
-		
+
+        // Option+Delete: delete previous word in query, but keep suggestions active.
+        if option && !command && event.keyCode == UInt16(kVK_Delete) {
+            if suggestionQuery.isEmpty {
+                dismissSuggestions()
+                removeCharactersFromTypedBuffer(1)
+            } else {
+                let removedCount = removePreviousWordFromSuggestionQuery()
+                removeCharactersFromTypedBuffer(removedCount)
+                updateSuggestionResults()
+            }
+            return false
+        }
+
         // Command/Option combos dismiss (Cmd+Z, Option produces special chars, etc.)
-        if !event.modifierFlags.intersection([.command, .option]).isEmpty {
+        if command || option {
             typedBuffer = ""
             dismissSuggestions()
             return false
@@ -423,6 +439,34 @@ final class SnippetExpansionEngine {
         if typedBuffer.count > maxBufferLength {
             typedBuffer = String(typedBuffer.suffix(maxBufferLength))
         }
+    }
+
+    private func removeCharactersFromTypedBuffer(_ count: Int) {
+        guard count > 0, !typedBuffer.isEmpty else { return }
+        typedBuffer.removeLast(min(count, typedBuffer.count))
+    }
+
+    private func removePreviousWordFromSuggestionQuery() -> Int {
+        guard !suggestionQuery.isEmpty else { return 0 }
+
+        let characters = Array(suggestionQuery)
+        var end = characters.count
+
+        while end > 0 && !isOptionDeleteWordCharacter(characters[end - 1]) {
+            end -= 1
+        }
+
+        while end > 0 && isOptionDeleteWordCharacter(characters[end - 1]) {
+            end -= 1
+        }
+
+        let removedCount = characters.count - end
+        suggestionQuery = String(characters.prefix(end))
+        return removedCount
+    }
+
+    private func isOptionDeleteWordCharacter(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy { optionDeleteWordCharacterSet.contains($0) }
     }
 
 
