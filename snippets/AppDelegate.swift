@@ -3,9 +3,22 @@ import ServiceManagement
 
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+    private enum QuitBehavior: String {
+        case ask
+        case hide
+        case quit
+    }
+
+    private enum QuitDecision {
+        case hide
+        case quit
+        case cancel
+    }
+
     let store = SnippetStore()
     lazy var expansionEngine = SnippetExpansionEngine(store: store)
 
+    private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
     private var shouldTerminateForReal = false
 
@@ -22,9 +35,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if shouldTerminateForReal {
             return .terminateNow
         }
-        // "Fake quit": hide windows and switch to background
-        hideToBackground()
-        return .terminateCancel
+
+        switch currentQuitBehavior {
+        case .hide:
+            hideToBackground()
+            return .terminateCancel
+        case .quit:
+            return .terminateNow
+        case .ask:
+            switch promptForQuitDecision() {
+            case .hide:
+                hideToBackground()
+                return .terminateCancel
+            case .quit:
+                return .terminateNow
+            case .cancel:
+                return .terminateCancel
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -78,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Snippets", action: #selector(quitForReal), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: ""))
         statusItem.menu = menu
     }
 
@@ -86,9 +114,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showMainWindow()
     }
 
-    @objc private func quitForReal() {
+    @IBAction func quitCompletely(_ sender: Any?) {
         shouldTerminateForReal = true
-        NSApp.terminate(nil)
+        NSApp.terminate(sender)
+    }
+
+    // MARK: - Quit Behavior
+
+    var hasRememberedQuitBehavior: Bool {
+        UserDefaults.standard.string(forKey: quitBehaviorDefaultsKey) != nil
+    }
+
+    @IBAction func resetQuitBehaviorPreference(_ sender: Any?) {
+        UserDefaults.standard.removeObject(forKey: quitBehaviorDefaultsKey)
+    }
+
+    private var currentQuitBehavior: QuitBehavior {
+        let storedValue = UserDefaults.standard.string(forKey: quitBehaviorDefaultsKey)
+        return QuitBehavior(rawValue: storedValue ?? QuitBehavior.ask.rawValue) ?? .ask
+    }
+
+    private func setQuitBehavior(_ behavior: QuitBehavior) {
+        UserDefaults.standard.set(behavior.rawValue, forKey: quitBehaviorDefaultsKey)
+    }
+
+    private func promptForQuitDecision() -> QuitDecision {
+        let alert = NSAlert()
+        alert.messageText = "What should Cmd+Q do?"
+        alert.informativeText = "Hide removes Snippets from the Dock and keeps it running in the menu bar. Quit completely stops Snippets."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Hide (Keep Running)")
+        alert.addButton(withTitle: "Quit Completely")
+        alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Remember choice"
+
+        let response = alert.runModal()
+        let shouldRemember = alert.suppressionButton?.state == .on
+
+        switch response {
+        case .alertFirstButtonReturn:
+            if shouldRemember {
+                setQuitBehavior(.hide)
+            }
+            return .hide
+        case .alertSecondButtonReturn:
+            if shouldRemember {
+                setQuitBehavior(.quit)
+            }
+            return .quit
+        default:
+            return .cancel
+        }
     }
 
     // MARK: - Activation Policy Switching

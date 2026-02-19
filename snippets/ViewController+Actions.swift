@@ -68,6 +68,11 @@ extension ViewController {
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(loginItem)
+        if (NSApp.delegate as? AppDelegate)?.hasRememberedQuitBehavior == true {
+            menu.addItem(.separator())
+            let resetQuitItem = NSMenuItem(title: "Forget Cmd+Q Choice", action: #selector(resetQuitChoice), keyEquivalent: "")
+            menu.addItem(resetQuitItem)
+        }
         let location = NSPoint(x: 0, y: sender.bounds.height + 4)
         menu.popUp(positioning: nil, at: location, in: sender)
     }
@@ -190,5 +195,11 @@ extension ViewController {
         } catch {
             NSLog("Launch at login toggle failed: \(error)")
         }
+    }
+
+    @objc func resetQuitChoice(_ sender: Any?) {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        appDelegate.resetQuitBehaviorPreference(sender)
+        importExportMessage = "Cmd+Q choice reset. You will be asked next time."
     }
 }
