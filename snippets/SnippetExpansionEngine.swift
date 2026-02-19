@@ -277,6 +277,11 @@ final class SnippetExpansionEngine {
             return false
         }
 
+        // Screenshot shortcuts (Cmd+Shift+3/4/5/6, optionally with Ctrl) should not dismiss suggestions.
+        if isScreenshotShortcut(event) {
+            return false
+        }
+
         // Option+Delete: delete previous word in query, but keep suggestions active.
         if option && !command && event.keyCode == UInt16(kVK_Delete) {
             if suggestionQuery.isEmpty {
@@ -438,6 +443,18 @@ final class SnippetExpansionEngine {
     private func trimBufferIfNeeded() {
         if typedBuffer.count > maxBufferLength {
             typedBuffer = String(typedBuffer.suffix(maxBufferLength))
+        }
+    }
+
+    private func isScreenshotShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .shift, .control])
+        guard flags.contains(.command), flags.contains(.shift) else { return false }
+
+        switch event.keyCode {
+        case UInt16(kVK_ANSI_3), UInt16(kVK_ANSI_4), UInt16(kVK_ANSI_5), UInt16(kVK_ANSI_6):
+            return true
+        default:
+            return false
         }
     }
 
