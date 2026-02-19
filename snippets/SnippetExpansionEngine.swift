@@ -259,13 +259,26 @@ final class SnippetExpansionEngine {
         }
 
         // Emacs Ctrl+H — treat as backspace
-        if ctrl && event.keyCode == UInt16(kVK_ANSI_H) {
+        if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
             if suggestionQuery.isEmpty {
                 dismissSuggestions()
                 if !typedBuffer.isEmpty { typedBuffer.removeLast() }
             } else {
                 suggestionQuery.removeLast()
                 if !typedBuffer.isEmpty { typedBuffer.removeLast() }
+                updateSuggestionResults()
+            }
+            return false
+        }
+
+        // Emacs Ctrl+W — delete previous word
+        if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_W) {
+            if suggestionQuery.isEmpty {
+                dismissSuggestions()
+                removeCharactersFromTypedBuffer(1)
+            } else {
+                let removedCount = removePreviousWordFromSuggestionQuery()
+                removeCharactersFromTypedBuffer(removedCount)
                 updateSuggestionResults()
             }
             return false
