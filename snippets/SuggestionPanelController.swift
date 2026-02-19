@@ -289,22 +289,24 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             return caretRect
         }
 
-        guard let elementRect = elementScreenRect(of: focusedElement) else {
+        guard let controlRect = preferredControlRect(for: focusedElement, caretRect: caretRect) ?? elementScreenRect(of: focusedElement) else {
             return caretRect
         }
 
         let isSingleLineRole = role == (kAXTextFieldRole as String) || role == (kAXComboBoxRole as String)
-        let isShortTextArea = role == (kAXTextAreaRole as String) && elementRect.height <= 56
-        guard isSingleLineRole || isShortTextArea else { return caretRect }
+        let isShortTextArea = role == (kAXTextAreaRole as String) && controlRect.height <= 56
+        // Safari exposes nested AX elements in the address bar; allow this path for those
+        // text-like roles so we can anchor below the containing control instead of line rect.
+        let isSafariTextInput = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Safari"
+            && (role == (kAXTextFieldRole as String) || role == (kAXComboBoxRole as String) || role == (kAXTextAreaRole as String))
+            && controlRect.height <= 90
+        guard isSingleLineRole || isShortTextArea || isSafariTextInput else { return caretRect }
 
-        guard caretRect.intersects(elementRect) else { return caretRect }
-
-        // Only adjust when caret baseline is noticeably above the control's bottom.
-        guard caretRect.minY - elementRect.minY > 4 else { return caretRect }
+        guard controlRect.insetBy(dx: -2, dy: -2).intersects(caretRect) else { return caretRect }
 
         var adjusted = caretRect
-        adjusted.origin.y = elementRect.minY
-        adjusted.size.height = max(caretRect.height, elementRect.height)
+        adjusted.origin.y = controlRect.minY
+        adjusted.size.height = max(caretRect.height, controlRect.height)
         return adjusted
     }
 
@@ -381,6 +383,56 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
 
         return axRectToAppKit(CGRect(origin: pos, size: size))
+    }
+
+    /// Walk up AX parents and pick the smallest plausible input control that still contains the caret.
+    /// This avoids anchoring to Safari's inner text node, which can place the panel over typed text.
+    private func preferredControlRect(for focusedElement: AXUIElement, caretRect: NSRect) -> NSRect? {
+        let candidates = inputHierarchy(startingAt: focusedElement, maxDepth: 6).compactMap { element -> NSRect? in
+            guard let rect = elementScreenRect(of: element) else { return nil }
+            guard rect.width >= 40, rect.height >= 16, rect.height <= 90 else { return nil }
+            guard rect.insetBy(dx: -2, dy: -2).intersects(caretRect) else { return nil }
+            return rect
+        }
+
+        guard !candidates.isEmpty else { return nil }
+
+        // Prefer a control box larger than the raw caret line when available.
+        if let expanded = candidates
+            .filter({ $0.height > caretRect.height + 4 })
+            .min(by: { rectArea($0) < rectArea($1) }) {
+            return expanded
+        }
+
+        return candidates.min(by: { rectArea($0) < rectArea($1) })
+    }
+
+    private func inputHierarchy(startingAt element: AXUIElement, maxDepth: Int) -> [AXUIElement] {
+        var elements: [AXUIElement] = [element]
+        var current = element
+
+        for _ in 0..<maxDepth {
+            guard let parent = parentElement(of: current) else { break }
+            elements.append(parent)
+            current = parent
+        }
+
+        return elements
+    }
+
+    private func parentElement(of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return nil
+        }
+
+        return (value as! AXUIElement)
+    }
+
+    private func rectArea(_ rect: NSRect) -> CGFloat {
+        rect.width * rect.height
     }
 
     // MARK: - NSTableViewDataSource
