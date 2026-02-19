@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Snippets.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Snippets.app; path = "Snippets Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "snippets" */;
+			buildConfigurationList = 272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "Snippets" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -269,8 +269,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.debug;
+				PRODUCT_NAME = "$(TARGET_NAME) Debug";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -320,7 +320,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "snippets" */ = {
+		272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "Snippets" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				272782E32F41F9F2000B9989 /* Debug */,
