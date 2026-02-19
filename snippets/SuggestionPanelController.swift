@@ -264,7 +264,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         // Try the selected range first
         if let rect = boundsForRange(of: focused, range: rangeValue!) {
-            return rect
+            return normalizedAnchorRect(for: rect, focusedElement: focused)
         }
 
         // Zero-length selection may fail in some apps (Safari, etc.)
@@ -273,11 +273,39 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             var altRange = CFRange(location: cfRange.location - 1, length: 1)
             if let altRangeValue = AXValueCreate(.cfRange, &altRange) {
                 // This gives us the rect of the character just before the cursor
-                return boundsForRange(of: focused, range: altRangeValue as CFTypeRef)
+                if let rect = boundsForRange(of: focused, range: altRangeValue as CFTypeRef) {
+                    return normalizedAnchorRect(for: rect, focusedElement: focused)
+                }
             }
         }
 
         return nil
+    }
+
+    /// Some native single-line fields report a caret line rect that sits inside the control.
+    /// Keep caret X, but anchor vertically to the control's bottom so the panel appears below it.
+    private func normalizedAnchorRect(for caretRect: NSRect, focusedElement: AXUIElement) -> NSRect {
+        guard let role = stringAttribute(of: focusedElement, attribute: kAXRoleAttribute as CFString) else {
+            return caretRect
+        }
+
+        guard let elementRect = elementScreenRect(of: focusedElement) else {
+            return caretRect
+        }
+
+        let isSingleLineRole = role == (kAXTextFieldRole as String) || role == (kAXComboBoxRole as String)
+        let isShortTextArea = role == (kAXTextAreaRole as String) && elementRect.height <= 56
+        guard isSingleLineRole || isShortTextArea else { return caretRect }
+
+        guard caretRect.intersects(elementRect) else { return caretRect }
+
+        // Only adjust when caret baseline is noticeably above the control's bottom.
+        guard caretRect.minY - elementRect.minY > 4 else { return caretRect }
+
+        var adjusted = caretRect
+        adjusted.origin.y = elementRect.minY
+        adjusted.size.height = max(caretRect.height, elementRect.height)
+        return adjusted
     }
 
     private func boundsForRange(of element: AXUIElement, range: CFTypeRef) -> NSRect? {
@@ -311,23 +339,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
         let focused = focusedValue as! AXUIElement
 
-        var posValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focused, kAXPositionAttribute as CFString, &posValue) == .success else {
-            return nil
-        }
-        var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focused, kAXSizeAttribute as CFString, &sizeValue) == .success else {
-            return nil
-        }
-
-        var pos = CGPoint.zero
-        var size = CGSize.zero
-        guard AXValueGetValue(posValue as! AXValue, .cgPoint, &pos),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
-            return nil
-        }
-
-        return axRectToAppKit(CGRect(origin: pos, size: size))
+        return elementScreenRect(of: focused)
     }
 
     /// Convert an AX rectangle (top-left origin) to an AppKit rect (bottom-left origin).
@@ -340,6 +352,35 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     private func mousePosition() -> NSPoint {
         NSEvent.mouseLocation
+    }
+
+    private func stringAttribute(of element: AXUIElement, attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value as? String
+    }
+
+    private func elementScreenRect(of element: AXUIElement) -> NSRect? {
+        var posValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success else {
+            return nil
+        }
+
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success else {
+            return nil
+        }
+
+        var pos = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(posValue as! AXValue, .cgPoint, &pos),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
+            return nil
+        }
+
+        return axRectToAppKit(CGRect(origin: pos, size: size))
     }
 
     // MARK: - NSTableViewDataSource
