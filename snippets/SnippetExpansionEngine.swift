@@ -277,12 +277,14 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Screenshot shortcuts (Cmd+Shift+3/4/5/6, optionally with Ctrl) should not dismiss suggestions.
+        // Dedicated exclusion: users often screenshot the suggestions panel itself.
+        // Keep the session active for Cmd+Shift+3/4/5/6 (+optional Ctrl).
         if isScreenshotShortcut(event) {
             return false
         }
 
-        // Option+Delete: delete previous word in query, but keep suggestions active.
+        // Dedicated Option+Delete handling:
+        // in suggestion mode this should edit the query, not fall into the generic Option-dismiss path.
         if option && !command && event.keyCode == UInt16(kVK_Delete) {
             if suggestionQuery.isEmpty {
                 dismissSuggestions()
@@ -469,6 +471,8 @@ final class SnippetExpansionEngine {
         let characters = Array(suggestionQuery)
         var end = characters.count
 
+        // Match typical Option+Delete semantics:
+        // drop trailing separators, then remove the previous word token.
         while end > 0 && !isOptionDeleteWordCharacter(characters[end - 1]) {
             end -= 1
         }
