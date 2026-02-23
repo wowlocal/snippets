@@ -28,11 +28,11 @@ final class SnippetExpansionEngine {
     private let optionDeleteWordCharacterSet = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
     // On macOS some apps drop rapid synthetic key events; keep a small delay
     // between injected keystrokes to ensure trigger deletion is complete.
-    private let injectedKeyDelay: TimeInterval = 0.012
-    private let injectedPasteShortcutDelay: TimeInterval = 0.008
-    private let prePasteDelayAfterDelete: TimeInterval = 0.02
-    private let pasteboardWriteSettleDelay: TimeInterval = 0.012
-    private let pasteboardRestoreDelay: Duration = .milliseconds(350)
+    private let injectedKeyDelay: TimeInterval = 0.0
+    private let injectedPasteShortcutDelay: TimeInterval = 0.00
+    private let prePasteDelayAfterDelete: TimeInterval = 0.0
+    private let pasteboardWriteSettleDelay: TimeInterval = 0.0
+    private let pasteboardRestoreDelay: Duration = .milliseconds(50)
 
     init(store: SnippetStore) {
         self.store = store
