@@ -15,6 +15,7 @@ final class SnippetExpansionEngine {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var localMonitor: Any?
+    private var accessibilityPrimedPIDs: Set<pid_t> = []
 
     private var typedBuffer = ""
     private let maxBufferLength = 120
@@ -116,6 +117,7 @@ final class SnippetExpansionEngine {
             NSEvent.removeMonitor(monitor)
             localMonitor = nil
         }
+        accessibilityPrimedPIDs.removeAll()
         startIfNeeded()
     }
 
@@ -679,21 +681,167 @@ final class SnippetExpansionEngine {
     }
 
     private func focusedElementIsTextInput() -> Bool {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
+        guard let focused = frontmostFocusedElement() else { return false }
+
+        if elementAcceptsTextInput(focused) {
+            return true
+        }
+
+        var current = focused
+        for _ in 0..<4 {
+            guard let parent = parentElement(of: current) else { break }
+            if elementAcceptsTextInput(parent) {
+                return true
+            }
+            current = parent
+        }
+
+        return false
+    }
+
+    private func frontmostFocusedElement() -> AXUIElement? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        primeAccessibilityIfNeeded(for: app)
+
+        if let focused = copyFocusedElement(from: app) {
+            return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+        }
+
+        // Retry once after forcing manual accessibility attributes for Chromium/Electron.
+        primeAccessibilityIfNeeded(for: app, force: true)
+        guard let focused = copyFocusedElement(from: app) else {
+            return nil
+        }
+        return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+    }
+
+    private func copyFocusedElement(from app: NSRunningApplication) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-
         var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success else {
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+              let focusedValue,
+              CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+            return nil
+        }
+
+        return (focusedValue as! AXUIElement)
+    }
+
+    private func deepestFocusedElement(startingAt root: AXUIElement, maxDepth: Int) -> AXUIElement {
+        var current = root
+
+        for _ in 0..<maxDepth {
+            var nestedValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(current, kAXFocusedUIElementAttribute as CFString, &nestedValue) == .success,
+                  let nestedValue,
+                  CFGetTypeID(nestedValue) == AXUIElementGetTypeID() else {
+                break
+            }
+
+            let nested = nestedValue as! AXUIElement
+            if CFEqual(current, nested) {
+                break
+            }
+
+            current = nested
+        }
+
+        return current
+    }
+
+    private func elementAcceptsTextInput(_ element: AXUIElement) -> Bool {
+        let role = stringAttribute(of: element, attribute: kAXRoleAttribute as CFString) ?? ""
+        let subrole = stringAttribute(of: element, attribute: kAXSubroleAttribute as CFString) ?? ""
+
+        if role == (kAXTextFieldRole as String) ||
+            role == (kAXTextAreaRole as String) ||
+            role == (kAXComboBoxRole as String) ||
+            subrole == (kAXSearchFieldSubrole as String) {
+            return true
+        }
+
+        if boolAttribute(of: element, attribute: "AXEditable" as CFString) == true {
+            return true
+        }
+
+        // Chromium/Electron text controls often expose text-range attributes
+        // even when the role isn't one of the standard text roles.
+        if hasAttribute(kAXSelectedTextRangeAttribute as CFString, on: element) {
+            return true
+        }
+
+        return false
+    }
+
+    private func stringAttribute(of element: AXUIElement, attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value as? String
+    }
+
+    private func boolAttribute(of element: AXUIElement, attribute: CFString) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value as? Bool
+    }
+
+    private func hasAttribute(_ attribute: CFString, on element: AXUIElement) -> Bool {
+        var attributesValue: CFArray?
+        guard AXUIElementCopyAttributeNames(element, &attributesValue) == .success,
+              let attributesValue,
+              let attributes = attributesValue as? [String] else {
             return false
         }
-        let focused = focusedValue as! AXUIElement
 
-        var roleValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focused, kAXRoleAttribute as CFString, &roleValue) == .success else {
-            return false
+        return attributes.contains(attribute as String)
+    }
+
+    private func parentElement(of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return nil
         }
-        let role = roleValue as? String ?? ""
 
-        return role == kAXTextFieldRole || role == kAXTextAreaRole || role == kAXComboBoxRole
+        return (value as! AXUIElement)
+    }
+
+    private func primeAccessibilityIfNeeded(for app: NSRunningApplication, force: Bool = false) {
+        guard accessibilityGranted else { return }
+        let pid = app.processIdentifier
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return }
+
+        if !force && accessibilityPrimedPIDs.contains(pid) {
+            return
+        }
+
+        let appElement = AXUIElementCreateApplication(pid)
+
+        // Electron documents this explicit opt-in switch for third-party ATs.
+        _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+
+        // Chromium apps may require this to expose complete accessibility data
+        // for non-VoiceOver assistive tools.
+        if isChromiumFamily(bundleIdentifier: app.bundleIdentifier) {
+            _ = AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
+
+        accessibilityPrimedPIDs.insert(pid)
+    }
+
+    private func isChromiumFamily(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return bundleIdentifier.hasPrefix("com.google.Chrome")
+            || bundleIdentifier == "org.chromium.Chromium"
+            || bundleIdentifier == "com.microsoft.edgemac"
+            || bundleIdentifier == "com.brave.Browser"
+            || bundleIdentifier == "com.operasoftware.Opera"
+            || bundleIdentifier == "com.vivaldi.Vivaldi"
+            || bundleIdentifier == "company.thebrowser.Browser"
     }
 }

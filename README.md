@@ -61,6 +61,10 @@ The app is organized around three main pieces:
 - `ViewController`: builds the app UI, binds controls to the store, and routes keyboard actions.
 - `SnippetExpansionEngine`: runs global key listening, suggestion mode, and text replacement in other apps.
 
+Detailed deep dive:
+
+- `/Users/mike/src/tries/2026-02-15-snippets/snippets/docs/text-input-detection.md` explains cross-app text-input detection, Chromium/Electron workarounds, monitor quirks, and troubleshooting.
+
 Global expansion pipeline:
 
 1. The expansion engine starts a session-level `CGEvent` tap plus a local `NSEvent` monitor.

@@ -15,24 +15,26 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private let rowHeight: CGFloat = 36
     private let panelWidth: CGFloat = 280
 
-	private var maxVisibleRowsOnScreen: Int {
-		let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.visibleFrame, false) })
-		?? NSScreen.main
+    private var maxVisibleRowsOnScreen: Int {
+        let anchorPoint = anchorRect.map { NSPoint(x: $0.midX, y: $0.midY) }
+        let screen = (anchorPoint.flatMap { screenContaining(point: $0) })
+            ?? screenContaining(point: NSEvent.mouseLocation)
+            ?? NSScreen.main
 
-		guard let visibleFrame = screen?.visibleFrame else { return 8 }
+        guard let visibleFrame = screen?.visibleFrame else { return 8 }
 
-		// Keep some margin so the panel doesn’t try to fill the whole screen
-		let maxHeight = visibleFrame.height * 0.5
+        // Keep some margin so the panel doesn’t try to fill the whole screen.
+        let maxHeight = visibleFrame.height * 0.5
 
-		let spacing = tableView.intercellSpacing.height
-		let perRow = rowHeight + spacing
+        let spacing = tableView.intercellSpacing.height
+        let perRow = rowHeight + spacing
 
-		// subtract scroll insets
-		let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
-		let usable = max(0, maxHeight - insets)
+        // Subtract scroll insets.
+        let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
+        let usable = max(0, maxHeight - insets)
 
-		return max(1, Int(floor(usable / perRow)))
-	}
+        return max(1, Int(floor(usable / perRow)))
+    }
 
 
     var onSelect: ((Snippet) -> Void)?
@@ -40,6 +42,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
     private var anchorRect: NSRect?
+    private var accessibilityPrimedPIDs: Set<pid_t> = []
 
     override init() {
         panel = NSPanel(
@@ -108,46 +111,46 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     var isVisible: Bool { panel.isVisible }
 
-	func show(items: [SuggestionItem]) {
-		self.items = items
-		tableView.reloadData()
+    func show(items: [SuggestionItem]) {
+        self.items = items
+        tableView.reloadData()
 
-		let count = items.count
-		guard count > 0 else { dismiss(); return }
+        let count = items.count
+        guard count > 0 else { dismiss(); return }
 
-		let visibleCount = min(count, maxVisible)
+        let visibleCount = min(count, maxVisible, maxVisibleRowsOnScreen)
 
-		// Make sure the table has computed row geometry
-		tableView.noteNumberOfRowsChanged()
-		tableView.layoutSubtreeIfNeeded()
-		scrollView.layoutSubtreeIfNeeded()
+        // Make sure the table has computed row geometry.
+        tableView.noteNumberOfRowsChanged()
+        tableView.layoutSubtreeIfNeeded()
+        scrollView.layoutSubtreeIfNeeded()
 
-		// Compute exact content height using real row rects
-		let lastRowIndex = visibleCount - 1
-		let lastRowRect = tableView.rect(ofRow: lastRowIndex)
+        // Compute exact content height using real row rects.
+        let lastRowIndex = visibleCount - 1
+        let lastRowRect = tableView.rect(ofRow: lastRowIndex)
 
-		let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
-		let safety: CGFloat = 4 // prevents 1-row clipping due to rounding / visual effect view
+        let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
+        let safety: CGFloat = 4 // prevents 1-row clipping due to rounding / visual effect view
 
-		let height = lastRowRect.maxY + insets + safety
+        let height = lastRowRect.maxY + insets + safety
 
-		panel.setContentSize(NSSize(width: panelWidth, height: height))
+        panel.setContentSize(NSSize(width: panelWidth, height: height))
 
-		// Position using the anchor from when suggestions first activated.
-		// This prevents the panel from jumping as the caret moves.
-		if anchorRect == nil {
-			anchorRect = caretScreenRect() ?? fallbackCaretRect()
-		}
-		positionPanelAtAnchor()
+        // Position using the anchor from when suggestions first activated.
+        // This prevents the panel from jumping as the caret moves.
+        if anchorRect == nil {
+            anchorRect = caretScreenRect() ?? fallbackCaretRect()
+        }
+        positionPanelAtAnchor()
 
-		scrollView.hasVerticalScroller = (count > visibleCount)
+        scrollView.hasVerticalScroller = (count > visibleCount)
 
-		if !panel.isVisible {
-			panel.orderFront(nil)
-			installClickMonitors()
-		}
-		tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-	}
+        if !panel.isVisible {
+            panel.orderFront(nil)
+            installClickMonitors()
+        }
+        tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    }
 
 
     /// Temporarily hide the panel (e.g. no results), preserving anchor position.
@@ -222,8 +225,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         // Place panel below the caret line (below rect.origin.y).
         var origin = NSPoint(x: rect.origin.x, y: rect.origin.y - panel.frame.height - 4)
 
-        // Keep on screen
-        if let screen = NSScreen.screens.first(where: { NSMouseInRect(NSPoint(x: rect.midX, y: rect.midY), $0.visibleFrame, false) }) ?? NSScreen.main {
+        // Keep on screen.
+        if let screen = screenContaining(point: NSPoint(x: rect.midX, y: rect.midY)) ?? NSScreen.main {
             let visible = screen.visibleFrame
             if origin.x + panelWidth > visible.maxX {
                 origin.x = visible.maxX - panelWidth
@@ -242,14 +245,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     /// Try to get precise caret rect using AXBoundsForRange.
     private func caretScreenRect() -> NSRect? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-
-        var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success else {
-            return nil
-        }
-        let focused = focusedValue as! AXUIElement
+        guard let focused = frontmostFocusedElement() else { return nil }
 
         var rangeValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success else {
@@ -332,28 +328,99 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     /// Fallback: use the focused element's own position/size (works in Chrome omnibox, etc.)
     private func fallbackCaretRect() -> NSRect? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-
-        var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success else {
-            return nil
-        }
-        let focused = focusedValue as! AXUIElement
+        guard let focused = frontmostFocusedElement() else { return nil }
 
         return elementScreenRect(of: focused)
     }
 
     /// Convert an AX rectangle (top-left origin) to an AppKit rect (bottom-left origin).
     private func axRectToAppKit(_ rect: CGRect) -> NSRect? {
-        guard let primaryScreen = NSScreen.screens.first else { return nil }
-        let screenHeight = primaryScreen.frame.height
+        let flippedFromAX = convertedAXTopLeftRect(rect)
+        if intersectsAnyScreen(flippedFromAX) {
+            return flippedFromAX
+        }
+
+        // Some Chromium/Electron fields report AppKit-style global coordinates.
+        let appKitAsIs = NSRect(x: rect.origin.x, y: rect.origin.y, width: rect.size.width, height: rect.size.height)
+        if intersectsAnyScreen(appKitAsIs) {
+            return appKitAsIs
+        }
+
+        // Keep previous behavior as the final fallback.
+        return flippedFromAX
+    }
+
+    private func convertedAXTopLeftRect(_ rect: CGRect) -> NSRect {
+        let screenHeight = NSScreen.screens.first?.frame.height ?? NSScreen.main?.frame.height ?? 0
         let flippedY = screenHeight - rect.origin.y - rect.size.height
         return NSRect(x: rect.origin.x, y: flippedY, width: rect.size.width, height: rect.size.height)
     }
 
+    private func screenContaining(point: NSPoint) -> NSScreen? {
+        if let frameMatch = NSScreen.screens.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }) {
+            return frameMatch
+        }
+        return NSScreen.screens.first(where: { $0.visibleFrame.insetBy(dx: -1, dy: -1).contains(point) })
+    }
+
+    private func intersectsAnyScreen(_ rect: NSRect) -> Bool {
+        NSScreen.screens.contains { screen in
+            screen.frame.insetBy(dx: -1, dy: -1).intersects(rect)
+        }
+    }
+
     private func mousePosition() -> NSPoint {
         NSEvent.mouseLocation
+    }
+
+    private func frontmostFocusedElement() -> AXUIElement? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        primeAccessibilityIfNeeded(for: app)
+
+        if let focused = copyFocusedElement(from: app) {
+            return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+        }
+
+        // Retry once after forcing manual accessibility attributes for Chromium/Electron.
+        primeAccessibilityIfNeeded(for: app, force: true)
+        guard let focused = copyFocusedElement(from: app) else {
+            return nil
+        }
+        return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+    }
+
+    private func copyFocusedElement(from app: NSRunningApplication) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+              let focusedValue,
+              CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+            return nil
+        }
+
+        return (focusedValue as! AXUIElement)
+    }
+
+    private func deepestFocusedElement(startingAt root: AXUIElement, maxDepth: Int) -> AXUIElement {
+        var current = root
+
+        for _ in 0..<maxDepth {
+            var nestedValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(current, kAXFocusedUIElementAttribute as CFString, &nestedValue) == .success,
+                  let nestedValue,
+                  CFGetTypeID(nestedValue) == AXUIElementGetTypeID() else {
+                break
+            }
+
+            let nested = nestedValue as! AXUIElement
+            if CFEqual(current, nested) {
+                break
+            }
+
+            current = nested
+        }
+
+        return current
     }
 
     private func stringAttribute(of element: AXUIElement, attribute: CFString) -> String? {
@@ -433,6 +500,39 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     private func rectArea(_ rect: NSRect) -> CGFloat {
         rect.width * rect.height
+    }
+
+    private func primeAccessibilityIfNeeded(for app: NSRunningApplication, force: Bool = false) {
+        let pid = app.processIdentifier
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return }
+
+        if !force && accessibilityPrimedPIDs.contains(pid) {
+            return
+        }
+
+        let appElement = AXUIElementCreateApplication(pid)
+
+        // Electron documents this explicit opt-in switch for third-party ATs.
+        _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+
+        // Chromium apps may require this to expose complete accessibility data
+        // for non-VoiceOver assistive tools.
+        if isChromiumFamily(bundleIdentifier: app.bundleIdentifier) {
+            _ = AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
+
+        accessibilityPrimedPIDs.insert(pid)
+    }
+
+    private func isChromiumFamily(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return bundleIdentifier.hasPrefix("com.google.Chrome")
+            || bundleIdentifier == "org.chromium.Chromium"
+            || bundleIdentifier == "com.microsoft.edgemac"
+            || bundleIdentifier == "com.brave.Browser"
+            || bundleIdentifier == "com.operasoftware.Opera"
+            || bundleIdentifier == "com.vivaldi.Vivaldi"
+            || bundleIdentifier == "company.thebrowser.Browser"
     }
 
     // MARK: - NSTableViewDataSource
