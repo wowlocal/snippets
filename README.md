@@ -1,71 +1,97 @@
-# Snippets (Raycast-style MVP for macOS)
+# Snippets (macOS)
 
-This project now implements a local snippet expander app for macOS.
+Local text-expander app for macOS with a Raycast-style snippet list/editor and global snippet insertion.
 
-## What it does
+## Features
 
-- Create, edit, enable, and delete snippets.
-- Each snippet has:
-  - `Name`
-  - `Snippet` text/template
-  - `Keyword` (for example: `\\tp`)
-- Expands snippets globally in other apps by replacing the typed keyword with snippet content.
-- Persists snippets to:
-  - `~/Library/Application Support/SnippetsClone/snippets.json`
-- Imports snippets from JSON.
-- Exports snippets to JSON.
-- Pins snippets to keep them at the top.
-- Supports dynamic placeholders:
+- Create, edit, delete, duplicate, enable/disable, and pin snippets.
+- Global expansion in other apps by typing `\` + keyword.
+- Suggestion panel near the caret with fuzzy matching on snippet name and keyword.
+- Dynamic placeholders in snippet content:
   - `{clipboard}`
   - `{date}`
   - `{time}`
   - `{datetime}`
-  - `{date:yyyy-MM-dd}` (custom date/time format)
+  - `{date:<DateFormatter pattern>}` (for example `{date:yyyy-MM-dd}`)
+- Import/export JSON snippets.
+- Menu bar item with quick open/quit.
+- Optional Launch at Login toggle.
 
-## Permissions required
+## Requirements
 
-The app needs macOS privacy permissions:
+- macOS 15.5+ (project deployment target).
+- Xcode with Swift 5 support.
 
-- Accessibility
-- Input Monitoring
+## Build and Run
 
-Use the buttons in the top banner to open these settings.
+1. Open `/Users/mike/src/tries/2026-02-15-snippets/snippets/Snippets.xcodeproj` in Xcode.
+2. Select the `snippets` scheme.
+3. Build and run.
 
-## Build
+## First Launch and Permissions
 
-Open `/Users/mike/src/tries/2026-02-15-snippets/snippets/snippets.xcodeproj` in Xcode and run the `snippets` scheme.
+The global expander uses Accessibility APIs. If expansion does not start:
 
-## Current trigger behavior
+1. Click `Request Permission` in the app banner.
+2. Open `Accessibility` from the same banner and enable Snippets.
+3. Click `Refresh`.
 
-- Keywords that start with punctuation (like `\\tp`) can expand immediately when fully typed.
-- Any keyword can also expand when followed by `Space`, `Tab`, or `Return`.
+Depending on macOS version/settings, Input Monitoring may also be needed for global keystroke capture.
 
-## Import / Export
+## How Expansion Works
 
-- Use the `Import` button to load snippets from a `.json` file.
-- Use the `Export` button to save all current snippets into a `.json` file.
-- Import merges by snippet `id` first, then by `keyword` (case-insensitive) if IDs differ.
+- Type `\` in a text input field to open suggestions.
+- Keep typing to filter snippets (fuzzy match by name/keyword).
+- Use `↑/↓` or `Ctrl+N` / `Ctrl+P` to navigate suggestions.
+- Press `Tab` or `Return` to insert the selected snippet.
+- If your query exactly matches one keyword (and no longer keyword shares that prefix), it auto-expands.
+- If focused text-field detection fails in some apps, fallback auto-expansion still tries to trigger from typed text.
 
-## Keyboard Navigation
+Keyword notes:
 
-- Raycast-style list navigation:
-  - `↑/↓`: move between snippets.
-  - `↩`: copy selected snippet.
-  - `⌘K`: open actions panel.
-  - `⌘N`: create a new snippet.
-  - `Esc`: close actions panel / return to list focus.
-- Raycast-style actions panel keymap:
-  - `⌘↩`: paste selected snippet.
-  - `⌘E`: edit selected snippet.
-  - `⌘D`: duplicate selected snippet.
-  - `⌘.`: pin or unpin selected snippet.
-  - `⌘N`: create a new snippet.
-- App-specific convenience shortcuts:
-  - `⌘⇧I`: import snippets from JSON.
-  - `⌘⇧E`: export snippets to JSON.
-  - `⌘⌫`: delete selected snippet.
+- In the editor, the visible `\` is a prefix label. Store keywords without the leading slash.
+- Spaces in keywords are converted to `-`.
+- Overlapping keywords (prefix collisions) show a warning and prevent auto-expand disambiguation.
 
-## Notes
+## Keyboard Shortcuts (Main Window)
 
-- App Sandbox is disabled in project settings so global key monitoring and text injection can work.
-- This is an MVP clone focused on core expansion workflow.
+- `Return`: copy selected snippet to clipboard.
+- `Cmd+Return`: paste selected snippet into frontmost app.
+- `Cmd+K`: open/close shortcuts panel.
+- `Cmd+F`: focus search.
+- `Cmd+N`: create snippet.
+- `Cmd+E`: edit selected snippet.
+- `Cmd+D`: duplicate selected snippet.
+- `Cmd+.`: pin/unpin selected snippet.
+- `Cmd+Delete`: delete selected snippet.
+- `Cmd+Shift+I`: import JSON.
+- `Cmd+Shift+E`: export JSON.
+- `Esc`: close action panel (or return focus to list).
+- `Ctrl+N` / `Ctrl+P`: move selection down/up in list context.
+
+## Import/Export Format and Merge Rules
+
+- Import accepts:
+  - A raw array of snippets: `[...]`
+  - Wrapped payload: `{ "snippets": [...] }`
+- Export writes wrapped payload format: `{ "snippets": [...] }`
+- Import merge behavior:
+  1. Match by `id` first (replace existing).
+  2. Else match by `keyword` case-insensitively (replace existing, preserve existing `id` and `createdAt`).
+  3. Else insert as new.
+
+## Data Storage
+
+- Snippets are persisted locally at:
+  - `~/Library/Application Support/SnippetsClone/snippets.json`
+- On first launch (or load failure), a starter snippet is created:
+  - Name: `Temporary Password`
+  - Keyword: `tp`
+  - Content: `TP-{date:yyyyMMdd}-{clipboard}`
+
+## App Behavior Notes
+
+- App Sandbox is disabled so global key monitoring and synthetic paste can work.
+- `Cmd+Q` supports a one-time choice:
+  - Hide to menu bar (keep running), or
+  - Quit completely.
