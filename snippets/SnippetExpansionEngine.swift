@@ -214,6 +214,13 @@ final class SnippetExpansionEngine {
             return false
         }
 
+        // Fallback path for apps where focused text input detection fails
+        // (for example, some custom editors). We still auto-expand on exact
+        // keyword match, but without showing the suggestion panel.
+        if autoExpandFromTypedBufferIfNeeded(typedCharacter: character) {
+            return true
+        }
+
         return false
     }
 
@@ -412,6 +419,30 @@ final class SnippetExpansionEngine {
         return exactMatch
     }
 
+    private func autoExpandFromTypedBufferIfNeeded(typedCharacter: Character) -> Bool {
+        guard isValidKeywordCharacter(typedCharacter) else { return false }
+        guard let query = trailingKeywordQuery(from: typedBuffer) else { return false }
+        guard let snippet = unambiguousExactMatch(for: query) else { return false }
+
+        // Current key-down has not been applied by the host app yet, so delete
+        // only the already-typed prefix ("\" + query.dropLast()).
+        let deleteCount = query.count
+        expand(snippet: snippet, deleteCount: deleteCount)
+        typedBuffer = ""
+        return true
+    }
+
+    private func trailingKeywordQuery(from buffer: String) -> String? {
+        guard let slashIndex = buffer.lastIndex(of: "\\") else { return nil }
+        let queryStart = buffer.index(after: slashIndex)
+        guard queryStart < buffer.endIndex else { return nil }
+
+        let query = String(buffer[queryStart...])
+        guard !query.isEmpty else { return nil }
+        guard query.allSatisfy({ isValidKeywordCharacter($0) }) else { return nil }
+        return query
+    }
+
     private func updateSuggestionResults() {
         let snippets = store.enabledSnippetsSorted()
 
@@ -593,7 +624,7 @@ final class SnippetExpansionEngine {
             Thread.sleep(forTimeInterval: interKeyDelay)
         }
     }
-
+	
     private func postKeyEvent(source: CGEventSource, keyCode: UInt16, keyDown: Bool, flags: CGEventFlags = []) {
         let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown)
         event?.flags = flags
