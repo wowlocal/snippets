@@ -53,6 +53,42 @@ Keyword notes:
 - Spaces in keywords are converted to `-`.
 - Overlapping keywords (prefix collisions) show a warning and prevent auto-expand disambiguation.
 
+## Under the Hood
+
+The app is organized around three main pieces:
+
+- `SnippetStore`: owns snippet state in memory, debounces writes, persists JSON, and handles import/export merge rules.
+- `ViewController`: builds the app UI, binds controls to the store, and routes keyboard actions.
+- `SnippetExpansionEngine`: runs global key listening, suggestion mode, and text replacement in other apps.
+
+Global expansion pipeline:
+
+1. The expansion engine starts a session-level `CGEvent` tap plus a local `NSEvent` monitor.
+2. Typed characters are appended to an internal rolling buffer.
+3. On `\`, suggestion mode activates and `SuggestionPanelController` shows ranked matches.
+4. Ranking uses fuzzy scoring (`FuzzyMatch`) against snippet name and keyword.
+5. Selecting a snippet (or unambiguous exact-match auto-expand) triggers expansion.
+6. The engine resolves placeholders with `PlaceholderResolver` and injects final text.
+
+Text replacement strategy:
+
+- The engine deletes trigger characters with synthetic backspaces.
+- It writes expansion text to the pasteboard.
+- It sends synthetic `Cmd+V` to paste into the frontmost app.
+- It restores previous clipboard contents shortly after paste, unless the clipboard changed in the meantime.
+
+Suggestion panel positioning:
+
+- The panel attempts to read caret bounds from Accessibility (`AXBoundsForRange`).
+- If that fails, it falls back to focused-element geometry.
+- Extra normalization avoids awkward placement in some apps (for example Safari/Chromium-style controls).
+
+Persistence and sync behavior:
+
+- Snippet updates write through `SnippetStore` and are saved with a short debounce.
+- Immediate writes are used for operations like add/delete/import/export.
+- Pending writes are flushed on app termination.
+
 ## Keyboard Shortcuts (Main Window)
 
 - `Return`: copy selected snippet to clipboard.
