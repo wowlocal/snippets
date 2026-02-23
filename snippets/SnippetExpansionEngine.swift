@@ -30,6 +30,8 @@ final class SnippetExpansionEngine {
     private let injectedKeyDelay: TimeInterval = 0.012
     private let injectedPasteShortcutDelay: TimeInterval = 0.008
     private let prePasteDelayAfterDelete: TimeInterval = 0.02
+    private let pasteboardWriteSettleDelay: TimeInterval = 0.012
+    private let pasteboardRestoreDelay: Duration = .milliseconds(350)
 
     init(store: SnippetStore) {
         self.store = store
@@ -588,12 +590,21 @@ final class SnippetExpansionEngine {
         let snapshot = capturePasteboardState(pasteboard)
 
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        guard pasteboard.setString(text, forType: .string) else {
+            return
+        }
+        let injectedChangeCount = pasteboard.changeCount
+        if pasteboardWriteSettleDelay > 0 {
+            Thread.sleep(forTimeInterval: pasteboardWriteSettleDelay)
+        }
 
         postPasteShortcut()
 
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: self?.pasteboardRestoreDelay ?? .milliseconds(350))
+            // If user/app changed the clipboard since injection, keep the newer
+            // content and do not restore our snapshot over it.
+            guard pasteboard.changeCount == injectedChangeCount else { return }
             self?.restorePasteboardState(snapshot, to: pasteboard)
         }
     }
@@ -613,7 +624,7 @@ final class SnippetExpansionEngine {
         }
         postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
     }
-
+	
     private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = [], interKeyDelay: TimeInterval = 0) {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
 
