@@ -626,7 +626,7 @@ final class SnippetExpansionEngine {
         }
         postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
     }
-	
+
     private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = [], interKeyDelay: TimeInterval = 0) {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
 
@@ -637,7 +637,7 @@ final class SnippetExpansionEngine {
             Thread.sleep(forTimeInterval: interKeyDelay)
         }
     }
-	
+
     private func postKeyEvent(source: CGEventSource, keyCode: UInt16, keyDown: Bool, flags: CGEventFlags = []) {
         let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown)
         event?.flags = flags
@@ -662,7 +662,7 @@ final class SnippetExpansionEngine {
 
     private func restorePasteboardState(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
         pasteboard.clearContents()
-		
+
         guard !snapshot.isEmpty else { return }
 
         let items: [NSPasteboardItem] = snapshot.map { typeToData in
