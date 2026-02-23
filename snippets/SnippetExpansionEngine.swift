@@ -25,6 +25,11 @@ final class SnippetExpansionEngine {
     private var suggestionQuery = ""
     private lazy var suggestionPanel = SuggestionPanelController()
     private let optionDeleteWordCharacterSet = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+    // On macOS some apps drop rapid synthetic key events; keep a small delay
+    // between injected keystrokes to ensure trigger deletion is complete.
+    private let injectedKeyDelay: TimeInterval = 0.012
+    private let injectedPasteShortcutDelay: TimeInterval = 0.008
+    private let prePasteDelayAfterDelete: TimeInterval = 0.02
 
     init(store: SnippetStore) {
         self.store = store
@@ -228,8 +233,8 @@ final class SnippetExpansionEngine {
         updateSuggestionResults()
     }
 
-    private func selectSuggestion(_ snippet: Snippet) {
-        let deleteCount = 1 + suggestionQuery.count // backslash + query
+    private func selectSuggestion(_ snippet: Snippet, deleteCount overrideDeleteCount: Int? = nil) {
+        let deleteCount = overrideDeleteCount ?? (1 + suggestionQuery.count) // backslash + query
         dismissSuggestions()
         expand(snippet: snippet, deleteCount: deleteCount)
         typedBuffer = ""
@@ -363,14 +368,18 @@ final class SnippetExpansionEngine {
 
         // Allow any character that is valid in a keyword (non-space); dismiss on space
         if isValidKeywordCharacter(character) {
+            let previousQuery = suggestionQuery
             suggestionQuery.append(character)
             typedBuffer.append(character)
             trimBufferIfNeeded()
 
             // Auto-expand if the query is an unambiguous exact match
             if let snippet = unambiguousExactMatch(for: suggestionQuery) {
-                selectSuggestion(snippet)
-                return false
+                // Consume this event: the host app has not yet inserted the final
+                // character, so delete only the already-typed prefix.
+                let deleteCount = 1 + previousQuery.count
+                selectSuggestion(snippet, deleteCount: deleteCount)
+                return true
             }
 
             updateSuggestionResults()
@@ -522,10 +531,12 @@ final class SnippetExpansionEngine {
     private func replaceTypedText(characterCount: Int, with replacement: String) {
         isInjecting = true
 
-        // Select the characters to replace using Shift+Left Arrow, then paste
-        // over the selection. This is more reliable than pressing Delete N times
-        // because some apps drop individual delete events when they arrive too fast.
-        selectBackward(characterCount: characterCount)
+        // Delete trigger text one character at a time with a small delay to avoid
+        // dropped synthetic key events in some host apps.
+        deleteBackward(characterCount: characterCount)
+        if prePasteDelayAfterDelete > 0 {
+            Thread.sleep(forTimeInterval: prePasteDelayAfterDelete)
+        }
         paste(replacement)
 
         Task { @MainActor [weak self] in
@@ -534,10 +545,10 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func selectBackward(characterCount: Int) {
+    private func deleteBackward(characterCount: Int) {
         guard characterCount > 0 else { return }
         for _ in 0..<characterCount {
-            postKeyStroke(keyCode: UInt16(kVK_LeftArrow), flags: .maskShift)
+            postKeyStroke(keyCode: UInt16(kVK_Delete), interKeyDelay: injectedKeyDelay)
         }
     }
 
@@ -548,7 +559,7 @@ final class SnippetExpansionEngine {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        postKeyStroke(keyCode: UInt16(kVK_ANSI_V), flags: .maskCommand)
+        postPasteShortcut()
 
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
@@ -556,17 +567,37 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = []) {
+    private func postPasteShortcut() {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+        let commandKey = UInt16(kVK_Command)
+
+        postKeyEvent(source: source, keyCode: commandKey, keyDown: true)
+        if injectedPasteShortcutDelay > 0 {
+            Thread.sleep(forTimeInterval: injectedPasteShortcutDelay)
+        }
+        postKeyEvent(source: source, keyCode: UInt16(kVK_ANSI_V), keyDown: true, flags: .maskCommand)
+        postKeyEvent(source: source, keyCode: UInt16(kVK_ANSI_V), keyDown: false, flags: .maskCommand)
+        if injectedPasteShortcutDelay > 0 {
+            Thread.sleep(forTimeInterval: injectedPasteShortcutDelay)
+        }
+        postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
+    }
+
+    private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = [], interKeyDelay: TimeInterval = 0) {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
 
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-        keyDown?.flags = flags
+        postKeyEvent(source: source, keyCode: keyCode, keyDown: true, flags: flags)
+        postKeyEvent(source: source, keyCode: keyCode, keyDown: false, flags: flags)
 
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-        keyUp?.flags = flags
+        if interKeyDelay > 0 {
+            Thread.sleep(forTimeInterval: interKeyDelay)
+        }
+    }
 
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+    private func postKeyEvent(source: CGEventSource, keyCode: UInt16, keyDown: Bool, flags: CGEventFlags = []) {
+        let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown)
+        event?.flags = flags
+        event?.post(tap: .cghidEventTap)
     }
 
     private typealias PasteboardSnapshot = [[NSPasteboard.PasteboardType: Data]]
@@ -587,7 +618,7 @@ final class SnippetExpansionEngine {
 
     private func restorePasteboardState(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
         pasteboard.clearContents()
-
+		
         guard !snapshot.isEmpty else { return }
 
         let items: [NSPasteboardItem] = snapshot.map { typeToData in
