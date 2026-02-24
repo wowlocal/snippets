@@ -555,12 +555,18 @@ final class SnippetExpansionEngine {
 
     private func expand(snippet: Snippet, deleteCount: Int) {
         guard deleteCount > 0 else { return }
+        let adjustedDeleteCount = adjustedDeleteCountForActiveSelection(baseDeleteCount: deleteCount)
 
         let resolvedText = PlaceholderResolver.resolve(template: snippet.content)
-        replaceTypedText(characterCount: deleteCount, with: resolvedText)
+        replaceTypedText(characterCount: adjustedDeleteCount, with: resolvedText)
 
         lastExpansionName = snippet.displayName
         statusText = "Expanded \(snippet.displayName)."
+    }
+
+    private func adjustedDeleteCountForActiveSelection(baseDeleteCount: Int) -> Int {
+        guard baseDeleteCount > 0 else { return 0 }
+        return focusedTextInputHasSelectedText() ? (baseDeleteCount + 1) : baseDeleteCount
     }
 
     private func replaceTypedText(characterCount: Int, with replacement: String) {
@@ -699,6 +705,28 @@ final class SnippetExpansionEngine {
         return false
     }
 
+    private func focusedTextInputHasSelectedText() -> Bool {
+        guard let focused = frontmostFocusedElement() else { return false }
+        if selectedRangeLength(of: focused) > 0 { return true }
+        if let selectedText = stringAttribute(of: focused, attribute: kAXSelectedTextAttribute as CFString),
+           !selectedText.isEmpty {
+            return true
+        }
+
+        var current = focused
+        for _ in 0..<4 {
+            guard let parent = parentElement(of: current) else { break }
+            if selectedRangeLength(of: parent) > 0 { return true }
+            if let selectedText = stringAttribute(of: parent, attribute: kAXSelectedTextAttribute as CFString),
+               !selectedText.isEmpty {
+                return true
+            }
+            current = parent
+        }
+
+        return false
+    }
+
     private func frontmostFocusedElement() -> AXUIElement? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         primeAccessibilityIfNeeded(for: app)
@@ -787,6 +815,27 @@ final class SnippetExpansionEngine {
             return nil
         }
         return value as? Bool
+    }
+
+    private func selectedRangeLength(of element: AXUIElement) -> Int {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXValueGetTypeID() else {
+            return 0
+        }
+
+        let axValue = value as! AXValue
+        guard AXValueGetType(axValue) == .cfRange else {
+            return 0
+        }
+
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(axValue, .cfRange, &range) else {
+            return 0
+        }
+
+        return max(0, range.length)
     }
 
     private func hasAttribute(_ attribute: CFString, on element: AXUIElement) -> Bool {
