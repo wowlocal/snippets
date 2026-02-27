@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     let store = SnippetStore()
     lazy var expansionEngine = SnippetExpansionEngine(store: store)
+    private lazy var settingsWindowController = SettingsWindowController()
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
+        configureSettingsMenuItem()
         setupStatusItem()
     }
 
@@ -87,6 +89,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    @IBAction func openSettings(_ sender: Any?) {
+        NSApp.setActivationPolicy(.regular)
+        settingsWindowController.showSettings()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleLaunchAtLogin(_:)) {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -108,6 +116,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: ""))
         statusItem.menu = menu
+    }
+
+    private func configureSettingsMenuItem() {
+        guard let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
+        guard let settingsItem = appMenu.items.first(where: { $0.keyEquivalent == "," }) else { return }
+
+        settingsItem.title = "Settings…"
+        settingsItem.target = self
+        settingsItem.action = #selector(openSettings(_:))
     }
 
     @objc private func openFromStatusBar() {

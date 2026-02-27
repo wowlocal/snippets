@@ -61,7 +61,7 @@ Implemented in:
 - `primeAccessibilityIfNeeded(for:force:)` in the engine.
 - `primeAccessibilityIfNeeded(for:force:)` in the suggestion panel controller.
 
-Chromium-family list currently includes:
+Built-in Chromium-family list includes:
 
 - `com.google.Chrome*`
 - `org.chromium.Chromium`
@@ -70,6 +70,13 @@ Chromium-family list currently includes:
 - `com.operasoftware.Opera`
 - `com.vivaldi.Vivaldi`
 - `company.thebrowser.Browser` (Arc)
+
+Users can add custom Chromium-family bundle IDs from:
+
+- `Snippets > Settings…`
+- Use `Add App...` to pick an installed app and auto-fill its bundle ID, or `Add Bundle ID...` for manual entries.
+
+Custom IDs are stored in `UserDefaults` and treated the same as built-in IDs for `AXEnhancedUserInterface` priming.
 
 ## Focused text-input detection strategy
 

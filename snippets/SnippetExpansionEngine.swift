@@ -16,6 +16,7 @@ final class SnippetExpansionEngine {
     private var runLoopSource: CFRunLoopSource?
     private var localMonitor: Any?
     private var accessibilityPrimedPIDs: Set<pid_t> = []
+    private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
 
     private var typedBuffer = ""
     private let maxBufferLength = 120
@@ -118,6 +119,7 @@ final class SnippetExpansionEngine {
             localMonitor = nil
         }
         accessibilityPrimedPIDs.removeAll()
+        enhancedAccessibilityPrimedPIDs.removeAll()
         startIfNeeded()
     }
 
@@ -865,32 +867,31 @@ final class SnippetExpansionEngine {
         let pid = app.processIdentifier
         guard pid != ProcessInfo.processInfo.processIdentifier else { return }
 
-        if !force && accessibilityPrimedPIDs.contains(pid) {
+        let shouldSetEnhancedUI = isChromiumFamily(bundleIdentifier: app.bundleIdentifier)
+        let hasManualPriming = accessibilityPrimedPIDs.contains(pid)
+        let hasEnhancedPriming = enhancedAccessibilityPrimedPIDs.contains(pid)
+
+        if !force && hasManualPriming && (!shouldSetEnhancedUI || hasEnhancedPriming) {
             return
         }
 
         let appElement = AXUIElementCreateApplication(pid)
 
         // Electron documents this explicit opt-in switch for third-party ATs.
-        _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        if force || !hasManualPriming {
+            _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            accessibilityPrimedPIDs.insert(pid)
+        }
 
         // Chromium apps may require this to expose complete accessibility data
         // for non-VoiceOver assistive tools.
-        if isChromiumFamily(bundleIdentifier: app.bundleIdentifier) {
+        if shouldSetEnhancedUI && (force || !hasEnhancedPriming) {
             _ = AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            enhancedAccessibilityPrimedPIDs.insert(pid)
         }
-
-        accessibilityPrimedPIDs.insert(pid)
     }
 
     private func isChromiumFamily(bundleIdentifier: String?) -> Bool {
-        guard let bundleIdentifier else { return false }
-        return bundleIdentifier.hasPrefix("com.google.Chrome")
-            || bundleIdentifier == "org.chromium.Chromium"
-            || bundleIdentifier == "com.microsoft.edgemac"
-            || bundleIdentifier == "com.brave.Browser"
-            || bundleIdentifier == "com.operasoftware.Opera"
-            || bundleIdentifier == "com.vivaldi.Vivaldi"
-            || bundleIdentifier == "company.thebrowser.Browser"
+        ChromiumBundleIDSettings.isChromiumFamily(bundleIdentifier: bundleIdentifier)
     }
 }
