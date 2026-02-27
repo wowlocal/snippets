@@ -147,6 +147,15 @@ final class SnippetExpansionEngine {
         NSWorkspace.shared.open(url)
     }
 
+    func chromiumBundleIDSettingsDidChange() {
+        accessibilityPrimedPIDs.removeAll()
+        enhancedAccessibilityPrimedPIDs.removeAll()
+        suggestionPanel.resetAccessibilityPrimingCache()
+
+        guard accessibilityGranted, let app = NSWorkspace.shared.frontmostApplication else { return }
+        primeAccessibilityIfNeeded(for: app, force: true)
+    }
+
 
     func copySnippetToClipboard(_ snippet: Snippet) {
         let rendered = PlaceholderResolver.resolve(template: snippet.content)

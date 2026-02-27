@@ -16,7 +16,7 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 - Import/export JSON snippets.
 - Menu bar item with quick open/quit.
 - Optional Launch at Login toggle.
-- Configurable extra Chromium bundle IDs in a dedicated `Snippets > Settings…` window.
+- Configurable extra Chromium bundle IDs in a dedicated `Snippets > Settings…` window (applies immediately, no relaunch).
 
 ## Requirements
 

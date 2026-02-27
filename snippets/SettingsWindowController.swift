@@ -69,7 +69,7 @@ private final class SettingsViewController: NSViewController, NSTableViewDataSou
         let titleLabel = NSTextField(labelWithString: "Chromium Bundle IDs")
         titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
 
-        let descriptionLabel = NSTextField(wrappingLabelWithString: "Add custom Chromium-based apps for enhanced accessibility priming.")
+        let descriptionLabel = NSTextField(wrappingLabelWithString: "Add custom Chromium-based apps for enhanced accessibility priming. Changes apply immediately.")
         descriptionLabel.font = .systemFont(ofSize: 13)
         descriptionLabel.textColor = .secondaryLabelColor
 
@@ -268,6 +268,7 @@ private final class SettingsViewController: NSViewController, NSTableViewDataSou
     private func applyAndPersist(_ updatedBundleIDs: [String]) {
         customBundleIDs = updatedBundleIDs
         ChromiumBundleIDSettings.saveAdditionalBundleIDs(updatedBundleIDs)
+        NotificationCenter.default.post(name: .snippetsChromiumBundleIDsChanged, object: nil)
         rebuildRows()
     }
 

@@ -187,6 +187,11 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return items[row].snippet
     }
 
+    func resetAccessibilityPrimingCache() {
+        accessibilityPrimedPIDs.removeAll()
+        enhancedAccessibilityPrimedPIDs.removeAll()
+    }
+
     // MARK: - Click-Outside Dismissal
 
     private func installClickMonitors() {

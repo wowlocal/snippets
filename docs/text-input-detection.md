@@ -77,6 +77,7 @@ Users can add custom Chromium-family bundle IDs from:
 - Use `Add App...` to pick an installed app and auto-fill its bundle ID, or `Add Bundle ID...` for manual entries.
 
 Custom IDs are stored in `UserDefaults` and treated the same as built-in IDs for `AXEnhancedUserInterface` priming.
+Settings changes clear priming caches and apply immediately (no Snippets relaunch required).
 
 ## Focused text-input detection strategy
 

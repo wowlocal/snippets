@@ -27,10 +27,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         expansionEngine.startIfNeeded()
         configureSettingsMenuItem()
         setupStatusItem()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleChromiumBundleIDsChanged),
+            name: .snippetsChromiumBundleIDsChanged,
+            object: nil
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         store.flushPendingWrites()
+        NotificationCenter.default.removeObserver(self)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -93,6 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.setActivationPolicy(.regular)
         settingsWindowController.showSettings()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func handleChromiumBundleIDsChanged() {
+        expansionEngine.chromiumBundleIDSettingsDidChange()
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
