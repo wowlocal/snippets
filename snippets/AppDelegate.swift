@@ -35,6 +35,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private weak var appMenuUpdateStatusItem: NSMenuItem?
     private weak var appMenuRestartToUpdateItem: NSMenuItem?
     private var appMenuUpdateStatusView: UpdateProgressMenuItemView?
+    private var updateAccessoryControllers: [ObjectIdentifier: UpdateReadyAccessoryController] = [:]
+    #if DEBUG
+    private var debugShowUpdatePill = false
+    private let debugPillVersion = "DEBUG"
+    #endif
 
     private var launchedAsLoginItem: Bool {
         guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
@@ -58,12 +63,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
+        #if DEBUG
+        configureDebugMenu()
+        #endif
         setupStatusItem()
         updaterController.updater.automaticallyDownloadsUpdates = true
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleChromiumBundleIDsChanged),
             name: .snippetsChromiumBundleIDsChanged,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWindowDidBecomeMain),
+            name: NSWindow.didBecomeMainNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWindowWillClose),
+            name: NSWindow.willCloseNotification,
             object: nil
         )
 
@@ -140,11 +160,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @IBAction func openSettings(_ sender: Any?) {
         NSApp.setActivationPolicy(.regular)
         settingsWindowController.showSettings()
+        refreshWindowUpdateAccessories()
         NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func handleChromiumBundleIDsChanged() {
         expansionEngine.chromiumBundleIDSettingsDidChange()
+    }
+
+    @objc private func handleWindowDidBecomeMain(_ notification: Notification) {
+        refreshWindowUpdateAccessories()
+    }
+
+    @objc private func handleWindowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let windowID = ObjectIdentifier(window)
+        guard let controller = updateAccessoryControllers.removeValue(forKey: windowID) else { return }
+        removeUpdateAccessoryController(controller, from: window)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -158,6 +190,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if menuItem.action == #selector(installPendingUpdateAndRestart(_:)) {
             return pendingUpdateInstallHandler != nil && !isApplyingPendingUpdate
         }
+        #if DEBUG
+        if menuItem.action == #selector(toggleDebugUpdatePill(_:)) {
+            menuItem.state = debugShowUpdatePill ? .on : .off
+            return true
+        }
+        #endif
         return true
     }
 
@@ -175,6 +213,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.addItem(NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: ""))
         statusItem.menu = menu
     }
+
+    #if DEBUG
+    private func configureDebugMenu() {
+        guard let mainMenu = NSApp.mainMenu else { return }
+        if mainMenu.items.contains(where: { $0.title == "Debug" }) {
+            return
+        }
+
+        let debugMenuItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
+        let debugMenu = NSMenu(title: "Debug")
+
+        let showUpdatePillItem = NSMenuItem(
+            title: "Show Update Pill",
+            action: #selector(toggleDebugUpdatePill(_:)),
+            keyEquivalent: ""
+        )
+        showUpdatePillItem.target = self
+        debugMenu.addItem(showUpdatePillItem)
+        debugMenuItem.submenu = debugMenu
+
+        if let helpMenuIndex = mainMenu.items.firstIndex(where: { $0.title == "Help" }) {
+            mainMenu.insertItem(debugMenuItem, at: helpMenuIndex)
+        } else {
+            mainMenu.addItem(debugMenuItem)
+        }
+    }
+    #endif
 
     private func configureAppMenuItems() {
         guard let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
@@ -231,6 +296,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc private func openFromStatusBar() {
         showMainWindow()
     }
+
+    #if DEBUG
+    @objc private func toggleDebugUpdatePill(_ sender: Any?) {
+        debugShowUpdatePill.toggle()
+        if debugShowUpdatePill {
+            showMainWindow()
+            setUpdateStatus("Debug: showing update pill preview.", showProgress: false, autoClearAfter: 2.5)
+        } else if pendingUpdateInstallHandler == nil {
+            setUpdateStatus(nil, showProgress: false, autoClearAfter: nil)
+        }
+        refreshAppMenuUpdateState()
+    }
+
+    @objc private func applyDebugUpdatePill(_ sender: Any?) {
+        setUpdateStatus("Debug: restart action tapped (preview only).", showProgress: false, autoClearAfter: 3)
+    }
+    #endif
 
     @IBAction func checkForUpdates(_ sender: Any?) {
         if pendingUpdateInstallHandler != nil {
@@ -329,6 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 wc.showWindow(nil)
             }
         }
+        refreshWindowUpdateAccessories()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -345,6 +428,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         appMenuRestartToUpdateItem?.isHidden = pendingUpdateInstallHandler == nil
         appMenuRestartToUpdateItem?.isEnabled = pendingUpdateInstallHandler != nil && !isApplyingPendingUpdate
+        refreshWindowUpdateAccessories()
+    }
+
+    private func refreshWindowUpdateAccessories() {
+        #if DEBUG
+        let showingDebugPreviewPill = debugShowUpdatePill && pendingUpdateInstallHandler == nil && !isApplyingPendingUpdate
+        #else
+        let showingDebugPreviewPill = false
+        #endif
+        let shouldShowAccessory = pendingUpdateInstallHandler != nil || isApplyingPendingUpdate || showingDebugPreviewPill
+        let candidateWindows = updateAccessoryCandidateWindows()
+        let candidateWindowIDs = Set(candidateWindows.map { ObjectIdentifier($0) })
+
+        if !shouldShowAccessory {
+            for (windowID, controller) in updateAccessoryControllers {
+                if let window = NSApp.windows.first(where: { ObjectIdentifier($0) == windowID }) {
+                    removeUpdateAccessoryController(controller, from: window)
+                }
+            }
+            updateAccessoryControllers.removeAll()
+            return
+        }
+
+        let staleWindowIDs = Array(updateAccessoryControllers.keys).filter { !candidateWindowIDs.contains($0) }
+        for windowID in staleWindowIDs {
+            if let controller = updateAccessoryControllers.removeValue(forKey: windowID),
+               let window = NSApp.windows.first(where: { ObjectIdentifier($0) == windowID }) {
+                removeUpdateAccessoryController(controller, from: window)
+            }
+        }
+
+        for window in candidateWindows {
+            let windowID = ObjectIdentifier(window)
+            let controller: UpdateReadyAccessoryController
+            if let existing = updateAccessoryControllers[windowID] {
+                controller = existing
+            } else {
+                let accessoryController = UpdateReadyAccessoryController()
+                accessoryController.layoutAttribute = .right
+                window.addTitlebarAccessoryViewController(accessoryController)
+                updateAccessoryControllers[windowID] = accessoryController
+                controller = accessoryController
+            }
+
+            let pillVersion: String?
+            if let pendingUpdateVersion, !pendingUpdateVersion.isEmpty {
+                pillVersion = pendingUpdateVersion
+            } else {
+                #if DEBUG
+                if showingDebugPreviewPill {
+                    pillVersion = debugPillVersion
+                } else {
+                    pillVersion = nil
+                }
+                #else
+                pillVersion = nil
+                #endif
+            }
+
+            let pillAction: Selector
+            if pendingUpdateInstallHandler != nil || isApplyingPendingUpdate {
+                pillAction = #selector(installPendingUpdateAndRestart(_:))
+            } else {
+                #if DEBUG
+                pillAction = #selector(applyDebugUpdatePill(_:))
+                #else
+                pillAction = #selector(installPendingUpdateAndRestart(_:))
+                #endif
+            }
+
+            controller.configure(
+                version: pillVersion,
+                isApplying: isApplyingPendingUpdate,
+                target: self,
+                action: pillAction
+            )
+        }
+    }
+
+    private func updateAccessoryCandidateWindows() -> [NSWindow] {
+        let settingsWindow = settingsWindowController.window
+        return NSApp.windows.filter { window in
+            window.canBecomeMain
+                && !window.isMiniaturized
+                && (window.contentViewController is ViewController || window === settingsWindow)
+        }
+    }
+
+    private func removeUpdateAccessoryController(_ controller: UpdateReadyAccessoryController, from window: NSWindow) {
+        guard let index = window.titlebarAccessoryViewControllers.firstIndex(where: { $0 === controller }) else {
+            return
+        }
+        window.removeTitlebarAccessoryViewController(at: index)
     }
 
     private func setUpdateStatus(_ message: String?, showProgress: Bool, autoClearAfter: TimeInterval?) {
