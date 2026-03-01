@@ -23,7 +23,7 @@ extension ViewController {
             if !actionOverlayView.isHidden {
                 closeActionPanel()
             } else {
-                view.window?.makeFirstResponder(tableView)
+                requestFirstResponder(tableView)
             }
             return nil
         }
@@ -34,7 +34,7 @@ extension ViewController {
         }
 
         if flags == [.command] && lowerCharacters == "f" {
-            view.window?.makeFirstResponder(searchField)
+            requestFirstResponder(searchField)
             return nil
         }
 

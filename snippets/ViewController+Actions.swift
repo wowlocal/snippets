@@ -9,7 +9,7 @@ extension ViewController {
         applySelectedSnippetToEditor()
 
         if focusEditorName {
-            view.window?.makeFirstResponder(nameField)
+            requestFirstResponder(nameField)
         }
     }
 
@@ -36,12 +36,12 @@ extension ViewController {
 
     func openActionPanel() {
         actionOverlayView.isHidden = false
-        view.window?.makeFirstResponder(tableView)
+        requestFirstResponder(tableView)
     }
 
     func closeActionPanel() {
         actionOverlayView.isHidden = true
-        view.window?.makeFirstResponder(tableView)
+        requestFirstResponder(tableView)
     }
 
     @objc func refreshPermissions() {
@@ -107,7 +107,7 @@ extension ViewController {
     func editSelectedSnippet() {
         guard selectedSnippet != nil else { return }
         closeActionPanel()
-        view.window?.makeFirstResponder(nameField)
+        requestFirstResponder(nameField)
     }
 
     func duplicateSelectedSnippet() {
@@ -160,7 +160,7 @@ extension ViewController {
             if selectedSnippetID == nil, let id = visibleSnippets.first?.id {
                 selectSnippet(id: id, focusEditorName: false)
             }
-            view.window?.makeFirstResponder(tableView)
+            requestFirstResponder(tableView)
         } catch {
             showErrorAlert(message: error.localizedDescription)
         }
@@ -178,7 +178,7 @@ extension ViewController {
         do {
             let count = try store.exportSnippets(to: url)
             importExportMessage = "Exported \(count) snippet(s) to \(url.lastPathComponent)."
-            view.window?.makeFirstResponder(tableView)
+            requestFirstResponder(tableView)
         } catch {
             showErrorAlert(message: error.localizedDescription)
         }

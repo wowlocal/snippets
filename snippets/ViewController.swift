@@ -94,7 +94,7 @@ final class ViewController: NSViewController {
 
         if let window = view.window {
             window.title = "Snippets"
-            window.minSize = NSSize(width: 620, height: 500)
+            window.minSize = NSSize(width: 680, height: 560)
 
             if !hasConfiguredWindowFrameAutosave {
                 hasConfiguredWindowFrameAutosave = true
@@ -102,6 +102,13 @@ final class ViewController: NSViewController {
                 if !restoredFromAutosave {
                     window.center()
                 }
+            }
+
+            if window.frame.width < window.minSize.width || window.frame.height < window.minSize.height {
+                var frame = window.frame
+                frame.size.width = max(frame.size.width, window.minSize.width)
+                frame.size.height = max(frame.size.height, window.minSize.height)
+                window.setFrame(frame, display: false)
             }
         }
 
@@ -111,7 +118,7 @@ final class ViewController: NSViewController {
             tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         }
 
-        view.window?.makeFirstResponder(tableView)
+        requestFirstResponder(tableView)
     }
 
     override func viewDidLayout() {
