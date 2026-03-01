@@ -1,9 +1,9 @@
 import Cocoa
 import ServiceManagement
-import class Sparkle.SPUStandardUpdaterController
+import Sparkle
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, SPUUpdaterDelegate {
     private enum QuitBehavior: String {
         case ask
         case hide
@@ -19,13 +19,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let store = SnippetStore()
     lazy var expansionEngine = SnippetExpansionEngine(store: store)
     private lazy var settingsWindowController = SettingsWindowController()
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+    private lazy var updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil
     )
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
     private var shouldTerminateForReal = false
+    private var pendingUpdateInstallHandler: (() -> Void)?
+    private var pendingUpdateVersion: String?
+    private var isApplyingPendingUpdate = false
+    private var userInitiatedUpdateCheck = false
+    private var clearUpdateStatusWorkItem: DispatchWorkItem?
+    private weak var appMenuCheckForUpdatesItem: NSMenuItem?
+    private weak var appMenuUpdateStatusItem: NSMenuItem?
+    private weak var appMenuRestartToUpdateItem: NSMenuItem?
+    private var appMenuUpdateStatusView: UpdateProgressMenuItemView?
 
     private var launchedAsLoginItem: Bool {
         guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
@@ -48,8 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
-        configureSettingsMenuItem()
+        configureAppMenuItems()
         setupStatusItem()
+        updaterController.updater.automaticallyDownloadsUpdates = true
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleChromiumBundleIDsChanged),
@@ -142,6 +152,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
             return true
         }
+        if menuItem.action == #selector(checkForUpdates(_:)) {
+            return updaterController.updater.canCheckForUpdates && !isApplyingPendingUpdate
+        }
+        if menuItem.action == #selector(installPendingUpdateAndRestart(_:)) {
+            return pendingUpdateInstallHandler != nil && !isApplyingPendingUpdate
+        }
         return true
     }
 
@@ -156,19 +172,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: ""))
-        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: ""))
         statusItem.menu = menu
     }
 
-    private func configureSettingsMenuItem() {
+    private func configureAppMenuItems() {
         guard let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
-        guard let settingsItem = appMenu.items.first(where: { $0.keyEquivalent == "," }) else { return }
 
-        settingsItem.title = "Settings…"
-        settingsItem.target = self
-        settingsItem.action = #selector(openSettings(_:))
+        if let settingsItem = appMenu.items.first(where: { $0.keyEquivalent == "," }) {
+            settingsItem.title = "Settings…"
+            settingsItem.target = self
+            settingsItem.action = #selector(openSettings(_:))
+        }
+
+        if appMenu.items.contains(where: { $0.action == #selector(checkForUpdates(_:)) }) {
+            appMenuCheckForUpdatesItem = appMenu.items.first(where: { $0.action == #selector(checkForUpdates(_:)) })
+            appMenuUpdateStatusItem = appMenu.items.first(where: { $0.tag == 981_001 })
+            appMenuRestartToUpdateItem = appMenu.items.first(where: { $0.action == #selector(installPendingUpdateAndRestart(_:)) })
+            refreshAppMenuUpdateState()
+            return
+        }
+
+        let checkForUpdatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        checkForUpdatesItem.target = self
+
+        let updateStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        updateStatusItem.tag = 981_001
+        updateStatusItem.isEnabled = false
+        updateStatusItem.isHidden = true
+        let updateStatusView = UpdateProgressMenuItemView(frame: NSRect(x: 0, y: 0, width: 320, height: 42))
+        updateStatusItem.view = updateStatusView
+
+        let restartToUpdateItem = NSMenuItem(title: "Restart to Apply Update", action: #selector(installPendingUpdateAndRestart(_:)), keyEquivalent: "")
+        restartToUpdateItem.target = self
+        restartToUpdateItem.isHidden = true
+
+        let insertionIndex: Int
+        if let settingsIndex = appMenu.items.firstIndex(where: { $0.keyEquivalent == "," }),
+           let separatorAfterSettings = appMenu.items[(settingsIndex + 1)...].firstIndex(where: { $0.isSeparatorItem }) {
+            insertionIndex = separatorAfterSettings
+        } else if let firstSeparator = appMenu.items.firstIndex(where: { $0.isSeparatorItem }) {
+            insertionIndex = firstSeparator + 1
+        } else {
+            insertionIndex = appMenu.items.count
+        }
+
+        appMenu.insertItem(checkForUpdatesItem, at: insertionIndex)
+        appMenu.insertItem(updateStatusItem, at: insertionIndex + 1)
+        appMenu.insertItem(restartToUpdateItem, at: insertionIndex + 2)
+
+        appMenuCheckForUpdatesItem = checkForUpdatesItem
+        appMenuUpdateStatusItem = updateStatusItem
+        appMenuRestartToUpdateItem = restartToUpdateItem
+        appMenuUpdateStatusView = updateStatusView
+        refreshAppMenuUpdateState()
     }
 
     @objc private func openFromStatusBar() {
@@ -176,7 +233,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @IBAction func checkForUpdates(_ sender: Any?) {
-        updaterController.checkForUpdates(sender)
+        if pendingUpdateInstallHandler != nil {
+            setUpdateStatus("Update \(pendingUpdateVersion ?? "") is ready. Use \"Restart to Apply Update\".", showProgress: false, autoClearAfter: nil)
+            return
+        }
+
+        userInitiatedUpdateCheck = true
+        setUpdateStatus("Checking for updates…", showProgress: true, autoClearAfter: nil)
+        updaterController.updater.checkForUpdatesInBackground()
+    }
+
+    @IBAction func installPendingUpdateAndRestart(_ sender: Any?) {
+        guard let installHandler = pendingUpdateInstallHandler, !isApplyingPendingUpdate else { return }
+        isApplyingPendingUpdate = true
+        setUpdateStatus("Applying update and restarting…", showProgress: true, autoClearAfter: nil)
+        refreshAppMenuUpdateState()
+        shouldTerminateForReal = true
+        installHandler()
     }
 
     @IBAction func quitCompletely(_ sender: Any?) {
@@ -257,5 +330,154 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - Update UI State
+
+    private func refreshAppMenuUpdateState() {
+        appMenuCheckForUpdatesItem?.isEnabled = updaterController.updater.canCheckForUpdates && !isApplyingPendingUpdate
+
+        if let version = pendingUpdateVersion, !version.isEmpty {
+            appMenuRestartToUpdateItem?.title = "Restart to Apply Update \(version)"
+        } else {
+            appMenuRestartToUpdateItem?.title = "Restart to Apply Update"
+        }
+
+        appMenuRestartToUpdateItem?.isHidden = pendingUpdateInstallHandler == nil
+        appMenuRestartToUpdateItem?.isEnabled = pendingUpdateInstallHandler != nil && !isApplyingPendingUpdate
+    }
+
+    private func setUpdateStatus(_ message: String?, showProgress: Bool, autoClearAfter: TimeInterval?) {
+        clearUpdateStatusWorkItem?.cancel()
+        clearUpdateStatusWorkItem = nil
+
+        if let message, !message.isEmpty {
+            appMenuUpdateStatusItem?.title = message
+            appMenuUpdateStatusView?.update(message: message, showProgress: showProgress)
+            appMenuUpdateStatusItem?.isHidden = false
+            if let autoClearAfter {
+                let workItem = DispatchWorkItem { [weak self] in
+                    self?.appMenuUpdateStatusView?.update(message: "", showProgress: false)
+                    self?.appMenuUpdateStatusItem?.isHidden = true
+                }
+                clearUpdateStatusWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + autoClearAfter, execute: workItem)
+            }
+        } else {
+            appMenuUpdateStatusView?.update(message: "", showProgress: false)
+            appMenuUpdateStatusItem?.isHidden = true
+        }
+
+        refreshAppMenuUpdateState()
+    }
+
+    private func updateVersionString(from item: SUAppcastItem) -> String {
+        let displayVersionString = item.displayVersionString
+        if !displayVersionString.isEmpty {
+            return displayVersionString
+        }
+        return item.versionString
+    }
+
+    // MARK: - Sparkle Delegate
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        let version = updateVersionString(from: item)
+        setUpdateStatus("Update \(version) found. Downloading…", showProgress: true, autoClearAfter: nil)
+    }
+
+    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+        let version = updateVersionString(from: item)
+        setUpdateStatus("Downloading update \(version)…", showProgress: true, autoClearAfter: nil)
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        let version = updateVersionString(from: item)
+        setUpdateStatus("Downloaded update \(version). Preparing…", showProgress: true, autoClearAfter: nil)
+    }
+
+    func updater(_ updater: SPUUpdater, didExtractUpdate item: SUAppcastItem) {
+        let version = updateVersionString(from: item)
+        setUpdateStatus("Prepared update \(version). Finalizing…", showProgress: true, autoClearAfter: nil)
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+        setUpdateStatus("Update download failed: \(error.localizedDescription)", showProgress: false, autoClearAfter: 8)
+    }
+
+    func userDidCancelDownload(_ updater: SPUUpdater) {
+        setUpdateStatus("Update download canceled.", showProgress: false, autoClearAfter: 5)
+    }
+
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        pendingUpdateInstallHandler = immediateInstallHandler
+        pendingUpdateVersion = updateVersionString(from: item)
+        isApplyingPendingUpdate = false
+        setUpdateStatus("Update \(pendingUpdateVersion ?? "") is ready. Choose \"Restart to Apply Update\".", showProgress: false, autoClearAfter: nil)
+        return true
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        guard userInitiatedUpdateCheck else { return }
+        setUpdateStatus("You're up to date.", showProgress: false, autoClearAfter: 4)
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        isApplyingPendingUpdate = false
+        setUpdateStatus("Update check failed: \(error.localizedDescription)", showProgress: false, autoClearAfter: 8)
+        refreshAppMenuUpdateState()
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        userInitiatedUpdateCheck = false
+        if pendingUpdateInstallHandler == nil && error == nil {
+            refreshAppMenuUpdateState()
+        }
+    }
+}
+
+private final class UpdateProgressMenuItemView: NSView {
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let progressIndicator = NSProgressIndicator()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        progressIndicator.style = .bar
+        progressIndicator.isIndeterminate = true
+        progressIndicator.isDisplayedWhenStopped = false
+        progressIndicator.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(statusLabel)
+        addSubview(progressIndicator)
+
+        NSLayoutConstraint.activate([
+            statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            statusLabel.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+
+            progressIndicator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            progressIndicator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            progressIndicator.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 4),
+            progressIndicator.heightAnchor.constraint(equalToConstant: 10),
+            progressIndicator.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(message: String, showProgress: Bool) {
+        statusLabel.stringValue = message
+        if showProgress {
+            progressIndicator.startAnimation(nil)
+        } else {
+            progressIndicator.stopAnimation(nil)
+        }
     }
 }
