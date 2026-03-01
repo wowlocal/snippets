@@ -23,6 +23,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private var shouldTerminateForReal = false
 
+    private var launchedAsLoginItem: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        return event.eventID == kAEOpenApplication
+            && event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    private var systemIsTerminating: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              let reason = event.attributeDescriptor(forKeyword: kAEQuitReason)
+        else { return false }
+        let code = reason.enumCodeValue
+        return code == kAEShutDown || code == kAERestart || code == kAEReallyLogOut
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
         configureSettingsMenuItem()
@@ -33,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             name: .snippetsChromiumBundleIDsChanged,
             object: nil
         )
+
+        if launchedAsLoginItem {
+            hideToBackground()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -41,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if shouldTerminateForReal {
+        if shouldTerminateForReal || systemIsTerminating {
             return .terminateNow
         }
 
