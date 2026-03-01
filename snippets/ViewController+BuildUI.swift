@@ -1,7 +1,7 @@
 import AppKit
 
 private enum MainLayoutMetrics {
-    static let sidebarMinWidth: CGFloat = 240
+    static let sidebarMinWidth: CGFloat = 300
     static let editorMinWidth: CGFloat = 360
     static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
@@ -41,7 +41,6 @@ extension ViewController {
         splitView.addArrangedSubview(editor)
 
         sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: MainLayoutMetrics.sidebarMinWidth).isActive = true
-        editor.widthAnchor.constraint(greaterThanOrEqualToConstant: MainLayoutMetrics.editorMinWidth).isActive = true
 
         splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
         splitView.setHoldingPriority(.defaultLow, forSubviewAt: 1)
