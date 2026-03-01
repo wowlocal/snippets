@@ -185,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func promptForQuitDecision() -> QuitDecision {
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "What should Cmd+Q do?"
         alert.informativeText = "Hide removes Snippets from the Dock and keeps it running in the menu bar. Quit completely stops Snippets."
