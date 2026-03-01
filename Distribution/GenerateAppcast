@@ -15,10 +15,17 @@ fi
 
 GENERATE_APPCAST="$SPARKLE_BIN/generate_appcast"
 DMGs_DIR="created-dmgs"
+MAXIMUM_DELTAS="${MAXIMUM_DELTAS:-3}"
 
 echo "Using generate_appcast from: $SPARKLE_BIN"
 echo "DMGs directory: $DMGs_DIR"
+echo "Maximum deltas: $MAXIMUM_DELTAS"
 
-$GENERATE_APPCAST --maximum-deltas 0 "$DMGs_DIR"
+if ! [[ "$MAXIMUM_DELTAS" =~ ^[0-9]+$ ]]; then
+    echo "Error: MAXIMUM_DELTAS must be a non-negative integer."
+    exit 1
+fi
+
+$GENERATE_APPCAST --maximum-deltas "$MAXIMUM_DELTAS" "$DMGs_DIR"
 
 echo "Appcast generated at $DMGs_DIR/appcast.xml"
