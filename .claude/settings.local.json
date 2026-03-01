@@ -12,7 +12,14 @@
       "WebFetch(domain:medium.com)",
       "WebFetch(domain:github.com)",
       "Bash(gh api:*)",
-      "WebFetch(domain:balatero.com)"
+      "WebFetch(domain:balatero.com)",
+      "WebFetch(domain:hisaac.net)",
+      "WebFetch(domain:theevilbit.github.io)",
+      "WebFetch(domain:dennisbabkin.com)",
+      "Bash(grep:*)",
+      "Bash(xargs ls:*)",
+      "Bash(git:*)",
+      "Bash(chmod +x:*)"
     ]
   }
 }

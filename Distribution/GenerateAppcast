@@ -1,0 +1,24 @@
+#! /bin/bash
+
+set -e
+
+cd "$(dirname "$0")"
+
+# Find Sparkle's generate_appcast in SPM build artifacts
+SPARKLE_BIN=$(find ~/Library/Developer/Xcode/DerivedData -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin" -type d 2>/dev/null | head -n 1)
+
+if [ -z "$SPARKLE_BIN" ]; then
+    echo "Error: Could not find Sparkle binary tools."
+    echo "Build the project in Xcode first to download the Sparkle package."
+    exit 1
+fi
+
+GENERATE_APPCAST="$SPARKLE_BIN/generate_appcast"
+DMGs_DIR="created-dmgs"
+
+echo "Using generate_appcast from: $SPARKLE_BIN"
+echo "DMGs directory: $DMGs_DIR"
+
+$GENERATE_APPCAST --maximum-deltas 0 "$DMGs_DIR"
+
+echo "Appcast generated at $DMGs_DIR/appcast.xml"

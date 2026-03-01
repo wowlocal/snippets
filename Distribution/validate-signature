@@ -1,0 +1,29 @@
+#! /bin/bash
+
+# check args
+if [ -z "$1" ]; then
+    echo "Usage: $0 <dmg_path>"
+    exit 1
+fi
+
+# if any call fails, exit with error
+set -e
+
+# verify signature
+codesign --verify --deep --strict --verbose=2 "$1"
+
+# check that the signature has valid identity (Developer ID Application)
+SIGNATURE_IDENTITY=$(codesign -dvv "$1" 2>&1 | grep "Authority" | grep "Developer ID Application" | head -n 1)
+
+if [[ -z "$SIGNATURE_IDENTITY" ]]; then
+	codesign -dvv "$1"
+    echo "Error: Signature does not contain a Developer ID Application identity"
+	echo "Check the signature details above"
+    exit 1
+fi
+
+# verify stapling
+xcrun stapler validate "$1"
+
+# validate signature
+spctl -a -t open --context context:primary-signature -v "$1"

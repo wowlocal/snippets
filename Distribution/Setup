@@ -1,0 +1,485 @@
+#!/bin/bash
+
+set -e
+
+cd "$(dirname "$0")"
+
+# ─── Colors ───────────────────────────────────────────────────────────────────
+
+function gray()   { echo -en "\033[1;30m"; }
+function green()  { echo -en "\033[1;32m"; }
+function orange() { echo -en "\033[1;33m"; }
+function red()    { echo -en "\033[1;31m"; }
+function blue()   { echo -en "\033[1;34m"; }
+function bold()   { echo -en "\033[1m"; }
+function reset()  { echo -en "\033[0m"; }
+
+function header() {
+    echo ""
+    blue; echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; reset
+    bold; echo "  $1"; reset
+    blue; echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; reset
+    echo ""
+}
+
+function step() {
+    green; echo -n "  ✓ "; reset; echo "$1"
+}
+
+function info() {
+    gray; echo "  $1"; reset
+}
+
+function warn() {
+    orange; echo "  ⚠ $1"; reset
+}
+
+function err() {
+    red; echo "  ✗ $1"; reset
+}
+
+function link() {
+    echo -e "  \033[4;34m$1\033[0m"
+}
+
+function ask() {
+    local prompt="$1"
+    local var_name="$2"
+    local default="$3"
+
+    if [ -n "$default" ]; then
+        echo -n "  $prompt [$default]: "
+    else
+        echo -n "  $prompt: "
+    fi
+    read -r value
+    if [ -z "$value" ] && [ -n "$default" ]; then
+        value="$default"
+    fi
+    eval "$var_name='$value'"
+}
+
+function ask_secret() {
+    local prompt="$1"
+    local var_name="$2"
+
+    echo -n "  $prompt: "
+    read -rs value
+    echo ""
+    eval "$var_name='$value'"
+}
+
+function confirm() {
+    echo -n "  $1 [Y/n]: "
+    read -r yn
+    case "$yn" in
+        [Nn]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+function wait_for_enter() {
+    gray; echo -n "  Press Enter when done..."; reset
+    read -r
+}
+
+# ─── Welcome ──────────────────────────────────────────────────────────────────
+
+header "Snippets Release Setup Wizard"
+echo "  This wizard will walk you through setting up everything needed"
+echo "  to build, sign, notarize, and publish Snippets updates."
+echo ""
+echo "  What we'll configure:"
+echo "    1. Required CLI tools (brew, aws, gh, create-dmg)"
+echo "    2. Apple notarization credentials"
+echo "    3. Sparkle signing keys for auto-updates"
+echo "    4. S3 bucket for hosting updates"
+echo "    5. Info.plist with your appcast URL and public key"
+echo ""
+
+if ! confirm "Ready to start?"; then
+    echo "  Bye!"
+    exit 0
+fi
+
+# ─── Step 1: CLI Tools ───────────────────────────────────────────────────────
+
+header "Step 1/5: CLI Tools"
+
+TOOLS_MISSING=0
+
+# Homebrew
+if command -v brew &>/dev/null; then
+    step "Homebrew installed"
+else
+    err "Homebrew not found"
+    echo "  Install it from:"
+    link "https://brew.sh"
+    echo ""
+    echo "  Run this in Terminal:"
+    gray; echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'; reset
+    TOOLS_MISSING=1
+fi
+
+# aws CLI
+if command -v aws &>/dev/null; then
+    step "AWS CLI installed ($(aws --version 2>&1 | head -c 20))"
+else
+    err "AWS CLI not found"
+    echo "  Install with:"
+    gray; echo "  brew install awscli"; reset
+    echo ""
+    echo "  Or download from:"
+    link "https://aws.amazon.com/cli/"
+    TOOLS_MISSING=1
+fi
+
+# gh CLI
+if command -v gh &>/dev/null; then
+    step "GitHub CLI installed"
+    if gh auth status &>/dev/null 2>&1; then
+        step "GitHub CLI authenticated"
+    else
+        warn "GitHub CLI not authenticated"
+        echo "  Run:"
+        gray; echo "  gh auth login"; reset
+        TOOLS_MISSING=1
+    fi
+else
+    err "GitHub CLI not found"
+    echo "  Install with:"
+    gray; echo "  brew install gh"; reset
+    echo ""
+    echo "  Then authenticate:"
+    gray; echo "  gh auth login"; reset
+    echo ""
+    echo "  Docs:"
+    link "https://cli.github.com"
+    TOOLS_MISSING=1
+fi
+
+# create-dmg
+if command -v create-dmg &>/dev/null; then
+    step "create-dmg installed"
+else
+    err "create-dmg not found"
+    echo "  Install with:"
+    gray; echo "  brew install create-dmg"; reset
+    echo ""
+    echo "  Docs:"
+    link "https://github.com/sindresorhus/create-dmg"
+    TOOLS_MISSING=1
+fi
+
+if [ "$TOOLS_MISSING" -eq 1 ]; then
+    echo ""
+    warn "Some tools are missing. Install them and re-run this wizard."
+    if ! confirm "Continue anyway?"; then
+        exit 1
+    fi
+fi
+
+# ─── Step 2: Apple Notarization ──────────────────────────────────────────────
+
+header "Step 2/5: Apple Notarization"
+
+echo "  Detecting code signing identity..."
+IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1)
+
+if [ -z "$IDENTITY" ]; then
+    err "No 'Developer ID Application' identity found."
+    echo "  Make sure you have a valid Developer ID certificate installed."
+    echo ""
+    echo "  Docs:"
+    link "https://developer.apple.com/account/resources/certificates/list"
+else
+    DEVELOPER_ID=$(echo "$IDENTITY" | sed -E 's/.*"(.*)".*/\1/')
+    TEAMID=$(echo "$DEVELOPER_ID" | sed -E 's/.*\(([A-Z0-9]+)\).*/\1/')
+    step "Found identity: $DEVELOPER_ID"
+    info "Team ID: $TEAMID"
+fi
+
+echo ""
+echo "  MakeDMG uses a notarytool keychain profile to notarize DMGs."
+echo "  If you already have one (from another project), you can reuse it."
+echo ""
+
+ask "Keychain profile name" NOTARY_PROFILE_INPUT "${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}"
+
+if [ -n "$NOTARY_PROFILE_INPUT" ]; then
+    NOTARY_KEYCHAIN_PROFILE="$NOTARY_PROFILE_INPUT"
+    step "Will use profile: $NOTARY_KEYCHAIN_PROFILE"
+fi
+
+echo ""
+if confirm "Create/update the \"$NOTARY_KEYCHAIN_PROFILE\" profile now?"; then
+    echo ""
+    echo "  notarytool will prompt for your Apple ID, app-specific password, and Team ID."
+    echo ""
+    echo "  If you need an app-specific password, create one at:"
+    link "https://account.apple.com/sign-in"
+    echo ""
+    xcrun notarytool store-credentials "$NOTARY_KEYCHAIN_PROFILE"
+    echo ""
+    step "Profile \"$NOTARY_KEYCHAIN_PROFILE\" stored in keychain"
+else
+    info "Skipped. If needed later, run:"
+    gray; echo "  xcrun notarytool store-credentials \"$NOTARY_KEYCHAIN_PROFILE\""; reset
+fi
+
+# ─── Step 3: Sparkle Signing Keys ────────────────────────────────────────────
+
+header "Step 3/5: Sparkle EdDSA Signing Keys"
+
+echo "  Sparkle signs updates with an EdDSA key pair."
+echo "  The private key lives in your Keychain."
+echo "  The public key goes in Info.plist (SUPublicEDKey)."
+echo ""
+echo "  Docs:"
+link "https://sparkle-project.org/documentation/eddsa-setup/"
+echo ""
+
+# Find Sparkle tools
+SPARKLE_BIN=$(find ~/Library/Developer/Xcode/DerivedData -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin" -type d 2>/dev/null | head -n 1)
+
+if [ -z "$SPARKLE_BIN" ]; then
+    warn "Sparkle binary tools not found in DerivedData."
+    echo "  Build the project in Xcode first to download the Sparkle package,"
+    echo "  then re-run this wizard."
+    echo ""
+    SPARKLE_PUBKEY=""
+else
+    GENERATE_KEYS="$SPARKLE_BIN/generate_keys"
+
+    # generate_keys -p prints the public key if one already exists
+    EXISTING_KEY=$("$GENERATE_KEYS" -p 2>/dev/null || true)
+
+    if [ -n "$EXISTING_KEY" ]; then
+        step "EdDSA key pair already exists in Keychain"
+        SPARKLE_PUBKEY="$EXISTING_KEY"
+        info "Public key: $SPARKLE_PUBKEY"
+    else
+        echo "  No existing Sparkle key found."
+        if confirm "Generate a new EdDSA key pair now?"; then
+            KEYGEN_OUTPUT=$("$GENERATE_KEYS" 2>&1)
+            SPARKLE_PUBKEY=$(echo "$KEYGEN_OUTPUT" | grep -oE '[A-Za-z0-9+/=]{40,}' | head -n 1)
+            step "Key pair generated and stored in Keychain"
+            if [ -n "$SPARKLE_PUBKEY" ]; then
+                info "Public key: $SPARKLE_PUBKEY"
+            else
+                warn "Could not extract public key automatically."
+                echo "  Run this to print it:"
+                gray; echo "  $GENERATE_KEYS -p"; reset
+            fi
+        else
+            warn "Skipped. Run this to generate keys later:"
+            gray; echo "  $GENERATE_KEYS"; reset
+            SPARKLE_PUBKEY=""
+        fi
+    fi
+fi
+
+# ─── Step 4: S3 Configuration ────────────────────────────────────────────────
+
+header "Step 4/5: S3 Update Hosting"
+
+echo "  Updates (DMG + appcast.xml) are uploaded to an S3-compatible bucket."
+echo "  This works with AWS S3, DigitalOcean Spaces, Cloudflare R2,"
+echo "  MinIO, Backblaze B2, etc."
+echo ""
+echo "  The appcast URL will be:"
+gray; echo "  https://<your-domain>/<prefix>/appcast.xml"; reset
+echo ""
+
+# Load existing .env if present
+if [ -f .env ]; then
+    info "Found existing .env, loading current values as defaults..."
+    set -a; source .env 2>/dev/null; set +a
+fi
+
+bold; echo "  S3 Bucket Settings"; reset
+echo ""
+
+ask "Bucket name" S3_BUCKET_INPUT "${S3_BUCKET:-}"
+ask "Endpoint URL (e.g. https://s3.us-east-1.amazonaws.com)" S3_ENDPOINT_INPUT "${S3_ENDPOINT:-}"
+ask "Region (e.g. us-east-1, ru-central1)" S3_REGION_INPUT "${S3_REGION:-us-east-1}"
+ask "Path prefix in bucket (e.g. snippets/updates)" S3_PREFIX_INPUT "${S3_PREFIX:-snippets/updates}"
+
+echo ""
+bold; echo "  S3 Credentials"; reset
+echo ""
+echo "  Where to get credentials for common providers:"
+echo ""
+echo "  AWS S3:"
+link "https://console.aws.amazon.com/iam/ → Users → Security credentials → Access keys"
+echo ""
+echo "  Cloudflare R2:"
+link "https://dash.cloudflare.com/ → R2 → Manage R2 API Tokens"
+echo ""
+echo "  DigitalOcean Spaces:"
+link "https://cloud.digitalocean.com/account/api → Spaces Keys"
+echo ""
+echo "  Backblaze B2:"
+link "https://secure.backblaze.com/app_keys.htm"
+echo ""
+
+ask "AWS_ACCESS_KEY_ID" AWS_KEY_INPUT "${AWS_ACCESS_KEY_ID:-}"
+ask_secret "AWS_SECRET_ACCESS_KEY" AWS_SECRET_INPUT
+
+# Use existing secret if user left it blank
+if [ -z "$AWS_SECRET_INPUT" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+    AWS_SECRET_INPUT="$AWS_SECRET_ACCESS_KEY"
+    info "Keeping existing secret"
+fi
+
+if [ -z "$S3_BUCKET_INPUT" ] || [ -z "$S3_ENDPOINT_INPUT" ] || [ -z "$AWS_KEY_INPUT" ] || [ -z "$AWS_SECRET_INPUT" ]; then
+    warn "Some S3 values are empty. You can edit Distribution/.env later."
+else
+    step "S3 configuration complete"
+fi
+
+# Write .env
+cat > .env <<ENVEOF
+NOTARY_KEYCHAIN_PROFILE=${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}
+S3_BUCKET=${S3_BUCKET_INPUT}
+S3_ENDPOINT=${S3_ENDPOINT_INPUT}
+S3_REGION=${S3_REGION_INPUT}
+S3_PREFIX=${S3_PREFIX_INPUT}
+AWS_ACCESS_KEY_ID=${AWS_KEY_INPUT}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_INPUT}
+ENVEOF
+
+step "Saved to Distribution/.env"
+
+# Test S3 connection
+if [ -n "$S3_BUCKET_INPUT" ] && [ -n "$S3_ENDPOINT_INPUT" ] && [ -n "$AWS_KEY_INPUT" ] && [ -n "$AWS_SECRET_INPUT" ]; then
+    echo ""
+    if confirm "Test S3 connection now?"; then
+        echo ""
+        S3_TEST_OUTPUT=$(AWS_ACCESS_KEY_ID="$AWS_KEY_INPUT" AWS_SECRET_ACCESS_KEY="$AWS_SECRET_INPUT" \
+           aws s3 ls "s3://${S3_BUCKET_INPUT}/" --endpoint-url "$S3_ENDPOINT_INPUT" --region "$S3_REGION_INPUT" 2>&1) && S3_TEST_OK=1 || S3_TEST_OK=0
+        if [ "$S3_TEST_OK" -eq 1 ]; then
+            step "S3 connection successful"
+        else
+            warn "S3 connection failed:"
+            gray; echo "  $S3_TEST_OUTPUT"; reset
+            echo ""
+            echo "  You can test manually with:"
+            gray; echo "  set -a && source Distribution/.env && set +a && aws s3 ls s3://\$S3_BUCKET/ --endpoint-url \$S3_ENDPOINT --region \$S3_REGION"; reset
+        fi
+    fi
+fi
+
+# ─── Step 5: Info.plist ──────────────────────────────────────────────────────
+
+header "Step 5/5: Configure Info.plist"
+
+PLIST_PATH="../snippets/Info.plist"
+
+echo "  Info.plist needs two values for Sparkle auto-updates:"
+echo "    - SUFeedURL: URL where appcast.xml is hosted"
+echo "    - SUPublicEDKey: your Sparkle EdDSA public key"
+echo ""
+
+CURRENT_FEED=$(/usr/libexec/PlistBuddy -c "Print SUFeedURL" "$PLIST_PATH" 2>/dev/null || echo "")
+CURRENT_PUBKEY=$(/usr/libexec/PlistBuddy -c "Print SUPublicEDKey" "$PLIST_PATH" 2>/dev/null || echo "")
+
+NEEDS_UPDATE=0
+
+# SUFeedURL
+if [ "$CURRENT_FEED" = "REPLACE_WITH_YOUR_APPCAST_URL" ] || [ -z "$CURRENT_FEED" ]; then
+    warn "SUFeedURL is not configured"
+    NEEDS_UPDATE=1
+else
+    step "SUFeedURL = $CURRENT_FEED"
+fi
+
+# SUPublicEDKey
+if [ "$CURRENT_PUBKEY" = "REPLACE_WITH_YOUR_PUBLIC_EDKEY" ] || [ -z "$CURRENT_PUBKEY" ]; then
+    warn "SUPublicEDKey is not configured"
+    NEEDS_UPDATE=1
+else
+    step "SUPublicEDKey = ${CURRENT_PUBKEY:0:20}..."
+fi
+
+if [ "$NEEDS_UPDATE" -eq 1 ]; then
+    echo ""
+
+    # Compute the appcast URL from S3 config
+    APPCAST_URL_GUESS=""
+    if [ -n "$S3_ENDPOINT_INPUT" ] && [ -n "$S3_BUCKET_INPUT" ] && [ -n "$S3_PREFIX_INPUT" ]; then
+        # Strip protocol for a guess — user should replace with their public URL
+        APPCAST_URL_GUESS="${S3_ENDPOINT_INPUT}/${S3_BUCKET_INPUT}/${S3_PREFIX_INPUT}/appcast.xml"
+    fi
+
+    if confirm "Update Info.plist now?"; then
+        echo ""
+        if [ "$CURRENT_FEED" = "REPLACE_WITH_YOUR_APPCAST_URL" ] || [ -z "$CURRENT_FEED" ]; then
+            echo "  The appcast URL is where your appcast.xml will be publicly accessible."
+            echo "  This is usually your CDN or bucket's public URL + prefix + /appcast.xml"
+            if [ -n "$APPCAST_URL_GUESS" ]; then
+                info "Possible URL based on your S3 config:"
+                info "$APPCAST_URL_GUESS"
+            fi
+            echo ""
+            ask "SUFeedURL (full URL to appcast.xml)" NEW_FEED "${APPCAST_URL_GUESS:-}"
+            if [ -n "$NEW_FEED" ]; then
+                /usr/libexec/PlistBuddy -c "Set SUFeedURL $NEW_FEED" "$PLIST_PATH"
+                step "SUFeedURL updated"
+            fi
+        fi
+
+        if [ "$CURRENT_PUBKEY" = "REPLACE_WITH_YOUR_PUBLIC_EDKEY" ] || [ -z "$CURRENT_PUBKEY" ]; then
+            if [ -n "$SPARKLE_PUBKEY" ]; then
+                info "Using the public key from Step 3"
+                /usr/libexec/PlistBuddy -c "Set SUPublicEDKey $SPARKLE_PUBKEY" "$PLIST_PATH"
+                step "SUPublicEDKey updated"
+            else
+                ask "SUPublicEDKey (EdDSA public key)" NEW_PUBKEY ""
+                if [ -n "$NEW_PUBKEY" ]; then
+                    /usr/libexec/PlistBuddy -c "Set SUPublicEDKey $NEW_PUBKEY" "$PLIST_PATH"
+                    step "SUPublicEDKey updated"
+                fi
+            fi
+        fi
+    else
+        warn "Skipped. Edit snippets/Info.plist manually before releasing."
+    fi
+fi
+
+# ─── Summary ─────────────────────────────────────────────────────────────────
+
+header "Setup Complete!"
+
+echo "  To make a release:"
+echo ""
+echo "    1. Archive in Xcode → export to Distribution/exported-apps/"
+echo "    2. Run:"
+bold; echo "       ./Distribution/Release"; reset
+echo ""
+echo "  This will:"
+echo "    - Build a signed, notarized DMG"
+echo "    - Generate the Sparkle appcast"
+echo "    - Upload to S3"
+echo "    - Create a GitHub release with the DMG attached"
+echo ""
+
+# Final checklist
+bold; echo "  Checklist:"; reset
+echo ""
+
+check_ok()   { green; echo -n "  [x] "; reset; echo "$1"; }
+check_fail() { red;   echo -n "  [ ] "; reset; echo "$1"; }
+
+if command -v aws &>/dev/null; then check_ok "AWS CLI installed"; else check_fail "AWS CLI installed"; fi
+if command -v gh &>/dev/null; then check_ok "GitHub CLI installed"; else check_fail "GitHub CLI installed"; fi
+if command -v create-dmg &>/dev/null; then check_ok "create-dmg installed"; else check_fail "create-dmg installed"; fi
+echo -n "  "; gray; echo "[?] Notary profile \"${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}\" (run xcrun notarytool store-credentials \"${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}\" if not set)"; reset
+if [ -f .env ]; then check_ok "Distribution/.env configured"; else check_fail "Distribution/.env configured"; fi
+
+FINAL_FEED=$(/usr/libexec/PlistBuddy -c "Print SUFeedURL" "$PLIST_PATH" 2>/dev/null || echo "")
+FINAL_PUBKEY=$(/usr/libexec/PlistBuddy -c "Print SUPublicEDKey" "$PLIST_PATH" 2>/dev/null || echo "")
+if [ -n "$FINAL_FEED" ] && [ "$FINAL_FEED" != "REPLACE_WITH_YOUR_APPCAST_URL" ]; then check_ok "SUFeedURL in Info.plist"; else check_fail "SUFeedURL in Info.plist"; fi
+if [ -n "$FINAL_PUBKEY" ] && [ "$FINAL_PUBKEY" != "REPLACE_WITH_YOUR_PUBLIC_EDKEY" ]; then check_ok "SUPublicEDKey in Info.plist"; else check_fail "SUPublicEDKey in Info.plist"; fi
+
+echo ""

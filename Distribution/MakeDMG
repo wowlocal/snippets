@@ -1,0 +1,184 @@
+#! /bin/bash
+
+function gray_text() {
+    echo -e "\033[1;30m"
+}
+
+function green_text() {
+    echo -e "\033[1;32m"
+}
+
+function normal_text() {
+    echo -e "\033[0m"
+}
+
+function orange_text() {
+    echo -e "\033[1;33m"
+}
+
+set -e
+
+# cd into the script directory
+cd "$(dirname "$0")"
+
+APP_INPUT_PATH=$1
+DMG_OUTPUT_PATH=$2
+
+# if DMG_OUTPUT_PATH is not specified, use created-dmgs default path
+if [ -z "$DMG_OUTPUT_PATH" ]; then
+    DMG_OUTPUT_PATH="created-dmgs"
+fi
+
+# if APP_INPUT_PATH is not specified, use exported-apps/Snippets.app
+if [ -z "$APP_INPUT_PATH" ]; then
+    APP_INPUT_PATH="exported-apps/Snippets.app"
+fi
+
+# check args
+if [ -z "$APP_INPUT_PATH" ]; then
+    echo "Usage: $0 <app_input_path> <dmg_output_path>"
+    exit 1
+fi
+
+gray_text
+echo "APP_INPUT_PATH: $APP_INPUT_PATH"
+echo "DMG_OUTPUT_PATH: $DMG_OUTPUT_PATH"
+normal_text
+
+# Extract app version from Info.plist
+APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_INPUT_PATH/Contents/Info.plist" 2>/dev/null)
+if [ -z "$APP_VERSION" ]; then
+    echo "Error: Could not extract app version from $APP_INPUT_PATH"
+    exit 1
+else
+    echo "Extracted app version: $APP_VERSION"
+fi
+
+APP_NAME=$(basename "$APP_INPUT_PATH")
+
+# Resolve DMG signing identity.
+# Priority:
+# 1) explicit env override (DMG_CODESIGN_IDENTITY)
+# 2) Developer ID authority embedded in the exported app signature
+# 3) first Developer ID Application identity from keychain
+DMG_CODESIGN_IDENTITY="${DMG_CODESIGN_IDENTITY:-}"
+if [ -z "$DMG_CODESIGN_IDENTITY" ]; then
+    DMG_CODESIGN_IDENTITY=$(codesign -dvv "$APP_INPUT_PATH" 2>&1 | sed -n 's/^Authority=//p' | grep '^Developer ID Application:' | head -n 1)
+fi
+if [ -z "$DMG_CODESIGN_IDENTITY" ]; then
+    DMG_CODESIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1)
+fi
+if [ -z "$DMG_CODESIGN_IDENTITY" ]; then
+    echo "Error: Could not resolve DMG signing identity."
+    echo "Set DMG_CODESIGN_IDENTITY to a valid Developer ID Application identity."
+    exit 1
+fi
+
+# verify code signature (before notarization)
+orange_text
+codesign --verify --deep --strict --verbose=2 "$APP_INPUT_PATH"
+normal_text
+
+green_text
+echo "Code signature valid for $APP_NAME"
+normal_text
+
+# notarize the app
+gray_text
+echo "Notarizing $APP_NAME..."
+ditto -c -k --keepParent "$APP_INPUT_PATH" "$APP_INPUT_PATH.zip"
+xcrun notarytool submit -p "${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}" --verbose "$APP_INPUT_PATH.zip" --wait --timeout 1h
+rm "$APP_INPUT_PATH.zip"
+normal_text
+
+# staple the app
+xcrun stapler staple "$APP_INPUT_PATH"
+
+orange_text
+./validate-signature "$APP_INPUT_PATH"
+normal_text
+
+green_text
+echo "App notarized and stapled: $APP_NAME"
+normal_text
+
+# check if create-dmg is installed via brew
+which create-dmg > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "create-dmg is not installed. Please install it via brew."
+    exit 1
+fi
+
+DMG_NAME="snippets"
+DMG_DEST_FILENAME="${DMG_NAME}-${APP_VERSION}.dmg"
+
+# DMG_OUTPUT_PATH can be either:
+# - a directory (default): write snippets-<version>.dmg inside it
+# - a .dmg path: write exactly to that path
+if [[ "$DMG_OUTPUT_PATH" == *.dmg ]]; then
+    DMG_DEST_PATH="$DMG_OUTPUT_PATH"
+    DMG_DIR=$(dirname "$DMG_DEST_PATH")
+else
+    DMG_DIR="$DMG_OUTPUT_PATH"
+    DMG_DEST_PATH="${DMG_DIR}/${DMG_DEST_FILENAME}"
+fi
+
+# prepare DMG output directory
+mkdir -p "$DMG_DIR"
+
+# check if dest file already exists
+if [ -f "$DMG_DEST_PATH" ]; then
+    echo "Error: DMG file $DMG_DEST_PATH already exists"
+    exit 1
+fi
+
+# create a staging folder with just the .app
+DMG_STAGING=$(mktemp -d)
+trap 'rm -rf "$DMG_STAGING"' EXIT
+cp -a "$APP_INPUT_PATH" "$DMG_STAGING/"
+
+# https://github.com/create-dmg/create-dmg
+create-dmg \
+    --volname "Snippets" \
+    --codesign "$DMG_CODESIGN_IDENTITY" \
+    "$DMG_DEST_PATH" \
+    "$DMG_STAGING"
+
+trap - EXIT
+rm -rf "$DMG_STAGING"
+
+if [ ! -f "$DMG_DEST_PATH" ]; then
+    echo "Error: DMG file $DMG_DEST_PATH does not exist"
+    exit 1
+fi
+
+DMG_OUTPUT_PATH="$DMG_DEST_PATH"
+
+gray_text
+echo "DMG_OUTPUT_PATH: $DMG_OUTPUT_PATH"
+normal_text
+
+# notarize
+gray_text
+xcrun notarytool submit -p "${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}" --verbose "$DMG_OUTPUT_PATH" --wait --timeout 1h
+normal_text
+
+xcrun stapler staple "$DMG_OUTPUT_PATH"
+
+orange_text
+./validate-signature "$DMG_OUTPUT_PATH"
+normal_text
+
+green_text
+echo "DMG validation passed $DMG_OUTPUT_PATH"
+normal_text
+
+# archive the app into a version directory
+APP_INPUT_DIR=$(dirname "$APP_INPUT_PATH")
+APP_VERSION_DIR="$APP_INPUT_DIR/$APP_VERSION"
+mkdir -p "$APP_VERSION_DIR"
+mv "$APP_INPUT_PATH" "$APP_VERSION_DIR"
+
+green_text
+echo "App archived to: $APP_VERSION_DIR"
+normal_text

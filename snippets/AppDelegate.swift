@@ -1,5 +1,6 @@
 import Cocoa
 import ServiceManagement
+import class Sparkle.SPUStandardUpdaterController
 
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
@@ -18,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let store = SnippetStore()
     lazy var expansionEngine = SnippetExpansionEngine(store: store)
     private lazy var settingsWindowController = SettingsWindowController()
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+    )
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
@@ -37,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return code == kAEShutDown || code == kAERestart || code == kAEReallyLogOut
     }
 
+    /// Sparkle sends a quit event when it needs to replace the app bundle.
+    private var updaterIsTerminating: Bool {
+        updaterController.updater.sessionInProgress
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
         configureSettingsMenuItem()
@@ -51,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if launchedAsLoginItem {
             hideToBackground()
         }
+
+        #if !DEBUG
+        updaterController.updater.checkForUpdatesInBackground()
+        #endif
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -59,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if shouldTerminateForReal || systemIsTerminating {
+        if shouldTerminateForReal || systemIsTerminating || updaterIsTerminating {
             return .terminateNow
         }
 
@@ -143,6 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: ""))
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: ""))
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: ""))
         statusItem.menu = menu
     }
@@ -158,6 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func openFromStatusBar() {
         showMainWindow()
+    }
+
+    @IBAction func checkForUpdates(_ sender: Any?) {
+        updaterController.checkForUpdates(sender)
     }
 
     @IBAction func quitCompletely(_ sender: Any?) {

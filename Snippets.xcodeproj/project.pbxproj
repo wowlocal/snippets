@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		270SPK012F53000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 270SPK022F53000000000002 /* Sparkle */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Snippets.app; path = "Snippets Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				270SPK012F53000000000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = Snippets;
 			packageProductDependencies = (
+				270SPK022F53000000000002 /* Sparkle */,
 			);
 			productName = snippets;
 			productReference = 272782D72F41F9F1000B9989 /* Snippets.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = 272782CE2F41F9F1000B9989;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				270SPK032F53000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 272782D82F41F9F1000B9989 /* Products */;
 			projectDirPath = "";
@@ -258,6 +267,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = snippets/Info.plist;
 				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Snippets needs Accessibility access to replace typed keywords with snippet content.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSInputMonitoringUsageDescription = "Snippets monitors typed keywords to trigger snippet expansion in any app.";
@@ -294,6 +304,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = snippets/Info.plist;
 				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Snippets needs Accessibility access to replace typed keywords with snippet content.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSInputMonitoringUsageDescription = "Snippets monitors typed keywords to trigger snippet expansion in any app.";
@@ -339,6 +350,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		270SPK032F53000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.7.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		270SPK022F53000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 270SPK032F53000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 272782CF2F41F9F1000B9989 /* Project object */;
 }

@@ -1,0 +1,230 @@
+#!/bin/bash
+
+set -e
+
+cd "$(dirname "$0")"
+
+function gray_text() {
+    echo -e "\033[1;30m"
+}
+
+function green_text() {
+    echo -e "\033[1;32m"
+}
+
+function normal_text() {
+    echo -e "\033[0m"
+}
+
+function orange_text() {
+    echo -e "\033[1;33m"
+}
+
+function red_text() {
+    echo -e "\033[1;31m"
+}
+
+# Load .env if present
+if [ -f .env ]; then
+    gray_text
+    echo "Loading environment from .env"
+    normal_text
+    set -a
+    source .env
+    set +a
+fi
+
+# Validate required env vars
+MISSING=()
+[ -z "$S3_BUCKET" ] && MISSING+=("S3_BUCKET")
+[ -z "$S3_ENDPOINT" ] && MISSING+=("S3_ENDPOINT")
+[ -z "$S3_REGION" ] && MISSING+=("S3_REGION")
+[ -z "$S3_PREFIX" ] && MISSING+=("S3_PREFIX")
+[ -z "$AWS_ACCESS_KEY_ID" ] && MISSING+=("AWS_ACCESS_KEY_ID")
+[ -z "$AWS_SECRET_ACCESS_KEY" ] && MISSING+=("AWS_SECRET_ACCESS_KEY")
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+    red_text
+    echo "Missing required environment variables: ${MISSING[*]}"
+    echo "Set them in Distribution/.env or export them before running."
+    normal_text
+    exit 1
+fi
+
+# Validate required tools
+for tool in aws gh; do
+    if ! command -v "$tool" &>/dev/null; then
+        red_text
+        echo "Required tool not found: $tool"
+        normal_text
+        exit 1
+    fi
+done
+
+PROJECT_DIR="$(cd .. && pwd)"
+SCHEME="Snippets"
+ARCHIVE_PATH="archives/Snippets.xcarchive"
+APP_PATH="exported-apps/Snippets.app"
+
+# Step 1: Bump version
+BUMP="${1:-patch}"
+orange_text
+echo "Step 1/7: Bumping version ($BUMP)..."
+normal_text
+
+APP_VERSION=$(./BumpVersion "$BUMP")
+TAG="v${APP_VERSION}"
+
+green_text
+echo "Version: $APP_VERSION ($TAG)"
+normal_text
+
+# Step 2: Archive
+orange_text
+echo "Step 2/7: Archiving..."
+normal_text
+
+mkdir -p archives
+xcodebuild archive \
+    -project "$PROJECT_DIR/Snippets.xcodeproj" \
+    -scheme "$SCHEME" \
+    -configuration Release \
+    -archivePath "$ARCHIVE_PATH" \
+    -quiet
+
+if [ ! -d "$ARCHIVE_PATH" ]; then
+    red_text
+    echo "Archive failed"
+    normal_text
+    exit 1
+fi
+
+green_text
+echo "Archived to $ARCHIVE_PATH"
+normal_text
+
+# Step 3: Export
+orange_text
+echo "Step 3/7: Exporting..."
+normal_text
+
+mkdir -p exported-apps
+xcodebuild -exportArchive \
+    -archivePath "$ARCHIVE_PATH" \
+    -exportOptionsPlist "ExportOptions.plist" \
+    -exportPath "exported-apps" \
+    -quiet
+
+# xcodebuild exports as <ProductName>.app, find it
+EXPORTED_APP=$(find exported-apps -name "*.app" -maxdepth 1 -type d | head -1)
+if [ -z "$EXPORTED_APP" ]; then
+    red_text
+    echo "Export failed — no .app found in exported-apps/"
+    normal_text
+    exit 1
+fi
+
+# Rename to expected path if needed
+if [ "$EXPORTED_APP" != "$APP_PATH" ]; then
+    mv "$EXPORTED_APP" "$APP_PATH"
+fi
+
+green_text
+echo "Exported to $APP_PATH"
+normal_text
+
+green_text
+echo "=== Releasing Snippets v${APP_VERSION} ==="
+normal_text
+
+DMG_DIR="created-dmgs"
+DMG_FILENAME="snippets-${APP_VERSION}.dmg"
+DMG_PATH="${DMG_DIR}/${DMG_FILENAME}"
+
+# Step 4: Build DMG (sign, notarize, staple)
+orange_text
+echo "Step 4/7: Building DMG..."
+normal_text
+./MakeDMG "$APP_PATH"
+
+if [ ! -f "$DMG_PATH" ]; then
+    red_text
+    echo "Expected DMG not found at $DMG_PATH"
+    normal_text
+    exit 1
+fi
+
+green_text
+echo "DMG created: $DMG_PATH"
+normal_text
+
+# Step 5: Generate appcast
+orange_text
+echo "Step 5/7: Generating appcast..."
+normal_text
+./GenerateAppcast
+
+if [ ! -f "$DMG_DIR/appcast.xml" ]; then
+    red_text
+    echo "Appcast not found at $DMG_DIR/appcast.xml"
+    normal_text
+    exit 1
+fi
+
+green_text
+echo "Appcast generated"
+normal_text
+
+# Step 6: Upload to S3
+orange_text
+echo "Step 6/7: Uploading to S3..."
+normal_text
+
+S3_DMG_DEST="s3://${S3_BUCKET}/${S3_PREFIX}/${DMG_FILENAME}"
+S3_APPCAST_DEST="s3://${S3_BUCKET}/${S3_PREFIX}/appcast.xml"
+
+gray_text
+echo "  DMG     → $S3_DMG_DEST"
+echo "  Appcast → $S3_APPCAST_DEST"
+normal_text
+
+aws s3 cp "$DMG_PATH" "$S3_DMG_DEST" --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION"
+aws s3 cp "$DMG_DIR/appcast.xml" "$S3_APPCAST_DEST" --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION"
+
+green_text
+echo "S3 upload complete"
+normal_text
+
+# Step 7: Push branch + tag + GitHub release
+orange_text
+echo "Step 7/7: Pushing branch/tag and creating GitHub release..."
+normal_text
+
+cd ..
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$CURRENT_BRANCH" = "HEAD" ]; then
+    red_text
+    echo "Detached HEAD detected; cannot push version bump commit to a branch."
+    normal_text
+    exit 1
+fi
+git push origin "$CURRENT_BRANCH"
+git push origin "$TAG"
+cd Distribution
+
+green_text
+echo "Branch $CURRENT_BRANCH and tag $TAG pushed"
+normal_text
+
+gh release create "$TAG" "$DMG_PATH" \
+    --title "Snippets ${APP_VERSION}" \
+    --generate-notes
+
+green_text
+echo ""
+echo "=== Release v${APP_VERSION} complete ==="
+echo ""
+echo "  DMG:     $DMG_PATH"
+echo "  S3:      $S3_DMG_DEST"
+echo "  GitHub:  $(gh release view "$TAG" --json url -q .url)"
+normal_text
