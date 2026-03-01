@@ -424,6 +424,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         isApplyingPendingUpdate = false
+        let nsError = error as NSError
+
+        // Sparkle may report "no update available" through abort callback.
+        // Treat this as a success state for user-initiated checks.
+        if nsError.code == 1001 {
+            if userInitiatedUpdateCheck {
+                setUpdateStatus("You're up to date.", showProgress: false, autoClearAfter: 4)
+            }
+            refreshAppMenuUpdateState()
+            return
+        }
+
+        // User canceled the install authorization prompt.
+        if nsError.code == 4007 {
+            refreshAppMenuUpdateState()
+            return
+        }
+
         setUpdateStatus("Update check failed: \(error.localizedDescription)", showProgress: false, autoClearAfter: 8)
         refreshAppMenuUpdateState()
     }
