@@ -190,14 +190,35 @@ normal_text
 
 S3_DMG_DEST="s3://${S3_BUCKET}/${S3_PREFIX}/${DMG_FILENAME}"
 S3_APPCAST_DEST="s3://${S3_BUCKET}/${S3_PREFIX}/appcast.xml"
+DELTA_FILENAMES=$(grep -oE 'url="[^"]+\.delta"' "$DMG_DIR/appcast.xml" | sed -E 's/^url="([^"]+)".*/\1/' | sed -E 's#.*/##' | sort -u)
+DELTA_COUNT=0
+for _delta in $DELTA_FILENAMES; do
+    DELTA_COUNT=$((DELTA_COUNT + 1))
+done
 
 gray_text
 echo "  DMG     → $S3_DMG_DEST"
 echo "  Appcast → $S3_APPCAST_DEST"
+if [ "$DELTA_COUNT" -gt 0 ]; then
+    echo "  Deltas  → s3://${S3_BUCKET}/${S3_PREFIX}/*.delta ($DELTA_COUNT file(s))"
+else
+    echo "  Deltas  → none referenced in appcast"
+fi
 normal_text
 
 aws s3 cp "$DMG_PATH" "$S3_DMG_DEST" --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION"
 aws s3 cp "$DMG_DIR/appcast.xml" "$S3_APPCAST_DEST" --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION"
+for DELTA_FILENAME in $DELTA_FILENAMES; do
+    DELTA_LOCAL_PATH="${DMG_DIR}/${DELTA_FILENAME}"
+    DELTA_DEST="s3://${S3_BUCKET}/${S3_PREFIX}/${DELTA_FILENAME}"
+    if [ ! -f "$DELTA_LOCAL_PATH" ]; then
+        red_text
+        echo "Delta referenced in appcast is missing locally: $DELTA_LOCAL_PATH"
+        normal_text
+        exit 1
+    fi
+    aws s3 cp "$DELTA_LOCAL_PATH" "$DELTA_DEST" --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION"
+done
 
 green_text
 echo "S3 upload complete"
