@@ -40,8 +40,6 @@ extension ViewController {
         splitView.addArrangedSubview(sidebar)
         splitView.addArrangedSubview(editor)
 
-        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: MainLayoutMetrics.sidebarMinWidth).isActive = true
-
         splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
         splitView.setHoldingPriority(.defaultLow, forSubviewAt: 1)
         splitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
@@ -99,6 +97,13 @@ extension ViewController {
         mainSplitView.setPosition(clampedPosition, ofDividerAt: 0)
 
         hasRestoredSplitViewDivider = true
+    }
+
+    func clampedSidebarWidth(in splitView: NSSplitView, proposedWidth: CGFloat) -> CGFloat {
+        let availableWidth = max(0, splitView.bounds.width - splitView.dividerThickness)
+        let minimumSidebarWidth = min(MainLayoutMetrics.sidebarMinWidth, availableWidth)
+        let maximumSidebarWidth = max(minimumSidebarWidth, availableWidth - MainLayoutMetrics.editorMinWidth)
+        return min(max(proposedWidth, minimumSidebarWidth), maximumSidebarWidth)
     }
 
     func buildPermissionBanner() -> NSView {
@@ -533,10 +538,7 @@ extension ViewController: NSSplitViewDelegate {
         constrainSplitPosition proposedPosition: CGFloat,
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
-        let minPosition = MainLayoutMetrics.sidebarMinWidth
-        let maxPosition = splitView.bounds.width - splitView.dividerThickness - MainLayoutMetrics.editorMinWidth
-        let clampedMaxPosition = max(minPosition, maxPosition)
-        return min(max(proposedPosition, minPosition), clampedMaxPosition)
+        clampedSidebarWidth(in: splitView, proposedWidth: proposedPosition)
     }
 
     func splitView(
@@ -553,6 +555,29 @@ extension ViewController: NSSplitViewDelegate {
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
         let maxAllowedSidebarWidth = proposedMaximumPosition - MainLayoutMetrics.editorMinWidth
-        return max(MainLayoutMetrics.sidebarMinWidth, maxAllowedSidebarWidth)
+        let constrainedMaximum = max(MainLayoutMetrics.sidebarMinWidth, maxAllowedSidebarWidth)
+        return min(proposedMaximumPosition, constrainedMaximum)
+    }
+
+    func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
+        guard splitView === mainSplitView, splitView.subviews.count >= 2 else {
+            splitView.adjustSubviews()
+            return
+        }
+
+        let sidebarView = splitView.subviews[0]
+        let editorView = splitView.subviews[1]
+        let sidebarWidth = clampedSidebarWidth(in: splitView, proposedWidth: sidebarView.frame.width)
+
+        var sidebarFrame = sidebarView.frame
+        sidebarFrame.origin = CGPoint(x: 0, y: 0)
+        sidebarFrame.size = CGSize(width: sidebarWidth, height: splitView.bounds.height)
+        sidebarView.frame = sidebarFrame
+
+        let editorOriginX = sidebarFrame.maxX + splitView.dividerThickness
+        var editorFrame = editorView.frame
+        editorFrame.origin = CGPoint(x: editorOriginX, y: 0)
+        editorFrame.size = CGSize(width: max(0, splitView.bounds.width - editorOriginX), height: splitView.bounds.height)
+        editorView.frame = editorFrame
     }
 }

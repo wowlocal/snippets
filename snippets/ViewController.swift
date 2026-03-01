@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 private enum MainWindowAutosave {
     static let frameName = NSWindow.FrameAutosaveName("SnippetsMainWindowFrame")
+    static let minimumContentSize = NSSize(width: 680, height: 560)
 }
 
 @MainActor
@@ -94,7 +95,8 @@ final class ViewController: NSViewController {
 
         if let window = view.window {
             window.title = "Snippets"
-            window.minSize = NSSize(width: 680, height: 560)
+            window.contentMinSize = MainWindowAutosave.minimumContentSize
+            window.minSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: MainWindowAutosave.minimumContentSize)).size
 
             if !hasConfiguredWindowFrameAutosave {
                 hasConfiguredWindowFrameAutosave = true
