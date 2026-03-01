@@ -72,7 +72,15 @@ orange_text
 echo "Step 1/7: Bumping version ($BUMP)..."
 normal_text
 
-APP_VERSION=$(./BumpVersion "$BUMP")
+APP_VERSION_RAW=$(./BumpVersion "$BUMP")
+APP_VERSION=$(echo "$APP_VERSION_RAW" | tr -d '\r' | tail -n 1)
+if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    red_text
+    echo "Invalid version output from BumpVersion:"
+    echo "$APP_VERSION_RAW"
+    normal_text
+    exit 1
+fi
 TAG="v${APP_VERSION}"
 
 green_text

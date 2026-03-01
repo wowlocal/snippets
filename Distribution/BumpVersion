@@ -50,7 +50,7 @@ sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = ${NEW
 
 # Commit
 cd "$PROJECT_DIR"
-git commit --only -m "Bump version to ${NEW_VERSION} (build ${NEW_BUILD})" -- Snippets.xcodeproj/project.pbxproj
+git commit --quiet --only -m "Bump version to ${NEW_VERSION} (build ${NEW_BUILD})" -- Snippets.xcodeproj/project.pbxproj
 
 # Tag
 TAG="v${NEW_VERSION}"
