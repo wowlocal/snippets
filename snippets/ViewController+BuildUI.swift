@@ -1,5 +1,12 @@
 import AppKit
 
+private enum MainLayoutMetrics {
+    static let sidebarMinWidth: CGFloat = 240
+    static let editorMinWidth: CGFloat = 360
+    static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
+    static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
+}
+
 extension ViewController {
     func buildUI() {
         let rootView = NSView()
@@ -18,9 +25,10 @@ extension ViewController {
         permissionBannerDivider.boxType = .separator
         rootStack.addArrangedSubview(permissionBannerDivider)
 
-        let splitView = NSSplitView()
+        let splitView = mainSplitView
         splitView.isVertical = true
         splitView.dividerStyle = .thin
+        splitView.delegate = self
         splitView.translatesAutoresizingMaskIntoConstraints = false
 
         let sidebar = buildSidebar()
@@ -32,11 +40,21 @@ extension ViewController {
         splitView.addArrangedSubview(sidebar)
         splitView.addArrangedSubview(editor)
 
-        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
-        sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 390).isActive = true
-        splitView.setPosition(330, ofDividerAt: 0)
+        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: MainLayoutMetrics.sidebarMinWidth).isActive = true
+        editor.widthAnchor.constraint(greaterThanOrEqualToConstant: MainLayoutMetrics.editorMinWidth).isActive = true
+
+        splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
+        splitView.setHoldingPriority(.defaultLow, forSubviewAt: 1)
+        splitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
 
         rootStack.addArrangedSubview(splitView)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMainSplitViewDidResize),
+            name: NSSplitView.didResizeSubviewsNotification,
+            object: splitView
+        )
 
         [banner, permissionBannerDivider, splitView].forEach {
             $0.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
@@ -50,6 +68,38 @@ extension ViewController {
         ])
 
         buildActionOverlay(in: rootView)
+    }
+
+    @objc
+    func handleMainSplitViewDidResize(_ notification: Notification) {
+        guard mainSplitView.subviews.count >= 2 else { return }
+
+        let position = mainSplitView.subviews[0].frame.width
+        guard position.isFinite, position > 0 else { return }
+
+        UserDefaults.standard.set(Double(position), forKey: MainLayoutMetrics.splitViewDividerPositionDefaultsKey)
+    }
+
+    func restoreMainSplitViewDividerIfNeeded() {
+        guard !hasRestoredSplitViewDivider else { return }
+        guard mainSplitView.subviews.count >= 2 else { return }
+
+        let storedPosition = UserDefaults.standard.double(forKey: MainLayoutMetrics.splitViewDividerPositionDefaultsKey)
+        guard storedPosition > 0 else {
+            hasRestoredSplitViewDivider = true
+            return
+        }
+
+        let proposedMinimum: CGFloat = 0
+        let proposedMaximum = mainSplitView.bounds.width - mainSplitView.dividerThickness
+        guard proposedMaximum > 0 else { return }
+
+        let minPosition = splitView(mainSplitView, constrainMinCoordinate: proposedMinimum, ofSubviewAt: 0)
+        let maxPosition = splitView(mainSplitView, constrainMaxCoordinate: proposedMaximum, ofSubviewAt: 0)
+        let clampedPosition = min(max(CGFloat(storedPosition), minPosition), max(minPosition, maxPosition))
+        mainSplitView.setPosition(clampedPosition, ofDividerAt: 0)
+
+        hasRestoredSplitViewDivider = true
     }
 
     func buildPermissionBanner() -> NSView {
@@ -374,7 +424,6 @@ extension ViewController {
         }
 
         previewContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true
-        stack.widthAnchor.constraint(lessThanOrEqualToConstant: 820).isActive = true
         let preferredEditorWidth = stack.widthAnchor.constraint(equalTo: contentView.widthAnchor, constant: -40)
         preferredEditorWidth.priority = .defaultHigh
         preferredEditorWidth.isActive = true
@@ -476,5 +525,35 @@ extension ViewController {
             actionStack.topAnchor.constraint(equalTo: actionPanelView.topAnchor, constant: 14),
             actionStack.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor, constant: -10)
         ])
+    }
+}
+
+extension ViewController: NSSplitViewDelegate {
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainSplitPosition proposedPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        let minPosition = MainLayoutMetrics.sidebarMinWidth
+        let maxPosition = splitView.bounds.width - splitView.dividerThickness - MainLayoutMetrics.editorMinWidth
+        let clampedMaxPosition = max(minPosition, maxPosition)
+        return min(max(proposedPosition, minPosition), clampedMaxPosition)
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMinCoordinate proposedMinimumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        MainLayoutMetrics.sidebarMinWidth
+    }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        let maxAllowedSidebarWidth = proposedMaximumPosition - MainLayoutMetrics.editorMinWidth
+        return max(MainLayoutMetrics.sidebarMinWidth, maxAllowedSidebarWidth)
     }
 }

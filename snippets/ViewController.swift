@@ -2,6 +2,10 @@ import AppKit
 import Carbon.HIToolbox
 import UniformTypeIdentifiers
 
+private enum MainWindowAutosave {
+    static let frameName = NSWindow.FrameAutosaveName("SnippetsMainWindowFrame")
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -50,9 +54,12 @@ final class ViewController: NSViewController {
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
     let previewSectionStack = NSStackView()
+    let mainSplitView = NSSplitView()
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSVisualEffectView()
+    var hasConfiguredWindowFrameAutosave = false
+    var hasRestoredSplitViewDivider = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -85,9 +92,18 @@ final class ViewController: NSViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
 
-        view.window?.title = "Snippets"
-        view.window?.minSize = NSSize(width: 620, height: 420)
-        view.window?.center()
+        if let window = view.window {
+            window.title = "Snippets"
+            window.minSize = NSSize(width: 620, height: 500)
+
+            if !hasConfiguredWindowFrameAutosave {
+                hasConfiguredWindowFrameAutosave = true
+                let restoredFromAutosave = window.setFrameAutosaveName(MainWindowAutosave.frameName)
+                if !restoredFromAutosave {
+                    window.center()
+                }
+            }
+        }
 
         installKeyboardMonitorIfNeeded()
 
@@ -96,6 +112,11 @@ final class ViewController: NSViewController {
         }
 
         view.window?.makeFirstResponder(tableView)
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        restoreMainSplitViewDividerIfNeeded()
     }
 
     deinit {
