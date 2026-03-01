@@ -27,8 +27,8 @@ final class UpdateReadyAccessoryController: NSTitlebarAccessoryViewController {
 
         stackView.orientation = .horizontal
         stackView.alignment = .centerY
-        stackView.spacing = 8
-        stackView.edgeInsets = NSEdgeInsets(top: 2, left: 8, bottom: 2, right: 0)
+        stackView.spacing = 9
+        stackView.edgeInsets = NSEdgeInsets(top: 2, left: 24, bottom: 2, right: 0)
         stackView.addArrangedSubview(titleLabel)
         stackView.addArrangedSubview(actionButton)
 
