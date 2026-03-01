@@ -140,6 +140,7 @@ cp -a "$APP_INPUT_PATH" "$DMG_STAGING/"
 # https://github.com/create-dmg/create-dmg
 create-dmg \
     --volname "Snippets" \
+    --app-drop-link 520 240 \
     --codesign "$DMG_CODESIGN_IDENTITY" \
     "$DMG_DEST_PATH" \
     "$DMG_STAGING"
