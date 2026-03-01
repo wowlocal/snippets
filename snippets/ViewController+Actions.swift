@@ -86,6 +86,10 @@ extension ViewController {
     }
 
     @objc func createSnippet(_ sender: Any?) {
+        if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            searchField.stringValue = ""
+        }
+
         let snippet = store.addSnippet()
         importExportMessage = nil
         reloadVisibleSnippets(keepSelection: true)
