@@ -28,13 +28,17 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && lowerCharacters == "k" {
-            toggleActionPanel()
+        if flags == [.command] && lowerCharacters == "f" {
+            requestFirstResponder(searchField)
             return nil
         }
 
-        if flags == [.command] && lowerCharacters == "f" {
-            requestFirstResponder(searchField)
+        if isSearchFieldActive {
+            return event
+        }
+
+        if flags == [.command] && lowerCharacters == "k" {
+            toggleActionPanel()
             return nil
         }
 
@@ -96,6 +100,11 @@ extension ViewController {
         return event
     }
 
+    var isSearchFieldActive: Bool {
+        guard let firstResponder = view.window?.firstResponder else { return false }
+        return firstResponder === searchField.currentEditor() || firstResponder === searchField
+    }
+
     var isListContext: Bool {
         guard let firstResponder = view.window?.firstResponder else { return true }
 
@@ -103,8 +112,8 @@ extension ViewController {
             return true
         }
 
-        if firstResponder === searchField.currentEditor() || firstResponder === searchField {
-            return true
+        if isSearchFieldActive {
+            return false
         }
 
         if firstResponder === snippetTextView {
