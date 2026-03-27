@@ -1,5 +1,10 @@
 import AppKit
 
+enum GroupPopUpItemKind {
+    static let ungrouped = "__ungrouped__"
+    static let newGroup = "__new_group__"
+}
+
 extension ViewController {
     func updatePermissionBanner() {
         if engine.accessibilityGranted {
@@ -17,16 +22,162 @@ extension ViewController {
         }
     }
 
+    func refreshGroupControls() {
+        updateSearchPlaceholder()
+        updateGroupFilterButtons()
+        rebuildGroupPopUpMenu()
+    }
+
+    func updateSearchPlaceholder() {
+        switch selectedGroupFilter {
+        case .all:
+            searchField.placeholderString = "Search snippets"
+        case .ungrouped:
+            searchField.placeholderString = "Search Ungrouped"
+        case let .group(groupID):
+            let groupName = store.group(id: groupID)?.displayName ?? "Group"
+            searchField.placeholderString = "Search \(groupName)"
+        }
+    }
+
+    func sanitizeSelectedGroupFilterIfNeeded() {
+        guard let groupID = selectedGroupFilter.groupID, store.group(id: groupID) == nil else { return }
+        selectedGroupFilter = .all
+    }
+
+    func updateGroupFilterButtons() {
+        groupFilterStackView.arrangedSubviews.forEach { subview in
+            groupFilterStackView.removeArrangedSubview(subview)
+            subview.removeFromSuperview()
+        }
+
+        let filters: [SnippetGroupFilter] = [.all, .ungrouped] + store.groupsSortedForDisplay().map { .group($0.id) }
+
+        for filter in filters {
+            let button = GroupFilterButton(frame: .zero)
+            button.title = title(for: filter)
+            button.filter = filter
+            button.state = filter == selectedGroupFilter ? .on : .off
+            button.target = self
+            button.action = #selector(handleGroupFilterButton(_:))
+            groupFilterStackView.addArrangedSubview(button)
+        }
+
+        groupFilterStackView.layoutSubtreeIfNeeded()
+        let fittingSize = groupFilterStackView.fittingSize
+        groupFilterStackView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: max(fittingSize.width, groupFilterScrollView.contentSize.width),
+            height: max(28, fittingSize.height)
+        )
+    }
+
+    func rebuildGroupPopUpMenu() {
+        let selectedGroupID = selectedSnippet?.groupID
+
+        isUpdatingGroupPopUp = true
+        groupPopUpButton.removeAllItems()
+
+        groupPopUpButton.addItem(withTitle: "Ungrouped")
+        groupPopUpButton.lastItem?.representedObject = GroupPopUpItemKind.ungrouped
+
+        let groups = store.groupsSortedForDisplay()
+        if !groups.isEmpty {
+            groupPopUpButton.menu?.addItem(.separator())
+            for group in groups {
+                groupPopUpButton.addItem(withTitle: group.displayName)
+                groupPopUpButton.lastItem?.representedObject = group.id.uuidString
+            }
+        }
+
+        groupPopUpButton.menu?.addItem(.separator())
+        groupPopUpButton.addItem(withTitle: "New Group…")
+        groupPopUpButton.lastItem?.representedObject = GroupPopUpItemKind.newGroup
+
+        if let selectedGroupID {
+            selectGroupPopUpItem(groupID: selectedGroupID)
+        } else {
+            selectGroupPopUpItem(groupID: nil)
+        }
+
+        groupPopUpButton.isEnabled = selectedSnippet != nil
+        isUpdatingGroupPopUp = false
+    }
+
+    func selectGroupPopUpItem(groupID: UUID?) {
+        let targetValue = groupID?.uuidString ?? GroupPopUpItemKind.ungrouped
+        if let item = groupPopUpButton.itemArray.first(where: { ($0.representedObject as? String) == targetValue }) {
+            groupPopUpButton.select(item)
+            return
+        }
+
+        groupPopUpButton.selectItem(at: 0)
+    }
+
+    func title(for filter: SnippetGroupFilter) -> String {
+        switch filter {
+        case .all:
+            return "All"
+        case .ungrouped:
+            return "Ungrouped"
+        case let .group(groupID):
+            return store.group(id: groupID)?.displayName ?? "Ungrouped"
+        }
+    }
+
+    func selectGroupFilter(_ filter: SnippetGroupFilter, shouldTouchGroup: Bool = true) {
+        let didChange = selectedGroupFilter != filter
+        selectedGroupFilter = filter
+
+        if let groupID = filter.groupID, shouldTouchGroup {
+            store.touchGroup(groupID: groupID)
+        } else {
+            refreshGroupControls()
+            if didChange {
+                reloadVisibleSnippets(keepSelection: true)
+                if selectedSnippetID == nil {
+                    applySelectedSnippetToEditor()
+                }
+            }
+        }
+    }
+
+    func adjustSelectedGroupFilterForSnippetGroupChange(to groupID: UUID?) {
+        switch selectedGroupFilter {
+        case .all:
+            return
+        case .ungrouped:
+            if groupID != nil {
+                selectedGroupFilter = groupFilter(for: groupID)
+                refreshGroupControls()
+            }
+        case let .group(currentGroupID):
+            if currentGroupID != groupID {
+                selectedGroupFilter = groupFilter(for: groupID)
+                refreshGroupControls()
+            }
+        }
+    }
+
+    func groupFilter(for groupID: UUID?) -> SnippetGroupFilter {
+        guard let groupID else { return .ungrouped }
+        return .group(groupID)
+    }
+
     func reloadVisibleSnippets(keepSelection: Bool) {
         let query = searchField.stringValue
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
-        let sorted = store.snippetsSortedForDisplay()
+        let scoped = store.snippetsSortedForDisplay().filter { snippet in
+            snippetMatchesCurrentGroupFilter(snippet)
+        }
+
         if query.isEmpty {
-            visibleSnippets = sorted
+            visibleSnippets = scoped
         } else {
-            visibleSnippets = sorted.filter { snippet in
+            visibleSnippets = scoped.filter { snippet in
                 snippet.displayName.lowercased().contains(query)
                     || snippet.normalizedKeyword.lowercased().contains(query)
                     || snippet.content.lowercased().contains(query)
@@ -42,6 +193,25 @@ extension ViewController {
         tableView.reloadData()
         syncTableSelectionWithSelectedSnippet()
         deleteButton.isEnabled = selectedSnippetID != nil
+
+        if selectedSnippetID == nil {
+            applySelectedSnippetToEditor()
+        }
+    }
+
+    func snippetMatchesCurrentGroupFilter(_ snippet: Snippet) -> Bool {
+        switch selectedGroupFilter {
+        case .all:
+            return true
+        case .ungrouped:
+            return snippet.groupID == nil
+        case let .group(groupID):
+            return snippet.groupID == groupID
+        }
+    }
+
+    var shouldShowGroupLabelsInList: Bool {
+        selectedGroupFilter == .all
     }
 
     func syncTableSelectionWithSelectedSnippet() {
@@ -74,6 +244,7 @@ extension ViewController {
             if enabledCheckbox.state != .off {
                 enabledCheckbox.state = .off
             }
+            rebuildGroupPopUpMenu()
             updatePreview(withTemplate: "")
             setEditorEnabled(false)
             isApplyingSnippetToEditor = false
@@ -94,6 +265,7 @@ extension ViewController {
         if enabledCheckbox.state != targetEnabledState {
             enabledCheckbox.state = targetEnabledState
         }
+        rebuildGroupPopUpMenu()
         updatePreview(withTemplate: snippet.content)
         updateKeywordWarning(for: snippet)
         setEditorEnabled(true)
@@ -103,6 +275,7 @@ extension ViewController {
     func setEditorEnabled(_ enabled: Bool) {
         nameField.isEnabled = enabled
         snippetTextView.isEditable = enabled
+        groupPopUpButton.isEnabled = enabled && selectedSnippet != nil
         keywordField.isEnabled = enabled
         enabledCheckbox.isEnabled = enabled
     }
@@ -145,7 +318,7 @@ extension ViewController {
         }
 
         if let first = conflicting.first {
-            keywordWarningLabel.stringValue = "Overlaps with \\\(first.normalizedKeyword) — won't auto-expand"
+            keywordWarningLabel.stringValue = "Overlaps with \\\(first.normalizedKeyword) - won't auto-expand"
             keywordWarningLabel.isHidden = false
         } else {
             keywordWarningLabel.isHidden = true
@@ -162,6 +335,9 @@ extension ViewController {
     var isEditingDetails: Bool {
         guard let firstResponder = view.window?.firstResponder else { return false }
         if firstResponder === snippetTextView {
+            return true
+        }
+        if firstResponder === groupPopUpButton {
             return true
         }
         if firstResponder === nameField.currentEditor() || firstResponder === keywordField.currentEditor() {

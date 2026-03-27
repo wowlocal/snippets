@@ -120,6 +120,10 @@ extension ViewController {
             return false
         }
 
+        if firstResponder === groupPopUpButton {
+            return false
+        }
+
         if firstResponder === nameField.currentEditor() || firstResponder === keywordField.currentEditor() {
             return false
         }

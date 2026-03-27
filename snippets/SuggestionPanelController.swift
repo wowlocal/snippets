@@ -3,6 +3,7 @@ import AppKit
 struct SuggestionItem {
     let snippet: Snippet
     let score: Int
+    let groupName: String?
 }
 
 @MainActor
@@ -12,7 +13,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private let scrollView: NSScrollView
     private(set) var items: [SuggestionItem] = []
     private let maxVisible = 8
-    private let rowHeight: CGFloat = 36
+    private let rowHeight: CGFloat = 40
     private let panelWidth: CGFloat = 280
 
     private var maxVisibleRowsOnScreen: Int {
@@ -73,7 +74,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
         tableView.intercellSpacing = NSSize(width: 0, height: 2)
-        tableView.rowHeight = 36
+        tableView.rowHeight = rowHeight
         tableView.focusRingType = .none
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("SuggestionColumn"))
@@ -559,7 +560,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
 
         let item = items[row]
-        cell.configure(name: item.snippet.displayName, keyword: item.snippet.normalizedKeyword)
+        cell.configure(name: item.snippet.displayName, keyword: item.snippet.normalizedKeyword, groupName: item.groupName)
         return cell
     }
 
@@ -573,6 +574,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 private final class SuggestionCellView: NSTableCellView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
+    private let groupLabelView = PillLabelView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -588,24 +590,42 @@ private final class SuggestionCellView: NSTableCellView {
         keywordLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         keywordLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        addSubview(nameLabel)
-        addSubview(keywordLabel)
+        groupLabelView.textColor = .tertiaryLabelColor
+        groupLabelView.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.10)
+        groupLabelView.translatesAutoresizingMaskIntoConstraints = false
+
+        let spacer = NSView()
+        let topRow = NSStackView(views: [nameLabel, spacer, keywordLabel])
+        topRow.orientation = .horizontal
+        topRow.alignment = .centerY
+        topRow.spacing = 8
+        topRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [topRow, groupLabelView])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(stack)
 
         NSLayoutConstraint.activate([
-            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            keywordLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            keywordLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            keywordLabel.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 8),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, keyword: String) {
+    func configure(name: String, keyword: String, groupName: String?) {
         nameLabel.stringValue = name
         keywordLabel.stringValue = keyword
+        if let groupName, !groupName.isEmpty {
+            groupLabelView.stringValue = groupName
+            groupLabelView.isHidden = false
+        } else {
+            groupLabelView.isHidden = true
+        }
     }
 }

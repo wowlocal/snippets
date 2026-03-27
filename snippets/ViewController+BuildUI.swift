@@ -216,6 +216,21 @@ extension ViewController {
         searchField.delegate = self
         searchField.controlSize = .regular
 
+        groupFilterStackView.orientation = .horizontal
+        groupFilterStackView.spacing = 6
+        groupFilterStackView.alignment = .centerY
+        groupFilterStackView.setFrameSize(NSSize(width: 0, height: 28))
+
+        groupFilterScrollView.translatesAutoresizingMaskIntoConstraints = false
+        groupFilterScrollView.borderType = .noBorder
+        groupFilterScrollView.drawsBackground = false
+        groupFilterScrollView.hasHorizontalScroller = true
+        groupFilterScrollView.hasVerticalScroller = false
+        groupFilterScrollView.autohidesScrollers = true
+        groupFilterScrollView.scrollerStyle = .overlay
+        groupFilterScrollView.documentView = groupFilterStackView
+        groupFilterScrollView.heightAnchor.constraint(equalToConstant: 30).isActive = true
+
         let tableScrollView = NSScrollView()
         tableScrollView.translatesAutoresizingMaskIntoConstraints = false
         tableScrollView.borderType = .noBorder
@@ -258,11 +273,13 @@ extension ViewController {
         importExportMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         rootStack.addArrangedSubview(headerStack)
+        rootStack.addArrangedSubview(groupFilterScrollView)
         rootStack.addArrangedSubview(searchField)
         rootStack.addArrangedSubview(tableScrollView)
         rootStack.addArrangedSubview(footerTopRow)
 
-        rootStack.setCustomSpacing(12, after: headerStack)
+        rootStack.setCustomSpacing(10, after: headerStack)
+        rootStack.setCustomSpacing(8, after: groupFilterScrollView)
         rootStack.setCustomSpacing(8, after: searchField)
         rootStack.setCustomSpacing(8, after: tableScrollView)
 
@@ -306,6 +323,16 @@ extension ViewController {
         nameField.delegate = self
         nameField.placeholderString = "Temporary Password"
         nameField.controlSize = .large
+
+        let groupLabel = NSTextField(labelWithString: "Group")
+        groupLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        groupLabel.textColor = .secondaryLabelColor
+        groupLabel.alignment = .left
+
+        groupPopUpButton.target = self
+        groupPopUpButton.action = #selector(groupPopUpSelectionChanged(_:))
+        groupPopUpButton.controlSize = .large
+        groupPopUpButton.translatesAutoresizingMaskIntoConstraints = false
 
         let snippetLabel = NSTextField(labelWithString: "Snippet")
         snippetLabel.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -410,6 +437,8 @@ extension ViewController {
 
         stack.addArrangedSubview(nameLabel)
         stack.addArrangedSubview(nameField)
+        stack.addArrangedSubview(groupLabel)
+        stack.addArrangedSubview(groupPopUpButton)
         stack.addArrangedSubview(keywordLabel)
         stack.addArrangedSubview(keywordRow)
         stack.addArrangedSubview(keywordWarningLabel)
@@ -423,7 +452,7 @@ extension ViewController {
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, keywordRow, keywordWarningLabel, snippetScrollView, placeholderLabel, separator, previewSectionStack].forEach {
+        [nameField, groupPopUpButton, keywordRow, keywordWarningLabel, snippetScrollView, placeholderLabel, separator, previewSectionStack].forEach {
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
@@ -433,6 +462,7 @@ extension ViewController {
         preferredEditorWidth.isActive = true
 
         stack.setCustomSpacing(8, after: nameLabel)
+        stack.setCustomSpacing(8, after: groupLabel)
         stack.setCustomSpacing(8, after: keywordLabel)
         stack.setCustomSpacing(4, after: keywordRow)
         stack.setCustomSpacing(10, after: snippetLabel)

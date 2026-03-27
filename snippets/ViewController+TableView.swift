@@ -14,6 +14,7 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         let identifier = NSUserInterfaceItemIdentifier("SnippetRowCell")
         let snippet = visibleSnippets[row]
+        let groupName = shouldShowGroupLabelsInList ? store.groupName(for: snippet.groupID) : nil
 
         let cell = (tableView.makeView(withIdentifier: identifier, owner: self) as? SnippetRowCellView) ?? {
             let view = SnippetRowCellView()
@@ -21,7 +22,7 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
             return view
         }()
 
-        cell.configure(with: snippet)
+        cell.configure(with: snippet, groupName: groupName, showGroupName: shouldShowGroupLabelsInList)
         return cell
     }
 

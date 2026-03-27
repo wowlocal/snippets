@@ -7,6 +7,17 @@ private enum MainWindowAutosave {
     static let minimumContentSize = NSSize(width: 680, height: 560)
 }
 
+enum SnippetGroupFilter: Equatable {
+    case all
+    case ungrouped
+    case group(UUID)
+
+    var groupID: UUID? {
+        guard case let .group(groupID) = self else { return nil }
+        return groupID
+    }
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -27,7 +38,9 @@ final class ViewController: NSViewController {
 
     var visibleSnippets: [Snippet] = []
     var selectedSnippetID: UUID?
+    var selectedGroupFilter: SnippetGroupFilter = .all
     var isApplyingSnippetToEditor = false
+    var isUpdatingGroupPopUp = false
 
     var importExportMessage: String? {
         didSet {
@@ -43,12 +56,15 @@ final class ViewController: NSViewController {
     let permissionButtonsStack = NSStackView()
 
     let searchField = NSSearchField()
+    let groupFilterScrollView = NSScrollView()
+    let groupFilterStackView = NSStackView()
     let tableView = NSTableView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     let importExportMessageLabel = NSTextField(labelWithString: "")
 
     let nameField = NSTextField(string: "")
     let snippetTextView = NSTextView()
+    let groupPopUpButton = NSPopUpButton()
     let keywordField = NSTextField(string: "")
     let keywordPrefixLabel = NSTextField(labelWithString: "\\")
     let keywordWarningLabel = NSTextField(labelWithString: "")
@@ -67,6 +83,7 @@ final class ViewController: NSViewController {
 
         buildUI()
         bindState()
+        refreshGroupControls()
 
         NotificationCenter.default.addObserver(
             self,
@@ -138,6 +155,8 @@ final class ViewController: NSViewController {
     func bindState() {
         store.onChange = { [weak self] in
             guard let self else { return }
+            sanitizeSelectedGroupFilterIfNeeded()
+            refreshGroupControls()
             reloadVisibleSnippets(keepSelection: true)
             if !isEditingDetails {
                 applySelectedSnippetToEditor()

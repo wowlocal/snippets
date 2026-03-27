@@ -5,6 +5,7 @@ struct Snippet: Identifiable, Codable, Equatable {
     var name: String
     var keyword: String
     var content: String
+    var groupID: UUID?
     var isEnabled: Bool
     var isPinned: Bool
     var createdAt: Date
@@ -15,6 +16,7 @@ struct Snippet: Identifiable, Codable, Equatable {
         name: String,
         keyword: String,
         content: String,
+        groupID: UUID? = nil,
         isEnabled: Bool = true,
         isPinned: Bool = false,
         createdAt: Date = Date(),
@@ -24,6 +26,7 @@ struct Snippet: Identifiable, Codable, Equatable {
         self.name = name
         self.keyword = keyword
         self.content = content
+        self.groupID = groupID
         self.isEnabled = isEnabled
         self.isPinned = isPinned
         self.createdAt = createdAt
@@ -54,6 +57,7 @@ extension Snippet {
         case name
         case keyword
         case content
+        case groupID
         case isEnabled
         case isPinned
         case createdAt
@@ -67,6 +71,7 @@ extension Snippet {
         name = try container.decode(String.self, forKey: .name)
         keyword = try container.decode(String.self, forKey: .keyword)
         content = try container.decode(String.self, forKey: .content)
+        groupID = try container.decodeIfPresent(UUID.self, forKey: .groupID)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
@@ -79,6 +84,7 @@ extension Snippet {
         try container.encode(name, forKey: .name)
         try container.encode(keyword, forKey: .keyword)
         try container.encode(content, forKey: .content)
+        try container.encodeIfPresent(groupID, forKey: .groupID)
         try container.encode(isEnabled, forKey: .isEnabled)
         try container.encode(isPinned, forKey: .isPinned)
         try container.encode(createdAt, forKey: .createdAt)

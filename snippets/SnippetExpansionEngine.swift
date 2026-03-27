@@ -464,7 +464,9 @@ final class SnippetExpansionEngine {
         let scored: [SuggestionItem]
         if suggestionQuery.isEmpty {
             // Show all enabled snippets when no query yet
-            scored = snippets.prefix(8).map { SuggestionItem(snippet: $0, score: 0) }
+            scored = snippets.prefix(8).map {
+                SuggestionItem(snippet: $0, score: 0, groupName: store.groupName(for: $0.groupID))
+            }
         } else {
             scored = snippets.compactMap { snippet in
                 let nameResult = FuzzyMatch.score(query: suggestionQuery, target: snippet.displayName)
@@ -472,7 +474,11 @@ final class SnippetExpansionEngine {
                 let best = max(nameResult.score, keywordResult.score)
                 let matched = nameResult.matched || keywordResult.matched
                 guard matched else { return nil }
-                return SuggestionItem(snippet: snippet, score: best)
+                return SuggestionItem(
+                    snippet: snippet,
+                    score: best,
+                    groupName: store.groupName(for: snippet.groupID)
+                )
             }
             .sorted { $0.score > $1.score }
             .prefix(8)

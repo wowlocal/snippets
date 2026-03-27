@@ -15,6 +15,7 @@ final class SnippetRowCellView: NSTableCellView {
     private let dotView = DotView()
     private let pinView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
+    private let groupLabelView = PillLabelView()
     private let keywordLabel = NSTextField(labelWithString: "")
     private let contentPreviewLabel = NSTextField(labelWithString: "")
     private var isDisabledSnippet = false
@@ -37,6 +38,9 @@ final class SnippetRowCellView: NSTableCellView {
         keywordLabel.setContentHuggingPriority(.required, for: .horizontal)
         keywordLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        groupLabelView.setContentHuggingPriority(.required, for: .horizontal)
+        groupLabelView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         contentPreviewLabel.font = .systemFont(ofSize: 12)
         contentPreviewLabel.lineBreakMode = .byTruncatingTail
         contentPreviewLabel.maximumNumberOfLines = 1
@@ -56,10 +60,10 @@ final class SnippetRowCellView: NSTableCellView {
             pinView.heightAnchor.constraint(equalToConstant: 10),
         ])
 
-        let topRow = NSStackView(views: [nameLabel, keywordLabel])
+        let topRow = NSStackView(views: [nameLabel, groupLabelView, keywordLabel])
         topRow.orientation = .horizontal
         topRow.spacing = 6
-        topRow.alignment = .firstBaseline
+        topRow.alignment = .centerY
 
         let labelsStack = NSStackView(views: [topRow, contentPreviewLabel])
         labelsStack.orientation = .vertical
@@ -87,10 +91,17 @@ final class SnippetRowCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(with snippet: Snippet) {
+    func configure(with snippet: Snippet, groupName: String?, showGroupName: Bool) {
         isDisabledSnippet = !snippet.isEnabled
 
         nameLabel.stringValue = snippet.displayName
+
+        if showGroupName, let groupName, !groupName.isEmpty {
+            groupLabelView.stringValue = groupName
+            groupLabelView.isHidden = false
+        } else {
+            groupLabelView.isHidden = true
+        }
 
         let keyword = snippet.normalizedKeyword
         keywordLabel.stringValue = keyword.isEmpty ? "" : "\\\(keyword)"
@@ -118,10 +129,14 @@ final class SnippetRowCellView: NSTableCellView {
     private func applyTextColors() {
         if isDisabledSnippet {
             nameLabel.textColor = .secondaryLabelColor
+            groupLabelView.textColor = .tertiaryLabelColor
+            groupLabelView.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.10)
             keywordLabel.textColor = .tertiaryLabelColor
             contentPreviewLabel.textColor = .tertiaryLabelColor
         } else {
             nameLabel.textColor = .labelColor
+            groupLabelView.textColor = .secondaryLabelColor
+            groupLabelView.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10)
             keywordLabel.textColor = .secondaryLabelColor
             contentPreviewLabel.textColor = .tertiaryLabelColor
         }

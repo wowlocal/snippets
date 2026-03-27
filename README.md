@@ -117,9 +117,10 @@ Persistence and sync behavior:
   - Wrapped payload: `{ "snippets": [...] }`
 - Export writes wrapped payload format: `{ "snippets": [...] }`
 - Import merge behavior:
-  1. Match by `id` first (replace existing).
-  2. Else match by `keyword` case-insensitively (replace existing, preserve existing `id` and `createdAt`).
-  3. Else insert as new.
+  1. Snippets with matching content are skipped and surfaced as a warning.
+  2. Else match by `id` first (replace existing).
+  3. Else match by `keyword` case-insensitively (replace existing, preserve existing `id` and `createdAt`).
+  4. Else insert as new.
 
 ## Data Storage
 
