@@ -117,18 +117,29 @@ green_text
 echo "App notarized and stapled: $APP_NAME"
 normal_text
 
-# Prefer globally installed sindresorhus/create-dmg. Fallback to npx.
+# Prefer globally installed sindresorhus/create-dmg. Fallback to npm exec.
 CREATE_DMG_CMD=()
 if has_modern_create_dmg; then
     CREATE_DMG_CMD=(create-dmg)
-elif command -v npx >/dev/null 2>&1; then
+elif command -v npm >/dev/null 2>&1; then
     NODE_MAJOR=$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
     if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
         echo "Error: Node.js 20+ is required for sindresorhus/create-dmg."
         echo "Install a newer Node.js and re-run."
         exit 1
     fi
-    CREATE_DMG_CMD=(npx --yes create-dmg@latest)
+    NODE_MODULE_VERSION=$(node -p 'process.versions.modules' 2>/dev/null)
+    if [ -z "$NODE_MODULE_VERSION" ]; then
+        echo "Error: Could not determine the current Node.js module ABI version."
+        exit 1
+    fi
+
+    # Native dependencies like macos-alias are cached by npm. Scope the cache to
+    # the current Node ABI so switching Node versions cannot reuse incompatible
+    # binaries from ~/.npm/_npx.
+    CREATE_DMG_CACHE_DIR="${HOME}/Library/Caches/Snippets/create-dmg/node-abi-${NODE_MODULE_VERSION}"
+    mkdir -p "$CREATE_DMG_CACHE_DIR"
+    CREATE_DMG_CMD=(npm exec --yes --cache "$CREATE_DMG_CACHE_DIR" --package create-dmg@latest -- create-dmg)
 else
     echo "Error: Could not find sindresorhus/create-dmg."
     echo "Install Node.js 20+ and run: npm install --global create-dmg"
