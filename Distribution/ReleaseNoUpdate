@@ -55,7 +55,7 @@ sed -i '' '/272782E42F41F9F2000B9989.*Release/,/name = Release;/{
 
 # Change Info.plist to Info-NoUpdate.plist in target Release config
 sed -i '' '/272782E72F41F9F2000B9989.*Release/,/name = Release;/{
-    s|INFOPLIST_FILE = snippets/Info.plist;|INFOPLIST_FILE = Info-NoUpdate.plist;|
+    s|INFOPLIST_FILE = Info.plist;|INFOPLIST_FILE = Info-NoUpdate.plist;|
 }' "$PBXPROJ"
 
 gray_text
@@ -89,10 +89,6 @@ export_app "$ARCHIVE_PATH" "$APP_PATH"
 green_text
 echo "Exported to $APP_PATH"
 normal_text
-
-# Remove stray Info.plist from Resources (bundled by file system sync group, contains URLs)
-rm -f "$APP_PATH/Contents/Resources/Info.plist"
-rm -f "$APP_PATH/Contents/Resources/Info-NoUpdate.plist"
 
 # Step 4: Verify no Sparkle in binary
 orange_text

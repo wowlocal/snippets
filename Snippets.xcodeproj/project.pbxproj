@@ -267,7 +267,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = snippets/Info.plist;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Snippets needs Accessibility access to replace typed keywords with snippet content.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSInputMonitoringUsageDescription = "Snippets monitors typed keywords to trigger snippet expansion in any app.";
@@ -304,7 +304,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = snippets/Info.plist;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Snippets needs Accessibility access to replace typed keywords with snippet content.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSInputMonitoringUsageDescription = "Snippets monitors typed keywords to trigger snippet expansion in any app.";
