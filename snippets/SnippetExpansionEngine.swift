@@ -287,14 +287,7 @@ final class SnippetExpansionEngine {
 
         // Emacs Ctrl+H — treat as backspace
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
-            if suggestionQuery.isEmpty {
-                dismissSuggestions()
-                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
-            } else {
-                suggestionQuery.removeLast()
-                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
-                updateSuggestionResults()
-            }
+            handleSuggestionBackspace()
             return false
         }
 
@@ -371,15 +364,7 @@ final class SnippetExpansionEngine {
 
         // Backspace — let through to target app (it needs to delete characters too)
         if event.keyCode == UInt16(kVK_Delete) {
-            if suggestionQuery.isEmpty {
-                // Query is empty — deleting the backslash, so dismiss
-                dismissSuggestions()
-                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
-            } else {
-                suggestionQuery.removeLast()
-                if !typedBuffer.isEmpty { typedBuffer.removeLast() }
-                updateSuggestionResults()
-            }
+            handleSuggestionBackspace()
             return false
         }
 
@@ -559,6 +544,47 @@ final class SnippetExpansionEngine {
     }
 
 
+    /// Handle backspace (or Ctrl+H) while the suggestion panel is active.
+    ///
+    /// When a text field has selected text (e.g. browser URL bar autocompletion),
+    /// backspace deletes the selection. We figure out how many of those selected
+    /// characters overlap with our tracked query so we trim the right amount —
+    /// zero for pure autocompletion text, N for a manual selection of N typed chars.
+    private func handleSuggestionBackspace() {
+        let trimCount: Int
+        if let selectedText = focusedTextInputSelectedText(), !selectedText.isEmpty {
+            // Backspace will delete this selection.
+            // Count how many characters at the end of our query are covered.
+            if suggestionQuery.hasSuffix(selectedText) {
+                trimCount = selectedText.count
+            } else if ("\\" + suggestionQuery).hasSuffix(selectedText) {
+                // Selection covers the backslash trigger too — dismiss entirely
+                dismissSuggestions()
+                removeCharactersFromTypedBuffer(suggestionQuery.count + 1)
+                return
+            } else {
+                // Selection is outside our tracked query (e.g. autocompletion) — nothing to trim
+                trimCount = 0
+            }
+        } else {
+            trimCount = 1
+        }
+
+        if trimCount == 0 {
+            return
+        }
+
+        if trimCount > suggestionQuery.count || (trimCount == 1 && suggestionQuery.isEmpty) {
+            // Deleting into the backslash — dismiss
+            dismissSuggestions()
+            removeCharactersFromTypedBuffer(suggestionQuery.count + 1)
+        } else {
+            suggestionQuery.removeLast(trimCount)
+            removeCharactersFromTypedBuffer(trimCount)
+            updateSuggestionResults()
+        }
+    }
+
     private func isValidKeywordCharacter(_ character: Character) -> Bool {
         !character.isWhitespace && !character.isNewline
     }
@@ -717,25 +743,34 @@ final class SnippetExpansionEngine {
     }
 
     private func focusedTextInputHasSelectedText() -> Bool {
-        guard let focused = frontmostFocusedElement() else { return false }
-        if selectedRangeLength(of: focused) > 0 { return true }
-        if let selectedText = stringAttribute(of: focused, attribute: kAXSelectedTextAttribute as CFString),
-           !selectedText.isEmpty {
-            return true
+        return focusedTextInputSelectedText() != nil
+    }
+
+    /// Returns the selected text in the focused element, or nil if nothing is selected.
+    private func focusedTextInputSelectedText() -> String? {
+        guard let focused = frontmostFocusedElement() else { return nil }
+        if let text = stringAttribute(of: focused, attribute: kAXSelectedTextAttribute as CFString),
+           !text.isEmpty {
+            return text
+        }
+        if selectedRangeLength(of: focused) > 0 {
+            return "" // Has selection range but couldn't read text
         }
 
         var current = focused
         for _ in 0..<4 {
             guard let parent = parentElement(of: current) else { break }
-            if selectedRangeLength(of: parent) > 0 { return true }
-            if let selectedText = stringAttribute(of: parent, attribute: kAXSelectedTextAttribute as CFString),
-               !selectedText.isEmpty {
-                return true
+            if let text = stringAttribute(of: parent, attribute: kAXSelectedTextAttribute as CFString),
+               !text.isEmpty {
+                return text
+            }
+            if selectedRangeLength(of: parent) > 0 {
+                return ""
             }
             current = parent
         }
 
-        return false
+        return nil
     }
 
     private func frontmostFocusedElement() -> AXUIElement? {
