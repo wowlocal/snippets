@@ -16,12 +16,14 @@ green_text
 echo "=== Building Snippets ${APP_VERSION} (no-update) ==="
 normal_text
 
-# Check tag doesn't already exist
+# Remove existing tag/release if re-running for the same version
 if git -C "$PROJECT_DIR" tag -l "$TAG" | grep -q "$TAG"; then
-    red_text
-    echo "Tag $TAG already exists. Aborting."
+    orange_text
+    echo "Tag $TAG already exists. Replacing..."
     normal_text
-    exit 1
+    gh release delete "$TAG" --yes 2>/dev/null || true
+    git -C "$PROJECT_DIR" push origin --delete "$TAG" 2>/dev/null || true
+    git -C "$PROJECT_DIR" tag -d "$TAG"
 fi
 
 # Step 1: Patch project to remove Sparkle and add NO_SPARKLE flag
@@ -129,7 +131,7 @@ echo "Binary verified: no Sparkle, no update URLs"
 normal_text
 
 # Step 5: Build DMG
-DMG_DIR="created-dmgs"
+DMG_DIR="created-dmgs-no-update"
 DMG_FILENAME="snippets-${APP_VERSION}-no-update.dmg"
 DMG_PATH="${DMG_DIR}/${DMG_FILENAME}"
 
