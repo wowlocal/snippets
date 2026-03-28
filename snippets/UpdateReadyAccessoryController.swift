@@ -1,3 +1,4 @@
+#if !NO_SPARKLE
 import AppKit
 
 final class UpdateReadyAccessoryController: NSTitlebarAccessoryViewController {
@@ -55,3 +56,4 @@ final class UpdateReadyAccessoryController: NSTitlebarAccessoryViewController {
         preferredContentSize = stackView.fittingSize
     }
 }
+#endif

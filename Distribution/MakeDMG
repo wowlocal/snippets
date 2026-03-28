@@ -217,6 +217,7 @@ normal_text
 APP_INPUT_DIR=$(dirname "$APP_INPUT_PATH")
 APP_VERSION_DIR="$APP_INPUT_DIR/$APP_VERSION"
 mkdir -p "$APP_VERSION_DIR"
+rm -rf "$APP_VERSION_DIR/$(basename "$APP_INPUT_PATH")"
 mv "$APP_INPUT_PATH" "$APP_VERSION_DIR"
 
 green_text

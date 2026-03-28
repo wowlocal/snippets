@@ -1,9 +1,11 @@
 import Cocoa
 import ServiceManagement
+#if !NO_SPARKLE
 import Sparkle
+#endif
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, SPUUpdaterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private enum QuitBehavior: String {
         case ask
         case hide
@@ -19,13 +21,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let store = SnippetStore()
     lazy var expansionEngine = SnippetExpansionEngine(store: store)
     private lazy var settingsWindowController = SettingsWindowController()
+    #if !NO_SPARKLE
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil
     )
+    #endif
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
     private var shouldTerminateForReal = false
+    #if !NO_SPARKLE
     private var pendingUpdateInstallHandler: (() -> Void)?
     private var pendingUpdateVersion: String?
     private var isApplyingPendingUpdate = false
@@ -36,7 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private weak var appMenuRestartToUpdateItem: NSMenuItem?
     private var appMenuUpdateStatusView: UpdateProgressMenuItemView?
     private var updateAccessoryControllers: [ObjectIdentifier: UpdateReadyAccessoryController] = [:]
-    #if DEBUG
+    #endif
+    #if DEBUG && !NO_SPARKLE
     private var debugShowUpdatePill = false
     private let debugPillVersion = "DEBUG"
     #endif
@@ -55,25 +61,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return code == kAEShutDown || code == kAERestart || code == kAEReallyLogOut
     }
 
+    #if !NO_SPARKLE
     /// Sparkle sends a quit event when it needs to replace the app bundle.
     private var updaterIsTerminating: Bool {
         updaterController.updater.sessionInProgress
     }
+    #else
+    private var updaterIsTerminating: Bool { false }
+    #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
-        #if DEBUG
+        #if DEBUG && !NO_SPARKLE
         configureDebugMenu()
         #endif
         setupStatusItem()
+        #if !NO_SPARKLE
         updaterController.updater.automaticallyDownloadsUpdates = true
+        #endif
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleChromiumBundleIDsChanged),
             name: .snippetsChromiumBundleIDsChanged,
             object: nil
         )
+        #if !NO_SPARKLE
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleWindowDidBecomeMain),
@@ -86,12 +99,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             name: NSWindow.willCloseNotification,
             object: nil
         )
+        #endif
 
         if launchedAsLoginItem {
             hideToBackground()
         }
 
-        #if !DEBUG
+        #if !DEBUG && !NO_SPARKLE
         updaterController.updater.checkForUpdatesInBackground()
         #endif
     }
@@ -160,7 +174,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @IBAction func openSettings(_ sender: Any?) {
         NSApp.setActivationPolicy(.regular)
         settingsWindowController.showSettings()
+        #if !NO_SPARKLE
         refreshWindowUpdateAccessories()
+        #endif
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -168,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         expansionEngine.chromiumBundleIDSettingsDidChange()
     }
 
+    #if !NO_SPARKLE
     @objc private func handleWindowDidBecomeMain(_ notification: Notification) {
         refreshWindowUpdateAccessories()
     }
@@ -178,19 +195,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         guard let controller = updateAccessoryControllers.removeValue(forKey: windowID) else { return }
         removeUpdateAccessoryController(controller, from: window)
     }
+    #endif
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleLaunchAtLogin(_:)) {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
             return true
         }
+        #if !NO_SPARKLE
         if menuItem.action == #selector(checkForUpdates(_:)) {
             return updaterController.updater.canCheckForUpdates && !isApplyingPendingUpdate
         }
         if menuItem.action == #selector(installPendingUpdateAndRestart(_:)) {
             return pendingUpdateInstallHandler != nil && !isApplyingPendingUpdate
         }
-        #if DEBUG
+        #endif
+        #if DEBUG && !NO_SPARKLE
         if menuItem.action == #selector(toggleDebugUpdatePill(_:)) {
             menuItem.state = debugShowUpdatePill ? .on : .off
             return true
@@ -214,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         statusItem.menu = menu
     }
 
-    #if DEBUG
+    #if DEBUG && !NO_SPARKLE
     private func configureDebugMenu() {
         guard let mainMenu = NSApp.mainMenu else { return }
         if mainMenu.items.contains(where: { $0.title == "Debug" }) {
@@ -250,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             settingsItem.action = #selector(openSettings(_:))
         }
 
+        #if !NO_SPARKLE
         if appMenu.items.contains(where: { $0.action == #selector(checkForUpdates(_:)) }) {
             appMenuCheckForUpdatesItem = appMenu.items.first(where: { $0.action == #selector(checkForUpdates(_:)) })
             appMenuUpdateStatusItem = appMenu.items.first(where: { $0.tag == 981_001 })
@@ -291,13 +312,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         appMenuRestartToUpdateItem = restartToUpdateItem
         appMenuUpdateStatusView = updateStatusView
         refreshAppMenuUpdateState()
+        #endif
     }
 
     @objc private func openFromStatusBar() {
         showMainWindow()
     }
 
-    #if DEBUG
+    #if DEBUG && !NO_SPARKLE
     @objc private func toggleDebugUpdatePill(_ sender: Any?) {
         debugShowUpdatePill.toggle()
         if debugShowUpdatePill {
@@ -314,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     #endif
 
+    #if !NO_SPARKLE
     @IBAction func checkForUpdates(_ sender: Any?) {
         if pendingUpdateInstallHandler != nil {
             setUpdateStatus("Update \(pendingUpdateVersion ?? "") is ready. Use \"Restart to Apply Update\".", showProgress: false, autoClearAfter: nil)
@@ -333,6 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         shouldTerminateForReal = true
         installHandler()
     }
+    #endif
 
     @IBAction func quitCompletely(_ sender: Any?) {
         shouldTerminateForReal = true
@@ -411,12 +435,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 wc.showWindow(nil)
             }
         }
+        #if !NO_SPARKLE
         refreshWindowUpdateAccessories()
+        #endif
         NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: - Update UI State
 
+    #if !NO_SPARKLE
     private func refreshAppMenuUpdateState() {
         appMenuCheckForUpdatesItem?.isEnabled = updaterController.updater.canCheckForUpdates && !isApplyingPendingUpdate
 
@@ -555,8 +582,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return item.versionString
     }
 
-    // MARK: - Sparkle Delegate
+    #endif
+}
 
+// MARK: - Sparkle Delegate
+
+#if !NO_SPARKLE
+extension AppDelegate: SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         let version = updateVersionString(from: item)
         setUpdateStatus("Update \(version) found. Downloading…", showProgress: true, autoClearAfter: nil)
@@ -629,7 +661,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 }
+#endif
 
+#if !NO_SPARKLE
 private final class UpdateProgressMenuItemView: NSView {
     private let statusLabel = NSTextField(labelWithString: "")
     private let progressIndicator = NSProgressIndicator()
@@ -675,3 +709,4 @@ private final class UpdateProgressMenuItemView: NSView {
         }
     }
 }
+#endif

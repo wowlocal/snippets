@@ -1,0 +1,174 @@
+#!/bin/bash
+
+set -e
+
+cd "$(dirname "$0")"
+source common.sh
+
+ARCHIVE_PATH="archives/Snippets-NoUpdate.xcarchive"
+APP_PATH="exported-apps/Snippets.app"
+
+# Read current version (no bump)
+APP_VERSION=$(read_version)
+TAG="v${APP_VERSION}-no-update"
+
+green_text
+echo "=== Building Snippets ${APP_VERSION} (no-update) ==="
+normal_text
+
+# Check tag doesn't already exist
+if git -C "$PROJECT_DIR" tag -l "$TAG" | grep -q "$TAG"; then
+    red_text
+    echo "Tag $TAG already exists. Aborting."
+    normal_text
+    exit 1
+fi
+
+# Step 1: Patch project to remove Sparkle and add NO_SPARKLE flag
+orange_text
+echo "Step 1/6: Patching project (remove Sparkle, add NO_SPARKLE)..."
+normal_text
+
+cp "$PBXPROJ" "$PBXPROJ.bak"
+trap 'if [ -f "$PBXPROJ.bak" ]; then mv "$PBXPROJ.bak" "$PBXPROJ"; echo "Restored project.pbxproj"; fi' EXIT
+
+# Remove all lines referencing Sparkle object IDs (single-line references)
+sed -i '' '/270SPK012F53000000000001/d' "$PBXPROJ"
+sed -i '' '/270SPK022F53000000000002/d' "$PBXPROJ"
+sed -i '' '/270SPK032F53000000000003/d' "$PBXPROJ"
+
+# Replace XCRemoteSwiftPackageReference section with empty section
+sed -i '' '/Begin XCRemoteSwiftPackageReference section/,/End XCRemoteSwiftPackageReference section/c\
+/* Begin XCRemoteSwiftPackageReference section */\
+/* End XCRemoteSwiftPackageReference section */' "$PBXPROJ"
+
+# Replace XCSwiftPackageProductDependency section with empty section
+sed -i '' '/Begin XCSwiftPackageProductDependency section/,/End XCSwiftPackageProductDependency section/c\
+/* Begin XCSwiftPackageProductDependency section */\
+/* End XCSwiftPackageProductDependency section */' "$PBXPROJ"
+
+# Add NO_SPARKLE compilation condition to project-level Release config
+sed -i '' '/272782E42F41F9F2000B9989.*Release/,/name = Release;/{
+    s/SWIFT_COMPILATION_MODE = wholemodule;/SWIFT_COMPILATION_MODE = wholemodule;\
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "NO_SPARKLE $(inherited)";/
+}' "$PBXPROJ"
+
+# Change Info.plist to Info-NoUpdate.plist in target Release config
+sed -i '' '/272782E72F41F9F2000B9989.*Release/,/name = Release;/{
+    s|INFOPLIST_FILE = snippets/Info.plist;|INFOPLIST_FILE = snippets/Info-NoUpdate.plist;|
+}' "$PBXPROJ"
+
+gray_text
+echo "  Removed Sparkle SPM dependency"
+echo "  Added NO_SPARKLE compilation condition"
+echo "  Switched to Info-NoUpdate.plist"
+normal_text
+
+# Step 2: Archive
+orange_text
+echo "Step 2/6: Archiving..."
+normal_text
+
+rm -rf "$ARCHIVE_PATH"
+archive_app "$ARCHIVE_PATH"
+
+# Restore pbxproj immediately after archive
+mv "$PBXPROJ.bak" "$PBXPROJ"
+
+green_text
+echo "Archived to $ARCHIVE_PATH (project restored)"
+normal_text
+
+# Step 3: Export
+orange_text
+echo "Step 3/6: Exporting..."
+normal_text
+
+export_app "$ARCHIVE_PATH" "$APP_PATH"
+
+green_text
+echo "Exported to $APP_PATH"
+normal_text
+
+# Step 4: Verify no Sparkle in binary
+orange_text
+echo "Step 4/6: Verifying binary is Sparkle-free..."
+normal_text
+
+BINARY_PATH="$APP_PATH/Contents/MacOS/Snippets"
+FAIL=0
+
+if otool -L "$BINARY_PATH" 2>/dev/null | grep -qi sparkle; then
+    red_text
+    echo "ERROR: Sparkle framework is still linked!"
+    otool -L "$BINARY_PATH" | grep -i sparkle
+    normal_text
+    FAIL=1
+fi
+
+if strings "$BINARY_PATH" 2>/dev/null | grep -q 'appcast\.xml'; then
+    red_text
+    echo "ERROR: appcast URL found in binary!"
+    normal_text
+    FAIL=1
+fi
+
+if strings "$BINARY_PATH" 2>/dev/null | grep -q 'yandexcloud'; then
+    red_text
+    echo "ERROR: yandexcloud URL found in binary!"
+    normal_text
+    FAIL=1
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+    exit 1
+fi
+
+green_text
+echo "Binary verified: no Sparkle, no update URLs"
+normal_text
+
+# Step 5: Build DMG
+DMG_DIR="created-dmgs"
+DMG_FILENAME="snippets-${APP_VERSION}-no-update.dmg"
+DMG_PATH="${DMG_DIR}/${DMG_FILENAME}"
+
+orange_text
+echo "Step 5/6: Building DMG..."
+normal_text
+
+rm -f "$DMG_PATH"
+./MakeDMG "$APP_PATH" "$DMG_PATH"
+
+if [ ! -f "$DMG_PATH" ]; then
+    red_text
+    echo "Expected DMG not found at $DMG_PATH"
+    normal_text
+    exit 1
+fi
+
+green_text
+echo "DMG created: $DMG_PATH"
+normal_text
+
+# Step 6: Tag and create GitHub release
+orange_text
+echo "Step 6/6: Tagging and creating GitHub release..."
+normal_text
+
+cd "$PROJECT_DIR"
+git tag "$TAG"
+git push origin "$TAG"
+cd Distribution
+
+gh release create "$TAG" "$DMG_PATH" \
+    --title "Snippets ${APP_VERSION} (No Auto-Update)" \
+    --notes "Same as v${APP_VERSION} but without the auto-updater. Manual download only."
+
+green_text
+echo ""
+echo "=== No-update release ${TAG} complete ==="
+echo ""
+echo "  DMG:    $DMG_PATH"
+echo "  GitHub: $(gh release view "$TAG" --json url -q .url)"
+normal_text

@@ -19,7 +19,26 @@
       "Bash(grep:*)",
       "Bash(xargs ls:*)",
       "Bash(git:*)",
-      "Bash(chmod +x:*)"
+      "Bash(chmod +x:*)",
+      "Bash(find /Users/mike/src/tries/2026-02-15-snippets/snippets -type f -name *.xcodeproj -o -name *.xcworkspace -o -name *.pbxproj)",
+      "Bash(find /Users/mike/src/tries/2026-02-15-snippets/snippets -type f \\\\\\(-name *.json -o -name *.yaml -o -name *.yml -o -name Makefile -o -name *.sh \\\\\\))",
+      "Bash('BINARY=build/Debug/Snippets Debug.app/Contents/MacOS/Snippets Debug')",
+      "Bash(otool -L $BINARY)",
+      "Bash(PBXPROJ=\"Snippets.xcodeproj/project.pbxproj\")",
+      "Read(//Users/mike/src/tries/2026-02-15-snippets/snippets/**)",
+      "Bash(sed -i '' '/270SPK032F53000000000003.*= {/,/^[[:space:]]*};$/d' \"$PBXPROJ\")",
+      "Bash(sed -i '' '/270SPK022F53000000000002.*= {/,/^[[:space:]]*};$/d' \"$PBXPROJ\")",
+      "Bash(sed -i '' '/270SPK012F53000000000001/d' \"$PBXPROJ\")",
+      "Bash(sed -i '' '/270SPK022F53000000000002/d' \"$PBXPROJ\")",
+      "Bash(sed -i '' '/270SPK032F53000000000003/d' \"$PBXPROJ\")",
+      "Bash(sed -i '' '/Begin XCRemoteSwiftPackageReference section/,/End XCRemoteSwiftPackageReference section/c/* Begin XCRemoteSwiftPackageReference section *//* End XCRemoteSwiftPackageReference section */' \"$PBXPROJ\")",
+      "Bash(sed -i '' '/Begin XCSwiftPackageProductDependency section/,/End XCSwiftPackageProductDependency section/c/* Begin XCSwiftPackageProductDependency section *//* End XCSwiftPackageProductDependency section */' \"$PBXPROJ\")",
+      "Bash(sed -i '' '/272782E42F41F9F2000B9989.*Release/,/name = Release;/{:*)",
+      "Bash(sed -i '' '/272782E72F41F9F2000B9989.*Release/,/name = Release;/{:*)",
+      "Bash(BINARY=\"$HOME/Library/Developer/Xcode/DerivedData/Snippets-aqhykpemvlvtsygsrfwoqmixtckp/Build/Products/Release/Snippets.app/Contents/MacOS/Snippets\")",
+      "Bash(bash -n common.sh)",
+      "Bash(bash -n Release)",
+      "Bash(bash -n ReleaseNoUpdate)"
     ]
   }
 }
