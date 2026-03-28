@@ -23,10 +23,11 @@ extension ViewController {
             .lowercased()
 
         let sorted = store.snippetsSortedForDisplay()
+        let newSnippets: [Snippet]
         if query.isEmpty {
-            visibleSnippets = sorted
+            newSnippets = sorted
         } else {
-            visibleSnippets = sorted.filter { snippet in
+            newSnippets = sorted.filter { snippet in
                 snippet.displayName.lowercased().contains(query)
                     || snippet.normalizedKeyword.lowercased().contains(query)
                     || snippet.content.lowercased().contains(query)
@@ -34,12 +35,25 @@ extension ViewController {
         }
 
         if !keepSelection {
-            selectedSnippetID = visibleSnippets.first?.id
-        } else if let selectedSnippetID, !visibleSnippets.contains(where: { $0.id == selectedSnippetID }) {
-            self.selectedSnippetID = visibleSnippets.first?.id
+            selectedSnippetID = newSnippets.first?.id
+        } else if let selectedSnippetID, !newSnippets.contains(where: { $0.id == selectedSnippetID }) {
+            self.selectedSnippetID = newSnippets.first?.id
         }
 
-        tableView.reloadData()
+        let oldIDs = visibleSnippets.map(\.id)
+        let newIDs = newSnippets.map(\.id)
+        visibleSnippets = newSnippets
+
+        if oldIDs == newIDs {
+            for row in 0..<visibleSnippets.count {
+                if let cellView = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SnippetRowCellView {
+                    cellView.configure(with: visibleSnippets[row])
+                }
+            }
+        } else {
+            tableView.reloadData()
+        }
+
         syncTableSelectionWithSelectedSnippet()
         deleteButton.isEnabled = selectedSnippetID != nil
     }
