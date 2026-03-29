@@ -248,6 +248,9 @@ extension ViewController {
         tableView.intercellSpacing = NSSize(width: 0, height: 6)
         tableView.delegate = self
         tableView.dataSource = self
+        tableView.contextMenuProvider = { [weak self] row in
+            self?.makeSnippetContextMenu(for: row)
+        }
 
         tableScrollView.documentView = tableView
         tableScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true

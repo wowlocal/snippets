@@ -49,7 +49,7 @@ final class ViewController: NSViewController {
     let permissionButtonsStack = NSStackView()
 
     let searchField = NSSearchField()
-    let tableView = NSTableView()
+    let tableView = SnippetListTableView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     let importExportMessageLabel = NSTextField(labelWithString: "")
 
