@@ -461,27 +461,28 @@ extension ViewController {
     func buildActionOverlay(in rootView: NSView) {
         actionOverlayView.translatesAutoresizingMaskIntoConstraints = false
         actionOverlayView.wantsLayer = true
-        actionOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.2).cgColor
+        actionOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.08).cgColor
         actionOverlayView.isHidden = true
         actionOverlayView.onBackgroundClick = { [weak self] in
             self?.closeActionPanel()
         }
 
         actionPanelView.translatesAutoresizingMaskIntoConstraints = false
-        actionPanelView.material = .menu
+        actionPanelView.material = .popover
         actionPanelView.blendingMode = .withinWindow
         actionPanelView.state = .active
         actionPanelView.wantsLayer = true
-        actionPanelView.layer?.cornerRadius = 12
+        actionPanelView.layer?.cornerRadius = 14
         actionPanelView.layer?.borderWidth = 1
-        actionPanelView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        actionPanelView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.14).cgColor
+        actionPanelView.layer?.masksToBounds = true
 
         let actionTitle = NSTextField(labelWithString: "Keyboard Shortcuts")
-        actionTitle.font = .systemFont(ofSize: 16, weight: .semibold)
+        actionTitle.font = .actionPanelRoundedSystemFont(ofSize: 18, weight: .semibold)
         actionTitle.alignment = .center
 
         let tip = NSTextField(labelWithString: "esc to dismiss")
-        tip.font = .systemFont(ofSize: 11)
+        tip.font = .systemFont(ofSize: 11, weight: .medium)
         tip.textColor = .tertiaryLabelColor
         tip.alignment = .center
 
@@ -523,11 +524,13 @@ extension ViewController {
             actionPanelView.centerXAnchor.constraint(equalTo: actionOverlayView.centerXAnchor),
             actionPanelView.centerYAnchor.constraint(equalTo: actionOverlayView.centerYAnchor),
             actionPanelView.widthAnchor.constraint(equalToConstant: 340),
+            actionPanelView.leadingAnchor.constraint(greaterThanOrEqualTo: actionOverlayView.leadingAnchor, constant: 20),
+            actionPanelView.trailingAnchor.constraint(lessThanOrEqualTo: actionOverlayView.trailingAnchor, constant: -20),
 
-            actionStack.leadingAnchor.constraint(equalTo: actionPanelView.leadingAnchor, constant: 10),
-            actionStack.trailingAnchor.constraint(equalTo: actionPanelView.trailingAnchor, constant: -10),
-            actionStack.topAnchor.constraint(equalTo: actionPanelView.topAnchor, constant: 14),
-            actionStack.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor, constant: -10)
+            actionStack.leadingAnchor.constraint(equalTo: actionPanelView.leadingAnchor, constant: 14),
+            actionStack.trailingAnchor.constraint(equalTo: actionPanelView.trailingAnchor, constant: -14),
+            actionStack.topAnchor.constraint(equalTo: actionPanelView.topAnchor, constant: 16),
+            actionStack.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor, constant: -12)
         ])
     }
 }
