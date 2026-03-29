@@ -89,13 +89,7 @@ private final class GeneralSettingsViewController: NSViewController {
 
     private static let cliInstallURL = URL(filePath: "/usr/local/bin/snippets-cli")
 
-    private static var cliBinaryName: String {
-        #if DEBUG
-        "snippets-cli-debug"
-        #else
-        "snippets-cli"
-        #endif
-    }
+    private static let cliBinaryName = "snippets-cli"
 
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
