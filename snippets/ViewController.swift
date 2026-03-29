@@ -154,10 +154,10 @@ final class ViewController: NSViewController {
     }
 
     func bindState() {
-        store.onChange = { [weak self] in
+        store.onChange = { [weak self] source in
             guard let self else { return }
             reloadVisibleSnippets(keepSelection: true)
-            if !isEditingDetails {
+            if source == .external || !isEditingDetails {
                 applySelectedSnippetToEditor()
             }
         }

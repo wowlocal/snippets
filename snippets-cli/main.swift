@@ -23,6 +23,12 @@ private func saveSnippets(_ snippets: [Snippet]) throws {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(snippets)
     try data.write(to: saveURL, options: .atomic)
+    DistributedNotificationCenter.default().postNotificationName(
+        SnippetStorageSync.distributedChangeNotification,
+        object: saveURL.path,
+        userInfo: nil,
+        deliverImmediately: true
+    )
 }
 
 // MARK: - Output

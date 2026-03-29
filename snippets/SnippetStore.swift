@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 @MainActor
@@ -6,15 +7,26 @@ final class SnippetStore {
         var preserveExclamationPrefix = false
     }
 
+    enum ChangeSource {
+        case local
+        case external
+    }
+
     private(set) var snippets: [Snippet] = []
 
-    var onChange: (() -> Void)?
+    var onChange: ((ChangeSource) -> Void)?
 
     private let saveURL: URL
+    private let saveFolderURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var persistWorkItem: DispatchWorkItem?
     private let persistDelay: TimeInterval = 0.3
+    private let externalReloadDelay: TimeInterval = 0.05
+    private var externalReloadWorkItem: DispatchWorkItem?
+    private var saveDirectoryMonitor: DispatchSourceFileSystemObject?
+    private var distributedChangeObserver: NSObjectProtocol?
+    private var lastKnownDiskData: Data?
 
     private var undoStack: [[Snippet]] = []
     private var redoStack: [[Snippet]] = []
@@ -54,9 +66,20 @@ final class SnippetStore {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let folder = appSupport.appendingPathComponent("SnippetsClone", isDirectory: true)
         try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        saveFolderURL = folder
         saveURL = folder.appendingPathComponent("snippets.json", isDirectory: false)
 
         load()
+        startObservingExternalChanges()
+    }
+
+    deinit {
+        persistWorkItem?.cancel()
+        externalReloadWorkItem?.cancel()
+        saveDirectoryMonitor?.cancel()
+        if let distributedChangeObserver {
+            DistributedNotificationCenter.default().removeObserver(distributedChangeObserver)
+        }
     }
 
     func addSnippet() -> Snippet {
@@ -261,6 +284,7 @@ final class SnippetStore {
         do {
             let data = try Data(contentsOf: saveURL)
             snippets = try decodeImportData(data)
+            lastKnownDiskData = data
         } catch {
             snippets = [Snippet.starterSnippet]
             persist()
@@ -361,7 +385,7 @@ final class SnippetStore {
     }
 
     private func persist(immediately: Bool = false) {
-        onChange?()
+        onChange?(.local)
         persistWorkItem?.cancel()
 
         if immediately {
@@ -382,6 +406,7 @@ final class SnippetStore {
         do {
             let data = try encoder.encode(snippets)
             try data.write(to: saveURL, options: .atomic)
+            lastKnownDiskData = data
         } catch {
             NSLog("Failed to save snippets: \(error.localizedDescription)")
         }
@@ -418,5 +443,74 @@ final class SnippetStore {
         snippets = snapshot
         persist(immediately: true)
         return true
+    }
+
+    private func startObservingExternalChanges() {
+        distributedChangeObserver = DistributedNotificationCenter.default().addObserver(
+            forName: SnippetStorageSync.distributedChangeNotification,
+            object: saveURL.path,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.scheduleExternalReload(immediately: true)
+        }
+
+        let descriptor = open(saveFolderURL.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+
+        let monitor = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .rename, .delete],
+            queue: .main
+        )
+        monitor.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.scheduleExternalReload(immediately: false)
+        }
+        monitor.setCancelHandler {
+            close(descriptor)
+        }
+        saveDirectoryMonitor = monitor
+        monitor.resume()
+    }
+
+    private func scheduleExternalReload(immediately: Bool) {
+        externalReloadWorkItem?.cancel()
+
+        guard !immediately else {
+            externalReloadWorkItem = nil
+            reloadFromDiskIfNeeded()
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.externalReloadWorkItem = nil
+                self?.reloadFromDiskIfNeeded()
+            }
+        }
+        externalReloadWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + externalReloadDelay, execute: workItem)
+    }
+
+    private func reloadFromDiskIfNeeded() {
+        guard let data = try? Data(contentsOf: saveURL) else { return }
+        guard data != lastKnownDiskData else { return }
+
+        do {
+            let reloadedSnippets = try decodeImportData(data)
+            lastKnownDiskData = data
+
+            guard reloadedSnippets != snippets else { return }
+
+            persistWorkItem?.cancel()
+            persistWorkItem = nil
+            undoStack.removeAll()
+            redoStack.removeAll()
+            snippets = reloadedSnippets
+            onChange?(.external)
+        } catch {
+            NSLog("Failed to reload snippets: \(error.localizedDescription)")
+        }
     }
 }

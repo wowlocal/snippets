@@ -48,6 +48,10 @@ struct Snippet: Identifiable, Codable, Equatable {
     }
 }
 
+enum SnippetStorageSync {
+    static let distributedChangeNotification = Notification.Name("com.khm.snippets.storageDidChange")
+}
+
 extension Snippet {
     private enum CodingKeys: String, CodingKey {
         case id
