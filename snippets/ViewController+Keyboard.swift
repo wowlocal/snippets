@@ -17,9 +17,9 @@ extension ViewController {
         }
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let lowerCharacters = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let key = event.keyCode  // Physical key position — layout-independent
 
-        if event.keyCode == UInt16(kVK_Escape) {
+        if key == UInt16(kVK_Escape) {
             if !actionOverlayView.isHidden {
                 closeActionPanel()
             } else {
@@ -28,7 +28,7 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && lowerCharacters == "f" {
+        if flags == [.command] && key == UInt16(kVK_ANSI_F) {
             requestFirstResponder(searchField)
             return nil
         }
@@ -37,32 +37,32 @@ extension ViewController {
             return event
         }
 
-        if flags == [.command] && lowerCharacters == "k" {
+        if flags == [.command] && key == UInt16(kVK_ANSI_K) {
             toggleActionPanel()
             return nil
         }
 
-        if flags == [.command] && lowerCharacters == "n" {
+        if flags == [.command] && key == UInt16(kVK_ANSI_N) {
             createSnippet(nil)
             return nil
         }
 
-        if flags == [.command] && event.keyCode == UInt16(kVK_Delete) && isListContext {
+        if flags == [.command] && key == UInt16(kVK_Delete) && isListContext {
             deleteSelectedSnippet(nil)
             return nil
         }
 
-        if flags == [.command, .shift] && lowerCharacters == "i" {
+        if flags == [.command, .shift] && key == UInt16(kVK_ANSI_I) {
             runImport(nil)
             return nil
         }
 
-        if flags == [.command, .shift] && lowerCharacters == "e" {
+        if flags == [.command, .shift] && key == UInt16(kVK_ANSI_E) {
             runExport(nil)
             return nil
         }
 
-        if flags == [.command] && lowerCharacters == "e" {
+        if flags == [.command] && key == UInt16(kVK_ANSI_E) {
             editSelectedSnippet()
             return nil
         }
@@ -72,22 +72,22 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && lowerCharacters == "d" {
+        if flags == [.command] && key == UInt16(kVK_ANSI_D) {
             duplicateSelectedSnippet()
             return nil
         }
 
-        if flags == [.command] && lowerCharacters == "." {
+        if flags == [.command] && key == UInt16(kVK_ANSI_Period) {
             togglePinnedSelectedSnippet()
             return nil
         }
 
-        if flags == [.control] && lowerCharacters == "n" && isListContext {
+        if flags == [.control] && key == UInt16(kVK_ANSI_N) && isListContext {
             selectAdjacentSnippet(direction: .down)
             return nil
         }
 
-        if flags == [.control] && lowerCharacters == "p" && isListContext {
+        if flags == [.control] && key == UInt16(kVK_ANSI_P) && isListContext {
             selectAdjacentSnippet(direction: .up)
             return nil
         }
