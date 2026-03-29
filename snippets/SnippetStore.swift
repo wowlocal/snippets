@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 final class SnippetStore {
+    struct ImportOptions {
+        var preserveExclamationPrefix = false
+    }
+
     private(set) var snippets: [Snippet] = []
 
     var onChange: (() -> Void)?
@@ -35,6 +39,12 @@ final class SnippetStore {
 
     private struct SnippetCollection: Codable {
         let snippets: [Snippet]
+    }
+
+    private struct RaycastSnippet: Decodable {
+        let name: String
+        let text: String
+        let keyword: String?
     }
 
     init() {
@@ -131,8 +141,26 @@ final class SnippetStore {
             }
     }
 
+    /// Peeks at a file to check if it contains Raycast snippets with `!`-prefixed keywords.
+    func detectsRaycastExclamationKeywords(in url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let raycastArray = decodeRaycastSnippets(from: data),
+              !raycastArray.isEmpty else { return false }
+        return raycastArray.contains {
+            Self.normalizedRaycastKeyword(
+                from: $0.keyword,
+                preserveExclamationPrefix: true
+            ).hasPrefix("!")
+        }
+    }
+
     @discardableResult
     func importSnippets(from url: URL) throws -> Int {
+        try importSnippets(from: url, options: ImportOptions())
+    }
+
+    @discardableResult
+    func importSnippets(from url: URL, options: ImportOptions) throws -> Int {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -140,12 +168,14 @@ final class SnippetStore {
             throw ImportExportError.cannotAccessFile
         }
 
-        var imported = try decodeImportData(data)
+        var imported = try decodeImportData(data, options: options)
         imported = normalizeImportedSnippets(imported)
 
         guard !imported.isEmpty else {
             throw ImportExportError.emptyImport
         }
+
+        pushUndo()
 
         var merged = snippets
         var importedCount = 0
@@ -207,6 +237,10 @@ final class SnippetStore {
     }
 
     private func decodeImportData(_ data: Data) throws -> [Snippet] {
+        try decodeImportData(data, options: ImportOptions())
+    }
+
+    private func decodeImportData(_ data: Data, options: ImportOptions) throws -> [Snippet] {
         if let directArray = try? decoder.decode([Snippet].self, from: data) {
             return directArray
         }
@@ -215,7 +249,61 @@ final class SnippetStore {
             return collection.snippets
         }
 
+        if let raycastArray = decodeRaycastSnippets(from: data) {
+            return raycastArray.map { rc in
+                return Snippet(
+                    name: rc.name,
+                    keyword: Self.normalizedRaycastKeyword(
+                        from: rc.keyword,
+                        preserveExclamationPrefix: options.preserveExclamationPrefix
+                    ),
+                    content: Self.convertRaycastPlaceholders(rc.text)
+                )
+            }
+        }
+
         throw ImportExportError.invalidFormat
+    }
+
+    private func decodeRaycastSnippets(from data: Data) -> [RaycastSnippet]? {
+        let isNative = (try? decoder.decode([Snippet].self, from: data)) != nil
+            || (try? decoder.decode(SnippetCollection.self, from: data)) != nil
+        guard !isNative,
+              let raycastArray = try? decoder.decode([RaycastSnippet].self, from: data),
+              !raycastArray.isEmpty else {
+            return nil
+        }
+
+        return raycastArray
+    }
+
+    private static func normalizedRaycastKeyword(
+        from rawKeyword: String?,
+        preserveExclamationPrefix: Bool
+    ) -> String {
+        var keyword = (rawKeyword ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if keyword.hasPrefix("\\") {
+            keyword.removeFirst()
+        }
+
+        if !preserveExclamationPrefix, keyword.hasPrefix("!") {
+            keyword.removeFirst()
+        }
+
+        return keyword
+    }
+
+    private static let raycastDateRegex = try? NSRegularExpression(
+        pattern: #"\{date "([^"]+)"\}"#
+    )
+
+    private static func convertRaycastPlaceholders(_ text: String) -> String {
+        guard let regex = raycastDateRegex else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.stringByReplacingMatches(
+            in: text, range: range, withTemplate: "{date:$1}"
+        )
     }
 
     private func normalizeImportedSnippets(_ imported: [Snippet]) -> [Snippet] {

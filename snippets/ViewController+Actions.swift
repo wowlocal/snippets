@@ -155,8 +155,20 @@ extension ViewController {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        var options = SnippetStore.ImportOptions()
+
+        if store.detectsRaycastExclamationKeywords(in: url) {
+            let alert = NSAlert()
+            alert.messageText = "Preserve \"!\" in Keywords?"
+            alert.informativeText = "Some Raycast snippets use \"!\" as part of the keyword (for example \"!email\"). Keep it when importing? Leading backslashes are removed automatically."
+            alert.addButton(withTitle: "Preserve \"!\"")
+            alert.addButton(withTitle: "Remove \"!\"")
+            let response = alert.runModal()
+            options.preserveExclamationPrefix = (response == .alertFirstButtonReturn)
+        }
+
         do {
-            let count = try store.importSnippets(from: url)
+            let count = try store.importSnippets(from: url, options: options)
             importExportMessage = "Imported \(count) snippet(s) from \(url.lastPathComponent)."
             reloadVisibleSnippets(keepSelection: true)
             if selectedSnippetID == nil, let id = visibleSnippets.first?.id {
