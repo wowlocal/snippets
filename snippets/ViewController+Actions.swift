@@ -62,8 +62,12 @@ extension ViewController {
         importItem.keyEquivalentModifierMask = [.command, .shift]
         let exportItem = NSMenuItem(title: "Export...", action: #selector(runExport), keyEquivalent: "E")
         exportItem.keyEquivalentModifierMask = [.command, .shift]
+        let shareItem = NSMenuItem(title: "Copy Share Link", action: #selector(copySelectedSnippetShareLink), keyEquivalent: "C")
+        shareItem.keyEquivalentModifierMask = [.command, .shift]
+        shareItem.isEnabled = selectedSnippet != nil
         menu.addItem(importItem)
         menu.addItem(exportItem)
+        menu.addItem(shareItem)
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -143,6 +147,21 @@ extension ViewController {
         guard let selectedSnippet else { return }
         engine.pasteSnippetIntoFrontmostApp(selectedSnippet)
         importExportMessage = "Pasting \(selectedSnippet.displayName)."
+    }
+
+    @objc func copySelectedSnippetShareLink() {
+        guard let selectedSnippet else { return }
+
+        do {
+            let url = try SnippetDeepLink.url(for: selectedSnippet)
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(url.absoluteString, forType: .string)
+            importExportMessage = "Copied share link for \(selectedSnippet.displayName)."
+            closeActionPanel()
+        } catch {
+            showErrorAlert(message: error.localizedDescription)
+        }
     }
 
     @objc func runImport(_ sender: Any?) {

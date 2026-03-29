@@ -72,6 +72,11 @@ extension ViewController {
             return nil
         }
 
+        if flags == [.command, .shift] && key == UInt16(kVK_ANSI_C) && isListContext {
+            copySelectedSnippetShareLink()
+            return nil
+        }
+
         if flags == [.command] && key == UInt16(kVK_ANSI_E) {
             editSelectedSnippet()
             return nil

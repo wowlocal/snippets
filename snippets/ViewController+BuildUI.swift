@@ -501,6 +501,7 @@ extension ViewController {
             actionTitle,
             ActionShortcutRow(title: "Copy Snippet", shortcut: "↩"),
             ActionShortcutRow(title: "Paste Snippet", shortcut: "⌘↩"),
+            ActionShortcutRow(title: "Copy Share Link", shortcut: "⇧⌘C"),
             ActionShortcutRow(title: "Edit Snippet", shortcut: "⌘E"),
             ActionShortcutRow(title: "Duplicate Snippet", shortcut: "⌘D"),
             ActionShortcutRow(title: "Pin / Unpin", shortcut: "⌘."),

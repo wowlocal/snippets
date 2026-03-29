@@ -14,6 +14,7 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
   - `{datetime}`
   - `{date:<DateFormatter pattern>}` (for example `{date:yyyy-MM-dd}`)
 - Import/export JSON snippets.
+- Share a single snippet via a `snippets://share?...` deep link.
 - Menu bar item with quick open/quit.
 - Optional Launch at Login toggle.
 - Configurable extra Chromium bundle IDs in a dedicated `Snippets > Settings…` window (applies immediately, no relaunch).
@@ -26,7 +27,7 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 ## Build and Run
 
 1. Open `/Users/mike/src/tries/2026-02-15-snippets/snippets/Snippets.xcodeproj` in Xcode.
-2. Select the `snippets` scheme.
+2. Select the `Snippets` scheme.
 3. Build and run.
 
 ## First Launch and Permissions
@@ -105,6 +106,7 @@ Persistence and sync behavior:
 - `Cmd+D`: duplicate selected snippet.
 - `Cmd+.`: pin/unpin selected snippet.
 - `Cmd+Delete`: delete selected snippet.
+- `Cmd+Shift+C`: copy a deep link for the selected snippet.
 - `Cmd+Shift+I`: import JSON.
 - `Cmd+Shift+E`: export JSON.
 - `Esc`: close action panel (or return focus to list).
@@ -121,6 +123,12 @@ Persistence and sync behavior:
   2. Else match by `keyword` case-insensitively (replace existing, preserve existing `id` and `createdAt`).
   3. Else insert as new.
 
+## Deep Links
+
+- `Cmd+Shift+C` copies a shareable deep link for the selected snippet.
+- Deep links use the custom scheme `snippets://share?data=...`.
+- Opening one of these links shows an import confirmation and then imports that single snippet using the same merge rules as JSON import.
+
 ## Data Storage
 
 - Snippets are persisted locally at:
@@ -136,3 +144,4 @@ Persistence and sync behavior:
 - `Cmd+Q` supports a one-time choice:
   - Hide to menu bar (keep running), or
   - Quit completely.
+  - If you choose "Remember choice", you can reset it later from Settings, the menu bar menu, or the main window's More menu.

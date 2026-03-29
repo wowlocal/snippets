@@ -150,6 +150,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return true
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let deepLinks = urls.filter { SnippetDeepLink.canHandle($0) }
+        guard !deepLinks.isEmpty else { return }
+
+        for url in deepLinks {
+            handleSnippetDeepLink(url)
+        }
+    }
+
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
     }
@@ -424,21 +433,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.setActivationPolicy(.accessory)
     }
 
-    private func showMainWindow() {
+    @discardableResult
+    private func showMainWindow() -> ViewController? {
         NSApp.setActivationPolicy(.regular)
 
+        let window: NSWindow?
         if let window = NSApp.windows.first(where: { $0.contentViewController is ViewController }) {
             window.makeKeyAndOrderFront(nil)
+            #if !NO_SPARKLE
+            refreshWindowUpdateAccessories()
+            #endif
+            NSApp.activate(ignoringOtherApps: true)
+            return window.contentViewController as? ViewController
         } else {
             let storyboard = NSStoryboard(name: "Main", bundle: nil)
             if let wc = storyboard.instantiateInitialController() as? NSWindowController {
                 wc.showWindow(nil)
+                window = wc.window
+            } else {
+                window = nil
             }
         }
         #if !NO_SPARKLE
         refreshWindowUpdateAccessories()
         #endif
         NSApp.activate(ignoringOtherApps: true)
+        return window?.contentViewController as? ViewController
+    }
+
+    private func handleSnippetDeepLink(_ url: URL) {
+        let viewController = showMainWindow()
+
+        do {
+            let snippet = try SnippetDeepLink.snippet(from: url)
+
+            guard confirmImportOfSharedSnippet(snippet) else { return }
+
+            let importedSnippet = try store.importSharedSnippet(snippet)
+            if let viewController {
+                let hasActiveSearch = !viewController.searchField.stringValue
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+                if hasActiveSearch {
+                    viewController.searchField.stringValue = ""
+                    viewController.reloadVisibleSnippets(keepSelection: true)
+                }
+                viewController.selectSnippet(id: importedSnippet.id, focusEditorName: false)
+                viewController.importExportMessage = "Imported shared snippet \(importedSnippet.displayName)."
+                viewController.requestFirstResponder(viewController.tableView)
+            }
+        } catch {
+            showDeepLinkAlert(
+                title: "Shared Link Failed",
+                message: error.localizedDescription,
+                style: .warning
+            )
+        }
+    }
+
+    private func confirmImportOfSharedSnippet(_ snippet: Snippet) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Import Shared Snippet?"
+        alert.informativeText = sharedSnippetSummary(snippet)
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Import")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func sharedSnippetSummary(_ snippet: Snippet) -> String {
+        let keyword = snippet.normalizedKeyword.isEmpty ? "No keyword" : "\\\(snippet.normalizedKeyword)"
+        let content = snippet.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preview = content.isEmpty ? "(empty content)" : truncatedSharedSnippetPreview(content)
+
+        return """
+        Name: \(snippet.displayName)
+        Keyword: \(keyword)
+
+        Preview:
+        \(preview)
+        """
+    }
+
+    private func truncatedSharedSnippetPreview(_ content: String) -> String {
+        let maxCharacters = 280
+        guard content.count > maxCharacters else { return content }
+        let endIndex = content.index(content.startIndex, offsetBy: maxCharacters)
+        return String(content[..<endIndex]) + "…"
+    }
+
+    private func showDeepLinkAlert(title: String, message: String, style: NSAlert.Style) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = style
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // MARK: - Update UI State

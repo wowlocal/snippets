@@ -175,37 +175,60 @@ final class SnippetStore {
             throw ImportExportError.emptyImport
         }
 
-        pushUndo()
+        return importSnippets(imported)
+    }
 
+    @discardableResult
+    func importSharedSnippet(_ snippet: Snippet) throws -> Snippet {
+        let imported = normalizeImportedSnippets([snippet])
+
+        guard let normalizedSnippet = imported.first else {
+            throw ImportExportError.emptyImport
+        }
+
+        pushUndo()
+        var merged = snippets
+        let finalSnippet = upsertImportedSnippet(normalizedSnippet, into: &merged)
+        snippets = merged
+        persist(immediately: true)
+        return finalSnippet
+    }
+
+    @discardableResult
+    private func importSnippets(_ imported: [Snippet]) -> Int {
+        pushUndo()
         var merged = snippets
         var importedCount = 0
 
         for incoming in imported {
-            if let idIndex = merged.firstIndex(where: { $0.id == incoming.id }) {
-                merged[idIndex] = incoming
-                importedCount += 1
-                continue
-            }
-
-            if !incoming.normalizedKeyword.isEmpty,
-               let keywordIndex = merged.firstIndex(where: {
-                   $0.normalizedKeyword.caseInsensitiveCompare(incoming.normalizedKeyword) == .orderedSame
-               }) {
-                var replacement = incoming
-                replacement.id = merged[keywordIndex].id
-                replacement.createdAt = merged[keywordIndex].createdAt
-                merged[keywordIndex] = replacement
-                importedCount += 1
-                continue
-            }
-
-            merged.insert(incoming, at: 0)
+            upsertImportedSnippet(incoming, into: &merged)
             importedCount += 1
         }
 
         snippets = merged
         persist(immediately: true)
         return importedCount
+    }
+
+    private func upsertImportedSnippet(_ incoming: Snippet, into merged: inout [Snippet]) -> Snippet {
+        if let idIndex = merged.firstIndex(where: { $0.id == incoming.id }) {
+            merged[idIndex] = incoming
+            return incoming
+        }
+
+        if !incoming.normalizedKeyword.isEmpty,
+           let keywordIndex = merged.firstIndex(where: {
+               $0.normalizedKeyword.caseInsensitiveCompare(incoming.normalizedKeyword) == .orderedSame
+           }) {
+            var replacement = incoming
+            replacement.id = merged[keywordIndex].id
+            replacement.createdAt = merged[keywordIndex].createdAt
+            merged[keywordIndex] = replacement
+            return replacement
+        }
+
+        merged.insert(incoming, at: 0)
+        return incoming
     }
 
     @discardableResult
