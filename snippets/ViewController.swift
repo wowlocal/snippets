@@ -223,22 +223,14 @@ final class ViewController: NSViewController {
         if ThemeManager.isPaleTheme {
             newButton.bezelColor = nil
             newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
-
-            enabledCheckbox.wantsLayer = true
-            if let filter = CIFilter(name: "CIColorControls") {
-                filter.setValue(0.0, forKey: kCIInputSaturationKey)
-                enabledCheckbox.layer?.filters = [filter]
-            }
         } else {
             let plusConfig = NSImage.SymbolConfiguration(pointSize: NSFont.systemFontSize, weight: .semibold)
                 .applying(.init(paletteColors: [.white]))
             newButton.bezelColor = .systemBlue
             newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
                 .withSymbolConfiguration(plusConfig)
-
-            enabledCheckbox.wantsLayer = true
-            enabledCheckbox.layer?.filters = nil
         }
+        ThemeManager.applyToggleAppearance(to: enabledCheckbox)
         keywordWarningLabel.textColor = ThemeManager.alertColor
         updatePermissionBanner()
     }

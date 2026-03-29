@@ -26,4 +26,16 @@ enum ThemeManager {
     static var alertColor: NSColor {
         isPaleTheme ? .secondaryLabelColor : .systemOrange
     }
+
+    static func applyToggleAppearance(to button: NSButton) {
+        button.wantsLayer = true
+
+        guard isPaleTheme, let filter = CIFilter(name: "CIColorControls") else {
+            button.layer?.filters = nil
+            return
+        }
+
+        filter.setValue(0.0, forKey: kCIInputSaturationKey)
+        button.layer?.filters = [filter]
+    }
 }

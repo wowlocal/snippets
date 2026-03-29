@@ -189,6 +189,12 @@ private final class GeneralSettingsViewController: NSViewController {
             name: .snippetsQuitBehaviorChanged,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleExternalPaleThemeChange),
+            name: .snippetsPaleThemeChanged,
+            object: nil
+        )
     }
 
     deinit {
@@ -208,6 +214,7 @@ private final class GeneralSettingsViewController: NSViewController {
         }
 
         resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
+        applyThemeColors()
         updateCLIStatus()
     }
 
@@ -308,8 +315,17 @@ private final class GeneralSettingsViewController: NSViewController {
         reloadFromStorage()
     }
 
+    @objc private func handleExternalPaleThemeChange() {
+        applyThemeColors()
+    }
+
     @objc private func handlePaleThemeChanged(_ sender: NSButton) {
         ThemeManager.isPaleTheme = sender.state == .on
+    }
+
+    private func applyThemeColors() {
+        paleThemeCheckbox.state = ThemeManager.isPaleTheme ? .on : .off
+        ThemeManager.applyToggleAppearance(to: paleThemeCheckbox)
     }
 
     private func configureQuitBehaviorPopup() {
