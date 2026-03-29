@@ -195,7 +195,8 @@ cd Distribution
 
 gh release create "$TAG" "$DMG_PATH" \
     --title "Snippets ${APP_VERSION} (No Auto-Update)" \
-    --notes "Same as v${APP_VERSION} but without the auto-updater. Manual download only."
+    --notes "Same as v${APP_VERSION} but without the auto-updater. Manual download only." \
+    --prerelease
 
 green_text
 echo ""

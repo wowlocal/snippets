@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# Backdates the no-update release by 60 seconds so the regular release
+# appears first (top) on the GitHub releases page.
+#
+# Usage: ./ReorderReleases [version]
+#   version — e.g. 1.3.14 (defaults to current project version)
+
+set -e
+
+cd "$(dirname "$0")"
+source common.sh
+
+if ! command -v gh &>/dev/null; then
+    red_text
+    echo "Required tool not found: gh"
+    normal_text
+    exit 1
+fi
+
+if [ -n "$1" ]; then
+    APP_VERSION="$1"
+else
+    APP_VERSION=$(read_version)
+fi
+
+REGULAR_TAG="v${APP_VERSION}"
+NO_UPDATE_TAG="v${APP_VERSION}-no-update"
+
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+
+gray_text
+echo "Repo:          $REPO"
+echo "Regular tag:   $REGULAR_TAG"
+echo "No-update tag: $NO_UPDATE_TAG"
+normal_text
+
+# Fetch published_at of the regular release
+REGULAR_PUBLISHED=$(gh api "repos/${REPO}/releases/tags/${REGULAR_TAG}" -q .published_at 2>/dev/null || true)
+if [ -z "$REGULAR_PUBLISHED" ]; then
+    red_text
+    echo "Regular release $REGULAR_TAG not found on GitHub."
+    normal_text
+    exit 1
+fi
+
+# Fetch id of the no-update release
+NO_UPDATE_ID=$(gh api "repos/${REPO}/releases/tags/${NO_UPDATE_TAG}" -q .id 2>/dev/null || true)
+if [ -z "$NO_UPDATE_ID" ]; then
+    red_text
+    echo "No-update release $NO_UPDATE_TAG not found on GitHub."
+    normal_text
+    exit 1
+fi
+
+# Backdate no-update by 60 seconds relative to the regular release
+# date -v is macOS; fall back to date -d for Linux
+if date -v -60S &>/dev/null 2>&1; then
+    BACKDATED=$(date -u -j -v -60S -f "%Y-%m-%dT%H:%M:%SZ" "$REGULAR_PUBLISHED" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
+else
+    BACKDATED=$(date -u -d "${REGULAR_PUBLISHED} -60 seconds" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
+fi
+
+if [ -z "$BACKDATED" ]; then
+    red_text
+    echo "Failed to compute backdated timestamp from: $REGULAR_PUBLISHED"
+    normal_text
+    exit 1
+fi
+
+gray_text
+echo "Regular published_at:   $REGULAR_PUBLISHED"
+echo "No-update published_at: $BACKDATED (−60s)"
+normal_text
+
+gh api -X PATCH "repos/${REPO}/releases/${NO_UPDATE_ID}" \
+    -f published_at="$BACKDATED" \
+    -F prerelease=true \
+    --silent
+
+green_text
+echo "Done — $NO_UPDATE_TAG backdated and marked prerelease; $REGULAR_TAG will be Latest."
+normal_text
