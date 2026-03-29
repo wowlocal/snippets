@@ -12,6 +12,10 @@ final class SnippetStore {
     private var persistWorkItem: DispatchWorkItem?
     private let persistDelay: TimeInterval = 0.3
 
+    private var undoStack: [[Snippet]] = []
+    private var redoStack: [[Snippet]] = []
+    private let maxUndoLevels = 50
+
     enum ImportExportError: LocalizedError {
         case emptyImport
         case invalidFormat
@@ -46,6 +50,7 @@ final class SnippetStore {
     }
 
     func addSnippet() -> Snippet {
+        pushUndo()
         let snippet = Snippet(name: "", keyword: "", content: "")
         snippets.insert(snippet, at: 0)
         persist(immediately: true)
@@ -74,6 +79,7 @@ final class SnippetStore {
     }
 
     func delete(snippetID: UUID) {
+        pushUndo()
         snippets.removeAll { $0.id == snippetID }
         persist(immediately: true)
     }
@@ -81,6 +87,7 @@ final class SnippetStore {
     @discardableResult
     func duplicate(snippetID: UUID) -> Snippet? {
         guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return nil }
+        pushUndo()
 
         let source = snippets[index]
         let duplicate = Snippet(
@@ -97,6 +104,7 @@ final class SnippetStore {
 
     func togglePinned(snippetID: UUID) {
         guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
+        pushUndo()
         snippets[index].isPinned.toggle()
         snippets[index].updatedAt = Date()
         persist(immediately: true)
@@ -265,5 +273,31 @@ final class SnippetStore {
         persistWorkItem?.cancel()
         persistWorkItem = nil
         writeToDisk()
+    }
+
+    // MARK: - Undo / Redo
+
+    private func pushUndo() {
+        undoStack.append(snippets)
+        if undoStack.count > maxUndoLevels {
+            undoStack.removeFirst()
+        }
+        redoStack.removeAll()
+    }
+
+    func undo() -> Bool {
+        guard let snapshot = undoStack.popLast() else { return false }
+        redoStack.append(snippets)
+        snippets = snapshot
+        persist(immediately: true)
+        return true
+    }
+
+    func redo() -> Bool {
+        guard let snapshot = redoStack.popLast() else { return false }
+        undoStack.append(snippets)
+        snippets = snapshot
+        persist(immediately: true)
+        return true
     }
 }

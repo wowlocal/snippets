@@ -91,17 +91,19 @@ extension ViewController {
         }
 
         let snippet = store.addSnippet()
-        importExportMessage = nil
         reloadVisibleSnippets(keepSelection: true)
         selectSnippet(id: snippet.id, focusEditorName: true)
+        importExportMessage = "Created snippet."
     }
 
     @objc func deleteSelectedSnippet(_ sender: Any?) {
         guard let selectedSnippetID else { return }
+        let deletedSnippetName = selectedSnippet?.displayName ?? "snippet"
         store.delete(snippetID: selectedSnippetID)
         reloadVisibleSnippets(keepSelection: true)
         applySelectedSnippetToEditor()
         closeActionPanel()
+        importExportMessage = "Deleted \(deletedSnippetName)."
     }
 
     func editSelectedSnippet() {
@@ -193,10 +195,13 @@ extension ViewController {
         do {
             if service.status == .enabled {
                 try service.unregister()
+                importExportMessage = "Launch at Login disabled."
             } else {
                 try service.register()
+                importExportMessage = "Launch at Login enabled."
             }
         } catch {
+            importExportMessage = "Couldn't update Launch at Login."
             NSLog("Launch at login toggle failed: \(error)")
         }
     }
@@ -205,5 +210,21 @@ extension ViewController {
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
         appDelegate.resetQuitBehaviorPreference(sender)
         importExportMessage = "Cmd+Q choice reset. You will be asked next time."
+    }
+
+    func performUndo() {
+        guard store.undo() else { return }
+        reloadVisibleSnippets(keepSelection: true)
+        applySelectedSnippetToEditor()
+        closeActionPanel()
+        importExportMessage = "Undid last change."
+    }
+
+    func performRedo() {
+        guard store.redo() else { return }
+        reloadVisibleSnippets(keepSelection: true)
+        applySelectedSnippetToEditor()
+        closeActionPanel()
+        importExportMessage = "Redid last change."
     }
 }

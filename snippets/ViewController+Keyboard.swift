@@ -28,6 +28,16 @@ extension ViewController {
             return nil
         }
 
+        if flags == [.command] && key == UInt16(kVK_ANSI_Z) && !isSearchFieldActive && !isEditingDetails {
+            performUndo()
+            return nil
+        }
+
+        if flags == [.command, .shift] && key == UInt16(kVK_ANSI_Z) && !isSearchFieldActive && !isEditingDetails {
+            performRedo()
+            return nil
+        }
+
         if flags == [.command] && key == UInt16(kVK_ANSI_F) {
             requestFirstResponder(searchField)
             return nil
