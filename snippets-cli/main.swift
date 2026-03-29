@@ -59,15 +59,31 @@ private func cmdSearch(query: String, enabledOnly: Bool) {
         let snippet: Snippet
     }
 
+    func searchScore(for snippet: Snippet, query: String) -> Int? {
+        let nameScore = FuzzyMatch.score(query: query, target: snippet.displayName)
+        let keywordScore = FuzzyMatch.score(query: query, target: snippet.normalizedKeyword)
+        let contentMatches = snippet.content.localizedCaseInsensitiveContains(query)
+
+        let fuzzyScore = max(
+            nameScore.matched ? nameScore.score + 10 : 0,
+            keywordScore.matched ? keywordScore.score + 20 : 0
+        )
+
+        if fuzzyScore > 0 {
+            return contentMatches ? fuzzyScore + 1 : fuzzyScore
+        }
+
+        guard contentMatches else { return nil }
+        return max(1, query.count)
+    }
+
     var snippets = loadSnippets()
     if enabledOnly { snippets = snippets.filter(\.isEnabled) }
 
     let results = snippets
         .compactMap { snippet -> SearchResult? in
-            let target = snippet.name + " " + snippet.keyword
-            let result = FuzzyMatch.score(query: query, target: target)
-            guard result.matched else { return nil }
-            return SearchResult(score: result.score, snippet: snippet)
+            guard let score = searchScore(for: snippet, query: query) else { return nil }
+            return SearchResult(score: score, snippet: snippet)
         }
         .sorted { $0.score > $1.score }
 
@@ -178,7 +194,7 @@ private func usage() -> Never {
         --enabled                    Show only enabled snippets
         --pinned                     Show only pinned snippets
 
-      search <query>                 Fuzzy-search snippets by name and keyword
+      search <query>                 Search snippets by name, keyword, and content
         --enabled                    Search only enabled snippets
 
       get <keyword>                  Get a snippet by exact keyword match
