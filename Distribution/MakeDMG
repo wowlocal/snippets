@@ -1,20 +1,9 @@
 #! /bin/bash
 
-function gray_text() {
-    echo -e "\033[1;30m"
-}
+set -e
 
-function green_text() {
-    echo -e "\033[1;32m"
-}
-
-function normal_text() {
-    echo -e "\033[0m"
-}
-
-function orange_text() {
-    echo -e "\033[1;33m"
-}
+cd "$(dirname "$0")"
+source common.sh
 
 function has_modern_create_dmg() {
     if ! command -v create-dmg >/dev/null 2>&1; then
@@ -23,11 +12,6 @@ function has_modern_create_dmg() {
 
     create-dmg --help 2>&1 | grep -q '\$ create-dmg <app> \[destination\]'
 }
-
-set -e
-
-# cd into the script directory
-cd "$(dirname "$0")"
 
 APP_INPUT_PATH=$1
 DMG_OUTPUT_PATH=$2

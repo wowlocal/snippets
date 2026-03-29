@@ -1,24 +1,84 @@
 #!/bin/bash
 # Shared helpers for Distribution scripts. Source this file, don't run it directly.
 
+COLOR_ENABLED=0
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    COLOR_ENABLED=1
+fi
+
+function set_style() {
+    if [ "$COLOR_ENABLED" -eq 1 ]; then
+        printf '\033[%sm' "$1"
+    fi
+}
+
+# Keep the palette away from black / dark blue tones so it stays readable in
+# both dark and light terminal themes.
 function gray_text() {
-    echo -e "\033[1;30m"
+    set_style "36"
 }
 
 function green_text() {
-    echo -e "\033[1;32m"
+    set_style "32"
 }
 
 function normal_text() {
-    echo -e "\033[0m"
+    set_style "0"
 }
 
 function orange_text() {
-    echo -e "\033[1;33m"
+    set_style "33"
 }
 
 function red_text() {
-    echo -e "\033[1;31m"
+    set_style "31"
+}
+
+function blue_text() {
+    set_style "35"
+}
+
+function bold_text() {
+    set_style "1"
+}
+
+function underline_text() {
+    set_style "4"
+}
+
+# Compatibility aliases for scripts that still use the older short names.
+function gray() {
+    gray_text
+}
+
+function green() {
+    green_text
+}
+
+function orange() {
+    orange_text
+}
+
+function red() {
+    red_text
+}
+
+function blue() {
+    blue_text
+}
+
+function bold() {
+    bold_text
+}
+
+function reset() {
+    normal_text
+}
+
+function link_text() {
+    if [ "$COLOR_ENABLED" -eq 1 ]; then
+        printf '\033[4;36m'
+    fi
 }
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

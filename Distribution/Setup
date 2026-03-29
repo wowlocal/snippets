@@ -3,16 +3,7 @@
 set -e
 
 cd "$(dirname "$0")"
-
-# ─── Colors ───────────────────────────────────────────────────────────────────
-
-function gray()   { echo -en "\033[1;30m"; }
-function green()  { echo -en "\033[1;32m"; }
-function orange() { echo -en "\033[1;33m"; }
-function red()    { echo -en "\033[1;31m"; }
-function blue()   { echo -en "\033[1;34m"; }
-function bold()   { echo -en "\033[1m"; }
-function reset()  { echo -en "\033[0m"; }
+source common.sh
 
 function header() {
     echo ""
@@ -39,7 +30,10 @@ function err() {
 }
 
 function link() {
-    echo -e "  \033[4;34m$1\033[0m"
+    echo -n "  "
+    link_text
+    echo "$1"
+    reset
 }
 
 function ask() {
