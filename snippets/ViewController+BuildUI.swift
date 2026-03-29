@@ -177,6 +177,13 @@ extension ViewController {
         headerStack.spacing = 8
         headerStack.alignment = .centerY
 
+        searchField.placeholderString = "Search snippets"
+        searchField.delegate = self
+        searchField.controlSize = .regular
+        searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        searchField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+
         let moreButton = NSButton(image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!, target: self, action: #selector(showMoreMenu(_:)))
         moreButton.bezelStyle = .rounded
         moreButton.isBordered = false
@@ -203,14 +210,10 @@ extension ViewController {
         helpButton.isBordered = false
         helpButton.toolTip = "Keyboard Shortcuts (⌘K)"
 
-        headerStack.addArrangedSubview(NSView())
+        headerStack.addArrangedSubview(searchField)
         headerStack.addArrangedSubview(helpButton)
         headerStack.addArrangedSubview(moreButton)
         headerStack.addArrangedSubview(newButton)
-
-        searchField.placeholderString = "Search snippets"
-        searchField.delegate = self
-        searchField.controlSize = .regular
 
         let tableScrollView = NSScrollView()
         tableScrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -254,12 +257,10 @@ extension ViewController {
         importExportMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         rootStack.addArrangedSubview(headerStack)
-        rootStack.addArrangedSubview(searchField)
         rootStack.addArrangedSubview(tableScrollView)
         rootStack.addArrangedSubview(footerTopRow)
 
-        rootStack.setCustomSpacing(12, after: headerStack)
-        rootStack.setCustomSpacing(8, after: searchField)
+        rootStack.setCustomSpacing(10, after: headerStack)
         rootStack.setCustomSpacing(8, after: tableScrollView)
 
         container.addSubview(rootStack)
