@@ -3,16 +3,20 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
-    private let settingsViewController = SettingsViewController()
+    private let settingsViewController = SettingsTabViewController()
 
     init() {
         let window = NSWindow(contentViewController: settingsViewController)
         window.title = "Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 700, height: 460))
-        window.minSize = NSSize(width: 620, height: 380)
+        window.setContentSize(NSSize(width: 720, height: 480))
+        window.minSize = NSSize(width: 720, height: 480)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
+        window.titleVisibility = .hidden
+        if #available(macOS 11.0, *) {
+            window.toolbarStyle = .preference
+        }
 
         super.init(window: window)
         shouldCascadeWindows = false
@@ -33,7 +37,174 @@ final class SettingsWindowController: NSWindowController {
 }
 
 @MainActor
-private final class SettingsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
+private final class SettingsTabViewController: NSTabViewController {
+    private let generalViewController = GeneralSettingsViewController()
+    private let browsersViewController = BrowserSettingsViewController()
+
+    init() {
+        super.init(nibName: nil, bundle: nil)
+        tabStyle = .toolbar
+        canPropagateSelectedChildViewControllerTitle = false
+
+        addTab(title: "General", symbolName: "gearshape", viewController: generalViewController)
+        addTab(title: "Browsers", symbolName: "globe", viewController: browsersViewController)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard let toolbar = view.window?.toolbar else { return }
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+    }
+
+    func reloadFromStorage() {
+        generalViewController.reloadFromStorage()
+        browsersViewController.reloadFromStorage()
+    }
+
+    private func addTab(title: String, symbolName: String, viewController: NSViewController) {
+        viewController.title = title
+
+        let item = NSTabViewItem(viewController: viewController)
+        item.label = title
+        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title)
+        addTabViewItem(item)
+    }
+}
+
+@MainActor
+private final class GeneralSettingsViewController: NSViewController {
+    private let quitBehaviorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let selectionSummaryLabel = NSTextField(wrappingLabelWithString: "")
+    private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
+    private let resetButton = NSButton(title: "Reset to Ask Every Time", target: nil, action: nil)
+
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+
+        let introLabel = makeSecondaryLabel("Choose what happens when you press Cmd+Q. This matches the remembered choice from the quit confirmation dialog.")
+
+        let behaviorLabel = NSTextField(labelWithString: "Pressing Cmd+Q:")
+        behaviorLabel.textColor = .secondaryLabelColor
+        behaviorLabel.font = .systemFont(ofSize: 13)
+        behaviorLabel.alignment = .right
+        behaviorLabel.setContentHuggingPriority(.required, for: .horizontal)
+        behaviorLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
+
+        quitBehaviorPopup.target = self
+        quitBehaviorPopup.action = #selector(handleQuitBehaviorChanged(_:))
+        quitBehaviorPopup.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        let behaviorRow = NSStackView(views: [behaviorLabel, quitBehaviorPopup, NSView()])
+        behaviorRow.orientation = .horizontal
+        behaviorRow.alignment = .centerY
+        behaviorRow.spacing = 12
+
+        selectionSummaryLabel.font = .systemFont(ofSize: 13)
+        selectionSummaryLabel.textColor = .labelColor
+
+        promptSummaryLabel.font = .systemFont(ofSize: 12)
+        promptSummaryLabel.textColor = .secondaryLabelColor
+
+        resetButton.target = self
+        resetButton.action = #selector(resetQuitBehavior)
+
+        let resetRow = NSStackView(views: [resetButton, NSView()])
+        resetRow.orientation = .horizontal
+        resetRow.alignment = .centerY
+
+        stack.addArrangedSubview(introLabel)
+        stack.addArrangedSubview(behaviorRow)
+        stack.addArrangedSubview(selectionSummaryLabel)
+        stack.addArrangedSubview(promptSummaryLabel)
+        stack.addArrangedSubview(resetRow)
+
+        behaviorRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        selectionSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        promptSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        configureQuitBehaviorPopup()
+        reloadFromStorage()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        preferredContentSize = NSSize(width: 720, height: 480)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleExternalQuitBehaviorChange),
+            name: .snippetsQuitBehaviorChanged,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    func reloadFromStorage() {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+
+        selectQuitBehavior(appDelegate.quitBehaviorPreference)
+        selectionSummaryLabel.stringValue = appDelegate.quitBehaviorPreferenceDescription
+
+        if appDelegate.hasRememberedQuitBehavior {
+            promptSummaryLabel.stringValue = "A remembered Cmd+Q preference is active. Choose “Ask Every Time” or use the reset button if you want the dialog back."
+        } else {
+            promptSummaryLabel.stringValue = "Snippets will show the Cmd+Q choice dialog until you select a remembered behavior."
+        }
+
+        resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
+    }
+
+    @objc private func handleQuitBehaviorChanged(_ sender: NSPopUpButton) {
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let preference = AppDelegate.QuitBehaviorPreference(rawValue: rawValue),
+              let appDelegate = NSApp.delegate as? AppDelegate
+        else { return }
+
+        appDelegate.updateQuitBehaviorPreference(preference)
+        reloadFromStorage()
+    }
+
+    @objc private func resetQuitBehavior() {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        appDelegate.resetQuitBehaviorPreference(nil)
+        reloadFromStorage()
+    }
+
+    @objc private func handleExternalQuitBehaviorChange() {
+        reloadFromStorage()
+    }
+
+    private func configureQuitBehaviorPopup() {
+        quitBehaviorPopup.removeAllItems()
+
+        for preference in AppDelegate.QuitBehaviorPreference.allCases {
+            quitBehaviorPopup.addItem(withTitle: preference.menuTitle)
+            quitBehaviorPopup.lastItem?.representedObject = preference.rawValue
+        }
+    }
+
+    private func selectQuitBehavior(_ preference: AppDelegate.QuitBehaviorPreference) {
+        let targetRawValue = preference.rawValue
+
+        for item in quitBehaviorPopup.itemArray where (item.representedObject as? String) == targetRawValue {
+            quitBehaviorPopup.select(item)
+            return
+        }
+    }
+}
+
+@MainActor
+private final class BrowserSettingsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     private struct BundleIDRow {
         let appName: String
         let bundleID: String
@@ -55,27 +226,11 @@ private final class SettingsViewController: NSViewController, NSTableViewDataSou
     private var rows: [BundleIDRow] = []
 
     override func loadView() {
-        let rootView = NSView()
-        rootView.translatesAutoresizingMaskIntoConstraints = false
+        let (rootView, stack) = makeSettingsPane()
         view = rootView
 
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        rootView.addSubview(stack)
-
-        let titleLabel = NSTextField(labelWithString: "Chromium Bundle IDs")
-        titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
-
-        let descriptionLabel = NSTextField(wrappingLabelWithString: "Add custom Chromium-based apps for enhanced accessibility priming. Changes apply immediately.")
-        descriptionLabel.font = .systemFont(ofSize: 13)
-        descriptionLabel.textColor = .secondaryLabelColor
-
-        let builtInLabel = NSTextField(wrappingLabelWithString: "Built-in apps: Chrome, Chromium, Edge, Brave, Opera, Vivaldi, Arc")
-        builtInLabel.font = .systemFont(ofSize: 12)
-        builtInLabel.textColor = .tertiaryLabelColor
+        let introLabel = makeSecondaryLabel("Add custom Chromium-based apps for enhanced accessibility priming. Built-in support already includes Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and Arc.")
+        let builtInLabel = makeTertiaryLabel("Use this pane only for extra apps that are not covered by the built-in browser list.")
 
         countLabel.font = .systemFont(ofSize: 12, weight: .medium)
         countLabel.textColor = .secondaryLabelColor
@@ -122,8 +277,7 @@ private final class SettingsViewController: NSViewController, NSTableViewDataSou
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
 
-        stack.addArrangedSubview(titleLabel)
-        stack.addArrangedSubview(descriptionLabel)
+        stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(builtInLabel)
         stack.addArrangedSubview(countLabel)
         stack.addArrangedSubview(scrollView)
@@ -131,18 +285,16 @@ private final class SettingsViewController: NSViewController, NSTableViewDataSou
         stack.addArrangedSubview(statusLabel)
 
         scrollView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 250).isActive = true
+        scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
         buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -20),
-            stack.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 18),
-            stack.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -18)
-        ])
-
         reloadFromStorage()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        preferredContentSize = NSSize(width: 720, height: 480)
     }
 
     func reloadFromStorage() {
@@ -231,12 +383,8 @@ private final class SettingsViewController: NSViewController, NSTableViewDataSou
         statusLabel.stringValue = "Cleared all custom bundle IDs."
     }
 
-    @objc private func selectionChanged() {
-        updateButtonStates()
-    }
-
     func tableViewSelectionDidChange(_ notification: Notification) {
-        selectionChanged()
+        updateButtonStates()
     }
 
     private func appendBundleIDs(_ incoming: [String], source: String?) {
@@ -386,4 +534,44 @@ private final class SettingsViewController: NSViewController, NSTableViewDataSou
         textField.stringValue = text
         return cell
     }
+}
+
+private func makeSettingsPane() -> (NSView, NSStackView) {
+    let rootView = NSView()
+    rootView.translatesAutoresizingMaskIntoConstraints = false
+
+    let stack = NSStackView()
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.distribution = .fill
+    stack.spacing = 12
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    stack.setHuggingPriority(.required, for: .vertical)
+    stack.setContentCompressionResistancePriority(.required, for: .vertical)
+    rootView.addSubview(stack)
+
+    let guide = rootView.safeAreaLayoutGuide
+
+    NSLayoutConstraint.activate([
+        stack.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 24),
+        stack.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -24),
+        stack.topAnchor.constraint(equalTo: guide.topAnchor, constant: 24),
+        stack.bottomAnchor.constraint(lessThanOrEqualTo: guide.bottomAnchor, constant: -24)
+    ])
+
+    return (rootView, stack)
+}
+
+private func makeSecondaryLabel(_ text: String) -> NSTextField {
+    let label = NSTextField(wrappingLabelWithString: text)
+    label.font = .systemFont(ofSize: 13)
+    label.textColor = .secondaryLabelColor
+    return label
+}
+
+private func makeTertiaryLabel(_ text: String) -> NSTextField {
+    let label = NSTextField(wrappingLabelWithString: text)
+    label.font = .systemFont(ofSize: 12)
+    label.textColor = .tertiaryLabelColor
+    return label
 }

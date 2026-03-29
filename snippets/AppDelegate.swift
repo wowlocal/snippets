@@ -6,10 +6,32 @@ import Sparkle
 
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private enum QuitBehavior: String {
+    enum QuitBehaviorPreference: String, CaseIterable {
         case ask
         case hide
         case quit
+
+        var menuTitle: String {
+            switch self {
+            case .ask:
+                return "Ask Every Time"
+            case .hide:
+                return "Hide to Menu Bar"
+            case .quit:
+                return "Quit Completely"
+            }
+        }
+
+        var settingsDescription: String {
+            switch self {
+            case .ask:
+                return "Snippets will ask what to do each time you press Cmd+Q."
+            case .hide:
+                return "Cmd+Q will hide Snippets to the menu bar and keep it running."
+            case .quit:
+                return "Cmd+Q will quit Snippets completely without asking."
+            }
+        }
     }
 
     private enum QuitDecision {
@@ -120,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return .terminateNow
         }
 
-        switch currentQuitBehavior {
+        switch quitBehaviorPreference {
         case .hide:
             hideToBackground()
             return .terminateCancel
@@ -211,6 +233,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
             return true
         }
+        if menuItem.action == #selector(resetQuitBehaviorPreference(_:)) {
+            let hasRemembered = hasRememberedQuitBehavior
+            menuItem.isHidden = !hasRemembered
+            return hasRemembered
+        }
         #if !NO_SPARKLE
         if menuItem.action == #selector(checkForUpdates(_:)) {
             return updaterController.updater.canCheckForUpdates && !isApplyingPendingUpdate
@@ -237,9 +264,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: ""))
+        let openItem = NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: "")
+        openItem.target = self
+        let resetQuitBehaviorItem = NSMenuItem(
+            title: "Reset Remembered Cmd+Q Choice",
+            action: #selector(resetQuitBehaviorPreference(_:)),
+            keyEquivalent: ""
+        )
+        resetQuitBehaviorItem.target = self
+        let quitItem = NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: "")
+        quitItem.target = self
+
+        menu.addItem(openItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: ""))
+        menu.addItem(resetQuitBehaviorItem)
+        menu.addItem(quitItem)
         statusItem.menu = menu
     }
 
@@ -277,6 +316,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             settingsItem.title = "Settings…"
             settingsItem.target = self
             settingsItem.action = #selector(openSettings(_:))
+        }
+
+        if appMenu.items.contains(where: { $0.action == #selector(resetQuitBehaviorPreference(_:)) }) == false {
+            let resetQuitBehaviorItem = NSMenuItem(
+                title: "Reset Remembered Cmd+Q Choice",
+                action: #selector(resetQuitBehaviorPreference(_:)),
+                keyEquivalent: ""
+            )
+            resetQuitBehaviorItem.target = self
+
+            if let settingsIndex = appMenu.items.firstIndex(where: { $0.keyEquivalent == "," }) {
+                appMenu.insertItem(resetQuitBehaviorItem, at: settingsIndex + 1)
+            } else {
+                appMenu.insertItem(resetQuitBehaviorItem, at: 0)
+            }
         }
 
         #if !NO_SPARKLE
@@ -378,24 +432,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         UserDefaults.standard.string(forKey: quitBehaviorDefaultsKey) != nil
     }
 
-    @IBAction func resetQuitBehaviorPreference(_ sender: Any?) {
-        UserDefaults.standard.removeObject(forKey: quitBehaviorDefaultsKey)
+    var rememberedQuitBehaviorDescription: String? {
+        guard hasRememberedQuitBehavior else { return nil }
+
+        switch quitBehaviorPreference {
+        case .ask:
+            return nil
+        case .hide:
+            return "Cmd+Q currently hides Snippets and keeps it running in the menu bar."
+        case .quit:
+            return "Cmd+Q currently quits Snippets completely."
+        }
     }
 
-    private var currentQuitBehavior: QuitBehavior {
+    var quitBehaviorPreference: QuitBehaviorPreference {
         let storedValue = UserDefaults.standard.string(forKey: quitBehaviorDefaultsKey)
-        return QuitBehavior(rawValue: storedValue ?? QuitBehavior.ask.rawValue) ?? .ask
+        return QuitBehaviorPreference(rawValue: storedValue ?? QuitBehaviorPreference.ask.rawValue) ?? .ask
     }
 
-    private func setQuitBehavior(_ behavior: QuitBehavior) {
-        UserDefaults.standard.set(behavior.rawValue, forKey: quitBehaviorDefaultsKey)
+    var quitBehaviorPreferenceDescription: String {
+        quitBehaviorPreference.settingsDescription
+    }
+
+    func updateQuitBehaviorPreference(_ preference: QuitBehaviorPreference) {
+        switch preference {
+        case .ask:
+            UserDefaults.standard.removeObject(forKey: quitBehaviorDefaultsKey)
+        case .hide, .quit:
+            UserDefaults.standard.set(preference.rawValue, forKey: quitBehaviorDefaultsKey)
+        }
+
+        NotificationCenter.default.post(name: .snippetsQuitBehaviorChanged, object: nil)
+    }
+
+    @IBAction func resetQuitBehaviorPreference(_ sender: Any?) {
+        guard hasRememberedQuitBehavior else { return }
+        updateQuitBehaviorPreference(.ask)
     }
 
     private func promptForQuitDecision() -> QuitDecision {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "What should Cmd+Q do?"
-        alert.informativeText = "Hide removes Snippets from the Dock and keeps it running in the menu bar. Quit completely stops Snippets."
+        alert.informativeText = "Hide removes Snippets from the Dock and keeps it running in the menu bar. Quit completely stops Snippets. You can reset a remembered choice later in Settings."
         alert.alertStyle = .informational
         let hideButton = alert.addButton(withTitle: "Hide (Keep Running)")
         alert.addButton(withTitle: "Quit Completely")
@@ -411,12 +490,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch response {
         case .alertFirstButtonReturn:
             if shouldRemember {
-                setQuitBehavior(.hide)
+                updateQuitBehaviorPreference(.hide)
             }
             return .hide
         case .alertSecondButtonReturn:
             if shouldRemember {
-                setQuitBehavior(.quit)
+                updateQuitBehaviorPreference(.quit)
             }
             return .quit
         default:

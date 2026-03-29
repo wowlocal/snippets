@@ -74,7 +74,11 @@ extension ViewController {
         menu.addItem(loginItem)
         if (NSApp.delegate as? AppDelegate)?.hasRememberedQuitBehavior == true {
             menu.addItem(.separator())
-            let resetQuitItem = NSMenuItem(title: "Forget Cmd+Q Choice", action: #selector(resetQuitChoice), keyEquivalent: "")
+            let resetQuitItem = NSMenuItem(
+                title: "Reset Remembered Cmd+Q Choice",
+                action: #selector(resetQuitChoice),
+                keyEquivalent: ""
+            )
             menu.addItem(resetQuitItem)
         }
         let location = NSPoint(x: 0, y: sender.bounds.height + 4)
@@ -240,7 +244,7 @@ extension ViewController {
     @objc func resetQuitChoice(_ sender: Any?) {
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
         appDelegate.resetQuitBehaviorPreference(sender)
-        importExportMessage = "Cmd+Q choice reset. You will be asked next time."
+        importExportMessage = "Remembered Cmd+Q choice reset. You will be asked next time."
     }
 
     func performUndo() {
