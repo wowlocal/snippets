@@ -55,7 +55,7 @@ final class ViewController: NSViewController {
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
     let previewSectionStack = NSStackView()
-    let mainSplitView = NSSplitView()
+    let mainSplitView = InvisibleDividerSplitView()
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSVisualEffectView()
