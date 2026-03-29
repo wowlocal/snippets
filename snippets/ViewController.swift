@@ -7,6 +7,11 @@ private enum MainWindowAutosave {
     static let minimumContentSize = NSSize(width: 680, height: 560)
 }
 
+private enum ActionStatusMessage {
+    static let displayDuration: TimeInterval = 4
+    static let fadeDuration: TimeInterval = 0.25
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -28,10 +33,11 @@ final class ViewController: NSViewController {
     var visibleSnippets: [Snippet] = []
     var selectedSnippetID: UUID?
     var isApplyingSnippetToEditor = false
+    private var importExportMessageDismissWorkItem: DispatchWorkItem?
 
     var importExportMessage: String? {
         didSet {
-            importExportMessageLabel.stringValue = importExportMessage ?? ""
+            updateImportExportMessageLabel(from: oldValue, to: importExportMessage)
         }
     }
 
@@ -129,6 +135,7 @@ final class ViewController: NSViewController {
     }
 
     deinit {
+        importExportMessageDismissWorkItem?.cancel()
         if let localKeyMonitor {
             NSEvent.removeMonitor(localKeyMonitor)
         }
@@ -148,6 +155,51 @@ final class ViewController: NSViewController {
             guard let self else { return }
             updatePermissionBanner()
             permissionStatusLabel.stringValue = engine.statusText
+            if shouldPresentEngineStatusMessage(engine.statusText) {
+                importExportMessage = engine.statusText
+            }
         }
+    }
+
+    private func updateImportExportMessageLabel(from oldValue: String?, to newValue: String?) {
+        importExportMessageDismissWorkItem?.cancel()
+        importExportMessageDismissWorkItem = nil
+
+        guard let newValue, !newValue.isEmpty else {
+            importExportMessageLabel.stringValue = ""
+            importExportMessageLabel.alphaValue = 1
+            return
+        }
+
+        importExportMessageLabel.stringValue = newValue
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            importExportMessageLabel.animator().alphaValue = 1
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.importExportMessage == newValue else { return }
+                await NSAnimationContext.runAnimationGroup { context in
+                    context.duration = ActionStatusMessage.fadeDuration
+                    self.importExportMessageLabel.animator().alphaValue = 0
+                }
+                guard self.importExportMessage == newValue else { return }
+                self.importExportMessageDismissWorkItem = nil
+                self.importExportMessage = nil
+            }
+        }
+
+        importExportMessageDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + ActionStatusMessage.displayDuration,
+            execute: workItem
+        )
+    }
+
+    private func shouldPresentEngineStatusMessage(_ message: String) -> Bool {
+        message.hasPrefix("Copied ")
+            || message.hasPrefix("Pasted ")
+            || message.hasPrefix("Expanded ")
     }
 }
