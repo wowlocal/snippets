@@ -177,9 +177,6 @@ extension ViewController {
         headerStack.spacing = 8
         headerStack.alignment = .centerY
 
-        let titleLabel = NSTextField(labelWithString: "Snippets")
-        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
-
         let moreButton = NSButton(image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!, target: self, action: #selector(showMoreMenu(_:)))
         moreButton.bezelStyle = .rounded
         moreButton.isBordered = false
@@ -206,7 +203,6 @@ extension ViewController {
         helpButton.isBordered = false
         helpButton.toolTip = "Keyboard Shortcuts (⌘K)"
 
-        headerStack.addArrangedSubview(titleLabel)
         headerStack.addArrangedSubview(NSView())
         headerStack.addArrangedSubview(helpButton)
         headerStack.addArrangedSubview(moreButton)
