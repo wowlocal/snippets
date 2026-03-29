@@ -67,6 +67,9 @@ final class ViewController: NSViewController {
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSVisualEffectView()
+    let actionShortcutStack = NSStackView()
+    let actionPanelTipLabel = NSTextField(labelWithString: "")
+    var actionShortcutRows: [(view: ActionShortcutRow, isEssential: Bool)] = []
     var hasConfiguredWindowFrameAutosave = false
     var hasRestoredSplitViewDivider = false
 

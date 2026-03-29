@@ -97,6 +97,8 @@ Persistence and sync behavior:
 
 ## Keyboard Shortcuts (Main Window)
 
+The in-app shortcuts panel shows essential shortcuts by default. Hold `Option` while it is open to reveal the full list.
+
 - `Return`: copy selected snippet to clipboard.
 - `Cmd+Return`: paste selected snippet into frontmost app.
 - `Cmd+K`: open/close shortcuts panel.
@@ -104,6 +106,7 @@ Persistence and sync behavior:
 - `Cmd+N`: create snippet.
 - `Cmd+E`: edit selected snippet.
 - `Cmd+D`: duplicate selected snippet.
+- `Cmd+/`: enable/disable selected snippet.
 - `Cmd+.`: pin/unpin selected snippet.
 - `Cmd+Delete`: delete selected snippet.
 - `Cmd+Shift+C`: copy a deep link for the selected snippet.

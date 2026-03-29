@@ -36,11 +36,13 @@ extension ViewController {
 
     func openActionPanel() {
         actionOverlayView.isHidden = false
+        updateActionPanelShortcutVisibility(showAll: currentModifierFlags.contains(.option))
         requestFirstResponder(tableView)
     }
 
     func closeActionPanel() {
         actionOverlayView.isHidden = true
+        updateActionPanelShortcutVisibility(showAll: false)
         requestFirstResponder(tableView)
     }
 
@@ -138,6 +140,17 @@ extension ViewController {
         importExportMessage = isPinned ? "Pinned snippet." : "Unpinned snippet."
 
         reloadVisibleSnippets(keepSelection: true)
+        closeActionPanel()
+    }
+
+    func toggleEnabledSelectedSnippet() {
+        guard let selectedSnippetID else { return }
+        store.toggleEnabled(snippetID: selectedSnippetID)
+
+        let isEnabled = store.snippet(id: selectedSnippetID)?.isEnabled == true
+        importExportMessage = isEnabled ? "Enabled snippet." : "Disabled snippet."
+
+        applySelectedSnippetToEditor()
         closeActionPanel()
     }
 

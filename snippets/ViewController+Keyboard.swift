@@ -4,10 +4,24 @@ import Carbon.HIToolbox
 extension ViewController {
     func installKeyboardMonitorIfNeeded() {
         guard localKeyMonitor == nil else { return }
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
-            return handleKeyEvent(event)
+            switch event.type {
+            case .keyDown:
+                return handleKeyEvent(event)
+            case .flagsChanged:
+                handleModifierFlagsChanged(event)
+                return event
+            default:
+                return event
+            }
         }
+    }
+
+    func handleModifierFlagsChanged(_ event: NSEvent) {
+        guard !actionOverlayView.isHidden else { return }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        updateActionPanelShortcutVisibility(showAll: flags.contains(.option))
     }
 
     func handleKeyEvent(_ event: NSEvent) -> NSEvent? {
@@ -92,6 +106,11 @@ extension ViewController {
             return nil
         }
 
+        if flags == [.command] && key == UInt16(kVK_ANSI_Slash) {
+            toggleEnabledSelectedSnippet()
+            return nil
+        }
+
         if flags == [.command] && key == UInt16(kVK_ANSI_Period) {
             togglePinnedSelectedSnippet()
             return nil
@@ -118,6 +137,11 @@ extension ViewController {
     var isSearchFieldActive: Bool {
         guard let firstResponder = view.window?.firstResponder else { return false }
         return firstResponder === searchField.currentEditor() || firstResponder === searchField
+    }
+
+    var currentModifierFlags: NSEvent.ModifierFlags {
+        let event = view.window?.currentEvent ?? NSApp.currentEvent
+        return event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
     }
 
     var isListContext: Bool {

@@ -120,6 +120,14 @@ final class SnippetStore {
         persist(immediately: true)
     }
 
+    func toggleEnabled(snippetID: UUID) {
+        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
+        pushUndo()
+        snippets[index].isEnabled.toggle()
+        snippets[index].updatedAt = Date()
+        persist(immediately: true)
+    }
+
     func snippet(id: UUID) -> Snippet? {
         snippets.first { $0.id == id }
     }

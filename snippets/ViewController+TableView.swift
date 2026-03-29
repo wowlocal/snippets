@@ -78,6 +78,10 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
             .separator(),
             contextMenuItem(title: "Duplicate Snippet", action: #selector(duplicateSelectedSnippetFromContextMenu(_:))),
             contextMenuItem(
+                title: snippet.isEnabled ? "Disable Snippet" : "Enable Snippet",
+                action: #selector(toggleEnabledSelectedSnippetFromContextMenu(_:))
+            ),
+            contextMenuItem(
                 title: snippet.isPinned ? "Unpin Snippet" : "Pin Snippet",
                 action: #selector(togglePinnedSelectedSnippetFromContextMenu(_:))
             ),
@@ -105,6 +109,10 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func duplicateSelectedSnippetFromContextMenu(_ sender: Any?) {
         duplicateSelectedSnippet()
+    }
+
+    @objc private func toggleEnabledSelectedSnippetFromContextMenu(_ sender: Any?) {
+        toggleEnabledSelectedSnippet()
     }
 
     @objc private func togglePinnedSelectedSnippetFromContextMenu(_ sender: Any?) {

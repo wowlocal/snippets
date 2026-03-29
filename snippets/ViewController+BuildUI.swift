@@ -12,6 +12,36 @@ private enum EditorSurfaceMetrics {
     static let borderWidth: CGFloat = 1
 }
 
+private struct ActionShortcutDescriptor {
+    let title: String
+    let shortcut: String
+    let isEssential: Bool
+}
+
+private enum ActionPanelContent {
+    static let shortcuts: [ActionShortcutDescriptor] = [
+        ActionShortcutDescriptor(title: "Copy Snippet", shortcut: "↩", isEssential: true),
+        ActionShortcutDescriptor(title: "Paste Snippet", shortcut: "⌘↩", isEssential: true),
+        ActionShortcutDescriptor(title: "Search", shortcut: "⌘F", isEssential: true),
+        ActionShortcutDescriptor(title: "Create New Snippet", shortcut: "⌘N", isEssential: true),
+        ActionShortcutDescriptor(title: "Edit Snippet", shortcut: "⌘E", isEssential: true),
+        ActionShortcutDescriptor(title: "Delete Snippet", shortcut: "⌘⌫", isEssential: true),
+        ActionShortcutDescriptor(title: "Copy Share Link", shortcut: "⇧⌘C", isEssential: false),
+        ActionShortcutDescriptor(title: "Duplicate Snippet", shortcut: "⌘D", isEssential: false),
+        ActionShortcutDescriptor(title: "Enable / Disable", shortcut: "⌘/", isEssential: true),
+        ActionShortcutDescriptor(title: "Pin / Unpin", shortcut: "⌘.", isEssential: true),
+        ActionShortcutDescriptor(title: "Import", shortcut: "⇧⌘I", isEssential: false),
+        ActionShortcutDescriptor(title: "Export", shortcut: "⇧⌘E", isEssential: false),
+        ActionShortcutDescriptor(title: "Toggle Shortcuts", shortcut: "⌘K", isEssential: false),
+        ActionShortcutDescriptor(title: "Next Snippet", shortcut: "⌃N", isEssential: false),
+        ActionShortcutDescriptor(title: "Previous Snippet", shortcut: "⌃P", isEssential: false),
+        ActionShortcutDescriptor(title: "Dismiss Panel", shortcut: "esc", isEssential: false)
+    ]
+
+    static let compactTip = "Hold Option for all keybindings. Esc dismisses."
+    static let expandedTip = "Release Option for essentials. Esc dismisses."
+}
+
 extension ViewController {
     func configureEditorSurface(_ view: NSView, backgroundColor: NSColor) {
         view.wantsLayer = true
@@ -520,36 +550,32 @@ extension ViewController {
         actionTitle.font = .actionPanelRoundedSystemFont(ofSize: 18, weight: .semibold)
         actionTitle.alignment = .center
 
-        let tip = NSTextField(labelWithString: "esc to dismiss")
-        tip.font = .systemFont(ofSize: 11, weight: .medium)
-        tip.textColor = .tertiaryLabelColor
-        tip.alignment = .center
+        actionShortcutStack.orientation = .vertical
+        actionShortcutStack.spacing = 2
+        actionShortcutStack.translatesAutoresizingMaskIntoConstraints = false
+        actionShortcutRows = ActionPanelContent.shortcuts.map { descriptor in
+            let row = ActionShortcutRow(title: descriptor.title, shortcut: descriptor.shortcut)
+            actionShortcutStack.addArrangedSubview(row)
+            return (view: row, isEssential: descriptor.isEssential)
+        }
 
-        let actionStack = NSStackView(views: [
-            actionTitle,
-            ActionShortcutRow(title: "Copy Snippet", shortcut: "↩"),
-            ActionShortcutRow(title: "Paste Snippet", shortcut: "⌘↩"),
-            ActionShortcutRow(title: "Copy Share Link", shortcut: "⇧⌘C"),
-            ActionShortcutRow(title: "Edit Snippet", shortcut: "⌘E"),
-            ActionShortcutRow(title: "Duplicate Snippet", shortcut: "⌘D"),
-            ActionShortcutRow(title: "Pin / Unpin", shortcut: "⌘."),
-            ActionShortcutRow(title: "Create New Snippet", shortcut: "⌘N"),
-            ActionShortcutRow(title: "Delete Snippet", shortcut: "⌘⌫"),
-            ActionShortcutRow(title: "Search", shortcut: "⌘F"),
-            ActionShortcutRow(title: "Import", shortcut: "⇧⌘I"),
-            ActionShortcutRow(title: "Export", shortcut: "⇧⌘E"),
-            tip
-        ])
+        actionPanelTipLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        actionPanelTipLabel.textColor = .tertiaryLabelColor
+        actionPanelTipLabel.alignment = .center
+
+        let actionStack = NSStackView(views: [actionTitle, actionShortcutStack, actionPanelTipLabel])
         actionStack.orientation = .vertical
-        actionStack.spacing = 2
+        actionStack.spacing = 8
         actionStack.translatesAutoresizingMaskIntoConstraints = false
 
         actionStack.setCustomSpacing(10, after: actionTitle)
-        actionStack.setCustomSpacing(8, after: actionStack.arrangedSubviews[actionStack.arrangedSubviews.count - 2])
+        actionStack.setCustomSpacing(10, after: actionShortcutStack)
 
-        [actionTitle, tip].forEach {
+        [actionTitle, actionPanelTipLabel].forEach {
             $0.widthAnchor.constraint(equalTo: actionStack.widthAnchor).isActive = true
         }
+
+        updateActionPanelShortcutVisibility(showAll: false)
 
         actionPanelView.addSubview(actionStack)
         actionOverlayView.addSubview(actionPanelView)
@@ -572,6 +598,14 @@ extension ViewController {
             actionStack.topAnchor.constraint(equalTo: actionPanelView.topAnchor, constant: 16),
             actionStack.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor, constant: -12)
         ])
+    }
+
+    func updateActionPanelShortcutVisibility(showAll: Bool) {
+        for shortcutRow in actionShortcutRows {
+            shortcutRow.view.isHidden = !showAll && !shortcutRow.isEssential
+        }
+
+        actionPanelTipLabel.stringValue = showAll ? ActionPanelContent.expandedTip : ActionPanelContent.compactTip
     }
 }
 
