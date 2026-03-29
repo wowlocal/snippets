@@ -177,43 +177,57 @@ extension ViewController {
         headerStack.spacing = 8
         headerStack.alignment = .centerY
 
+        let headerActionsStack = NSStackView()
+        headerActionsStack.orientation = .horizontal
+        headerActionsStack.spacing = 6
+        headerActionsStack.alignment = .centerY
+        headerActionsStack.setContentHuggingPriority(.required, for: .horizontal)
+        headerActionsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         searchField.placeholderString = "Search snippets"
         searchField.delegate = self
         searchField.controlSize = .regular
         searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         searchField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
 
         let moreButton = NSButton(image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!, target: self, action: #selector(showMoreMenu(_:)))
+        moreButton.controlSize = .small
         moreButton.bezelStyle = .rounded
         moreButton.isBordered = false
         moreButton.toolTip = "Import, Export..."
+        moreButton.setContentHuggingPriority(.required, for: .horizontal)
+        moreButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let newButton = NSButton(title: "", target: self, action: #selector(createSnippet))
         let plusConfig = NSImage.SymbolConfiguration(pointSize: NSFont.systemFontSize, weight: .semibold)
             .applying(.init(paletteColors: [.white]))
         newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
             .withSymbolConfiguration(plusConfig)
+        newButton.title = "New"
+        newButton.controlSize = .small
         newButton.imagePosition = .imageLeading
         newButton.imageHugsTitle = true
         newButton.bezelStyle = .rounded
         newButton.bezelColor = .systemBlue
-        newButton.attributedTitle = NSAttributedString(string: "New", attributes: [
-            .foregroundColor: NSColor.white,
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .medium),
-        ])
+        newButton.setContentHuggingPriority(.required, for: .horizontal)
+        newButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         newButton.keyEquivalent = "n"
         newButton.keyEquivalentModifierMask = [.command]
 
         let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: self, action: #selector(toggleActionPanel))
+        helpButton.controlSize = .small
         helpButton.bezelStyle = .rounded
         helpButton.isBordered = false
         helpButton.toolTip = "Keyboard Shortcuts (⌘K)"
+        helpButton.setContentHuggingPriority(.required, for: .horizontal)
+        helpButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         headerStack.addArrangedSubview(searchField)
-        headerStack.addArrangedSubview(helpButton)
-        headerStack.addArrangedSubview(moreButton)
-        headerStack.addArrangedSubview(newButton)
+        headerActionsStack.addArrangedSubview(helpButton)
+        headerActionsStack.addArrangedSubview(moreButton)
+        headerActionsStack.addArrangedSubview(newButton)
+        headerStack.addArrangedSubview(headerActionsStack)
 
         let tableScrollView = NSScrollView()
         tableScrollView.translatesAutoresizingMaskIntoConstraints = false
