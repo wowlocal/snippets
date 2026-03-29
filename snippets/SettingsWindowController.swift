@@ -83,6 +83,19 @@ private final class GeneralSettingsViewController: NSViewController {
     private let selectionSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let resetButton = NSButton(title: "Reset to Ask Every Time", target: nil, action: nil)
+    private let paleThemeCheckbox = NSButton(checkboxWithTitle: "Pale Theme", target: nil, action: nil)
+    private let cliInstallButton = NSButton(title: "Install CLI Tool", target: nil, action: nil)
+    private let cliStatusLabel = NSTextField(wrappingLabelWithString: "")
+
+    private static let cliInstallURL = URL(filePath: "/usr/local/bin/snippets-cli")
+
+    private static var cliBinaryName: String {
+        #if DEBUG
+        "snippets-cli-debug"
+        #else
+        "snippets-cli"
+        #endif
+    }
 
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
@@ -119,15 +132,54 @@ private final class GeneralSettingsViewController: NSViewController {
         resetRow.orientation = .horizontal
         resetRow.alignment = .centerY
 
+        let themeSeparator = NSBox()
+        themeSeparator.boxType = .separator
+
+        let themeIntroLabel = makeSecondaryLabel("Reduce accent colors throughout the interface for a quieter, more muted look.")
+
+        paleThemeCheckbox.target = self
+        paleThemeCheckbox.action = #selector(handlePaleThemeChanged(_:))
+        paleThemeCheckbox.state = ThemeManager.isPaleTheme ? .on : .off
+
+        let paleThemeRow = NSStackView(views: [paleThemeCheckbox, NSView()])
+        paleThemeRow.orientation = .horizontal
+        paleThemeRow.alignment = .centerY
+
+        let cliSeparator = NSBox()
+        cliSeparator.boxType = .separator
+
+        let cliIntroLabel = makeSecondaryLabel("Install snippets-cli to /usr/local/bin so agents and terminal scripts can interact with your snippets.")
+
+        cliInstallButton.target = self
+        cliInstallButton.action = #selector(installCLI)
+
+        cliStatusLabel.font = .systemFont(ofSize: 12)
+        cliStatusLabel.textColor = .secondaryLabelColor
+
+        let cliRow = NSStackView(views: [cliInstallButton, NSView()])
+        cliRow.orientation = .horizontal
+        cliRow.alignment = .centerY
+
         stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(behaviorRow)
         stack.addArrangedSubview(selectionSummaryLabel)
         stack.addArrangedSubview(promptSummaryLabel)
         stack.addArrangedSubview(resetRow)
+        stack.addArrangedSubview(themeSeparator)
+        stack.addArrangedSubview(themeIntroLabel)
+        stack.addArrangedSubview(paleThemeRow)
+        stack.addArrangedSubview(cliSeparator)
+        stack.addArrangedSubview(cliIntroLabel)
+        stack.addArrangedSubview(cliRow)
+        stack.addArrangedSubview(cliStatusLabel)
 
         behaviorRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         selectionSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         promptSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        themeSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        cliSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        cliIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        cliStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         configureQuitBehaviorPopup()
         reloadFromStorage()
@@ -156,12 +208,90 @@ private final class GeneralSettingsViewController: NSViewController {
         selectionSummaryLabel.stringValue = appDelegate.quitBehaviorPreferenceDescription
 
         if appDelegate.hasRememberedQuitBehavior {
-            promptSummaryLabel.stringValue = "A remembered Cmd+Q preference is active. Choose “Ask Every Time” or use the reset button if you want the dialog back."
+            promptSummaryLabel.stringValue = "A remembered Cmd+Q preference is active. Choose \u{201C}Ask Every Time\u{201D} or use the reset button if you want the dialog back."
         } else {
             promptSummaryLabel.stringValue = "Snippets will show the Cmd+Q choice dialog until you select a remembered behavior."
         }
 
         resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
+        updateCLIStatus()
+    }
+
+    private func updateCLIStatus() {
+        let installURL = Self.cliInstallURL
+        let fm = FileManager.default
+
+        guard let cliSourceURL = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent(Self.cliBinaryName)
+        else {
+            cliInstallButton.isEnabled = false
+            cliStatusLabel.stringValue = "snippets-cli not found in app bundle."
+            return
+        }
+
+        cliInstallButton.isEnabled = true
+
+        let destExists = fm.fileExists(atPath: installURL.path)
+        let pointsHere: Bool = {
+            guard let dest = try? fm.destinationOfSymbolicLink(atPath: installURL.path) else { return false }
+            return dest == cliSourceURL.path
+        }()
+
+        if destExists && pointsHere {
+            cliInstallButton.title = "Reinstall CLI Tool"
+            cliStatusLabel.stringValue = "Installed at \(installURL.path)"
+        } else if destExists {
+            cliInstallButton.title = "Install CLI Tool"
+            cliStatusLabel.stringValue = "\(installURL.path) exists but points elsewhere. Clicking install will replace it."
+        } else {
+            cliInstallButton.title = "Install CLI Tool"
+            cliStatusLabel.stringValue = "Not installed."
+        }
+    }
+
+    @objc private func installCLI() {
+        guard let cliSourceURL = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent(Self.cliBinaryName)
+        else {
+            cliStatusLabel.stringValue = "Could not locate snippets-cli inside the app bundle."
+            return
+        }
+
+        let installURL = Self.cliInstallURL
+        let fm = FileManager.default
+
+        do {
+            let binDir = installURL.deletingLastPathComponent()
+            if !fm.fileExists(atPath: binDir.path) {
+                try fm.createDirectory(at: binDir, withIntermediateDirectories: true)
+            }
+            if fm.fileExists(atPath: installURL.path) {
+                try fm.removeItem(at: installURL)
+            }
+            try fm.createSymbolicLink(at: installURL, withDestinationURL: cliSourceURL)
+            updateCLIStatus()
+        } catch {
+            installCLIWithPrivileges(source: cliSourceURL, destination: installURL)
+        }
+    }
+
+    private func installCLIWithPrivileges(source: URL, destination: URL) {
+        let src = source.path.replacingOccurrences(of: "'", with: "'\\''")
+        let dst = destination.path.replacingOccurrences(of: "'", with: "'\\''")
+        let dir = destination.deletingLastPathComponent().path.replacingOccurrences(of: "'", with: "'\\''")
+        let script = "do shell script \"mkdir -p '\(dir)' && ln -sf '\(src)' '\(dst)'\" with administrator privileges"
+
+        var appleScriptError: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&appleScriptError)
+
+        if let errDict = appleScriptError {
+            let msg = errDict[NSAppleScript.errorMessage] as? String ?? "unknown error"
+            cliStatusLabel.stringValue = "Installation failed: \(msg)"
+        } else {
+            updateCLIStatus()
+        }
     }
 
     @objc private func handleQuitBehaviorChanged(_ sender: NSPopUpButton) {
@@ -182,6 +312,10 @@ private final class GeneralSettingsViewController: NSViewController {
 
     @objc private func handleExternalQuitBehaviorChange() {
         reloadFromStorage()
+    }
+
+    @objc private func handlePaleThemeChanged(_ sender: NSButton) {
+        ThemeManager.isPaleTheme = sender.state == .on
     }
 
     private func configureQuitBehaviorPopup() {

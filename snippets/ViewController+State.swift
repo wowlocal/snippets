@@ -9,9 +9,9 @@ extension ViewController {
             permissionBannerContainer.isHidden = false
             permissionBannerDivider.isHidden = false
             permissionIconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
-            permissionIconView.contentTintColor = .systemOrange
+            permissionIconView.contentTintColor = ThemeManager.alertColor
             permissionTitleLabel.stringValue = "Permissions Required"
-            permissionTitleLabel.textColor = .systemOrange
+            permissionTitleLabel.textColor = ThemeManager.alertColor
             permissionButtonsStack.isHidden = false
             permissionStatusLabel.stringValue = engine.statusText
         }
@@ -169,6 +169,7 @@ extension ViewController {
     func updatePreview(withTemplate template: String) {
         let rendered = PlaceholderResolver.resolve(template: template)
         let hasDynamicContent = !template.isEmpty && rendered != template
+        previewSeparator.isHidden = !hasDynamicContent
         previewSectionStack.isHidden = !hasDynamicContent
         previewValueField.stringValue = rendered
     }

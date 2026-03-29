@@ -49,6 +49,7 @@ final class ViewController: NSViewController {
     let permissionButtonsStack = NSStackView()
 
     let searchField = NSSearchField()
+    let newButton = NSButton(title: "New", target: nil, action: nil)
     let tableView = SnippetListTableView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     let importExportMessageLabel = NSTextField(labelWithString: "")
@@ -60,6 +61,7 @@ final class ViewController: NSViewController {
     let keywordWarningLabel = NSTextField(labelWithString: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
+    let previewSeparator = NSBox()
     let previewSectionStack = NSStackView()
     let mainSplitView = InvisibleDividerSplitView()
 
@@ -84,6 +86,12 @@ final class ViewController: NSViewController {
             self,
             selector: #selector(handleToggleActionsNotification),
             name: .snippetsToggleActions,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePaleThemeChanged),
+            name: .snippetsPaleThemeChanged,
             object: nil
         )
 
@@ -201,5 +209,34 @@ final class ViewController: NSViewController {
         message.hasPrefix("Copied ")
             || message.hasPrefix("Pasted ")
             || message.hasPrefix("Expanded ")
+    }
+
+    @objc private func handlePaleThemeChanged() {
+        applyThemeColors()
+        tableView.reloadData()
+    }
+
+    func applyThemeColors() {
+        if ThemeManager.isPaleTheme {
+            newButton.bezelColor = nil
+            newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+
+            enabledCheckbox.wantsLayer = true
+            if let filter = CIFilter(name: "CIColorControls") {
+                filter.setValue(0.0, forKey: kCIInputSaturationKey)
+                enabledCheckbox.layer?.filters = [filter]
+            }
+        } else {
+            let plusConfig = NSImage.SymbolConfiguration(pointSize: NSFont.systemFontSize, weight: .semibold)
+                .applying(.init(paletteColors: [.white]))
+            newButton.bezelColor = .systemBlue
+            newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
+                .withSymbolConfiguration(plusConfig)
+
+            enabledCheckbox.wantsLayer = true
+            enabledCheckbox.layer?.filters = nil
+        }
+        keywordWarningLabel.textColor = ThemeManager.alertColor
+        updatePermissionBanner()
     }
 }

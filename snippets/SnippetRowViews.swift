@@ -49,7 +49,6 @@ final class SnippetRowCellView: NSTableCellView {
 
         pinView.translatesAutoresizingMaskIntoConstraints = false
         pinView.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: nil)
-        pinView.contentTintColor = .systemYellow
         pinView.symbolConfiguration = .init(pointSize: 10, weight: .regular)
         NSLayoutConstraint.activate([
             pinView.widthAnchor.constraint(equalToConstant: 10),
@@ -106,10 +105,11 @@ final class SnippetRowCellView: NSTableCellView {
         if snippet.isPinned {
             dotView.isHidden = true
             pinView.isHidden = false
+            pinView.contentTintColor = ThemeManager.pinColor
         } else {
             dotView.isHidden = false
             pinView.isHidden = true
-            dotView.color = snippet.isEnabled ? .systemGreen : .secondaryLabelColor
+            dotView.color = snippet.isEnabled ? ThemeManager.snippetDotColor : .secondaryLabelColor
         }
 
         applyTextColors()

@@ -7,7 +7,21 @@ private enum MainLayoutMetrics {
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
 }
 
+private enum EditorSurfaceMetrics {
+    static let cornerRadius: CGFloat = 8
+    static let borderWidth: CGFloat = 1
+}
+
 extension ViewController {
+    func configureEditorSurface(_ view: NSView, backgroundColor: NSColor) {
+        view.wantsLayer = true
+        view.layer?.cornerRadius = EditorSurfaceMetrics.cornerRadius
+        view.layer?.borderWidth = EditorSurfaceMetrics.borderWidth
+        view.layer?.borderColor = NSColor.separatorColor.cgColor
+        view.layer?.backgroundColor = backgroundColor.cgColor
+        view.layer?.masksToBounds = true
+    }
+
     func buildUI() {
         let rootView = NSView()
         rootView.translatesAutoresizingMaskIntoConstraints = false
@@ -199,21 +213,22 @@ extension ViewController {
         moreButton.setContentHuggingPriority(.required, for: .horizontal)
         moreButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let newButton = NSButton(title: "", target: self, action: #selector(createSnippet))
+        newButton.target = self
+        newButton.action = #selector(createSnippet)
         let plusConfig = NSImage.SymbolConfiguration(pointSize: NSFont.systemFontSize, weight: .semibold)
             .applying(.init(paletteColors: [.white]))
         newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
             .withSymbolConfiguration(plusConfig)
-        newButton.title = "New"
         newButton.controlSize = .small
         newButton.imagePosition = .imageLeading
         newButton.imageHugsTitle = true
         newButton.bezelStyle = .rounded
-        newButton.bezelColor = .systemBlue
+        newButton.bezelColor = ThemeManager.newButtonBezelColor
         newButton.setContentHuggingPriority(.required, for: .horizontal)
         newButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         newButton.keyEquivalent = "n"
         newButton.keyEquivalentModifierMask = [.command]
+        applyThemeColors()
 
         let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: self, action: #selector(toggleActionPanel))
         helpButton.controlSize = .small
@@ -326,16 +341,21 @@ extension ViewController {
         snippetLabel.textColor = .secondaryLabelColor
         snippetLabel.alignment = .left
 
+        let snippetContainer = NSView()
+        snippetContainer.translatesAutoresizingMaskIntoConstraints = false
+        configureEditorSurface(snippetContainer, backgroundColor: .textBackgroundColor)
+
         let snippetScrollView = NSScrollView()
         snippetScrollView.translatesAutoresizingMaskIntoConstraints = false
         snippetScrollView.hasVerticalScroller = true
-        snippetScrollView.borderType = .bezelBorder
+        snippetScrollView.borderType = .noBorder
+        snippetScrollView.drawsBackground = false
         snippetScrollView.scrollerStyle = .overlay
 
         snippetTextView.delegate = self
         snippetTextView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         snippetTextView.textColor = .textColor
-        snippetTextView.backgroundColor = .textBackgroundColor
+        snippetTextView.drawsBackground = false
         snippetTextView.isRichText = false
         snippetTextView.isAutomaticQuoteSubstitutionEnabled = false
         snippetTextView.isAutomaticTextReplacementEnabled = false
@@ -349,7 +369,15 @@ extension ViewController {
         snippetTextView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
 
         snippetScrollView.documentView = snippetTextView
-        snippetScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        snippetContainer.addSubview(snippetScrollView)
+        snippetContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+
+        NSLayoutConstraint.activate([
+            snippetScrollView.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
+            snippetScrollView.trailingAnchor.constraint(equalTo: snippetContainer.trailingAnchor),
+            snippetScrollView.topAnchor.constraint(equalTo: snippetContainer.topAnchor),
+            snippetScrollView.bottomAnchor.constraint(equalTo: snippetContainer.bottomAnchor)
+        ])
 
         let placeholderLabel = NSTextField(labelWithString: "Dynamic placeholders: {clipboard}, {date}, {time}, {datetime}, {date:yyyy-MM-dd}")
         placeholderLabel.font = .systemFont(ofSize: 12)
@@ -371,7 +399,7 @@ extension ViewController {
         keywordField.controlSize = .large
 
         keywordWarningLabel.font = .systemFont(ofSize: 12)
-        keywordWarningLabel.textColor = .systemOrange
+        keywordWarningLabel.textColor = ThemeManager.alertColor
         keywordWarningLabel.alignment = .left
         keywordWarningLabel.isHidden = true
 
@@ -386,11 +414,7 @@ extension ViewController {
 
         let previewContainer = NSView()
         previewContainer.translatesAutoresizingMaskIntoConstraints = false
-        previewContainer.wantsLayer = true
-        previewContainer.layer?.cornerRadius = 8
-        previewContainer.layer?.borderWidth = 1
-        previewContainer.layer?.borderColor = NSColor.separatorColor.cgColor
-        previewContainer.layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.08).cgColor
+        configureEditorSurface(previewContainer, backgroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.08))
 
         previewValueField.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
         previewValueField.lineBreakMode = .byWordWrapping
@@ -407,12 +431,13 @@ extension ViewController {
             previewValueField.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor, constant: -8)
         ])
 
-        let separator = NSBox()
-        separator.boxType = .separator
+        previewSeparator.boxType = .separator
+        previewSeparator.isHidden = true
 
         previewSectionStack.orientation = .vertical
         previewSectionStack.spacing = 8
         previewSectionStack.alignment = .leading
+        previewSectionStack.isHidden = true
         previewSectionStack.addArrangedSubview(previewLabel)
         previewSectionStack.addArrangedSubview(previewContainer)
         previewContainer.widthAnchor.constraint(equalTo: previewSectionStack.widthAnchor).isActive = true
@@ -429,15 +454,15 @@ extension ViewController {
         stack.addArrangedSubview(keywordWarningLabel)
         stack.addArrangedSubview(enabledCheckbox)
         stack.addArrangedSubview(snippetLabel)
-        stack.addArrangedSubview(snippetScrollView)
+        stack.addArrangedSubview(snippetContainer)
         stack.addArrangedSubview(placeholderLabel)
-        stack.addArrangedSubview(separator)
+        stack.addArrangedSubview(previewSeparator)
         stack.addArrangedSubview(previewSectionStack)
 
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, keywordRow, keywordWarningLabel, snippetScrollView, placeholderLabel, separator, previewSectionStack].forEach {
+        [nameField, keywordRow, keywordWarningLabel, snippetContainer, placeholderLabel, previewSeparator, previewSectionStack].forEach {
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
@@ -450,7 +475,7 @@ extension ViewController {
         stack.setCustomSpacing(8, after: keywordLabel)
         stack.setCustomSpacing(4, after: keywordRow)
         stack.setCustomSpacing(10, after: snippetLabel)
-        stack.setCustomSpacing(8, after: separator)
+        stack.setCustomSpacing(8, after: previewSeparator)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),

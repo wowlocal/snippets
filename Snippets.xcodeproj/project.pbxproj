@@ -8,10 +8,41 @@
 
 /* Begin PBXBuildFile section */
 		270SPK012F53000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 270SPK022F53000000000002 /* Sparkle */; };
+		27C110052F53000000000005 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110022F53000000000002 /* main.swift */; };
+		27C110062F53000000000006 /* Snippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110032F53000000000003 /* Snippet.swift */; };
+		27C110072F53000000000007 /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110042F53000000000004 /* FuzzyMatch.swift */; };
+		27C110122F53000000000012 /* snippets-cli in CopyFiles */ = {isa = PBXBuildFile; fileRef = 27C110012F53000000000001 /* snippets-cli */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		27C1100F2F5300000000000F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 272782CF2F41F9F1000B9989 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 27C1100A2F5300000000000A;
+			remoteInfo = "snippets-cli";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		27C110112F53000000000011 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				27C110122F53000000000012 /* snippets-cli in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Snippets.app; path = "Snippets Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		27C110012F53000000000001 /* snippets-cli */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; name = "snippets-cli"; path = "snippets-cli-debug"; sourceTree = BUILT_PRODUCTS_DIR; };
+		27C110022F53000000000002 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		27C110032F53000000000003 /* Snippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Snippet.swift; path = ../snippets/Snippet.swift; sourceTree = "<group>"; };
+		27C110042F53000000000004 /* FuzzyMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FuzzyMatch.swift; path = ../snippets/FuzzyMatch.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +62,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		27C110092F53000000000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				272782D92F41F9F1000B9989 /* snippets */,
+				27C1100E2F5300000000000E /* snippets-cli */,
 				272782D82F41F9F1000B9989 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,8 +85,19 @@
 			isa = PBXGroup;
 			children = (
 				272782D72F41F9F1000B9989 /* Snippets.app */,
+				27C110012F53000000000001 /* snippets-cli */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		27C1100E2F5300000000000E /* snippets-cli */ = {
+			isa = PBXGroup;
+			children = (
+				27C110022F53000000000002 /* main.swift */,
+				27C110032F53000000000003 /* Snippet.swift */,
+				27C110042F53000000000004 /* FuzzyMatch.swift */,
+			);
+			path = "snippets-cli";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -60,10 +110,12 @@
 				272782D32F41F9F1000B9989 /* Sources */,
 				272782D42F41F9F1000B9989 /* Frameworks */,
 				272782D52F41F9F1000B9989 /* Resources */,
+				27C110112F53000000000011 /* CopyFiles */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				27C110102F53000000000010 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				272782D92F41F9F1000B9989 /* snippets */,
@@ -76,6 +128,22 @@
 			productReference = 272782D72F41F9F1000B9989 /* Snippets.app */;
 			productType = "com.apple.product-type.application";
 		};
+		27C1100A2F5300000000000A /* snippets-cli */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 27C1100D2F5300000000000D /* Build configuration list for PBXNativeTarget "snippets-cli" */;
+			buildPhases = (
+				27C110082F53000000000008 /* Sources */,
+				27C110092F53000000000009 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "snippets-cli";
+			productName = "snippets-cli";
+			productReference = 27C110012F53000000000001 /* snippets-cli */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -87,6 +155,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					272782D62F41F9F1000B9989 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					27C1100A2F5300000000000A = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -109,6 +180,7 @@
 			projectRoot = "";
 			targets = (
 				272782D62F41F9F1000B9989 /* Snippets */,
+				27C1100A2F5300000000000A /* snippets-cli */,
 			);
 		};
 /* End PBXProject section */
@@ -131,7 +203,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		27C110082F53000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				27C110052F53000000000005 /* main.swift in Sources */,
+				27C110062F53000000000006 /* Snippet.swift in Sources */,
+				27C110072F53000000000007 /* FuzzyMatch.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		27C110102F53000000000010 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 27C1100A2F5300000000000A /* snippets-cli */;
+			targetProxy = 27C1100F2F5300000000000F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		272782E32F41F9F2000B9989 /* Debug */ = {
@@ -328,6 +418,37 @@
 			};
 			name = Release;
 		};
+		27C1100B2F5300000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)-debug";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		27C1100C2F5300000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -345,6 +466,15 @@
 			buildConfigurations = (
 				272782E62F41F9F2000B9989 /* Debug */,
 				272782E72F41F9F2000B9989 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		27C1100D2F5300000000000D /* Build configuration list for PBXNativeTarget "snippets-cli" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				27C1100B2F5300000000000B /* Debug */,
+				27C1100C2F5300000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
