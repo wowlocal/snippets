@@ -7,6 +7,31 @@ source common.sh
 
 ARCHIVE_PATH="archives/Snippets-NoUpdate.xcarchive"
 APP_PATH="exported-apps/Snippets.app"
+PACKAGE_RESOLVED="$PROJECT_DIR/Snippets.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+PBXPROJ_BAK="$PBXPROJ.bak"
+PACKAGE_RESOLVED_BAK="$PACKAGE_RESOLVED.bak"
+PACKAGE_RESOLVED_EXISTED=0
+PATCH_STATE_RESTORED=0
+
+function restore_release_project_state() {
+    if [ "$PATCH_STATE_RESTORED" -eq 1 ]; then
+        return
+    fi
+
+    if [ -f "$PBXPROJ_BAK" ]; then
+        mv "$PBXPROJ_BAK" "$PBXPROJ"
+        echo "Restored project.pbxproj"
+    fi
+
+    if [ -f "$PACKAGE_RESOLVED_BAK" ]; then
+        mv "$PACKAGE_RESOLVED_BAK" "$PACKAGE_RESOLVED"
+        echo "Restored Package.resolved"
+    elif [ "$PACKAGE_RESOLVED_EXISTED" -eq 0 ] && [ -f "$PACKAGE_RESOLVED" ]; then
+        rm -f "$PACKAGE_RESOLVED"
+    fi
+
+    PATCH_STATE_RESTORED=1
+}
 
 # Read current version (no bump)
 APP_VERSION=$(read_version)
@@ -31,8 +56,12 @@ orange_text
 echo "Step 1/6: Patching project (remove Sparkle, add NO_SPARKLE)..."
 normal_text
 
-cp "$PBXPROJ" "$PBXPROJ.bak"
-trap 'if [ -f "$PBXPROJ.bak" ]; then mv "$PBXPROJ.bak" "$PBXPROJ"; echo "Restored project.pbxproj"; fi' EXIT
+cp "$PBXPROJ" "$PBXPROJ_BAK"
+if [ -f "$PACKAGE_RESOLVED" ]; then
+    PACKAGE_RESOLVED_EXISTED=1
+    cp "$PACKAGE_RESOLVED" "$PACKAGE_RESOLVED_BAK"
+fi
+trap restore_release_project_state EXIT
 
 # Remove all lines referencing Sparkle object IDs (single-line references)
 sed -i '' '/270SPK012F53000000000001/d' "$PBXPROJ"
@@ -74,11 +103,12 @@ normal_text
 rm -rf "$ARCHIVE_PATH"
 archive_app "$ARCHIVE_PATH"
 
-# Restore pbxproj immediately after archive
-mv "$PBXPROJ.bak" "$PBXPROJ"
+# Restore project files immediately after archive
+restore_release_project_state
+trap - EXIT
 
 green_text
-echo "Archived to $ARCHIVE_PATH (project restored)"
+echo "Archived to $ARCHIVE_PATH (project files restored)"
 normal_text
 
 # Step 3: Export
