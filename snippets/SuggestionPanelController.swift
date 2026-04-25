@@ -39,7 +39,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         guard let visibleFrame = screen?.visibleFrame else { return 8 }
 
-        // Keep some margin so the panel doesn’t try to fill the whole screen.
+        // Keep some margin so the panel doesn't try to fill the whole screen.
         let maxHeight = visibleFrame.height * 0.5
 
         let spacing = tableView.intercellSpacing.height
@@ -51,7 +51,6 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         return max(1, Int(floor(usable / perRow)))
     }
-
 
     var onSelect: ((Snippet) -> Void)?
     var onDismiss: (() -> Void)?

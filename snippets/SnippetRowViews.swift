@@ -129,21 +129,99 @@ final class SnippetRowCellView: NSTableCellView {
 }
 
 final class SnippetTableRowView: NSTableRowView {
+    private var hoverTrackingArea: NSTrackingArea?
+    private var isHovering = false {
+        didSet {
+            if oldValue != isHovering {
+                needsDisplay = true
+            }
+        }
+    }
+
     override var isEmphasized: Bool {
         get { false }
         set {}
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+
+        let nextTrackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(nextTrackingArea)
+        hoverTrackingArea = nextTrackingArea
+
+        syncHoverWithMouseLocation()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        isHovering = false
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovering = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovering = false
+    }
+
+    private func syncHoverWithMouseLocation() {
+        guard let window, window.isKeyWindow else {
+            isHovering = false
+            return
+        }
+        let mouseInWindow = window.mouseLocationOutsideOfEventStream
+        let mouseInView = convert(mouseInWindow, from: nil)
+        isHovering = bounds.contains(mouseInView)
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+
+        guard isHovering, !isSelected else { return }
+
+        let hoverRect = bounds.insetBy(dx: 5, dy: 1)
+        let path = NSBezierPath(
+            roundedRect: hoverRect,
+            xRadius: LiquidGlassDesign.Metrics.rowCornerRadius,
+            yRadius: LiquidGlassDesign.Metrics.rowCornerRadius
+        )
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let color = isDark
+            ? NSColor.white.withAlphaComponent(0.055)
+            : NSColor.black.withAlphaComponent(0.035)
+        color.setFill()
+        path.fill()
+    }
+
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
 
-        let selectionRect = bounds.insetBy(dx: 4, dy: 1)
-        let path = NSBezierPath(roundedRect: selectionRect, xRadius: 8, yRadius: 8)
+        let selectionRect = bounds.insetBy(dx: 5, dy: 1)
+        let path = NSBezierPath(
+            roundedRect: selectionRect,
+            xRadius: LiquidGlassDesign.Metrics.rowCornerRadius,
+            yRadius: LiquidGlassDesign.Metrics.rowCornerRadius
+        )
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let color = isDark
-            ? NSColor.white.withAlphaComponent(0.10)
-            : NSColor.black.withAlphaComponent(0.06)
+            ? NSColor.white.withAlphaComponent(0.13)
+            : NSColor.controlAccentColor.withAlphaComponent(0.11)
         color.setFill()
         path.fill()
+
+        NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16).setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 }

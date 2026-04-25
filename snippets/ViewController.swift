@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 private enum MainWindowAutosave {
     static let frameName = NSWindow.FrameAutosaveName("SnippetsMainWindowFrame")
-    static let minimumContentSize = NSSize(width: 680, height: 560)
+    static let relaxedMinimumContentSize = NSSize(width: 1, height: 1)
 }
 
 private enum ActionStatusMessage {
@@ -49,7 +49,6 @@ final class ViewController: NSViewController {
     let permissionButtonsStack = NSStackView()
 
     let searchField = NSSearchField()
-    let newButton = NSButton(title: "New", target: nil, action: nil)
     let tableView = SnippetListTableView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     let importExportMessageLabel = NSTextField(labelWithString: "")
@@ -63,14 +62,24 @@ final class ViewController: NSViewController {
     let previewValueField = NSTextField(wrappingLabelWithString: "")
     let previewSeparator = NSBox()
     let previewSectionStack = NSStackView()
-    let mainSplitView = InvisibleDividerSplitView()
+    let mainSplitViewController = NSSplitViewController()
+    var mainSplitView: NSSplitView { mainSplitViewController.splitView }
+    var mainSidebarSplitItem: NSSplitViewItem?
+    var mainContentSplitItem: NSSplitViewItem?
 
     let actionOverlayView = ActionOverlayView()
-    let actionPanelView = NSVisualEffectView()
+    let actionPanelView = NSView()
     let actionShortcutStack = NSStackView()
     let actionPanelTipLabel = NSTextField(labelWithString: "")
     var actionShortcutRows: [(view: ActionShortcutRow, isEssential: Bool)] = []
+    let searchSuggestionOverlayView = SearchSuggestionOverlayView()
+    var searchSuggestionLeadingConstraint: NSLayoutConstraint?
+    var searchSuggestionTopConstraint: NSLayoutConstraint?
+    var searchSuggestionWidthConstraint: NSLayoutConstraint?
+    var searchSuggestionHeightConstraint: NSLayoutConstraint?
+    var searchSuggestionClickMonitor: Any?
     var hasConfiguredWindowFrameAutosave = false
+    var hasConfiguredMainWindowToolbar = false
     var hasRestoredSplitViewDivider = false
 
     override func viewDidLoad() {
@@ -111,9 +120,8 @@ final class ViewController: NSViewController {
         super.viewDidAppear()
 
         if let window = view.window {
-            window.title = "Snippets"
-            window.contentMinSize = MainWindowAutosave.minimumContentSize
-            window.minSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: MainWindowAutosave.minimumContentSize)).size
+            configureMainWindowChrome(window)
+            relaxWindowResizeLimits(window)
 
             if !hasConfiguredWindowFrameAutosave {
                 hasConfiguredWindowFrameAutosave = true
@@ -121,13 +129,6 @@ final class ViewController: NSViewController {
                 if !restoredFromAutosave {
                     window.center()
                 }
-            }
-
-            if window.frame.width < window.minSize.width || window.frame.height < window.minSize.height {
-                var frame = window.frame
-                frame.size.width = max(frame.size.width, window.minSize.width)
-                frame.size.height = max(frame.size.height, window.minSize.height)
-                window.setFrame(frame, display: false)
             }
         }
 
@@ -142,13 +143,21 @@ final class ViewController: NSViewController {
 
     override func viewDidLayout() {
         super.viewDidLayout()
+        if let window = view.window {
+            relaxWindowResizeLimits(window)
+        }
         restoreMainSplitViewDividerIfNeeded()
+        updateSnippetTextViewWrappingWidth()
+        updateSearchSuggestionOverlayLayout()
     }
 
     deinit {
         importExportMessageDismissWorkItem?.cancel()
         if let localKeyMonitor {
             NSEvent.removeMonitor(localKeyMonitor)
+        }
+        if let searchSuggestionClickMonitor {
+            NSEvent.removeMonitor(searchSuggestionClickMonitor)
         }
         NotificationCenter.default.removeObserver(self)
     }
@@ -170,6 +179,13 @@ final class ViewController: NSViewController {
                 importExportMessage = engine.statusText
             }
         }
+    }
+
+    private func relaxWindowResizeLimits(_ window: NSWindow) {
+        window.contentMinSize = MainWindowAutosave.relaxedMinimumContentSize
+        window.minSize = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: MainWindowAutosave.relaxedMinimumContentSize)
+        ).size
     }
 
     private func updateImportExportMessageLabel(from oldValue: String?, to newValue: String?) {
@@ -220,18 +236,14 @@ final class ViewController: NSViewController {
     }
 
     func applyThemeColors() {
-        if ThemeManager.isPaleTheme {
-            newButton.bezelColor = nil
-            newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
-        } else {
-            let plusConfig = NSImage.SymbolConfiguration(pointSize: NSFont.systemFontSize, weight: .semibold)
-                .applying(.init(paletteColors: [.white]))
-            newButton.bezelColor = .systemBlue
-            newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
-                .withSymbolConfiguration(plusConfig)
-        }
         ThemeManager.applyToggleAppearance(to: enabledCheckbox)
         keywordWarningLabel.textColor = ThemeManager.alertColor
         updatePermissionBanner()
+
+        if let window = view.window, hasConfiguredMainWindowToolbar {
+            hasConfiguredMainWindowToolbar = false
+            window.toolbar = nil
+            configureMainWindowChrome(window)
+        }
     }
 }

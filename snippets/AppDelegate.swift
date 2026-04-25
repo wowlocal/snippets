@@ -266,14 +266,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let menu = NSMenu()
         let openItem = NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: "")
         openItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("macwindow", to: openItem)
         let resetQuitBehaviorItem = NSMenuItem(
             title: "Reset Remembered Cmd+Q Choice",
             action: #selector(resetQuitBehaviorPreference(_:)),
             keyEquivalent: ""
         )
         resetQuitBehaviorItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("arrow.uturn.backward", to: resetQuitBehaviorItem)
         let quitItem = NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: "")
         quitItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("power", to: quitItem)
 
         menu.addItem(openItem)
         menu.addItem(.separator())

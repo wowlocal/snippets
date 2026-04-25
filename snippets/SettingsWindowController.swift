@@ -10,12 +10,14 @@ final class SettingsWindowController: NSWindowController {
         window.title = "Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.setContentSize(NSSize(width: 720, height: 480))
-        window.minSize = NSSize(width: 720, height: 480)
+        window.contentMinSize = NSSize(width: 1, height: 1)
+        window.minSize = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 1, height: 1)).size
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.titleVisibility = .hidden
         if #available(macOS 11.0, *) {
             window.toolbarStyle = .preference
+            window.titlebarSeparatorStyle = .none
         }
 
         super.init(window: window)
@@ -121,6 +123,7 @@ private final class GeneralSettingsViewController: NSViewController {
 
         resetButton.target = self
         resetButton.action = #selector(resetQuitBehavior)
+        LiquidGlassDesign.configureActionButton(resetButton, symbolName: "arrow.counterclockwise")
 
         let resetRow = NSStackView(views: [resetButton, NSView()])
         resetRow.orientation = .horizontal
@@ -146,6 +149,7 @@ private final class GeneralSettingsViewController: NSViewController {
 
         cliInstallButton.target = self
         cliInstallButton.action = #selector(installCLI)
+        LiquidGlassDesign.configureActionButton(cliInstallButton, symbolName: "terminal")
 
         cliStatusLabel.font = .systemFont(ofSize: 12)
         cliStatusLabel.textColor = .secondaryLabelColor
@@ -381,9 +385,11 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
 
         let scrollView = NSScrollView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.borderType = .bezelBorder
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
 
         let appColumn = NSTableColumn(identifier: ColumnID.app)
         appColumn.title = "App"
@@ -398,11 +404,15 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         tableView.addTableColumn(appColumn)
         tableView.addTableColumn(bundleIDColumn)
         tableView.headerView = NSTableHeaderView()
-        tableView.usesAlternatingRowBackgroundColors = true
-        tableView.rowHeight = 28
+        tableView.usesAlternatingRowBackgroundColors = false
+        tableView.backgroundColor = .clear
+        tableView.rowHeight = 32
         tableView.allowsEmptySelection = true
         tableView.delegate = self
         tableView.dataSource = self
+        if #available(macOS 11.0, *) {
+            tableView.style = .inset
+        }
         scrollView.documentView = tableView
 
         let addAppButton = NSButton(title: "Add App...", target: self, action: #selector(addApp))
@@ -411,6 +421,20 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         removeButton.action = #selector(removeSelected)
         clearButton.target = self
         clearButton.action = #selector(clearAll)
+        LiquidGlassDesign.configureActionButton(addAppButton, symbolName: "app.badge")
+        LiquidGlassDesign.configureActionButton(addBundleIDButton, symbolName: "plus.square")
+        LiquidGlassDesign.configureActionButton(removeButton, symbolName: "minus.circle")
+        LiquidGlassDesign.configureActionButton(clearButton, symbolName: "trash")
+
+        let tableSurface = NSView()
+        tableSurface.translatesAutoresizingMaskIntoConstraints = false
+        LiquidGlassDesign.configureRoundedLayer(
+            tableSurface,
+            cornerRadius: LiquidGlassDesign.Metrics.contentCornerRadius,
+            borderColor: NSColor.separatorColor.withAlphaComponent(0.18),
+            backgroundColor: NSColor.controlBackgroundColor.withAlphaComponent(0.16)
+        )
+        tableSurface.addSubview(scrollView)
 
         let buttonRow = NSStackView(views: [addAppButton, addBundleIDButton, NSView(), removeButton, clearButton])
         buttonRow.orientation = .horizontal
@@ -424,12 +448,20 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(builtInLabel)
         stack.addArrangedSubview(countLabel)
-        stack.addArrangedSubview(scrollView)
+        stack.addArrangedSubview(tableSurface)
         stack.addArrangedSubview(buttonRow)
         stack.addArrangedSubview(statusLabel)
 
-        scrollView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+        tableSurface.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        let preferredTableHeight = tableSurface.heightAnchor.constraint(greaterThanOrEqualToConstant: 300)
+        preferredTableHeight.priority = .defaultLow
+        preferredTableHeight.isActive = true
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: tableSurface.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: tableSurface.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: tableSurface.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: tableSurface.bottomAnchor)
+        ])
         buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
@@ -683,12 +715,14 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
 private func makeSettingsPane() -> (NSView, NSStackView) {
     let rootView = NSView()
     rootView.translatesAutoresizingMaskIntoConstraints = false
+    rootView.wantsLayer = true
+    rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
 
     let stack = NSStackView()
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.distribution = .fill
-    stack.spacing = 12
+    stack.spacing = 14
     stack.translatesAutoresizingMaskIntoConstraints = false
     stack.setHuggingPriority(.required, for: .vertical)
     stack.setContentCompressionResistancePriority(.required, for: .vertical)

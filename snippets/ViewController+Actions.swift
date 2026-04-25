@@ -26,6 +26,54 @@ extension ViewController {
         }
     }
 
+    @objc func toggleSidebarAnimated(_ sender: Any?) {
+        guard let sidebarItem = mainSidebarSplitItem else { return }
+        let willCollapse = !sidebarItem.isCollapsed
+        let shouldMoveFocusAfterCollapse = willCollapse && shouldMoveFocusAfterCollapsingSidebar()
+        storeSidebarCollapsedState(isCollapsed: willCollapse)
+        hideSearchSuggestionOverlay()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            sidebarItem.animator().isCollapsed.toggle()
+        } completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.view.layoutSubtreeIfNeeded()
+                self?.storeSidebarCollapsedState(isCollapsed: willCollapse)
+                self?.restoreMainSplitViewDividerIfNeeded()
+                self?.updateSnippetTextViewWrappingWidth()
+                self?.hideSearchSuggestionOverlay()
+                if shouldMoveFocusAfterCollapse {
+                    self?.focusEditorAfterCollapsingSidebar()
+                }
+            }
+        }
+    }
+
+    private func shouldMoveFocusAfterCollapsingSidebar() -> Bool {
+        if isSearchFieldActive {
+            return true
+        }
+
+        guard let firstResponder = view.window?.firstResponder else {
+            return true
+        }
+
+        return firstResponder === tableView
+            || firstResponder === tableView.enclosingScrollView
+            || firstResponder === tableView.currentEditor()
+    }
+
+    private func focusEditorAfterCollapsingSidebar() {
+        guard let window = view.window else { return }
+
+        let target: NSResponder = selectedSnippetID == nil ? view : snippetTextView
+        window.makeFirstResponder(target)
+        hideSearchSuggestionOverlay()
+    }
+
     @objc func toggleActionPanel() {
         if actionOverlayView.isHidden {
             openActionPanel()
@@ -59,32 +107,60 @@ extension ViewController {
     }
 
     @objc func showMoreMenu(_ sender: NSButton) {
+        let menu = makeMoreMenu()
+        let location = NSPoint(x: 0, y: sender.bounds.height + 4)
+        menu.popUp(positioning: nil, at: location, in: sender)
+    }
+
+    func makeMoreMenu() -> NSMenu {
         let menu = NSMenu()
-        let importItem = NSMenuItem(title: "Import...", action: #selector(runImport), keyEquivalent: "I")
+        let importItem = LiquidGlassDesign.menuItem(
+            title: "Import...",
+            symbolName: "square.and.arrow.down",
+            action: #selector(runImport),
+            target: self
+        )
         importItem.keyEquivalentModifierMask = [.command, .shift]
-        let exportItem = NSMenuItem(title: "Export...", action: #selector(runExport), keyEquivalent: "E")
+        importItem.keyEquivalent = "I"
+
+        let exportItem = LiquidGlassDesign.menuItem(
+            title: "Export...",
+            symbolName: "square.and.arrow.up",
+            action: #selector(runExport),
+            target: self
+        )
         exportItem.keyEquivalentModifierMask = [.command, .shift]
-        let shareItem = NSMenuItem(title: "Copy Share Link", action: #selector(copySelectedSnippetShareLink), keyEquivalent: "C")
+        exportItem.keyEquivalent = "E"
+
+        let shareItem = LiquidGlassDesign.menuItem(
+            title: "Copy Share Link",
+            symbolName: "link",
+            action: #selector(copySelectedSnippetShareLink),
+            target: self
+        )
         shareItem.keyEquivalentModifierMask = [.command, .shift]
+        shareItem.keyEquivalent = "C"
         shareItem.isEnabled = selectedSnippet != nil
         menu.addItem(importItem)
         menu.addItem(exportItem)
         menu.addItem(shareItem)
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem.target = self
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        LiquidGlassDesign.applyMenuSymbol("power", to: loginItem)
         menu.addItem(loginItem)
         if (NSApp.delegate as? AppDelegate)?.hasRememberedQuitBehavior == true {
             menu.addItem(.separator())
-            let resetQuitItem = NSMenuItem(
+            let resetQuitItem = LiquidGlassDesign.menuItem(
                 title: "Reset Remembered Cmd+Q Choice",
+                symbolName: "arrow.uturn.backward",
                 action: #selector(resetQuitChoice),
-                keyEquivalent: ""
+                target: self
             )
             menu.addItem(resetQuitItem)
         }
-        let location = NSPoint(x: 0, y: sender.bounds.height + 4)
-        menu.popUp(positioning: nil, at: location, in: sender)
+        return menu
     }
 
     @objc func handleCreateNewNotification() {
