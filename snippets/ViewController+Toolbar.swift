@@ -122,10 +122,14 @@ extension ViewController: NSToolbarDelegate {
                 action: #selector(showMoreMenu(_:))
             )
             button.toolTip = item.toolTip
-            button.frame = NSRect(x: 0, y: 0, width: 34, height: 28)
-            LiquidGlassDesign.configureToolbarIconButton(button, bordered: true)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.isBordered = true
+            button.imagePosition = .imageOnly
+            button.bezelStyle = .circular
+            button.setContentHuggingPriority(.required, for: .horizontal)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
             NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 34),
+                button.widthAnchor.constraint(equalToConstant: 28),
                 button.heightAnchor.constraint(equalToConstant: 28)
             ])
             item.view = button
