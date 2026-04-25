@@ -587,7 +587,7 @@ extension ViewController {
             containing: panelContentView,
             cornerRadius: LiquidGlassDesign.Metrics.panelCornerRadius,
             fallbackMaterial: .popover,
-            tintColor: LiquidGlassDesign.subtleTintColor
+			tintColor: NSColor.darkGray.withAlphaComponent(0.1)
         )
 
         actionPanelView.addSubview(actionSurface)
