@@ -1,9 +1,9 @@
 import AppKit
 
 private enum MainLayoutMetrics {
-    static let sidebarMinWidth: CGFloat = 150
-    static let sidebarMaxWidth: CGFloat = 300
-    static let sidebarPreferredFraction: CGFloat = 0.26
+    static let sidebarMinWidth: CGFloat = 180
+    static let sidebarMaxWidth: CGFloat = 520
+    static let sidebarPreferredFraction: CGFloat = 0.28
     static let editorMinWidth: CGFloat = 1
     static let editorComfortWidth: CGFloat = 520
     static let editorHorizontalPadding: CGFloat = 24
@@ -97,44 +97,50 @@ extension ViewController {
         buildActionOverlay(in: rootView)
     }
 
-    func configureMainSplitViewController() {
-        guard mainSplitViewController.splitViewItems.isEmpty else { return }
+	func configureMainSplitViewController() {
+		guard mainSplitViewController.splitViewItems.isEmpty else { return }
 
-        let managedSplitView = NSSplitView()
-        managedSplitView.isVertical = true
-        managedSplitView.dividerStyle = .thin
-        managedSplitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
-        mainSplitViewController.splitView = managedSplitView
-        mainSplitViewController.minimumThicknessForInlineSidebars = MainLayoutMetrics.minimumInlineSidebarWidth
+		let managedSplitView = NSSplitView()
+		managedSplitView.isVertical = true
+		managedSplitView.dividerStyle = .thin
+		managedSplitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
 
-        let sidebarController = NSViewController()
-        sidebarController.view = buildSidebar()
+		mainSplitViewController.splitView = managedSplitView
 
-        let editorController = NSViewController()
-        editorController.view = buildEditor()
+		// Either remove this while debugging, or set it lower.
+		mainSplitViewController.minimumThicknessForInlineSidebars = 300
 
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
-        sidebarItem.minimumThickness = MainLayoutMetrics.sidebarMinWidth
-        sidebarItem.maximumThickness = MainLayoutMetrics.sidebarMaxWidth
-        sidebarItem.preferredThicknessFraction = MainLayoutMetrics.sidebarPreferredFraction
-        sidebarItem.holdingPriority = .defaultHigh
-        if #available(macOS 11.0, *) {
-            sidebarItem.allowsFullHeightLayout = true
-            sidebarItem.titlebarSeparatorStyle = .none
-        }
+		let sidebarController = NSViewController()
+		sidebarController.view = buildSidebar()
 
-        let contentItem = NSSplitViewItem(viewController: editorController)
-        contentItem.minimumThickness = MainLayoutMetrics.editorMinWidth
-        contentItem.holdingPriority = .defaultLow
-        if #available(macOS 26.0, *) {
-            contentItem.automaticallyAdjustsSafeAreaInsets = false
-        }
+		let editorController = NSViewController()
+		editorController.view = buildEditor()
 
-        mainSplitViewController.addSplitViewItem(sidebarItem)
-        mainSplitViewController.addSplitViewItem(contentItem)
-        mainSidebarSplitItem = sidebarItem
-        mainContentSplitItem = contentItem
-    }
+		let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
+		sidebarItem.minimumThickness = MainLayoutMetrics.sidebarMinWidth
+		sidebarItem.maximumThickness = MainLayoutMetrics.sidebarMaxWidth
+		sidebarItem.preferredThicknessFraction = MainLayoutMetrics.sidebarPreferredFraction
+		sidebarItem.canCollapse = true
+
+		if #available(macOS 11.0, *) {
+			sidebarItem.allowsFullHeightLayout = true
+			sidebarItem.titlebarSeparatorStyle = .none
+		}
+
+		let contentItem = NSSplitViewItem(viewController: editorController)
+		contentItem.minimumThickness = 320
+		contentItem.holdingPriority = .defaultLow
+
+		if #available(macOS 26.0, *) {
+			contentItem.automaticallyAdjustsSafeAreaInsets = true
+		}
+
+		mainSplitViewController.addSplitViewItem(sidebarItem)
+		mainSplitViewController.addSplitViewItem(contentItem)
+
+		mainSidebarSplitItem = sidebarItem
+		mainContentSplitItem = contentItem
+	}
 
     @objc
     func handleMainSplitViewDidResize(_ notification: Notification) {
