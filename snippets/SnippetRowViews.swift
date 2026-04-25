@@ -158,6 +158,13 @@ final class SnippetTableRowView: NSTableRowView {
         )
         addTrackingArea(nextTrackingArea)
         hoverTrackingArea = nextTrackingArea
+
+        syncHoverWithMouseLocation()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        isHovering = false
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -166,6 +173,16 @@ final class SnippetTableRowView: NSTableRowView {
 
     override func mouseExited(with event: NSEvent) {
         isHovering = false
+    }
+
+    private func syncHoverWithMouseLocation() {
+        guard let window, window.isKeyWindow else {
+            isHovering = false
+            return
+        }
+        let mouseInWindow = window.mouseLocationOutsideOfEventStream
+        let mouseInView = convert(mouseInWindow, from: nil)
+        isHovering = bounds.contains(mouseInView)
     }
 
     override func drawBackground(in dirtyRect: NSRect) {
