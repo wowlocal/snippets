@@ -4,10 +4,10 @@ private enum MainLayoutMetrics {
     static let sidebarMinWidth: CGFloat = 180
     static let sidebarMaxWidth: CGFloat = 520
     static let sidebarPreferredFraction: CGFloat = 0.28
-    static let editorMinWidth: CGFloat = 1
+    static let editorMinWidth: CGFloat = 320
     static let editorComfortWidth: CGFloat = 520
     static let editorHorizontalPadding: CGFloat = 24
-    static let minimumInlineSidebarWidth: CGFloat = 520
+    static let minimumInlineSidebarWidth: CGFloat = 300
     static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
 }
@@ -97,54 +97,54 @@ extension ViewController {
         buildActionOverlay(in: rootView)
     }
 
-	func configureMainSplitViewController() {
-		guard mainSplitViewController.splitViewItems.isEmpty else { return }
+    func configureMainSplitViewController() {
+        guard mainSplitViewController.splitViewItems.isEmpty else { return }
 
-		let managedSplitView = NSSplitView()
-		managedSplitView.isVertical = true
-		managedSplitView.dividerStyle = .thin
-		managedSplitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
+        let managedSplitView = NSSplitView()
+        managedSplitView.isVertical = true
+        managedSplitView.dividerStyle = .thin
+        managedSplitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
 
-		mainSplitViewController.splitView = managedSplitView
+        mainSplitViewController.splitView = managedSplitView
+        mainSplitViewController.minimumThicknessForInlineSidebars = MainLayoutMetrics.minimumInlineSidebarWidth
 
-		// Either remove this while debugging, or set it lower.
-		mainSplitViewController.minimumThicknessForInlineSidebars = 300
+        let sidebarController = NSViewController()
+        sidebarController.view = buildSidebar()
 
-		let sidebarController = NSViewController()
-		sidebarController.view = buildSidebar()
+        let editorController = NSViewController()
+        editorController.view = buildEditor()
 
-		let editorController = NSViewController()
-		editorController.view = buildEditor()
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
+        sidebarItem.minimumThickness = MainLayoutMetrics.sidebarMinWidth
+        sidebarItem.maximumThickness = MainLayoutMetrics.sidebarMaxWidth
+        sidebarItem.preferredThicknessFraction = MainLayoutMetrics.sidebarPreferredFraction
+        sidebarItem.canCollapse = true
 
-		let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
-		sidebarItem.minimumThickness = MainLayoutMetrics.sidebarMinWidth
-		sidebarItem.maximumThickness = MainLayoutMetrics.sidebarMaxWidth
-		sidebarItem.preferredThicknessFraction = MainLayoutMetrics.sidebarPreferredFraction
-		sidebarItem.canCollapse = true
+        if #available(macOS 11.0, *) {
+            sidebarItem.allowsFullHeightLayout = true
+            sidebarItem.titlebarSeparatorStyle = .none
+        }
 
-		if #available(macOS 11.0, *) {
-			sidebarItem.allowsFullHeightLayout = true
-			sidebarItem.titlebarSeparatorStyle = .none
-		}
+        let contentItem = NSSplitViewItem(viewController: editorController)
+        contentItem.minimumThickness = MainLayoutMetrics.editorMinWidth
+        contentItem.holdingPriority = .defaultLow
 
-		let contentItem = NSSplitViewItem(viewController: editorController)
-		contentItem.minimumThickness = 320
-		contentItem.holdingPriority = .defaultLow
+        if #available(macOS 26.0, *) {
+            contentItem.automaticallyAdjustsSafeAreaInsets = true
+        }
 
-		if #available(macOS 26.0, *) {
-			contentItem.automaticallyAdjustsSafeAreaInsets = true
-		}
+        mainSplitViewController.addSplitViewItem(sidebarItem)
+        mainSplitViewController.addSplitViewItem(contentItem)
 
-		mainSplitViewController.addSplitViewItem(sidebarItem)
-		mainSplitViewController.addSplitViewItem(contentItem)
-
-		mainSidebarSplitItem = sidebarItem
-		mainContentSplitItem = contentItem
-	}
+        mainSidebarSplitItem = sidebarItem
+        mainContentSplitItem = contentItem
+    }
 
     @objc
     func handleMainSplitViewDidResize(_ notification: Notification) {
         guard mainSplitView.subviews.count >= 2 else { return }
+
+        updateSnippetTextViewWrappingWidth()
 
         let position = mainSplitView.subviews[0].frame.width
         guard position.isFinite, position > 0 else { return }
@@ -169,6 +169,25 @@ extension ViewController {
         mainSplitView.setPosition(clampedPosition, ofDividerAt: 0)
 
         hasRestoredSplitViewDivider = true
+    }
+
+    func updateSnippetTextViewWrappingWidth() {
+        guard let scrollView = snippetTextView.enclosingScrollView else { return }
+
+        let availableWidth = scrollView.contentView.bounds.width
+        guard availableWidth.isFinite, availableWidth > 0 else { return }
+        guard abs(snippetTextView.frame.width - availableWidth) > 0.5 else { return }
+
+        let availableHeight = max(snippetTextView.frame.height, scrollView.contentView.bounds.height)
+        snippetTextView.setFrameSize(NSSize(width: availableWidth, height: availableHeight))
+
+        if let textContainer = snippetTextView.textContainer {
+            textContainer.widthTracksTextView = true
+            textContainer.containerSize = NSSize(width: availableWidth, height: CGFloat.greatestFiniteMagnitude)
+            let fullRange = NSRange(location: 0, length: snippetTextView.string.utf16.count)
+            snippetTextView.layoutManager?.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+            snippetTextView.layoutManager?.ensureLayout(for: textContainer)
+        }
     }
 
     func clampedSidebarWidth(in splitView: NSSplitView, proposedWidth: CGFloat) -> CGFloat {
@@ -513,7 +532,6 @@ extension ViewController {
             equalTo: contentView.widthAnchor,
             constant: -(MainLayoutMetrics.editorHorizontalPadding * 2)
         )
-        preferredEditorWidth.priority = .defaultHigh
         preferredEditorWidth.isActive = true
 
         stack.setCustomSpacing(8, after: nameLabel)
@@ -523,8 +541,8 @@ extension ViewController {
         stack.setCustomSpacing(8, after: previewSeparator)
 
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 

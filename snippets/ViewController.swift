@@ -141,6 +141,7 @@ final class ViewController: NSViewController {
             relaxWindowResizeLimits(window)
         }
         restoreMainSplitViewDividerIfNeeded()
+        updateSnippetTextViewWrappingWidth()
     }
 
     deinit {

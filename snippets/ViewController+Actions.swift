@@ -33,6 +33,11 @@ extension ViewController {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             context.allowsImplicitAnimation = true
             sidebarItem.animator().isCollapsed.toggle()
+        } completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.view.layoutSubtreeIfNeeded()
+                self?.updateSnippetTextViewWrappingWidth()
+            }
         }
     }
 
