@@ -2,12 +2,11 @@ import AppKit
 
 private enum MainLayoutMetrics {
     static let sidebarMinWidth: CGFloat = 1
-    static let sidebarMaxWidth: CGFloat = 360
+    static let sidebarMaxWidth: CGFloat = .greatestFiniteMagnitude
     static let sidebarPreferredFraction: CGFloat = 0.26
     static let editorMinWidth: CGFloat = 1
     static let editorComfortWidth: CGFloat = 520
     static let editorHorizontalPadding: CGFloat = 24
-    static let editorMaxFormWidth: CGFloat = 760
     static let minimumInlineSidebarWidth: CGFloat = 520
     static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
@@ -510,7 +509,6 @@ extension ViewController {
         )
         preferredEditorWidth.priority = .defaultHigh
         preferredEditorWidth.isActive = true
-        stack.widthAnchor.constraint(lessThanOrEqualToConstant: MainLayoutMetrics.editorMaxFormWidth).isActive = true
 
         stack.setCustomSpacing(8, after: nameLabel)
         stack.setCustomSpacing(8, after: keywordLabel)
