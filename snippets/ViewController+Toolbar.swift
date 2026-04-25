@@ -15,7 +15,7 @@ extension ViewController: NSToolbarDelegate {
     func configureMainWindowChrome(_ window: NSWindow) {
         window.title = "Snippets"
         window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
 
         if #available(macOS 11.0, *) {
             window.toolbarStyle = .unified
