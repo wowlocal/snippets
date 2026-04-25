@@ -4,7 +4,7 @@ private enum MainLayoutMetrics {
     static let sidebarMinWidth: CGFloat = 260
     static let sidebarMaxWidth: CGFloat = 520
     static let sidebarPreferredFraction: CGFloat = 0.28
-    static let editorMinWidth: CGFloat = 320
+    static let editorMinWidth: CGFloat = 230
     static let editorComfortWidth: CGFloat = 520
     static let editorHorizontalPadding: CGFloat = 24
     static let minimumInlineSidebarWidth: CGFloat = 300
