@@ -26,6 +26,16 @@ extension ViewController {
         }
     }
 
+    @objc func toggleSidebarAnimated(_ sender: Any?) {
+        guard let sidebarItem = mainSidebarSplitItem else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            sidebarItem.animator().isCollapsed.toggle()
+        }
+    }
+
     @objc func toggleActionPanel() {
         if actionOverlayView.isHidden {
             openActionPanel()

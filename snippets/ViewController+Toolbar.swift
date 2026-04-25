@@ -40,10 +40,11 @@ extension ViewController: NSToolbarDelegate {
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
             .toggleSidebar,
-            .sidebarTrackingSeparator,
+            .flexibleSpace,
             .snippetsSearch,
             .snippetsShortcuts,
             .snippetsMore,
+            .flexibleSpace,
             .snippetsNew
         ]
     }
@@ -73,8 +74,8 @@ extension ViewController: NSToolbarDelegate {
             item.paletteLabel = "Toggle Sidebar"
             item.toolTip = "Toggle Sidebar"
             item.image = LiquidGlassDesign.symbol("sidebar.leading", pointSize: 16)
-            item.target = mainSplitViewController
-            item.action = #selector(NSSplitViewController.toggleSidebar(_:))
+            item.target = self
+            item.action = #selector(toggleSidebarAnimated(_:))
             LiquidGlassDesign.configureSecondaryToolbarItem(item)
             item.visibilityPriority = .standard
             return item
@@ -93,7 +94,7 @@ extension ViewController: NSToolbarDelegate {
             item.paletteLabel = "Search Snippets"
             item.toolTip = "Search Snippets"
             item.searchField = searchField
-            item.preferredWidthForSearchField = 160
+            item.preferredWidthForSearchField = 220
             item.visibilityPriority = .low
             return item
 
