@@ -56,6 +56,7 @@ extension ViewController {
 
         syncTableSelectionWithSelectedSnippet()
         deleteButton.isEnabled = selectedSnippetID != nil
+        updateSearchSuggestionOverlay()
     }
 
     func syncTableSelectionWithSelectedSnippet() {

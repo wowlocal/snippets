@@ -72,6 +72,12 @@ final class ViewController: NSViewController {
     let actionShortcutStack = NSStackView()
     let actionPanelTipLabel = NSTextField(labelWithString: "")
     var actionShortcutRows: [(view: ActionShortcutRow, isEssential: Bool)] = []
+    let searchSuggestionOverlayView = SearchSuggestionOverlayView()
+    var searchSuggestionLeadingConstraint: NSLayoutConstraint?
+    var searchSuggestionTopConstraint: NSLayoutConstraint?
+    var searchSuggestionWidthConstraint: NSLayoutConstraint?
+    var searchSuggestionHeightConstraint: NSLayoutConstraint?
+    var searchSuggestionClickMonitor: Any?
     var hasConfiguredWindowFrameAutosave = false
     var hasConfiguredMainWindowToolbar = false
     var hasRestoredSplitViewDivider = false
@@ -142,12 +148,16 @@ final class ViewController: NSViewController {
         }
         restoreMainSplitViewDividerIfNeeded()
         updateSnippetTextViewWrappingWidth()
+        updateSearchSuggestionOverlayLayout()
     }
 
     deinit {
         importExportMessageDismissWorkItem?.cancel()
         if let localKeyMonitor {
             NSEvent.removeMonitor(localKeyMonitor)
+        }
+        if let searchSuggestionClickMonitor {
+            NSEvent.removeMonitor(searchSuggestionClickMonitor)
         }
         NotificationCenter.default.removeObserver(self)
     }

@@ -36,6 +36,8 @@ extension ViewController {
         if key == UInt16(kVK_Escape) {
             if !actionOverlayView.isHidden {
                 closeActionPanel()
+            } else if isSearchSuggestionOverlayVisible {
+                hideSearchSuggestionOverlay()
             } else {
                 requestFirstResponder(tableView)
             }
@@ -52,13 +54,19 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && key == UInt16(kVK_ANSI_F) {
-            requestFirstResponder(searchField)
+        if flags == [.command] && key == UInt16(kVK_ANSI_B) {
+            toggleSidebarAnimated(nil)
             return nil
         }
 
-        if isSearchFieldActive {
-            return event
+        if flags == [.command] && key == UInt16(kVK_ANSI_F) {
+            requestFirstResponder(searchField)
+            updateSearchSuggestionOverlay()
+            return nil
+        }
+
+        if isSearchFieldActive && handleSearchSuggestionKeyEvent(event) {
+            return nil
         }
 
         if flags == [.command] && key == UInt16(kVK_ANSI_K) {
@@ -114,6 +122,10 @@ extension ViewController {
         if flags == [.command] && key == UInt16(kVK_ANSI_Period) {
             togglePinnedSelectedSnippet()
             return nil
+        }
+
+        if isSearchFieldActive {
+            return event
         }
 
         if flags == [.control] && key == UInt16(kVK_ANSI_N) && isListContext {

@@ -42,8 +42,8 @@ extension ViewController: NSToolbarDelegate {
             .toggleSidebar,
             .flexibleSpace,
             .snippetsSearch,
-            .snippetsShortcuts,
             .snippetsMore,
+            .snippetsShortcuts,
             .flexibleSpace,
             .snippetsNew
         ]
@@ -72,7 +72,7 @@ extension ViewController: NSToolbarDelegate {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Sidebar"
             item.paletteLabel = "Toggle Sidebar"
-            item.toolTip = "Toggle Sidebar"
+            item.toolTip = "Toggle Sidebar (Command-B)"
             item.image = LiquidGlassDesign.symbol("sidebar.leading", pointSize: 16)
             item.target = self
             item.action = #selector(toggleSidebarAnimated(_:))

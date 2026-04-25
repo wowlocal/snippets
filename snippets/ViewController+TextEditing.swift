@@ -9,6 +9,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
             if selectedSnippetID == nil, let firstID = visibleSnippets.first?.id {
                 selectSnippet(id: firstID, focusEditorName: false)
             }
+            updateSearchSuggestionOverlay()
             return
         }
 
@@ -20,5 +21,21 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
     func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView, textView === snippetTextView else { return }
         updateSelectedSnippetFromEditor()
+    }
+
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        guard obj.object as? NSTextField == searchField else { return }
+        updateSearchSuggestionOverlay()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard obj.object as? NSTextField == searchField else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if !searchSuggestionOverlayView.containsFirstResponder(in: view.window) {
+                hideSearchSuggestionOverlay()
+            }
+        }
     }
 }

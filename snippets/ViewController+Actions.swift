@@ -28,6 +28,11 @@ extension ViewController {
 
     @objc func toggleSidebarAnimated(_ sender: Any?) {
         guard let sidebarItem = mainSidebarSplitItem else { return }
+        let willCollapse = !sidebarItem.isCollapsed
+        let shouldMoveFocusAfterCollapse = willCollapse && shouldMoveFocusAfterCollapsingSidebar()
+        storeSidebarCollapsedState(isCollapsed: willCollapse)
+        hideSearchSuggestionOverlay()
+
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -36,9 +41,37 @@ extension ViewController {
         } completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.view.layoutSubtreeIfNeeded()
+                self?.storeSidebarCollapsedState(isCollapsed: willCollapse)
+                self?.restoreMainSplitViewDividerIfNeeded()
                 self?.updateSnippetTextViewWrappingWidth()
+                self?.hideSearchSuggestionOverlay()
+                if shouldMoveFocusAfterCollapse {
+                    self?.focusEditorAfterCollapsingSidebar()
+                }
             }
         }
+    }
+
+    private func shouldMoveFocusAfterCollapsingSidebar() -> Bool {
+        if isSearchFieldActive {
+            return true
+        }
+
+        guard let firstResponder = view.window?.firstResponder else {
+            return true
+        }
+
+        return firstResponder === tableView
+            || firstResponder === tableView.enclosingScrollView
+            || firstResponder === tableView.currentEditor()
+    }
+
+    private func focusEditorAfterCollapsingSidebar() {
+        guard let window = view.window else { return }
+
+        let target: NSResponder = selectedSnippetID == nil ? view : snippetTextView
+        window.makeFirstResponder(target)
+        hideSearchSuggestionOverlay()
     }
 
     @objc func toggleActionPanel() {

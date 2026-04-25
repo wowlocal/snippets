@@ -10,6 +10,7 @@ private enum MainLayoutMetrics {
     static let minimumInlineSidebarWidth: CGFloat = 300
     static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
+    static let sidebarCollapsedDefaultsKey = "SnippetsMainSidebarCollapsed"
 }
 
 private struct ActionShortcutDescriptor {
@@ -23,6 +24,7 @@ private enum ActionPanelContent {
         ActionShortcutDescriptor(title: "Copy Snippet", shortcut: "↩", isEssential: true),
         ActionShortcutDescriptor(title: "Paste Snippet", shortcut: "⌘↩", isEssential: true),
         ActionShortcutDescriptor(title: "Search", shortcut: "⌘F", isEssential: true),
+        ActionShortcutDescriptor(title: "Toggle Sidebar", shortcut: "⌘B", isEssential: true),
         ActionShortcutDescriptor(title: "Create New Snippet", shortcut: "⌘N", isEssential: true),
         ActionShortcutDescriptor(title: "Edit Snippet", shortcut: "⌘E", isEssential: true),
         ActionShortcutDescriptor(title: "Delete Snippet", shortcut: "⌘⌫", isEssential: true),
@@ -94,6 +96,7 @@ extension ViewController {
             rootStack.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
         ])
 
+        buildSearchSuggestionOverlay(in: rootView)
         buildActionOverlay(in: rootView)
     }
 
@@ -138,6 +141,7 @@ extension ViewController {
 
         mainSidebarSplitItem = sidebarItem
         mainContentSplitItem = contentItem
+        sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
     }
 
     @objc
@@ -145,6 +149,12 @@ extension ViewController {
         guard mainSplitView.subviews.count >= 2 else { return }
 
         updateSnippetTextViewWrappingWidth()
+        if isSearchSuggestionOverlayVisible {
+            updateSearchSuggestionOverlay()
+        }
+        storeSidebarCollapsedState(isCollapsed: isSidebarCollapsed)
+
+        guard !isSidebarCollapsed else { return }
 
         let position = mainSplitView.subviews[0].frame.width
         guard position.isFinite, position > 0 else { return }
@@ -155,6 +165,7 @@ extension ViewController {
     func restoreMainSplitViewDividerIfNeeded() {
         guard !hasRestoredSplitViewDivider else { return }
         guard mainSplitView.subviews.count >= 2 else { return }
+        guard !isSidebarCollapsed else { return }
 
         let storedPosition = UserDefaults.standard.double(forKey: MainLayoutMetrics.splitViewDividerPositionDefaultsKey)
         guard storedPosition > 0 else {
@@ -169,6 +180,10 @@ extension ViewController {
         mainSplitView.setPosition(clampedPosition, ofDividerAt: 0)
 
         hasRestoredSplitViewDivider = true
+    }
+
+    func storeSidebarCollapsedState(isCollapsed: Bool) {
+        UserDefaults.standard.set(isCollapsed, forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
     }
 
     func updateSnippetTextViewWrappingWidth() {
