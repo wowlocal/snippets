@@ -4,24 +4,27 @@ struct FuzzyMatch {
     struct Result {
         let score: Int
         let matched: Bool
+        let matchedRanges: [NSRange]
     }
 
     static func score(query: String, target: String) -> Result {
-        let query = Array(query.lowercased())
-        let target = Array(target.lowercased())
+        let query = query.lowercased().map(String.init)
+        let targetCharacters = Array(target)
+        let targetIndices = Array(target.indices)
 
-        guard !query.isEmpty else { return Result(score: 0, matched: true) }
-        guard !target.isEmpty else { return Result(score: 0, matched: false) }
+        guard !query.isEmpty else { return Result(score: 0, matched: true, matchedRanges: []) }
+        guard !targetCharacters.isEmpty else { return Result(score: 0, matched: false, matchedRanges: []) }
 
         var score = 0
         var queryIndex = 0
         var consecutive = 0
         var previousMatchIndex = -2
+        var matchedRanges: [NSRange] = []
 
-        for (targetIndex, char) in target.enumerated() {
+        for (targetIndex, char) in targetCharacters.enumerated() {
             guard queryIndex < query.count else { break }
 
-            if char == query[queryIndex] {
+            if String(char).lowercased() == query[queryIndex] {
                 score += 1
 
                 // Consecutive match bonus
@@ -33,7 +36,7 @@ struct FuzzyMatch {
                 }
 
                 // Start-of-word bonus
-                if targetIndex == 0 || !target[targetIndex - 1].isLetter {
+                if targetIndex == 0 || !targetCharacters[targetIndex - 1].isLetter {
                     score += 3
                 }
 
@@ -41,6 +44,10 @@ struct FuzzyMatch {
                 if queryIndex == 0 && targetIndex == 0 {
                     score += 5
                 }
+
+                let rangeStart = targetIndices[targetIndex]
+                let rangeEnd = target.index(after: rangeStart)
+                matchedRanges.append(NSRange(rangeStart..<rangeEnd, in: target))
 
                 previousMatchIndex = targetIndex
                 queryIndex += 1
@@ -50,6 +57,10 @@ struct FuzzyMatch {
         }
 
         let matched = queryIndex == query.count
-        return Result(score: matched ? score : 0, matched: matched)
+        return Result(
+            score: matched ? score : 0,
+            matched: matched,
+            matchedRanges: matched ? matchedRanges : []
+        )
     }
 }

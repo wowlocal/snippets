@@ -3,6 +3,20 @@ import AppKit
 struct SuggestionItem {
     let snippet: Snippet
     let score: Int
+    let nameMatchRanges: [NSRange]
+    let keywordMatchRanges: [NSRange]
+
+    init(
+        snippet: Snippet,
+        score: Int,
+        nameMatchRanges: [NSRange] = [],
+        keywordMatchRanges: [NSRange] = []
+    ) {
+        self.snippet = snippet
+        self.score = score
+        self.nameMatchRanges = nameMatchRanges
+        self.keywordMatchRanges = keywordMatchRanges
+    }
 }
 
 @MainActor
@@ -12,8 +26,10 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private let scrollView: NSScrollView
     private(set) var items: [SuggestionItem] = []
     private let maxVisible = 8
-    private let rowHeight: CGFloat = 36
+    private let singleLineRowHeight: CGFloat = 46
+    private let wrappedNameRowHeight: CGFloat = 62
     private let panelWidth: CGFloat = 280
+    private let horizontalCellPadding: CGFloat = 20
 
     private var maxVisibleRowsOnScreen: Int {
         let anchorPoint = anchorRect.map { NSPoint(x: $0.midX, y: $0.midY) }
@@ -27,7 +43,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         let maxHeight = visibleFrame.height * 0.5
 
         let spacing = tableView.intercellSpacing.height
-        let perRow = rowHeight + spacing
+        let perRow = wrappedNameRowHeight + spacing
 
         // Subtract scroll insets.
         let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
@@ -73,7 +89,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
         tableView.intercellSpacing = NSSize(width: 0, height: 2)
-        tableView.rowHeight = 36
+        tableView.rowHeight = singleLineRowHeight
         tableView.focusRingType = .none
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("SuggestionColumn"))
@@ -559,53 +575,117 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
 
         let item = items[row]
-        cell.configure(name: item.snippet.displayName, keyword: item.snippet.normalizedKeyword)
+        cell.configure(
+            name: item.snippet.displayName,
+            keyword: item.snippet.normalizedKeyword,
+            nameMatchRanges: item.nameMatchRanges,
+            keywordMatchRanges: item.keywordMatchRanges
+        )
         return cell
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        rowHeight
+        guard items.indices.contains(row) else { return singleLineRowHeight }
+        return shouldWrapName(for: items[row]) ? wrappedNameRowHeight : singleLineRowHeight
+    }
+
+    private func shouldWrapName(for item: SuggestionItem) -> Bool {
+        let name = item.snippet.displayName as NSString
+        let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let availableWidth = panelWidth - horizontalCellPadding
+        let width = name.size(withAttributes: [.font: font]).width
+        return width > availableWidth
     }
 }
 
 // MARK: - Cell View
 
 private final class SuggestionCellView: NSTableCellView {
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let keywordLabel = NSTextField(labelWithString: "")
+    private let primaryLabel = NSTextField(labelWithString: "")
+    private let secondaryLabel = NSTextField(labelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
-        nameLabel.font = .systemFont(ofSize: 13)
-        nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        primaryLabel.lineBreakMode = .byWordWrapping
+        primaryLabel.maximumNumberOfLines = 2
+        primaryLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        keywordLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        keywordLabel.textColor = .secondaryLabelColor
-        keywordLabel.lineBreakMode = .byTruncatingTail
-        keywordLabel.translatesAutoresizingMaskIntoConstraints = false
-        keywordLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        keywordLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        secondaryLabel.lineBreakMode = .byTruncatingTail
+        secondaryLabel.maximumNumberOfLines = 1
+        secondaryLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(nameLabel)
-        addSubview(keywordLabel)
+        let labelsStack = NSStackView(views: [primaryLabel, secondaryLabel])
+        labelsStack.orientation = .vertical
+        labelsStack.spacing = 1
+        labelsStack.alignment = .leading
+        labelsStack.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(labelsStack)
 
         NSLayoutConstraint.activate([
-            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labelsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            labelsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            labelsStack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labelsStack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 4),
+            labelsStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4),
 
-            keywordLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            keywordLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            keywordLabel.leadingAnchor.constraint(greaterThanOrEqualTo: nameLabel.trailingAnchor, constant: 8),
+            primaryLabel.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
+            secondaryLabel.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, keyword: String) {
-        nameLabel.stringValue = name
-        keywordLabel.stringValue = keyword
+    func configure(name: String, keyword: String, nameMatchRanges: [NSRange], keywordMatchRanges: [NSRange]) {
+        primaryLabel.attributedStringValue = highlightedString(
+            name,
+            font: .systemFont(ofSize: 13),
+            color: .labelColor,
+            matchRanges: nameMatchRanges
+        )
+        secondaryLabel.attributedStringValue = highlightedString(
+            keyword,
+            font: .monospacedSystemFont(ofSize: 11, weight: .regular),
+            color: .secondaryLabelColor,
+            matchRanges: keywordMatchRanges
+        )
+        secondaryLabel.isHidden = keyword.isEmpty
+    }
+
+    private func highlightedString(
+        _ string: String,
+        font: NSFont,
+        color: NSColor,
+        matchRanges: [NSRange]
+    ) -> NSAttributedString {
+        let attributed = NSMutableAttributedString(
+            string: string,
+            attributes: [.font: font, .foregroundColor: color]
+        )
+        guard !string.isEmpty, !matchRanges.isEmpty else { return attributed }
+
+        let highlightedFont = highlightedFont(for: font)
+        let fullRange = NSRange(location: 0, length: (string as NSString).length)
+
+        for range in matchRanges where NSIntersectionRange(range, fullRange).length == range.length {
+            attributed.addAttributes(
+                [
+                    .font: highlightedFont,
+                    .foregroundColor: NSColor.controlAccentColor
+                ],
+                range: range
+            )
+        }
+
+        return attributed
+    }
+
+    private func highlightedFont(for font: NSFont) -> NSFont {
+        if font.fontDescriptor.symbolicTraits.contains(.monoSpace) {
+            return .monospacedSystemFont(ofSize: font.pointSize, weight: .semibold)
+        }
+
+        return .systemFont(ofSize: font.pointSize, weight: .semibold)
     }
 }

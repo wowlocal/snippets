@@ -457,7 +457,12 @@ final class SnippetExpansionEngine {
                 let best = max(nameResult.score, keywordResult.score)
                 let matched = nameResult.matched || keywordResult.matched
                 guard matched else { return nil }
-                return SuggestionItem(snippet: snippet, score: best)
+                return SuggestionItem(
+                    snippet: snippet,
+                    score: best,
+                    nameMatchRanges: nameResult.matchedRanges,
+                    keywordMatchRanges: keywordResult.matchedRanges
+                )
             }
             .sorted { $0.score > $1.score }
             .prefix(8)
