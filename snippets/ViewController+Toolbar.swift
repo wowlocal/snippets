@@ -103,7 +103,7 @@ extension ViewController: NSToolbarDelegate {
             item.label = "Shortcuts"
             item.paletteLabel = "Keyboard Shortcuts"
             item.toolTip = "Keyboard Shortcuts (Command-K)"
-            item.image = LiquidGlassDesign.symbol("keyboard", pointSize: 16)
+            item.image = LiquidGlassDesign.symbol("keyboard", pointSize: 13)
             item.target = self
             item.action = #selector(toggleActionPanel)
             LiquidGlassDesign.configureSecondaryToolbarItem(item)

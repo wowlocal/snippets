@@ -13,8 +13,7 @@ extension ViewController {
         searchSuggestionOverlayView.isHidden = true
         searchSuggestionOverlayView.onSelect = { [weak self] snippet in
             guard let self else { return }
-            selectSnippetFromSearchSuggestions(snippet)
-            hideSearchSuggestionOverlay()
+            acceptSearchSuggestion(snippet)
         }
 
         rootView.addSubview(searchSuggestionOverlayView)
@@ -125,8 +124,7 @@ extension ViewController {
                 return true
 
             case UInt16(kVK_Return), UInt16(kVK_ANSI_KeypadEnter):
-                selectHighlightedSearchSuggestion()
-                hideSearchSuggestionOverlay()
+                acceptHighlightedSearchSuggestion()
                 return true
 
             default:
@@ -165,6 +163,17 @@ extension ViewController {
     private func selectHighlightedSearchSuggestion() {
         guard let snippet = searchSuggestionOverlayView.selectedSnippet() else { return }
         selectSnippetFromSearchSuggestions(snippet)
+    }
+
+    private func acceptHighlightedSearchSuggestion() {
+        guard let snippet = searchSuggestionOverlayView.selectedSnippet() else { return }
+        acceptSearchSuggestion(snippet)
+    }
+
+    private func acceptSearchSuggestion(_ snippet: Snippet) {
+        selectSnippetFromSearchSuggestions(snippet)
+        hideSearchSuggestionOverlay()
+        requestFirstResponder(snippetTextView)
     }
 
     private func searchFieldRectInRootView() -> NSRect {
