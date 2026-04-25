@@ -1,7 +1,7 @@
 import AppKit
 
 private enum MainLayoutMetrics {
-    static let sidebarMinWidth: CGFloat = 180
+    static let sidebarMinWidth: CGFloat = 260
     static let sidebarMaxWidth: CGFloat = 520
     static let sidebarPreferredFraction: CGFloat = 0.28
     static let editorMinWidth: CGFloat = 320
