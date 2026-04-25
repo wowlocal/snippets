@@ -1,15 +1,16 @@
 import AppKit
 
 private enum MainLayoutMetrics {
-    static let sidebarMinWidth: CGFloat = 300
-    static let editorMinWidth: CGFloat = 360
+    static let sidebarMinWidth: CGFloat = 1
+    static let sidebarMaxWidth: CGFloat = 360
+    static let sidebarPreferredFraction: CGFloat = 0.26
+    static let editorMinWidth: CGFloat = 1
+    static let editorComfortWidth: CGFloat = 520
+    static let editorHorizontalPadding: CGFloat = 24
+    static let editorMaxFormWidth: CGFloat = 760
+    static let minimumInlineSidebarWidth: CGFloat = 520
     static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
-}
-
-private enum EditorSurfaceMetrics {
-    static let cornerRadius: CGFloat = 8
-    static let borderWidth: CGFloat = 1
 }
 
 private struct ActionShortcutDescriptor {
@@ -44,12 +45,7 @@ private enum ActionPanelContent {
 
 extension ViewController {
     func configureEditorSurface(_ view: NSView, backgroundColor: NSColor) {
-        view.wantsLayer = true
-        view.layer?.cornerRadius = EditorSurfaceMetrics.cornerRadius
-        view.layer?.borderWidth = EditorSurfaceMetrics.borderWidth
-        view.layer?.borderColor = NSColor.separatorColor.cgColor
-        view.layer?.backgroundColor = backgroundColor.cgColor
-        view.layer?.masksToBounds = true
+        LiquidGlassDesign.configureEditorSurface(view, backgroundColor: backgroundColor)
     }
 
     func buildUI() {
@@ -59,6 +55,7 @@ extension ViewController {
 
         let rootStack = NSStackView()
         rootStack.orientation = .vertical
+        rootStack.distribution = .fill
         rootStack.spacing = 0
         rootStack.translatesAutoresizingMaskIntoConstraints = false
         rootView.addSubview(rootStack)
@@ -69,37 +66,27 @@ extension ViewController {
         permissionBannerDivider.boxType = .separator
         rootStack.addArrangedSubview(permissionBannerDivider)
 
-        let splitView = mainSplitView
-        splitView.isVertical = true
-        splitView.dividerStyle = .thin
-        splitView.delegate = self
+        configureMainSplitViewController()
+        addChild(mainSplitViewController)
+
+        let splitView = mainSplitViewController.view
         splitView.translatesAutoresizingMaskIntoConstraints = false
-
-        let sidebar = buildSidebar()
-        let editor = buildEditor()
-
-        sidebar.translatesAutoresizingMaskIntoConstraints = false
-        editor.translatesAutoresizingMaskIntoConstraints = false
-
-        splitView.addArrangedSubview(sidebar)
-        splitView.addArrangedSubview(editor)
-
-        splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
-        splitView.setHoldingPriority(.defaultLow, forSubviewAt: 1)
-        splitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
-
+        splitView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        splitView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         rootStack.addArrangedSubview(splitView)
 
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleMainSplitViewDidResize),
             name: NSSplitView.didResizeSubviewsNotification,
-            object: splitView
+            object: mainSplitView
         )
 
         [banner, permissionBannerDivider, splitView].forEach {
             $0.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
         }
+        banner.setContentHuggingPriority(.required, for: .vertical)
+        permissionBannerDivider.setContentHuggingPriority(.required, for: .vertical)
 
         NSLayoutConstraint.activate([
             rootStack.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
@@ -109,6 +96,45 @@ extension ViewController {
         ])
 
         buildActionOverlay(in: rootView)
+    }
+
+    func configureMainSplitViewController() {
+        guard mainSplitViewController.splitViewItems.isEmpty else { return }
+
+        let managedSplitView = NSSplitView()
+        managedSplitView.isVertical = true
+        managedSplitView.dividerStyle = .thin
+        managedSplitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
+        mainSplitViewController.splitView = managedSplitView
+        mainSplitViewController.minimumThicknessForInlineSidebars = MainLayoutMetrics.minimumInlineSidebarWidth
+
+        let sidebarController = NSViewController()
+        sidebarController.view = buildSidebar()
+
+        let editorController = NSViewController()
+        editorController.view = buildEditor()
+
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
+        sidebarItem.minimumThickness = MainLayoutMetrics.sidebarMinWidth
+        sidebarItem.maximumThickness = MainLayoutMetrics.sidebarMaxWidth
+        sidebarItem.preferredThicknessFraction = MainLayoutMetrics.sidebarPreferredFraction
+        sidebarItem.holdingPriority = .defaultHigh
+        if #available(macOS 11.0, *) {
+            sidebarItem.allowsFullHeightLayout = true
+            sidebarItem.titlebarSeparatorStyle = .none
+        }
+
+        let contentItem = NSSplitViewItem(viewController: editorController)
+        contentItem.minimumThickness = MainLayoutMetrics.editorMinWidth
+        contentItem.holdingPriority = .defaultLow
+        if #available(macOS 26.0, *) {
+            contentItem.automaticallyAdjustsSafeAreaInsets = false
+        }
+
+        mainSplitViewController.addSplitViewItem(sidebarItem)
+        mainSplitViewController.addSplitViewItem(contentItem)
+        mainSidebarSplitItem = sidebarItem
+        mainContentSplitItem = contentItem
     }
 
     @objc
@@ -131,13 +157,10 @@ extension ViewController {
             return
         }
 
-        let proposedMinimum: CGFloat = 0
         let proposedMaximum = mainSplitView.bounds.width - mainSplitView.dividerThickness
         guard proposedMaximum > 0 else { return }
 
-        let minPosition = splitView(mainSplitView, constrainMinCoordinate: proposedMinimum, ofSubviewAt: 0)
-        let maxPosition = splitView(mainSplitView, constrainMaxCoordinate: proposedMaximum, ofSubviewAt: 0)
-        let clampedPosition = min(max(CGFloat(storedPosition), minPosition), max(minPosition, maxPosition))
+        let clampedPosition = clampedSidebarWidth(in: mainSplitView, proposedWidth: CGFloat(storedPosition))
         mainSplitView.setPosition(clampedPosition, ofDividerAt: 0)
 
         hasRestoredSplitViewDivider = true
@@ -146,15 +169,16 @@ extension ViewController {
     func clampedSidebarWidth(in splitView: NSSplitView, proposedWidth: CGFloat) -> CGFloat {
         let availableWidth = max(0, splitView.bounds.width - splitView.dividerThickness)
         let minimumSidebarWidth = min(MainLayoutMetrics.sidebarMinWidth, availableWidth)
-        let maximumSidebarWidth = max(minimumSidebarWidth, availableWidth - MainLayoutMetrics.editorMinWidth)
+        let maximumSidebarWidth = max(
+            minimumSidebarWidth,
+            min(MainLayoutMetrics.sidebarMaxWidth, availableWidth - MainLayoutMetrics.editorMinWidth)
+        )
         return min(max(proposedWidth, minimumSidebarWidth), maximumSidebarWidth)
     }
 
     func buildPermissionBanner() -> NSView {
         let container = permissionBannerContainer
         container.translatesAutoresizingMaskIntoConstraints = false
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.15).cgColor
 
         let stack = NSStackView()
         stack.orientation = .horizontal
@@ -180,7 +204,11 @@ extension ViewController {
         permissionButtonsStack.spacing = 8
         [refreshButton, requestButton, accessibilityButton].forEach {
             $0.controlSize = .small
-            $0.bezelStyle = .rounded
+            if #available(macOS 26.0, *) {
+                $0.bezelStyle = .glass
+            } else {
+                $0.bezelStyle = .rounded
+            }
             permissionButtonsStack.addArrangedSubview($0)
         }
 
@@ -193,13 +221,28 @@ extension ViewController {
         stack.addArrangedSubview(NSView())
         stack.addArrangedSubview(permissionButtonsStack)
 
-        container.addSubview(stack)
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(stack)
+
+        let surface = LiquidGlassDesign.makeTransientSurface(
+            containing: contentView,
+            cornerRadius: 0,
+            fallbackMaterial: .contentBackground,
+            tintColor: NSColor.systemOrange.withAlphaComponent(0.08)
+        )
+        container.addSubview(surface)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -10)
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10)
         ])
 
         return container
@@ -208,74 +251,17 @@ extension ViewController {
     func buildSidebar() -> NSView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.12).cgColor
 
         let rootStack = NSStackView()
         rootStack.orientation = .vertical
-        rootStack.spacing = 10
+        rootStack.distribution = .fill
+        rootStack.spacing = 8
         rootStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let headerStack = NSStackView()
-        headerStack.orientation = .horizontal
-        headerStack.spacing = 8
-        headerStack.alignment = .centerY
-
-        let headerActionsStack = NSStackView()
-        headerActionsStack.orientation = .horizontal
-        headerActionsStack.spacing = 6
-        headerActionsStack.alignment = .centerY
-        headerActionsStack.setContentHuggingPriority(.required, for: .horizontal)
-        headerActionsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        searchField.placeholderString = "Search snippets"
-        searchField.delegate = self
-        searchField.controlSize = .regular
-        searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        searchField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
-
-        let moreButton = NSButton(image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!, target: self, action: #selector(showMoreMenu(_:)))
-        moreButton.controlSize = .small
-        moreButton.bezelStyle = .rounded
-        moreButton.isBordered = false
-        moreButton.toolTip = "Import, Export..."
-        moreButton.setContentHuggingPriority(.required, for: .horizontal)
-        moreButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        newButton.target = self
-        newButton.action = #selector(createSnippet)
-        let plusConfig = NSImage.SymbolConfiguration(pointSize: NSFont.systemFontSize, weight: .semibold)
-            .applying(.init(paletteColors: [.white]))
-        newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
-            .withSymbolConfiguration(plusConfig)
-        newButton.controlSize = .small
-        newButton.imagePosition = .imageLeading
-        newButton.imageHugsTitle = true
-        newButton.bezelStyle = .rounded
-        newButton.bezelColor = ThemeManager.newButtonBezelColor
-        newButton.setContentHuggingPriority(.required, for: .horizontal)
-        newButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        newButton.keyEquivalent = "n"
-        newButton.keyEquivalentModifierMask = [.command]
-        applyThemeColors()
-
-        let helpButton = NSButton(image: NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Keyboard Shortcuts")!, target: self, action: #selector(toggleActionPanel))
-        helpButton.controlSize = .small
-        helpButton.bezelStyle = .rounded
-        helpButton.isBordered = false
-        helpButton.toolTip = "Keyboard Shortcuts (⌘K)"
-        helpButton.setContentHuggingPriority(.required, for: .horizontal)
-        helpButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        headerStack.addArrangedSubview(searchField)
-        headerActionsStack.addArrangedSubview(helpButton)
-        headerActionsStack.addArrangedSubview(moreButton)
-        headerActionsStack.addArrangedSubview(newButton)
-        headerStack.addArrangedSubview(headerActionsStack)
 
         let tableScrollView = NSScrollView()
         tableScrollView.translatesAutoresizingMaskIntoConstraints = false
+        tableScrollView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        tableScrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         tableScrollView.borderType = .noBorder
         tableScrollView.drawsBackground = false
         tableScrollView.hasVerticalScroller = true
@@ -298,18 +284,26 @@ extension ViewController {
         }
 
         tableScrollView.documentView = tableView
-        tableScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        let preferredSidebarTableHeight = tableScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 260)
+        preferredSidebarTableHeight.priority = .defaultLow
+        preferredSidebarTableHeight.isActive = true
 
         deleteButton.target = self
         deleteButton.action = #selector(deleteSelectedSnippet)
-        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
+        deleteButton.image = LiquidGlassDesign.symbol("trash", pointSize: 13)
         deleteButton.imagePosition = .imageLeading
-        deleteButton.bezelStyle = .rounded
+        if #available(macOS 26.0, *) {
+            deleteButton.bezelStyle = .glass
+        } else {
+            deleteButton.bezelStyle = .rounded
+        }
 
         let footerTopRow = NSStackView(views: [deleteButton, NSView(), importExportMessageLabel])
         footerTopRow.orientation = .horizontal
         footerTopRow.spacing = 6
         footerTopRow.alignment = .centerY
+        footerTopRow.setContentHuggingPriority(.required, for: .vertical)
+        footerTopRow.setContentCompressionResistancePriority(.required, for: .vertical)
 
         importExportMessageLabel.font = .systemFont(ofSize: 12)
         importExportMessageLabel.textColor = .secondaryLabelColor
@@ -318,20 +312,28 @@ extension ViewController {
         importExportMessageLabel.maximumNumberOfLines = 1
         importExportMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        rootStack.addArrangedSubview(headerStack)
         rootStack.addArrangedSubview(tableScrollView)
         rootStack.addArrangedSubview(footerTopRow)
 
-        rootStack.setCustomSpacing(10, after: headerStack)
         rootStack.setCustomSpacing(8, after: tableScrollView)
 
-        container.addSubview(rootStack)
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(rootStack)
+
+        let surface = LiquidGlassDesign.makeSidebarSurface(containing: contentView)
+        container.addSubview(surface)
 
         NSLayoutConstraint.activate([
-            rootStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            rootStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            rootStack.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
-            rootStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12)
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            rootStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
+            rootStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
+            rootStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            rootStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
         ])
 
         return container
@@ -378,6 +380,7 @@ extension ViewController {
         let snippetScrollView = NSScrollView()
         snippetScrollView.translatesAutoresizingMaskIntoConstraints = false
         snippetScrollView.hasVerticalScroller = true
+        snippetScrollView.hasHorizontalScroller = false
         snippetScrollView.borderType = .noBorder
         snippetScrollView.drawsBackground = false
         snippetScrollView.scrollerStyle = .overlay
@@ -391,11 +394,13 @@ extension ViewController {
         snippetTextView.isAutomaticTextReplacementEnabled = false
         snippetTextView.isAutomaticDataDetectionEnabled = false
         snippetTextView.allowsUndo = true
+        snippetTextView.isHorizontallyResizable = false
         snippetTextView.autoresizingMask = [.width]
         snippetTextView.minSize = NSSize(width: 0, height: 220)
         snippetTextView.isVerticallyResizable = true
         snippetTextView.textContainerInset = NSSize(width: 8, height: 8)
         snippetTextView.textContainer?.widthTracksTextView = true
+        snippetTextView.textContainer?.lineBreakMode = .byCharWrapping
         snippetTextView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
 
         snippetScrollView.documentView = snippetTextView
@@ -413,6 +418,8 @@ extension ViewController {
         placeholderLabel.font = .systemFont(ofSize: 12)
         placeholderLabel.textColor = .secondaryLabelColor
         placeholderLabel.alignment = .left
+        placeholderLabel.lineBreakMode = .byWordWrapping
+        placeholderLabel.maximumNumberOfLines = 2
 
         let keywordLabel = NSTextField(labelWithString: "Keyword")
         keywordLabel.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -497,9 +504,13 @@ extension ViewController {
         }
 
         previewContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true
-        let preferredEditorWidth = stack.widthAnchor.constraint(equalTo: contentView.widthAnchor, constant: -40)
+        let preferredEditorWidth = stack.widthAnchor.constraint(
+            equalTo: contentView.widthAnchor,
+            constant: -(MainLayoutMetrics.editorHorizontalPadding * 2)
+        )
         preferredEditorWidth.priority = .defaultHigh
         preferredEditorWidth.isActive = true
+        stack.widthAnchor.constraint(lessThanOrEqualToConstant: MainLayoutMetrics.editorMaxFormWidth).isActive = true
 
         stack.setCustomSpacing(8, after: nameLabel)
         stack.setCustomSpacing(8, after: keywordLabel)
@@ -513,13 +524,14 @@ extension ViewController {
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
+            contentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             contentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
             contentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             contentView.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor),
 
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -20),
-            stack.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: MainLayoutMetrics.editorHorizontalPadding),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -MainLayoutMetrics.editorHorizontalPadding),
             stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 18),
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20)
         ])
@@ -530,21 +542,13 @@ extension ViewController {
     func buildActionOverlay(in rootView: NSView) {
         actionOverlayView.translatesAutoresizingMaskIntoConstraints = false
         actionOverlayView.wantsLayer = true
-        actionOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.08).cgColor
+        actionOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.07).cgColor
         actionOverlayView.isHidden = true
         actionOverlayView.onBackgroundClick = { [weak self] in
             self?.closeActionPanel()
         }
 
         actionPanelView.translatesAutoresizingMaskIntoConstraints = false
-        actionPanelView.material = .popover
-        actionPanelView.blendingMode = .withinWindow
-        actionPanelView.state = .active
-        actionPanelView.wantsLayer = true
-        actionPanelView.layer?.cornerRadius = 14
-        actionPanelView.layer?.borderWidth = 1
-        actionPanelView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.14).cgColor
-        actionPanelView.layer?.masksToBounds = true
 
         let actionTitle = NSTextField(labelWithString: "Keyboard Shortcuts")
         actionTitle.font = .actionPanelRoundedSystemFont(ofSize: 18, weight: .semibold)
@@ -577,9 +581,24 @@ extension ViewController {
 
         updateActionPanelShortcutVisibility(showAll: false)
 
-        actionPanelView.addSubview(actionStack)
+        let panelContentView = NSView()
+        panelContentView.translatesAutoresizingMaskIntoConstraints = false
+        panelContentView.addSubview(actionStack)
+
+        let actionSurface = LiquidGlassDesign.makeTransientSurface(
+            containing: panelContentView,
+            cornerRadius: LiquidGlassDesign.Metrics.panelCornerRadius,
+            fallbackMaterial: .popover,
+            tintColor: LiquidGlassDesign.subtleTintColor
+        )
+
+        actionPanelView.addSubview(actionSurface)
         actionOverlayView.addSubview(actionPanelView)
         rootView.addSubview(actionOverlayView)
+
+        let preferredActionPanelWidth = actionPanelView.widthAnchor.constraint(equalToConstant: 340)
+        preferredActionPanelWidth.priority = .defaultHigh
+        preferredActionPanelWidth.isActive = true
 
         NSLayoutConstraint.activate([
             actionOverlayView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
@@ -589,14 +608,19 @@ extension ViewController {
 
             actionPanelView.centerXAnchor.constraint(equalTo: actionOverlayView.centerXAnchor),
             actionPanelView.centerYAnchor.constraint(equalTo: actionOverlayView.centerYAnchor),
-            actionPanelView.widthAnchor.constraint(equalToConstant: 340),
+            actionPanelView.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
             actionPanelView.leadingAnchor.constraint(greaterThanOrEqualTo: actionOverlayView.leadingAnchor, constant: 20),
             actionPanelView.trailingAnchor.constraint(lessThanOrEqualTo: actionOverlayView.trailingAnchor, constant: -20),
 
-            actionStack.leadingAnchor.constraint(equalTo: actionPanelView.leadingAnchor, constant: 14),
-            actionStack.trailingAnchor.constraint(equalTo: actionPanelView.trailingAnchor, constant: -14),
-            actionStack.topAnchor.constraint(equalTo: actionPanelView.topAnchor, constant: 16),
-            actionStack.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor, constant: -12)
+            actionSurface.leadingAnchor.constraint(equalTo: actionPanelView.leadingAnchor),
+            actionSurface.trailingAnchor.constraint(equalTo: actionPanelView.trailingAnchor),
+            actionSurface.topAnchor.constraint(equalTo: actionPanelView.topAnchor),
+            actionSurface.bottomAnchor.constraint(equalTo: actionPanelView.bottomAnchor),
+
+            actionStack.leadingAnchor.constraint(equalTo: panelContentView.leadingAnchor, constant: 16),
+            actionStack.trailingAnchor.constraint(equalTo: panelContentView.trailingAnchor, constant: -16),
+            actionStack.topAnchor.constraint(equalTo: panelContentView.topAnchor, constant: 18),
+            actionStack.bottomAnchor.constraint(equalTo: panelContentView.bottomAnchor, constant: -14)
         ])
     }
 
@@ -606,55 +630,5 @@ extension ViewController {
         }
 
         actionPanelTipLabel.stringValue = showAll ? ActionPanelContent.expandedTip : ActionPanelContent.compactTip
-    }
-}
-
-extension ViewController: NSSplitViewDelegate {
-    func splitView(
-        _ splitView: NSSplitView,
-        constrainSplitPosition proposedPosition: CGFloat,
-        ofSubviewAt dividerIndex: Int
-    ) -> CGFloat {
-        clampedSidebarWidth(in: splitView, proposedWidth: proposedPosition)
-    }
-
-    func splitView(
-        _ splitView: NSSplitView,
-        constrainMinCoordinate proposedMinimumPosition: CGFloat,
-        ofSubviewAt dividerIndex: Int
-    ) -> CGFloat {
-        MainLayoutMetrics.sidebarMinWidth
-    }
-
-    func splitView(
-        _ splitView: NSSplitView,
-        constrainMaxCoordinate proposedMaximumPosition: CGFloat,
-        ofSubviewAt dividerIndex: Int
-    ) -> CGFloat {
-        let maxAllowedSidebarWidth = proposedMaximumPosition - MainLayoutMetrics.editorMinWidth
-        let constrainedMaximum = max(MainLayoutMetrics.sidebarMinWidth, maxAllowedSidebarWidth)
-        return min(proposedMaximumPosition, constrainedMaximum)
-    }
-
-    func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
-        guard splitView === mainSplitView, splitView.subviews.count >= 2 else {
-            splitView.adjustSubviews()
-            return
-        }
-
-        let sidebarView = splitView.subviews[0]
-        let editorView = splitView.subviews[1]
-        let sidebarWidth = clampedSidebarWidth(in: splitView, proposedWidth: sidebarView.frame.width)
-
-        var sidebarFrame = sidebarView.frame
-        sidebarFrame.origin = CGPoint(x: 0, y: 0)
-        sidebarFrame.size = CGSize(width: sidebarWidth, height: splitView.bounds.height)
-        sidebarView.frame = sidebarFrame
-
-        let editorOriginX = sidebarFrame.maxX + splitView.dividerThickness
-        var editorFrame = editorView.frame
-        editorFrame.origin = CGPoint(x: editorOriginX, y: 0)
-        editorFrame.size = CGSize(width: max(0, splitView.bounds.width - editorOriginX), height: splitView.bounds.height)
-        editorView.frame = editorFrame
     }
 }

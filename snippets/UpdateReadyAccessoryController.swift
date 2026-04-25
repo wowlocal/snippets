@@ -22,7 +22,11 @@ final class UpdateReadyAccessoryController: NSTitlebarAccessoryViewController {
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        actionButton.bezelStyle = .rounded
+        if #available(macOS 26.0, *) {
+            actionButton.bezelStyle = .glass
+        } else {
+            actionButton.bezelStyle = .rounded
+        }
         actionButton.controlSize = .small
         actionButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 

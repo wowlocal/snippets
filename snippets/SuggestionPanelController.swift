@@ -77,13 +77,6 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let visualEffect = NSVisualEffectView()
-        visualEffect.material = .menu
-        visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 8
-        visualEffect.layer?.masksToBounds = true
-
         tableView = NSTableView()
         tableView.headerView = nil
         tableView.backgroundColor = .clear
@@ -103,13 +96,18 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
 
-        visualEffect.frame = panel.contentView!.bounds
-        visualEffect.autoresizingMask = [.width, .height]
-        panel.contentView!.addSubview(visualEffect)
+        let surface = LiquidGlassDesign.makeTransientSurface(
+            containing: scrollView,
+            cornerRadius: 12,
+            fallbackMaterial: .menu,
+            tintColor: LiquidGlassDesign.subtleTintColor
+        )
+        surface.frame = panel.contentView!.bounds
+        surface.autoresizingMask = [.width, .height]
+        panel.contentView!.addSubview(surface)
 
-        scrollView.frame = visualEffect.bounds
+        scrollView.frame = surface.bounds
         scrollView.autoresizingMask = [.width, .height]
-        visualEffect.addSubview(scrollView)
 
         super.init()
 
@@ -563,6 +561,10 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     }
 
     // MARK: - NSTableViewDelegate
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        SnippetTableRowView()
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cellID = NSUserInterfaceItemIdentifier("SuggestionCell")

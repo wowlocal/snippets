@@ -19,16 +19,17 @@ enum ThemeManager {
         isPaleTheme ? .secondaryLabelColor : .systemYellow
     }
 
-    static var newButtonBezelColor: NSColor? {
-        isPaleTheme ? nil : .systemBlue
-    }
-
     static var alertColor: NSColor {
         isPaleTheme ? .secondaryLabelColor : .systemOrange
     }
 
     static func applyToggleAppearance(to button: NSButton) {
         button.wantsLayer = true
+
+        if #available(macOS 26.0, *) {
+            button.layer?.filters = nil
+            return
+        }
 
         guard isPaleTheme, let filter = CIFilter(name: "CIColorControls") else {
             button.layer?.filters = nil

@@ -72,31 +72,31 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
         let snippet = visibleSnippets[row]
         let menu = NSMenu(title: snippet.displayName)
         let items: [NSMenuItem] = [
-            contextMenuItem(title: "Copy Snippet", action: #selector(copySelectedSnippetFromContextMenu(_:))),
-            contextMenuItem(title: "Paste Snippet", action: #selector(pasteSelectedSnippetFromContextMenu(_:))),
-            contextMenuItem(title: "Copy Share Link", action: #selector(copySelectedSnippetShareLink)),
+            contextMenuItem(title: "Copy Snippet", symbolName: "doc.on.doc", action: #selector(copySelectedSnippetFromContextMenu(_:))),
+            contextMenuItem(title: "Paste Snippet", symbolName: "arrow.down.doc", action: #selector(pasteSelectedSnippetFromContextMenu(_:))),
+            contextMenuItem(title: "Copy Share Link", symbolName: "link", action: #selector(copySelectedSnippetShareLink)),
             .separator(),
-            contextMenuItem(title: "Duplicate Snippet", action: #selector(duplicateSelectedSnippetFromContextMenu(_:))),
+            contextMenuItem(title: "Duplicate Snippet", symbolName: "plus.square.on.square", action: #selector(duplicateSelectedSnippetFromContextMenu(_:))),
             contextMenuItem(
                 title: snippet.isEnabled ? "Disable Snippet" : "Enable Snippet",
+                symbolName: snippet.isEnabled ? "pause.circle" : "play.circle",
                 action: #selector(toggleEnabledSelectedSnippetFromContextMenu(_:))
             ),
             contextMenuItem(
                 title: snippet.isPinned ? "Unpin Snippet" : "Pin Snippet",
+                symbolName: snippet.isPinned ? "pin.slash" : "pin",
                 action: #selector(togglePinnedSelectedSnippetFromContextMenu(_:))
             ),
             .separator(),
-            contextMenuItem(title: "Delete Snippet", action: #selector(deleteSelectedSnippet(_:)))
+            contextMenuItem(title: "Delete Snippet", symbolName: "trash", action: #selector(deleteSelectedSnippet(_:)))
         ]
 
         items.forEach(menu.addItem)
         return menu
     }
 
-    private func contextMenuItem(title: String, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        return item
+    private func contextMenuItem(title: String, symbolName: String, action: Selector) -> NSMenuItem {
+        LiquidGlassDesign.menuItem(title: title, symbolName: symbolName, action: action, target: self)
     }
 
     @objc private func copySelectedSnippetFromContextMenu(_ sender: Any?) {
