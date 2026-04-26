@@ -6,7 +6,6 @@ private extension NSToolbar.Identifier {
 
 private extension NSToolbarItem.Identifier {
     static let snippetsSearch = NSToolbarItem.Identifier("SnippetsToolbarSearch")
-    static let snippetsShortcuts = NSToolbarItem.Identifier("SnippetsToolbarShortcuts")
     static let snippetsMore = NSToolbarItem.Identifier("SnippetsToolbarMore")
     static let snippetsNew = NSToolbarItem.Identifier("SnippetsToolbarNew")
 }
@@ -43,7 +42,6 @@ extension ViewController: NSToolbarDelegate {
             .flexibleSpace,
             .snippetsSearch,
             .snippetsMore,
-            .snippetsShortcuts,
             .flexibleSpace,
             .snippetsNew
         ]
@@ -54,7 +52,6 @@ extension ViewController: NSToolbarDelegate {
             .toggleSidebar,
             .sidebarTrackingSeparator,
             .snippetsSearch,
-            .snippetsShortcuts,
             .snippetsMore,
             .snippetsNew,
             .space,
@@ -98,40 +95,13 @@ extension ViewController: NSToolbarDelegate {
             item.visibilityPriority = .low
             return item
 
-        case .snippetsShortcuts:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Shortcuts"
-            item.paletteLabel = "Keyboard Shortcuts"
-            item.toolTip = "Keyboard Shortcuts (Command-K)"
-            item.image = LiquidGlassDesign.symbol("keyboard", pointSize: 13)
-            item.target = self
-            item.action = #selector(toggleActionPanel)
-            LiquidGlassDesign.configureSecondaryToolbarItem(item)
-            item.visibilityPriority = .low
-            return item
-
         case .snippetsMore:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "More"
             item.paletteLabel = "More"
             item.toolTip = "Import, Export, and Settings"
 
-            let button = NSButton(
-                image: LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 16) ?? NSImage(),
-                target: self,
-                action: #selector(showMoreMenu(_:))
-            )
-            button.toolTip = item.toolTip
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.isBordered = true
-            button.imagePosition = .imageOnly
-            button.bezelStyle = .circular
-            button.setContentHuggingPriority(.required, for: .horizontal)
-            button.setContentCompressionResistancePriority(.required, for: .horizontal)
-            NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 28),
-                button.heightAnchor.constraint(equalToConstant: 28)
-            ])
+            let button = makeMoreToolbarButton(toolTip: item.toolTip)
             item.view = button
             item.visibilityPriority = .low
             return item
@@ -159,5 +129,52 @@ extension ViewController: NSToolbarDelegate {
         searchField.controlSize = .regular
         searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         searchField.setContentCompressionResistancePriority(.fittingSizeCompression, for: .horizontal)
+    }
+
+    private func makeMoreToolbarButton(toolTip: String?) -> NSButton {
+        let button = NSButton(title: "", target: self, action: #selector(showMoreMenu(_:)))
+        button.toolTip = toolTip
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.controlSize = .regular
+        button.isBordered = true
+        button.imagePosition = .noImage
+        button.setButtonType(.momentaryPushIn)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        if #available(macOS 26.0, *) {
+            button.bezelStyle = .glass
+        } else {
+            button.bezelStyle = .rounded
+        }
+
+        let ellipsisView = NSImageView(image: LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 14, weight: .medium) ?? NSImage())
+        let chevronView = NSImageView(image: LiquidGlassDesign.symbol("chevron.down", pointSize: 9, weight: .semibold) ?? NSImage())
+        [ellipsisView, chevronView].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            $0.contentTintColor = .labelColor
+            $0.symbolConfiguration = .init(hierarchicalColor: .labelColor)
+        }
+
+        let imageStack = NSStackView(views: [ellipsisView, chevronView])
+        imageStack.translatesAutoresizingMaskIntoConstraints = false
+        imageStack.orientation = .horizontal
+        imageStack.alignment = .centerY
+        imageStack.spacing = 6
+        imageStack.distribution = .gravityAreas
+        button.addSubview(imageStack)
+
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 48),
+            button.heightAnchor.constraint(equalToConstant: 36),
+            imageStack.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+            imageStack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            ellipsisView.widthAnchor.constraint(equalToConstant: 18),
+            ellipsisView.heightAnchor.constraint(equalToConstant: 18),
+            chevronView.widthAnchor.constraint(equalToConstant: 9),
+            chevronView.heightAnchor.constraint(equalToConstant: 9)
+        ])
+
+        return button
     }
 }

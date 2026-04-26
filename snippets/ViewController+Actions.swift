@@ -2,7 +2,11 @@ import AppKit
 import ServiceManagement
 import UniformTypeIdentifiers
 
-extension ViewController {
+private extension NSUserInterfaceItemIdentifier {
+    static let snippetsMoreMenu = NSUserInterfaceItemIdentifier("SnippetsMoreMenu")
+}
+
+extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     func selectSnippet(id: UUID, focusEditorName: Bool) {
         selectedSnippetID = id
         syncTableSelectionWithSelectedSnippet()
@@ -114,6 +118,37 @@ extension ViewController {
 
     func makeMoreMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.identifier = .snippetsMoreMenu
+        menu.delegate = self
+        populateMoreMenu(menu)
+        return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.identifier == .snippetsMoreMenu else { return }
+        populateMoreMenu(menu)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(copySelectedSnippetShareLink) {
+            return selectedSnippet != nil
+        }
+
+        if menuItem.action == #selector(toggleLaunchAtLogin) {
+            menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            return true
+        }
+
+        if menuItem.action == #selector(resetQuitChoice(_:)) {
+            return (NSApp.delegate as? AppDelegate)?.hasRememberedQuitBehavior == true
+        }
+
+        return true
+    }
+
+    private func populateMoreMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+
         let importItem = LiquidGlassDesign.menuItem(
             title: "Import...",
             symbolName: "square.and.arrow.down",
@@ -141,9 +176,20 @@ extension ViewController {
         shareItem.keyEquivalentModifierMask = [.command, .shift]
         shareItem.keyEquivalent = "C"
         shareItem.isEnabled = selectedSnippet != nil
+
+        let shortcutsItem = LiquidGlassDesign.menuItem(
+            title: "Keyboard Shortcuts",
+            symbolName: "keyboard",
+            action: #selector(toggleActionPanel),
+            target: self
+        )
+        shortcutsItem.keyEquivalentModifierMask = [.command]
+        shortcutsItem.keyEquivalent = "k"
+
         menu.addItem(importItem)
         menu.addItem(exportItem)
         menu.addItem(shareItem)
+        menu.addItem(shortcutsItem)
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.target = self
@@ -160,7 +206,6 @@ extension ViewController {
             )
             menu.addItem(resetQuitItem)
         }
-        return menu
     }
 
     @objc func handleCreateNewNotification() {
