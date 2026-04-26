@@ -26,6 +26,9 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
     func controlTextDidBeginEditing(_ obj: Notification) {
         guard obj.object as? NSTextField == searchField else { return }
         updateSearchSuggestionOverlay()
+        DispatchQueue.main.async { [weak self] in
+            self?.updateSearchSuggestionOverlay()
+        }
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {

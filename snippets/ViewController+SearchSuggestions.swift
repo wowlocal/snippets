@@ -83,6 +83,17 @@ extension ViewController {
         }
     }
 
+    func dismissSearchInteraction() {
+        hideSearchSuggestionOverlay()
+
+        if isSidebarCollapsed {
+            let target: NSResponder = selectedSnippetID == nil ? view : snippetTextView
+            requestFirstResponder(target)
+        } else {
+            requestFirstResponder(tableView)
+        }
+    }
+
     var isSearchSuggestionOverlayVisible: Bool {
         !searchSuggestionOverlayView.isHidden
     }
@@ -104,12 +115,15 @@ extension ViewController {
     }
 
     func handleSearchSuggestionKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
         if !isSearchSuggestionOverlayVisible {
+            guard shouldActivateSearchSuggestionOverlay(forKeyCode: event.keyCode, flags: flags) else {
+                return false
+            }
             updateSearchSuggestionOverlay()
         }
         guard isSearchSuggestionOverlayVisible else { return false }
-
-        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
 
         if flags.isEmpty {
             switch event.keyCode {
@@ -147,6 +161,25 @@ extension ViewController {
             default:
                 return false
             }
+        }
+
+        return false
+    }
+
+    private func shouldActivateSearchSuggestionOverlay(
+        forKeyCode keyCode: UInt16,
+        flags: NSEvent.ModifierFlags
+    ) -> Bool {
+        if flags.isEmpty {
+            return keyCode == UInt16(kVK_DownArrow)
+                || keyCode == UInt16(kVK_UpArrow)
+                || keyCode == UInt16(kVK_Return)
+                || keyCode == UInt16(kVK_ANSI_KeypadEnter)
+        }
+
+        if flags == [.control] {
+            return keyCode == UInt16(kVK_ANSI_N)
+                || keyCode == UInt16(kVK_ANSI_P)
         }
 
         return false
@@ -214,7 +247,7 @@ extension ViewController {
         return searchSuggestionOverlayView.bounds.contains(point)
     }
 
-    private func eventHitsSearchField(_ event: NSEvent) -> Bool {
+    func eventHitsSearchField(_ event: NSEvent) -> Bool {
         guard event.window === searchField.window else { return false }
         let point = searchField.convert(event.locationInWindow, from: nil)
         return searchField.bounds.contains(point)

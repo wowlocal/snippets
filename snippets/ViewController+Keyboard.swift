@@ -4,7 +4,7 @@ import Carbon.HIToolbox
 extension ViewController {
     func installKeyboardMonitorIfNeeded() {
         guard localKeyMonitor == nil else { return }
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .leftMouseDown]) { [weak self] event in
             guard let self else { return event }
             switch event.type {
             case .keyDown:
@@ -12,6 +12,8 @@ extension ViewController {
             case .flagsChanged:
                 handleModifierFlagsChanged(event)
                 return event
+            case .leftMouseDown:
+                return handleMouseEvent(event)
             default:
                 return event
             }
@@ -22,6 +24,18 @@ extension ViewController {
         guard !actionOverlayView.isHidden else { return }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         updateActionPanelShortcutVisibility(showAll: flags.contains(.option))
+    }
+
+    func handleMouseEvent(_ event: NSEvent) -> NSEvent? {
+        guard NSApp.modalWindow == nil else { return event }
+        guard eventHitsSearchField(event) else { return event }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, isSearchFieldActive else { return }
+            updateSearchSuggestionOverlay()
+        }
+
+        return event
     }
 
     func handleKeyEvent(_ event: NSEvent) -> NSEvent? {
@@ -36,6 +50,8 @@ extension ViewController {
         if key == UInt16(kVK_Escape) {
             if !actionOverlayView.isHidden {
                 closeActionPanel()
+            } else if isSearchFieldActive {
+                dismissSearchInteraction()
             } else if isSearchSuggestionOverlayVisible {
                 hideSearchSuggestionOverlay()
             } else {
@@ -61,7 +77,9 @@ extension ViewController {
 
         if flags == [.command] && key == UInt16(kVK_ANSI_F) {
             requestFirstResponder(searchField)
-            updateSearchSuggestionOverlay()
+            DispatchQueue.main.async { [weak self] in
+                self?.updateSearchSuggestionOverlay()
+            }
             return nil
         }
 
