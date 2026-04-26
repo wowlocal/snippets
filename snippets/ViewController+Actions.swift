@@ -112,7 +112,8 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
     @objc func showMoreMenu(_ sender: NSButton) {
         let menu = makeMoreMenu()
-        let location = NSPoint(x: 0, y: sender.bounds.height + 4)
+        let menuVerticalGap: CGFloat = 8
+        let location = NSPoint(x: 0, y: sender.bounds.height + menuVerticalGap)
         menu.popUp(positioning: nil, at: location, in: sender)
     }
 

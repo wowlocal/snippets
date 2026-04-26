@@ -148,7 +148,7 @@ extension ViewController: NSToolbarDelegate {
             button.bezelStyle = .rounded
         }
 
-        let ellipsisView = NSImageView(image: LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 14, weight: .medium) ?? NSImage())
+        let ellipsisView = NSImageView(image: LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 18, weight: .medium) ?? NSImage())
         let chevronView = NSImageView(image: LiquidGlassDesign.symbol("chevron.down", pointSize: 9, weight: .semibold) ?? NSImage())
         [ellipsisView, chevronView].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -169,8 +169,8 @@ extension ViewController: NSToolbarDelegate {
             button.heightAnchor.constraint(equalToConstant: 36),
             imageStack.centerXAnchor.constraint(equalTo: button.centerXAnchor),
             imageStack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            ellipsisView.widthAnchor.constraint(equalToConstant: 18),
-            ellipsisView.heightAnchor.constraint(equalToConstant: 18),
+            ellipsisView.widthAnchor.constraint(equalToConstant: 22),
+            ellipsisView.heightAnchor.constraint(equalToConstant: 22),
             chevronView.widthAnchor.constraint(equalToConstant: 9),
             chevronView.heightAnchor.constraint(equalToConstant: 9)
         ])
