@@ -12,6 +12,10 @@ private enum ActionStatusMessage {
     static let fadeDuration: TimeInterval = 0.25
 }
 
+private enum ClipboardPreviewRefresh {
+    static let interval: TimeInterval = 0.5
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -34,6 +38,8 @@ final class ViewController: NSViewController {
     var selectedSnippetID: UUID?
     var isApplyingSnippetToEditor = false
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
+    var clipboardPreviewTimer: Timer?
+    var observedPasteboardChangeCount = NSPasteboard.general.changeCount
 
     var importExportMessage: String? {
         didSet {
@@ -108,6 +114,7 @@ final class ViewController: NSViewController {
         )
 
         engine.startIfNeeded()
+        startClipboardPreviewRefreshTimerIfNeeded()
         reloadVisibleSnippets(keepSelection: false)
         if let firstID = visibleSnippets.first?.id {
             selectSnippet(id: firstID, focusEditorName: false)
@@ -159,6 +166,7 @@ final class ViewController: NSViewController {
         if let searchSuggestionClickMonitor {
             NSEvent.removeMonitor(searchSuggestionClickMonitor)
         }
+        clipboardPreviewTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -179,6 +187,30 @@ final class ViewController: NSViewController {
                 importExportMessage = engine.statusText
             }
         }
+    }
+
+    private func startClipboardPreviewRefreshTimerIfNeeded() {
+        guard clipboardPreviewTimer == nil else { return }
+
+        observedPasteboardChangeCount = NSPasteboard.general.changeCount
+        let timer = Timer(timeInterval: ClipboardPreviewRefresh.interval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshClipboardDependentPreviewIfNeeded()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        clipboardPreviewTimer = timer
+    }
+
+    private func refreshClipboardDependentPreviewIfNeeded() {
+        let pasteboardChangeCount = NSPasteboard.general.changeCount
+        guard pasteboardChangeCount != observedPasteboardChangeCount else { return }
+
+        observedPasteboardChangeCount = pasteboardChangeCount
+        let template = snippetTextView.string
+        guard PlaceholderResolver.containsClipboardPlaceholder(in: template) else { return }
+
+        updatePreview(withTemplate: template)
     }
 
     private func relaxWindowResizeLimits(_ window: NSWindow) {

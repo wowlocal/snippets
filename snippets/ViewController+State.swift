@@ -168,8 +168,9 @@ extension ViewController {
     }
 
     func updatePreview(withTemplate template: String) {
-        let rendered = PlaceholderResolver.resolve(template: template)
-        let hasDynamicContent = !template.isEmpty && rendered != template
+        let rendered = PlaceholderResolver.resolveForPreview(template: template)
+        let hasDynamicContent = !template.isEmpty
+            && PlaceholderResolver.containsResolvablePlaceholder(in: template)
         previewSeparator.isHidden = !hasDynamicContent
         previewSectionStack.isHidden = !hasDynamicContent
         previewValueField.stringValue = rendered

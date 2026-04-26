@@ -7,6 +7,7 @@ private enum MainLayoutMetrics {
     static let editorMinWidth: CGFloat = 230
     static let editorComfortWidth: CGFloat = 520
     static let editorHorizontalPadding: CGFloat = 24
+    static let previewMaxHeight: CGFloat = 150
     static let minimumInlineSidebarWidth: CGFloat = 300
     static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
@@ -493,10 +494,11 @@ extension ViewController {
         configureEditorSurface(previewContainer, backgroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.08))
 
         previewValueField.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        previewValueField.lineBreakMode = .byWordWrapping
-        previewValueField.maximumNumberOfLines = 0
+        previewValueField.lineBreakMode = .byCharWrapping
+        previewValueField.maximumNumberOfLines = 8
         previewValueField.allowsDefaultTighteningForTruncation = false
         previewValueField.translatesAutoresizingMaskIntoConstraints = false
+        previewValueField.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
         previewContainer.addSubview(previewValueField)
 
@@ -543,6 +545,7 @@ extension ViewController {
         }
 
         previewContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true
+        previewContainer.heightAnchor.constraint(lessThanOrEqualToConstant: MainLayoutMetrics.previewMaxHeight).isActive = true
         let preferredEditorWidth = stack.widthAnchor.constraint(
             equalTo: contentView.widthAnchor,
             constant: -(MainLayoutMetrics.editorHorizontalPadding * 2)

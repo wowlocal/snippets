@@ -2,9 +2,40 @@ import AppKit
 import Foundation
 
 enum PlaceholderResolver {
+    private enum PreviewLimit {
+        static let clipboardCharacters = 1_000
+        static let renderedCharacters = 2_000
+    }
+
+    private enum ResolutionMode {
+        case expansion
+        case preview
+    }
+
     private static let tokenRegex = try? NSRegularExpression(pattern: "\\{([a-zA-Z0-9:_\\-]+)\\}")
 
     static func resolve(template: String) -> String {
+        resolve(template: template, mode: .expansion)
+    }
+
+    static func resolveForPreview(template: String) -> String {
+        let rendered = resolve(template: template, mode: .preview)
+        return limitedPreview(
+            rendered,
+            characterLimit: PreviewLimit.renderedCharacters,
+            truncatedMarker: "[preview truncated]"
+        )
+    }
+
+    static func containsResolvablePlaceholder(in template: String) -> Bool {
+        containsToken(in: template, where: isResolvableToken)
+    }
+
+    static func containsClipboardPlaceholder(in template: String) -> Bool {
+        containsToken(in: template) { $0 == "clipboard" }
+    }
+
+    private static func resolve(template: String, mode: ResolutionMode) -> String {
         guard let tokenRegex else { return template }
 
         let fullRange = NSRange(template.startIndex..., in: template)
@@ -21,7 +52,7 @@ enum PlaceholderResolver {
             }
 
             let token = String(template[tokenRange])
-            guard let replacement = replacementValue(for: token) else {
+            guard let replacement = replacementValue(for: token, mode: mode) else {
                 continue
             }
 
@@ -31,9 +62,15 @@ enum PlaceholderResolver {
         return rendered
     }
 
-    private static func replacementValue(for token: String) -> String? {
+    private static func replacementValue(for token: String, mode: ResolutionMode) -> String? {
         if token == "clipboard" {
-            return NSPasteboard.general.string(forType: .string) ?? ""
+            let value = NSPasteboard.general.string(forType: .string) ?? ""
+            guard mode == .preview else { return value }
+            return limitedPreview(
+                value,
+                characterLimit: PreviewLimit.clipboardCharacters,
+                truncatedMarker: "[clipboard preview truncated]"
+            )
         }
 
         if token == "date" {
@@ -65,5 +102,56 @@ enum PlaceholderResolver {
         }
 
         return nil
+    }
+
+    private static func containsToken(in template: String, where predicate: (String) -> Bool) -> Bool {
+        guard let tokenRegex else { return false }
+
+        let fullRange = NSRange(template.startIndex..., in: template)
+        let matches = tokenRegex.matches(in: template, options: [], range: fullRange)
+        for match in matches {
+            guard
+                match.numberOfRanges == 2,
+                let tokenRange = Range(match.range(at: 1), in: template)
+            else {
+                continue
+            }
+
+            if predicate(String(template[tokenRange])) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private static func isResolvableToken(_ token: String) -> Bool {
+        token == "clipboard"
+            || token == "date"
+            || token == "time"
+            || token == "datetime"
+            || token.hasPrefix("date:")
+            || token.hasPrefix("time:")
+            || token.hasPrefix("datetime:")
+    }
+
+    private static func limitedPreview(
+        _ value: String,
+        characterLimit: Int,
+        truncatedMarker: String
+    ) -> String {
+        guard
+            characterLimit > 0,
+            let cutoffIndex = value.index(
+                value.startIndex,
+                offsetBy: characterLimit,
+                limitedBy: value.endIndex
+            ),
+            cutoffIndex < value.endIndex
+        else {
+            return value
+        }
+
+        return String(value[..<cutoffIndex]) + "\n... " + truncatedMarker
     }
 }
