@@ -95,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
+        configureFileMenuItems()
         #if DEBUG && !NO_SPARKLE
         configureDebugMenu()
         #endif
@@ -209,6 +210,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         refreshWindowUpdateAccessories()
         #endif
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @IBAction func importSnippets(_ sender: Any?) {
+        showMainWindow()?.runImport(sender)
+    }
+
+    @IBAction func exportSnippets(_ sender: Any?) {
+        showMainWindow()?.runExport(sender)
     }
 
     @objc private func handleChromiumBundleIDsChanged() {
@@ -379,6 +388,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         appMenuUpdateStatusView = updateStatusView
         refreshAppMenuUpdateState()
         #endif
+    }
+
+    private func configureFileMenuItems() {
+        guard let fileMenu = NSApp.mainMenu?.items.first(where: { $0.title == "File" })?.submenu else { return }
+        if fileMenu.items.contains(where: { $0.action == #selector(importSnippets(_:)) })
+            || fileMenu.items.contains(where: { $0.action == #selector(exportSnippets(_:)) }) {
+            return
+        }
+
+        let importItem = NSMenuItem(
+            title: "Import Snippets…",
+            action: #selector(importSnippets(_:)),
+            keyEquivalent: "I"
+        )
+        importItem.keyEquivalentModifierMask = [.command, .shift]
+        importItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("square.and.arrow.down", to: importItem)
+
+        let exportItem = NSMenuItem(
+            title: "Export Snippets…",
+            action: #selector(exportSnippets(_:)),
+            keyEquivalent: "E"
+        )
+        exportItem.keyEquivalentModifierMask = [.command, .shift]
+        exportItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("square.and.arrow.up", to: exportItem)
+
+        let insertionIndex = fileMenu.items.firstIndex(where: { $0.isSeparatorItem }) ?? fileMenu.items.count
+        fileMenu.insertItem(exportItem, at: insertionIndex)
+        fileMenu.insertItem(importItem, at: insertionIndex)
     }
 
     @objc private func openFromStatusBar() {
