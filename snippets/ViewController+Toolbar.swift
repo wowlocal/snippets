@@ -96,14 +96,20 @@ extension ViewController: NSToolbarDelegate {
             return item
 
         case .snippetsMore:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "More"
-            item.paletteLabel = "More"
-            item.toolTip = "Import, Export, and Settings"
+            if #available(macOS 26.0, *) {
+                let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+                configureMoreToolbarItem(item)
+                let button = makeMoreToolbarButton(toolTip: item.toolTip)
+                item.view = button
+                return item
+            }
 
-            let button = makeMoreToolbarButton(toolTip: item.toolTip)
-            item.view = button
-            item.visibilityPriority = .low
+            let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
+            configureMoreToolbarItem(item)
+            item.image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 18, weight: .medium)
+            item.menu = makeMoreMenu()
+            item.showsIndicator = true
+            LiquidGlassDesign.configureSecondaryToolbarItem(item)
             return item
 
         case .snippetsNew:
@@ -129,6 +135,13 @@ extension ViewController: NSToolbarDelegate {
         searchField.controlSize = .regular
         searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         searchField.setContentCompressionResistancePriority(.fittingSizeCompression, for: .horizontal)
+    }
+
+    private func configureMoreToolbarItem(_ item: NSToolbarItem) {
+        item.label = "More"
+        item.paletteLabel = "More"
+        item.toolTip = "Import, Export, and Settings"
+        item.visibilityPriority = .low
     }
 
     private func makeMoreToolbarButton(toolTip: String?) -> NSButton {
