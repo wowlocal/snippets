@@ -96,20 +96,10 @@ extension ViewController: NSToolbarDelegate {
             return item
 
         case .snippetsMore:
-            if #available(macOS 26.0, *) {
-                let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-                configureMoreToolbarItem(item)
-                let button = makeMoreToolbarButton(toolTip: item.toolTip)
-                item.view = button
-                return item
-            }
-
-            let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             configureMoreToolbarItem(item)
-            item.image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 14, weight: .regular)
-            item.menu = makeMoreMenu()
-            item.showsIndicator = true
-            item.isBordered = true
+            let button = makeMoreToolbarButton(toolTip: item.toolTip)
+            item.view = button
             return item
 
         case .snippetsNew:
@@ -145,6 +135,14 @@ extension ViewController: NSToolbarDelegate {
     }
 
     private func makeMoreToolbarButton(toolTip: String?) -> NSButton {
+        let usesNativeGlass = LiquidGlassDesign.usesNativeGlass
+        let buttonWidth: CGFloat = usesNativeGlass ? 48 : 42
+        let buttonHeight: CGFloat = usesNativeGlass ? 36 : 28
+        let ellipsisPointSize: CGFloat = usesNativeGlass ? 18 : 14
+        let ellipsisSize: CGFloat = usesNativeGlass ? 22 : 18
+        let ellipsisWeight: NSFont.Weight = usesNativeGlass ? .medium : .regular
+        let chevronPointSize: CGFloat = usesNativeGlass ? 9 : 8
+        let chevronSize: CGFloat = usesNativeGlass ? 9 : 8
         let button = NSButton(title: "", target: self, action: #selector(showMoreMenu(_:)))
         button.toolTip = toolTip
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -161,8 +159,20 @@ extension ViewController: NSToolbarDelegate {
             button.bezelStyle = .rounded
         }
 
-        let ellipsisView = NSImageView(image: LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 18, weight: .medium) ?? NSImage())
-        let chevronView = NSImageView(image: LiquidGlassDesign.symbol("chevron.down", pointSize: 9, weight: .semibold) ?? NSImage())
+        let ellipsisView = NSImageView(
+            image: LiquidGlassDesign.symbol(
+                "ellipsis.circle",
+                pointSize: ellipsisPointSize,
+                weight: ellipsisWeight
+            ) ?? NSImage()
+        )
+        let chevronView = NSImageView(
+            image: LiquidGlassDesign.symbol(
+                "chevron.down",
+                pointSize: chevronPointSize,
+                weight: .semibold
+            ) ?? NSImage()
+        )
         [ellipsisView, chevronView].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             $0.contentTintColor = .labelColor
@@ -173,19 +183,19 @@ extension ViewController: NSToolbarDelegate {
         imageStack.translatesAutoresizingMaskIntoConstraints = false
         imageStack.orientation = .horizontal
         imageStack.alignment = .centerY
-        imageStack.spacing = 6
+        imageStack.spacing = usesNativeGlass ? 6 : 4
         imageStack.distribution = .gravityAreas
         button.addSubview(imageStack)
 
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 48),
-            button.heightAnchor.constraint(equalToConstant: 36),
+            button.widthAnchor.constraint(equalToConstant: buttonWidth),
+            button.heightAnchor.constraint(equalToConstant: buttonHeight),
             imageStack.centerXAnchor.constraint(equalTo: button.centerXAnchor),
             imageStack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            ellipsisView.widthAnchor.constraint(equalToConstant: 22),
-            ellipsisView.heightAnchor.constraint(equalToConstant: 22),
-            chevronView.widthAnchor.constraint(equalToConstant: 9),
-            chevronView.heightAnchor.constraint(equalToConstant: 9)
+            ellipsisView.widthAnchor.constraint(equalToConstant: ellipsisSize),
+            ellipsisView.heightAnchor.constraint(equalToConstant: ellipsisSize),
+            chevronView.widthAnchor.constraint(equalToConstant: chevronSize),
+            chevronView.heightAnchor.constraint(equalToConstant: chevronSize)
         ])
 
         return button
