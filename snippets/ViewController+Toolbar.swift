@@ -106,7 +106,7 @@ extension ViewController: NSToolbarDelegate {
 
             let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
             configureMoreToolbarItem(item)
-            item.image = makeLegacyMoreToolbarImage()
+            item.image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 14, weight: .regular)
             item.menu = makeMoreMenu()
             item.showsIndicator = true
             item.isBordered = true
@@ -142,13 +142,6 @@ extension ViewController: NSToolbarDelegate {
         item.paletteLabel = "More"
         item.toolTip = "Import, Export, and Settings"
         item.visibilityPriority = .low
-    }
-
-    private func makeLegacyMoreToolbarImage() -> NSImage? {
-        let image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 14, weight: .regular)?
-            .withSymbolConfiguration(.init(hierarchicalColor: .secondaryLabelColor))
-        image?.isTemplate = false
-        return image
     }
 
     private func makeMoreToolbarButton(toolTip: String?) -> NSButton {
