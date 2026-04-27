@@ -106,10 +106,10 @@ extension ViewController: NSToolbarDelegate {
 
             let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
             configureMoreToolbarItem(item)
-            item.image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 18, weight: .medium)
+            item.image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 16, weight: .medium)
             item.menu = makeMoreMenu()
             item.showsIndicator = true
-            LiquidGlassDesign.configureSecondaryToolbarItem(item)
+            item.isBordered = false
             return item
 
         case .snippetsNew:
