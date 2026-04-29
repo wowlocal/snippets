@@ -306,6 +306,7 @@ extension ViewController {
         tableScrollView.drawsBackground = false
         tableScrollView.hasVerticalScroller = true
         tableScrollView.autohidesScrollers = true
+        tableScrollView.scrollerStyle = .overlay
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("SnippetColumn"))
         tableView.addTableColumn(column)
@@ -324,7 +325,12 @@ extension ViewController {
         }
 
         tableScrollView.documentView = tableView
-        let preferredSidebarTableHeight = tableScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 260)
+
+        let listContainer = LiquidGlassDesign.makeScrollFadeContainer(containing: tableScrollView)
+        listContainer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        listContainer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+
+        let preferredSidebarTableHeight = listContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 260)
         preferredSidebarTableHeight.priority = .defaultLow
         preferredSidebarTableHeight.isActive = true
 
@@ -352,10 +358,10 @@ extension ViewController {
         importExportMessageLabel.maximumNumberOfLines = 1
         importExportMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        rootStack.addArrangedSubview(tableScrollView)
+        rootStack.addArrangedSubview(listContainer)
         rootStack.addArrangedSubview(footerTopRow)
 
-        rootStack.setCustomSpacing(8, after: tableScrollView)
+        rootStack.setCustomSpacing(8, after: listContainer)
 
         let contentView = NSView()
         contentView.translatesAutoresizingMaskIntoConstraints = false

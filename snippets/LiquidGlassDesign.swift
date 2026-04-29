@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 enum LiquidGlassDesign {
     enum Metrics {
@@ -86,6 +87,13 @@ enum LiquidGlassDesign {
         effectView.addSubview(content)
         pin(content, to: effectView)
         return effectView
+    }
+
+    static func makeScrollFadeContainer(containing scrollView: NSScrollView) -> NSView {
+        let container = ScrollFadeMaskContainerView(scrollView: scrollView)
+        container.addSubview(scrollView)
+        pin(scrollView, to: container)
+        return container
     }
 
     static func configureRoundedLayer(
@@ -188,5 +196,107 @@ enum LiquidGlassDesign {
             content.topAnchor.constraint(equalTo: container.topAnchor),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
+    }
+}
+
+private final class ScrollFadeMaskContainerView: NSView {
+    private weak var scrollView: NSScrollView?
+    private var boundsObserver: NSObjectProtocol?
+    private let maskLayer = CAGradientLayer()
+    private let topFadeHeight: CGFloat = 26
+    private let bottomFadeHeight: CGFloat = 20
+
+    init(scrollView: NSScrollView) {
+        self.scrollView = scrollView
+        super.init(frame: .zero)
+
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.mask = maskLayer
+        observeScrollView(scrollView)
+        updateMask()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateMask()
+    }
+
+    override func layout() {
+        super.layout()
+        updateMask()
+    }
+
+    deinit {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+        }
+    }
+
+    private func observeScrollView(_ scrollView: NSScrollView) {
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateMask()
+        }
+    }
+
+    private func updateMask() {
+        maskLayer.frame = bounds
+
+        guard let scrollView, let documentView = scrollView.documentView else {
+            applyMask(topIntensity: 0, bottomIntensity: 0)
+            return
+        }
+
+        let visibleBounds = scrollView.contentView.bounds
+        let documentBounds = documentView.bounds
+        guard documentBounds.height > visibleBounds.height + 1 else {
+            applyMask(topIntensity: 0, bottomIntensity: 0)
+            return
+        }
+
+        let topHiddenDistance = documentView.isFlipped
+            ? visibleBounds.minY - documentBounds.minY
+            : documentBounds.maxY - visibleBounds.maxY
+        let bottomHiddenDistance = documentView.isFlipped
+            ? documentBounds.maxY - visibleBounds.maxY
+            : visibleBounds.minY - documentBounds.minY
+
+        applyMask(
+            topIntensity: min(max(topHiddenDistance / topFadeHeight, 0), 1),
+            bottomIntensity: min(max(bottomHiddenDistance / bottomFadeHeight, 0), 1)
+        )
+    }
+
+    private func applyMask(topIntensity: CGFloat, bottomIntensity: CGFloat) {
+        let height = max(bounds.height, 1)
+        let topFade = min(topFadeHeight / height, 0.45)
+        let bottomFade = min(bottomFadeHeight / height, 0.45)
+        let opaque = NSColor.black.withAlphaComponent(1).cgColor
+        let topEdge = NSColor.black.withAlphaComponent(1 - topIntensity).cgColor
+        let bottomEdge = NSColor.black.withAlphaComponent(1 - bottomIntensity).cgColor
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.startPoint = CGPoint(x: 0.5, y: 0)
+        maskLayer.endPoint = CGPoint(x: 0.5, y: 1)
+        maskLayer.colors = [bottomEdge, opaque, opaque, topEdge]
+        maskLayer.locations = [
+            0,
+            NSNumber(value: Double(bottomFade)),
+            NSNumber(value: Double(max(bottomFade, 1 - topFade))),
+            1
+        ]
+        CATransaction.commit()
     }
 }
