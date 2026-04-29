@@ -213,6 +213,12 @@ private final class ScrollFadeMaskContainerView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.masksToBounds = true
+        maskLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "colors": NSNull(),
+            "locations": NSNull()
+        ]
         layer?.mask = maskLayer
         observeScrollView(scrollView)
         updateMask()
@@ -225,6 +231,16 @@ private final class ScrollFadeMaskContainerView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateMask()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateMask()
+    }
+
+    override func setBoundsSize(_ newSize: NSSize) {
+        super.setBoundsSize(newSize)
         updateMask()
     }
 
@@ -251,8 +267,6 @@ private final class ScrollFadeMaskContainerView: NSView {
     }
 
     private func updateMask() {
-        maskLayer.frame = bounds
-
         guard let scrollView, let documentView = scrollView.documentView else {
             applyMask(topIntensity: 0, bottomIntensity: 0)
             return
@@ -288,6 +302,7 @@ private final class ScrollFadeMaskContainerView: NSView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        maskLayer.frame = bounds
         maskLayer.startPoint = CGPoint(x: 0.5, y: 0)
         maskLayer.endPoint = CGPoint(x: 0.5, y: 1)
         maskLayer.colors = [bottomEdge, opaque, opaque, topEdge]
