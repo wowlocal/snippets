@@ -190,16 +190,18 @@ final class SnippetTableRowView: NSTableRowView {
 
         guard isHovering, !isSelected else { return }
 
-        let hoverRect = bounds.insetBy(dx: 5, dy: 1)
+        let hoverRect = LiquidGlassDesign.rowHighlightRect(
+            in: bounds,
+            horizontalInset: 5,
+            verticalInset: 1
+        )
         let path = NSBezierPath(
             roundedRect: hoverRect,
-            xRadius: LiquidGlassDesign.Metrics.rowCornerRadius,
-            yRadius: LiquidGlassDesign.Metrics.rowCornerRadius
+            xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
+            yRadius: LiquidGlassDesign.rowHighlightCornerRadius
         )
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let color = isDark
-            ? NSColor.white.withAlphaComponent(0.055)
-            : NSColor.black.withAlphaComponent(0.035)
+        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: false, isDark: isDark)
         color.setFill()
         path.fill()
     }
@@ -207,21 +209,25 @@ final class SnippetTableRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
 
-        let selectionRect = bounds.insetBy(dx: 5, dy: 1)
+        let selectionRect = LiquidGlassDesign.rowHighlightRect(
+            in: bounds,
+            horizontalInset: 5,
+            verticalInset: 1
+        )
         let path = NSBezierPath(
             roundedRect: selectionRect,
-            xRadius: LiquidGlassDesign.Metrics.rowCornerRadius,
-            yRadius: LiquidGlassDesign.Metrics.rowCornerRadius
+            xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
+            yRadius: LiquidGlassDesign.rowHighlightCornerRadius
         )
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let color = isDark
-            ? NSColor.white.withAlphaComponent(0.13)
-            : NSColor.controlAccentColor.withAlphaComponent(0.11)
+        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: true, isDark: isDark)
         color.setFill()
         path.fill()
 
-        NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16).setStroke()
-        path.lineWidth = 1
-        path.stroke()
+        if let strokeColor = LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark) {
+            strokeColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
     }
 }

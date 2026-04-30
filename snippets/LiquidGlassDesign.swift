@@ -27,6 +27,52 @@ enum LiquidGlassDesign {
             : NSColor.controlAccentColor.withAlphaComponent(0.18)
     }
 
+    static var rowHighlightCornerRadius: CGFloat {
+        usesNativeGlass ? Metrics.rowCornerRadius : 8
+    }
+
+    static func rowHighlightRect(
+        in bounds: NSRect,
+        horizontalInset: CGFloat,
+        verticalInset: CGFloat
+    ) -> NSRect {
+        if usesNativeGlass {
+            return bounds.insetBy(dx: horizontalInset, dy: verticalInset)
+        }
+
+        return bounds.insetBy(
+            dx: max(horizontalInset, 10),
+            dy: max(verticalInset, 7)
+        )
+    }
+
+    static func rowHighlightFillColor(isSelected: Bool, isDark: Bool) -> NSColor {
+        if usesNativeGlass {
+            if isSelected {
+                return isDark
+                    ? NSColor.white.withAlphaComponent(0.13)
+                    : NSColor.controlAccentColor.withAlphaComponent(0.11)
+            }
+
+            return isDark
+                ? NSColor.white.withAlphaComponent(0.055)
+                : NSColor.black.withAlphaComponent(0.035)
+        }
+
+        if isSelected {
+            return NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.20 : 0.12)
+        }
+
+        return isDark
+            ? NSColor.white.withAlphaComponent(0.035)
+            : NSColor.black.withAlphaComponent(0.025)
+    }
+
+    static func rowHighlightStrokeColor(isDark: Bool) -> NSColor? {
+        guard usesNativeGlass else { return nil }
+        return NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16)
+    }
+
     static func makeTransientSurface(
         containing content: NSView,
         cornerRadius: CGFloat = Metrics.panelCornerRadius,

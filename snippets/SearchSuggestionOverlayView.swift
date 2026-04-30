@@ -257,23 +257,18 @@ private final class SearchSuggestionRowView: NSView {
 
         guard isSelected || isHovering else { return }
 
-        let rect = bounds.insetBy(dx: 8, dy: 3)
+        let rect = LiquidGlassDesign.rowHighlightRect(
+            in: bounds,
+            horizontalInset: 8,
+            verticalInset: 3
+        )
         let path = NSBezierPath(
             roundedRect: rect,
-            xRadius: LiquidGlassDesign.Metrics.rowCornerRadius,
-            yRadius: LiquidGlassDesign.Metrics.rowCornerRadius
+            xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
+            yRadius: LiquidGlassDesign.rowHighlightCornerRadius
         )
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let color: NSColor
-        if isSelected {
-            color = isDark
-                ? NSColor.white.withAlphaComponent(0.13)
-                : NSColor.controlAccentColor.withAlphaComponent(0.11)
-        } else {
-            color = isDark
-                ? NSColor.white.withAlphaComponent(0.055)
-                : NSColor.black.withAlphaComponent(0.035)
-        }
+        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: isSelected, isDark: isDark)
         color.setFill()
         path.fill()
     }
