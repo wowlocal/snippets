@@ -305,7 +305,7 @@ private final class SearchSuggestionRowView: NSView {
         } else {
             nameLabel.textColor = .labelColor
             keywordLabel.textColor = .secondaryLabelColor
-            contentPreviewLabel.textColor = .tertiaryLabelColor
+            contentPreviewLabel.textColor = .secondaryLabelColor
         }
     }
 }

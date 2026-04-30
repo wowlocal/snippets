@@ -123,7 +123,7 @@ final class SnippetRowCellView: NSTableCellView {
         } else {
             nameLabel.textColor = .labelColor
             keywordLabel.textColor = .secondaryLabelColor
-            contentPreviewLabel.textColor = .tertiaryLabelColor
+            contentPreviewLabel.textColor = .secondaryLabelColor
         }
     }
 }
