@@ -186,45 +186,31 @@ final class SnippetTableRowView: NSTableRowView {
     }
 
     override func drawBackground(in dirtyRect: NSRect) {
-        super.drawBackground(in: dirtyRect)
-
-        guard isHovering, !isSelected else { return }
-
-        let hoverRect = LiquidGlassDesign.rowHighlightRect(
-            in: bounds,
-            horizontalInset: 5,
-            verticalInset: 1
-        )
-        let path = NSBezierPath(
-            roundedRect: hoverRect,
-            xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
-            yRadius: LiquidGlassDesign.rowHighlightCornerRadius
-        )
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: false, isDark: isDark)
-        color.setFill()
-        path.fill()
+        guard isSelected || isHovering else { return }
+        drawHighlight(isSelected: isSelected)
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
-        guard selectionHighlightStyle != .none else { return }
+        // Selection is drawn in drawBackground so hover and selected states share the same footprint.
+    }
 
-        let selectionRect = LiquidGlassDesign.rowHighlightRect(
+    private func drawHighlight(isSelected: Bool) {
+        let highlightRect = LiquidGlassDesign.rowHighlightRect(
             in: bounds,
             horizontalInset: 5,
             verticalInset: 1
         )
         let path = NSBezierPath(
-            roundedRect: selectionRect,
+            roundedRect: highlightRect,
             xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
             yRadius: LiquidGlassDesign.rowHighlightCornerRadius
         )
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: true, isDark: isDark)
+        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: isSelected, isDark: isDark)
         color.setFill()
         path.fill()
 
-        if let strokeColor = LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark) {
+        if isSelected, let strokeColor = LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark) {
             strokeColor.setStroke()
             path.lineWidth = 1
             path.stroke()
