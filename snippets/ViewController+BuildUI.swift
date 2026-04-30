@@ -313,7 +313,7 @@ extension ViewController {
         tableView.headerView = nil
         tableView.focusRingType = .none
         tableView.usesAlternatingRowBackgroundColors = false
-        tableView.selectionHighlightStyle = .regular
+        tableView.selectionHighlightStyle = .none
         tableView.backgroundColor = .clear
         tableView.allowsEmptySelection = true
         tableView.rowHeight = 58
