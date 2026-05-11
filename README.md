@@ -26,7 +26,7 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 
 ## Build and Run
 
-1. Open `/Users/mike/src/tries/2026-02-15-snippets/snippets/Snippets.xcodeproj` in Xcode.
+1. Open `Snippets.xcodeproj` in Xcode.
 2. Select the `Snippets` scheme.
 3. Build and run.
 
@@ -65,7 +65,7 @@ The app is organized around three main pieces:
 
 Detailed deep dive:
 
-- `/Users/mike/src/tries/2026-02-15-snippets/snippets/docs/text-input-detection.md` explains cross-app text-input detection, Chromium/Electron workarounds, monitor quirks, and troubleshooting.
+- `docs/text-input-detection.md` explains cross-app text-input detection, Chromium/Electron workarounds, monitor quirks, and troubleshooting.
 
 Global expansion pipeline:
 
