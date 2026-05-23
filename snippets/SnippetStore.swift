@@ -130,11 +130,12 @@ final class SnippetStore {
         pushUndo()
 
         let source = snippets[index]
+        let shouldDisableDuplicate = source.isEnabled && !source.normalizedKeyword.isEmpty
         let duplicate = Snippet(
             name: source.displayName + " Copy",
             keyword: source.keyword,
             content: source.content,
-            isEnabled: source.isEnabled,
+            isEnabled: shouldDisableDuplicate ? false : source.isEnabled,
             isPinned: source.isPinned
         )
         snippets.insert(duplicate, at: index + 1)

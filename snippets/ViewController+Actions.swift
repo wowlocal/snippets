@@ -257,7 +257,11 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         guard let targetSnippetID,
               let duplicate = store.duplicate(snippetID: targetSnippetID) else { return }
 
-        importExportMessage = "Duplicated \(duplicate.displayName)."
+        if duplicate.isEnabled || duplicate.normalizedKeyword.isEmpty {
+            importExportMessage = "Duplicated \(duplicate.displayName)."
+        } else {
+            importExportMessage = "Duplicated \(duplicate.displayName) and disabled the copy to avoid a duplicate keyword."
+        }
         reloadVisibleSnippets(keepSelection: true)
         selectSnippet(id: duplicate.id, focusEditorName: true)
         closeActionPanel()
