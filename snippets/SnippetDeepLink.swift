@@ -110,11 +110,7 @@ enum SnippetDeepLink {
     }
 
     private static func normalizedSharedKeyword(_ rawKeyword: String) -> String {
-        var keyword = rawKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        if keyword.hasPrefix("\\") {
-            keyword.removeFirst()
-        }
-        return keyword
+        Snippet.sanitizedKeyword(rawKeyword)
     }
 }
 

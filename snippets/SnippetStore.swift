@@ -133,7 +133,7 @@ final class SnippetStore {
         let shouldDisableDuplicate = source.isEnabled && !source.normalizedKeyword.isEmpty
         let duplicate = Snippet(
             name: source.displayName + " Copy",
-            keyword: source.keyword,
+            keyword: source.normalizedKeyword,
             content: source.content,
             isEnabled: shouldDisableDuplicate ? false : source.isEnabled,
             isPinned: source.isPinned
@@ -344,14 +344,11 @@ final class SnippetStore {
         from rawKeyword: String?,
         preserveExclamationPrefix: Bool
     ) -> String {
-        var keyword = (rawKeyword ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if keyword.hasPrefix("\\") {
-            keyword.removeFirst()
-        }
+        var keyword = Snippet.sanitizedKeyword(rawKeyword ?? "")
 
         if !preserveExclamationPrefix, keyword.hasPrefix("!") {
             keyword.removeFirst()
+            keyword = Snippet.sanitizedKeyword(keyword)
         }
 
         return keyword

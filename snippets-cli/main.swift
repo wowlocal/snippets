@@ -97,9 +97,10 @@ private func cmdSearch(query: String, enabledOnly: Bool) {
 }
 
 private func cmdGet(keyword: String) {
+    let lookupKeyword = Snippet.sanitizedKeyword(keyword)
     let snippets = loadSnippets()
     guard let snippet = snippets.first(where: {
-        $0.normalizedKeyword.caseInsensitiveCompare(keyword) == .orderedSame
+        $0.normalizedKeyword.caseInsensitiveCompare(lookupKeyword) == .orderedSame
     }) else {
         fail("no snippet found with keyword '\(keyword)'")
     }
@@ -107,13 +108,14 @@ private func cmdGet(keyword: String) {
 }
 
 private func cmdAdd(name: String, keyword: String, content: String, enabled: Bool, pinned: Bool) {
-    guard !keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    let sanitizedKeyword = Snippet.sanitizedKeyword(keyword)
+    guard !sanitizedKeyword.isEmpty else {
         fail("--keyword must not be empty")
     }
     var snippets = loadSnippets()
     let snippet = Snippet(
         name: name,
-        keyword: keyword.trimmingCharacters(in: .whitespacesAndNewlines),
+        keyword: sanitizedKeyword,
         content: content,
         isEnabled: enabled,
         isPinned: pinned
@@ -132,17 +134,18 @@ private func cmdUpdate(
     pinned: Bool?
 ) {
     var snippets = loadSnippets()
+    let lookupKeyword = Snippet.sanitizedKeyword(keywordOrID)
 
     guard let index = snippets.firstIndex(where: { s in
         if let id = UUID(uuidString: keywordOrID) { return s.id == id }
-        return s.normalizedKeyword.caseInsensitiveCompare(keywordOrID) == .orderedSame
+        return s.normalizedKeyword.caseInsensitiveCompare(lookupKeyword) == .orderedSame
     }) else {
         fail("no snippet found matching '\(keywordOrID)'")
     }
 
     var updated = snippets[index]
     if let name    = name    { updated.name    = name }
-    if let keyword = keyword { updated.keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines) }
+    if let keyword = keyword { updated.keyword = Snippet.sanitizedKeyword(keyword) }
     if let content = content { updated.content = content }
     if let enabled = enabled { updated.isEnabled = enabled }
     if let pinned  = pinned  { updated.isPinned  = pinned  }
@@ -156,12 +159,13 @@ private func cmdUpdate(
 private func cmdDelete(keywordOrID: String) {
     var snippets = loadSnippets()
     let before = snippets.count
+    let lookupKeyword = Snippet.sanitizedKeyword(keywordOrID)
 
     if let id = UUID(uuidString: keywordOrID) {
         snippets.removeAll { $0.id == id }
     } else {
         snippets.removeAll {
-            $0.normalizedKeyword.caseInsensitiveCompare(keywordOrID) == .orderedSame
+            $0.normalizedKeyword.caseInsensitiveCompare(lookupKeyword) == .orderedSame
         }
     }
 

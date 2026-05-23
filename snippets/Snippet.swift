@@ -44,7 +44,21 @@ struct Snippet: Identifiable, Codable, Equatable {
     }
 
     var normalizedKeyword: String {
-        keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.sanitizedKeyword(keyword)
+    }
+
+    static func sanitizedKeyword(_ rawKeyword: String) -> String {
+        var keyword = rawKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        while keyword.hasPrefix("\\") {
+            keyword.removeFirst()
+            keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return keyword
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
     }
 }
 

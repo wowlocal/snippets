@@ -159,17 +159,33 @@ extension ViewController {
         snippet.name = nameField.stringValue
         snippet.content = snippetTextView.string
 
-        let sanitizedKeyword = keywordField.stringValue.replacingOccurrences(of: " ", with: "-")
-        if sanitizedKeyword != keywordField.stringValue {
-            keywordField.stringValue = sanitizedKeyword
-        }
-        snippet.keyword = sanitizedKeyword
+        snippet.keyword = sanitizedKeywordFromEditor()
 
         snippet.isEnabled = enabledCheckbox.state == .on
 
         store.update(snippet)
         updatePreview(withTemplate: snippet.content)
         updateKeywordWarning(for: snippet)
+    }
+
+    private func sanitizedKeywordFromEditor() -> String {
+        let rawKeyword = keywordField.stringValue
+        let sanitizedKeyword = Snippet.sanitizedKeyword(rawKeyword)
+        guard sanitizedKeyword != rawKeyword else { return sanitizedKeyword }
+
+        if let editor = keywordField.currentEditor() {
+            let selectedRange = editor.selectedRange
+            let sanitizedLength = (sanitizedKeyword as NSString).length
+            editor.string = sanitizedKeyword
+            editor.selectedRange = NSRange(
+                location: min(selectedRange.location, sanitizedLength),
+                length: min(selectedRange.length, max(0, sanitizedLength - min(selectedRange.location, sanitizedLength)))
+            )
+        } else {
+            keywordField.stringValue = sanitizedKeyword
+        }
+
+        return sanitizedKeyword
     }
 
     func updateKeywordWarning(for snippet: Snippet) {
