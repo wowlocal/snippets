@@ -577,6 +577,11 @@ final class SnippetStore {
     }
 
     private func reloadFromDiskIfNeeded() {
+        guard persistWorkItem == nil else {
+            flushPendingWrites()
+            return
+        }
+
         guard let data = try? Data(contentsOf: saveURL) else { return }
         guard data != lastKnownDiskData else { return }
 
