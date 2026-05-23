@@ -26,7 +26,6 @@ final class SnippetExpansionEngine {
     private var suggestionActive = false
     private var suggestionQuery = ""
     private lazy var suggestionPanel = SuggestionPanelController()
-    private let optionDeleteWordCharacterSet = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
     // On macOS some apps drop rapid synthetic key events; keep a small delay
     // between injected keystrokes to ensure trigger deletion is complete.
     private let injectedKeyDelay: TimeInterval = 0.012
@@ -34,6 +33,21 @@ final class SnippetExpansionEngine {
     private let prePasteDelayAfterDelete: TimeInterval = 0.02
     private let pasteboardWriteSettleDelay: TimeInterval = 0.012
     private let pasteboardRestoreDelay: Duration = .milliseconds(350)
+
+    private enum FocusedSelection {
+        case none
+        case text(String)
+        case unreadable(length: Int)
+
+        var hasSelection: Bool {
+            switch self {
+            case .none:
+                return false
+            case .text, .unreadable:
+                return true
+            }
+        }
+    }
 
     init(store: SnippetStore) {
         self.store = store
@@ -277,10 +291,12 @@ final class SnippetExpansionEngine {
 
         // Arrow keys / Ctrl+N/P navigate the list — suppress so target app doesn't see them
         if event.keyCode == UInt16(kVK_DownArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_N)) {
+            guard suggestionPanel.hasSelectableItems else { return false }
             suggestionPanel.moveSelectionDown()
             return true
         }
         if event.keyCode == UInt16(kVK_UpArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_P)) {
+            guard suggestionPanel.hasSelectableItems else { return false }
             suggestionPanel.moveSelectionUp()
             return true
         }
@@ -293,14 +309,7 @@ final class SnippetExpansionEngine {
 
         // Emacs Ctrl+W — delete previous word
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_W) {
-            if suggestionQuery.isEmpty {
-                dismissSuggestions()
-                removeCharactersFromTypedBuffer(1)
-            } else {
-                let removedCount = removePreviousWordFromSuggestionQuery()
-                removeCharactersFromTypedBuffer(removedCount)
-                updateSuggestionResults()
-            }
+            dismissSuggestionsAfterHostDeletion()
             return false
         }
 
@@ -316,17 +325,10 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Dedicated Option+Delete handling:
-        // in suggestion mode this should edit the query, not fall into the generic Option-dismiss path.
+        // Dedicated Option+Delete handling: host apps do not agree on word
+        // boundaries, so let the app delete and end this suggestion session.
         if option && !command && event.keyCode == UInt16(kVK_Delete) {
-            if suggestionQuery.isEmpty {
-                dismissSuggestions()
-                removeCharactersFromTypedBuffer(1)
-            } else {
-                let removedCount = removePreviousWordFromSuggestionQuery()
-                removeCharactersFromTypedBuffer(removedCount)
-                updateSuggestionResults()
-            }
+            dismissSuggestionsAfterHostDeletion()
             return false
         }
 
@@ -402,21 +404,23 @@ final class SnippetExpansionEngine {
     /// Returns a snippet only if `query` exactly matches one keyword and no other keyword starts with `query`.
     private func unambiguousExactMatch(for query: String) -> Snippet? {
         let snippets = store.enabledSnippetsSorted()
-        let lowered = query.lowercased()
+        let normalizedQuery = normalizedForSuggestionMatching(query)
 
-        var exactMatch: Snippet?
+        var exactMatches: [Snippet] = []
+        var hasLongerPrefix = false
         for snippet in snippets {
-            let keyword = snippet.normalizedKeyword.lowercased()
+            let keyword = normalizedForSuggestionMatching(snippet.normalizedKeyword)
             guard !keyword.isEmpty else { continue }
 
-            if keyword == lowered {
-                exactMatch = snippet
-            } else if keyword.hasPrefix(lowered) {
-                // Another keyword extends this one — ambiguous
-                return nil
+            if keyword == normalizedQuery {
+                exactMatches.append(snippet)
+            } else if keyword.hasPrefix(normalizedQuery) {
+                hasLongerPrefix = true
             }
         }
-        return exactMatch
+
+        guard exactMatches.count == 1, !hasLongerPrefix else { return nil }
+        return exactMatches[0]
     }
 
     private func autoExpandFromTypedBufferIfNeeded(typedCharacter: Character) -> Bool {
@@ -444,7 +448,10 @@ final class SnippetExpansionEngine {
     }
 
     private func updateSuggestionResults() {
-        let snippets = store.enabledSnippetsSorted()
+        let snippets = enabledSnippetsForSuggestionDisplay()
+        let displayOrder = Dictionary(
+            uniqueKeysWithValues: snippets.enumerated().map { ($0.element.id, $0.offset) }
+        )
 
         let scored: [SuggestionItem]
         if suggestionQuery.isEmpty {
@@ -464,7 +471,9 @@ final class SnippetExpansionEngine {
                     keywordMatchRanges: keywordResult.matchedRanges
                 )
             }
-            .sorted { $0.score > $1.score }
+            .sorted {
+                suggestion($0, ranksBefore: $1, query: suggestionQuery, displayOrder: displayOrder)
+            }
             .prefix(8)
             .map { $0 }
         }
@@ -474,6 +483,64 @@ final class SnippetExpansionEngine {
         } else {
             suggestionPanel.show(items: Array(scored))
         }
+    }
+
+    private func enabledSnippetsForSuggestionDisplay() -> [Snippet] {
+        store.snippetsSortedForDisplay()
+            .filter { $0.isEnabled && !$0.normalizedKeyword.isEmpty }
+    }
+
+    private func suggestion(
+        _ lhs: SuggestionItem,
+        ranksBefore rhs: SuggestionItem,
+        query: String,
+        displayOrder: [UUID: Int]
+    ) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score > rhs.score
+        }
+
+        let lhsKeywordRank = keywordMatchRank(for: lhs, query: query)
+        let rhsKeywordRank = keywordMatchRank(for: rhs, query: query)
+        if lhsKeywordRank != rhsKeywordRank {
+            return lhsKeywordRank > rhsKeywordRank
+        }
+
+        if lhs.snippet.isPinned != rhs.snippet.isPinned {
+            return lhs.snippet.isPinned
+        }
+
+        let lhsDisplayOrder = displayOrder[lhs.snippet.id] ?? Int.max
+        let rhsDisplayOrder = displayOrder[rhs.snippet.id] ?? Int.max
+        if lhsDisplayOrder != rhsDisplayOrder {
+            return lhsDisplayOrder < rhsDisplayOrder
+        }
+
+        let nameComparison = lhs.snippet.displayName.localizedCaseInsensitiveCompare(rhs.snippet.displayName)
+        if nameComparison != .orderedSame {
+            return nameComparison == .orderedAscending
+        }
+
+        return lhs.snippet.id.uuidString < rhs.snippet.id.uuidString
+    }
+
+    private func keywordMatchRank(for item: SuggestionItem, query: String) -> Int {
+        let keyword = normalizedForSuggestionMatching(item.snippet.normalizedKeyword)
+        let query = normalizedForSuggestionMatching(query)
+
+        if keyword == query {
+            return 3
+        }
+
+        if keyword.hasPrefix(query) {
+            return 2
+        }
+
+        return item.keywordMatchRanges.isEmpty ? 0 : 1
+    }
+
+    private func normalizedForSuggestionMatching(_ string: String) -> String {
+        string.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     private func typedCharacter(from event: NSEvent) -> Character? {
@@ -523,29 +590,9 @@ final class SnippetExpansionEngine {
         typedBuffer.removeLast(min(count, typedBuffer.count))
     }
 
-    private func removePreviousWordFromSuggestionQuery() -> Int {
-        guard !suggestionQuery.isEmpty else { return 0 }
-
-        let characters = Array(suggestionQuery)
-        var end = characters.count
-
-        // Match typical Option+Delete semantics:
-        // drop trailing separators, then remove the previous word token.
-        while end > 0 && !isOptionDeleteWordCharacter(characters[end - 1]) {
-            end -= 1
-        }
-
-        while end > 0 && isOptionDeleteWordCharacter(characters[end - 1]) {
-            end -= 1
-        }
-
-        let removedCount = characters.count - end
-        suggestionQuery = String(characters.prefix(end))
-        return removedCount
-    }
-
-    private func isOptionDeleteWordCharacter(_ character: Character) -> Bool {
-        character.unicodeScalars.allSatisfy { optionDeleteWordCharacterSet.contains($0) }
+    private func dismissSuggestionsAfterHostDeletion() {
+        typedBuffer = ""
+        dismissSuggestions()
     }
 
 
@@ -557,7 +604,8 @@ final class SnippetExpansionEngine {
     /// zero for pure autocompletion text, N for a manual selection of N typed chars.
     private func handleSuggestionBackspace() {
         let trimCount: Int
-        if let selectedText = focusedTextInputSelectedText(), !selectedText.isEmpty {
+        switch focusedTextInputSelection() {
+        case .text(let selectedText):
             // Backspace will delete this selection.
             // Count how many characters at the end of our query are covered.
             if suggestionQuery.hasSuffix(selectedText) {
@@ -571,7 +619,10 @@ final class SnippetExpansionEngine {
                 // Selection is outside our tracked query (e.g. autocompletion) — nothing to trim
                 trimCount = 0
             }
-        } else {
+        case .unreadable:
+            dismissSuggestionsAfterHostDeletion()
+            return
+        case .none:
             trimCount = 1
         }
 
@@ -748,34 +799,42 @@ final class SnippetExpansionEngine {
     }
 
     private func focusedTextInputHasSelectedText() -> Bool {
-        return focusedTextInputSelectedText() != nil
+        return focusedTextInputSelection().hasSelection
     }
 
-    /// Returns the selected text in the focused element, or nil if nothing is selected.
-    private func focusedTextInputSelectedText() -> String? {
-        guard let focused = frontmostFocusedElement() else { return nil }
-        if let text = stringAttribute(of: focused, attribute: kAXSelectedTextAttribute as CFString),
-           !text.isEmpty {
-            return text
-        }
-        if selectedRangeLength(of: focused) > 0 {
-            return "" // Has selection range but couldn't read text
+    private func focusedTextInputSelection() -> FocusedSelection {
+        guard let focused = frontmostFocusedElement() else { return .none }
+
+        let focusedSelection = selectionState(of: focused)
+        if focusedSelection.hasSelection {
+            return focusedSelection
         }
 
         var current = focused
         for _ in 0..<4 {
             guard let parent = parentElement(of: current) else { break }
-            if let text = stringAttribute(of: parent, attribute: kAXSelectedTextAttribute as CFString),
-               !text.isEmpty {
-                return text
-            }
-            if selectedRangeLength(of: parent) > 0 {
-                return ""
+            let parentSelection = selectionState(of: parent)
+            if parentSelection.hasSelection {
+                return parentSelection
             }
             current = parent
         }
 
-        return nil
+        return .none
+    }
+
+    private func selectionState(of element: AXUIElement) -> FocusedSelection {
+        if let text = stringAttribute(of: element, attribute: kAXSelectedTextAttribute as CFString),
+           !text.isEmpty {
+            return .text(text)
+        }
+
+        let selectionLength = selectedRangeLength(of: element)
+        if selectionLength > 0 {
+            return .unreadable(length: selectionLength)
+        }
+
+        return .none
     }
 
     private func frontmostFocusedElement() -> AXUIElement? {

@@ -54,11 +54,18 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     var onSelect: ((Snippet) -> Void)?
     var onDismiss: (() -> Void)?
+    var hasSelectableItems: Bool { !items.isEmpty }
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
     private var anchorRect: NSRect?
     private var accessibilityPrimedPIDs: Set<pid_t> = []
     private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
+
+    private struct RectCandidate {
+        let rect: NSRect
+        let screen: NSScreen
+        let priority: Int
+    }
 
     override init() {
         panel = NSPanel(
@@ -183,6 +190,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     }
 
     func moveSelectionUp() {
+        guard !items.isEmpty else { return }
+
         let current = tableView.selectedRow
         let next = current > 0 ? current - 1 : items.count - 1
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
@@ -190,8 +199,10 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     }
 
     func moveSelectionDown() {
+        guard !items.isEmpty else { return }
+
         let current = tableView.selectedRow
-        let next = current < items.count - 1 ? current + 1 : 0
+        let next = current >= 0 && current < items.count - 1 ? current + 1 : 0
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         tableView.scrollRowToVisible(next)
     }
@@ -238,6 +249,9 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             // Last resort: use mouse position
             var origin = mousePosition()
             origin.y -= panel.frame.height + 4
+            if let screen = screenContaining(point: origin) ?? NSScreen.main {
+                origin = clampedPanelOrigin(origin, in: screen.visibleFrame)
+            }
             panel.setFrameOrigin(origin)
             return
         }
@@ -247,18 +261,15 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         var origin = NSPoint(x: rect.origin.x, y: rect.origin.y - panel.frame.height - 4)
 
         // Keep on screen.
-        if let screen = screenContaining(point: NSPoint(x: rect.midX, y: rect.midY)) ?? NSScreen.main {
+        if let screen = screenContaining(point: NSPoint(x: rect.midX, y: rect.midY))
+            ?? screenIntersecting(rect)
+            ?? NSScreen.main {
             let visible = screen.visibleFrame
-            if origin.x + panelWidth > visible.maxX {
-                origin.x = visible.maxX - panelWidth
-            }
-            if origin.x < visible.minX {
-                origin.x = visible.minX
-            }
             if origin.y < visible.minY {
                 // Show above caret instead
                 origin.y = rect.maxY + 4
             }
+            origin = clampedPanelOrigin(origin, in: visible)
         }
 
         panel.setFrameOrigin(origin)
@@ -275,12 +286,13 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         // Get the CFRange so we can create alternative ranges if needed
         var cfRange = CFRange(location: 0, length: 0)
-        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &cfRange) else {
+        guard axValue(rangeValue, type: .cfRange, into: &cfRange),
+              let rangeValue else {
             return nil
         }
 
         // Try the selected range first
-        if let rect = boundsForRange(of: focused, range: rangeValue!) {
+        if let rect = boundsForRange(of: focused, range: rangeValue) {
             return normalizedAnchorRect(for: rect, focusedElement: focused)
         }
 
@@ -334,7 +346,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             return nil
         }
 
-        guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &bounds) else {
+        guard axValue(boundsValue, type: .cgRect, into: &bounds) else {
             return nil
         }
 
@@ -356,25 +368,76 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     /// Convert an AX rectangle (top-left origin) to an AppKit rect (bottom-left origin).
     private func axRectToAppKit(_ rect: CGRect) -> NSRect? {
-        let flippedFromAX = convertedAXTopLeftRect(rect)
-        if intersectsAnyScreen(flippedFromAX) {
-            return flippedFromAX
+        var candidates: [RectCandidate] = []
+
+        if let screen = screenContainingAXTopLeftRect(rect) {
+            candidates.append(
+                RectCandidate(
+                    rect: convertedAXTopLeftRect(rect, on: screen),
+                    screen: screen,
+                    priority: 3
+                )
+            )
         }
 
-        // Some Chromium/Electron fields report AppKit-style global coordinates.
         let appKitAsIs = NSRect(x: rect.origin.x, y: rect.origin.y, width: rect.size.width, height: rect.size.height)
-        if intersectsAnyScreen(appKitAsIs) {
-            return appKitAsIs
+        if let screen = screenContaining(point: NSPoint(x: appKitAsIs.midX, y: appKitAsIs.midY))
+            ?? screenIntersecting(appKitAsIs) {
+            // Some Chromium/Electron fields report AppKit-style global coordinates.
+            candidates.append(RectCandidate(rect: appKitAsIs, screen: screen, priority: 2))
         }
 
-        // Keep previous behavior as the final fallback.
-        return flippedFromAX
+        // A few apps appear to report screen-local top-left coordinates; keep those
+        // as lower-priority candidates instead of accepting any intersecting rect.
+        for screen in NSScreen.screens {
+            candidates.append(
+                RectCandidate(
+                    rect: convertedScreenLocalAXTopLeftRect(rect, on: screen),
+                    screen: screen,
+                    priority: 1
+                )
+            )
+        }
+
+        if let best = bestRectCandidate(candidates) {
+            return best
+        }
+
+        return NSScreen.main.map { convertedAXTopLeftRect(rect, on: $0) }
     }
 
-    private func convertedAXTopLeftRect(_ rect: CGRect) -> NSRect {
-        let screenHeight = NSScreen.screens.first?.frame.height ?? NSScreen.main?.frame.height ?? 0
-        let flippedY = screenHeight - rect.origin.y - rect.size.height
+    private func convertedAXTopLeftRect(_ rect: CGRect, on screen: NSScreen) -> NSRect {
+        let screenAXFrame = axTopLeftFrame(for: screen)
+        let yInScreen = rect.origin.y - screenAXFrame.minY
+        let flippedY = screen.frame.maxY - yInScreen - rect.size.height
         return NSRect(x: rect.origin.x, y: flippedY, width: rect.size.width, height: rect.size.height)
+    }
+
+    private func convertedScreenLocalAXTopLeftRect(_ rect: CGRect, on screen: NSScreen) -> NSRect {
+        let flippedY = screen.frame.maxY - rect.origin.y - rect.size.height
+        return NSRect(
+            x: screen.frame.minX + rect.origin.x,
+            y: flippedY,
+            width: rect.size.width,
+            height: rect.size.height
+        )
+    }
+
+    private func axTopLeftFrame(for screen: NSScreen) -> NSRect {
+        let mainHeight = NSScreen.main?.frame.height ?? NSScreen.screens.first?.frame.height ?? 0
+        return NSRect(
+            x: screen.frame.minX,
+            y: mainHeight - screen.frame.maxY,
+            width: screen.frame.width,
+            height: screen.frame.height
+        )
+    }
+
+    private func screenContainingAXTopLeftRect(_ rect: CGRect) -> NSScreen? {
+        let axRect = NSRect(x: rect.origin.x, y: rect.origin.y, width: rect.size.width, height: rect.size.height)
+        return NSScreen.screens.first { screen in
+            axTopLeftFrame(for: screen).insetBy(dx: -1, dy: -1).intersects(axRect)
+        }
     }
 
     private func screenContaining(point: NSPoint) -> NSScreen? {
@@ -384,10 +447,62 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return NSScreen.screens.first(where: { $0.visibleFrame.insetBy(dx: -1, dy: -1).contains(point) })
     }
 
-    private func intersectsAnyScreen(_ rect: NSRect) -> Bool {
-        NSScreen.screens.contains { screen in
-            screen.frame.insetBy(dx: -1, dy: -1).intersects(rect)
+    private func screenIntersecting(_ rect: NSRect) -> NSScreen? {
+        NSScreen.screens.max { lhs, rhs in
+            intersectionArea(lhs.frame, rect) < intersectionArea(rhs.frame, rect)
+        }.flatMap { screen in
+            intersectionArea(screen.frame, rect) > 0 ? screen : nil
         }
+    }
+
+    private func bestRectCandidate(_ candidates: [RectCandidate]) -> NSRect? {
+        candidates
+            .compactMap { candidate -> (candidate: RectCandidate, visibleArea: CGFloat, distance: CGFloat)? in
+                let visibleArea = intersectionArea(candidate.screen.visibleFrame, candidate.rect)
+                let frameArea = intersectionArea(candidate.screen.frame, candidate.rect)
+                guard max(visibleArea, frameArea) > 0 else { return nil }
+
+                let distance = distanceFromPoint(
+                    NSPoint(x: candidate.rect.midX, y: candidate.rect.midY),
+                    to: candidate.screen.visibleFrame
+                )
+                return (candidate, max(visibleArea, frameArea), distance)
+            }
+            .max { lhs, rhs in
+                if lhs.visibleArea != rhs.visibleArea {
+                    return lhs.visibleArea < rhs.visibleArea
+                }
+                if lhs.distance != rhs.distance {
+                    return lhs.distance > rhs.distance
+                }
+                return lhs.candidate.priority < rhs.candidate.priority
+            }?
+            .candidate
+            .rect
+    }
+
+    private func intersectionArea(_ lhs: NSRect, _ rhs: NSRect) -> CGFloat {
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull else { return 0 }
+        return max(0, intersection.width) * max(0, intersection.height)
+    }
+
+    private func distanceFromPoint(_ point: NSPoint, to rect: NSRect) -> CGFloat {
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        return hypot(dx, dy)
+    }
+
+    private func clampedPanelOrigin(_ origin: NSPoint, in visible: NSRect) -> NSPoint {
+        NSPoint(
+            x: clamped(origin.x, min: visible.minX, max: visible.maxX - panel.frame.width),
+            y: clamped(origin.y, min: visible.minY, max: visible.maxY - panel.frame.height)
+        )
+    }
+
+    private func clamped(_ value: CGFloat, min minValue: CGFloat, max maxValue: CGFloat) -> CGFloat {
+        guard maxValue >= minValue else { return minValue }
+        return min(max(value, minValue), maxValue)
     }
 
     private func mousePosition() -> NSPoint {
@@ -452,6 +567,22 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return value as? String
     }
 
+    private func axValue<T>(_ value: CFTypeRef?, type: AXValueType, into output: inout T) -> Bool {
+        guard let value,
+              CFGetTypeID(value) == AXValueGetTypeID() else {
+            return false
+        }
+
+        let axValue = value as! AXValue
+        guard AXValueGetType(axValue) == type else {
+            return false
+        }
+
+        return withUnsafeMutablePointer(to: &output) { pointer in
+            AXValueGetValue(axValue, type, pointer)
+        }
+    }
+
     private func elementScreenRect(of element: AXUIElement) -> NSRect? {
         var posValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success else {
@@ -465,8 +596,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         var pos = CGPoint.zero
         var size = CGSize.zero
-        guard AXValueGetValue(posValue as! AXValue, .cgPoint, &pos),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
+        guard axValue(posValue, type: .cgPoint, into: &pos),
+              axValue(sizeValue, type: .cgSize, into: &size) else {
             return nil
         }
 
