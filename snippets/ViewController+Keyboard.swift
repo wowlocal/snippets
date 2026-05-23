@@ -97,7 +97,7 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && key == UInt16(kVK_Delete) && isListContext {
+        if flags == [.command] && key == UInt16(kVK_Delete) {
             deleteSelectedSnippet(nil)
             return nil
         }
@@ -112,7 +112,7 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command, .shift] && key == UInt16(kVK_ANSI_C) && isListContext {
+        if flags == [.command, .shift] && key == UInt16(kVK_ANSI_C) {
             copySelectedSnippetShareLink()
             return nil
         }
@@ -146,12 +146,12 @@ extension ViewController {
             return event
         }
 
-        if flags == [.control] && key == UInt16(kVK_ANSI_N) && isListContext {
+        if flags == [.control] && key == UInt16(kVK_ANSI_N) {
             selectAdjacentSnippet(direction: .down)
             return nil
         }
 
-        if flags == [.control] && key == UInt16(kVK_ANSI_P) && isListContext {
+        if flags == [.control] && key == UInt16(kVK_ANSI_P) {
             selectAdjacentSnippet(direction: .up)
             return nil
         }
@@ -202,8 +202,48 @@ extension ViewController {
 
     enum TableDirection { case up, down }
 
+    enum EditorFocusTarget {
+        case name
+        case keyword
+        case content
+    }
+
+    func currentEditorFocusTarget() -> EditorFocusTarget? {
+        guard let firstResponder = view.window?.firstResponder else { return nil }
+
+        if firstResponder === snippetTextView {
+            return .content
+        }
+
+        if firstResponder === nameField.currentEditor() {
+            return .name
+        }
+
+        if firstResponder === keywordField.currentEditor() {
+            return .keyword
+        }
+
+        return nil
+    }
+
+    func restoreEditorFocus(_ target: EditorFocusTarget?) {
+        guard let target else { return }
+
+        switch target {
+        case .name:
+            requestFirstResponder(nameField)
+        case .keyword:
+            requestFirstResponder(keywordField)
+        case .content:
+            requestFirstResponder(snippetTextView)
+        }
+    }
+
     func selectAdjacentSnippet(direction: TableDirection) {
         guard !visibleSnippets.isEmpty else { return }
+        let focusTarget = currentEditorFocusTarget()
+        commitActiveEditorState(endingEditing: focusTarget != nil)
+
         let current = tableView.selectedRow
         let next: Int
         switch direction {
@@ -214,5 +254,6 @@ extension ViewController {
         }
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         tableView.scrollRowToVisible(next)
+        restoreEditorFocus(focusTarget)
     }
 }

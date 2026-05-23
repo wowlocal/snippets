@@ -96,6 +96,10 @@ extension ViewController {
             return
         }
 
+        applySnippetToEditor(snippet)
+    }
+
+    func applySnippetToEditor(_ snippet: Snippet) {
         isApplyingSnippetToEditor = true
         editingSnippetID = snippet.id
         if nameField.stringValue != snippet.name {
@@ -132,6 +136,21 @@ extension ViewController {
     var editingSnippet: Snippet? {
         guard let editingSnippetID else { return nil }
         return store.snippet(id: editingSnippetID)
+    }
+
+    func activeCommandSnippetID() -> UUID? {
+        let preferredID = isEditingDetails ? editingSnippetID : selectedSnippetID
+        guard let preferredID, store.snippet(id: preferredID) != nil else { return nil }
+        return preferredID
+    }
+
+    func commitActiveEditorState(endingEditing: Bool) {
+        guard isEditingDetails else { return }
+        updateSelectedSnippetFromEditor()
+        store.commitEditTransaction()
+
+        guard endingEditing else { return }
+        view.window?.makeFirstResponder(tableView)
     }
 
     func updateSelectedSnippetFromEditor() {

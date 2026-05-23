@@ -218,6 +218,8 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     }
 
     @objc func createSnippet(_ sender: Any?) {
+        commitActiveEditorState(endingEditing: true)
+
         if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             searchField.stringValue = ""
         }
@@ -229,9 +231,13 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     }
 
     @objc func deleteSelectedSnippet(_ sender: Any?) {
-        guard let selectedSnippetID else { return }
-        let deletedSnippetName = selectedSnippet?.displayName ?? "snippet"
-        store.delete(snippetID: selectedSnippetID)
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
+
+        guard let targetSnippetID,
+              let targetSnippet = store.snippet(id: targetSnippetID) else { return }
+        let deletedSnippetName = targetSnippet.displayName
+        store.delete(snippetID: targetSnippetID)
         reloadVisibleSnippets(keepSelection: true)
         applySelectedSnippetToEditor()
         closeActionPanel()
@@ -245,8 +251,11 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     }
 
     func duplicateSelectedSnippet() {
-        guard let selectedSnippetID,
-              let duplicate = store.duplicate(snippetID: selectedSnippetID) else { return }
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
+
+        guard let targetSnippetID,
+              let duplicate = store.duplicate(snippetID: targetSnippetID) else { return }
 
         importExportMessage = "Duplicated \(duplicate.displayName)."
         reloadVisibleSnippets(keepSelection: true)
@@ -255,48 +264,71 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     }
 
     func togglePinnedSelectedSnippet() {
-        guard let selectedSnippetID else { return }
-        store.togglePinned(snippetID: selectedSnippetID)
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
 
-        let isPinned = store.snippet(id: selectedSnippetID)?.isPinned == true
+        guard let targetSnippetID else { return }
+        store.togglePinned(snippetID: targetSnippetID)
+
+        let isPinned = store.snippet(id: targetSnippetID)?.isPinned == true
         importExportMessage = isPinned ? "Pinned snippet." : "Unpinned snippet."
 
         reloadVisibleSnippets(keepSelection: true)
+        if let snippet = store.snippet(id: targetSnippetID) {
+            applySnippetToEditor(snippet)
+        }
         closeActionPanel()
     }
 
     func toggleEnabledSelectedSnippet() {
-        guard let selectedSnippetID else { return }
-        store.toggleEnabled(snippetID: selectedSnippetID)
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
 
-        let isEnabled = store.snippet(id: selectedSnippetID)?.isEnabled == true
+        guard let targetSnippetID else { return }
+        store.toggleEnabled(snippetID: targetSnippetID)
+
+        let isEnabled = store.snippet(id: targetSnippetID)?.isEnabled == true
         importExportMessage = isEnabled ? "Enabled snippet." : "Disabled snippet."
 
-        applySelectedSnippetToEditor()
+        if let snippet = store.snippet(id: targetSnippetID) {
+            applySnippetToEditor(snippet)
+        }
         closeActionPanel()
     }
 
     func copySelectedSnippet() {
-        guard let selectedSnippet else { return }
-        engine.copySnippetToClipboard(selectedSnippet)
-        importExportMessage = "Copied \(selectedSnippet.displayName) to clipboard."
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
+
+        guard let targetSnippetID,
+              let snippet = store.snippet(id: targetSnippetID) else { return }
+        engine.copySnippetToClipboard(snippet)
+        importExportMessage = "Copied \(snippet.displayName) to clipboard."
     }
 
     func pasteSelectedSnippet() {
-        guard let selectedSnippet else { return }
-        engine.pasteSnippetIntoFrontmostApp(selectedSnippet)
-        importExportMessage = "Pasting \(selectedSnippet.displayName)."
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
+
+        guard let targetSnippetID,
+              let snippet = store.snippet(id: targetSnippetID) else { return }
+        engine.pasteSnippetIntoFrontmostApp(snippet)
+        importExportMessage = "Pasting \(snippet.displayName)."
     }
 
     @objc func copySelectedSnippetShareLink() {
-        guard let selectedSnippet else { return }
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
+
+        guard let targetSnippetID,
+              let snippet = store.snippet(id: targetSnippetID) else { return }
 
         do {
-            let url = try SnippetDeepLink.url(for: selectedSnippet)
+            let url = try SnippetDeepLink.url(for: snippet)
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(url.absoluteString, forType: .string)
-            importExportMessage = "Copied share link for \(selectedSnippet.displayName)."
+            importExportMessage = "Copied share link for \(snippet.displayName)."
             closeActionPanel()
         } catch {
             showErrorAlert(message: error.localizedDescription)
@@ -304,6 +336,8 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     }
 
     @objc func runImport(_ sender: Any?) {
+        commitActiveEditorState(endingEditing: true)
+
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.canChooseFiles = true
@@ -339,6 +373,8 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     }
 
     @objc func runExport(_ sender: Any?) {
+        commitActiveEditorState(endingEditing: true)
+
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType.json]
         panel.canCreateDirectories = true
