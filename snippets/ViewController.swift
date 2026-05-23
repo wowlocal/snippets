@@ -36,6 +36,7 @@ final class ViewController: NSViewController {
 
     var visibleSnippets: [Snippet] = []
     var selectedSnippetID: UUID?
+    var editingSnippetID: UUID?
     var isApplyingSnippetToEditor = false
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
     var clipboardPreviewTimer: Timer?

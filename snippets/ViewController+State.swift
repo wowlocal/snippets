@@ -77,6 +77,7 @@ extension ViewController {
     func applySelectedSnippetToEditor() {
         guard let snippet = selectedSnippet else {
             isApplyingSnippetToEditor = true
+            editingSnippetID = nil
             if !nameField.stringValue.isEmpty {
                 nameField.stringValue = ""
             }
@@ -96,6 +97,7 @@ extension ViewController {
         }
 
         isApplyingSnippetToEditor = true
+        editingSnippetID = snippet.id
         if nameField.stringValue != snippet.name {
             nameField.stringValue = snippet.name
         }
@@ -127,8 +129,13 @@ extension ViewController {
         return store.snippet(id: selectedSnippetID)
     }
 
+    var editingSnippet: Snippet? {
+        guard let editingSnippetID else { return nil }
+        return store.snippet(id: editingSnippetID)
+    }
+
     func updateSelectedSnippetFromEditor() {
-        guard !isApplyingSnippetToEditor, var snippet = selectedSnippet else { return }
+        guard !isApplyingSnippetToEditor, var snippet = editingSnippet else { return }
 
         snippet.name = nameField.stringValue
         snippet.content = snippetTextView.string
