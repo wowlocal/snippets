@@ -42,8 +42,50 @@ for tool in aws gh; do
     fi
 done
 
+if [ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]; then
+    red_text
+    echo "Working tree is dirty. Commit or stash changes before releasing."
+    normal_text
+    exit 1
+fi
+
 ARCHIVE_PATH="archives/Snippets.xcarchive"
 APP_PATH="exported-apps/Snippets.app"
+ORIGINAL_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+BUMP_COMMIT=""
+TAG=""
+PUBLISHING_STARTED=0
+RELEASE_COMPLETE=0
+
+function rollback_failed_release() {
+    local status=$?
+    if [ "$status" -eq 0 ] || [ "$RELEASE_COMPLETE" -eq 1 ]; then
+        return
+    fi
+
+    if [ "$PUBLISHING_STARTED" -eq 1 ]; then
+        orange_text
+        echo "Release failed after publishing started; leaving git state intact for manual recovery."
+        normal_text
+        return
+    fi
+
+    if [ -n "$TAG" ] && git -C "$PROJECT_DIR" tag -l "$TAG" | grep -q "^${TAG}$"; then
+        orange_text
+        echo "Deleting unpublished local tag $TAG"
+        normal_text
+        git -C "$PROJECT_DIR" tag -d "$TAG" >/dev/null
+    fi
+
+    if [ -n "$BUMP_COMMIT" ] && [ "$(git -C "$PROJECT_DIR" rev-parse HEAD)" = "$BUMP_COMMIT" ]; then
+        orange_text
+        echo "Removing unpublished version bump commit $BUMP_COMMIT"
+        normal_text
+        git -C "$PROJECT_DIR" reset --hard "$ORIGINAL_HEAD" >/dev/null
+    fi
+}
+
+trap rollback_failed_release EXIT
 
 # Step 1: Bump version
 BUMP="${1:-patch}"
@@ -61,6 +103,7 @@ if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 TAG="v${APP_VERSION}"
+BUMP_COMMIT=$(git -C "$PROJECT_DIR" rev-parse HEAD)
 
 green_text
 echo "Version: $APP_VERSION ($TAG)"
@@ -134,6 +177,7 @@ normal_text
 orange_text
 echo "Step 6/7: Uploading to S3..."
 normal_text
+PUBLISHING_STARTED=1
 
 S3_DMG_DEST="s3://${S3_BUCKET}/${S3_PREFIX}/${DMG_FILENAME}"
 S3_APPCAST_DEST="s3://${S3_BUCKET}/${S3_PREFIX}/appcast.xml"
@@ -195,6 +239,7 @@ normal_text
 gh release create "$TAG" "$DMG_PATH" \
     --title "Snippets ${APP_VERSION}" \
     --generate-notes
+RELEASE_COMPLETE=1
 
 green_text
 echo ""
