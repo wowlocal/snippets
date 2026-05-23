@@ -30,6 +30,7 @@ final class SnippetStore {
 
     private var undoStack: [[Snippet]] = []
     private var redoStack: [[Snippet]] = []
+    private var editTransactionSnapshot: [Snippet]?
     private let maxUndoLevels = 50
 
     enum ImportExportError: LocalizedError {
@@ -105,6 +106,12 @@ final class SnippetStore {
             existing.isPinned != updated.isPinned
 
         guard didChange else { return }
+
+        if editTransactionSnapshot == nil {
+            pushUndo()
+        } else {
+            redoStack.removeAll()
+        }
 
         updated.updatedAt = Date()
         snippets[index] = updated
@@ -421,8 +428,25 @@ final class SnippetStore {
 
     // MARK: - Undo / Redo
 
+    func beginEditTransaction() {
+        guard editTransactionSnapshot == nil else { return }
+        editTransactionSnapshot = snippets
+    }
+
+    func commitEditTransaction() {
+        guard let snapshot = editTransactionSnapshot else { return }
+        editTransactionSnapshot = nil
+
+        guard snapshot != snippets else { return }
+        pushUndo(snapshot)
+    }
+
     private func pushUndo() {
-        undoStack.append(snippets)
+        pushUndo(snippets)
+    }
+
+    private func pushUndo(_ snapshot: [Snippet]) {
+        undoStack.append(snapshot)
         if undoStack.count > maxUndoLevels {
             undoStack.removeFirst()
         }

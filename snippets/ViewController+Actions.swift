@@ -357,7 +357,9 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     }
 
     @objc func enabledStateChanged() {
+        store.beginEditTransaction()
         updateSelectedSnippetFromEditor()
+        store.commitEditTransaction()
     }
 
     @objc func toggleLaunchAtLogin() {
