@@ -18,6 +18,10 @@ extension ViewController {
     }
 
     func reloadVisibleSnippets(keepSelection: Bool) {
+        if editorListReloadWorkItem != nil {
+            cancelEditorListReload()
+        }
+
         let query = searchField.stringValue
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()

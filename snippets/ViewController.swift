@@ -16,6 +16,10 @@ private enum ClipboardPreviewRefresh {
     static let interval: TimeInterval = 0.5
 }
 
+private enum EditorListReload {
+    static let delay: TimeInterval = 0.12
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -39,6 +43,7 @@ final class ViewController: NSViewController {
     var editingSnippetID: UUID?
     var isApplyingSnippetToEditor = false
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
+    var editorListReloadWorkItem: DispatchWorkItem?
     var clipboardPreviewTimer: Timer?
     var observedPasteboardChangeCount = NSPasteboard.general.changeCount
 
@@ -161,6 +166,7 @@ final class ViewController: NSViewController {
 
     deinit {
         importExportMessageDismissWorkItem?.cancel()
+        editorListReloadWorkItem?.cancel()
         if let localKeyMonitor {
             NSEvent.removeMonitor(localKeyMonitor)
         }
@@ -174,6 +180,12 @@ final class ViewController: NSViewController {
     func bindState() {
         store.onChange = { [weak self] source in
             guard let self else { return }
+            if source == .local && isEditingDetails {
+                scheduleEditorListReload()
+                return
+            }
+
+            cancelEditorListReload()
             reloadVisibleSnippets(keepSelection: true)
             if source == .external || !isEditingDetails {
                 applySelectedSnippetToEditor()
@@ -188,6 +200,25 @@ final class ViewController: NSViewController {
                 importExportMessage = engine.statusText
             }
         }
+    }
+
+    func scheduleEditorListReload() {
+        editorListReloadWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.editorListReloadWorkItem = nil
+                self.reloadVisibleSnippets(keepSelection: true)
+            }
+        }
+        editorListReloadWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + EditorListReload.delay, execute: workItem)
+    }
+
+    func cancelEditorListReload() {
+        editorListReloadWorkItem?.cancel()
+        editorListReloadWorkItem = nil
     }
 
     private func startClipboardPreviewRefreshTimerIfNeeded() {
