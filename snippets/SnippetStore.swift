@@ -37,6 +37,7 @@ final class SnippetStore {
         case emptyImport
         case invalidFormat
         case cannotAccessFile
+        case importConflicts([String])
 
         var errorDescription: String? {
             switch self {
@@ -46,6 +47,12 @@ final class SnippetStore {
                 return "Unsupported file format. Expected JSON exported from this app."
             case .cannotAccessFile:
                 return "Could not read or write the selected file."
+            case .importConflicts(let conflicts):
+                if conflicts.count == 1, let conflict = conflicts.first {
+                    return "Import conflict: \(conflict)"
+                }
+
+                return "Import conflicts:\n" + conflicts.map { "- \($0)" }.joined(separator: "\n")
             }
         }
     }
@@ -207,8 +214,11 @@ final class SnippetStore {
             throw ImportExportError.cannotAccessFile
         }
 
-        var imported = try decodeImportData(data, options: options)
-        imported = normalizeImportedSnippets(imported)
+        let decoded = try decodeImportData(data, options: options)
+        try preflightImportedSnippets(decoded)
+
+        let imported = normalizeImportedSnippets(decoded)
+        try preflightImportMerge(imported)
 
         guard !imported.isEmpty else {
             throw ImportExportError.emptyImport
@@ -219,7 +229,10 @@ final class SnippetStore {
 
     @discardableResult
     func importSharedSnippet(_ snippet: Snippet) throws -> Snippet {
+        try preflightImportedSnippets([snippet])
+
         let imported = normalizeImportedSnippets([snippet])
+        try preflightImportMerge(imported)
 
         guard let normalizedSnippet = imported.first else {
             throw ImportExportError.emptyImport
@@ -338,6 +351,54 @@ final class SnippetStore {
         }
 
         return raycastArray
+    }
+
+    private func preflightImportedSnippets(_ imported: [Snippet]) throws {
+        var conflicts: [String] = []
+        var seenIDs = Set<UUID>()
+        var seenKeywords: [String: Snippet] = [:]
+
+        for snippet in imported {
+            if !seenIDs.insert(snippet.id).inserted {
+                conflicts.append("The import contains duplicate snippet ID \(snippet.id.uuidString).")
+            }
+
+            let keyword = snippet.normalizedKeyword.lowercased()
+            guard !keyword.isEmpty else { continue }
+
+            if let existing = seenKeywords[keyword] {
+                conflicts.append("The import contains duplicate keyword \\\(snippet.normalizedKeyword) in \(existing.displayName) and \(snippet.displayName).")
+            } else {
+                seenKeywords[keyword] = snippet
+            }
+        }
+
+        try throwImportConflictsIfNeeded(conflicts)
+    }
+
+    private func preflightImportMerge(_ imported: [Snippet]) throws {
+        var conflicts: [String] = []
+
+        for incoming in imported {
+            guard let idMatch = snippets.first(where: { $0.id == incoming.id }) else { continue }
+
+            let keyword = incoming.normalizedKeyword
+            guard !keyword.isEmpty else { continue }
+
+            if let keywordMatch = snippets.first(where: {
+                $0.id != incoming.id &&
+                $0.normalizedKeyword.caseInsensitiveCompare(keyword) == .orderedSame
+            }) {
+                conflicts.append("Imported \(incoming.displayName) matches existing ID \(idMatch.displayName), but keyword \\\(keyword) belongs to \(keywordMatch.displayName).")
+            }
+        }
+
+        try throwImportConflictsIfNeeded(conflicts)
+    }
+
+    private func throwImportConflictsIfNeeded(_ conflicts: [String]) throws {
+        guard !conflicts.isEmpty else { return }
+        throw ImportExportError.importConflicts(Array(conflicts.prefix(8)))
     }
 
     private static func normalizedRaycastKeyword(
