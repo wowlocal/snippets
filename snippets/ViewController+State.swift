@@ -90,6 +90,7 @@ extension ViewController {
             if enabledCheckbox.state != .off {
                 enabledCheckbox.state = .off
             }
+            keywordWarningLabel.isHidden = true
             updatePreview(withTemplate: "")
             setEditorEnabled(false)
             isApplyingSnippetToEditor = false
@@ -190,7 +191,7 @@ extension ViewController {
 
     func updateKeywordWarning(for snippet: Snippet) {
         let keyword = snippet.normalizedKeyword.lowercased()
-        guard !keyword.isEmpty else {
+        guard snippet.isEnabled, !keyword.isEmpty else {
             keywordWarningLabel.isHidden = true
             return
         }
