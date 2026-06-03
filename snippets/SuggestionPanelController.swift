@@ -407,29 +407,28 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     }
 
     private func convertedAXTopLeftRect(_ rect: CGRect, on screen: NSScreen) -> NSRect {
-        let screenAXFrame = axTopLeftFrame(for: screen)
-        let yInScreen = rect.origin.y - screenAXFrame.minY
-        let flippedY = screen.frame.maxY - yInScreen - rect.size.height
-        return NSRect(x: rect.origin.x, y: flippedY, width: rect.size.width, height: rect.size.height)
-    }
-
-    private func convertedScreenLocalAXTopLeftRect(_ rect: CGRect, on screen: NSScreen) -> NSRect {
-        let flippedY = screen.frame.maxY - rect.origin.y - rect.size.height
-        return NSRect(
-            x: screen.frame.minX + rect.origin.x,
-            y: flippedY,
-            width: rect.size.width,
-            height: rect.size.height
+        AXCoordinateSpace.convertAXTopLeftRect(
+            rect,
+            on: AXScreenGeometry(screen),
+            primaryScreenHeight: primaryScreenHeight
         )
     }
 
+    private func convertedScreenLocalAXTopLeftRect(_ rect: CGRect, on screen: NSScreen) -> NSRect {
+        AXCoordinateSpace.convertScreenLocalAXTopLeftRect(rect, on: AXScreenGeometry(screen))
+    }
+
     private func axTopLeftFrame(for screen: NSScreen) -> NSRect {
-        let mainHeight = NSScreen.main?.frame.height ?? NSScreen.screens.first?.frame.height ?? 0
-        return NSRect(
-            x: screen.frame.minX,
-            y: mainHeight - screen.frame.maxY,
-            width: screen.frame.width,
-            height: screen.frame.height
+        AXCoordinateSpace.axTopLeftFrame(
+            for: AXScreenGeometry(screen),
+            primaryScreenHeight: primaryScreenHeight
+        )
+    }
+
+    private var primaryScreenHeight: CGFloat {
+        AXCoordinateSpace.primaryScreenHeight(
+            from: NSScreen.screens.map(AXScreenGeometry.init),
+            fallbackMainHeight: NSScreen.main?.frame.height ?? 0
         )
     }
 
