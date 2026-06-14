@@ -21,12 +21,13 @@ struct SuggestionTriggerContext: Equatable {
 
 enum SuggestionContextRefreshResult: Equatable {
     case synced
+    case localFallback
     case missingTrigger
     case unavailable
 
     nonisolated var canUseForExpansion: Bool {
         switch self {
-        case .synced:
+        case .synced, .localFallback:
             return true
         case .missingTrigger, .unavailable:
             return false

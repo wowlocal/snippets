@@ -52,6 +52,12 @@ private enum SuggestionTriggerContextTests {
         )
 
         assertEqual(
+            SuggestionContextRefreshResult.localFallback.canUseForExpansion,
+            true,
+            "tracked local fallback can select or auto-expand when AX is unavailable"
+        )
+
+        assertEqual(
             SuggestionContextRefreshResult.unavailable.canUseForExpansion,
             false,
             "unavailable refresh cannot use stale suggestion state"

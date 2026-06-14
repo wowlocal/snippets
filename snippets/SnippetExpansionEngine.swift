@@ -26,6 +26,7 @@ final class SnippetExpansionEngine {
     private var suggestionActive = false
     private var suggestionQuery = ""
     private var suggestionDeleteCount = 1
+    private var suggestionLocalFallbackUsable = false
     private var suggestionSyncGeneration = 0
     private lazy var suggestionPanel = SuggestionPanelController()
     // Host apps can apply text edits asynchronously; reread focused text more
@@ -273,6 +274,7 @@ final class SnippetExpansionEngine {
         suggestionActive = true
         suggestionQuery = ""
         suggestionDeleteCount = 1
+        suggestionLocalFallbackUsable = true
 
         suggestionPanel.onSelect = { [weak self] snippet in
             self?.selectSuggestion(snippet)
@@ -308,6 +310,7 @@ final class SnippetExpansionEngine {
         suggestionActive = false
         suggestionQuery = ""
         suggestionDeleteCount = 1
+        suggestionLocalFallbackUsable = false
         suggestionSyncGeneration += 1
         suggestionPanel.dismiss()
     }
@@ -332,12 +335,14 @@ final class SnippetExpansionEngine {
 
         // Emacs Ctrl+H - treat as backspace
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
+            applyLocalSuggestionBackspace()
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
         // Emacs Ctrl+W - let the host edit, then read the real text before the caret.
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_W) {
+            suggestionLocalFallbackUsable = false
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
@@ -357,6 +362,7 @@ final class SnippetExpansionEngine {
         // Host apps do not agree on word boundaries, so let the app delete and
         // then resync from AX instead of trying to model the shortcut.
         if option && !command && event.keyCode == UInt16(kVK_Delete) {
+            suggestionLocalFallbackUsable = false
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
@@ -371,6 +377,7 @@ final class SnippetExpansionEngine {
         // Other Ctrl combos and function keys - let the host handle them, then
         // refresh in case the shortcut moved the caret or edited text.
         if ctrl {
+            suggestionLocalFallbackUsable = false
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
@@ -406,6 +413,7 @@ final class SnippetExpansionEngine {
 
         // Backspace - let through to target app (it needs to delete characters too)
         if event.keyCode == UInt16(kVK_Delete) {
+            applyLocalSuggestionBackspace()
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
@@ -417,9 +425,10 @@ final class SnippetExpansionEngine {
 
         // Let the host apply printable text, then resync from the focused AX text.
         if isValidKeywordCharacter(character) {
+            appendLocalSuggestionCharacter(character)
             scheduleSuggestionContextRefresh(allowAutoExpand: true, dismissOnMissingTrigger: true)
         } else {
-            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
+            dismissSuggestions()
         }
         return false
     }
@@ -460,8 +469,12 @@ final class SnippetExpansionEngine {
                   !self.isInjecting else {
                 return
             }
-            if lastRefreshResult == .unavailable && dismissOnMissingTrigger {
-                self.abandonUnsafeSuggestionContext()
+            if lastRefreshResult == .unavailable {
+                if self.suggestionLocalFallbackUsable {
+                    self.handleUnavailableRefreshWithLocalFallback(allowAutoExpand: allowAutoExpand)
+                } else if dismissOnMissingTrigger {
+                    self.abandonUnsafeSuggestionContext()
+                }
             }
         }
     }
@@ -469,6 +482,40 @@ final class SnippetExpansionEngine {
     private func abandonUnsafeSuggestionContext() {
         typedBuffer = ""
         dismissSuggestions()
+    }
+
+    private func appendLocalSuggestionCharacter(_ character: Character) {
+        guard suggestionActive else { return }
+        suggestionQuery.append(character)
+        suggestionDeleteCount = 1 + suggestionQuery.count
+        suggestionLocalFallbackUsable = true
+        updateSuggestionResults()
+    }
+
+    private func applyLocalSuggestionBackspace() {
+        guard suggestionActive, suggestionLocalFallbackUsable else { return }
+
+        if suggestionQuery.isEmpty {
+            dismissSuggestions()
+            return
+        }
+
+        suggestionQuery.removeLast()
+        suggestionDeleteCount = 1 + suggestionQuery.count
+        updateSuggestionResults()
+    }
+
+    private func handleUnavailableRefreshWithLocalFallback(allowAutoExpand: Bool) {
+        guard suggestionActive, suggestionLocalFallbackUsable else { return }
+
+        if allowAutoExpand,
+           !suggestionQuery.isEmpty,
+           let snippet = unambiguousExactMatch(for: suggestionQuery) {
+            selectSuggestion(snippet, deleteCount: suggestionDeleteCount)
+            return
+        }
+
+        updateSuggestionResults()
     }
 
     @discardableResult
@@ -482,6 +529,7 @@ final class SnippetExpansionEngine {
         case .found(let context):
             suggestionQuery = context.query
             suggestionDeleteCount = context.triggerLength
+            suggestionLocalFallbackUsable = true
 
             if allowAutoExpand,
                !context.query.isEmpty,
@@ -501,6 +549,12 @@ final class SnippetExpansionEngine {
             return .missingTrigger
 
         case .unavailable:
+            if suggestionLocalFallbackUsable {
+                if allowAutoExpand {
+                    handleUnavailableRefreshWithLocalFallback(allowAutoExpand: true)
+                }
+                return .localFallback
+            }
             return .unavailable
         }
     }
