@@ -154,9 +154,16 @@ This reduces off-screen or wrong-monitor placement.
 Handled intentionally:
 
 - `Ctrl+N/P` and arrow keys navigate list and are suppressed.
+- `Ctrl+C` dismisses the suggestion panel and is passed through to the host app.
 - `Tab`/`Return` select suggestion and are suppressed.
-- Backspace is generally passed through so host app deletes text too.
-- `Option+Delete` and `Ctrl+W` delete previous word in query logic.
+- Printable characters and deletion shortcuts are generally passed through so the host app edits real text first.
+- After host edits, the active query is reread from `AXSelectedTextRange` plus text before the caret instead of being inferred from key presses.
+- AX reread is retried after short delays because Chromium/Electron text state can lag behind the key event.
+- If AX text is unavailable, printable characters and simple backspace keep a local fallback query so terminal apps can still update suggestions.
+- Until AX has successfully found the trigger in the current session, a missing AX trigger can also stay on local fallback because terminal accessibility text may not expose the current typed buffer.
+- Selection and auto-expand are allowed only after a successful reread or tracked local fallback; unknown unavailable text context dismisses the active session instead of using stale query/delete state.
+- Host-side edits that invalidate the local query, such as `Ctrl+W` or `Option+Delete`, cannot re-enable local fallback until AX resync succeeds.
+- `Backspace`, `Ctrl+H`, `Option+Delete`, and `Ctrl+W` therefore use the host app's actual edit result and then resync suggestions.
 - Cmd/Option combos mostly dismiss suggestion mode.
 - Cmd+Shift+3/4/5/6 are ignored (do not dismiss) to avoid interfering with screenshots.
 - Input-source switching shortcuts (for example Cmd+Space) do not dismiss.
