@@ -27,6 +27,7 @@ final class SnippetExpansionEngine {
     private var suggestionQuery = ""
     private var suggestionDeleteCount = 1
     private var suggestionLocalFallbackUsable = false
+    private var suggestionHasSyncedAXContext = false
     private var suggestionSyncGeneration = 0
     private lazy var suggestionPanel = SuggestionPanelController()
     // Host apps can apply text edits asynchronously; reread focused text more
@@ -275,6 +276,7 @@ final class SnippetExpansionEngine {
         suggestionQuery = ""
         suggestionDeleteCount = 1
         suggestionLocalFallbackUsable = true
+        suggestionHasSyncedAXContext = false
 
         suggestionPanel.onSelect = { [weak self] snippet in
             self?.selectSuggestion(snippet)
@@ -311,6 +313,7 @@ final class SnippetExpansionEngine {
         suggestionQuery = ""
         suggestionDeleteCount = 1
         suggestionLocalFallbackUsable = false
+        suggestionHasSyncedAXContext = false
         suggestionSyncGeneration += 1
         suggestionPanel.dismiss()
     }
@@ -530,6 +533,7 @@ final class SnippetExpansionEngine {
             suggestionQuery = context.query
             suggestionDeleteCount = context.triggerLength
             suggestionLocalFallbackUsable = true
+            suggestionHasSyncedAXContext = true
 
             if allowAutoExpand,
                !context.query.isEmpty,
@@ -542,6 +546,13 @@ final class SnippetExpansionEngine {
             return .synced
 
         case .missingTrigger:
+            if suggestionLocalFallbackUsable && !suggestionHasSyncedAXContext {
+                if allowAutoExpand {
+                    handleUnavailableRefreshWithLocalFallback(allowAutoExpand: true)
+                }
+                return .localFallback
+            }
+
             if dismissOnMissingTrigger {
                 typedBuffer = ""
                 dismissSuggestions()

@@ -159,6 +159,7 @@ Handled intentionally:
 - After host edits, the active query is reread from `AXSelectedTextRange` plus text before the caret instead of being inferred from key presses.
 - AX reread is retried after short delays because Chromium/Electron text state can lag behind the key event.
 - If AX text is unavailable, printable characters and simple backspace keep a local fallback query so terminal apps can still update suggestions.
+- Until AX has successfully found the trigger in the current session, a missing AX trigger can also stay on local fallback because terminal accessibility text may not expose the current typed buffer.
 - Selection and auto-expand are allowed only after a successful reread or tracked local fallback; unknown unavailable text context dismisses the active session instead of using stale query/delete state.
 - `Backspace`, `Ctrl+H`, `Option+Delete`, and `Ctrl+W` therefore use the host app's actual edit result and then resync suggestions.
 - Cmd/Option combos mostly dismiss suggestion mode.
