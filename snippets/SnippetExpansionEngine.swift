@@ -308,6 +308,8 @@ final class SnippetExpansionEngine {
     }
 
     private func dismissSuggestions() {
+        typedBuffer = ""
+
         guard suggestionActive else { return }
         suggestionActive = false
         suggestionQuery = ""
@@ -496,10 +498,9 @@ final class SnippetExpansionEngine {
     }
 
     private func appendLocalSuggestionCharacter(_ character: Character) {
-        guard suggestionActive else { return }
+        guard suggestionActive, suggestionLocalFallbackUsable else { return }
         suggestionQuery.append(character)
         suggestionDeleteCount = 1 + suggestionQuery.count
-        suggestionLocalFallbackUsable = true
         updateSuggestionResults()
     }
 
