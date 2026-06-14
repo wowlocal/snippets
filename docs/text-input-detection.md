@@ -155,8 +155,9 @@ Handled intentionally:
 
 - `Ctrl+N/P` and arrow keys navigate list and are suppressed.
 - `Tab`/`Return` select suggestion and are suppressed.
-- Backspace is generally passed through so host app deletes text too.
-- `Option+Delete` and `Ctrl+W` delete previous word in query logic.
+- Printable characters and deletion shortcuts are generally passed through so the host app edits real text first.
+- After host edits, the active query is reread from `AXSelectedTextRange` plus text before the caret instead of being inferred from key presses.
+- `Backspace`, `Ctrl+H`, `Option+Delete`, and `Ctrl+W` therefore use the host app's actual edit result and then resync suggestions.
 - Cmd/Option combos mostly dismiss suggestion mode.
 - Cmd+Shift+3/4/5/6 are ignored (do not dismiss) to avoid interfering with screenshots.
 - Input-source switching shortcuts (for example Cmd+Space) do not dismiss.

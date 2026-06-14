@@ -25,9 +25,12 @@ final class SnippetExpansionEngine {
     // Suggestion overlay state
     private var suggestionActive = false
     private var suggestionQuery = ""
+    private var suggestionDeleteCount = 1
+    private var suggestionSyncGeneration = 0
     private lazy var suggestionPanel = SuggestionPanelController()
     // On macOS some apps drop rapid synthetic key events; keep a small delay
     // between injected keystrokes to ensure trigger deletion is complete.
+    private let suggestionTextSyncDelay: Duration = .milliseconds(18)
     private let injectedKeyDelay: TimeInterval = 0.012
     private let injectedPasteShortcutDelay: TimeInterval = 0.008
     private let prePasteDelayAfterDelete: TimeInterval = 0.02
@@ -47,6 +50,18 @@ final class SnippetExpansionEngine {
                 return true
             }
         }
+    }
+
+    private enum FocusedTriggerContextRead {
+        case found(SuggestionTriggerContext)
+        case missingTrigger
+        case unavailable
+    }
+
+    private enum SuggestionContextRefreshResult: Equatable {
+        case synced
+        case missingTrigger
+        case unavailable
     }
 
     init(store: SnippetStore) {
@@ -258,6 +273,7 @@ final class SnippetExpansionEngine {
     private func activateSuggestions() {
         suggestionActive = true
         suggestionQuery = ""
+        suggestionDeleteCount = 1
 
         suggestionPanel.onSelect = { [weak self] snippet in
             self?.selectSuggestion(snippet)
@@ -267,10 +283,21 @@ final class SnippetExpansionEngine {
         }
 
         updateSuggestionResults()
+        scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: false)
     }
 
     private func selectSuggestion(_ snippet: Snippet, deleteCount overrideDeleteCount: Int? = nil) {
-        let deleteCount = overrideDeleteCount ?? (1 + suggestionQuery.count) // backslash + query
+        if overrideDeleteCount == nil {
+            let refreshResult = refreshSuggestionContextFromFocusedText(
+                allowAutoExpand: false,
+                dismissOnMissingTrigger: true
+            )
+            if refreshResult == .missingTrigger {
+                return
+            }
+        }
+
+        let deleteCount = overrideDeleteCount ?? suggestionDeleteCount
         dismissSuggestions()
         expand(snippet: snippet, deleteCount: deleteCount)
         typedBuffer = ""
@@ -280,6 +307,8 @@ final class SnippetExpansionEngine {
         guard suggestionActive else { return }
         suggestionActive = false
         suggestionQuery = ""
+        suggestionDeleteCount = 1
+        suggestionSyncGeneration += 1
         suggestionPanel.dismiss()
     }
 
@@ -303,13 +332,13 @@ final class SnippetExpansionEngine {
 
         // Emacs Ctrl+H — treat as backspace
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
-            handleSuggestionBackspace()
+            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
-        // Emacs Ctrl+W — delete previous word
+        // Emacs Ctrl+W — let the host edit, then read the real text before the caret.
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_W) {
-            dismissSuggestionsAfterHostDeletion()
+            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
@@ -325,10 +354,10 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Dedicated Option+Delete handling: host apps do not agree on word
-        // boundaries, so let the app delete and end this suggestion session.
+        // Host apps do not agree on word boundaries, so let the app delete and
+        // then resync from AX instead of trying to model the shortcut.
         if option && !command && event.keyCode == UInt16(kVK_Delete) {
-            dismissSuggestionsAfterHostDeletion()
+            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
@@ -339,8 +368,10 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Other Ctrl combos and function keys — ignore without dismissing
+        // Other Ctrl combos and function keys — let the host handle them, then
+        // refresh in case the shortcut moved the caret or edited text.
         if ctrl {
+            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
@@ -353,8 +384,17 @@ final class SnippetExpansionEngine {
 
         // Tab or Return selects — suppress so target app doesn't act on the key
         if event.keyCode == UInt16(kVK_Tab) || event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
+            let refreshResult = refreshSuggestionContextFromFocusedText(
+                allowAutoExpand: false,
+                dismissOnMissingTrigger: true
+            )
+            if refreshResult == .missingTrigger {
+                typedBuffer = ""
+                return true
+            }
+
             if let snippet = suggestionPanel.selectedSnippet() {
-                let deleteCount = 1 + suggestionQuery.count // backslash + query
+                let deleteCount = suggestionDeleteCount
                 dismissSuggestions()
                 expand(snippet: snippet, deleteCount: deleteCount)
                 typedBuffer = ""
@@ -366,7 +406,7 @@ final class SnippetExpansionEngine {
 
         // Backspace — let through to target app (it needs to delete characters too)
         if event.keyCode == UInt16(kVK_Delete) {
-            handleSuggestionBackspace()
+            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
@@ -375,30 +415,71 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Allow any character that is valid in a keyword (non-space); dismiss on space
+        // Let the host apply printable text, then resync from the focused AX text.
         if isValidKeywordCharacter(character) {
-            let previousQuery = suggestionQuery
-            suggestionQuery.append(character)
-            typedBuffer.append(character)
-            trimBufferIfNeeded()
+            scheduleSuggestionContextRefresh(allowAutoExpand: true, dismissOnMissingTrigger: true)
+        } else {
+            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
+        }
+        return false
+    }
 
-            // Auto-expand if the query is an unambiguous exact match
-            if let snippet = unambiguousExactMatch(for: suggestionQuery) {
-                // Consume this event: the host app has not yet inserted the final
-                // character, so delete only the already-typed prefix.
-                let deleteCount = 1 + previousQuery.count
-                selectSuggestion(snippet, deleteCount: deleteCount)
-                return true
+    private func scheduleSuggestionContextRefresh(
+        allowAutoExpand: Bool,
+        dismissOnMissingTrigger: Bool
+    ) {
+        suggestionSyncGeneration += 1
+        let generation = suggestionSyncGeneration
+        let delay = suggestionTextSyncDelay
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self,
+                  self.suggestionActive,
+                  self.suggestionSyncGeneration == generation,
+                  !self.isInjecting else {
+                return
+            }
+
+            _ = self.refreshSuggestionContextFromFocusedText(
+                allowAutoExpand: allowAutoExpand,
+                dismissOnMissingTrigger: dismissOnMissingTrigger
+            )
+        }
+    }
+
+    @discardableResult
+    private func refreshSuggestionContextFromFocusedText(
+        allowAutoExpand: Bool,
+        dismissOnMissingTrigger: Bool
+    ) -> SuggestionContextRefreshResult {
+        guard suggestionActive else { return .missingTrigger }
+
+        switch focusedTriggerContext() {
+        case .found(let context):
+            suggestionQuery = context.query
+            suggestionDeleteCount = context.triggerLength
+
+            if allowAutoExpand,
+               !context.query.isEmpty,
+               let snippet = unambiguousExactMatch(for: context.query) {
+                selectSuggestion(snippet, deleteCount: context.triggerLength)
+                return .synced
             }
 
             updateSuggestionResults()
-        } else {
-            // Space or other disallowed character — dismiss suggestions
-            dismissSuggestions()
-            typedBuffer.append(character)
-            trimBufferIfNeeded()
+            return .synced
+
+        case .missingTrigger:
+            if dismissOnMissingTrigger {
+                typedBuffer = ""
+                dismissSuggestions()
+            }
+            return .missingTrigger
+
+        case .unavailable:
+            return .unavailable
         }
-        return false
     }
 
     /// Returns a snippet only if `query` exactly matches one keyword and no other keyword starts with `query`.
@@ -585,62 +666,6 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func removeCharactersFromTypedBuffer(_ count: Int) {
-        guard count > 0, !typedBuffer.isEmpty else { return }
-        typedBuffer.removeLast(min(count, typedBuffer.count))
-    }
-
-    private func dismissSuggestionsAfterHostDeletion() {
-        typedBuffer = ""
-        dismissSuggestions()
-    }
-
-
-    /// Handle backspace (or Ctrl+H) while the suggestion panel is active.
-    ///
-    /// When a text field has selected text (e.g. browser URL bar autocompletion),
-    /// backspace deletes the selection. We figure out how many of those selected
-    /// characters overlap with our tracked query so we trim the right amount —
-    /// zero for pure autocompletion text, N for a manual selection of N typed chars.
-    private func handleSuggestionBackspace() {
-        let trimCount: Int
-        switch focusedTextInputSelection() {
-        case .text(let selectedText):
-            // Backspace will delete this selection.
-            // Count how many characters at the end of our query are covered.
-            if suggestionQuery.hasSuffix(selectedText) {
-                trimCount = selectedText.count
-            } else if ("\\" + suggestionQuery).hasSuffix(selectedText) {
-                // Selection covers the backslash trigger too — dismiss entirely
-                dismissSuggestions()
-                removeCharactersFromTypedBuffer(suggestionQuery.count + 1)
-                return
-            } else {
-                // Selection is outside our tracked query (e.g. autocompletion) — nothing to trim
-                trimCount = 0
-            }
-        case .unreadable:
-            dismissSuggestionsAfterHostDeletion()
-            return
-        case .none:
-            trimCount = 1
-        }
-
-        if trimCount == 0 {
-            return
-        }
-
-        if trimCount > suggestionQuery.count || (trimCount == 1 && suggestionQuery.isEmpty) {
-            // Deleting into the backslash — dismiss
-            dismissSuggestions()
-            removeCharactersFromTypedBuffer(suggestionQuery.count + 1)
-        } else {
-            suggestionQuery.removeLast(trimCount)
-            removeCharactersFromTypedBuffer(trimCount)
-            updateSuggestionResults()
-        }
-    }
-
     private func isValidKeywordCharacter(_ character: Character) -> Bool {
         !character.isWhitespace && !character.isNewline
     }
@@ -823,6 +848,90 @@ final class SnippetExpansionEngine {
         return .none
     }
 
+    private func focusedTriggerContext() -> FocusedTriggerContextRead {
+        guard let focused = frontmostFocusedElement() else { return .unavailable }
+
+        var sawReadableText = false
+        for element in focusedTextContextCandidates(startingAt: focused) {
+            guard let textBeforeCaret = textBeforeCaret(in: element, maxCharacters: maxBufferLength) else {
+                continue
+            }
+            sawReadableText = true
+
+            if let context = SuggestionTriggerContext.context(inTextBeforeCaret: textBeforeCaret) {
+                return .found(context)
+            }
+        }
+
+        return sawReadableText ? .missingTrigger : .unavailable
+    }
+
+    private func focusedTextContextCandidates(startingAt element: AXUIElement) -> [AXUIElement] {
+        var elements: [AXUIElement] = [element]
+        var current = element
+
+        for _ in 0..<4 {
+            guard let parent = parentElement(of: current) else { break }
+            elements.append(parent)
+            current = parent
+        }
+
+        return elements
+    }
+
+    private func textBeforeCaret(in element: AXUIElement, maxCharacters: Int) -> String? {
+        guard let selectedRange = selectedRange(of: element), selectedRange.location >= 0 else {
+            return nil
+        }
+
+        let caretLocation = selectedRange.location
+        let start = max(0, caretLocation - maxCharacters)
+        let length = caretLocation - start
+        let rangeBeforeCaret = CFRange(location: start, length: length)
+
+        if let text = stringForRange(of: element, range: rangeBeforeCaret) {
+            return text
+        }
+
+        return stringValueBeforeCaret(of: element, caretLocation: caretLocation, maxCharacters: maxCharacters)
+    }
+
+    private func stringForRange(of element: AXUIElement, range: CFRange) -> String? {
+        guard range.length > 0 else { return "" }
+
+        var requestedRange = range
+        guard let rangeValue = AXValueCreate(.cfRange, &requestedRange) else {
+            return nil
+        }
+
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element,
+            kAXStringForRangeParameterizedAttribute as CFString,
+            rangeValue,
+            &value
+        ) == .success else {
+            return nil
+        }
+
+        return value as? String
+    }
+
+    private func stringValueBeforeCaret(
+        of element: AXUIElement,
+        caretLocation: Int,
+        maxCharacters: Int
+    ) -> String? {
+        guard let value = stringAttribute(of: element, attribute: kAXValueAttribute as CFString) else {
+            return nil
+        }
+
+        let nsValue = value as NSString
+        let boundedLocation = min(max(0, caretLocation), nsValue.length)
+        let start = max(0, boundedLocation - maxCharacters)
+        return nsValue.substring(with: NSRange(location: start, length: boundedLocation - start))
+    }
+
     private func selectionState(of element: AXUIElement) -> FocusedSelection {
         if let text = stringAttribute(of: element, attribute: kAXSelectedTextAttribute as CFString),
            !text.isEmpty {
@@ -927,24 +1036,29 @@ final class SnippetExpansionEngine {
         return value as? Bool
     }
 
-    private func selectedRangeLength(of element: AXUIElement) -> Int {
+    private func selectedRange(of element: AXUIElement) -> CFRange? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
               let value,
               CFGetTypeID(value) == AXValueGetTypeID() else {
-            return 0
+            return nil
         }
 
         let axValue = value as! AXValue
         guard AXValueGetType(axValue) == .cfRange else {
-            return 0
+            return nil
         }
 
         var range = CFRange(location: 0, length: 0)
         guard AXValueGetValue(axValue, .cfRange, &range) else {
-            return 0
+            return nil
         }
 
+        return range
+    }
+
+    private func selectedRangeLength(of element: AXUIElement) -> Int {
+        guard let range = selectedRange(of: element) else { return 0 }
         return max(0, range.length)
     }
 
