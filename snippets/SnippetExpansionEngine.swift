@@ -28,9 +28,14 @@ final class SnippetExpansionEngine {
     private var suggestionDeleteCount = 1
     private var suggestionSyncGeneration = 0
     private lazy var suggestionPanel = SuggestionPanelController()
+    // Host apps can apply text edits asynchronously; reread focused text more
+    // than once before trusting the suggestion context for expansion.
+    private let suggestionTextSyncDelays: [Duration] = [
+        .milliseconds(18),
+        .milliseconds(60)
+    ]
     // On macOS some apps drop rapid synthetic key events; keep a small delay
     // between injected keystrokes to ensure trigger deletion is complete.
-    private let suggestionTextSyncDelay: Duration = .milliseconds(18)
     private let injectedKeyDelay: TimeInterval = 0.012
     private let injectedPasteShortcutDelay: TimeInterval = 0.008
     private let prePasteDelayAfterDelete: TimeInterval = 0.02
@@ -54,12 +59,6 @@ final class SnippetExpansionEngine {
 
     private enum FocusedTriggerContextRead {
         case found(SuggestionTriggerContext)
-        case missingTrigger
-        case unavailable
-    }
-
-    private enum SuggestionContextRefreshResult: Equatable {
-        case synced
         case missingTrigger
         case unavailable
     }
@@ -292,7 +291,8 @@ final class SnippetExpansionEngine {
                 allowAutoExpand: false,
                 dismissOnMissingTrigger: true
             )
-            if refreshResult == .missingTrigger {
+            guard refreshResult.canUseForExpansion else {
+                abandonUnsafeSuggestionContext()
                 return
             }
         }
@@ -318,7 +318,7 @@ final class SnippetExpansionEngine {
         let command = event.modifierFlags.contains(.command)
         let option = event.modifierFlags.contains(.option)
 
-        // Arrow keys / Ctrl+N/P navigate the list — suppress so target app doesn't see them
+        // Arrow keys / Ctrl+N/P navigate the list - suppress so target app doesn't see them
         if event.keyCode == UInt16(kVK_DownArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_N)) {
             guard suggestionPanel.hasSelectableItems else { return false }
             suggestionPanel.moveSelectionDown()
@@ -330,19 +330,19 @@ final class SnippetExpansionEngine {
             return true
         }
 
-        // Emacs Ctrl+H — treat as backspace
+        // Emacs Ctrl+H - treat as backspace
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
-        // Emacs Ctrl+W — let the host edit, then read the real text before the caret.
+        // Emacs Ctrl+W - let the host edit, then read the real text before the caret.
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_W) {
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
-        // Language/input-source switch (Cmd+Space, Ctrl+Space, Option+Space) — ignore without dismissing
+        // Language/input-source switch (Cmd+Space, Ctrl+Space, Option+Space) - ignore without dismissing
         if event.keyCode == UInt16(kVK_Space) &&
             !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
             return false
@@ -368,28 +368,28 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Other Ctrl combos and function keys — let the host handle them, then
+        // Other Ctrl combos and function keys - let the host handle them, then
         // refresh in case the shortcut moved the caret or edited text.
         if ctrl {
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
-        // Escape dismisses — suppress
+        // Escape dismisses - suppress
         if event.keyCode == UInt16(kVK_Escape) {
             dismissSuggestions()
             typedBuffer = ""
             return true
         }
 
-        // Tab or Return selects — suppress so target app doesn't act on the key
+        // Tab or Return selects - suppress so target app doesn't act on the key
         if event.keyCode == UInt16(kVK_Tab) || event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
             let refreshResult = refreshSuggestionContextFromFocusedText(
                 allowAutoExpand: false,
                 dismissOnMissingTrigger: true
             )
-            if refreshResult == .missingTrigger {
-                typedBuffer = ""
+            guard refreshResult.canUseForExpansion else {
+                abandonUnsafeSuggestionContext()
                 return true
             }
 
@@ -404,14 +404,14 @@ final class SnippetExpansionEngine {
             return true
         }
 
-        // Backspace — let through to target app (it needs to delete characters too)
+        // Backspace - let through to target app (it needs to delete characters too)
         if event.keyCode == UInt16(kVK_Delete) {
             scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
         guard let character = typedCharacter(from: event) else {
-            // No printable character (e.g. language switch, function key) — ignore
+            // No printable character (e.g. language switch, function key) - ignore
             return false
         }
 
@@ -430,22 +430,45 @@ final class SnippetExpansionEngine {
     ) {
         suggestionSyncGeneration += 1
         let generation = suggestionSyncGeneration
-        let delay = suggestionTextSyncDelay
+        let delays = suggestionTextSyncDelays
 
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: delay)
+            var lastRefreshResult: SuggestionContextRefreshResult = .unavailable
+            for (index, delay) in delays.enumerated() {
+                try? await Task.sleep(for: delay)
+                guard let self,
+                      self.suggestionActive,
+                      self.suggestionSyncGeneration == generation,
+                      !self.isInjecting else {
+                    return
+                }
+
+                let isLastAttempt = index == delays.count - 1
+                lastRefreshResult = self.refreshSuggestionContextFromFocusedText(
+                    allowAutoExpand: allowAutoExpand && isLastAttempt,
+                    dismissOnMissingTrigger: dismissOnMissingTrigger
+                )
+
+                if lastRefreshResult == .missingTrigger || !self.suggestionActive {
+                    return
+                }
+            }
+
             guard let self,
                   self.suggestionActive,
                   self.suggestionSyncGeneration == generation,
                   !self.isInjecting else {
                 return
             }
-
-            _ = self.refreshSuggestionContextFromFocusedText(
-                allowAutoExpand: allowAutoExpand,
-                dismissOnMissingTrigger: dismissOnMissingTrigger
-            )
+            if lastRefreshResult == .unavailable && dismissOnMissingTrigger {
+                self.abandonUnsafeSuggestionContext()
+            }
         }
+    }
+
+    private func abandonUnsafeSuggestionContext() {
+        typedBuffer = ""
+        dismissSuggestions()
     }
 
     @discardableResult

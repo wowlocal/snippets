@@ -157,6 +157,8 @@ Handled intentionally:
 - `Tab`/`Return` select suggestion and are suppressed.
 - Printable characters and deletion shortcuts are generally passed through so the host app edits real text first.
 - After host edits, the active query is reread from `AXSelectedTextRange` plus text before the caret instead of being inferred from key presses.
+- AX reread is retried after short delays because Chromium/Electron text state can lag behind the key event.
+- Selection and auto-expand are allowed only after a successful reread; unavailable text context dismisses the active session instead of using stale query/delete state.
 - `Backspace`, `Ctrl+H`, `Option+Delete`, and `Ctrl+W` therefore use the host app's actual edit result and then resync suggestions.
 - Cmd/Option combos mostly dismiss suggestion mode.
 - Cmd+Shift+3/4/5/6 are ignored (do not dismiss) to avoid interfering with screenshots.

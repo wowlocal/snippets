@@ -45,6 +45,24 @@ private enum SuggestionTriggerContextTests {
             "missing trigger is not active"
         )
 
+        assertEqual(
+            SuggestionContextRefreshResult.synced.canUseForExpansion,
+            true,
+            "synced refresh can select or auto-expand"
+        )
+
+        assertEqual(
+            SuggestionContextRefreshResult.unavailable.canUseForExpansion,
+            false,
+            "unavailable refresh cannot use stale suggestion state"
+        )
+
+        assertEqual(
+            SuggestionContextRefreshResult.missingTrigger.canUseForExpansion,
+            false,
+            "missing trigger cannot select or auto-expand"
+        )
+
         print("SuggestionTriggerContextTests passed")
     }
 }
