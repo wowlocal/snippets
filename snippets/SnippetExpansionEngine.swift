@@ -336,6 +336,14 @@ final class SnippetExpansionEngine {
             return true
         }
 
+        // Ctrl+C cancels suggestion mode while still letting the host handle
+        // the shortcut (copy/cancel/interruption depending on the app).
+        if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_C) {
+            typedBuffer = ""
+            dismissSuggestions()
+            return false
+        }
+
         // Emacs Ctrl+H - treat as backspace
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
             applyLocalSuggestionBackspace()

@@ -154,6 +154,7 @@ This reduces off-screen or wrong-monitor placement.
 Handled intentionally:
 
 - `Ctrl+N/P` and arrow keys navigate list and are suppressed.
+- `Ctrl+C` dismisses the suggestion panel and is passed through to the host app.
 - `Tab`/`Return` select suggestion and are suppressed.
 - Printable characters and deletion shortcuts are generally passed through so the host app edits real text first.
 - After host edits, the active query is reread from `AXSelectedTextRange` plus text before the caret instead of being inferred from key presses.
