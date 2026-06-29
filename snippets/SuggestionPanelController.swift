@@ -60,6 +60,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private var anchorRect: NSRect?
     private var accessibilityPrimedPIDs: Set<pid_t> = []
     private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
+    private var selectionWasUserDriven = false
 
     private struct RectCandidate {
         let rect: NSRect
@@ -128,6 +129,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     @objc private func rowClicked() {
         let row = tableView.clickedRow
         guard row >= 0, row < items.count else { return }
+        selectionWasUserDriven = true
         let snippet = items[row].snippet
         onSelect?(snippet)
     }
@@ -135,6 +137,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     var isVisible: Bool { panel.isVisible }
 
     func show(items: [SuggestionItem]) {
+        let previouslySelectedSnippetID = selectionWasUserDriven ? selectedSnippet()?.id : nil
         self.items = items
         tableView.reloadData()
 
@@ -172,7 +175,17 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             panel.orderFront(nil)
             installClickMonitors()
         }
-        tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+
+        let selectedRow = previouslySelectedSnippetID
+            .flatMap { id in items.firstIndex { $0.snippet.id == id } }
+            ?? 0
+        tableView.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
+        tableView.scrollRowToVisible(selectedRow)
+        if let preservedID = previouslySelectedSnippetID {
+            selectionWasUserDriven = items[selectedRow].snippet.id == preservedID
+        } else {
+            selectionWasUserDriven = false
+        }
     }
 
 
@@ -181,6 +194,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         removeClickMonitors()
         panel.orderOut(nil)
         items = []
+        selectionWasUserDriven = false
     }
 
     /// Fully end the suggestion session — clears anchor so next activation repositions.
@@ -196,6 +210,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         let next = current > 0 ? current - 1 : items.count - 1
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         tableView.scrollRowToVisible(next)
+        selectionWasUserDriven = true
     }
 
     func moveSelectionDown() {
@@ -205,6 +220,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         let next = current >= 0 && current < items.count - 1 ? current + 1 : 0
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         tableView.scrollRowToVisible(next)
+        selectionWasUserDriven = true
     }
 
     func selectedSnippet() -> Snippet? {
