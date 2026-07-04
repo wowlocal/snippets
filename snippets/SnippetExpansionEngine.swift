@@ -43,6 +43,10 @@ final class SnippetExpansionEngine {
     private let prePasteDelayAfterDelete: TimeInterval = 0.02
     private let pasteboardWriteSettleDelay: TimeInterval = 0.012
     private let pasteboardRestoreDelay: Duration = .milliseconds(350)
+    // AX calls into a beachballing host block for ~6s by default, which is
+    // long enough for macOS to disable our event tap. Bound every AX message
+    // we send so the tap callback can always return quickly.
+    private let axMessagingTimeoutSeconds: Float = 0.4
 
     private enum FocusedSelection {
         case none
@@ -98,9 +102,19 @@ final class SnippetExpansionEngine {
             place: .headInsertEventTap,
             options: .defaultTap,          // active tap — can modify/suppress events
             eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
-            callback: { _, _, event, refcon -> Unmanaged<CGEvent>? in
+            callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let engine = Unmanaged<SnippetExpansionEngine>.fromOpaque(refcon).takeUnretainedValue()
+
+                // macOS disables the tap if the callback stalls (timeout) or on
+                // user-input protection; without re-enabling here the tap stays
+                // dead until app restart and expansion silently stops.
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    engine.reenableEventTap()
+                    return Unmanaged.passUnretained(event)
+                }
+                guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+
                 // Must dispatch to main actor synchronously — we need the
                 // return value now to decide whether to suppress the event.
                 // CGEvent tap callbacks run on the run loop thread (main).
@@ -115,6 +129,16 @@ final class SnippetExpansionEngine {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    /// Called from the CGEvent tap callback on the main thread when macOS
+    /// reports the tap as disabled (`.tapDisabledByTimeout` /
+    /// `.tapDisabledByUserInput`).
+    nonisolated private func reenableEventTap() {
+        MainActor.assumeIsolated {
+            guard let tap = eventTap else { return }
+            CGEvent.tapEnable(tap: tap, enable: true)
+        }
     }
 
     /// Called from the CGEvent tap callback on the main thread.
@@ -416,8 +440,8 @@ final class SnippetExpansionEngine {
             if let snippet = suggestionPanel.selectedSnippet() {
                 let deleteCount = suggestionDeleteCount
                 dismissSuggestions()
-                expand(snippet: snippet, deleteCount: deleteCount)
                 typedBuffer = ""
+                deferExpansion(of: snippet, deleteCount: deleteCount)
             } else {
                 dismissSuggestions()
             }
@@ -609,8 +633,8 @@ final class SnippetExpansionEngine {
         // Current key-down has not been applied by the host app yet, so delete
         // only the already-typed prefix ("\" + query.dropLast()).
         let deleteCount = query.count
-        expand(snippet: snippet, deleteCount: deleteCount)
         typedBuffer = ""
+        deferExpansion(of: snippet, deleteCount: deleteCount)
         return true
     }
 
@@ -767,6 +791,27 @@ final class SnippetExpansionEngine {
         !character.isWhitespace && !character.isNewline
     }
 
+
+    /// Runs the injection work (AX reads, per-key sleeps, paste) outside the
+    /// event-tap callback so the callback can return immediately — blocking in
+    /// the callback is what makes macOS disable the tap with
+    /// `.tapDisabledByTimeout`. The suppress decision has already been made by
+    /// the caller; `isInjecting` is raised synchronously so any key event that
+    /// arrives before the deferred block runs is ignored, exactly as it would
+    /// have been while a synchronous expansion blocked the run loop.
+    private func deferExpansion(of snippet: Snippet, deleteCount: Int) {
+        isInjecting = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard deleteCount > 0 else {
+                self.isInjecting = false
+                return
+            }
+            // `expand` -> `replaceTypedText` re-raises `isInjecting` and
+            // schedules the deferred reset that eventually clears it.
+            self.expand(snippet: snippet, deleteCount: deleteCount)
+        }
+    }
 
     private func expand(snippet: Snippet, deleteCount: Int) {
         guard deleteCount > 0 else { return }
@@ -1059,8 +1104,15 @@ final class SnippetExpansionEngine {
         return deepestFocusedElement(startingAt: focused, maxDepth: 4)
     }
 
+    /// Applies the engine's bounded messaging timeout to an element we are
+    /// about to query, so a stalled host process cannot hang the tap thread.
+    private func withBoundedMessagingTimeout(_ element: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(element, axMessagingTimeoutSeconds)
+        return element
+    }
+
     private func copyFocusedElement(from app: NSRunningApplication) -> AXUIElement? {
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(app.processIdentifier))
         var focusedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
               let focusedValue,
@@ -1068,7 +1120,7 @@ final class SnippetExpansionEngine {
             return nil
         }
 
-        return (focusedValue as! AXUIElement)
+        return withBoundedMessagingTimeout(focusedValue as! AXUIElement)
     }
 
     private func deepestFocusedElement(startingAt root: AXUIElement, maxDepth: Int) -> AXUIElement {
@@ -1082,7 +1134,7 @@ final class SnippetExpansionEngine {
                 break
             }
 
-            let nested = nestedValue as! AXUIElement
+            let nested = withBoundedMessagingTimeout(nestedValue as! AXUIElement)
             if CFEqual(current, nested) {
                 break
             }
@@ -1178,7 +1230,7 @@ final class SnippetExpansionEngine {
             return nil
         }
 
-        return (value as! AXUIElement)
+        return withBoundedMessagingTimeout(value as! AXUIElement)
     }
 
     private func primeAccessibilityIfNeeded(for app: NSRunningApplication, force: Bool = false) {
@@ -1194,7 +1246,7 @@ final class SnippetExpansionEngine {
             return
         }
 
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(pid))
 
         // Electron documents this explicit opt-in switch for third-party ATs.
         if force || !hasManualPriming {
