@@ -39,7 +39,16 @@ extension ViewController {
     }
 
     func handleKeyEvent(_ event: NSEvent) -> NSEvent? {
-        // Let modal alerts/sheets consume keyboard events (Enter/Escape/etc).
+        // This is an app-wide local monitor: only handle events aimed at the
+        // main window. Sheets (beginSheetModal doesn't set NSApp.modalWindow),
+        // the Settings window, and modal alerts must consume their own keys
+        // (Enter/Escape/etc). Attached sheet events carry the sheet as their
+        // window, so they pass through here. In-window overlays (search
+        // suggestions, action panel) live in the main window and still match.
+        guard event.window === view.window else { return event }
+
+        // Let runModal-style alerts consume keyboard events even if they are
+        // somehow routed with the main window attached.
         if NSApp.modalWindow != nil {
             return event
         }
