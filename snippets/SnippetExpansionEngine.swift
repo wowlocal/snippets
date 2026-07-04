@@ -382,6 +382,9 @@ final class SnippetExpansionEngine {
         case mismatch
         case missingTrigger
         case unavailable
+        /// The host text before the caret contains multi-scalar graphemes;
+        /// no backspace count is reliable there.
+        case unsafe
 
         var isConfirmed: Bool {
             if case .confirmed = self { return true }
@@ -392,6 +395,12 @@ final class SnippetExpansionEngine {
     private func readAcceptContext(matchingQuery query: String) -> AcceptContextRead {
         switch focusedTriggerContext() {
         case .found(let context):
+            // Even a confirming AX read may carry a different scalar
+            // composition than what was typed (e.g. decomposed form);
+            // refuse to count backspaces over multi-scalar graphemes.
+            if containsMultiScalarGrapheme(context.query) {
+                return .unsafe
+            }
             if normalizedForSuggestionMatching(context.query) == normalizedForSuggestionMatching(query) {
                 return .confirmed(deleteCount: context.triggerLength)
             }
@@ -418,7 +427,13 @@ final class SnippetExpansionEngine {
         let localDeleteCount = suggestionDeleteCount
         let localFallbackUsable = suggestionLocalFallbackUsable
         let hadSyncedAXContext = suggestionHasSyncedAXContext
+
         dismissSuggestions()
+
+        // Multi-scalar graphemes (ZWJ emoji, flags, combining marks) in the
+        // query make the backspace count unreliable in web hosts — skip the
+        // accept instead of corrupting host text.
+        guard !containsMultiScalarGrapheme(localQuery) else { return }
 
         // Ignore key events while the short confirmation reads run, exactly
         // as a synchronous expansion did by blocking the run loop.
@@ -446,6 +461,9 @@ final class SnippetExpansionEngine {
                 // AX is behind or unreadable; trust local tracking while it
                 // has stayed authoritative.
                 deleteCount = localFallbackUsable ? localDeleteCount : nil
+            case .unsafe:
+                // No backspace count is reliable over multi-scalar graphemes.
+                deleteCount = nil
             }
 
             guard let deleteCount, deleteCount > 0 else {
@@ -743,6 +761,10 @@ final class SnippetExpansionEngine {
 
     /// Returns a snippet only if `query` exactly matches one keyword and no other keyword starts with `query`.
     private func unambiguousExactMatch(for query: String) -> Snippet? {
+        // The delete count for auto-expansion is derived from this query;
+        // multi-scalar graphemes make that count unreliable in web hosts.
+        guard !containsMultiScalarGrapheme(query) else { return nil }
+
         let snippets = store.enabledSnippetsSorted()
         let normalizedQuery = normalizedForSuggestionMatching(query)
 
@@ -927,6 +949,15 @@ final class SnippetExpansionEngine {
 
     private func isValidKeywordCharacter(_ character: Character) -> Bool {
         !character.isWhitespace && !character.isNewline
+    }
+
+    /// Trigger deletion is injected as one backspace per Swift Character
+    /// (grapheme), but Chromium-family hosts delete multi-scalar graphemes
+    /// (ZWJ emoji, flag sequences, combining marks) one scalar per backspace.
+    /// A grapheme count is then the wrong unit, so expansion is skipped for
+    /// such triggers rather than risking leftover fragments in host text.
+    private func containsMultiScalarGrapheme(_ string: String) -> Bool {
+        string.contains { $0.unicodeScalars.count > 1 }
     }
 
     /// True when the event carries a character from the Unicode function-key
