@@ -364,21 +364,98 @@ final class SnippetExpansionEngine {
     }
 
     private func selectSuggestion(_ snippet: Snippet, deleteCount overrideDeleteCount: Int? = nil) {
-        if overrideDeleteCount == nil {
-            let refreshResult = refreshSuggestionContextFromFocusedText(
-                allowAutoExpand: false,
-                dismissOnMissingTrigger: true
-            )
-            guard refreshResult.canUseForExpansion else {
-                abandonUnsafeSuggestionContext()
-                return
-            }
+        if let overrideDeleteCount {
+            // Auto-expand callers pass the delete count from a context they
+            // just synced; expand with it directly.
+            dismissSuggestions()
+            expand(snippet: snippet, deleteCount: overrideDeleteCount)
+            typedBuffer = ""
+            return
         }
 
-        let deleteCount = overrideDeleteCount ?? suggestionDeleteCount
+        acceptSelectedSuggestion(snippet)
+    }
+
+    /// How a fresh AX read relates to the query the user accepted.
+    private enum AcceptContextRead {
+        case confirmed(deleteCount: Int)
+        case mismatch
+        case missingTrigger
+        case unavailable
+
+        var isConfirmed: Bool {
+            if case .confirmed = self { return true }
+            return false
+        }
+    }
+
+    private func readAcceptContext(matchingQuery query: String) -> AcceptContextRead {
+        switch focusedTriggerContext() {
+        case .found(let context):
+            if normalizedForSuggestionMatching(context.query) == normalizedForSuggestionMatching(query) {
+                return .confirmed(deleteCount: context.triggerLength)
+            }
+            return .mismatch
+        case .missingTrigger:
+            return .missingTrigger
+        case .unavailable:
+            return .unavailable
+        }
+    }
+
+    /// Accepts an explicit user selection (Tab/Return or a click in the
+    /// panel). The snippet must be captured by the caller BEFORE any context
+    /// refresh so that re-ranking can never change what the user picked.
+    ///
+    /// The delete count is taken from a fresh AX read only when that read
+    /// confirms the accepted query; async hosts (Electron/Slack) often have
+    /// not applied the last keystrokes to AX yet, so unconfirmed reads are
+    /// retried with the same delays as the regular resync path
+    /// (`suggestionTextSyncDelays`) before falling back to the locally
+    /// tracked count.
+    private func acceptSelectedSuggestion(_ snippet: Snippet) {
+        let localQuery = suggestionQuery
+        let localDeleteCount = suggestionDeleteCount
+        let localFallbackUsable = suggestionLocalFallbackUsable
+        let hadSyncedAXContext = suggestionHasSyncedAXContext
         dismissSuggestions()
-        expand(snippet: snippet, deleteCount: deleteCount)
-        typedBuffer = ""
+
+        // Ignore key events while the short confirmation reads run, exactly
+        // as a synchronous expansion did by blocking the run loop.
+        isInjecting = true
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            var lastRead = self.readAcceptContext(matchingQuery: localQuery)
+            for delay in self.suggestionTextSyncDelays where !lastRead.isConfirmed {
+                try? await Task.sleep(for: delay)
+                lastRead = self.readAcceptContext(matchingQuery: localQuery)
+            }
+
+            let deleteCount: Int?
+            switch lastRead {
+            case .confirmed(let confirmedDeleteCount):
+                deleteCount = confirmedDeleteCount
+            case .missingTrigger:
+                // AX previously showed this trigger and no longer does — the
+                // host text really changed, so deleting anything would be
+                // blind. Only trust local tracking if AX never synced at all.
+                deleteCount = (hadSyncedAXContext || !localFallbackUsable) ? nil : localDeleteCount
+            case .mismatch, .unavailable:
+                // AX is behind or unreadable; trust local tracking while it
+                // has stayed authoritative.
+                deleteCount = localFallbackUsable ? localDeleteCount : nil
+            }
+
+            guard let deleteCount, deleteCount > 0 else {
+                // Nothing can vouch for the text before the caret — abort
+                // rather than delete blindly.
+                self.isInjecting = false
+                return
+            }
+            self.expand(snippet: snippet, deleteCount: deleteCount)
+        }
     }
 
     private func dismissSuggestions() {
@@ -478,23 +555,13 @@ final class SnippetExpansionEngine {
 
         // Tab or Return selects - suppress so target app doesn't act on the key
         if event.keyCode == UInt16(kVK_Tab) || event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
-            let refreshResult = refreshSuggestionContextFromFocusedText(
-                allowAutoExpand: false,
-                dismissOnMissingTrigger: true
-            )
-            guard refreshResult.canUseForExpansion else {
-                abandonUnsafeSuggestionContext()
+            // Capture the user's explicit selection BEFORE anything can
+            // refresh the context and re-rank the list underneath them.
+            guard let snippet = suggestionPanel.selectedSnippet() else {
+                dismissSuggestions()
                 return true
             }
-
-            if let snippet = suggestionPanel.selectedSnippet() {
-                let deleteCount = suggestionDeleteCount
-                dismissSuggestions()
-                typedBuffer = ""
-                deferExpansion(of: snippet, deleteCount: deleteCount)
-            } else {
-                dismissSuggestions()
-            }
+            acceptSelectedSuggestion(snippet)
             return true
         }
 
