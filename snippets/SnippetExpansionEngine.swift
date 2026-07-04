@@ -572,6 +572,27 @@ final class SnippetExpansionEngine {
             return false
         }
 
+        // Navigation and function keys report characters in the Unicode
+        // function-key range (U+F700–U+F8FF, e.g. NSLeftArrowFunctionKey).
+        // Those pass isValidKeywordCharacter but are not query text — they
+        // must never be appended to suggestionQuery.
+        if isFunctionKeyEvent(event) {
+            switch event.keyCode {
+            case UInt16(kVK_LeftArrow), UInt16(kVK_RightArrow),
+                 UInt16(kVK_Home), UInt16(kVK_End),
+                 UInt16(kVK_PageUp), UInt16(kVK_PageDown):
+                // The caret moves, so the tracked delete count no longer
+                // describes the text before it — end the session and let the
+                // host handle the key.
+                dismissSuggestions()
+                return false
+            default:
+                // Pure function keys (F1–F19, forward delete, …) don't edit
+                // the text before the caret; pass them through untouched.
+                return false
+            }
+        }
+
         guard let character = typedCharacter(from: event) else {
             // No printable character (e.g. language switch, function key) - ignore
             return false
@@ -906,6 +927,15 @@ final class SnippetExpansionEngine {
 
     private func isValidKeywordCharacter(_ character: Character) -> Bool {
         !character.isWhitespace && !character.isNewline
+    }
+
+    /// True when the event carries a character from the Unicode function-key
+    /// range (U+F700–U+F8FF): arrows, Home/End, Page Up/Down, F-keys, forward
+    /// delete, … The `.function` modifier alone is not used as the signal
+    /// because fn-modified events can still carry ordinary text characters.
+    private func isFunctionKeyEvent(_ event: NSEvent) -> Bool {
+        guard let scalar = event.characters?.unicodeScalars.first else { return false }
+        return (0xF700...0xF8FF).contains(scalar.value)
     }
 
 
