@@ -194,6 +194,10 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         removeClickMonitors()
         panel.orderOut(nil)
         items = []
+        // Keep the table in sync with the emptied data source; otherwise it still
+        // believes it has rows and any row materialization while hidden (e.g. an
+        // accessibility client walking the table) indexes past the empty array.
+        tableView.reloadData()
         selectionWasUserDriven = false
     }
 
@@ -710,6 +714,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     // MARK: - NSTableViewDelegate
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard items.indices.contains(row) else { return nil }
+
         let cellID = NSUserInterfaceItemIdentifier("SuggestionCell")
         let cell: SuggestionCellView
         if let reused = tableView.makeView(withIdentifier: cellID, owner: nil) as? SuggestionCellView {
