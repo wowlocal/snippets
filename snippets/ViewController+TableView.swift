@@ -43,14 +43,29 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        // Mid-batch callbacks see intermediate row indexes against the final
+        // visibleSnippets array; ignore them. reloadVisibleSnippets restores
+        // the selection via syncTableSelectionWithSelectedSnippet afterwards.
+        guard !isApplyingListUpdate else { return }
+
         let row = tableView.selectedRow
         guard row >= 0, row < visibleSnippets.count else {
+            // The edited snippet may be filtered out of the list while the
+            // user is still typing in the editor (debounced reloads deselect
+            // its row). Keep the editor bound to it instead of blanking.
+            if isEditingDetails,
+               let selectedSnippetID,
+               selectedSnippetID == editingSnippetID,
+               store.snippet(id: selectedSnippetID) != nil {
+                return
+            }
+
             let hadSelection = selectedSnippetID != nil
             selectedSnippetID = nil
             if hadSelection {
                 applySelectedSnippetToEditor()
             }
-    
+
             deleteButton.isEnabled = false
             return
         }

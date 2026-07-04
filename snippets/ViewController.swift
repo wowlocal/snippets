@@ -42,6 +42,12 @@ final class ViewController: NSViewController {
     var selectedSnippetID: UUID?
     var editingSnippetID: UUID?
     var isApplyingSnippetToEditor = false
+    /// True while the table is applying a batched diff / reloadData inside
+    /// `reloadVisibleSnippets`. Selection delegate callbacks fired mid-update
+    /// see intermediate row indexes against the final `visibleSnippets` array,
+    /// so they are ignored; `syncTableSelectionWithSelectedSnippet()` restores
+    /// the correct row once the update is done.
+    var isApplyingListUpdate = false
     var activeTagFilterKeys: Set<String> = []
     var renderedSuggestedTags: [String] = []
     private var importExportMessageDismissWorkItem: DispatchWorkItem?

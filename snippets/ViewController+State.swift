@@ -59,7 +59,16 @@ extension ViewController {
         if !keepSelection {
             selectedSnippetID = newSnippets.first?.id
         } else if let selectedSnippetID, !newSnippets.contains(where: { $0.id == selectedSnippetID }) {
-            self.selectedSnippetID = newSnippets.first?.id
+            // If the user is live-editing the selected snippet and it merely
+            // fell out of the current filter/search (e.g. rename-while-
+            // searching), keep the editor bound to it instead of yanking the
+            // selection to another snippet mid-typing.
+            let keepEditingHiddenSnippet = isEditingDetails
+                && editingSnippetID == selectedSnippetID
+                && store.snippet(id: selectedSnippetID) != nil
+            if !keepEditingHiddenSnippet {
+                self.selectedSnippetID = newSnippets.first?.id
+            }
         }
 
         let oldIDs = visibleSnippets.map(\.id)
@@ -89,6 +98,12 @@ extension ViewController {
     /// Applies filtered/search list changes with a fade so rows don't pop in
     /// and out abruptly. Falls back to a plain reload for large changes.
     private func applyAnimatedListUpdate(oldIDs: [UUID], newIDs: [UUID]) {
+        // Suppress selection delegate callbacks for the whole update
+        // (including the reloadData fallback): removing the selected row
+        // fires tableViewSelectionDidChange synchronously mid-batch.
+        isApplyingListUpdate = true
+        defer { isApplyingListUpdate = false }
+
         let diff = newIDs.difference(from: oldIDs)
         guard !oldIDs.isEmpty, diff.count <= ListUpdateAnimation.maxAnimatedChanges, view.window != nil else {
             tableView.reloadData()
