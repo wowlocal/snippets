@@ -353,9 +353,31 @@ final class SnippetStore {
             snippets = try decodeImportData(data)
             lastKnownDiskData = data
         } catch {
+            NSLog("Failed to load snippets: \(error.localizedDescription)")
             snippets = [Snippet.starterSnippet]
+
+            // Preserve the user's data: move the unreadable file aside before
+            // anything is written back to snippets.json. If the move fails,
+            // skip persisting so the original bytes are never overwritten.
+            let backupURL = saveFolderURL.appendingPathComponent(
+                "snippets.json.corrupt-\(Self.backupTimestamp())", isDirectory: false
+            )
+            do {
+                try FileManager.default.moveItem(at: saveURL, to: backupURL)
+                NSLog("Moved unreadable snippets file to \(backupURL.path)")
+            } catch {
+                NSLog("Could not move unreadable snippets file aside: \(error.localizedDescription); leaving it untouched")
+                return
+            }
             persist()
         }
+    }
+
+    private static func backupTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
     }
 
     private func decodeImportData(_ data: Data) throws -> [Snippet] {
