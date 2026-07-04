@@ -83,15 +83,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return code == kAEShutDown || code == kAERestart || code == kAEReallyLogOut
     }
 
-    #if !NO_SPARKLE
-    /// Sparkle sends a quit event when it needs to replace the app bundle.
-    private var updaterIsTerminating: Bool {
-        updaterController.updater.sessionInProgress
-    }
-    #else
-    private var updaterIsTerminating: Bool { false }
-    #endif
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
@@ -139,7 +130,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if shouldTerminateForReal || systemIsTerminating || updaterIsTerminating {
+        // Note: Sparkle's `sessionInProgress` is intentionally NOT consulted here.
+        // It is true during background appcast checks and automatic downloads, not
+        // just when Sparkle relaunches to install. The legit install relaunch is
+        // covered by `shouldTerminateForReal`, set before invoking the install handler.
+        if shouldTerminateForReal || systemIsTerminating {
             return .terminateNow
         }
 
@@ -854,6 +849,9 @@ extension AppDelegate: SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         isApplyingPendingUpdate = false
+        // The update session is over; a canceled/failed install must not leave
+        // Cmd+Q latched to quit-for-real for the rest of the session.
+        shouldTerminateForReal = false
         let nsError = error as NSError
 
         // Sparkle may report "no update available" through abort callback.
@@ -866,8 +864,10 @@ extension AppDelegate: SPUUpdaterDelegate {
             return
         }
 
-        // User canceled the install authorization prompt.
+        // User canceled the install authorization prompt. Clear the
+        // "Applying update and restarting…" status/spinner.
         if nsError.code == 4007 {
+            setUpdateStatus("Update installation canceled.", showProgress: false, autoClearAfter: 5)
             refreshAppMenuUpdateState()
             return
         }
