@@ -407,7 +407,9 @@ extension ViewController {
     }
 
     func updateKeywordWarning(for snippet: Snippet) {
-        let keyword = snippet.normalizedKeyword.lowercased()
+        // Fold like the expansion engine (case + diacritics) so e.g.
+        // "cafe" vs "café" is flagged — both stop expanding.
+        let keyword = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
         guard snippet.isEnabled, !keyword.isEmpty else {
             keywordWarningLabel.isHidden = true
             return
@@ -415,7 +417,7 @@ extension ViewController {
 
         let conflicting = store.enabledSnippetsSorted().filter { other in
             guard other.id != snippet.id else { return false }
-            let otherKeyword = other.normalizedKeyword.lowercased()
+            let otherKeyword = SnippetTagging.filterKey(for: other.normalizedKeyword)
             return otherKeyword.hasPrefix(keyword) || keyword.hasPrefix(otherKeyword)
         }
 
