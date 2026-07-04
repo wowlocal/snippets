@@ -1,7 +1,7 @@
 import AppKit
 
 enum TagColorPalette {
-    private static let colors: [NSColor] = [
+    private static let baseColors: [NSColor] = [
         .systemRed,
         .systemOrange,
         .systemYellow,
@@ -16,11 +16,35 @@ enum TagColorPalette {
         .systemBrown
     ]
 
+    private static let colors: [NSColor] = baseColors.map(muted)
+
     /// Deterministic color for a tag — stable across launches and machines,
     /// so the same tag always renders with the same color (Raycast-style).
     static func color(for tag: String) -> NSColor {
         let key = SnippetTagging.filterKey(for: tag)
         return colors[Int(fnv1aHash(key) % UInt64(colors.count))]
+    }
+
+    /// Full-saturation system colors turn a sidebar with many tags into
+    /// confetti, so tags render in softened renditions of the same hues:
+    /// pastel in dark mode, inky in light mode where text needs to stay
+    /// readable against bright backgrounds.
+    private static func muted(_ base: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            var resolved = base
+            appearance.performAsCurrentDrawingAppearance {
+                resolved = base.usingColorSpace(.sRGB) ?? base
+            }
+            var hue: CGFloat = 0
+            var saturation: CGFloat = 0
+            var brightness: CGFloat = 0
+            var alpha: CGFloat = 0
+            resolved.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return isDark
+                ? NSColor(hue: hue, saturation: saturation * 0.5, brightness: min(brightness, 0.92), alpha: alpha)
+                : NSColor(hue: hue, saturation: saturation * 0.65, brightness: brightness * 0.72, alpha: alpha)
+        }
     }
 
     static func swatchImage(for tag: String, diameter: CGFloat = 12) -> NSImage {
@@ -121,9 +145,25 @@ final class TagChipView: NSView {
         case .tinted:
             return color
         case .filled:
-            return .white
+            return Self.contrastingTextColor(on: color)
         case .muted:
             return .secondaryLabelColor
+        }
+    }
+
+    /// Filled chips sit on the tag color itself, which resolves to a light
+    /// pastel in dark mode and a deep tone in light mode — pick the text
+    /// color per resolved background luminance.
+    private static func contrastingTextColor(on background: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            var resolved = background
+            appearance.performAsCurrentDrawingAppearance {
+                resolved = background.usingColorSpace(.sRGB) ?? background
+            }
+            let luminance = 0.299 * resolved.redComponent
+                + 0.587 * resolved.greenComponent
+                + 0.114 * resolved.blueComponent
+            return luminance > 0.55 ? NSColor.black.withAlphaComponent(0.85) : .white
         }
     }
 
@@ -131,9 +171,9 @@ final class TagChipView: NSView {
         let hovering = isHovering && onClick != nil
         switch style {
         case .tinted:
-            return color.withAlphaComponent(hovering ? 0.3 : 0.18)
+            return color.withAlphaComponent(hovering ? 0.22 : 0.13)
         case .filled:
-            return color.withAlphaComponent(hovering ? 1.0 : 0.85)
+            return color.withAlphaComponent(hovering ? 1.0 : 0.92)
         case .muted:
             return NSColor.secondaryLabelColor.withAlphaComponent(hovering ? 0.2 : 0.12)
         }
@@ -144,17 +184,6 @@ final class TagChipView: NSView {
         let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
         fillColor.setFill()
         path.fill()
-
-        if style == .tinted {
-            let strokePath = NSBezierPath(
-                roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-                xRadius: radius,
-                yRadius: radius
-            )
-            color.withAlphaComponent(0.3).setStroke()
-            strokePath.lineWidth = 1
-            strokePath.stroke()
-        }
     }
 
     override func resetCursorRects() {
