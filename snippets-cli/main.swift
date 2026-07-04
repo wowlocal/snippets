@@ -61,16 +61,53 @@ private func fail(_ message: String, code: Int32 = 1) -> Never {
     exit(code)
 }
 
+// MARK: - Tags
+
+private func parseTags(_ value: String) -> [String] {
+    SnippetTagging.normalizedTags(value.components(separatedBy: ","))
+}
+
+/// AND semantics across filters, matching the app's tag filter bar.
+private func filterByTags(_ snippets: [Snippet], tagFilters: [String]) -> [Snippet] {
+    guard !tagFilters.isEmpty else { return snippets }
+    let keys = tagFilters.map { SnippetTagging.filterKey(for: $0) }
+    return snippets.filter { snippet in keys.allSatisfy { snippet.hasTag(withKey: $0) } }
+}
+
 // MARK: - Commands
 
-private func cmdList(enabledOnly: Bool, pinnedOnly: Bool) {
+private func cmdList(enabledOnly: Bool, pinnedOnly: Bool, tagFilters: [String]) {
     var snippets = loadSnippets()
     if enabledOnly { snippets = snippets.filter(\.isEnabled) }
     if pinnedOnly  { snippets = snippets.filter(\.isPinned) }
+    snippets = filterByTags(snippets, tagFilters: tagFilters)
     printJSON(snippets)
 }
 
-private func cmdSearch(query: String, enabledOnly: Bool) {
+private func cmdTags() {
+    struct TagUsage: Encodable {
+        let tag: String
+        let count: Int
+    }
+
+    // Mirror the app's tag list: dedupe by folded key, keep first-seen casing.
+    var canonicalTags: [String: String] = [:]
+    var counts: [String: Int] = [:]
+    for snippet in loadSnippets() {
+        for tag in snippet.tags {
+            let key = SnippetTagging.filterKey(for: tag)
+            if canonicalTags[key] == nil { canonicalTags[key] = tag }
+            counts[key, default: 0] += 1
+        }
+    }
+
+    let usage = canonicalTags
+        .map { TagUsage(tag: $0.value, count: counts[$0.key] ?? 0) }
+        .sorted { $0.tag.localizedCaseInsensitiveCompare($1.tag) == .orderedAscending }
+    printJSON(usage)
+}
+
+private func cmdSearch(query: String, enabledOnly: Bool, tagFilters: [String]) {
     struct SearchResult: Encodable {
         let score: Int
         let snippet: Snippet
@@ -80,6 +117,7 @@ private func cmdSearch(query: String, enabledOnly: Bool) {
         let nameScore = FuzzyMatch.score(query: query, target: snippet.displayName)
         let keywordScore = FuzzyMatch.score(query: query, target: snippet.normalizedKeyword)
         let contentMatches = snippet.content.localizedCaseInsensitiveContains(query)
+        let tagMatches = snippet.tags.contains { $0.localizedCaseInsensitiveContains(query) }
 
         let fuzzyScore = max(
             nameScore.matched ? nameScore.score + 10 : 0,
@@ -87,15 +125,16 @@ private func cmdSearch(query: String, enabledOnly: Bool) {
         )
 
         if fuzzyScore > 0 {
-            return contentMatches ? fuzzyScore + 1 : fuzzyScore
+            return (contentMatches || tagMatches) ? fuzzyScore + 1 : fuzzyScore
         }
 
-        guard contentMatches else { return nil }
+        guard contentMatches || tagMatches else { return nil }
         return max(1, query.count)
     }
 
     var snippets = loadSnippets()
     if enabledOnly { snippets = snippets.filter(\.isEnabled) }
+    snippets = filterByTags(snippets, tagFilters: tagFilters)
 
     let results = snippets
         .compactMap { snippet -> SearchResult? in
@@ -134,7 +173,7 @@ private func requireNoKeywordCollision(
     }
 }
 
-private func cmdAdd(name: String, keyword: String, content: String, enabled: Bool, pinned: Bool) {
+private func cmdAdd(name: String, keyword: String, content: String, tags: [String], enabled: Bool, pinned: Bool) {
     let sanitizedKeyword = Snippet.sanitizedKeyword(keyword)
     guard !sanitizedKeyword.isEmpty else {
         fail("--keyword must not be empty")
@@ -145,6 +184,7 @@ private func cmdAdd(name: String, keyword: String, content: String, enabled: Boo
         name: name,
         keyword: sanitizedKeyword,
         content: content,
+        tags: tags,
         isEnabled: enabled,
         isPinned: pinned
     )
@@ -158,9 +198,16 @@ private func cmdUpdate(
     name: String?,
     keyword: String?,
     content: String?,
+    tags: [String]?,
+    addTags: [String]?,
+    removeTags: [String]?,
     enabled: Bool?,
     pinned: Bool?
 ) {
+    if tags != nil && (addTags != nil || removeTags != nil) {
+        fail("--tags replaces all tags and cannot be combined with --add-tags/--remove-tags")
+    }
+
     var snippets = loadSnippets()
     let lookupKeyword = Snippet.sanitizedKeyword(keywordOrID)
 
@@ -179,6 +226,14 @@ private func cmdUpdate(
         updated.keyword = sanitized
     }
     if let content = content { updated.content = content }
+    if let tags = tags { updated.tags = tags }
+    if let addTags = addTags {
+        updated.tags = SnippetTagging.normalizedTags(updated.tags + addTags)
+    }
+    if let removeTags = removeTags {
+        let removeKeys = Set(removeTags.map { SnippetTagging.filterKey(for: $0) })
+        updated.tags.removeAll { removeKeys.contains(SnippetTagging.filterKey(for: $0)) }
+    }
     if let enabled = enabled { updated.isEnabled = enabled }
     if let pinned  = pinned  { updated.isPinned  = pinned  }
     updated.updatedAt = Date()
@@ -235,15 +290,20 @@ private func usage() -> Never {
       list                           List all snippets
         --enabled                    Show only enabled snippets
         --pinned                     Show only pinned snippets
+        --tag <tag>                  Show only snippets with this tag (repeatable; AND)
 
-      search <query>                 Search snippets by name, keyword, and content
+      search <query>                 Search snippets by name, keyword, content, and tags
         --enabled                    Search only enabled snippets
+        --tag <tag>                  Search only snippets with this tag (repeatable; AND)
 
       get <keyword>                  Get a snippet by exact keyword match
+
+      tags                           List all tags with usage counts
 
       add --keyword <kw>             Add a new snippet
           --name <name>
           --content <text>|-         (use - to read content from stdin)
+          --tags <a,b,c>             Comma-separated tags
           --disabled
           --pinned
 
@@ -251,11 +311,15 @@ private func usage() -> Never {
              [--name <name>]
              [--keyword <kw>]
              [--content <text>|-]
+             [--tags <a,b,c>]        Replace all tags (empty string clears them)
+             [--add-tags <a,b>]      Add tags, keeping existing ones
+             [--remove-tags <a,b>]   Remove tags, keeping the rest
              [--enabled|--disabled]
              [--pinned|--unpinned]
 
       delete <keyword-or-id>         Delete a snippet by keyword or UUID
 
+    Tags are matched ignoring case and diacritics, like the app.
     All output is JSON. Errors are written to stderr with a non-zero exit code.
     """)
     exit(0)
@@ -269,33 +333,49 @@ guard !args.isEmpty else { usage() }
 switch args[0] {
 
 case "list":
+    var tagFilters: [String] = []
+    var i = 1
+    while i < args.count {
+        if args[i] == "--tag" {
+            tagFilters.append(nextArg(args, after: i, flag: "--tag")); i += 1
+        }
+        i += 1
+    }
     cmdList(
         enabledOnly: args.contains("--enabled"),
-        pinnedOnly:  args.contains("--pinned")
+        pinnedOnly:  args.contains("--pinned"),
+        tagFilters:  tagFilters
     )
 
 case "search":
     var query = ""
     var enabledOnly = false
+    var tagFilters: [String] = []
     var i = 1
     while i < args.count {
         switch args[i] {
         case "--enabled": enabledOnly = true
+        case "--tag":
+            tagFilters.append(nextArg(args, after: i, flag: "--tag")); i += 1
         default: query = args[i]
         }
         i += 1
     }
     guard !query.isEmpty else { fail("search requires a query argument") }
-    cmdSearch(query: query, enabledOnly: enabledOnly)
+    cmdSearch(query: query, enabledOnly: enabledOnly, tagFilters: tagFilters)
 
 case "get":
     guard args.count >= 2 else { fail("get requires a keyword argument") }
     cmdGet(keyword: args[1])
 
+case "tags":
+    cmdTags()
+
 case "add":
     var name    = ""
     var keyword = ""
     var content = ""
+    var tags: [String] = []
     var enabled = true
     var pinned  = false
     var i = 1
@@ -307,22 +387,27 @@ case "add":
             keyword = nextArg(args, after: i, flag: "--keyword"); i += 1
         case "--content":
             content = readContent(from: nextArg(args, after: i, flag: "--content")); i += 1
+        case "--tags":
+            tags = parseTags(nextArg(args, after: i, flag: "--tags")); i += 1
         case "--disabled": enabled = false
         case "--pinned":   pinned  = true
         default: break
         }
         i += 1
     }
-    cmdAdd(name: name, keyword: keyword, content: content, enabled: enabled, pinned: pinned)
+    cmdAdd(name: name, keyword: keyword, content: content, tags: tags, enabled: enabled, pinned: pinned)
 
 case "update":
     guard args.count >= 2 else { fail("update requires a keyword or UUID argument") }
     let target = args[1]
-    var name:    String? = nil
-    var keyword: String? = nil
-    var content: String? = nil
-    var enabled: Bool?   = nil
-    var pinned:  Bool?   = nil
+    var name:       String?   = nil
+    var keyword:    String?   = nil
+    var content:    String?   = nil
+    var tags:       [String]? = nil
+    var addTags:    [String]? = nil
+    var removeTags: [String]? = nil
+    var enabled:    Bool?     = nil
+    var pinned:     Bool?     = nil
     var i = 2
     while i < args.count {
         switch args[i] {
@@ -332,6 +417,12 @@ case "update":
             keyword = nextArg(args, after: i, flag: "--keyword"); i += 1
         case "--content":
             content = readContent(from: nextArg(args, after: i, flag: "--content")); i += 1
+        case "--tags":
+            tags = parseTags(nextArg(args, after: i, flag: "--tags")); i += 1
+        case "--add-tags":
+            addTags = parseTags(nextArg(args, after: i, flag: "--add-tags")); i += 1
+        case "--remove-tags":
+            removeTags = parseTags(nextArg(args, after: i, flag: "--remove-tags")); i += 1
         case "--enabled":  enabled = true
         case "--disabled": enabled = false
         case "--pinned":   pinned  = true
@@ -340,7 +431,17 @@ case "update":
         }
         i += 1
     }
-    cmdUpdate(keywordOrID: target, name: name, keyword: keyword, content: content, enabled: enabled, pinned: pinned)
+    cmdUpdate(
+        keywordOrID: target,
+        name: name,
+        keyword: keyword,
+        content: content,
+        tags: tags,
+        addTags: addTags,
+        removeTags: removeTags,
+        enabled: enabled,
+        pinned: pinned
+    )
 
 case "delete":
     guard args.count >= 2 else { fail("delete requires a keyword or UUID argument") }
