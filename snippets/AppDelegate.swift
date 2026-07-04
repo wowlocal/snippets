@@ -620,12 +620,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func confirmImportOfSharedSnippet(_ snippet: Snippet) -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Import Shared Snippet?"
-        alert.informativeText = sharedSnippetSummary(snippet)
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Import")
+
+        if let replaced = existingSnippetReplacedByImport(of: snippet) {
+            // The store's import merge keys on keyword equality: importing a shared
+            // snippet whose keyword matches an existing one silently overwrites it.
+            // Make that explicit so a crafted share link can't swap trusted expansion
+            // content behind a benign-looking import dialog.
+            alert.messageText = "Replace Existing Snippet?"
+            alert.informativeText = """
+            Warning: You already have a snippet named "\(replaced.displayName)" with the keyword \\\(replaced.normalizedKeyword). Importing this shared snippet will REPLACE it, permanently overwriting its current content.
+
+            \(sharedSnippetSummary(snippet))
+            """
+            alert.alertStyle = .warning
+            let replaceButton = alert.addButton(withTitle: "Replace \"\(replaced.displayName)\"")
+            replaceButton.hasDestructiveAction = true
+        } else {
+            alert.messageText = "Import Shared Snippet?"
+            alert.informativeText = sharedSnippetSummary(snippet)
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Import")
+        }
+
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Existing snippet that the store's keyword-keyed import merge would replace.
+    private func existingSnippetReplacedByImport(of snippet: Snippet) -> Snippet? {
+        let incomingKeyword = snippet.normalizedKeyword
+        guard !incomingKeyword.isEmpty else { return nil }
+
+        let incomingKey = SnippetTagging.filterKey(for: incomingKeyword)
+        return store.snippets.first { existing in
+            let existingKeyword = existing.normalizedKeyword
+            return !existingKeyword.isEmpty && SnippetTagging.filterKey(for: existingKeyword) == incomingKey
+        }
     }
 
     private func sharedSnippetSummary(_ snippet: Snippet) -> String {
