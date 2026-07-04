@@ -9,13 +9,24 @@ private let saveURL: URL = {
     return appSupport.appendingPathComponent("SnippetsClone/snippets.json")
 }()
 
+/// Loads the snippet library. A missing file means an empty library; an
+/// existing file that cannot be read or decoded aborts the command (for every
+/// command, read or write) so a later save can never wipe the user's data.
 private func loadSnippets() -> [Snippet] {
-    guard let data = try? Data(contentsOf: saveURL) else { return [] }
+    guard FileManager.default.fileExists(atPath: saveURL.path) else { return [] }
+
+    let data: Data
+    do {
+        data = try Data(contentsOf: saveURL)
+    } catch {
+        fail("cannot read snippets file at '\(saveURL.path)': \(error.localizedDescription)")
+    }
+
     let decoder = JSONDecoder()
     if let array = try? decoder.decode([Snippet].self, from: data) { return array }
     struct Wrapper: Decodable { let snippets: [Snippet] }
     if let wrapper = try? decoder.decode(Wrapper.self, from: data) { return wrapper.snippets }
-    return []
+    fail("snippets file at '\(saveURL.path)' exists but could not be decoded; fix or move it aside and retry")
 }
 
 private func saveSnippets(_ snippets: [Snippet]) throws {
