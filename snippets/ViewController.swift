@@ -51,6 +51,11 @@ final class ViewController: NSViewController {
     var activeTagFilterKeys: Set<String> = []
     var renderedSuggestedTags: [String] = []
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
+    /// Bumped on every status message change so an in-flight dismiss task can
+    /// detect it is stale. Text equality is not enough: re-showing the same
+    /// message during its fade would pass the old task's guard and get
+    /// dismissed almost immediately.
+    private var importExportMessageGeneration = 0
     var editorListReloadWorkItem: DispatchWorkItem?
     var clipboardPreviewTimer: Timer?
     var observedPasteboardChangeCount = NSPasteboard.general.changeCount
@@ -269,6 +274,8 @@ final class ViewController: NSViewController {
     }
 
     private func updateImportExportMessageLabel(from oldValue: String?, to newValue: String?) {
+        importExportMessageGeneration += 1
+        let generation = importExportMessageGeneration
         importExportMessageDismissWorkItem?.cancel()
         importExportMessageDismissWorkItem = nil
 
@@ -286,12 +293,12 @@ final class ViewController: NSViewController {
 
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, self.importExportMessage == newValue else { return }
+                guard let self, self.importExportMessageGeneration == generation else { return }
                 await NSAnimationContext.runAnimationGroup { context in
                     context.duration = ActionStatusMessage.fadeDuration
                     self.importExportMessageLabel.animator().alphaValue = 0
                 }
-                guard self.importExportMessage == newValue else { return }
+                guard self.importExportMessageGeneration == generation else { return }
                 self.importExportMessageDismissWorkItem = nil
                 self.importExportMessage = nil
             }
