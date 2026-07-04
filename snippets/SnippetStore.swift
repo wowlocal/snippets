@@ -315,9 +315,10 @@ final class SnippetStore {
             return incoming
         }
 
+        let incomingKey = SnippetTagging.filterKey(for: incoming.normalizedKeyword)
         if !incoming.normalizedKeyword.isEmpty,
            let keywordIndex = merged.firstIndex(where: {
-               $0.normalizedKeyword.caseInsensitiveCompare(incoming.normalizedKeyword) == .orderedSame
+               SnippetTagging.filterKey(for: $0.normalizedKeyword) == incomingKey
            }) {
             var replacement = incoming
             replacement.id = merged[keywordIndex].id
@@ -432,7 +433,8 @@ final class SnippetStore {
                 conflicts.append("The import contains duplicate snippet ID \(snippet.id.uuidString).")
             }
 
-            let keyword = snippet.normalizedKeyword.lowercased()
+            // Match the expansion engine, which folds case AND diacritics.
+            let keyword = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
             guard !keyword.isEmpty else { continue }
 
             if let existing = seenKeywords[keyword] {
@@ -454,9 +456,10 @@ final class SnippetStore {
             let keyword = incoming.normalizedKeyword
             guard !keyword.isEmpty else { continue }
 
+            let keywordKey = SnippetTagging.filterKey(for: keyword)
             if let keywordMatch = snippets.first(where: {
                 $0.id != incoming.id &&
-                $0.normalizedKeyword.caseInsensitiveCompare(keyword) == .orderedSame
+                SnippetTagging.filterKey(for: $0.normalizedKeyword) == keywordKey
             }) {
                 conflicts.append("Imported \(incoming.displayName) matches existing ID \(idMatch.displayName), but keyword \\\(keyword) belongs to \(keywordMatch.displayName).")
             }

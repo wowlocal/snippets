@@ -118,12 +118,29 @@ private func cmdGet(keyword: String) {
     printJSON(snippet)
 }
 
+/// The expansion engine matches keywords ignoring case AND diacritics, so two
+/// keywords with the same folded key (e.g. `cafe` and `café`) would silently
+/// stop expanding. Reject such collisions up front.
+private func requireNoKeywordCollision(
+    _ keyword: String, in snippets: [Snippet], excludingID: UUID? = nil
+) {
+    let key = SnippetTagging.filterKey(for: keyword)
+    guard !key.isEmpty else { return }
+
+    if let existing = snippets.first(where: {
+        $0.id != excludingID && SnippetTagging.filterKey(for: $0.normalizedKeyword) == key
+    }) {
+        fail("keyword '\(keyword)' conflicts with existing snippet '\(existing.displayName)' (keyword '\(existing.normalizedKeyword)'); keywords are compared ignoring case and diacritics")
+    }
+}
+
 private func cmdAdd(name: String, keyword: String, content: String, enabled: Bool, pinned: Bool) {
     let sanitizedKeyword = Snippet.sanitizedKeyword(keyword)
     guard !sanitizedKeyword.isEmpty else {
         fail("--keyword must not be empty")
     }
     var snippets = loadSnippets()
+    requireNoKeywordCollision(sanitizedKeyword, in: snippets)
     let snippet = Snippet(
         name: name,
         keyword: sanitizedKeyword,
@@ -156,7 +173,11 @@ private func cmdUpdate(
 
     var updated = snippets[index]
     if let name    = name    { updated.name    = name }
-    if let keyword = keyword { updated.keyword = Snippet.sanitizedKeyword(keyword) }
+    if let keyword = keyword {
+        let sanitized = Snippet.sanitizedKeyword(keyword)
+        requireNoKeywordCollision(sanitized, in: snippets, excludingID: updated.id)
+        updated.keyword = sanitized
+    }
     if let content = content { updated.content = content }
     if let enabled = enabled { updated.isEnabled = enabled }
     if let pinned  = pinned  { updated.isPinned  = pinned  }
