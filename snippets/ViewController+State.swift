@@ -194,6 +194,12 @@ extension ViewController {
 
     private func pruneStaleTagFilters() {
         guard !activeTagFilterKeys.isEmpty else { return }
+        // Live editing transiently rewrites the edited snippet's tags (e.g.
+        // tags = [] while a token is being retyped); pruning during the
+        // debounced reload would permanently drop and persist an active
+        // filter the user is about to restore. The controlTextDidEndEditing
+        // reload prunes once editing is done.
+        guard !isEditingDetails else { return }
         let existingKeys = Set(store.allTags().map { SnippetTagging.filterKey(for: $0) })
         let pruned = activeTagFilterKeys.intersection(existingKeys)
         if pruned != activeTagFilterKeys {
