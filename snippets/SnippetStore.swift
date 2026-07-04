@@ -522,6 +522,7 @@ final class SnippetStore {
     private func persist(immediately: Bool = false) {
         onChange?(.local)
         persistWorkItem?.cancel()
+        persistWorkItem = nil
 
         if immediately {
             writeToDisk()
@@ -530,7 +531,11 @@ final class SnippetStore {
 
         let workItem = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
-                self?.writeToDisk()
+                guard let self else { return }
+                // Clear the reference before writing: a non-nil persistWorkItem
+                // must always mean a write is still pending.
+                self.persistWorkItem = nil
+                self.writeToDisk()
             }
         }
         persistWorkItem = workItem
@@ -646,6 +651,13 @@ final class SnippetStore {
     }
 
     private func reloadFromDiskIfNeeded() {
+        // True conflict: a local debounced write is still pending AND the file
+        // changed underneath us. Policy: the in-app edit wins — the user made
+        // it within the last `persistDelay` seconds, so flush it over the
+        // external change rather than dropping their keystrokes. (Merging the
+        // two is out of scope.) A non-nil persistWorkItem is guaranteed to
+        // mean a genuinely pending write; completed or superseded work items
+        // clear the reference.
         guard persistWorkItem == nil else {
             flushPendingWrites()
             return
@@ -660,8 +672,6 @@ final class SnippetStore {
 
             guard reloadedSnippets != snippets else { return }
 
-            persistWorkItem?.cancel()
-            persistWorkItem = nil
             undoStack.removeAll()
             redoStack.removeAll()
             snippets = reloadedSnippets
