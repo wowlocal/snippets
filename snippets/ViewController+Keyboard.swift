@@ -97,7 +97,9 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && key == UInt16(kVK_Delete) {
+        // ⌘⌫ is "delete to beginning of line" while typing; only treat it as
+        // "delete snippet" when no text field is being edited.
+        if flags == [.command] && key == UInt16(kVK_Delete) && !isSearchFieldActive && !isEditingDetails {
             deleteSelectedSnippet(nil)
             return nil
         }
@@ -117,7 +119,7 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && key == UInt16(kVK_ANSI_E) {
+        if flags == [.command] && key == UInt16(kVK_ANSI_E) && !isSearchFieldActive && !isEditingDetails {
             editSelectedSnippet()
             return nil
         }
@@ -127,7 +129,7 @@ extension ViewController {
             return nil
         }
 
-        if flags == [.command] && key == UInt16(kVK_ANSI_D) {
+        if flags == [.command] && key == UInt16(kVK_ANSI_D) && !isSearchFieldActive && !isEditingDetails {
             duplicateSelectedSnippet()
             return nil
         }
