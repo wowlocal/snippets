@@ -189,7 +189,9 @@ extension ViewController {
             return false
         }
 
-        if firstResponder === nameField.currentEditor() || firstResponder === keywordField.currentEditor() {
+        if firstResponder === nameField.currentEditor()
+            || firstResponder === keywordField.currentEditor()
+            || firstResponder === tagsField.currentEditor() {
             return false
         }
 
@@ -205,6 +207,7 @@ extension ViewController {
     enum EditorFocusTarget {
         case name
         case keyword
+        case tags
         case content
     }
 
@@ -223,6 +226,10 @@ extension ViewController {
             return .keyword
         }
 
+        if firstResponder === tagsField.currentEditor() {
+            return .tags
+        }
+
         return nil
     }
 
@@ -234,6 +241,8 @@ extension ViewController {
             requestFirstResponder(nameField)
         case .keyword:
             requestFirstResponder(keywordField)
+        case .tags:
+            requestFirstResponder(tagsField)
         case .content:
             requestFirstResponder(snippetTextView)
         }

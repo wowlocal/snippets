@@ -35,6 +35,8 @@ enum SnippetDeepLink {
         let name: String
         let keyword: String
         let content: String
+        // Optional so links from older app versions still decode.
+        let tags: [String]?
     }
 
     static func canHandle(_ url: URL) -> Bool {
@@ -51,7 +53,8 @@ enum SnippetDeepLink {
             version: currentVersion,
             name: snippet.name,
             keyword: snippet.normalizedKeyword,
-            content: snippet.content
+            content: snippet.content,
+            tags: snippet.tags.isEmpty ? nil : snippet.tags
         )
 
         let encoder = JSONEncoder()
@@ -105,7 +108,8 @@ enum SnippetDeepLink {
         return Snippet(
             name: payload.name,
             keyword: normalizedSharedKeyword(payload.keyword),
-            content: payload.content
+            content: payload.content,
+            tags: SnippetTagging.normalizedTags(payload.tags ?? [])
         )
     }
 

@@ -42,6 +42,8 @@ final class ViewController: NSViewController {
     var selectedSnippetID: UUID?
     var editingSnippetID: UUID?
     var isApplyingSnippetToEditor = false
+    var activeTagFilterKeys: Set<String> = []
+    var renderedSuggestedTags: [String] = []
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
     var editorListReloadWorkItem: DispatchWorkItem?
     var clipboardPreviewTimer: Timer?
@@ -62,12 +64,19 @@ final class ViewController: NSViewController {
 
     let searchField = NSSearchField()
     let tableView = SnippetListTableView()
+    let tagFilterBar = TagFilterBarView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     let importExportMessageLabel = NSTextField(labelWithString: "")
+    let listEmptyStateView = NSStackView()
+    let listEmptyStateIconView = NSImageView()
+    let listEmptyStateLabel = NSTextField(wrappingLabelWithString: "")
+    let listEmptyStateClearButton = NSButton(title: "Clear Filters", target: nil, action: nil)
 
     let nameField = NSTextField(string: "")
     let snippetTextView = NSTextView()
     let keywordField = NSTextField(string: "")
+    let tagsField = NSTokenField(string: "")
+    let editorSuggestedTagsFlow = TagFlowView()
     let keywordPrefixLabel = NSTextField(labelWithString: "\\")
     let keywordWarningLabel = NSTextField(labelWithString: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
@@ -121,6 +130,7 @@ final class ViewController: NSViewController {
 
         engine.startIfNeeded()
         startClipboardPreviewRefreshTimerIfNeeded()
+        loadPersistedTagFilters()
         reloadVisibleSnippets(keepSelection: false)
         if let firstID = visibleSnippets.first?.id {
             selectSnippet(id: firstID, focusEditorName: false)

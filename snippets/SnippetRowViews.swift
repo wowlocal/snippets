@@ -17,7 +17,10 @@ final class SnippetRowCellView: NSTableCellView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
     private let contentPreviewLabel = NSTextField(labelWithString: "")
+    private let tagChipsStack = NSStackView()
     private var isDisabledSnippet = false
+    private var renderedTagState: (tags: [String], muted: Bool)?
+    private static let maxVisibleTagChips = 3
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {
@@ -40,6 +43,7 @@ final class SnippetRowCellView: NSTableCellView {
         contentPreviewLabel.font = .systemFont(ofSize: 12)
         contentPreviewLabel.lineBreakMode = .byTruncatingTail
         contentPreviewLabel.maximumNumberOfLines = 1
+        contentPreviewLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         dotView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -55,15 +59,30 @@ final class SnippetRowCellView: NSTableCellView {
             pinView.heightAnchor.constraint(equalToConstant: 10),
         ])
 
+        tagChipsStack.orientation = .horizontal
+        tagChipsStack.spacing = 4
+        tagChipsStack.alignment = .centerY
+        tagChipsStack.setContentHuggingPriority(.required, for: .horizontal)
+        tagChipsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         let topRow = NSStackView(views: [nameLabel, keywordLabel])
         topRow.orientation = .horizontal
         topRow.spacing = 6
         topRow.alignment = .firstBaseline
 
-        let labelsStack = NSStackView(views: [topRow, contentPreviewLabel])
+        let bottomRowSpacer = NSView()
+        bottomRowSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+
+        let bottomRow = NSStackView(views: [contentPreviewLabel, bottomRowSpacer, tagChipsStack])
+        bottomRow.orientation = .horizontal
+        bottomRow.spacing = 6
+        bottomRow.alignment = .centerY
+
+        let labelsStack = NSStackView(views: [topRow, bottomRow])
         labelsStack.orientation = .vertical
         labelsStack.spacing = 2
         labelsStack.alignment = .leading
+        bottomRow.widthAnchor.constraint(equalTo: labelsStack.widthAnchor).isActive = true
 
         let rootStack = NSStackView(views: [dotView, pinView, labelsStack])
         rootStack.orientation = .horizontal
@@ -102,6 +121,8 @@ final class SnippetRowCellView: NSTableCellView {
         contentPreviewLabel.stringValue = preview
         contentPreviewLabel.isHidden = preview.isEmpty
 
+        updateTagChips(tags: snippet.tags, muted: !snippet.isEnabled)
+
         if snippet.isPinned {
             dotView.isHidden = true
             pinView.isHidden = false
@@ -113,6 +134,24 @@ final class SnippetRowCellView: NSTableCellView {
         }
 
         applyTextColors()
+    }
+
+    private func updateTagChips(tags: [String], muted: Bool) {
+        guard renderedTagState?.tags != tags || renderedTagState?.muted != muted else { return }
+        renderedTagState = (tags, muted)
+
+        tagChipsStack.arrangedSubviews.forEach { view in
+            tagChipsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let chips = TagChipView.makeChips(
+            for: tags,
+            maxCount: Self.maxVisibleTagChips,
+            muted: muted
+        )
+        chips.forEach(tagChipsStack.addArrangedSubview)
+        tagChipsStack.isHidden = chips.isEmpty
     }
 
     private func applyTextColors() {

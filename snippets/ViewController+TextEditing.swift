@@ -1,6 +1,6 @@
 import AppKit
 
-extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchFieldDelegate {
+extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSTokenFieldDelegate {
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
 
@@ -13,7 +13,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
             return
         }
 
-        if field == nameField || field == keywordField {
+        if field == nameField || field == keywordField || field == tagsField {
             updateSelectedSnippetFromEditor()
         }
     }
@@ -31,7 +31,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
             DispatchQueue.main.async { [weak self] in
                 self?.updateSearchSuggestionOverlay()
             }
-        } else if field == nameField || field == keywordField {
+        } else if field == nameField || field == keywordField || field == tagsField {
             store.beginEditTransaction()
         }
     }
@@ -46,9 +46,41 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
                     hideSearchSuggestionOverlay()
                 }
             }
-        } else if field == nameField || field == keywordField {
+        } else if field == nameField || field == keywordField || field == tagsField {
+            if field == tagsField {
+                // The trailing token is only finalized when editing ends, so
+                // re-read the field before committing the transaction.
+                updateSelectedSnippetFromEditor()
+            }
             store.commitEditTransaction()
+            if field == tagsField {
+                reloadVisibleSnippets(keepSelection: true)
+            }
         }
+    }
+
+    func tokenField(
+        _ tokenField: NSTokenField,
+        completionsForSubstring substring: String,
+        indexOfToken tokenIndex: Int,
+        indexOfSelectedItem selectedIndex: UnsafeMutablePointer<Int>?
+    ) -> [Any]? {
+        let key = SnippetTagging.filterKey(for: substring)
+        guard !key.isEmpty else { return [] }
+
+        let editorTagKeys = Set(tagsFromEditor().map { SnippetTagging.filterKey(for: $0) })
+        return store.allTags().filter { tag in
+            let tagKey = SnippetTagging.filterKey(for: tag)
+            return tagKey.hasPrefix(key) && !editorTagKeys.contains(tagKey)
+        }
+    }
+
+    func tokenField(
+        _ tokenField: NSTokenField,
+        shouldAdd tokens: [Any],
+        at index: Int
+    ) -> [Any] {
+        SnippetTagging.normalizedTags(tokens.compactMap { $0 as? String })
     }
 
     func textDidBeginEditing(_ notification: Notification) {

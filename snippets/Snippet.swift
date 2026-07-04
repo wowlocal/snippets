@@ -5,6 +5,7 @@ struct Snippet: Identifiable, Codable, Equatable {
     var name: String
     var keyword: String
     var content: String
+    var tags: [String]
     var isEnabled: Bool
     var isPinned: Bool
     var createdAt: Date
@@ -15,6 +16,7 @@ struct Snippet: Identifiable, Codable, Equatable {
         name: String,
         keyword: String,
         content: String,
+        tags: [String] = [],
         isEnabled: Bool = true,
         isPinned: Bool = false,
         createdAt: Date = Date(),
@@ -24,6 +26,7 @@ struct Snippet: Identifiable, Codable, Equatable {
         self.name = name
         self.keyword = keyword
         self.content = content
+        self.tags = tags
         self.isEnabled = isEnabled
         self.isPinned = isPinned
         self.createdAt = createdAt
@@ -66,12 +69,48 @@ enum SnippetStorageSync {
     static let distributedChangeNotification = Notification.Name("com.khm.snippets.storageDidChange")
 }
 
+enum SnippetTagging {
+    /// Trims whitespace, drops empties, and dedupes case-insensitively while
+    /// preserving the first-seen casing and input order.
+    static func normalizedTags(_ rawTags: [String]) -> [String] {
+        var seenKeys = Set<String>()
+        var normalized: [String] = []
+
+        for rawTag in rawTags {
+            let tag = rawTag
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            guard !tag.isEmpty else { continue }
+
+            if seenKeys.insert(filterKey(for: tag)).inserted {
+                normalized.append(tag)
+            }
+        }
+
+        return normalized
+    }
+
+    /// Canonical key used for tag comparison, filtering, and color hashing.
+    static func filterKey(for tag: String) -> String {
+        tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+}
+
+extension Snippet {
+    func hasTag(withKey key: String) -> Bool {
+        tags.contains { SnippetTagging.filterKey(for: $0) == key }
+    }
+}
+
 extension Snippet {
     private enum CodingKeys: String, CodingKey {
         case id
         case name
         case keyword
         case content
+        case tags
         case isEnabled
         case isPinned
         case createdAt
@@ -85,6 +124,7 @@ extension Snippet {
         name = try container.decode(String.self, forKey: .name)
         keyword = try container.decode(String.self, forKey: .keyword)
         content = try container.decode(String.self, forKey: .content)
+        tags = SnippetTagging.normalizedTags(try container.decodeIfPresent([String].self, forKey: .tags) ?? [])
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
@@ -97,6 +137,7 @@ extension Snippet {
         try container.encode(name, forKey: .name)
         try container.encode(keyword, forKey: .keyword)
         try container.encode(content, forKey: .content)
+        try container.encode(tags, forKey: .tags)
         try container.encode(isEnabled, forKey: .isEnabled)
         try container.encode(isPinned, forKey: .isPinned)
         try container.encode(createdAt, forKey: .createdAt)

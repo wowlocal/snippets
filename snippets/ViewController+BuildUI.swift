@@ -288,6 +288,48 @@ extension ViewController {
         return container
     }
 
+    private func buildListEmptyState(in listContainer: NSView) {
+        listEmptyStateIconView.imageScaling = .scaleProportionallyDown
+        listEmptyStateIconView.contentTintColor = .tertiaryLabelColor
+        listEmptyStateIconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 24, weight: .regular)
+
+        listEmptyStateLabel.font = .systemFont(ofSize: 12)
+        listEmptyStateLabel.textColor = .secondaryLabelColor
+        listEmptyStateLabel.alignment = .center
+
+        listEmptyStateClearButton.target = self
+        listEmptyStateClearButton.action = #selector(clearTagFiltersFromEmptyState)
+        listEmptyStateClearButton.controlSize = .small
+        if #available(macOS 26.0, *) {
+            listEmptyStateClearButton.bezelStyle = .glass
+        } else {
+            listEmptyStateClearButton.bezelStyle = .rounded
+        }
+
+        listEmptyStateView.orientation = .vertical
+        listEmptyStateView.spacing = 8
+        listEmptyStateView.alignment = .centerX
+        listEmptyStateView.translatesAutoresizingMaskIntoConstraints = false
+        listEmptyStateView.isHidden = true
+        listEmptyStateView.addArrangedSubview(listEmptyStateIconView)
+        listEmptyStateView.addArrangedSubview(listEmptyStateLabel)
+        listEmptyStateView.addArrangedSubview(listEmptyStateClearButton)
+        listEmptyStateView.setCustomSpacing(12, after: listEmptyStateLabel)
+
+        listContainer.addSubview(listEmptyStateView)
+
+        NSLayoutConstraint.activate([
+            listEmptyStateView.centerXAnchor.constraint(equalTo: listContainer.centerXAnchor),
+            listEmptyStateView.centerYAnchor.constraint(equalTo: listContainer.centerYAnchor, constant: -24),
+            listEmptyStateView.leadingAnchor.constraint(greaterThanOrEqualTo: listContainer.leadingAnchor, constant: 12),
+            listEmptyStateView.trailingAnchor.constraint(lessThanOrEqualTo: listContainer.trailingAnchor, constant: -12)
+        ])
+    }
+
+    @objc private func clearTagFiltersFromEmptyState() {
+        clearTagFilters()
+    }
+
     func buildSidebar() -> NSView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -326,9 +368,19 @@ extension ViewController {
 
         tableScrollView.documentView = tableView
 
+        tagFilterBar.isHidden = true
+        tagFilterBar.onToggleTag = { [weak self] tag in
+            self?.toggleTagFilter(tag)
+        }
+        tagFilterBar.onClearFilters = { [weak self] in
+            self?.clearTagFilters()
+        }
+
         let listContainer = LiquidGlassDesign.makeScrollFadeContainer(containing: tableScrollView)
         listContainer.setContentHuggingPriority(.defaultLow, for: .vertical)
         listContainer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+
+        buildListEmptyState(in: listContainer)
 
         let preferredSidebarTableHeight = listContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 260)
         preferredSidebarTableHeight.priority = .defaultLow
@@ -358,9 +410,11 @@ extension ViewController {
         importExportMessageLabel.maximumNumberOfLines = 1
         importExportMessageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        rootStack.addArrangedSubview(tagFilterBar)
         rootStack.addArrangedSubview(listContainer)
         rootStack.addArrangedSubview(footerTopRow)
 
+        tagFilterBar.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
         rootStack.setCustomSpacing(8, after: listContainer)
 
         let contentView = NSView()
@@ -486,6 +540,19 @@ extension ViewController {
         keywordWarningLabel.alignment = .left
         keywordWarningLabel.isHidden = true
 
+        let tagsLabel = NSTextField(labelWithString: "Tags")
+        tagsLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        tagsLabel.textColor = .secondaryLabelColor
+        tagsLabel.alignment = .left
+
+        tagsField.delegate = self
+        tagsField.placeholderString = "work, email"
+        tagsField.controlSize = .large
+        tagsField.tokenizingCharacterSet = CharacterSet(charactersIn: ",")
+        tagsField.completionDelay = 0.2
+
+        editorSuggestedTagsFlow.isHidden = true
+
         enabledCheckbox.target = self
         enabledCheckbox.action = #selector(enabledStateChanged)
         enabledCheckbox.setContentHuggingPriority(.required, for: .horizontal)
@@ -536,6 +603,9 @@ extension ViewController {
         stack.addArrangedSubview(keywordLabel)
         stack.addArrangedSubview(keywordRow)
         stack.addArrangedSubview(keywordWarningLabel)
+        stack.addArrangedSubview(tagsLabel)
+        stack.addArrangedSubview(tagsField)
+        stack.addArrangedSubview(editorSuggestedTagsFlow)
         stack.addArrangedSubview(enabledCheckbox)
         stack.addArrangedSubview(snippetLabel)
         stack.addArrangedSubview(snippetContainer)
@@ -546,7 +616,7 @@ extension ViewController {
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, keywordRow, keywordWarningLabel, snippetContainer, placeholderLabel, previewSeparator, previewSectionStack].forEach {
+        [nameField, keywordRow, keywordWarningLabel, tagsField, editorSuggestedTagsFlow, snippetContainer, placeholderLabel, previewSeparator, previewSectionStack].forEach {
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
@@ -561,6 +631,8 @@ extension ViewController {
         stack.setCustomSpacing(8, after: nameLabel)
         stack.setCustomSpacing(8, after: keywordLabel)
         stack.setCustomSpacing(4, after: keywordRow)
+        stack.setCustomSpacing(8, after: tagsLabel)
+        stack.setCustomSpacing(6, after: tagsField)
         stack.setCustomSpacing(10, after: snippetLabel)
         stack.setCustomSpacing(8, after: previewSeparator)
 

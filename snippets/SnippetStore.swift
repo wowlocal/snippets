@@ -104,11 +104,13 @@ final class SnippetStore {
 
         var updated = snippet
         updated.keyword = updated.normalizedKeyword
+        updated.tags = SnippetTagging.normalizedTags(updated.tags)
 
         let didChange =
             existing.name != updated.name ||
             existing.keyword != updated.keyword ||
             existing.content != updated.content ||
+            existing.tags != updated.tags ||
             existing.isEnabled != updated.isEnabled ||
             existing.isPinned != updated.isPinned
 
@@ -142,6 +144,7 @@ final class SnippetStore {
             name: source.displayName + " Copy",
             keyword: source.normalizedKeyword,
             content: source.content,
+            tags: source.tags,
             isEnabled: shouldDisableDuplicate ? false : source.isEnabled,
             isPinned: source.isPinned
         )
@@ -168,6 +171,49 @@ final class SnippetStore {
 
     func snippet(id: UUID) -> Snippet? {
         snippets.first { $0.id == id }
+    }
+
+    /// All distinct tags across snippets, deduped case-insensitively and
+    /// sorted alphabetically for stable filter/completion UI.
+    func allTags() -> [String] {
+        tagUsage().map(\.tag)
+    }
+
+    /// Distinct tags with the number of snippets using each, sorted alphabetically.
+    func tagUsage() -> [(tag: String, count: Int)] {
+        var canonicalTags: [String: String] = [:]
+        var counts: [String: Int] = [:]
+
+        for snippet in snippets {
+            for tag in snippet.tags {
+                let key = SnippetTagging.filterKey(for: tag)
+                if canonicalTags[key] == nil {
+                    canonicalTags[key] = tag
+                }
+                counts[key, default: 0] += 1
+            }
+        }
+
+        return canonicalTags
+            .sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }
+            .map { (tag: $0.value, count: counts[$0.key] ?? 0) }
+    }
+
+    func toggleTag(_ tag: String, snippetID: UUID) {
+        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
+        pushUndo()
+
+        let key = SnippetTagging.filterKey(for: tag)
+        var tags = snippets[index].tags
+        if let existing = tags.firstIndex(where: { SnippetTagging.filterKey(for: $0) == key }) {
+            tags.remove(at: existing)
+        } else {
+            tags.append(tag)
+        }
+
+        snippets[index].tags = SnippetTagging.normalizedTags(tags)
+        snippets[index].updatedAt = Date()
+        persist(immediately: true)
     }
 
     func snippetsSortedForDisplay() -> [Snippet] {
@@ -434,6 +480,7 @@ final class SnippetStore {
         for item in imported {
             var snippet = item
             snippet.keyword = snippet.normalizedKeyword
+            snippet.tags = SnippetTagging.normalizedTags(snippet.tags)
 
             if seenIDs.contains(snippet.id) {
                 snippet.id = UUID()

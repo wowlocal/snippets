@@ -723,6 +723,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         cell.configure(
             name: item.snippet.displayName,
             keyword: item.snippet.normalizedKeyword,
+            tags: item.snippet.tags,
             nameMatchRanges: item.nameMatchRanges,
             keywordMatchRanges: item.keywordMatchRanges
         )
@@ -748,6 +749,9 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 private final class SuggestionCellView: NSTableCellView {
     private let primaryLabel = NSTextField(labelWithString: "")
     private let secondaryLabel = NSTextField(labelWithString: "")
+    private let tagChipsStack = NSStackView()
+    private var renderedTags: [String] = []
+    private static let maxVisibleTagChips = 2
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -759,8 +763,22 @@ private final class SuggestionCellView: NSTableCellView {
         secondaryLabel.lineBreakMode = .byTruncatingTail
         secondaryLabel.maximumNumberOfLines = 1
         secondaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        secondaryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        secondaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let labelsStack = NSStackView(views: [primaryLabel, secondaryLabel])
+        tagChipsStack.orientation = .horizontal
+        tagChipsStack.spacing = 4
+        tagChipsStack.alignment = .centerY
+        tagChipsStack.setContentHuggingPriority(.required, for: .horizontal)
+        tagChipsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let secondaryRow = NSStackView(views: [secondaryLabel, tagChipsStack])
+        secondaryRow.orientation = .horizontal
+        secondaryRow.spacing = 6
+        secondaryRow.alignment = .centerY
+        secondaryRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let labelsStack = NSStackView(views: [primaryLabel, secondaryRow])
         labelsStack.orientation = .vertical
         labelsStack.spacing = 1
         labelsStack.alignment = .leading
@@ -776,13 +794,19 @@ private final class SuggestionCellView: NSTableCellView {
             labelsStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4),
 
             primaryLabel.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
-            secondaryLabel.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
+            secondaryRow.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, keyword: String, nameMatchRanges: [NSRange], keywordMatchRanges: [NSRange]) {
+    func configure(
+        name: String,
+        keyword: String,
+        tags: [String],
+        nameMatchRanges: [NSRange],
+        keywordMatchRanges: [NSRange]
+    ) {
         primaryLabel.attributedStringValue = highlightedString(
             name,
             font: .systemFont(ofSize: 13),
@@ -796,6 +820,21 @@ private final class SuggestionCellView: NSTableCellView {
             matchRanges: keywordMatchRanges
         )
         secondaryLabel.isHidden = keyword.isEmpty
+        updateTagChips(tags: tags)
+    }
+
+    private func updateTagChips(tags: [String]) {
+        guard tags != renderedTags else { return }
+        renderedTags = tags
+
+        tagChipsStack.arrangedSubviews.forEach { view in
+            tagChipsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let chips = TagChipView.makeChips(for: tags, maxCount: Self.maxVisibleTagChips)
+        chips.forEach(tagChipsStack.addArrangedSubview)
+        tagChipsStack.isHidden = chips.isEmpty
     }
 
     private func highlightedString(

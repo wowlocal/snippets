@@ -146,6 +146,7 @@ private final class SearchSuggestionRowView: NSView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
     private let contentPreviewLabel = NSTextField(labelWithString: "")
+    private let tagChipsStack = NSStackView()
     private var trackingArea: NSTrackingArea?
     private var isDisabledSnippet = false
     private var isHovering = false {
@@ -195,7 +196,14 @@ private final class SearchSuggestionRowView: NSView {
         contentPreviewLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         contentPreviewLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        [dotView, nameLabel, keywordLabel, contentPreviewLabel].forEach(addSubview)
+        tagChipsStack.orientation = .horizontal
+        tagChipsStack.spacing = 4
+        tagChipsStack.alignment = .centerY
+        tagChipsStack.translatesAutoresizingMaskIntoConstraints = false
+        tagChipsStack.setContentHuggingPriority(.required, for: .horizontal)
+        tagChipsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        [dotView, nameLabel, keywordLabel, tagChipsStack, contentPreviewLabel].forEach(addSubview)
 
         NSLayoutConstraint.activate([
             dotView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -210,6 +218,10 @@ private final class SearchSuggestionRowView: NSView {
             keywordLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 8),
             keywordLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
             keywordLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
+
+            tagChipsStack.leadingAnchor.constraint(greaterThanOrEqualTo: keywordLabel.trailingAnchor, constant: 8),
+            tagChipsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            tagChipsStack.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
             contentPreviewLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             contentPreviewLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
@@ -288,6 +300,18 @@ private final class SearchSuggestionRowView: NSView {
         contentPreviewLabel.stringValue = preview
         contentPreviewLabel.isHidden = preview.isEmpty
         dotView.color = snippet.isEnabled ? ThemeManager.snippetDotColor : .secondaryLabelColor
+
+        tagChipsStack.arrangedSubviews.forEach { view in
+            tagChipsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        let chips = TagChipView.makeChips(
+            for: snippet.tags,
+            maxCount: 3,
+            muted: !snippet.isEnabled
+        )
+        chips.forEach(tagChipsStack.addArrangedSubview)
+        tagChipsStack.isHidden = chips.isEmpty
 
         applyTextColors()
     }

@@ -87,12 +87,61 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
                 symbolName: snippet.isPinned ? "pin.slash" : "pin",
                 action: #selector(togglePinnedSelectedSnippetFromContextMenu(_:))
             ),
+            tagsContextMenuItem(for: snippet),
             .separator(),
             contextMenuItem(title: "Delete Snippet", symbolName: "trash", action: #selector(deleteSelectedSnippet(_:)))
         ]
 
         items.forEach(menu.addItem)
         return menu
+    }
+
+    private func tagsContextMenuItem(for snippet: Snippet) -> NSMenuItem {
+        let item = NSMenuItem(title: "Tags", action: nil, keyEquivalent: "")
+        LiquidGlassDesign.applyMenuSymbol("tag", to: item)
+
+        let submenu = NSMenu(title: "Tags")
+        let allTags = store.allTags()
+
+        if allTags.isEmpty {
+            let placeholder = NSMenuItem(title: "No Tags Yet", action: nil, keyEquivalent: "")
+            placeholder.isEnabled = false
+            submenu.addItem(placeholder)
+            let hint = NSMenuItem(title: "Add tags in the editor's Tags field", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            submenu.addItem(hint)
+        } else {
+            for tag in allTags {
+                let tagItem = NSMenuItem(
+                    title: tag,
+                    action: #selector(toggleTagFromContextMenu(_:)),
+                    keyEquivalent: ""
+                )
+                tagItem.target = self
+                tagItem.representedObject = tag
+                tagItem.state = snippet.hasTag(withKey: SnippetTagging.filterKey(for: tag)) ? .on : .off
+                tagItem.image = TagColorPalette.swatchImage(for: tag)
+                submenu.addItem(tagItem)
+            }
+        }
+
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func toggleTagFromContextMenu(_ sender: NSMenuItem) {
+        guard let tag = sender.representedObject as? String else { return }
+
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
+
+        guard let targetSnippetID else { return }
+        store.toggleTag(tag, snippetID: targetSnippetID)
+
+        reloadVisibleSnippets(keepSelection: true)
+        if let snippet = store.snippet(id: targetSnippetID) {
+            applySnippetToEditor(snippet)
+        }
     }
 
     private func contextMenuItem(title: String, symbolName: String, action: Selector) -> NSMenuItem {

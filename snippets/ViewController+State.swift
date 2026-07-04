@@ -1,5 +1,13 @@
 import AppKit
 
+private enum TagFilterDefaults {
+    static let activeKeysKey = "snippetsActiveTagFilterKeys"
+}
+
+private enum ListUpdateAnimation {
+    static let maxAnimatedChanges = 40
+}
+
 extension ViewController {
     func updatePermissionBanner() {
         if engine.accessibilityGranted {
@@ -26,8 +34,11 @@ extension ViewController {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
+        pruneStaleTagFilters()
+        updateTagFilterBar()
+
         let sorted = store.snippetsSortedForDisplay()
-        let newSnippets: [Snippet]
+        var newSnippets: [Snippet]
         if query.isEmpty {
             newSnippets = sorted
         } else {
@@ -35,6 +46,13 @@ extension ViewController {
                 snippet.displayName.lowercased().contains(query)
                     || snippet.normalizedKeyword.lowercased().contains(query)
                     || snippet.content.lowercased().contains(query)
+                    || snippet.tags.contains { $0.lowercased().contains(query) }
+            }
+        }
+
+        if !activeTagFilterKeys.isEmpty {
+            newSnippets = newSnippets.filter { snippet in
+                activeTagFilterKeys.allSatisfy { snippet.hasTag(withKey: $0) }
             }
         }
 
@@ -49,18 +67,134 @@ extension ViewController {
         visibleSnippets = newSnippets
 
         if oldIDs == newIDs {
-            for row in 0..<visibleSnippets.count {
-                if let cellView = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SnippetRowCellView {
-                    cellView.configure(with: visibleSnippets[row])
-                }
-            }
+            reconfigureVisibleRows()
         } else {
-            tableView.reloadData()
+            applyAnimatedListUpdate(oldIDs: oldIDs, newIDs: newIDs)
         }
 
+        updateListEmptyState(query: query)
         syncTableSelectionWithSelectedSnippet()
         deleteButton.isEnabled = selectedSnippetID != nil
         updateSearchSuggestionOverlay()
+    }
+
+    private func reconfigureVisibleRows() {
+        for row in 0..<visibleSnippets.count {
+            if let cellView = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SnippetRowCellView {
+                cellView.configure(with: visibleSnippets[row])
+            }
+        }
+    }
+
+    /// Applies filtered/search list changes with a fade so rows don't pop in
+    /// and out abruptly. Falls back to a plain reload for large changes.
+    private func applyAnimatedListUpdate(oldIDs: [UUID], newIDs: [UUID]) {
+        let diff = newIDs.difference(from: oldIDs)
+        guard !oldIDs.isEmpty, diff.count <= ListUpdateAnimation.maxAnimatedChanges, view.window != nil else {
+            tableView.reloadData()
+            return
+        }
+
+        tableView.beginUpdates()
+        for change in diff {
+            switch change {
+            case .remove(let offset, _, _):
+                tableView.removeRows(at: IndexSet(integer: offset), withAnimation: .effectFade)
+            case .insert(let offset, _, _):
+                tableView.insertRows(at: IndexSet(integer: offset), withAnimation: .effectFade)
+            }
+        }
+        tableView.endUpdates()
+        reconfigureVisibleRows()
+    }
+
+    private func updateListEmptyState(query: String) {
+        guard visibleSnippets.isEmpty else {
+            listEmptyStateView.isHidden = true
+            return
+        }
+
+        let isSearching = !query.isEmpty
+        let isFiltering = !activeTagFilterKeys.isEmpty
+        let iconName: String
+        let message: String
+
+        if store.snippets.isEmpty {
+            iconName = "square.dashed"
+            message = "No snippets yet.\nPress ⌘N to create one."
+        } else if isSearching && isFiltering {
+            iconName = "magnifyingglass"
+            message = "No results for “\(searchField.stringValue)”\nwith the selected tags."
+        } else if isSearching {
+            iconName = "magnifyingglass"
+            message = "No results for “\(searchField.stringValue)”."
+        } else if isFiltering {
+            iconName = "tag"
+            message = "No snippets match\nthe selected tags."
+        } else {
+            listEmptyStateView.isHidden = true
+            return
+        }
+
+        listEmptyStateIconView.image = LiquidGlassDesign.symbol(iconName, pointSize: 24, weight: .regular)
+        listEmptyStateLabel.stringValue = message
+        listEmptyStateClearButton.isHidden = !isFiltering
+        listEmptyStateView.isHidden = false
+    }
+
+    func toggleTagFilter(_ tag: String) {
+        let key = SnippetTagging.filterKey(for: tag)
+        if activeTagFilterKeys.contains(key) {
+            activeTagFilterKeys.remove(key)
+        } else {
+            activeTagFilterKeys.insert(key)
+        }
+        persistTagFilters()
+
+        reloadVisibleSnippets(keepSelection: true)
+        if !isEditingDetails {
+            applySelectedSnippetToEditor()
+        }
+    }
+
+    func clearTagFilters() {
+        guard !activeTagFilterKeys.isEmpty else { return }
+        activeTagFilterKeys.removeAll()
+        persistTagFilters()
+
+        reloadVisibleSnippets(keepSelection: true)
+        if !isEditingDetails {
+            applySelectedSnippetToEditor()
+        }
+    }
+
+    func loadPersistedTagFilters() {
+        let saved = UserDefaults.standard.stringArray(forKey: TagFilterDefaults.activeKeysKey) ?? []
+        activeTagFilterKeys = Set(saved)
+    }
+
+    private func persistTagFilters() {
+        UserDefaults.standard.set(Array(activeTagFilterKeys).sorted(), forKey: TagFilterDefaults.activeKeysKey)
+    }
+
+    private func pruneStaleTagFilters() {
+        guard !activeTagFilterKeys.isEmpty else { return }
+        let existingKeys = Set(store.allTags().map { SnippetTagging.filterKey(for: $0) })
+        let pruned = activeTagFilterKeys.intersection(existingKeys)
+        if pruned != activeTagFilterKeys {
+            activeTagFilterKeys = pruned
+            persistTagFilters()
+        }
+    }
+
+    private func updateTagFilterBar() {
+        // Skip while the user is typing tags so the bar doesn't churn with
+        // partial tokens; controlTextDidEndEditing refreshes it afterwards.
+        guard view.window?.firstResponder !== tagsField.currentEditor() else { return }
+
+        let items = store.tagUsage().map { TagFilterBarView.Item(tag: $0.tag, count: $0.count) }
+        tagFilterBar.isHidden = items.isEmpty
+        tagFilterBar.update(items: items, activeKeys: activeTagFilterKeys)
     }
 
     func syncTableSelectionWithSelectedSnippet() {
@@ -91,12 +225,16 @@ extension ViewController {
             if !keywordField.stringValue.isEmpty {
                 keywordField.stringValue = ""
             }
+            if !tagsFromEditor().isEmpty {
+                tagsField.objectValue = [String]()
+            }
             if enabledCheckbox.state != .off {
                 enabledCheckbox.state = .off
             }
             keywordWarningLabel.isHidden = true
             updatePreview(withTemplate: "")
             setEditorEnabled(false)
+            updateSuggestedTagsRow()
             isApplyingSnippetToEditor = false
             return
         }
@@ -116,6 +254,9 @@ extension ViewController {
         if keywordField.stringValue != snippet.normalizedKeyword {
             keywordField.stringValue = snippet.normalizedKeyword
         }
+        if tagsFromEditor() != snippet.tags {
+            tagsField.objectValue = snippet.tags
+        }
         let targetEnabledState: NSControl.StateValue = snippet.isEnabled ? .on : .off
         if enabledCheckbox.state != targetEnabledState {
             enabledCheckbox.state = targetEnabledState
@@ -123,6 +264,7 @@ extension ViewController {
         updatePreview(withTemplate: snippet.content)
         updateKeywordWarning(for: snippet)
         setEditorEnabled(true)
+        updateSuggestedTagsRow()
         isApplyingSnippetToEditor = false
     }
 
@@ -130,6 +272,7 @@ extension ViewController {
         nameField.isEnabled = enabled
         snippetTextView.isEditable = enabled
         keywordField.isEnabled = enabled
+        tagsField.isEnabled = enabled
         enabledCheckbox.isEnabled = enabled
     }
 
@@ -165,12 +308,58 @@ extension ViewController {
         snippet.content = snippetTextView.string
 
         snippet.keyword = sanitizedKeywordFromEditor()
+        snippet.tags = tagsFromEditor()
 
         snippet.isEnabled = enabledCheckbox.state == .on
 
         store.update(snippet)
         updatePreview(withTemplate: snippet.content)
         updateKeywordWarning(for: snippet)
+        updateSuggestedTagsRow()
+    }
+
+    func tagsFromEditor() -> [String] {
+        let tokens = (tagsField.objectValue as? [Any]) ?? []
+        return SnippetTagging.normalizedTags(tokens.compactMap { $0 as? String })
+    }
+
+    /// Rebuilds the one-click "+ tag" suggestions under the tags field:
+    /// existing tags not yet on the edited snippet, most-used first.
+    func updateSuggestedTagsRow() {
+        let suggestions: [String]
+        if editingSnippetID != nil, tagsField.isEnabled {
+            let currentKeys = Set(tagsFromEditor().map { SnippetTagging.filterKey(for: $0) })
+            suggestions = store.tagUsage()
+                .filter { !currentKeys.contains(SnippetTagging.filterKey(for: $0.tag)) }
+                .sorted { $0.count > $1.count }
+                .prefix(8)
+                .map(\.tag)
+        } else {
+            suggestions = []
+        }
+
+        guard suggestions != renderedSuggestedTags else { return }
+        renderedSuggestedTags = suggestions
+
+        let chips = suggestions.map { tag -> TagChipView in
+            let chip = TagChipView(fontSize: 11)
+            chip.configure(text: "+ \(tag)", color: TagColorPalette.color(for: tag), style: .tinted)
+            chip.toolTip = "Add tag “\(tag)”"
+            chip.setAccessibility(label: "Add tag \(tag)", isButton: true)
+            chip.onClick = { [weak self] in
+                self?.addSuggestedTagToEditor(tag)
+            }
+            return chip
+        }
+        editorSuggestedTagsFlow.setChips(chips)
+        editorSuggestedTagsFlow.isHidden = chips.isEmpty
+    }
+
+    private func addSuggestedTagToEditor(_ tag: String) {
+        guard editingSnippet != nil else { return }
+        tagsField.objectValue = SnippetTagging.normalizedTags(tagsFromEditor() + [tag])
+        updateSelectedSnippetFromEditor()
+        reloadVisibleSnippets(keepSelection: true)
     }
 
     private func sanitizedKeywordFromEditor() -> String {
@@ -228,7 +417,9 @@ extension ViewController {
         if firstResponder === snippetTextView {
             return true
         }
-        if firstResponder === nameField.currentEditor() || firstResponder === keywordField.currentEditor() {
+        if firstResponder === nameField.currentEditor()
+            || firstResponder === keywordField.currentEditor()
+            || firstResponder === tagsField.currentEditor() {
             return true
         }
         return false
