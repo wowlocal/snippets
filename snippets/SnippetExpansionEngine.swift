@@ -15,6 +15,8 @@ final class SnippetExpansionEngine {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var localMonitor: Any?
+    private var globalMouseMonitor: Any?
+    private var workspaceActivationObserver: NSObjectProtocol?
     private var accessibilityPrimedPIDs: Set<pid_t> = []
     private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
 
@@ -86,8 +88,48 @@ final class SnippetExpansionEngine {
             }
         }
 
+        // A mouse click moves the caret (or focus), so previously typed
+        // characters no longer sit before it — any tracked trigger state
+        // would delete unrelated text. Global monitors observe without
+        // consuming, which is all we need.
+        if globalMouseMonitor == nil {
+            globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] _ in
+                self?.resetTypingContext()
+            }
+        }
+
+        // Switching apps (Cmd+Tab, Dock, Spotlight, …) also invalidates the
+        // typing context even without a click.
+        if workspaceActivationObserver == nil {
+            workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                // Ignore our own activation: interacting with the (non-
+                // activating) suggestion panel must not tear down the session
+                // that drives it; `handle(event:)` already resets state when
+                // this app is frontmost.
+                if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                   app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+                    return
+                }
+                self?.resetTypingContext()
+            }
+        }
+
         listening = true
         refreshAccessibilityStatus(prompt: false)
+    }
+
+    /// The typed buffer and suggestion session describe text immediately
+    /// before the caret; once the caret or focus may have moved, that state
+    /// must not authorize deletions any more.
+    private func resetTypingContext() {
+        typedBuffer = ""
+        dismissSuggestions()
     }
 
     /// Install a CGEvent tap so we can intercept (suppress) keys like TAB
@@ -171,6 +213,14 @@ final class SnippetExpansionEngine {
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)
             localMonitor = nil
+        }
+        if let monitor = globalMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalMouseMonitor = nil
+        }
+        if let observer = workspaceActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            workspaceActivationObserver = nil
         }
         accessibilityPrimedPIDs.removeAll()
         enhancedAccessibilityPrimedPIDs.removeAll()
