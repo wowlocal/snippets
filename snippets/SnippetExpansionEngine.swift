@@ -1006,6 +1006,9 @@ final class SnippetExpansionEngine {
 
         pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else {
+            // The trigger characters have already been deleted and the
+            // pasteboard cleared; at least put the user's clipboard back.
+            restorePasteboardState(snapshot, to: pasteboard)
             return
         }
         let injectedChangeCount = pasteboard.changeCount
