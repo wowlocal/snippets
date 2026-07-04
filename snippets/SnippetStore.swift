@@ -31,6 +31,7 @@ final class SnippetStore {
     private var undoStack: [[Snippet]] = []
     private var redoStack: [[Snippet]] = []
     private var editTransactionSnapshot: [Snippet]?
+    private var editTransactionNeedsRestart = false
     private let maxUndoLevels = 50
 
     enum ImportExportError: LocalizedError {
@@ -520,6 +521,7 @@ final class SnippetStore {
     }
 
     private func persist(immediately: Bool = false) {
+        restartEditTransactionIfNeeded()
         onChange?(.local)
         persistWorkItem?.cancel()
         persistWorkItem = nil
@@ -575,15 +577,41 @@ final class SnippetStore {
     }
 
     private func pushUndo() {
+        // A discrete action (pin/delete/import/…) is interrupting an open edit
+        // transaction. Keep the undo stack chronological: push the
+        // transaction's baseline first (undoes the in-transaction edits), then
+        // the pre-action state, and restart the transaction from the
+        // post-action state (rebased by the action's follow-up persist call).
+        if let transactionSnapshot = editTransactionSnapshot {
+            editTransactionSnapshot = nil
+            editTransactionNeedsRestart = true
+            if transactionSnapshot != snippets {
+                appendUndoSnapshot(transactionSnapshot)
+            }
+        }
         pushUndo(snippets)
     }
 
     private func pushUndo(_ snapshot: [Snippet]) {
+        appendUndoSnapshot(snapshot)
+        redoStack.removeAll()
+    }
+
+    private func appendUndoSnapshot(_ snapshot: [Snippet]) {
         undoStack.append(snapshot)
         if undoStack.count > maxUndoLevels {
             undoStack.removeFirst()
         }
-        redoStack.removeAll()
+    }
+
+    /// Completes the transaction restart requested by `pushUndo()`. Runs from
+    /// `persist`, which every interrupting action calls right after mutating
+    /// `snippets`, so the reopened transaction is baselined on the
+    /// post-action state.
+    private func restartEditTransactionIfNeeded() {
+        guard editTransactionNeedsRestart else { return }
+        editTransactionNeedsRestart = false
+        editTransactionSnapshot = snippets
     }
 
     func undo() -> Bool {
@@ -674,6 +702,12 @@ final class SnippetStore {
 
             undoStack.removeAll()
             redoStack.removeAll()
+            // If a UI edit transaction is open, rebase it onto the reloaded
+            // state; committing the pre-reload snapshot would let undo
+            // resurrect (and persist) data that no longer exists on disk.
+            if editTransactionSnapshot != nil {
+                editTransactionSnapshot = reloadedSnippets
+            }
             snippets = reloadedSnippets
             onChange?(.external)
         } catch {
