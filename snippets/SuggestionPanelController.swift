@@ -144,6 +144,14 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         let count = items.count
         guard count > 0 else { dismiss(); return }
 
+        // Resolve the anchor from the caret BEFORE computing the visible-row cap,
+        // so screen metrics come from the caret's screen rather than falling back
+        // to the screen containing the mouse. The anchor is captured once per
+        // suggestion session to prevent the panel from jumping as the caret moves.
+        if anchorRect == nil {
+            anchorRect = caretScreenRect() ?? fallbackCaretRect()
+        }
+
         let visibleCount = min(count, maxVisible, maxVisibleRowsOnScreen)
 
         // Make sure the table has computed row geometry.
@@ -164,9 +172,6 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         // Position using the anchor from when suggestions first activated.
         // This prevents the panel from jumping as the caret moves.
-        if anchorRect == nil {
-            anchorRect = caretScreenRect() ?? fallbackCaretRect()
-        }
         positionPanelAtAnchor()
 
         scrollView.hasVerticalScroller = (count > visibleCount)
