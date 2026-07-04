@@ -282,11 +282,25 @@ private final class GeneralSettingsViewController: NSViewController {
         }
     }
 
+    /// Escapes a value for embedding in an AppleScript double-quoted string
+    /// literal (backslashes and double quotes are the only escapes needed).
+    private func appleScriptStringLiteral(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+
     private func installCLIWithPrivileges(source: URL, destination: URL) {
-        let src = source.path.replacingOccurrences(of: "'", with: "'\\''")
-        let dst = destination.path.replacingOccurrences(of: "'", with: "'\\''")
-        let dir = destination.deletingLastPathComponent().path.replacingOccurrences(of: "'", with: "'\\''")
-        let script = "do shell script \"mkdir -p '\(dir)' && ln -sf '\(src)' '\(dst)'\" with administrator privileges"
+        // Two escaping layers: paths become AppleScript string literals (escaping
+        // \ and "), and AppleScript's `quoted form of` handles shell quoting.
+        // Raw paths are never interpolated into the shell command itself.
+        let script = """
+        set srcPath to \(appleScriptStringLiteral(source.path))
+        set dstPath to \(appleScriptStringLiteral(destination.path))
+        set dirPath to \(appleScriptStringLiteral(destination.deletingLastPathComponent().path))
+        do shell script "mkdir -p " & quoted form of dirPath & " && ln -sf " & quoted form of srcPath & " " & quoted form of dstPath with administrator privileges
+        """
 
         var appleScriptError: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&appleScriptError)
