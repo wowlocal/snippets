@@ -33,7 +33,7 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 
 # Validate required tools
-for tool in aws gh; do
+for tool in aws curl python3; do
     if ! command -v "$tool" &>/dev/null; then
         red_text
         echo "Required tool not found: $tool"
@@ -41,6 +41,13 @@ for tool in aws gh; do
         exit 1
     fi
 done
+
+if [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ] && ! command -v gh &>/dev/null; then
+    red_text
+    echo "Required tool not found: gh (or set GH_TOKEN/GITHUB_TOKEN)"
+    normal_text
+    exit 1
+fi
 
 if [ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]; then
     red_text
@@ -83,6 +90,243 @@ function rollback_failed_release() {
         normal_text
         git -C "$PROJECT_DIR" reset --hard "$ORIGINAL_HEAD" >/dev/null
     fi
+}
+
+function github_access_token() {
+    if [ -n "${GH_TOKEN:-}" ]; then
+        echo "$GH_TOKEN"
+        return
+    fi
+
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        echo "$GITHUB_TOKEN"
+        return
+    fi
+
+    gh auth token
+}
+
+function github_repo_slug() {
+    local remote_url
+    remote_url=$(git -C "$PROJECT_DIR" remote get-url origin)
+
+    case "$remote_url" in
+        git@github.com:*.git)
+            echo "${remote_url#git@github.com:}" | sed -E 's/\.git$//'
+            ;;
+        git@github.com:*)
+            echo "${remote_url#git@github.com:}"
+            ;;
+        https://github.com/*.git)
+            echo "${remote_url#https://github.com/}" | sed -E 's/\.git$//'
+            ;;
+        https://github.com/*)
+            echo "${remote_url#https://github.com/}"
+            ;;
+        *)
+            red_text
+            echo "Cannot derive GitHub repo from origin URL: $remote_url"
+            normal_text
+            exit 1
+            ;;
+    esac
+}
+
+function json_field() {
+    local file="$1"
+    local field="$2"
+    python3 - "$file" "$field" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+
+for part in sys.argv[2].split("."):
+    value = value[part]
+
+print(value)
+PY
+}
+
+function asset_id_by_name() {
+    local file="$1"
+    local asset_name="$2"
+    python3 - "$file" "$asset_name" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    release = json.load(handle)
+
+for asset in release.get("assets", []):
+    if asset.get("name") == sys.argv[2]:
+        print(asset.get("id", ""))
+        break
+PY
+}
+
+function url_encode() {
+    python3 - "$1" <<'PY'
+import sys
+import urllib.parse
+
+print(urllib.parse.quote(sys.argv[1], safe=""))
+PY
+}
+
+function write_release_payload() {
+    local payload_path="$1"
+    local release_tag="$2"
+    local target_branch="$3"
+    local release_title="$4"
+
+    python3 - "$release_tag" "$target_branch" "$release_title" > "$payload_path" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "tag_name": sys.argv[1],
+    "target_commitish": sys.argv[2],
+    "name": sys.argv[3],
+    "draft": False,
+    "prerelease": False,
+    "generate_release_notes": True,
+}))
+PY
+}
+
+function github_request() {
+    local method="$1"
+    local url="$2"
+    local output_path="$3"
+    local body_path="${4:-}"
+    local token="$GITHUB_RELEASE_TOKEN"
+    local args=(
+        --silent
+        --show-error
+        --location
+        --request "$method"
+        --output "$output_path"
+        --write-out "%{http_code}"
+        --header "Authorization: Bearer ${token}"
+        --header "Accept: application/vnd.github+json"
+        --header "X-GitHub-Api-Version: 2022-11-28"
+    )
+
+    if [ -n "$body_path" ]; then
+        args+=(--header "Content-Type: application/json" --data-binary "@${body_path}")
+    fi
+
+    curl "${args[@]}" "$url"
+}
+
+function print_github_error() {
+    local action="$1"
+    local status="$2"
+    local response_path="$3"
+
+    red_text
+    echo "GitHub ${action} failed (HTTP ${status})"
+    if [ -s "$response_path" ]; then
+        python3 - "$response_path" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        payload = json.load(handle)
+    print(json.dumps(payload, indent=2))
+except Exception:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as handle:
+        print(handle.read())
+PY
+    fi
+    normal_text
+}
+
+function create_github_release() {
+    local release_tag="$1"
+    local dmg_path="$2"
+    local release_title="$3"
+    local target_branch="$4"
+    local repo
+    local api_base
+    local uploads_base
+    local payload
+    local response
+    local upload_response
+    local delete_response
+    local status
+    local release_id
+    local release_url
+    local asset_name
+    local asset_name_encoded
+    local existing_asset_id
+
+    repo=$(github_repo_slug)
+    api_base="${GITHUB_API_URL:-https://api.github.com}"
+    uploads_base="${GITHUB_UPLOADS_URL:-https://uploads.github.com}"
+    GITHUB_RELEASE_TOKEN=$(github_access_token)
+
+    payload=$(mktemp "${TMPDIR:-/tmp}/snippets-release-payload.XXXXXX")
+    response=$(mktemp "${TMPDIR:-/tmp}/snippets-release-response.XXXXXX")
+    upload_response=$(mktemp "${TMPDIR:-/tmp}/snippets-upload-response.XXXXXX")
+    delete_response=$(mktemp "${TMPDIR:-/tmp}/snippets-delete-response.XXXXXX")
+
+    write_release_payload "$payload" "$release_tag" "$target_branch" "$release_title"
+
+    status=$(github_request GET "${api_base}/repos/${repo}/releases/tags/${release_tag}" "$response")
+    if [ "$status" = "404" ]; then
+        status=$(github_request POST "${api_base}/repos/${repo}/releases" "$response" "$payload")
+        if [ "$status" != "201" ]; then
+            print_github_error "release creation" "$status" "$response"
+            exit 1
+        fi
+    elif [ "$status" != "200" ]; then
+        print_github_error "release lookup" "$status" "$response"
+        exit 1
+    fi
+
+    release_id=$(json_field "$response" "id")
+    release_url=$(json_field "$response" "html_url")
+    asset_name=$(basename "$dmg_path")
+    asset_name_encoded=$(url_encode "$asset_name")
+
+    existing_asset_id=$(asset_id_by_name "$response" "$asset_name")
+    if [ -n "$existing_asset_id" ]; then
+        gray_text
+        echo "Replacing existing GitHub release asset: $asset_name"
+        normal_text
+
+        status=$(github_request DELETE "${api_base}/repos/${repo}/releases/assets/${existing_asset_id}" "$delete_response")
+        if [ "$status" != "204" ]; then
+            print_github_error "asset deletion" "$status" "$delete_response"
+            exit 1
+        fi
+    fi
+
+    status=$(curl \
+        --silent \
+        --show-error \
+        --location \
+        --request POST \
+        --output "$upload_response" \
+        --write-out "%{http_code}" \
+        --header "Authorization: Bearer ${GITHUB_RELEASE_TOKEN}" \
+        --header "Accept: application/vnd.github+json" \
+        --header "X-GitHub-Api-Version: 2022-11-28" \
+        --header "Content-Type: application/octet-stream" \
+        --data-binary "@${dmg_path}" \
+        "${uploads_base}/repos/${repo}/releases/${release_id}/assets?name=${asset_name_encoded}")
+
+    if [ "$status" != "201" ]; then
+        print_github_error "asset upload" "$status" "$upload_response"
+        exit 1
+    fi
+
+    GITHUB_RELEASE_URL="$release_url"
+    GITHUB_ASSET_URL=$(json_field "$upload_response" "browser_download_url")
 }
 
 trap rollback_failed_release EXIT
@@ -236,9 +480,7 @@ green_text
 echo "Branch $CURRENT_BRANCH and tag $TAG pushed"
 normal_text
 
-gh release create "$TAG" "$DMG_PATH" \
-    --title "Snippets ${APP_VERSION}" \
-    --generate-notes
+create_github_release "$TAG" "$DMG_PATH" "Snippets ${APP_VERSION}" "$CURRENT_BRANCH"
 RELEASE_COMPLETE=1
 
 green_text
@@ -247,5 +489,6 @@ echo "=== Release v${APP_VERSION} complete ==="
 echo ""
 echo "  DMG:     $DMG_PATH"
 echo "  S3:      $S3_DMG_DEST"
-echo "  GitHub:  $(gh release view "$TAG" --json url -q .url)"
+echo "  GitHub:  $GITHUB_RELEASE_URL"
+echo "  Asset:   $GITHUB_ASSET_URL"
 normal_text
