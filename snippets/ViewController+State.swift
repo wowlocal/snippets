@@ -205,7 +205,10 @@ extension ViewController {
     private func updateTagFilterBar() {
         // Skip while the user is typing tags so the bar doesn't churn with
         // partial tokens; controlTextDidEndEditing refreshes it afterwards.
-        guard view.window?.firstResponder !== tagsField.currentEditor() else { return }
+        // (Both sides can be nil — e.g. at viewDidLoad — which must NOT skip.)
+        if let editor = tagsField.currentEditor(), view.window?.firstResponder === editor {
+            return
+        }
 
         let items = store.tagUsage().map { TagFilterBarView.Item(tag: $0.tag, count: $0.count) }
         tagFilterBar.isHidden = items.isEmpty
