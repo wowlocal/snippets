@@ -1140,19 +1140,23 @@ final class SnippetExpansionEngine {
     private func focusedTriggerContext() -> FocusedTriggerContextRead {
         guard let focused = frontmostFocusedElement() else { return .unavailable }
 
-        var sawReadableText = false
         for element in focusedTextContextCandidates(startingAt: focused) {
             guard let textBeforeCaret = textBeforeCaret(in: element, maxCharacters: maxBufferLength) else {
                 continue
             }
-            sawReadableText = true
 
+            // The first readable candidate is authoritative: injected
+            // backspaces land in the actually focused field, so a trigger
+            // found in an ancestor's unrelated text must never authorize a
+            // deletion here. Keep walking ancestors only while candidates
+            // are unreadable.
             if let context = SuggestionTriggerContext.context(inTextBeforeCaret: textBeforeCaret) {
                 return .found(context)
             }
+            return .missingTrigger
         }
 
-        return sawReadableText ? .missingTrigger : .unavailable
+        return .unavailable
     }
 
     private func focusedTextContextCandidates(startingAt element: AXUIElement) -> [AXUIElement] {
