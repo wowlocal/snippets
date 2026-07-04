@@ -94,14 +94,24 @@ enum PlaceholderResolver {
             return formatter.string(from: Date())
         }
 
-        if token.hasPrefix("date:") || token.hasPrefix("time:") || token.hasPrefix("datetime:") {
-            guard let format = token.split(separator: ":", maxSplits: 1).last else { return nil }
+        if let format = formattedDatePattern(for: token) {
             let formatter = DateFormatter()
-            formatter.dateFormat = String(format)
+            formatter.dateFormat = format
             return formatter.string(from: Date())
         }
 
         return nil
+    }
+
+    private static let formattedDatePrefixes = ["date:", "time:", "datetime:"]
+
+    /// Explicit date format carried by a `date:`/`time:`/`datetime:` token.
+    /// Returns nil for an empty format (e.g. `{date:}`) so the token is left
+    /// untouched, consistent with how unknown tokens behave.
+    private static func formattedDatePattern(for token: String) -> String? {
+        guard let prefix = formattedDatePrefixes.first(where: token.hasPrefix) else { return nil }
+        let format = String(token.dropFirst(prefix.count))
+        return format.isEmpty ? nil : format
     }
 
     private static func containsToken(in template: String, where predicate: (String) -> Bool) -> Bool {
@@ -130,9 +140,7 @@ enum PlaceholderResolver {
             || token == "date"
             || token == "time"
             || token == "datetime"
-            || token.hasPrefix("date:")
-            || token.hasPrefix("time:")
-            || token.hasPrefix("datetime:")
+            || formattedDatePattern(for: token) != nil
     }
 
     private static func limitedPreview(
