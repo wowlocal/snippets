@@ -269,7 +269,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "text.cursor.typefill", accessibilityDescription: "Snippets")
+            // Fall back through known-good symbols; never leave the button blank,
+            // since this is the only re-entry point after hiding to the menu bar.
+            let symbolCandidates = ["text.cursor", "character.cursor.ibeam"]
+            let image = symbolCandidates.lazy
+                .compactMap { NSImage(systemSymbolName: $0, accessibilityDescription: "Snippets") }
+                .first
+            if let image {
+                button.image = image
+            } else {
+                button.title = "S"
+            }
+            button.toolTip = "Snippets"
         }
 
         let menu = NSMenu()
