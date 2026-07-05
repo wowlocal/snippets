@@ -107,11 +107,19 @@ final class TagChipView: NSView {
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
 
+        // Trailing/bottom stay just below required: TagFlowView frames chips
+        // manually (translatesAutoresizingMaskIntoConstraints = true), and the
+        // transient zero frame would otherwise conflict with required padding
+        // and spew "Unable to simultaneously satisfy constraints" on every pass.
+        let trailing = label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -horizontalPadding)
+        trailing.priority = NSLayoutConstraint.Priority(999)
+        let bottom = label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -verticalPadding)
+        bottom.priority = NSLayoutConstraint.Priority(999)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: horizontalPadding),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -horizontalPadding),
+            trailing,
             label.topAnchor.constraint(equalTo: topAnchor, constant: verticalPadding),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -verticalPadding)
+            bottom
         ])
 
         setContentHuggingPriority(.required, for: .horizontal)
