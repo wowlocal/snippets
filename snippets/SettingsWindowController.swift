@@ -85,6 +85,12 @@ private final class GeneralSettingsViewController: NSViewController {
     private let selectionSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let resetButton = NSButton(title: "Reset to Ask Every Time", target: nil, action: nil)
+    private let globalHotkeyCheckbox = NSButton(
+        checkboxWithTitle: "Open Snippets with \(GlobalHotkeyManager.displayString) from anywhere",
+        target: nil,
+        action: nil
+    )
+    private let globalHotkeyStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let paleThemeCheckbox = NSButton(checkboxWithTitle: "Pale Theme", target: nil, action: nil)
     private let cliInstallButton = NSButton(title: "Install CLI Tool", target: nil, action: nil)
     private let cliStatusLabel = NSTextField(wrappingLabelWithString: "")
@@ -129,6 +135,21 @@ private final class GeneralSettingsViewController: NSViewController {
         resetRow.orientation = .horizontal
         resetRow.alignment = .centerY
 
+        let hotkeySeparator = NSBox()
+        hotkeySeparator.boxType = .separator
+
+        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) in any app to bring Snippets to the front. Turn this off to leave the shortcut to other apps.")
+
+        globalHotkeyCheckbox.target = self
+        globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))
+
+        let globalHotkeyRow = NSStackView(views: [globalHotkeyCheckbox, NSView()])
+        globalHotkeyRow.orientation = .horizontal
+        globalHotkeyRow.alignment = .centerY
+
+        globalHotkeyStatusLabel.font = .systemFont(ofSize: 12)
+        globalHotkeyStatusLabel.textColor = .secondaryLabelColor
+
         let themeSeparator = NSBox()
         themeSeparator.boxType = .separator
 
@@ -163,6 +184,10 @@ private final class GeneralSettingsViewController: NSViewController {
         stack.addArrangedSubview(selectionSummaryLabel)
         stack.addArrangedSubview(promptSummaryLabel)
         stack.addArrangedSubview(resetRow)
+        stack.addArrangedSubview(hotkeySeparator)
+        stack.addArrangedSubview(hotkeyIntroLabel)
+        stack.addArrangedSubview(globalHotkeyRow)
+        stack.addArrangedSubview(globalHotkeyStatusLabel)
         stack.addArrangedSubview(themeSeparator)
         stack.addArrangedSubview(themeIntroLabel)
         stack.addArrangedSubview(paleThemeRow)
@@ -174,6 +199,9 @@ private final class GeneralSettingsViewController: NSViewController {
         behaviorRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         selectionSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         promptSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        hotkeySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        hotkeyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        globalHotkeyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         themeSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -199,6 +227,12 @@ private final class GeneralSettingsViewController: NSViewController {
             name: .snippetsPaleThemeChanged,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleExternalGlobalHotkeyChange),
+            name: .snippetsGlobalHotkeyChanged,
+            object: nil
+        )
     }
 
     deinit {
@@ -218,8 +252,27 @@ private final class GeneralSettingsViewController: NSViewController {
         }
 
         resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
+        updateGlobalHotkeyControls()
         applyThemeColors()
         updateCLIStatus()
+    }
+
+    private func updateGlobalHotkeyControls() {
+        let manager = GlobalHotkeyManager.shared
+        // Opening Settings is the natural moment to retry a registration that
+        // lost the shortcut to another app at launch.
+        manager.syncRegistration()
+
+        globalHotkeyCheckbox.state = manager.isEnabled ? .on : .off
+        ThemeManager.applyToggleAppearance(to: globalHotkeyCheckbox)
+
+        if !manager.isEnabled {
+            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) is off. Open Snippets from the Dock or the menu bar item."
+        } else if manager.registrationFailed {
+            globalHotkeyStatusLabel.stringValue = "macOS wouldn't register \(GlobalHotkeyManager.displayString) — another app is already using it. Quit that app and reopen Settings to try again."
+        } else {
+            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) works from any app, even while Snippets is hidden in the menu bar."
+        }
     }
 
     private func updateCLIStatus() {
@@ -341,9 +394,19 @@ private final class GeneralSettingsViewController: NSViewController {
         ThemeManager.isPaleTheme = sender.state == .on
     }
 
+    @objc private func handleExternalGlobalHotkeyChange() {
+        updateGlobalHotkeyControls()
+    }
+
+    @objc private func handleGlobalHotkeyChanged(_ sender: NSButton) {
+        GlobalHotkeyManager.shared.isEnabled = sender.state == .on
+        updateGlobalHotkeyControls()
+    }
+
     private func applyThemeColors() {
         paleThemeCheckbox.state = ThemeManager.isPaleTheme ? .on : .off
         ThemeManager.applyToggleAppearance(to: paleThemeCheckbox)
+        ThemeManager.applyToggleAppearance(to: globalHotkeyCheckbox)
     }
 
     private func configureQuitBehaviorPopup() {

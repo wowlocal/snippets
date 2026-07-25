@@ -16,6 +16,7 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 - Import/export JSON snippets.
 - Share a single snippet via a `snippets://share?...` deep link.
 - Menu bar item with quick open/quit.
+- Global `⌘\` shortcut that brings the app to the front from any app (on by default, switchable in Settings).
 - Optional Launch at Login toggle.
 - Configurable extra Chromium bundle IDs in a dedicated `Snippets > Settings…` window (applies immediately, no relaunch).
 
@@ -94,6 +95,13 @@ Persistence and sync behavior:
 - Snippet updates write through `SnippetStore` and are saved with a short debounce.
 - Immediate writes are used for operations like add/delete/import/export.
 - Pending writes are flushed on app termination.
+
+## Global Shortcut
+
+- `⌘\` opens Snippets from any app, including while it is hidden in the menu bar.
+- It is on by default and can be switched off in `Snippets > Settings… > General` (for example when another app needs `⌘\`).
+- The shortcut is registered with Carbon's `RegisterEventHotKey`, so it does not depend on Accessibility permissions and works before expansion is enabled.
+- If macOS refuses the registration because another app already owns `⌘\`, Settings says so; quit that app and reopen Settings to retry.
 
 ## Keyboard Shortcuts (Main Window)
 

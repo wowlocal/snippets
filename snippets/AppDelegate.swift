@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
+    private weak var statusMenuOpenItem: NSMenuItem?
     private var shouldTerminateForReal = false
     #if !NO_SPARKLE
     private var pendingUpdateInstallHandler: (() -> Void)?
@@ -91,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         configureDebugMenu()
         #endif
         setupStatusItem()
+        setupGlobalHotkey()
         #if !NO_SPARKLE
         updaterController.updater.automaticallyDownloadsUpdates = true
         #endif
@@ -98,6 +100,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self,
             selector: #selector(handleChromiumBundleIDsChanged),
             name: .snippetsChromiumBundleIDsChanged,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleGlobalHotkeyChanged),
+            name: .snippetsGlobalHotkeyChanged,
             object: nil
         )
         #if !NO_SPARKLE
@@ -282,6 +290,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let openItem = NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: "")
         openItem.target = self
         LiquidGlassDesign.applyMenuSymbol("macwindow", to: openItem)
+        // `setupGlobalHotkey()` runs next and fills in the ⌘\ hint.
+        statusMenuOpenItem = openItem
         let resetQuitBehaviorItem = NSMenuItem(
             title: "Reset Remembered Cmd+Q Choice",
             action: #selector(resetQuitBehaviorPreference(_:)),
@@ -298,6 +308,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(resetQuitBehaviorItem)
         menu.addItem(quitItem)
         statusItem.menu = menu
+    }
+
+    // MARK: - Global Shortcut
+
+    private func setupGlobalHotkey() {
+        GlobalHotkeyManager.shared.onTrigger = { [weak self] in
+            self?.openFromGlobalHotkey()
+        }
+        GlobalHotkeyManager.shared.syncRegistration()
+        refreshGlobalHotkeyMenuHint()
+    }
+
+    private func openFromGlobalHotkey() {
+        // The shortcut is the way back in from anywhere, so it also has to
+        // recover from Cmd+H — `showMainWindow()` alone leaves a hidden app
+        // hidden.
+        NSApp.unhide(nil)
+        showMainWindow()
+    }
+
+    @objc private func handleGlobalHotkeyChanged() {
+        refreshGlobalHotkeyMenuHint()
+    }
+
+    /// The menu bar item is the only always-visible surface for the shortcut,
+    /// so it advertises ⌘\ — but only while the shortcut actually works.
+    private func refreshGlobalHotkeyMenuHint() {
+        let manager = GlobalHotkeyManager.shared
+        let showsShortcut = manager.isEnabled && manager.isActive
+        statusMenuOpenItem?.keyEquivalent = showsShortcut ? "\\" : ""
+        statusMenuOpenItem?.keyEquivalentModifierMask = showsShortcut ? [.command] : []
     }
 
     #if DEBUG && !NO_SPARKLE
