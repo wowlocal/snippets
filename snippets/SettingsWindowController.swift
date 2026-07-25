@@ -138,7 +138,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let hotkeySeparator = NSBox()
         hotkeySeparator.boxType = .separator
 
-        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) in any app to bring Snippets to the front. Turn this off to leave the shortcut to other apps.")
+        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) in any app to bring Snippets to the front, and again while Snippets is focused to hide it. Turn this off to leave the shortcut to other apps.")
 
         globalHotkeyCheckbox.target = self
         globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))

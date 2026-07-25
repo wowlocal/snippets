@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
     private weak var statusMenuOpenItem: NSMenuItem?
+    private var hotkeyPromotedFromAccessory = false
     private var shouldTerminateForReal = false
     #if !NO_SPARKLE
     private var pendingUpdateInstallHandler: (() -> Void)?
@@ -314,18 +315,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func setupGlobalHotkey() {
         GlobalHotkeyManager.shared.onTrigger = { [weak self] in
-            self?.openFromGlobalHotkey()
+            self?.toggleFromGlobalHotkey()
         }
         GlobalHotkeyManager.shared.syncRegistration()
         refreshGlobalHotkeyMenuHint()
     }
 
+    private func toggleFromGlobalHotkey() {
+        if isShowingMainWindow {
+            hideFromGlobalHotkey()
+        } else {
+            openFromGlobalHotkey()
+        }
+    }
+
+    /// Frontmost with the snippet list actually on screen. A miniaturized or
+    /// ordered-out window reads as hidden, so the shortcut reopens it instead
+    /// of hiding an app the user cannot see.
+    private var isShowingMainWindow: Bool {
+        guard NSApp.isActive else { return false }
+        return NSApp.windows.contains { $0.contentViewController is ViewController && $0.isVisible }
+    }
+
     private func openFromGlobalHotkey() {
+        // Coming from the menu bar means the Dock icon is being added just for
+        // this visit; remember that so hiding can put it back the way it was.
+        hotkeyPromotedFromAccessory = NSApp.activationPolicy() == .accessory
         // The shortcut is the way back in from anywhere, so it also has to
         // recover from Cmd+H — `showMainWindow()` alone leaves a hidden app
         // hidden.
         NSApp.unhide(nil)
         showMainWindow()
+    }
+
+    private func hideFromGlobalHotkey() {
+        if hotkeyPromotedFromAccessory {
+            hotkeyPromotedFromAccessory = false
+            hideToBackground()
+        } else {
+            NSApp.hide(nil)
+        }
     }
 
     @objc private func handleGlobalHotkeyChanged() {
