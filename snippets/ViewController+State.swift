@@ -229,13 +229,22 @@ extension ViewController {
     }
 
     private func updateTagFilterBar() {
-        // Skip while the user is typing tags so the bar doesn't churn with
-        // partial tokens; controlTextDidEndEditing refreshes it afterwards.
+        // Skip mid-token: every keystroke writes the unfinished text to the
+        // store as a tag, so a live rebuild would flash chips for "w", "wo",
+        // "wor". `refreshTagFilterBar()` publishes the tag the moment the token
+        // is actually committed, and controlTextDidEndEditing catches the rest.
         // (Both sides can be nil — e.g. at viewDidLoad — which must NOT skip.)
         if let editor = tagsField.currentEditor(), view.window?.firstResponder === editor {
             return
         }
 
+        refreshTagFilterBar()
+    }
+
+    /// Rebuilds the sidebar filter chips from the store, bypassing the
+    /// skip-while-typing guard above. Safe to call redundantly: the bar no-ops
+    /// when the items and active keys are unchanged.
+    func refreshTagFilterBar() {
         let items = store.tagUsage().map { TagFilterBarView.Item(tag: $0.tag, count: $0.count) }
         tagFilterBar.isHidden = items.isEmpty
         tagFilterBar.update(items: items, activeKeys: activeTagFilterKeys)
@@ -404,6 +413,7 @@ extension ViewController {
         tagsField.objectValue = SnippetTagging.normalizedTags(tagsFromEditor() + [tag])
         updateSelectedSnippetFromEditor()
         reloadVisibleSnippets(keepSelection: true)
+        refreshTagFilterBar()
     }
 
     private func sanitizedKeywordFromEditor() -> String {

@@ -55,6 +55,10 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
             store.commitEditTransaction()
             if field == tagsField {
                 reloadVisibleSnippets(keepSelection: true)
+                // Force it: the field editor is still installed and still the
+                // window's first responder at this point, so the reload above
+                // takes the skip-while-typing path and leaves the bar stale.
+                refreshTagFilterBar()
             }
         }
     }
@@ -80,7 +84,20 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         shouldAdd tokens: [Any],
         at index: Int
     ) -> [Any] {
-        SnippetTagging.normalizedTags(tokens.compactMap { $0 as? String })
+        // A token is committed here — by the tokenizing comma, a picked
+        // completion, or a paste. The tokens aren't in the field yet, so publish
+        // them to the sidebar filter bar on the next tick, once the field (and
+        // therefore the store) has them. Without this the new tag stays
+        // invisible until focus leaves the field. (Trailing text typed without
+        // a comma is not tokenized through here — controlTextDidEndEditing
+        // picks that up instead.)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            updateSelectedSnippetFromEditor()
+            refreshTagFilterBar()
+        }
+
+        return SnippetTagging.normalizedTags(tokens.compactMap { $0 as? String })
     }
 
     // MARK: - Editor key loop
