@@ -37,12 +37,16 @@ extension ViewController {
         pruneStaleTagFilters()
         updateTagFilterBar()
 
+        let tagFilterKeys = activeTagFilterKeys
+        let didTagFilterChange = lastAppliedTagFilterKeys != tagFilterKeys
+        lastAppliedTagFilterKeys = tagFilterKeys
+
         let sorted = store.snippetsSortedForDisplay()
-        var newSnippets: [Snippet]
+        let searchMatches: [Snippet]
         if query.isEmpty {
-            newSnippets = sorted
+            searchMatches = sorted
         } else {
-            newSnippets = sorted.filter { snippet in
+            searchMatches = sorted.filter { snippet in
                 snippet.displayName.lowercased().contains(query)
                     || snippet.normalizedKeyword.lowercased().contains(query)
                     || snippet.content.lowercased().contains(query)
@@ -50,9 +54,10 @@ extension ViewController {
             }
         }
 
-        if !activeTagFilterKeys.isEmpty {
+        var newSnippets = searchMatches
+        if !tagFilterKeys.isEmpty {
             newSnippets = newSnippets.filter { snippet in
-                activeTagFilterKeys.allSatisfy { snippet.hasTag(withKey: $0) }
+                tagFilterKeys.allSatisfy { snippet.hasTag(withKey: $0) }
             }
         }
 
@@ -66,7 +71,16 @@ extension ViewController {
             let keepEditingHiddenSnippet = isEditingDetails
                 && editingSnippetID == selectedSnippetID
                 && store.snippet(id: selectedSnippetID) != nil
-            if !keepEditingHiddenSnippet {
+            // Likewise when the snippet open in the editor drops out because
+            // its own tags changed (the user cleared the tag the filter is on)
+            // rather than because the filter itself changed. That is editing,
+            // not a request for a different list, so it stays open — otherwise
+            // deleting a tag rips the snippet out from under the caret.
+            let keepSnippetDroppedByOwnTags = !didTagFilterChange
+                && !tagFilterKeys.isEmpty
+                && editingSnippetID == selectedSnippetID
+                && searchMatches.contains { $0.id == selectedSnippetID }
+            if !keepEditingHiddenSnippet && !keepSnippetDroppedByOwnTags {
                 self.selectedSnippetID = newSnippets.first?.id
             }
         }
@@ -170,6 +184,12 @@ extension ViewController {
         if !isEditingDetails {
             applySelectedSnippetToEditor()
         }
+    }
+
+    /// Canonical, display-cased tags behind the currently active filter keys.
+    func activeTagFilterTags() -> [String] {
+        guard !activeTagFilterKeys.isEmpty else { return [] }
+        return store.allTags().filter { activeTagFilterKeys.contains(SnippetTagging.filterKey(for: $0)) }
     }
 
     func clearTagFilters() {

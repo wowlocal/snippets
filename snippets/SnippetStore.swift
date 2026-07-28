@@ -91,9 +91,9 @@ final class SnippetStore {
         }
     }
 
-    func addSnippet() -> Snippet {
+    func addSnippet(tags: [String] = []) -> Snippet {
         pushUndo()
-        let snippet = Snippet(name: "", keyword: "", content: "")
+        let snippet = Snippet(name: "", keyword: "", content: "", tags: SnippetTagging.normalizedTags(tags))
         snippets.insert(snippet, at: 0)
         persist(immediately: true)
         return snippet

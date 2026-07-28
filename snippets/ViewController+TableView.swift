@@ -50,13 +50,15 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         let row = tableView.selectedRow
         guard row >= 0, row < visibleSnippets.count else {
-            // The edited snippet may be filtered out of the list while the
-            // user is still typing in the editor (debounced reloads deselect
-            // its row). Keep the editor bound to it instead of blanking.
-            if isEditingDetails,
-               let selectedSnippetID,
-               selectedSnippetID == editingSnippetID,
-               store.snippet(id: selectedSnippetID) != nil {
+            // The selected snippet still exists but the active search / tag
+            // filter hides it — e.g. it was created while a filter was on, or
+            // the user just deleted the tag that kept it in the list. Its row
+            // is gone, but the editor must stay bound to it so it remains
+            // editable instead of being blanked and disabled.
+            if let selectedSnippetID,
+               store.snippet(id: selectedSnippetID) != nil,
+               !visibleSnippets.contains(where: { $0.id == selectedSnippetID }) {
+                deleteButton.isEnabled = true
                 return
             }
 

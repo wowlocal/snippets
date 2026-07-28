@@ -49,6 +49,11 @@ final class ViewController: NSViewController {
     /// the correct row once the update is done.
     var isApplyingListUpdate = false
     var activeTagFilterKeys: Set<String> = []
+    /// Tag filter keys applied by the previous `reloadVisibleSnippets` pass, so
+    /// it can tell "the open snippet lost the tag that kept it in the list"
+    /// (keep it open and editable) from "the user picked a different filter"
+    /// (follow the new list).
+    var lastAppliedTagFilterKeys: Set<String>?
     var renderedSuggestedTags: [String] = []
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
     /// Bumped on every status message change so an in-flight dismiss task can

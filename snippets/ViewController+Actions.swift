@@ -224,10 +224,15 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             searchField.stringValue = ""
         }
 
-        let snippet = store.addSnippet()
+        // Adopt the active tag filters so the snippet lands inside the list the
+        // user is looking at instead of being created invisible.
+        let inheritedTags = activeTagFilterTags()
+        let snippet = store.addSnippet(tags: inheritedTags)
         reloadVisibleSnippets(keepSelection: true)
         selectSnippet(id: snippet.id, focusEditorName: true)
-        importExportMessage = "Created snippet."
+        importExportMessage = inheritedTags.isEmpty
+            ? "Created snippet."
+            : "Created snippet tagged \(inheritedTags.joined(separator: ", "))."
     }
 
     @objc func deleteSelectedSnippet(_ sender: Any?) {
