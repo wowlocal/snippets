@@ -92,6 +92,18 @@ private final class GeneralSettingsViewController: NSViewController {
     )
     private let globalHotkeyStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let paleThemeCheckbox = NSButton(checkboxWithTitle: "Pale Theme", target: nil, action: nil)
+    private let frecencyCheckbox = NSButton(
+        checkboxWithTitle: "Rank suggestions by how often I use them",
+        target: nil,
+        action: nil
+    )
+    private let selectionMemoryCheckbox = NSButton(
+        checkboxWithTitle: "Remember which snippet I pick for each typed prefix",
+        target: nil,
+        action: nil
+    )
+    private let frecencyStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let resetUsageButton = NSButton(title: "Reset Usage Data", target: nil, action: nil)
     private let cliInstallButton = NSButton(title: "Install CLI Tool", target: nil, action: nil)
     private let cliStatusLabel = NSTextField(wrappingLabelWithString: "")
 
@@ -163,6 +175,36 @@ private final class GeneralSettingsViewController: NSViewController {
         paleThemeRow.orientation = .horizontal
         paleThemeRow.alignment = .centerY
 
+        let frecencySeparator = NSBox()
+        frecencySeparator.boxType = .separator
+
+        let frecencyIntroLabel = makeSecondaryLabel("Snippets you expand most often move to the top of the panel that appears after you type \u{201C}\\\u{201D}. Typing a full keyword always wins over usage, and pinned snippets always stay on top. Usage stays on this Mac \u{2014} it is never included in exports or share links.")
+
+        frecencyCheckbox.target = self
+        frecencyCheckbox.action = #selector(handleFrecencyChanged(_:))
+
+        let frecencyRow = NSStackView(views: [frecencyCheckbox, NSView()])
+        frecencyRow.orientation = .horizontal
+        frecencyRow.alignment = .centerY
+
+        selectionMemoryCheckbox.target = self
+        selectionMemoryCheckbox.action = #selector(handleSelectionMemoryChanged(_:))
+
+        let selectionMemoryRow = NSStackView(views: [selectionMemoryCheckbox, NSView()])
+        selectionMemoryRow.orientation = .horizontal
+        selectionMemoryRow.alignment = .centerY
+
+        frecencyStatusLabel.font = .systemFont(ofSize: 12)
+        frecencyStatusLabel.textColor = .secondaryLabelColor
+
+        resetUsageButton.target = self
+        resetUsageButton.action = #selector(resetUsageData)
+        LiquidGlassDesign.configureActionButton(resetUsageButton, symbolName: "arrow.counterclockwise")
+
+        let resetUsageRow = NSStackView(views: [resetUsageButton, NSView()])
+        resetUsageRow.orientation = .horizontal
+        resetUsageRow.alignment = .centerY
+
         let cliSeparator = NSBox()
         cliSeparator.boxType = .separator
 
@@ -191,6 +233,12 @@ private final class GeneralSettingsViewController: NSViewController {
         stack.addArrangedSubview(themeSeparator)
         stack.addArrangedSubview(themeIntroLabel)
         stack.addArrangedSubview(paleThemeRow)
+        stack.addArrangedSubview(frecencySeparator)
+        stack.addArrangedSubview(frecencyIntroLabel)
+        stack.addArrangedSubview(frecencyRow)
+        stack.addArrangedSubview(selectionMemoryRow)
+        stack.addArrangedSubview(frecencyStatusLabel)
+        stack.addArrangedSubview(resetUsageRow)
         stack.addArrangedSubview(cliSeparator)
         stack.addArrangedSubview(cliIntroLabel)
         stack.addArrangedSubview(cliRow)
@@ -203,6 +251,9 @@ private final class GeneralSettingsViewController: NSViewController {
         hotkeyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         globalHotkeyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         themeSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        frecencySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        frecencyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        frecencyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -253,6 +304,7 @@ private final class GeneralSettingsViewController: NSViewController {
 
         resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
         updateGlobalHotkeyControls()
+        applyFrecencyControls()
         applyThemeColors()
         updateCLIStatus()
     }
@@ -407,6 +459,67 @@ private final class GeneralSettingsViewController: NSViewController {
         paleThemeCheckbox.state = ThemeManager.isPaleTheme ? .on : .off
         ThemeManager.applyToggleAppearance(to: paleThemeCheckbox)
         ThemeManager.applyToggleAppearance(to: globalHotkeyCheckbox)
+        ThemeManager.applyToggleAppearance(to: frecencyCheckbox)
+        ThemeManager.applyToggleAppearance(to: selectionMemoryCheckbox)
+    }
+
+    private func applyFrecencyControls() {
+        guard let usageStore = (NSApp.delegate as? AppDelegate)?.usageStore else { return }
+
+        frecencyCheckbox.state = usageStore.isRankingEnabled ? .on : .off
+        selectionMemoryCheckbox.state = usageStore.isSelectionMemoryEnabled ? .on : .off
+        // Selection memory refines the ranking; without ranking it has nothing
+        // to refine.
+        selectionMemoryCheckbox.isEnabled = usageStore.isRankingEnabled && !usageStore.isReadOnly
+        ThemeManager.applyToggleAppearance(to: frecencyCheckbox)
+        ThemeManager.applyToggleAppearance(to: selectionMemoryCheckbox)
+
+        let tracked = usageStore.trackedSnippetCount
+        if usageStore.isReadOnly {
+            frecencyStatusLabel.stringValue = "Usage data was written by a newer version of Snippets. Ranking is paused and nothing is being saved."
+        } else if tracked == 0 {
+            frecencyStatusLabel.stringValue = "No usage recorded yet."
+        } else if let top = usageStore.mostUsedSummary {
+            frecencyStatusLabel.stringValue = "Tracking \(tracked) snippet\(tracked == 1 ? "" : "s") \u{2014} \(usageStore.storageFootprintDescription). Most used: \(top.name) (\(top.count) use\(top.count == 1 ? "" : "s"))."
+        } else {
+            frecencyStatusLabel.stringValue = "Tracking \(tracked) snippet\(tracked == 1 ? "" : "s") \u{2014} \(usageStore.storageFootprintDescription)."
+        }
+
+        resetUsageButton.isEnabled = tracked > 0 && !usageStore.isReadOnly
+    }
+
+    @objc private func handleFrecencyChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: SnippetUsageStore.rankingEnabledKey)
+        applyFrecencyControls()
+    }
+
+    @objc private func handleSelectionMemoryChanged(_ sender: NSButton) {
+        let enabled = sender.state == .on
+        UserDefaults.standard.set(enabled, forKey: SnippetUsageStore.selectionMemoryEnabledKey)
+        // Switching this off deletes the table rather than merely stopping
+        // collection: a guard in `record` alone would leave the stored prefixes
+        // on disk forever, and the merge would bring them back.
+        if !enabled {
+            (NSApp.delegate as? AppDelegate)?.usageStore.forgetAllBindings()
+        }
+        applyFrecencyControls()
+    }
+
+    @objc private func resetUsageData() {
+        guard let usageStore = (NSApp.delegate as? AppDelegate)?.usageStore,
+              usageStore.trackedSnippetCount > 0 else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Reset Usage Data?"
+        alert.informativeText = "Suggestions go back to pinned-then-newest-first order until you start using snippets again. Your snippets are not changed."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reset Usage Data")
+        alert.addButton(withTitle: "Cancel")
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        usageStore.eraseAll()
+        applyFrecencyControls()
+        frecencyStatusLabel.stringValue = "Usage data reset."
     }
 
     private func configureQuitBehaviorPopup() {

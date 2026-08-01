@@ -2,12 +2,7 @@ import Foundation
 
 // MARK: - Storage
 
-private let saveURL: URL = {
-    let appSupport = FileManager.default.urls(
-        for: .applicationSupportDirectory, in: .userDomainMask
-    ).first!
-    return appSupport.appendingPathComponent("SnippetsClone/snippets.json")
-}()
+private let saveURL: URL = SnippetStorageLocations.snippetsFileURL
 
 /// Loads the snippet library. A missing file means an empty library; an
 /// existing file that cannot be read or decoded aborts the command (for every

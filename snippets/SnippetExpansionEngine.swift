@@ -12,6 +12,7 @@ final class SnippetExpansionEngine {
     var onStateChange: (() -> Void)?
 
     private let store: SnippetStore
+    private let usage: SnippetUsageStore
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var localMonitor: Any?
@@ -31,6 +32,12 @@ final class SnippetExpansionEngine {
     private var suggestionLocalFallbackUsable = false
     private var suggestionHasSyncedAXContext = false
     private var suggestionSyncGeneration = 0
+    /// Frozen for the lifetime of one suggestion session so the three refreshes
+    /// per keystroke cannot reshuffle rows under the user's fingers.
+    private var suggestionFrecency: FrecencySnapshot = .empty
+    /// The query the user had typed when they accepted from the panel, held
+    /// only until `expand()` consumes it. Never set on an auto-expand path.
+    private var pendingSelectionMemoryQuery: String?
     private lazy var suggestionPanel = SuggestionPanelController()
     // Host apps can apply text edits asynchronously; reread focused text more
     // than once before trusting the suggestion context for expansion.
@@ -71,8 +78,9 @@ final class SnippetExpansionEngine {
         case unavailable
     }
 
-    init(store: SnippetStore) {
+    init(store: SnippetStore, usage: SnippetUsageStore) {
         self.store = store
+        self.usage = usage
         refreshAccessibilityStatus(prompt: false)
     }
 
@@ -266,6 +274,7 @@ final class SnippetExpansionEngine {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(rendered, forType: .string)
 
+        usage.record(.copyFromApp, snippetID: snippet.id)
         lastExpansionName = snippet.displayName
         statusText = "Copied \(snippet.displayName)."
     }
@@ -280,6 +289,7 @@ final class SnippetExpansionEngine {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(140))
             self.paste(rendered)
+            self.usage.record(.pasteFromApp, snippetID: snippet.id)
             self.lastExpansionName = snippet.displayName
             self.statusText = "Pasted \(snippet.displayName)."
         }
@@ -351,6 +361,8 @@ final class SnippetExpansionEngine {
         suggestionDeleteCount = 1
         suggestionLocalFallbackUsable = true
         suggestionHasSyncedAXContext = false
+        suggestionFrecency = usage.makeRankingSnapshot()
+        pendingSelectionMemoryQuery = nil
 
         suggestionPanel.onSelect = { [weak self] snippet in
             self?.selectSuggestion(snippet)
@@ -428,12 +440,22 @@ final class SnippetExpansionEngine {
         let localFallbackUsable = suggestionLocalFallbackUsable
         let hadSyncedAXContext = suggestionHasSyncedAXContext
 
+        // Captured before `dismissSuggestions()` clears the query. Only an
+        // explicit accept teaches selection memory; auto-expansions never do.
+        pendingSelectionMemoryQuery = localQuery
+
         dismissSuggestions()
 
         // Multi-scalar graphemes (ZWJ emoji, flags, combining marks) in the
         // query make the backspace count unreliable in web hosts — skip the
         // accept instead of corrupting host text.
-        guard !containsMultiScalarGrapheme(localQuery) else { return }
+        guard !containsMultiScalarGrapheme(localQuery) else {
+            // Without this the query would outlive the abandoned accept and be
+            // attributed to whatever expanded next — including an auto-expand,
+            // which must never write a binding.
+            pendingSelectionMemoryQuery = nil
+            return
+        }
 
         // Ignore key events while the short confirmation reads run, exactly
         // as a synchronous expansion did by blocking the run loop.
@@ -469,6 +491,7 @@ final class SnippetExpansionEngine {
             guard let deleteCount, deleteCount > 0 else {
                 // Nothing can vouch for the text before the caret — abort
                 // rather than delete blindly.
+                self.pendingSelectionMemoryQuery = nil
                 self.isInjecting = false
                 return
             }
@@ -486,6 +509,7 @@ final class SnippetExpansionEngine {
         suggestionLocalFallbackUsable = false
         suggestionHasSyncedAXContext = false
         suggestionSyncGeneration += 1
+        suggestionFrecency = .empty
         suggestionPanel.dismiss()
     }
 
@@ -817,10 +841,34 @@ final class SnippetExpansionEngine {
 
         let scored: [SuggestionItem]
         if suggestionQuery.isEmpty {
-            // Show all enabled snippets when no query yet
-            scored = snippets.prefix(8).map { SuggestionItem(snippet: $0, score: 0) }
+            // Pinned first, then most used, then the library's own order. The
+            // cap is applied after ranking; it used to slice the first eight in
+            // creation order and present that as the top eight.
+            scored = snippets
+                .enumerated()
+                .sorted { lhs, rhs in
+                    SnippetFrecency.emptyQueryRanks(
+                        lhsPinned: lhs.element.isPinned,
+                        lhsFrecency: suggestionFrecency.value(for: lhs.element.id),
+                        lhsOrder: lhs.offset,
+                        rhsPinned: rhs.element.isPinned,
+                        rhsFrecency: suggestionFrecency.value(for: rhs.element.id),
+                        rhsOrder: rhs.offset
+                    )
+                }
+                .prefix(8)
+                .map {
+                    SuggestionItem(
+                        snippet: $0.element,
+                        score: 0,
+                        frecency: suggestionFrecency.value(for: $0.element.id)
+                    )
+                }
         } else {
-            scored = snippets.compactMap { snippet in
+            let foldedQuery = SnippetFrecency.foldedForMatching(suggestionQuery)
+            let binding = suggestionFrecency.bindingTable(forQuery: suggestionQuery)
+
+            scored = snippets.compactMap { snippet -> SuggestionItem? in
                 let nameResult = FuzzyMatch.score(query: suggestionQuery, target: snippet.displayName)
                 let keywordResult = FuzzyMatch.score(query: suggestionQuery, target: snippet.normalizedKeyword)
                 let best = max(nameResult.score, keywordResult.score)
@@ -830,14 +878,23 @@ final class SnippetExpansionEngine {
                     snippet: snippet,
                     score: best,
                     nameMatchRanges: nameResult.matchedRanges,
-                    keywordMatchRanges: keywordResult.matchedRanges
+                    keywordMatchRanges: keywordResult.matchedRanges,
+                    keywordRank: SnippetFrecency.keywordRank(
+                        foldedKeyword: SnippetFrecency.foldedForMatching(snippet.normalizedKeyword),
+                        foldedQuery: foldedQuery,
+                        hasKeywordMatchRanges: !keywordResult.matchedRanges.isEmpty
+                    ),
+                    bindingWeight: binding[snippet.id] ?? 0,
+                    frecency: suggestionFrecency.value(for: snippet.id)
                 )
             }
-            .sorted {
-                suggestion($0, ranksBefore: $1, query: suggestionQuery, displayOrder: displayOrder)
-            }
+            // Decorate-sort-undecorate: each key is built once per element.
+            // Deriving it inside the sort closure would mean O(N log N)
+            // constructions, each retaining a String and a UUID.
+            .map { (key: rankingKey(for: $0, displayOrder: displayOrder), item: $0) }
+            .sorted { SnippetFrecency.ranks($0.key, before: $1.key) }
             .prefix(8)
-            .map { $0 }
+            .map { $0.item }
         }
 
         if scored.isEmpty {
@@ -852,53 +909,17 @@ final class SnippetExpansionEngine {
             .filter { $0.isEnabled && !$0.normalizedKeyword.isEmpty }
     }
 
-    private func suggestion(
-        _ lhs: SuggestionItem,
-        ranksBefore rhs: SuggestionItem,
-        query: String,
-        displayOrder: [UUID: Int]
-    ) -> Bool {
-        if lhs.score != rhs.score {
-            return lhs.score > rhs.score
-        }
-
-        let lhsKeywordRank = keywordMatchRank(for: lhs, query: query)
-        let rhsKeywordRank = keywordMatchRank(for: rhs, query: query)
-        if lhsKeywordRank != rhsKeywordRank {
-            return lhsKeywordRank > rhsKeywordRank
-        }
-
-        if lhs.snippet.isPinned != rhs.snippet.isPinned {
-            return lhs.snippet.isPinned
-        }
-
-        let lhsDisplayOrder = displayOrder[lhs.snippet.id] ?? Int.max
-        let rhsDisplayOrder = displayOrder[rhs.snippet.id] ?? Int.max
-        if lhsDisplayOrder != rhsDisplayOrder {
-            return lhsDisplayOrder < rhsDisplayOrder
-        }
-
-        let nameComparison = lhs.snippet.displayName.localizedCaseInsensitiveCompare(rhs.snippet.displayName)
-        if nameComparison != .orderedSame {
-            return nameComparison == .orderedAscending
-        }
-
-        return lhs.snippet.id.uuidString < rhs.snippet.id.uuidString
-    }
-
-    private func keywordMatchRank(for item: SuggestionItem, query: String) -> Int {
-        let keyword = normalizedForSuggestionMatching(item.snippet.normalizedKeyword)
-        let query = normalizedForSuggestionMatching(query)
-
-        if keyword == query {
-            return 3
-        }
-
-        if keyword.hasPrefix(query) {
-            return 2
-        }
-
-        return item.keywordMatchRanges.isEmpty ? 0 : 1
+    private func rankingKey(for item: SuggestionItem, displayOrder: [UUID: Int]) -> SnippetRankingKey {
+        SnippetRankingKey(
+            score: item.score,
+            keywordRank: item.keywordRank,
+            isPinned: item.snippet.isPinned,
+            bindingWeight: item.bindingWeight,
+            frecency: item.frecency,
+            displayOrder: displayOrder[item.snippet.id] ?? Int.max,
+            displayName: item.snippet.displayName,
+            id: item.snippet.id
+        )
     }
 
     private func normalizedForSuggestionMatching(_ string: String) -> String {
@@ -992,14 +1013,29 @@ final class SnippetExpansionEngine {
     }
 
     private func expand(snippet: Snippet, deleteCount: Int) {
+        // Consumed on every attempt, recorded only on the ones that commit.
+        let bindingQuery = consumePendingSelectionMemoryQuery()
         guard deleteCount > 0 else { return }
         let adjustedDeleteCount = adjustedDeleteCountForActiveSelection(baseDeleteCount: deleteCount)
 
         let resolvedText = PlaceholderResolver.resolve(template: snippet.content)
         replaceTypedText(characterCount: adjustedDeleteCount, with: resolvedText)
 
+        // After the injection, not before: `replaceTypedText` blocks the main
+        // thread for tens of milliseconds per deleted character, so recording
+        // first would delay the visible insertion. This is also the only point
+        // that means "we committed to inserting" — every earlier stage can
+        // still abort without touching the host's text.
+        usage.record(.expansion, snippetID: snippet.id, bindingQuery: bindingQuery)
         lastExpansionName = snippet.displayName
         statusText = "Expanded \(snippet.displayName)."
+    }
+
+    /// Reads and clears in one step, so one accepted query can never be
+    /// attributed to two expansions.
+    private func consumePendingSelectionMemoryQuery() -> String? {
+        defer { pendingSelectionMemoryQuery = nil }
+        return pendingSelectionMemoryQuery
     }
 
     private func adjustedDeleteCountForActiveSelection(baseDeleteCount: Int) -> Int {

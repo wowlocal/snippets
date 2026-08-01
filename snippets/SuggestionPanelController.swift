@@ -5,17 +5,27 @@ struct SuggestionItem {
     let score: Int
     let nameMatchRanges: [NSRange]
     let keywordMatchRanges: [NSRange]
+    /// Precomputed so the comparator never folds strings on the keystroke path.
+    let keywordRank: Int
+    let bindingWeight: Double
+    let frecency: Double
 
     init(
         snippet: Snippet,
         score: Int,
         nameMatchRanges: [NSRange] = [],
-        keywordMatchRanges: [NSRange] = []
+        keywordMatchRanges: [NSRange] = [],
+        keywordRank: Int = 0,
+        bindingWeight: Double = 0,
+        frecency: Double = 0
     ) {
         self.snippet = snippet
         self.score = score
         self.nameMatchRanges = nameMatchRanges
         self.keywordMatchRanges = keywordMatchRanges
+        self.keywordRank = keywordRank
+        self.bindingWeight = bindingWeight
+        self.frecency = frecency
     }
 }
 

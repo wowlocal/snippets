@@ -40,8 +40,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case cancel
     }
 
+    // Declaration order is load-bearing: stored properties initialize top to
+    // bottom, and `SnippetStore.init()` installs a `DispatchSource` on the
+    // support folder. The usage store creates `Usage/` in its own initializer,
+    // so that directory must exist before the monitor goes up — otherwise the
+    // one-off `createDirectory` would fire it at an arbitrary later moment.
+    let usageStore = SnippetUsageStore()
     let store = SnippetStore()
-    lazy var expansionEngine = SnippetExpansionEngine(store: store)
+    lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStore)
     private lazy var settingsWindowController = SettingsWindowController()
     #if !NO_SPARKLE
     private lazy var updaterController = SPUStandardUpdaterController(
@@ -86,6 +92,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Consulted only when the usage file hits its record cap, so that a
+        // forced eviction drops UUIDs of deleted snippets before live ones.
+        usageStore.liveSnippetIDs = { [weak store] in
+            Set((store?.snippets ?? []).map(\.id))
+        }
+        usageStore.snippetDisplayName = { [weak store] id in
+            store?.snippet(id: id)?.displayName
+        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(flushUsageData),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(flushUsageDataBeforeSleep),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
         configureFileMenuItems()
@@ -134,8 +161,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Synchronous on purpose: this method returns and the process dies long
+        // before an async write would run, so an async flush here writes nothing.
+        usageStore.flush(synchronously: true)
         store.flushPendingWrites()
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    /// Expanding a snippet means some other app is frontmost, so resigning
+    /// active catches nearly every pending write without waiting out the
+    /// debounce.
+    @objc private func flushUsageData() {
+        usageStore.flush()
+    }
+
+    @objc private func flushUsageDataBeforeSleep() {
+        usageStore.flush(synchronously: true)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

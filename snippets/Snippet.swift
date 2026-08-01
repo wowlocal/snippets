@@ -69,6 +69,31 @@ enum SnippetStorageSync {
     static let distributedChangeNotification = Notification.Name("com.khm.snippets.storageDidChange")
 }
 
+enum SnippetStorageLocations {
+    static var supportFolderURL: URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("SnippetsClone", isDirectory: true)
+    }
+
+    static var snippetsFileURL: URL {
+        supportFolderURL.appendingPathComponent("snippets.json", isDirectory: false)
+    }
+
+    /// Deliberately a subdirectory: `SnippetStore` watches the parent folder
+    /// with a `DispatchSource`, and an atomic write renames an inode into the
+    /// destination directory. Writing usage data next to `snippets.json` would
+    /// fire that monitor on every expansion and collapse the editor's write
+    /// debounce.
+    static var usageFolderURL: URL {
+        supportFolderURL.appendingPathComponent("Usage", isDirectory: true)
+    }
+
+    static var usageFileURL: URL {
+        usageFolderURL.appendingPathComponent("usage.json", isDirectory: false)
+    }
+}
+
 enum SnippetTagging {
     /// Trims whitespace, drops empties, and dedupes case-insensitively while
     /// preserving the first-seen casing and input order.
