@@ -88,7 +88,7 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         let snippet = visibleSnippets[row]
         let menu = NSMenu(title: snippet.displayName)
-        let items: [NSMenuItem] = [
+        var items: [NSMenuItem] = [
             contextMenuItem(title: "Copy Snippet", symbolName: "doc.on.doc", action: #selector(copySelectedSnippetFromContextMenu(_:))),
             contextMenuItem(title: "Paste Snippet", symbolName: "arrow.down.doc", action: #selector(pasteSelectedSnippetFromContextMenu(_:))),
             contextMenuItem(title: "Copy Share Link", symbolName: "link", action: #selector(copySelectedSnippetShareLink)),
@@ -108,6 +108,23 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
             .separator(),
             contextMenuItem(title: "Delete Snippet", symbolName: "trash", action: #selector(deleteSelectedSnippet(_:)))
         ]
+
+        // The title is the disclosure: the user learns the count and gets the
+        // fix in one gesture. Hidden entirely at zero, like the Pin and Enable
+        // items swap rather than show a no-op.
+        if let count = usageStore.usageCount(for: snippet.id), count > 0,
+           let pinIndex = items.firstIndex(where: {
+               $0.action == #selector(togglePinnedSelectedSnippetFromContextMenu(_:))
+           }) {
+            items.insert(
+                contextMenuItem(
+                    title: "Reset Usage (\(count) use\(count == 1 ? "" : "s"))",
+                    symbolName: "arrow.counterclockwise",
+                    action: #selector(resetUsageForSelectedSnippetFromContextMenu(_:))
+                ),
+                at: pinIndex + 1
+            )
+        }
 
         items.forEach(menu.addItem)
         return menu
@@ -183,5 +200,9 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func togglePinnedSelectedSnippetFromContextMenu(_ sender: Any?) {
         togglePinnedSelectedSnippet()
+    }
+
+    @objc private func resetUsageForSelectedSnippetFromContextMenu(_ sender: Any?) {
+        resetUsageForSelectedSnippet()
     }
 }

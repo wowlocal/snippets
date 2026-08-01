@@ -29,11 +29,18 @@ final class ViewController: NSViewController {
         return SnippetStore()
     }()
 
+    lazy var usageStore: SnippetUsageStore = {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            return appDelegate.usageStore
+        }
+        return SnippetUsageStore()
+    }()
+
     lazy var engine: SnippetExpansionEngine = {
         if let appDelegate = NSApp.delegate as? AppDelegate {
             return appDelegate.expansionEngine
         }
-        return SnippetExpansionEngine(store: store)
+        return SnippetExpansionEngine(store: store, usage: usageStore)
     }()
 
     var localKeyMonitor: Any?

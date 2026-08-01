@@ -7,6 +7,7 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 - Create, edit, delete, duplicate, enable/disable, and pin snippets.
 - Global expansion in other apps by typing `\` + keyword.
 - Suggestion panel near the caret with fuzzy matching on snippet name and keyword.
+- Usage-based ranking: snippets you expand often rise in the suggestion panel. Match quality and pinning always win over usage. Two toggles and a reset live in `Settings > General`; usage stays on this Mac and never travels in exports or share links.
 - Dynamic placeholders in snippet content:
   - `{clipboard}`
   - `{date}`
@@ -63,17 +64,19 @@ The app is organized around three main pieces:
 - `SnippetStore`: owns snippet state in memory, debounces writes, persists JSON, and handles import/export merge rules.
 - `ViewController`: builds the app UI, binds controls to the store, and routes keyboard actions.
 - `SnippetExpansionEngine`: runs global key listening, suggestion mode, and text replacement in other apps.
+- `SnippetUsageStore`: records which snippets get used and supplies the ranking snapshot. Backed by `Usage/usage.json`, a sibling directory to `snippets.json` so its writes never trip the library's folder monitor. Pure math and file format live in `SnippetFrecency` and `SnippetUsageDocument`.
 
 Detailed deep dive:
 
 - `docs/text-input-detection.md` explains cross-app text-input detection, Chromium/Electron workarounds, monitor quirks, and troubleshooting.
+- `docs/frecency-ranking.md` specifies usage-based ranking: the decay math, where usage sits in the precedence chain, the merge rules, and the privacy boundary.
 
 Global expansion pipeline:
 
 1. The expansion engine starts a session-level `CGEvent` tap plus a local `NSEvent` monitor.
 2. Typed characters are appended to an internal rolling buffer.
 3. On `\`, suggestion mode activates and `SuggestionPanelController` shows ranked matches.
-4. Ranking uses fuzzy scoring (`FuzzyMatch`) against snippet name and keyword.
+4. Ranking uses fuzzy scoring (`FuzzyMatch`) against snippet name and keyword, then keyword-match quality, then pinning, and only then how often you use each snippet.
 5. Selecting a snippet (or unambiguous exact-match auto-expand) triggers expansion.
 6. The engine resolves placeholders with `PlaceholderResolver` and injects final text.
 

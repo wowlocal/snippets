@@ -71,12 +71,10 @@ final class SnippetStore {
     init() {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
-        let fileManager = FileManager.default
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let folder = appSupport.appendingPathComponent("SnippetsClone", isDirectory: true)
-        try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folder = SnippetStorageLocations.supportFolderURL
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         saveFolderURL = folder
-        saveURL = folder.appendingPathComponent("snippets.json", isDirectory: false)
+        saveURL = SnippetStorageLocations.snippetsFileURL
 
         load()
         startObservingExternalChanges()

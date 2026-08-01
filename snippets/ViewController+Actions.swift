@@ -289,6 +289,20 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         closeActionPanel()
     }
 
+    func resetUsageForSelectedSnippet() {
+        let targetSnippetID = activeCommandSnippetID()
+        commitActiveEditorState(endingEditing: true)
+
+        guard let targetSnippetID else { return }
+        let name = store.snippet(id: targetSnippetID)?.displayName
+        usageStore.forget(snippetID: targetSnippetID)
+
+        importExportMessage = name.map { "Reset usage history for \($0)." } ?? "Reset usage history."
+
+        reloadVisibleSnippets(keepSelection: true)
+        closeActionPanel()
+    }
+
     func toggleEnabledSelectedSnippet() {
         let targetSnippetID = activeCommandSnippetID()
         commitActiveEditorState(endingEditing: true)
