@@ -38,7 +38,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private let maxVisible = 8
     private let singleLineRowHeight: CGFloat = 46
     private let wrappedNameRowHeight: CGFloat = 62
-    private let panelWidth: CGFloat = 280
+    /// Static so the panel and its column can size themselves during init.
+    private static let panelWidth: CGFloat = 320
     private let horizontalCellPadding: CGFloat = 20
 
     private var maxVisibleRowsOnScreen: Int {
@@ -80,7 +81,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     override init() {
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 200),
+            contentRect: NSRect(x: 0, y: 0, width: SuggestionPanelController.panelWidth, height: 200),
             styleMask: [.nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: true
@@ -110,7 +111,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         tableView.focusRingType = .none
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("SuggestionColumn"))
-        column.width = 280
+        column.width = SuggestionPanelController.panelWidth
         tableView.addTableColumn(column)
 
         scrollView = NSScrollView()
@@ -178,7 +179,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         let height = lastRowRect.maxY + insets + safety
 
-        panel.setContentSize(NSSize(width: panelWidth, height: height))
+        panel.setContentSize(NSSize(width: Self.panelWidth, height: height))
 
         // Position using the anchor from when suggestions first activated.
         // This prevents the panel from jumping as the caret moves.
@@ -746,7 +747,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             keyword: item.snippet.normalizedKeyword,
             tags: item.snippet.tags,
             nameMatchRanges: item.nameMatchRanges,
-            keywordMatchRanges: item.keywordMatchRanges
+            keywordMatchRanges: item.keywordMatchRanges,
+            availableWidth: Self.panelWidth - horizontalCellPadding
         )
         return cell
     }
@@ -759,7 +761,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private func shouldWrapName(for item: SuggestionItem) -> Bool {
         let name = item.snippet.displayName as NSString
         let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        let availableWidth = panelWidth - horizontalCellPadding
+        let availableWidth = Self.panelWidth - horizontalCellPadding
         let width = name.size(withAttributes: [.font: font]).width
         return width > availableWidth
     }
@@ -772,7 +774,10 @@ private final class SuggestionCellView: NSTableCellView {
     private let secondaryLabel = NSTextField(labelWithString: "")
     private let tagChipsStack = NSStackView()
     private var renderedTags: [String] = []
+    private var renderedChipWidth: CGFloat = -1
     private static let maxVisibleTagChips = 2
+    private static let secondaryRowSpacing: CGFloat = 6
+    private static let tagChipSpacing: CGFloat = 4
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -785,17 +790,24 @@ private final class SuggestionCellView: NSTableCellView {
         secondaryLabel.maximumNumberOfLines = 1
         secondaryLabel.translatesAutoresizingMaskIntoConstraints = false
         secondaryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        secondaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // The keyword is what the user types against — it must not be clipped so
+        // a tag chip can stay on screen. Chips yield first; staying below
+        // .required still lets a keyword wider than the row truncate on its own
+        // instead of breaking the row's width constraint.
+        secondaryLabel.setContentCompressionResistancePriority(
+            NSLayoutConstraint.Priority(rawValue: NSLayoutConstraint.Priority.defaultHigh.rawValue + 1),
+            for: .horizontal
+        )
 
         tagChipsStack.orientation = .horizontal
-        tagChipsStack.spacing = 4
+        tagChipsStack.spacing = Self.tagChipSpacing
         tagChipsStack.alignment = .centerY
         tagChipsStack.setContentHuggingPriority(.required, for: .horizontal)
-        tagChipsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        tagChipsStack.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         let secondaryRow = NSStackView(views: [secondaryLabel, tagChipsStack])
         secondaryRow.orientation = .horizontal
-        secondaryRow.spacing = 6
+        secondaryRow.spacing = Self.secondaryRowSpacing
         secondaryRow.alignment = .centerY
         secondaryRow.translatesAutoresizingMaskIntoConstraints = false
 
@@ -826,7 +838,8 @@ private final class SuggestionCellView: NSTableCellView {
         keyword: String,
         tags: [String],
         nameMatchRanges: [NSRange],
-        keywordMatchRanges: [NSRange]
+        keywordMatchRanges: [NSRange],
+        availableWidth: CGFloat
     ) {
         primaryLabel.attributedStringValue = highlightedString(
             name,
@@ -834,26 +847,52 @@ private final class SuggestionCellView: NSTableCellView {
             color: .labelColor,
             matchRanges: nameMatchRanges
         )
-        secondaryLabel.attributedStringValue = highlightedString(
+        let keywordString = highlightedString(
             keyword,
             font: .monospacedSystemFont(ofSize: 11, weight: .regular),
             color: .secondaryLabelColor,
             matchRanges: keywordMatchRanges
         )
+        secondaryLabel.attributedStringValue = keywordString
         secondaryLabel.isHidden = keyword.isEmpty
-        updateTagChips(tags: tags)
+
+        let keywordWidth = keyword.isEmpty ? 0 : ceil(keywordString.size().width) + Self.secondaryRowSpacing
+        updateTagChips(tags: tags, availableWidth: availableWidth - keywordWidth)
     }
 
-    private func updateTagChips(tags: [String]) {
-        guard tags != renderedTags else { return }
+    /// Fits as many chips as the space left over by the keyword allows, so the
+    /// keyword always renders in full. A "+N" chip only appears when it fits
+    /// too; chips that don't fit are dropped rather than squeezed.
+    private func updateTagChips(tags: [String], availableWidth: CGFloat) {
+        guard tags != renderedTags || availableWidth != renderedChipWidth else { return }
         renderedTags = tags
+        renderedChipWidth = availableWidth
 
         tagChipsStack.arrangedSubviews.forEach { view in
             tagChipsStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
 
-        let chips = TagChipView.makeChips(for: tags, maxCount: Self.maxVisibleTagChips)
+        var visible: [String] = []
+        var usedWidth: CGFloat = 0
+        for tag in tags.prefix(Self.maxVisibleTagChips) {
+            let chipWidth = TagChipView.width(for: tag)
+            let spacing = visible.isEmpty ? 0 : Self.tagChipSpacing
+            guard usedWidth + spacing + chipWidth <= availableWidth else { break }
+            usedWidth += spacing + chipWidth
+            visible.append(tag)
+        }
+
+        var hidden = Array(tags.dropFirst(visible.count))
+        if !hidden.isEmpty {
+            let overflowWidth = TagChipView.overflowChipWidth(hiddenCount: hidden.count)
+            let spacing = visible.isEmpty ? 0 : Self.tagChipSpacing
+            if visible.isEmpty || usedWidth + spacing + overflowWidth > availableWidth {
+                hidden = []
+            }
+        }
+
+        let chips = TagChipView.makeChips(visible: visible, hidden: hidden)
         chips.forEach(tagChipsStack.addArrangedSubview)
         tagChipsStack.isHidden = chips.isEmpty
     }

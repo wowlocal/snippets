@@ -96,7 +96,7 @@ final class TagChipView: NSView {
     }
 
     init(fontSize: CGFloat = 10) {
-        horizontalPadding = fontSize * 0.7
+        horizontalPadding = Self.horizontalPadding(forFontSize: fontSize)
         verticalPadding = fontSize * 0.25
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -244,6 +244,17 @@ final class TagChipView: NSView {
         }
     }
 
+    private static func horizontalPadding(forFontSize fontSize: CGFloat) -> CGFloat {
+        fontSize * 0.7
+    }
+
+    /// Width a chip needs to show `text` untruncated, without building the view.
+    static func width(for text: String, fontSize: CGFloat = 10) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        let textWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        return ceil(textWidth) + horizontalPadding(forFontSize: fontSize) * 2
+    }
+
     /// Builds display chips for a snippet's tags, capping at `maxCount` and
     /// appending a "+N" overflow chip when needed.
     static func makeChips(
@@ -252,9 +263,25 @@ final class TagChipView: NSView {
         fontSize: CGFloat = 10,
         muted: Bool = false
     ) -> [TagChipView] {
-        guard !tags.isEmpty else { return [] }
+        makeChips(
+            visible: Array(tags.prefix(maxCount)),
+            hidden: Array(tags.dropFirst(maxCount)),
+            fontSize: fontSize,
+            muted: muted
+        )
+    }
 
-        var chips: [TagChipView] = tags.prefix(maxCount).map { tag in
+    /// Builds chips for a precomputed split: one chip per visible tag, plus a
+    /// "+N" overflow chip when `hidden` isn't empty.
+    static func makeChips(
+        visible: [String],
+        hidden: [String],
+        fontSize: CGFloat = 10,
+        muted: Bool = false
+    ) -> [TagChipView] {
+        guard !visible.isEmpty || !hidden.isEmpty else { return [] }
+
+        var chips: [TagChipView] = visible.map { tag in
             let chip = TagChipView(fontSize: fontSize)
             chip.configure(
                 text: tag,
@@ -264,18 +291,22 @@ final class TagChipView: NSView {
             return chip
         }
 
-        if tags.count > maxCount {
+        if !hidden.isEmpty {
             let overflow = TagChipView(fontSize: fontSize)
             overflow.configure(
-                text: "+\(tags.count - maxCount)",
+                text: "+\(hidden.count)",
                 color: .secondaryLabelColor,
                 style: .muted
             )
-            overflow.toolTip = tags.dropFirst(maxCount).joined(separator: ", ")
+            overflow.toolTip = hidden.joined(separator: ", ")
             chips.append(overflow)
         }
 
         return chips
+    }
+
+    static func overflowChipWidth(hiddenCount: Int, fontSize: CGFloat = 10) -> CGFloat {
+        width(for: "+\(hiddenCount)", fontSize: fontSize)
     }
 }
 
