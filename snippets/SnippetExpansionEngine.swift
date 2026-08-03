@@ -23,7 +23,16 @@ final class SnippetExpansionEngine {
 
     private var typedBuffer = ""
     private let maxBufferLength = 120
-    private var isInjecting = false
+    /// Counts overlapping expansions. As a plain `Bool` with a timed reset, an earlier expansion's
+    /// timer could unlock user input while a later one was still writing into the host.
+    private var injectionDepth = 0
+    private var isInjecting: Bool { injectionDepth > 0 }
+    private let injectionQueue = SnippetInjectionQueue()
+    /// Bumped whenever the caret may have moved, so a queued delete count that no longer describes
+    /// the text before it is discarded rather than applied to whatever is there now.
+    private var injectionContextGeneration: UInt = 0
+    private var activePasteboardLease: TemporaryPasteboardLease?
+    private var suggestionSecureInputWatchdog: Timer?
 
     // Suggestion overlay state
     private var suggestionActive = false
@@ -47,15 +56,17 @@ final class SnippetExpansionEngine {
     ]
     // On macOS some apps drop rapid synthetic key events; keep a small delay
     // between injected keystrokes to ensure trigger deletion is complete.
-    private let injectedKeyDelay: TimeInterval = 0.012
-    private let injectedPasteShortcutDelay: TimeInterval = 0.008
-    private let prePasteDelayAfterDelete: TimeInterval = 0.02
-    private let pasteboardWriteSettleDelay: TimeInterval = 0.012
-    private let pasteboardRestoreDelay: Duration = .milliseconds(350)
+    private let injectedKeyDelay: Duration = .milliseconds(12)
+    private let prePasteDelayAfterDelete: Duration = .milliseconds(20)
+    private let pasteboardWriteSettleDelay: Duration = .milliseconds(12)
     // AX calls into a beachballing host block for ~6s by default, which is
     // long enough for macOS to disable our event tap. Bound every AX message
     // we send so the tap callback can always return quickly.
     private let axMessagingTimeoutSeconds: Float = 0.4
+    // A slow answer is worthless in a progress probe, and paying the full timeout on every poll is
+    // exactly what gets the tap disabled.
+    private let confirmationAXMessagingTimeoutSeconds: Float = 0.1
+    private let pasteConfirmationTuning = SnippetPasteConfirmationPolicy.Tuning.default
 
     private enum FocusedSelection {
         case none
@@ -91,7 +102,10 @@ final class SnippetExpansionEngine {
 
         if localMonitor == nil {
             localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                self?.handle(event: event)
+                self?.handle(
+                    event: event,
+                    eventUserData: event.cgEvent?.getIntegerValueField(.eventSourceUserData)
+                )
                 return event
             }
         }
@@ -116,15 +130,25 @@ final class SnippetExpansionEngine {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                // Ignore our own activation: interacting with the (non-
-                // activating) suggestion panel must not tear down the session
-                // that drives it; `handle(event:)` already resets state when
-                // this app is frontmost.
-                if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                   app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
-                    return
+                // Delivered on the main queue, so the isolation is real rather than assumed away.
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    // Secure input often comes up during an activation we would otherwise ignore, and
+                    // once it is on no further key events reach us to notice it.
+                    if self.secureEventInputEnabled {
+                        self.resetTypingContext()
+                        return
+                    }
+                    // Ignore our own activation: interacting with the (non-
+                    // activating) suggestion panel must not tear down the session
+                    // that drives it; `handle(event:)` already resets state when
+                    // this app is frontmost.
+                    if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                       app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+                        return
+                    }
+                    self.resetTypingContext()
                 }
-                self?.resetTypingContext()
             }
         }
 
@@ -137,6 +161,8 @@ final class SnippetExpansionEngine {
     /// must not authorize deletions any more.
     private func resetTypingContext() {
         typedBuffer = ""
+        // Anything already queued was measured against a caret that has since moved.
+        injectionContextGeneration &+= 1
         dismissSuggestions()
     }
 
@@ -194,14 +220,17 @@ final class SnippetExpansionEngine {
     /// Called from the CGEvent tap callback on the main thread.
     /// Returns `true` if the event should be suppressed (consumed by us).
     nonisolated private func handleEventTap(_ cgEvent: CGEvent) -> Bool {
+        // Read the marker before bridging to NSEvent: our own injection is the hot path here — one
+        // event per deleted character, plus the paste shortcut — and must cost nothing.
+        let eventUserData = cgEvent.getIntegerValueField(.eventSourceUserData)
+        // Never `true`. Consuming our own backspace would break the very expansion we are running.
+        guard SnippetSyntheticEvent.origin(eventUserData: eventUserData) == .user else { return false }
+
         // We're on the main thread (run loop), so we can safely access
         // MainActor-isolated state via MainActor.assumeIsolated.
         return MainActor.assumeIsolated {
-            guard listening, !isInjecting else { return false }
-            if frontmostProcessIsThisApp() { return false }
-
             guard let nsEvent = NSEvent(cgEvent: cgEvent) else { return false }
-            return handle(event: nsEvent)
+            return handle(event: nsEvent, eventUserData: eventUserData)
         }
     }
 
@@ -210,6 +239,10 @@ final class SnippetExpansionEngine {
     }
 
     private func restartEventMonitors() {
+        injectionContextGeneration &+= 1
+        injectionQueue.cancelAll()
+        stopSuggestionSecureInputWatchdog()
+        finishPendingPasteboardOwnership()
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             if let source = runLoopSource {
@@ -246,7 +279,13 @@ final class SnippetExpansionEngine {
             if !wasGranted {
                 restartEventMonitors()
             }
-            statusText = listening ? "Listening for snippet keywords in all apps." : "Ready to start listening."
+            if secureEventInputEnabled {
+                // Names the cause, because the flag is global: another app can hold it on and leave
+                // expansion silently dead with nothing else to go on.
+                statusText = "Paused while an app has secure keyboard entry on."
+            } else {
+                statusText = listening ? "Listening for snippet keywords in all apps." : "Ready to start listening."
+            }
         } else {
             statusText = "Accessibility access is required to watch typing and insert snippets."
         }
@@ -270,6 +309,9 @@ final class SnippetExpansionEngine {
 
 
     func copySnippetToClipboard(_ snippet: Snippet) {
+        // An explicit copy is the user taking the clipboard back; hand it over before reading
+        // `{clipboard}`, or the snippet would resolve against a snippet we are still holding.
+        finishPendingPasteboardOwnership()
         let rendered = PlaceholderResolver.resolve(template: snippet.content)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(rendered, forType: .string)
@@ -280,30 +322,71 @@ final class SnippetExpansionEngine {
     }
 
     func pasteSnippetIntoFrontmostApp(_ snippet: Snippet) {
+        finishPendingPasteboardOwnership()
         let rendered = PlaceholderResolver.resolve(template: snippet.content)
 
         if frontmostProcessIsThisApp() {
             NSApp.hide(nil)
         }
 
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(140))
-            self.paste(rendered)
+        // Raised for the whole trip, which the old code never did: this path posts a synthetic
+        // Cmd+V too, and it used to come back through our own tap unguarded.
+        beginInjection()
+        injectionQueue.enqueue(isAutomatic: false) { [weak self] in
+            guard let self else { return }
+            defer { self.endInjection() }
+            guard !Task.isCancelled else { return }
+            await self.settle(for: .milliseconds(140))
+            // Read after hiding: hiding ourselves activates another app, which bumps the generation.
+            let delivered = await self.replaceTypedText(
+                characterCount: 0,
+                with: rendered,
+                generation: self.injectionContextGeneration,
+                targetPID: nil
+            )
+            guard delivered else {
+                self.statusText = "Could not paste \(snippet.displayName)."
+                return
+            }
             self.usage.record(.pasteFromApp, snippetID: snippet.id)
             self.lastExpansionName = snippet.displayName
             self.statusText = "Pasted \(snippet.displayName)."
         }
     }
 
+    /// Synchronous on purpose: `applicationWillTerminate` cannot await, and leaving the process with
+    /// a snippet still sitting in the user's clipboard is exactly what the lease exists to prevent.
+    func prepareForTermination() {
+        injectionContextGeneration &+= 1
+        injectionQueue.cancelAll()
+        finishPendingPasteboardOwnership()
+    }
+
+    func releaseBorrowedPasteboard() {
+        finishPendingPasteboardOwnership()
+    }
+
     /// Returns `true` if the event was consumed and should be suppressed.
     @discardableResult
-    private func handle(event: NSEvent) -> Bool {
-        guard listening, !isInjecting else { return false }
-
-        if frontmostProcessIsThisApp() {
-            typedBuffer = ""
-            dismissSuggestions()
+    private func handle(event: NSEvent, eventUserData: Int64?) -> Bool {
+        let origin = SnippetSyntheticEvent.origin(eventUserData: eventUserData)
+        switch SnippetInjectionGate.inputDisposition(
+            origin: origin,
+            secureEventInputEnabled: secureEventInputEnabled,
+            isListening: listening,
+            isInjecting: isInjecting,
+            ownAppIsFrontmost: frontmostProcessIsThisApp()
+        ) {
+        case .ignore:
+            // Real typing during an injection moves the text our queued delete counts were measured
+            // against, so they must not be applied afterwards.
+            if origin == .user, isInjecting { injectionContextGeneration &+= 1 }
             return false
+        case .resetAndPassThrough:
+            resetTypingContext()
+            return false
+        case .process:
+            break
         }
 
         // Suggestion mode handling — check before modifier guard so
@@ -373,14 +456,36 @@ final class SnippetExpansionEngine {
 
         updateSuggestionResults()
         scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: false)
+        startSuggestionSecureInputWatchdog()
     }
 
-    private func selectSuggestion(_ snippet: Snippet, deleteCount overrideDeleteCount: Int? = nil) {
-        if let overrideDeleteCount {
-            // Auto-expand callers pass the delete count from a context they
+    /// Secure Event Input stops key events reaching a session tap at all, so the usual dismissal
+    /// paths go quiet exactly when they are needed: the panel would sit over the password prompt
+    /// and the query typed next to it would stay in memory. Scoped to a live session so a menu-bar
+    /// app is not waking the run loop for a window that lasts seconds.
+    private func startSuggestionSecureInputWatchdog() {
+        guard suggestionSecureInputWatchdog == nil else { return }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.secureEventInputEnabled else { return }
+                self.resetTypingContext()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        suggestionSecureInputWatchdog = timer
+    }
+
+    private func stopSuggestionSecureInputWatchdog() {
+        suggestionSecureInputWatchdog?.invalidate()
+        suggestionSecureInputWatchdog = nil
+    }
+
+    private func selectSuggestion(_ snippet: Snippet, deletion overrideDeletion: TriggerDeletion? = nil) {
+        if let overrideDeletion {
+            // Auto-expand callers pass a deletion from a context they
             // just synced; expand with it directly.
             dismissSuggestions()
-            expand(snippet: snippet, deleteCount: overrideDeleteCount)
+            enqueueExpansion(of: snippet, deletion: overrideDeletion)
             typedBuffer = ""
             return
         }
@@ -390,7 +495,9 @@ final class SnippetExpansionEngine {
 
     /// How a fresh AX read relates to the query the user accepted.
     private enum AcceptContextRead {
-        case confirmed(deleteCount: Int)
+        /// Carries the context itself: the Accessibility path needs the trigger text, not just its
+        /// length, to prove what sits before the caret before it overwrites anything.
+        case confirmed(SuggestionTriggerContext)
         case mismatch
         case missingTrigger
         case unavailable
@@ -414,7 +521,7 @@ final class SnippetExpansionEngine {
                 return .unsafe
             }
             if normalizedForSuggestionMatching(context.query) == normalizedForSuggestionMatching(query) {
-                return .confirmed(deleteCount: context.triggerLength)
+                return .confirmed(context)
             }
             return .mismatch
         case .missingTrigger:
@@ -436,7 +543,6 @@ final class SnippetExpansionEngine {
     /// tracked count.
     private func acceptSelectedSuggestion(_ snippet: Snippet) {
         let localQuery = suggestionQuery
-        let localDeleteCount = suggestionDeleteCount
         let localFallbackUsable = suggestionLocalFallbackUsable
         let hadSyncedAXContext = suggestionHasSyncedAXContext
 
@@ -459,7 +565,7 @@ final class SnippetExpansionEngine {
 
         // Ignore key events while the short confirmation reads run, exactly
         // as a synchronous expansion did by blocking the run loop.
-        isInjecting = true
+        beginInjection()
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -467,40 +573,53 @@ final class SnippetExpansionEngine {
             var lastRead = self.readAcceptContext(matchingQuery: localQuery)
             for delay in self.suggestionTextSyncDelays where !lastRead.isConfirmed {
                 try? await Task.sleep(for: delay)
+                // Secure input can come up mid-read; nothing we send afterwards would reach the host.
+                guard !self.secureEventInputEnabled else {
+                    self.pendingSelectionMemoryQuery = nil
+                    self.endInjection()
+                    return
+                }
                 lastRead = self.readAcceptContext(matchingQuery: localQuery)
             }
 
-            let deleteCount: Int?
+            let deletion: TriggerDeletion?
             switch lastRead {
-            case .confirmed(let confirmedDeleteCount):
-                deleteCount = confirmedDeleteCount
+            case .confirmed(let context):
+                deletion = .confirmed(context)
             case .missingTrigger:
                 // AX previously showed this trigger and no longer does — the
                 // host text really changed, so deleting anything would be
                 // blind. Only trust local tracking if AX never synced at all.
-                deleteCount = (hadSyncedAXContext || !localFallbackUsable) ? nil : localDeleteCount
+                deletion = (hadSyncedAXContext || !localFallbackUsable)
+                    ? nil
+                    : .localTracking(query: localQuery)
             case .mismatch, .unavailable:
                 // AX is behind or unreadable; trust local tracking while it
                 // has stayed authoritative.
-                deleteCount = localFallbackUsable ? localDeleteCount : nil
+                deletion = localFallbackUsable ? .localTracking(query: localQuery) : nil
             case .unsafe:
                 // No backspace count is reliable over multi-scalar graphemes.
-                deleteCount = nil
+                deletion = nil
             }
 
-            guard let deleteCount, deleteCount > 0 else {
+            guard let deletion, deletion.characterCount > 0 else {
                 // Nothing can vouch for the text before the caret — abort
                 // rather than delete blindly.
                 self.pendingSelectionMemoryQuery = nil
-                self.isInjecting = false
+                self.endInjection()
                 return
             }
-            self.expand(snippet: snippet, deleteCount: deleteCount)
+            // Enqueue before releasing our own hold, so user input stays ignored across the handover.
+            self.enqueueExpansion(of: snippet, deletion: deletion)
+            self.endInjection()
         }
     }
 
     private func dismissSuggestions() {
         typedBuffer = ""
+        // Before the guard: another path may have already cleared `suggestionActive`, and the timer
+        // would then outlive the session it belongs to.
+        stopSuggestionSecureInputWatchdog()
 
         guard suggestionActive else { return }
         suggestionActive = false
@@ -727,7 +846,7 @@ final class SnippetExpansionEngine {
         if allowAutoExpand,
            !suggestionQuery.isEmpty,
            let snippet = unambiguousExactMatch(for: suggestionQuery) {
-            selectSuggestion(snippet, deleteCount: suggestionDeleteCount)
+            selectSuggestion(snippet, deletion: .localTracking(query: suggestionQuery))
             return
         }
 
@@ -751,7 +870,7 @@ final class SnippetExpansionEngine {
             if allowAutoExpand,
                !context.query.isEmpty,
                let snippet = unambiguousExactMatch(for: context.query) {
-                selectSuggestion(snippet, deleteCount: context.triggerLength)
+                selectSuggestion(snippet, deletion: .confirmed(context))
                 return .synced
             }
 
@@ -814,11 +933,10 @@ final class SnippetExpansionEngine {
         guard let query = trailingKeywordQuery(from: typedBuffer) else { return false }
         guard let snippet = unambiguousExactMatch(for: query) else { return false }
 
+        typedBuffer = ""
         // Current key-down has not been applied by the host app yet, so delete
         // only the already-typed prefix ("\" + query.dropLast()).
-        let deleteCount = query.count
-        typedBuffer = ""
-        deferExpansion(of: snippet, deleteCount: deleteCount)
+        enqueueExpansion(of: snippet, deletion: .pendingLastCharacter(query: query))
         return true
     }
 
@@ -991,45 +1109,106 @@ final class SnippetExpansionEngine {
     }
 
 
-    /// Runs the injection work (AX reads, per-key sleeps, paste) outside the
-    /// event-tap callback so the callback can return immediately — blocking in
-    /// the callback is what makes macOS disable the tap with
-    /// `.tapDisabledByTimeout`. The suppress decision has already been made by
-    /// the caller; `isInjecting` is raised synchronously so any key event that
-    /// arrives before the deferred block runs is ignored, exactly as it would
-    /// have been while a synchronous expansion blocked the run loop.
-    private func deferExpansion(of snippet: Snippet, deleteCount: Int) {
-        isInjecting = true
-        DispatchQueue.main.async { [weak self] in
+    // MARK: - Injection
+
+    private func beginInjection() {
+        injectionDepth += 1
+    }
+
+    private func endInjection() {
+        injectionDepth = max(0, injectionDepth - 1)
+    }
+
+    /// The one place an expansion is scheduled. Callers stay synchronous — a tap callback has to
+    /// return its suppress decision immediately — while delivery runs on the queue afterwards.
+    private func enqueueExpansion(of snippet: Snippet, deletion: TriggerDeletion) {
+        // Consumed on every attempt, recorded only on the ones that commit.
+        let bindingQuery = consumePendingSelectionMemoryQuery()
+        guard deletion.isSelfConsistent,
+              SnippetInjectionGate.refusal(
+                  secureEventInputEnabled: secureEventInputEnabled,
+                  isListening: listening,
+                  ownAppIsFrontmost: frontmostProcessIsThisApp(),
+                  deleteCount: deletion.characterCount
+              ) == nil
+        else { return }
+
+        let generation = injectionContextGeneration
+        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        // An expansion still waiting its turn was measured against text the one now starting is
+        // about to rewrite. Cancelling is a no-op once a unit is past its start check.
+        injectionQueue.cancelAutomatic()
+        // Raised synchronously, so a key arriving before the unit starts is already ignored.
+        beginInjection()
+        injectionQueue.enqueue(isAutomatic: true) { [weak self] in
             guard let self else { return }
-            guard deleteCount > 0 else {
-                self.isInjecting = false
-                return
-            }
-            // `expand` -> `replaceTypedText` re-raises `isInjecting` and
-            // schedules the deferred reset that eventually clears it.
-            self.expand(snippet: snippet, deleteCount: deleteCount)
+            // Paired with the `beginInjection()` above, and released on every exit — a stranded
+            // count would leave user input ignored until the app restarts.
+            defer { self.endInjection() }
+            guard !Task.isCancelled else { return }
+            await self.performExpansion(
+                of: snippet,
+                deletion: deletion,
+                bindingQuery: bindingQuery,
+                generation: generation,
+                targetPID: targetPID
+            )
         }
     }
 
-    private func expand(snippet: Snippet, deleteCount: Int) {
-        // Consumed on every attempt, recorded only on the ones that commit.
-        let bindingQuery = consumePendingSelectionMemoryQuery()
-        guard deleteCount > 0 else { return }
-        let adjustedDeleteCount = adjustedDeleteCountForActiveSelection(baseDeleteCount: deleteCount)
-
+    private func performExpansion(
+        of snippet: Snippet,
+        deletion: TriggerDeletion,
+        bindingQuery: String?,
+        generation: UInt,
+        targetPID: pid_t?
+    ) async {
+        guard injectionIsAllowed(generation: generation, targetPID: targetPID) else { return }
+        // `{clipboard}` has to see the user's clipboard, never a snippet we are still holding.
+        finishPendingPasteboardOwnership()
         let resolvedText = PlaceholderResolver.resolve(template: snippet.content)
-        replaceTypedText(characterCount: adjustedDeleteCount, with: resolvedText)
 
-        // After the injection, not before: `replaceTypedText` blocks the main
-        // thread for tens of milliseconds per deleted character, so recording
-        // first would delay the visible insertion. This is also the only point
-        // that means "we committed to inserting" — every earlier stage can
-        // still abort without touching the host's text.
+        let replacement = replaceUsingAccessibility(deletion: deletion, with: resolvedText)
+        switch AccessibilityReplacementPolicy.action(for: replacement, provenance: deletion.provenance) {
+        case .commit:
+            recordExpansion(of: snippet, bindingQuery: bindingQuery)
+            return
+        case .abort:
+            statusText = "Skipped \(snippet.displayName): the text before the cursor changed."
+            return
+        case .useEvents:
+            break
+        }
+
+        let deleteCount = adjustedDeleteCountForActiveSelection(baseDeleteCount: deletion.characterCount)
+        guard await replaceTypedText(
+            characterCount: deleteCount,
+            with: resolvedText,
+            generation: generation,
+            targetPID: targetPID
+        ) else { return }
+        recordExpansion(of: snippet, bindingQuery: bindingQuery)
+    }
+
+    /// The single point that means "the host's text changed" — every earlier stage can still abort
+    /// without touching it, and must not be counted as a use.
+    private func recordExpansion(of snippet: Snippet, bindingQuery: String?) {
         usage.record(.expansion, snippetID: snippet.id, bindingQuery: bindingQuery)
         lastExpansionName = snippet.displayName
         statusText = "Expanded \(snippet.displayName)."
     }
+
+    private func injectionIsAllowed(generation: UInt, targetPID: pid_t?) -> Bool {
+        guard generation == injectionContextGeneration, listening, !secureEventInputEnabled else {
+            return false
+        }
+        guard let targetPID else { return !frontmostProcessIsThisApp() }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
+    }
+
+    /// Process-global: true when *any* process has secure keyboard entry on, not only the frontmost
+    /// one. Not thread safe per its Carbon header — every call site here is on the main actor.
+    private var secureEventInputEnabled: Bool { IsSecureEventInputEnabled() }
 
     /// Reads and clears in one step, so one accepted query can never be
     /// attributed to two expansions.
@@ -1043,120 +1222,337 @@ final class SnippetExpansionEngine {
         return focusedTextInputHasSelectedText() ? (baseDeleteCount + 1) : baseDeleteCount
     }
 
-    private func replaceTypedText(characterCount: Int, with replacement: String) {
-        isInjecting = true
+    // MARK: - Accessibility replacement
+
+    /// The preferred path: one atomic replacement, no synthetic events, no clipboard involvement.
+    /// Synchronous on purpose — the read that proves what sits before the caret and the write that
+    /// replaces it have to happen in the same turn, or the proof means nothing.
+    private func replaceUsingAccessibility(
+        deletion: TriggerDeletion,
+        with replacement: String
+    ) -> AccessibilityReplacement {
+        guard accessibilityGranted,
+              deletion.isSelfConsistent,
+              let app = NSWorkspace.shared.frontmostApplication,
+              accessibilityInsertionIsPermitted(for: app),
+              // Only the focused element, never an ancestor: reading from a parent is safe, writing
+              // into one is not.
+              let element = frontmostFocusedElement(),
+              let caret = selectedRange(of: element),
+              caret.location >= 0, caret.length >= 0
+        else { return .unavailable }
+
+        let caretRange = NSRange(location: caret.location, length: caret.length)
+        // Enough text that a trigger made of surrogate pairs cannot be clipped by the read window.
+        let readLength = max(maxBufferLength, deletion.expectedText.utf16.count + 8)
+        guard let before = textBeforeCaret(
+            in: element,
+            caretLocation: caret.location,
+            maxCharacters: readLength,
+            allowFullValueFallback: true
+        ) else { return .unavailable }
+
+        let planResult = AccessibilityTextReplacement.plan(
+            textBeforeCaret: before,
+            caretRange: caretRange,
+            expectedTrigger: deletion.expectedText,
+            triggerCharacterCount: deletion.characterCount,
+            replacementUTF16Length: replacement.utf16.count
+        )
+        guard case .plan(let plan) = planResult else {
+            return planResult == .rejected ? .rejected : .unavailable
+        }
+
+        // Checked after the text comparison, not before: a mismatch has to fail closed even in a
+        // field we cannot write, otherwise it would fall through to deleting somebody else's text.
+        guard isAttributeSettable(kAXSelectedTextRangeAttribute as CFString, on: element),
+              isAttributeSettable(kAXSelectedTextAttribute as CFString, on: element)
+        else { return .unavailable }
+
+        let valueBefore = stringAttribute(of: element, attribute: kAXValueAttribute as CFString)
+
+        guard setSelectedRange(plan.replacementRange, on: element) else { return .unavailable }
+        guard setSelectedText(replacement, on: element) else {
+            // Leaving the trigger selected would make the event fallback's first backspace eat it
+            // and every following one eat a character of the user's text.
+            _ = setSelectedRange(caretRange, on: element)
+            return .rejected
+        }
+        // WebKit and Chromium can leave the inserted text selected, so the next keystroke would wipe
+        // the snippet out. Collapse explicitly.
+        _ = setSelectedRange(NSRange(location: plan.caretLocation, length: 0), on: element)
+
+        guard let valueBefore else { return .delivered }
+        guard let valueAfter = stringAttribute(of: element, attribute: kAXValueAttribute as CFString) else {
+            // Readable before the write and not after: too little to justify a second attempt.
+            return .rejected
+        }
+        if AccessibilityTextReplacement.writeLanded(
+            valueBefore: valueBefore,
+            valueAfter: valueAfter,
+            plan: plan,
+            replacement: replacement
+        ) { return .delivered }
+
+        if valueAfter == valueBefore {
+            // A write that reported success and did nothing — the Chromium/Electron failure mode.
+            _ = setSelectedRange(caretRange, on: element)
+            return .unavailable
+        }
+        return .rejected
+    }
+
+    /// Escape hatch for a host that acknowledges a write its own model never sees.
+    private func accessibilityInsertionIsPermitted(for app: NSRunningApplication) -> Bool {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "SnippetsAccessibilityInsertionEnabled") != nil,
+           !defaults.bool(forKey: "SnippetsAccessibilityInsertionEnabled") {
+            return false
+        }
+        guard let bundleID = app.bundleIdentifier else { return true }
+        let excluded = defaults.stringArray(forKey: "SnippetsAccessibilityInsertionExcludedBundleIDs") ?? []
+        return !excluded.contains(bundleID)
+    }
+
+    private func isAttributeSettable(_ attribute: CFString, on element: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, attribute, &settable) == .success else {
+            return false
+        }
+        return settable.boolValue
+    }
+
+    private func setSelectedRange(_ range: NSRange, on element: AXUIElement) -> Bool {
+        var cfRange = CFRange(location: range.location, length: range.length)
+        guard let value = AXValueCreate(.cfRange, &cfRange) else { return false }
+        return AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            value
+        ) == .success
+    }
+
+    private func setSelectedText(_ text: String, on element: AXUIElement) -> Bool {
+        AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            text as CFString
+        ) == .success
+    }
+
+    // MARK: - Event fallback
+
+    /// Returns `true` once the paste has been posted; only then may the caller record a use.
+    private func replaceTypedText(
+        characterCount: Int,
+        with replacement: String,
+        generation: UInt,
+        targetPID: pid_t?
+    ) async -> Bool {
+        guard injectionIsAllowed(generation: generation, targetPID: targetPID) else { return false }
+        // Borrowed before a single character is deleted: a pasteboard we cannot borrow safely must
+        // cost the user nothing, and once the trigger is gone "nothing" is no longer on the table.
+        guard beginPasteboardLease(placing: replacement) else { return false }
 
         // Delete trigger text one character at a time with a small delay to avoid
         // dropped synthetic key events in some host apps.
-        deleteBackward(characterCount: characterCount)
-        if prePasteDelayAfterDelete > 0 {
-            Thread.sleep(forTimeInterval: prePasteDelayAfterDelete)
+        for index in 0..<characterCount {
+            guard injectionIsAllowed(generation: generation, targetPID: targetPID) else {
+                finishPendingPasteboardOwnership()
+                return false
+            }
+            postKeyStroke(keyCode: UInt16(kVK_Delete))
+            if index < characterCount - 1 {
+                await settle(for: injectedKeyDelay)
+            }
         }
-        paste(replacement)
+        // Past here the trigger is gone, so bailing out would leave the user with neither their text
+        // nor the snippet. These waits are deliberately not cancellable: a cancelled `Task.sleep`
+        // returns at once and would rush the paste into a host still applying our deletions.
+        if characterCount > 0 { await settle(for: injectedKeyDelay) }
+        await settle(for: prePasteDelayAfterDelete)
+        await settle(for: pasteboardWriteSettleDelay)
 
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
-            self?.isInjecting = false
+        guard let lease = activePasteboardLease, lease.isOwned else {
+            finishPendingPasteboardOwnership()
+            return false
         }
-    }
-
-    private func deleteBackward(characterCount: Int) {
-        guard characterCount > 0 else { return }
-        for _ in 0..<characterCount {
-            postKeyStroke(keyCode: UInt16(kVK_Delete), interKeyDelay: injectedKeyDelay)
-        }
-    }
-
-    private func paste(_ text: String) {
-        let pasteboard = NSPasteboard.general
-        let snapshot = capturePasteboardState(pasteboard)
-
-        pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
-            // The trigger characters have already been deleted and the
-            // pasteboard cleared; at least put the user's clipboard back.
-            restorePasteboardState(snapshot, to: pasteboard)
-            return
-        }
-        let injectedChangeCount = pasteboard.changeCount
-        if pasteboardWriteSettleDelay > 0 {
-            Thread.sleep(forTimeInterval: pasteboardWriteSettleDelay)
-        }
-
+        let baseline = focusedCaretFingerprint()
         postPasteShortcut()
+        await waitForPasteConfirmation(
+            pastedText: replacement,
+            baseline: baseline,
+            lease: lease,
+            targetPID: targetPID
+        )
+        finishPendingPasteboardOwnership()
+        return true
+    }
 
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: self?.pasteboardRestoreDelay ?? .milliseconds(350))
-            // If user/app changed the clipboard since injection, keep the newer
-            // content and do not restore our snapshot over it.
-            guard pasteboard.changeCount == injectedChangeCount else { return }
-            self?.restorePasteboardState(snapshot, to: pasteboard)
+    /// Holds the borrowed pasteboard until there is evidence the host applied the paste. A fixed
+    /// delay cannot be right for both: it is ten times too long for a native field and still too
+    /// short for a loaded Electron host, where restoring first makes the user's own clipboard land
+    /// in the document instead of the snippet.
+    private func waitForPasteConfirmation(
+        pastedText: String,
+        baseline: PasteCaretFingerprint?,
+        lease: TemporaryPasteboardLease,
+        targetPID: pid_t?
+    ) async {
+        var baseline = baseline
+        var sawReadableFingerprintAfterPaste = false
+        var firstForwardEditAttempt: Int?
+        let start = ContinuousClock.now
+        var attempt = 0
+
+        while true {
+            let abort = pasteConfirmationAbort(lease: lease, targetPID: targetPID)
+            let current = abort == nil ? focusedCaretFingerprint() : nil
+            if current != nil { sawReadableFingerprintAfterPaste = true }
+
+            let progress = SnippetPasteConfirmationPolicy.progress(
+                before: baseline,
+                after: current,
+                pastedText: pastedText,
+                tailLength: pasteConfirmationTuning.fingerprintTailLength
+            )
+            if progress == .forwardEditObserved, firstForwardEditAttempt == nil {
+                firstForwardEditAttempt = attempt
+            }
+
+            let verdict = SnippetPasteConfirmationPolicy.verdict(
+                SnippetPasteConfirmationPolicy.Input(
+                    attempt: attempt,
+                    elapsed: start.duration(to: .now),
+                    progress: progress,
+                    hadFingerprintBeforePaste: baseline != nil,
+                    sawReadableFingerprintAfterPaste: sawReadableFingerprintAfterPaste,
+                    firstForwardEditAttempt: firstForwardEditAttempt,
+                    abort: abort
+                ),
+                tuning: pasteConfirmationTuning
+            )
+            switch verdict {
+            case .confirmed, .timedOut, .abandoned:
+                return
+            case .keepWaiting:
+                break
+            }
+
+            // Our own backspaces can still be landing. Re-baseline, or the caret moving back and
+            // then forward again would read as a paste that has not happened yet.
+            if progress == .pendingEditObserved, let current { baseline = current }
+            await settle(for: pasteConfirmationTuning.pollInterval)
+            attempt += 1
         }
+    }
+
+    /// Ordered cheapest first; the Accessibility read is the expensive part and comes last.
+    private func pasteConfirmationAbort(
+        lease: TemporaryPasteboardLease,
+        targetPID: pid_t?
+    ) -> PasteConfirmationAbort? {
+        if !lease.isOwned { return .pasteboardSuperseded }
+        if secureEventInputEnabled { return .secureInputEnabled }
+        if let targetPID,
+           NSWorkspace.shared.frontmostApplication?.processIdentifier != targetPID {
+            // Hand the clipboard back rather than hold it: the user switching away and pressing
+            // Cmd+V themselves is likelier than a late paste into an app they already left.
+            return .frontmostAppChanged
+        }
+        return nil
+    }
+
+    private func beginPasteboardLease(placing text: String) -> Bool {
+        // A previous lease still held would become this one's "original", losing the user's
+        // clipboard for good.
+        guard finishPendingPasteboardOwnership() else { return false }
+        guard let lease = TemporaryPasteboardLease.begin(
+            text: text,
+            pasteboard: NSPasteboard.general
+        ) else { return false }
+        activePasteboardLease = lease
+        return true
+    }
+
+    @discardableResult
+    private func finishPendingPasteboardOwnership() -> Bool {
+        guard let lease = activePasteboardLease else { return true }
+        for _ in 0..<3 {
+            guard lease.isOwned else { break }
+            if case .failed = lease.restoreIfOwned() { continue }
+            break
+        }
+        guard !lease.isOwned else { return false }
+        activePasteboardLease = nil
+        return true
+    }
+
+    private func focusedCaretFingerprint() -> PasteCaretFingerprint? {
+        guard let element = frontmostFocusedElement(),
+              let range = selectedRange(of: element),
+              range.location >= 0
+        else { return nil }
+        AXUIElementSetMessagingTimeout(element, confirmationAXMessagingTimeoutSeconds)
+        // Never the whole value: in a real editor that is the entire document, re-serialized over
+        // Accessibility IPC on every poll.
+        let tail = textBeforeCaret(
+            in: element,
+            caretLocation: range.location,
+            maxCharacters: pasteConfirmationTuning.fingerprintTailLength,
+            allowFullValueFallback: false
+        ) ?? ""
+        return PasteCaretFingerprint(
+            caretLocation: range.location,
+            selectionLength: max(0, range.length),
+            textBeforeCaret: tail
+        )
     }
 
     private func postPasteShortcut() {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
         let commandKey = UInt16(kVK_Command)
 
+        // One uninterrupted burst: a suspension between Command down and up would leave the host
+        // believing Command is held, turning the user's next keystroke into a shortcut.
         postKeyEvent(source: source, keyCode: commandKey, keyDown: true)
-        if injectedPasteShortcutDelay > 0 {
-            Thread.sleep(forTimeInterval: injectedPasteShortcutDelay)
-        }
         postKeyEvent(source: source, keyCode: UInt16(kVK_ANSI_V), keyDown: true, flags: .maskCommand)
         postKeyEvent(source: source, keyCode: UInt16(kVK_ANSI_V), keyDown: false, flags: .maskCommand)
-        if injectedPasteShortcutDelay > 0 {
-            Thread.sleep(forTimeInterval: injectedPasteShortcutDelay)
-        }
         postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
     }
 
-    private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = [], interKeyDelay: TimeInterval = 0) {
+    private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = []) {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
 
         postKeyEvent(source: source, keyCode: keyCode, keyDown: true, flags: flags)
         postKeyEvent(source: source, keyCode: keyCode, keyDown: false, flags: flags)
-
-        if interKeyDelay > 0 {
-            Thread.sleep(forTimeInterval: interKeyDelay)
-        }
     }
 
     private func postKeyEvent(source: CGEventSource, keyCode: UInt16, keyDown: Bool, flags: CGEventFlags = []) {
-        let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown)
-        event?.flags = flags
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown) else {
+            return
+        }
+        event.flags = flags
+        tag(event)
+        event.post(tap: .cghidEventTap)
     }
 
-    private typealias PasteboardSnapshot = [[NSPasteboard.PasteboardType: Data]]
-
-    private func capturePasteboardState(_ pasteboard: NSPasteboard) -> PasteboardSnapshot {
-        guard let items = pasteboard.pasteboardItems else { return [] }
-
-        return items.map { item in
-            var typeToData: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    typeToData[type] = data
-                }
-            }
-            return typeToData
-        }
+    /// Everything we post carries this marker. Our events come back through our own session tap, and
+    /// the tap keys off the marker to skip them instead of guessing by elapsed time.
+    private func tag(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: SnippetSyntheticEvent.tag)
     }
 
-    private func restorePasteboardState(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-
-        guard !snapshot.isEmpty else { return }
-
-        let items: [NSPasteboardItem] = snapshot.map { typeToData in
-            let pasteboardItem = NSPasteboardItem()
-            for (type, data) in typeToData {
-                pasteboardItem.setData(data, forType: type)
+    /// A pause that survives cancellation, unlike `Task.sleep`, which returns immediately once the
+    /// task is cancelled — the worst possible timing in the middle of an injection.
+    private func settle(for duration: Duration) async {
+        let seconds = Double(duration.components.seconds)
+            + Double(duration.components.attoseconds) / 1e18
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+                continuation.resume()
             }
-            return pasteboardItem
         }
-
-        pasteboard.writeObjects(items)
     }
 
     private func frontmostProcessIsThisApp() -> Bool {
@@ -1246,8 +1642,23 @@ final class SnippetExpansionEngine {
         guard let selectedRange = selectedRange(of: element), selectedRange.location >= 0 else {
             return nil
         }
+        return textBeforeCaret(
+            in: element,
+            caretLocation: selectedRange.location,
+            maxCharacters: maxCharacters,
+            allowFullValueFallback: true
+        )
+    }
 
-        let caretLocation = selectedRange.location
+    /// Split out so a caller can pin the text and the caret offset to one observation, and so the
+    /// confirmation poll can opt out of the whole-value fallback.
+    private func textBeforeCaret(
+        in element: AXUIElement,
+        caretLocation: Int,
+        maxCharacters: Int,
+        allowFullValueFallback: Bool
+    ) -> String? {
+        guard caretLocation >= 0 else { return nil }
         let start = max(0, caretLocation - maxCharacters)
         let length = caretLocation - start
         let rangeBeforeCaret = CFRange(location: start, length: length)

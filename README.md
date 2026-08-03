@@ -82,10 +82,16 @@ Global expansion pipeline:
 
 Text replacement strategy:
 
-- The engine deletes trigger characters with synthetic backspaces.
-- It writes expansion text to the pasteboard.
-- It sends synthetic `Cmd+V` to paste into the frontmost app.
-- It restores previous clipboard contents shortly after paste, unless the clipboard changed in the meantime.
+- Preferred path: one atomic Accessibility replacement. The engine proves the text before the caret
+  is the trigger it means to delete, then overwrites that range in place — no synthetic keys, and the
+  clipboard is never touched.
+- Fallback, for fields that expose no writable text: the engine borrows the pasteboard, deletes the
+  trigger with synthetic backspaces, and sends `Cmd+V`.
+- The borrow is returned once there is evidence the host applied the paste, or on a bounded timeout —
+  never on a fixed delay, which is both too slow for a native field and too fast for a loaded Electron
+  host. A newer copy is never overwritten.
+- Every event the engine posts is tagged so its own injection cannot be mistaken for typing.
+- Nothing is injected while secure keyboard entry is on.
 
 Suggestion panel positioning:
 

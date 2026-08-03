@@ -161,6 +161,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // First: give the user's clipboard back before writing anything of our own. A snippet
+        // borrowed for a paste would otherwise outlive the process.
+        expansionEngine.prepareForTermination()
         // Synchronous on purpose: this method returns and the process dies long
         // before an async write would run, so an async flush here writes nothing.
         usageStore.flush(synchronously: true)
@@ -177,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func flushUsageDataBeforeSleep() {
+        // Sleeping with a borrowed clipboard would hold it for hours instead of milliseconds.
+        expansionEngine.releaseBorrowedPasteboard()
         usageStore.flush(synchronously: true)
     }
 

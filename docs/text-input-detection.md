@@ -170,19 +170,83 @@ Handled intentionally:
 
 ## Expansion and pasteboard timing quirks
 
-Text replacement is delete+paste, not direct insertion:
+Replacement has two paths. The Accessibility path is preferred; delete+paste is the fallback.
 
-1. Delete trigger text with synthetic backspaces.
-2. Write resolved snippet to pasteboard.
+### Accessibility path
+
+One atomic replacement, no synthetic events and no clipboard involvement:
+
+1. Read the focused element's caret range and the text before it.
+2. Prove that text ends with the exact trigger we mean to delete.
+3. Set `AXSelectedTextRange` to the trigger's range and write `AXSelectedText`.
+4. Collapse the caret behind the inserted text.
+5. Verify the write landed by re-reading `AXValue`.
+
+Reading and writing happen in the same main-actor turn — split them and the proof from step 2 is
+worthless. Three outcomes, and only one of them falls back:
+
+- `delivered` — committed.
+- `unavailable` — the field exposes no writable text attributes, or the write was a silent no-op
+  (the Chromium/Electron failure mode, caught by step 5). Falls back to events.
+- `rejected` — the text before the caret is not what we expected. Fails closed **when the delete
+  count came from an Accessibility read**; with a locally tracked count Accessibility is merely
+  lagging, which is the normal state in Chromium, so the event path still runs.
+
+`UserDefaults` keys `SnippetsAccessibilityInsertionEnabled` (set to `false`) and
+`SnippetsAccessibilityInsertionExcludedBundleIDs` disable this path globally or per app.
+
+### Event fallback
+
+1. Borrow the pasteboard — **before** deleting anything, so a pasteboard we cannot borrow safely
+   costs the user nothing.
+2. Delete trigger text with synthetic backspaces.
 3. Send synthetic `Cmd+V`.
-4. Restore previous clipboard snapshot after short delay if clipboard unchanged.
+4. Hold the borrowed pasteboard until delivery is confirmed, then hand it back.
 
-Delays are intentional and tuned:
+Every event we post carries `SnippetSyntheticEvent.tag` in `kCGEventSourceUserData`, and the tap
+skips events carrying it — our own injection comes back through our own session tap, and a timing
+window cannot tell it apart from real typing.
+
+The borrow mutates the original `NSPasteboardItem` in place when the first item holds plain text, so
+handing the clipboard back costs no change count and clipboard managers record one entry, not two.
+An image-first or empty clipboard is rewritten wholesale instead; only a pasteboard that cannot be
+snapshotted at all refuses the lease.
+
+Delays are intentional and tuned, and none of them blocks the main thread:
 
 - `injectedKeyDelay`: helps apps that drop rapid synthetic deletes.
 - `prePasteDelayAfterDelete`: lets host app settle before paste.
 - `pasteboardWriteSettleDelay`: avoid race where paste occurs before clipboard update propagates.
-- `pasteboardRestoreDelay`: reduces race restoring old clipboard over new user copy.
+
+They are awaited through a non-cancellable `settle(for:)`, not `Task.sleep`: a cancelled sleep
+returns immediately, which would rush the paste into a host still applying our deletions.
+
+### Confirming the paste
+
+The clipboard is returned on evidence, not on a timer. Each poll compares a bounded fingerprint —
+caret location, selection length, and up to 32 characters before the caret — against the state
+captured just before `Cmd+V`. Never the whole `AXValue`: in an editor that is the entire document,
+re-serialized over Accessibility IPC on every poll.
+
+- Caret advanced by the pasted length, or the text before it now ends with what we pasted → confirmed.
+- Caret moved backwards → our own backspaces are still landing; re-baseline and keep waiting.
+- Host answers nothing at all (terminals, and any host without readable text) → accepted after 400 ms,
+  deliberately no shorter than the fixed 350 ms delay this replaced.
+- Two independent ceilings — attempts and wall clock — guarantee the loop ends even against a host
+  that stalls every read.
+
+Waiting stops early, and the clipboard goes back, when another copy supersedes ours, when secure
+input comes on, or when the frontmost app changes. Holding through an app switch would mean the
+user's next manual `Cmd+V` pastes our snippet.
+
+### Secure Event Input
+
+`IsSecureEventInputEnabled()` is process-global — any app can hold it on. While it is on, no
+synthetic event reaches the host, so expansion refuses to start and refuses to continue across every
+suspension point. Tracked state is dropped rather than held next to a password prompt, and keys are
+never suppressed on that path. Because secure input also stops key events reaching a session tap at
+all, an open suggestion session additionally polls for it — otherwise the panel would sit over the
+password prompt with no event left to dismiss it.
 
 ## Known limits
 
@@ -217,6 +281,14 @@ When changing detection logic, keep these invariants:
 - Keep Chromium/Electron priming + retry.
 - Keep panel anchor stable for one suggestion session.
 - Keep dual coordinate conversion fallback.
-- Keep pasteboard restoration guard (`changeCount` check).
+- Restore only a pasteboard we still own (`changeCount` check), and only once delivery is confirmed
+  or the budget is spent.
+- Read and write in one main-actor turn on the Accessibility path; restore the original selection
+  before falling back to events, or the fallback's first backspace eats the trigger and every one
+  after it eats the user's text.
+- Never suppress an event carrying our own tag: consuming our own backspace breaks the expansion in
+  progress.
+- Never suppress keys while secure input is on.
+- Read the parent chain, but write only to the focused element.
 
 Breaking any of these tends to reintroduce known regressions.
