@@ -66,6 +66,11 @@ final class SnippetExpansionEngine {
     // A slow answer is worthless in a progress probe, and paying the full timeout on every poll is
     // exactly what gets the tap disabled.
     private let confirmationAXMessagingTimeoutSeconds: Float = 0.1
+    // Bounds on what may be rewritten wholesale. A browser's address bar holds one URL and sits a
+    // few levels under its window; anything longer, multi-line, or deeper is not the field this
+    // strategy was measured against.
+    private let maxBrowserChromeValueLength = 8192
+    private let maxBrowserChromeAncestorDepth = 16
     private let pasteConfirmationTuning = SnippetPasteConfirmationPolicy.Tuning.default
 
     private enum FocusedSelection {
@@ -1233,8 +1238,11 @@ final class SnippetExpansionEngine {
     ) -> AccessibilityReplacement {
         guard accessibilityGranted,
               deletion.isSelfConsistent,
-              let app = NSWorkspace.shared.frontmostApplication,
-              accessibilityInsertionIsPermitted(for: app),
+              let app = NSWorkspace.shared.frontmostApplication
+        else { return .unavailable }
+
+        let strategy = accessibilityWriteStrategy(for: app)
+        guard strategy != .none,
               // Only the focused element, never an ancestor: reading from a parent is safe, writing
               // into one is not.
               let element = frontmostFocusedElement(),
@@ -1261,6 +1269,17 @@ final class SnippetExpansionEngine {
         )
         guard case .plan(let plan) = planResult else {
             return planResult == .rejected ? .rejected : .unavailable
+        }
+
+        if strategy == .wholeValue {
+            // Proven here rather than in the policy: it takes Accessibility reads, and they are
+            // wasted on every host that is not Chromium.
+            guard elementIsBrowserChrome(element) else { return .unavailable }
+            return replaceWholeValueUsingAccessibility(
+                element: element,
+                plan: plan,
+                replacement: replacement
+            )
         }
 
         // Checked after the text comparison, not before: a mismatch has to fail closed even in a
@@ -1302,16 +1321,108 @@ final class SnippetExpansionEngine {
         return .rejected
     }
 
-    /// Escape hatch for a host that acknowledges a write its own model never sees.
-    private func accessibilityInsertionIsPermitted(for app: NSRunningApplication) -> Bool {
-        let defaults = UserDefaults.standard
-        if defaults.object(forKey: "SnippetsAccessibilityInsertionEnabled") != nil,
-           !defaults.bool(forKey: "SnippetsAccessibilityInsertionEnabled") {
-            return false
+    /// Chromium's answer: rewrite the field's whole value, because that is the write its edit model
+    /// hears. Only ever reached for a target `elementIsBrowserChrome` has vouched for — a one-line
+    /// field in the browser's own UI, where "the whole value" is a URL, not somebody's document.
+    private func replaceWholeValueUsingAccessibility(
+        element: AXUIElement,
+        plan: AccessibilityTextReplacement.Plan,
+        replacement: String
+    ) -> AccessibilityReplacement {
+        guard isAttributeSettable(kAXValueAttribute as CFString, on: element),
+              let valueBefore = stringAttribute(of: element, attribute: kAXValueAttribute as CFString)
+        else { return .unavailable }
+
+        // The plan was measured against the caret range, so a value that disagrees with it is a
+        // model we do not understand — not something to overwrite wholesale.
+        let text = valueBefore as NSString
+        guard plan.replacementRange.location >= 0,
+              NSMaxRange(plan.replacementRange) <= text.length
+        else { return .unavailable }
+
+        let newValue = text.replacingCharacters(in: plan.replacementRange, with: replacement)
+        guard AXUIElementSetAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            newValue as CFString
+        ) == .success else { return .unavailable }
+
+        guard let valueAfter = stringAttribute(of: element, attribute: kAXValueAttribute as CFString) else {
+            // Readable before the write and not after: too little to justify a second attempt.
+            return .rejected
         }
-        guard let bundleID = app.bundleIdentifier else { return true }
-        let excluded = defaults.stringArray(forKey: "SnippetsAccessibilityInsertionExcludedBundleIDs") ?? []
-        return !excluded.contains(bundleID)
+
+        if AccessibilityTextReplacement.writeLanded(
+            valueBefore: valueBefore,
+            valueAfter: valueAfter,
+            plan: plan,
+            replacement: replacement
+        ) {
+            // Moved only once the value is provably ours. `plan.caretLocation` is an offset into the
+            // text we meant to write, so placing the caret before that proof would leave it somewhere
+            // arbitrary in the old text — and the event fallback would then backspace from there,
+            // eating the user's characters instead of the trigger. This path never touches the
+            // selection on any other exit, so there is nothing to restore.
+            _ = setSelectedRange(NSRange(location: plan.caretLocation, length: 0), on: element)
+            return .delivered
+        }
+
+        if valueAfter == valueBefore {
+            // A write that reported success and did nothing — the Chromium/Electron failure mode.
+            return .unavailable
+        }
+        // The field holds something we did not write. Saying `.unavailable` here would invite the
+        // event path to paste on top of it.
+        return .rejected
+    }
+
+    /// Guards the whole-value write: true only for a single-line text field belonging to the
+    /// application's own interface, never for rendered page content.
+    ///
+    /// Inside a web area `AXValue` is a flattened rendition of the DOM. Writing it back would strip
+    /// a rich editor down to plain text and desynchronize every field whose framework owns its
+    /// value — the same class of bug as the omnibox, reintroduced on the web.
+    ///
+    /// So the walk demands positive evidence — the chain has to arrive at the application element
+    /// without passing through a web area. Absence of a web area is not the same claim: a parent
+    /// read that fails answers `nil` exactly like the top of the tree does, and a page field one
+    /// unreadable link below its `AXWebArea` would pass a test written that way.
+    private func elementIsBrowserChrome(_ element: AXUIElement) -> Bool {
+        guard stringAttribute(of: element, attribute: kAXRoleAttribute as CFString) == (kAXTextFieldRole as String)
+        else { return false }
+
+        if let value = stringAttribute(of: element, attribute: kAXValueAttribute as CFString) {
+            guard value.utf16.count <= maxBrowserChromeValueLength,
+                  !value.contains(where: \.isNewline)
+            else { return false }
+        }
+
+        var current = element
+        for _ in 0..<maxBrowserChromeAncestorDepth {
+            guard let parent = parentElement(of: current),
+                  let role = stringAttribute(of: parent, attribute: kAXRoleAttribute as CFString)
+            else { return false }
+
+            if role == "AXWebArea" { return false }
+            if role == (kAXApplicationRole as String) { return true }
+            current = parent
+        }
+        return false
+    }
+
+    /// Reads the user's switches; the decision itself lives in `AccessibilityInsertionPolicy`.
+    private func accessibilityWriteStrategy(
+        for app: NSRunningApplication
+    ) -> AccessibilityInsertionPolicy.Strategy {
+        let defaults = UserDefaults.standard
+        let key = "SnippetsAccessibilityInsertionEnabled"
+        let bundleID = app.bundleIdentifier
+        return AccessibilityInsertionPolicy.strategy(
+            bundleID: bundleID,
+            globallyEnabled: defaults.object(forKey: key) == nil ? nil : defaults.bool(forKey: key),
+            hostIsChromiumFamily: ChromiumBundleIDSettings.isChromiumFamily(bundleIdentifier: bundleID),
+            excludedBundleIDs: defaults.stringArray(forKey: "SnippetsAccessibilityInsertionExcludedBundleIDs") ?? []
+        )
     }
 
     private func isAttributeSettable(_ attribute: CFString, on element: AXUIElement) -> Bool {

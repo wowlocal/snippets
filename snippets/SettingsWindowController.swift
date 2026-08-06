@@ -567,7 +567,7 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         let (rootView, stack) = makeSettingsPane()
         view = rootView
 
-        let introLabel = makeSecondaryLabel("Add custom Chromium-based apps for enhanced accessibility priming. Built-in support already includes Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and Arc.")
+        let introLabel = makeSecondaryLabel("Add custom Chromium-based apps so Snippets primes their accessibility and inserts text the way Chromium accepts it. Built-in support already includes Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and Arc.")
         let builtInLabel = makeTertiaryLabel("Use this pane only for extra apps that are not covered by the built-in browser list.")
 
         countLabel.font = .systemFont(ofSize: 12, weight: .medium)

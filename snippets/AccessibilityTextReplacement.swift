@@ -34,6 +34,41 @@ nonisolated enum AccessibilityReplacementPolicy {
     }
 }
 
+/// How the Accessibility path may write into a given host, if at all.
+nonisolated enum AccessibilityInsertionPolicy {
+    enum Strategy: Equatable {
+        /// Overwrite just the trigger's range. Surgical, and what every well-behaved host wants.
+        case selectedText
+        /// Rewrite the field's whole value. Chromium only, and only in the browser's own UI —
+        /// the caller still has to prove the target is not rendered page content.
+        case wholeValue
+        /// Leave the host to the event path.
+        case none
+    }
+
+    /// `globallyEnabled` is `nil` when the user never set the switch.
+    ///
+    /// Chromium is decided by host because its omnibox is the one failure the verification step
+    /// cannot see. A selected-text write there lands in the text it draws and never reaches the edit
+    /// model, so `AXValue` reads back exactly what we wrote while Return still navigates to what the
+    /// user typed — `\crew` expands to a URL on screen and then searches the web for `\crew`. The
+    /// model is not in the Accessibility tree, so no read tells that apart from a real success. A
+    /// whole-value write does reach the model, which is why Chromium gets that strategy instead of a
+    /// flat refusal.
+    nonisolated static func strategy(
+        bundleID: String?,
+        globallyEnabled: Bool?,
+        hostIsChromiumFamily: Bool,
+        excludedBundleIDs: [String]
+    ) -> Strategy {
+        if globallyEnabled == false { return .none }
+        // No bundle ID is no evidence against the host; the outcome checks still guard the write.
+        guard let bundleID else { return .selectedText }
+        if excludedBundleIDs.contains(bundleID) { return .none }
+        return hostIsChromiumFamily ? .wholeValue : .selectedText
+    }
+}
+
 nonisolated enum AccessibilityTextReplacement {
     struct Plan: Equatable {
         /// UTF-16 range that will be selected and overwritten.

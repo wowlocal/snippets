@@ -29,6 +29,7 @@ private enum AccessibilityTextReplacementTests {
         testPlanRejection()
         testWriteLanded()
         testPolicy()
+        testInsertionPolicy()
         print("AccessibilityTextReplacement tests passed")
     }
 
@@ -285,6 +286,93 @@ private enum AccessibilityTextReplacementTests {
             AccessibilityReplacementPolicy.action(for: .rejected, provenance: .localTracking),
             .useEvents,
             "lagging Accessibility in Chromium keeps the working event path"
+        )
+    }
+
+    private static func testInsertionPolicy() {
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: "com.apple.Safari",
+                globallyEnabled: nil,
+                hostIsChromiumFamily: false,
+                excludedBundleIDs: []
+            ),
+            .selectedText,
+            "an ordinary host gets the surgical write"
+        )
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: nil,
+                globallyEnabled: nil,
+                hostIsChromiumFamily: false,
+                excludedBundleIDs: []
+            ),
+            .selectedText,
+            "a host without a bundle ID is not evidence against itself"
+        )
+        // Chrome's omnibox hears a whole-value write and ignores a selected-text one, and no read
+        // tells the ignored write apart from a real success.
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: "com.google.Chrome",
+                globallyEnabled: nil,
+                hostIsChromiumFamily: true,
+                excludedBundleIDs: []
+            ),
+            .wholeValue,
+            "a Chromium host gets the whole-value write"
+        )
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: "com.apple.Safari",
+                globallyEnabled: false,
+                hostIsChromiumFamily: false,
+                excludedBundleIDs: []
+            ),
+            .none,
+            "the global switch turns the path off everywhere"
+        )
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: "com.apple.Safari",
+                globallyEnabled: true,
+                hostIsChromiumFamily: false,
+                excludedBundleIDs: []
+            ),
+            .selectedText,
+            "the switch set to on behaves like the default"
+        )
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: "com.example.App",
+                globallyEnabled: nil,
+                hostIsChromiumFamily: false,
+                excludedBundleIDs: ["com.example.App"]
+            ),
+            .none,
+            "a per-app exclusion still applies"
+        )
+        // The exclusion is the user saying "keep Accessibility out of this app"; a Chromium host
+        // must not read that as permission to use the other strategy.
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: "com.google.Chrome",
+                globallyEnabled: nil,
+                hostIsChromiumFamily: true,
+                excludedBundleIDs: ["com.google.Chrome"]
+            ),
+            .none,
+            "an excluded Chromium host is excluded, not rerouted"
+        )
+        assertEqual(
+            AccessibilityInsertionPolicy.strategy(
+                bundleID: "com.example.App",
+                globallyEnabled: nil,
+                hostIsChromiumFamily: false,
+                excludedBundleIDs: ["com.other.App"]
+            ),
+            .selectedText,
+            "somebody else's exclusion does not spill over"
         )
     }
 }

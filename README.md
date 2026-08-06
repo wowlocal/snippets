@@ -87,6 +87,11 @@ Text replacement strategy:
   clipboard is never touched.
 - Fallback, for fields that expose no writable text: the engine borrows the pasteboard, deletes the
   trigger with synthetic backspaces, and sends `Cmd+V`.
+- Chromium-family apps replace the field's whole value instead. Chrome's omnibox acknowledges a
+  selected-text write, redraws it, and keeps the old string in its edit model, so Return would
+  navigate to what the user typed instead of the snippet — and nothing in the Accessibility tree
+  reports that. A whole-value write does reach the model. It is allowed only in the browser's own
+  one-line fields, never in rendered page content, which keeps the fallback it already used.
 - The borrow is returned once there is evidence the host applied the paste, or on a bounded timeout —
   never on a fixed delay, which is both too slow for a native field and too fast for a loaded Electron
   host. A newer copy is never overwritten.

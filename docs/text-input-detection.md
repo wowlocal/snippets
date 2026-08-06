@@ -192,8 +192,38 @@ worthless. Three outcomes, and only one of them falls back:
   count came from an Accessibility read**; with a locally tracked count Accessibility is merely
   lagging, which is the normal state in Chromium, so the event path still runs.
 
+### Chromium writes the whole value instead
+
+Chrome's omnibox is the one failure step 5 cannot see. A selected-text write lands in the text it
+draws and never reaches `OmniboxEditModel`, so `AXValue` reads back exactly what was written while
+Return still navigates to what the user typed: `\crew` expands to a URL on screen and then searches
+the web for `\crew`. The edit model is not in the Accessibility tree, so no read tells that apart
+from a real success — the host has to be decided up front rather than by outcome.
+
+Writing the field's whole value does reach the model, so Chromium-family hosts get that strategy
+instead of a refusal. It is deliberately narrow:
+
+- `elementIsBrowserChrome` must vouch for the target first — role `AXTextField`, a short single-line
+  value, and a parent chain that arrives at `AXApplication` without passing an `AXWebArea`. Positive
+  evidence, not absence of evidence: a failed parent read answers `nil` exactly like the top of the
+  tree does, and a page field one unreadable link below its web area would pass the weaker test.
+- Inside a web area `AXValue` is a flattened rendition of the DOM. Writing it back would strip a rich
+  editor to plain text and desynchronize any field whose framework owns its value — the omnibox bug,
+  reintroduced on the web. Web content keeps the event path, which is what it already used: those
+  selected-text writes were silent no-ops that fell through anyway.
+- The caret is moved only after the value reads back as ours. `plan.caretLocation` is an offset into
+  the text we meant to write, so placing the caret before that proof would strand it in the old text
+  and the event fallback would backspace from there — eating the user's characters, not the trigger.
+  No other exit touches the selection, so no other exit has to restore it.
+- A value that changed into something we did not write answers `rejected`, not `unavailable`: the
+  event path must not paste on top of it.
+
+Safari is unaffected — WebKit's address bar applies a selected-text write through its normal editing
+path.
+
 `UserDefaults` keys `SnippetsAccessibilityInsertionEnabled` (set to `false`) and
-`SnippetsAccessibilityInsertionExcludedBundleIDs` disable this path globally or per app.
+`SnippetsAccessibilityInsertionExcludedBundleIDs` disable this path globally or per app. An excluded
+Chromium host is excluded, not rerouted to the whole-value strategy.
 
 ### Event fallback
 
