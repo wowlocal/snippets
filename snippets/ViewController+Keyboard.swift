@@ -64,12 +64,7 @@ extension ViewController {
             } else if isSearchSuggestionOverlayVisible {
                 hideSearchSuggestionOverlay()
             } else {
-                // One of the two real ways out of the editor, and it commits
-                // nothing on the way, so the draft has to be dealt with here
-                // rather than anywhere the exits have in common.
-                let abandonedSnippetID = selectedSnippetID
-                requestFirstResponder(tableView)
-                discardBlankDraftAfterLeaving(abandonedSnippetID)
+                moveFocus(to: tableView)
             }
             return nil
         }
@@ -90,7 +85,7 @@ extension ViewController {
         }
 
         if flags == [.command] && key == UInt16(kVK_ANSI_F) {
-            requestFirstResponder(searchField)
+            moveFocus(to: searchField)
             DispatchQueue.main.async { [weak self] in
                 self?.updateSearchSuggestionOverlay()
             }

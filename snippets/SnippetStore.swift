@@ -138,10 +138,11 @@ final class SnippetStore {
         return snippet
     }
 
-    /// Removes the blank draft and, where it is provably safe, the traces that
-    /// would let it come back: the undo entry its creation pushed, and an open
-    /// edit transaction whose baseline still contains it — `commitEditTransaction`
-    /// would push that baseline and one ⌘Z would resurrect the ghost.
+    /// Removes the blank draft and the traces that would let it come back: the
+    /// undo entry its creation pushed, every other entry still holding it, and an
+    /// open edit transaction whose baseline still contains it —
+    /// `commitEditTransaction` would push that baseline and one ⌘Z would
+    /// resurrect the ghost.
     ///
     /// It pushes no undo entry of its own. A row the user never typed into is
     /// not a change worth being able to take back, and an entry for it would
@@ -161,12 +162,46 @@ final class SnippetStore {
         if undoStack.count == draft.undoDepth, undoStack.last == draft.undoSnapshot {
             undoStack.removeLast()
         }
+        // Declining that pop is not the end of it. The creation's entry is
+        // rarely the only one holding the draft by the time it is abandoned:
+        // typing into it and clearing it again closes an edit transaction whose
+        // baseline is a library that still contains it, and so does a single
+        // click on Enabled. A row nobody typed into must not be restorable at
+        // any depth, so it comes out of every level rather than only that one.
+        eraseFromHistory(id: id)
         if editTransactionSnapshot?.contains(where: { $0.id == id }) == true {
             editTransactionSnapshot = nil
         }
 
         persist(immediately: true)
         return true
+    }
+
+    private func eraseFromHistory(id: UUID) {
+        for index in undoStack.indices {
+            undoStack[index].removeAll { $0.id == id }
+        }
+        for index in redoStack.indices {
+            redoStack[index].removeAll { $0.id == id }
+        }
+        undoStack = withoutDeadLevels(undoStack)
+        redoStack = withoutDeadLevels(redoStack)
+    }
+
+    /// `stack` with every level that erasing the draft turned into a copy of the
+    /// state it would be reached from removed. Restoring a state identical to
+    /// the current one moves nothing on screen while still announcing "Undid
+    /// last change.", so leaving those in place would make the user press ⌘Z
+    /// past one dead level per snapshot the draft appeared in before reaching
+    /// the change they meant to take back.
+    private func withoutDeadLevels(_ stack: [[Snippet]]) -> [[Snippet]] {
+        var kept: [[Snippet]] = []
+        var successor = snippets
+        for level in stack.reversed() where level != successor {
+            kept.append(level)
+            successor = level
+        }
+        return kept.reversed()
     }
 
     func update(_ snippet: Snippet) {

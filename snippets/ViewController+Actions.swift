@@ -74,6 +74,30 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         }
     }
 
+    /// Hands focus over, and takes back the blank draft behind it when that
+    /// leaves the editor.
+    ///
+    /// There is no funnel every exit passes through — Escape, ⌘F and Shift-Tab
+    /// off the content box each go straight to `requestFirstResponder` and commit
+    /// nothing on the way — so leaving them to say so one at a time is how the
+    /// Shift-Tab exit shipped without saying it. Routing the hops through here
+    /// instead means the next one anybody adds cannot forget, and the hops that
+    /// land on another editor field pass through unchanged: the draft is only
+    /// abandoned when the whole editor is.
+    func moveFocus(to responder: NSResponder) {
+        let abandonedSnippetID = isEditorField(responder) ? nil : selectedSnippetID
+        requestFirstResponder(responder)
+        discardBlankDraftAfterLeaving(abandonedSnippetID)
+    }
+
+    private func isEditorField(_ responder: NSResponder) -> Bool {
+        responder === snippetTextView
+            || responder === keywordField
+            || responder === nameField
+            || responder === tagsField
+            || responder === enabledCheckbox
+    }
+
     /// The window is going away or the app is quitting, so whichever draft is
     /// open is abandoned by definition and the selection is beside the point.
     ///

@@ -20,6 +20,14 @@ private enum EditorListReload {
     static let delay: TimeInterval = 0.12
 }
 
+/// Passes every click straight through to what is underneath. The status
+/// message floats over the editor for four seconds at a time, and a surface that
+/// eats a click on the Enabled checkbox for being in the way is worse than the
+/// silence it is there to fix.
+private final class StatusMessageOverlayView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -83,6 +91,14 @@ final class ViewController: NSViewController {
         }
     }
 
+    /// The same sentence, over the editor, for when the sidebar footer that
+    /// normally carries it is not on screen. Built here rather than into the
+    /// editor stack because it must not reserve a row: it appears for four
+    /// seconds at a time and the editor is a stack view whose layout is not to
+    /// reflow while someone is typing in it.
+    private let statusMessageOverlayLabel = NSTextField(labelWithString: "")
+    private var statusMessageOverlayView: NSView?
+
     let permissionBannerContainer = NSView()
     let permissionBannerDivider = NSBox()
     let permissionIconView = NSImageView()
@@ -131,11 +147,13 @@ final class ViewController: NSViewController {
     var hasConfiguredWindowFrameAutosave = false
     var hasConfiguredMainWindowToolbar = false
     var hasRestoredSplitViewDivider = false
+    private var hasObservedWindowWillClose = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
         buildUI()
+        buildStatusMessageOverlay()
         bindState()
         configureSnippetDropTarget()
 
@@ -186,6 +204,16 @@ final class ViewController: NSViewController {
                     window.center()
                 }
             }
+
+            if !hasObservedWindowWillClose {
+                hasObservedWindowWillClose = true
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(handleWindowWillClose),
+                    name: NSWindow.willCloseNotification,
+                    object: window
+                )
+            }
         }
 
         installKeyboardMonitorIfNeeded()
@@ -197,12 +225,17 @@ final class ViewController: NSViewController {
         requestFirstResponder(tableView)
     }
 
-    /// ⌘W, closing the window and hiding to the menu bar all arrive here, and all
-    /// three mean the user is done with whatever was on screen. Safe on a
-    /// controller that was created, used and dismissed inside one runloop turn:
-    /// it asks the store what is open rather than assuming anything appeared.
-    override func viewWillDisappear() {
-        super.viewWillDisappear()
+    /// Closing the window is the only way out of it that means the user is done
+    /// with what was open.
+    ///
+    /// `viewWillDisappear` looks like the place for this and is not: AppKit sends
+    /// it for every trip off screen, so ⌘H, ⌘M, the yellow button and this app's
+    /// own ⌘\ round trip each took back the snippet the user had just made and
+    /// left the editor bound to an unrelated one on the way back in. Nothing
+    /// inside that callback tells the four apart — the window still reports
+    /// `isVisible` for all of them, close included — while this notification is
+    /// posted on a close and on nothing else.
+    @objc private func handleWindowWillClose() {
         discardOpenBlankDraft()
     }
 
@@ -322,11 +355,83 @@ final class ViewController: NSViewController {
         ).size
     }
 
+    private func buildStatusMessageOverlay() {
+        statusMessageOverlayLabel.font = .systemFont(ofSize: 12)
+        statusMessageOverlayLabel.textColor = .labelColor
+        statusMessageOverlayLabel.alignment = .center
+        statusMessageOverlayLabel.lineBreakMode = .byTruncatingTail
+        statusMessageOverlayLabel.maximumNumberOfLines = 1
+        statusMessageOverlayLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(statusMessageOverlayLabel)
+
+        let surface = LiquidGlassDesign.makeTransientSurface(
+            containing: contentView,
+            cornerRadius: LiquidGlassDesign.Metrics.controlCornerRadius,
+            fallbackMaterial: .popover
+        )
+
+        let container = StatusMessageOverlayView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.isHidden = true
+        container.alphaValue = 0
+        container.addSubview(surface)
+        view.addSubview(container)
+        statusMessageOverlayView = container
+
+        NSLayoutConstraint.activate([
+            statusMessageOverlayLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            statusMessageOverlayLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
+            statusMessageOverlayLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 7),
+            statusMessageOverlayLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -7),
+
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            container.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            container.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            container.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20)
+        ])
+    }
+
+    /// `importExportMessageLabel` is the only surface this app has for a status
+    /// message and it sits in the sidebar footer, which ⌘B removes from the
+    /// window outright. Everything routed through here was therefore invisible
+    /// with the sidebar collapsed — including the one sentence ⇧⌘N exists to say
+    /// when the clipboard holds no text, which left a command the user explicitly
+    /// invoked with no observable effect at all.
+    private func presentStatusMessageOverlay(_ message: String?) {
+        guard let statusMessageOverlayView else { return }
+
+        guard let message, !message.isEmpty, isSidebarCollapsed else {
+            statusMessageOverlayView.isHidden = true
+            statusMessageOverlayView.alphaValue = 0
+            return
+        }
+
+        statusMessageOverlayLabel.stringValue = message
+        statusMessageOverlayView.isHidden = false
+        // Through the animator, like the label below: a message re-shown during
+        // the previous one's fade has an animation in flight, and assigning
+        // `alphaValue` directly would be overwritten by it.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            statusMessageOverlayView.animator().alphaValue = 1
+        }
+    }
+
     private func updateImportExportMessageLabel(from oldValue: String?, to newValue: String?) {
         importExportMessageGeneration += 1
         let generation = importExportMessageGeneration
         importExportMessageDismissWorkItem?.cancel()
         importExportMessageDismissWorkItem = nil
+
+        presentStatusMessageOverlay(newValue)
 
         guard let newValue, !newValue.isEmpty else {
             importExportMessageLabel.stringValue = ""
@@ -346,6 +451,7 @@ final class ViewController: NSViewController {
                 await NSAnimationContext.runAnimationGroup { context in
                     context.duration = ActionStatusMessage.fadeDuration
                     self.importExportMessageLabel.animator().alphaValue = 0
+                    self.statusMessageOverlayView?.animator().alphaValue = 0
                 }
                 guard self.importExportMessageGeneration == generation else { return }
                 self.importExportMessageDismissWorkItem = nil
