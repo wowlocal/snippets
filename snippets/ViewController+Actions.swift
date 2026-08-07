@@ -194,10 +194,6 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         requestFirstResponder(tableView)
     }
 
-    @objc func refreshPermissions() {
-        engine.refreshAccessibilityStatus(prompt: false)
-    }
-
     @objc func requestPermission() {
         engine.requestAccessibilityPermission()
     }

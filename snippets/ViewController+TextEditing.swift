@@ -23,6 +23,29 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         updateSelectedSnippetFromEditor()
     }
 
+    /// The placeholder vocabulary, offered where it is used. `{` in the content
+    /// editor calls `complete(nil)` and this answers it; `rangeForUserCompletion`
+    /// on the text view is what makes `charRange` start at the brace, so the
+    /// chosen token replaces it rather than landing beside it.
+    func textView(
+        _ textView: NSTextView,
+        completions words: [String],
+        forPartialWordRange charRange: NSRange,
+        indexOfSelectedItem index: UnsafeMutablePointer<Int>?
+    ) -> [String] {
+        guard textView === snippetTextView else { return words }
+
+        let text = textView.string as NSString
+        guard charRange.location + charRange.length <= text.length else { return words }
+        let partial = text.substring(with: charRange)
+        guard partial.hasPrefix("{") else { return words }
+
+        let matches = PlaceholderResolver.completionTokens.filter { $0.hasPrefix(partial) }
+        // Preselected, so Return takes the obvious one and Escape backs out.
+        index?.pointee = matches.isEmpty ? -1 : 0
+        return matches
+    }
+
     func controlTextDidBeginEditing(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
 

@@ -5,6 +5,10 @@ import UniformTypeIdentifiers
 private enum MainWindowAutosave {
     static let frameName = NSWindow.FrameAutosaveName("SnippetsMainWindowFrame")
     static let relaxedMinimumContentSize = NSSize(width: 1, height: 1)
+    /// First run only. The sidebar takes 0.28 of this and the editor the rest,
+    /// which puts the editor pane at ~700pt — well into its wide shape, and wide
+    /// enough that no string in the form is cut.
+    static let preferredFirstRunContentSize = NSSize(width: 1000, height: 660)
 }
 
 private enum ActionStatusMessage {
@@ -102,7 +106,6 @@ final class ViewController: NSViewController {
     let permissionBannerContainer = NSView()
     let permissionBannerDivider = NSBox()
     let permissionIconView = NSImageView()
-    let permissionTitleLabel = NSTextField(labelWithString: "")
     let permissionStatusLabel = NSTextField(labelWithString: "")
     let permissionButtonsStack = NSStackView()
 
@@ -126,8 +129,19 @@ final class ViewController: NSViewController {
     let keywordWarningLabel = NSTextField(labelWithString: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
-    let previewSeparator = NSBox()
     let previewSectionStack = NSStackView()
+
+    let editorStack = NSStackView()
+    /// The editor form, one object per labelled section, in arranged order.
+    /// Keyword, Name and Tags must stay in that relative order — the hand-wired
+    /// tab loop in `editorNeighbor` walks it.
+    var editorSections: [EditorFormSection] = []
+    var currentEditorLayoutMode: EditorLayoutMode = .stacked
+    var hasAppliedEditorLayout = false
+    /// The editor split item's own view. Its width, not the window's, is what
+    /// decides the form's shape — the divider and ⌘B both move it on their own.
+    weak var editorPaneContainer: NSView?
+
     let mainSplitViewController = NSSplitViewController()
     var mainSplitView: NSSplitView { mainSplitViewController.splitView }
     var mainSidebarSplitItem: NSSplitViewItem?
@@ -178,6 +192,17 @@ final class ViewController: NSViewController {
             name: NSApplication.willTerminateNotification,
             object: nil
         )
+        // The permission banner used to carry a Refresh button because nothing
+        // re-checked the grant: `refreshAccessibilityStatus` ran at startup and
+        // nowhere else. Granting access means leaving for System Settings and
+        // coming back, so coming back is the moment to look again — and the
+        // banner then removes itself instead of waiting to be told.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleApplicationDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
 
         engine.startIfNeeded()
         startClipboardPreviewRefreshTimerIfNeeded()
@@ -201,6 +226,17 @@ final class ViewController: NSViewController {
                 hasConfiguredWindowFrameAutosave = true
                 let restoredFromAutosave = window.setFrameAutosaveName(MainWindowAutosave.frameName)
                 if !restoredFromAutosave {
+                    // Only when there is nothing stored, so an existing user's
+                    // window is left exactly where they put it.
+                    //
+                    // The storyboard's 480×270 is upstream of nearly every
+                    // truncation this app had: the split view's own minimums
+                    // force it out to ~491pt, which puts the editor at its 230pt
+                    // floor and the form at 182pt, and 270pt of height against a
+                    // 500pt form means a new user's first screen is a fragment.
+                    // At this size the form is in its wide shape from the start
+                    // and every string in it fits.
+                    window.setContentSize(defaultMainWindowContentSize(on: window.screen))
                     window.center()
                 }
             }
@@ -243,12 +279,31 @@ final class ViewController: NSViewController {
         discardOpenBlankDraft()
     }
 
+    @objc private func handleApplicationDidBecomeActive() {
+        guard !engine.accessibilityGranted else { return }
+        engine.refreshAccessibilityStatus(prompt: false)
+    }
+
+    /// 1000×660 wants a 1152pt-class display to centre comfortably, so it is
+    /// clamped to whatever the screen actually has rather than opening off the
+    /// edge of a small laptop.
+    private func defaultMainWindowContentSize(on screen: NSScreen?) -> NSSize {
+        guard let visible = (screen ?? NSScreen.main)?.visibleFrame else {
+            return MainWindowAutosave.preferredFirstRunContentSize
+        }
+        return NSSize(
+            width: min(MainWindowAutosave.preferredFirstRunContentSize.width, visible.width - 80),
+            height: min(MainWindowAutosave.preferredFirstRunContentSize.height, visible.height - 80)
+        )
+    }
+
     override func viewDidLayout() {
         super.viewDidLayout()
         if let window = view.window {
             relaxWindowResizeLimits(window)
         }
         restoreMainSplitViewDividerIfNeeded()
+        updateEditorLayoutMode()
         updateSnippetTextViewWrappingWidth()
         updateSearchSuggestionOverlayLayout()
     }

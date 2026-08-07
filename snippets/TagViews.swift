@@ -576,12 +576,15 @@ final class TagFilterBarView: NSView {
             clearButton.isEnabled = true
             clearButton.toolTip = "Clear tag filters"
             clearButton.setAccessibilityLabel("Clear tag filters")
+            clearButton.isHidden = false
         } else {
-            clearButton.image = LiquidGlassDesign.symbol("tag", pointSize: 11)
-            clearButton.contentTintColor = .tertiaryLabelColor
-            clearButton.isEnabled = false
-            clearButton.toolTip = "Filter snippets by tag"
-            clearButton.setAccessibilityLabel("Tag filters")
+            // Hidden, not shown-and-disabled. A permanently visible, permanently
+            // dead control whose only job is to become a live one later, with a
+            // tooltip explaining what the chips beside it already demonstrate.
+            // Hiding costs no geometry: the fixed 18pt width constraint the flow
+            // is pinned to stays, so the chip row does not shift when the last
+            // filter clears.
+            clearButton.isHidden = true
         }
     }
 
