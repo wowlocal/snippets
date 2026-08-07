@@ -71,6 +71,11 @@
                                                 <action selector="newDocument:" target="Ady-hI-5gd" id="4Si-XN-c54"/>
                                             </connections>
                                         </menuItem>
+                                        <menuItem title="New from Clipboard" keyEquivalent="N" id="Kc7-vD-3lQ">
+                                            <connections>
+                                                <action selector="newSnippetFromClipboard:" target="Ady-hI-5gd" id="Rt9-hW-2bF"/>
+                                            </connections>
+                                        </menuItem>
                                         <menuItem title="Close" keyEquivalent="w" id="DVo-aG-piG">
                                             <connections>
                                                 <action selector="performClose:" target="Ady-hI-5gd" id="HmO-Ls-i7Q"/>
@@ -623,7 +628,7 @@
                                     <items>
                                         <menuItem title="Snippets Help" keyEquivalent="?" id="FKE-Sm-Kum">
                                             <connections>
-                                                <action selector="showHelp:" target="Ady-hI-5gd" id="y7X-2Q-9no"/>
+                                                <action selector="showSnippetsHelp:" target="Ady-hI-5gd" id="y7X-2Q-9no"/>
                                             </connections>
                                         </menuItem>
                                     </items>

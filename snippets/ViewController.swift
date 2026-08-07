@@ -131,6 +131,7 @@ final class ViewController: NSViewController {
 
         buildUI()
         bindState()
+        configureSnippetDropTarget()
 
         NotificationCenter.default.addObserver(
             self,
