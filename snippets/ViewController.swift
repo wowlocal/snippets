@@ -62,6 +62,11 @@ final class ViewController: NSViewController {
     /// (follow the new list).
     var lastAppliedTagFilterKeys: Set<String>?
     var renderedSuggestedTags: [String] = []
+    var renderedSuggestedKeywords: [String] = []
+    /// Folded keywords of every enabled snippet, so a keyword chip can be tested
+    /// against the whole library with a set walk instead of filtering and
+    /// sorting it again on every keystroke. Only a store change can move it.
+    var enabledKeywordKeys: Set<String> = []
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
     /// Bumped on every status message change so an in-flight dismiss task can
     /// detect it is stale. Text equality is not enough: re-showing the same
@@ -100,6 +105,7 @@ final class ViewController: NSViewController {
     let keywordField = NSTextField(string: "")
     let tagsField = NSTokenField(string: "")
     let editorSuggestedTagsFlow = TagFlowView()
+    let editorSuggestedKeywordsFlow = TagFlowView()
     let keywordPrefixLabel = NSTextField(labelWithString: "\\")
     let keywordWarningLabel = NSTextField(labelWithString: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
@@ -206,8 +212,13 @@ final class ViewController: NSViewController {
     }
 
     func bindState() {
+        rebuildEnabledKeywordKeys()
         store.onChange = { [weak self] source in
             guard let self else { return }
+            // Ahead of the early return below: a local edit while the editor has
+            // focus is precisely when a keyword moves, and the suggestion chips
+            // are filtered against this on that same keystroke.
+            rebuildEnabledKeywordKeys()
             if source == .local && isEditingDetails {
                 scheduleEditorListReload()
                 return
@@ -228,6 +239,15 @@ final class ViewController: NSViewController {
                 importExportMessage = engine.statusText
             }
         }
+    }
+
+    private func rebuildEnabledKeywordKeys() {
+        enabledKeywordKeys = Set(
+            store.snippets.lazy
+                .filter(\.isEnabled)
+                .map { SnippetTagging.filterKey(for: $0.normalizedKeyword) }
+                .filter { !$0.isEmpty }
+        )
     }
 
     func scheduleEditorListReload() {
@@ -331,7 +351,10 @@ final class ViewController: NSViewController {
 
     func applyThemeColors() {
         ThemeManager.applyToggleAppearance(to: enabledCheckbox)
-        keywordWarningLabel.textColor = ThemeManager.alertColor
+        // The status line is alert-coloured only when it is reporting a failure,
+        // so repainting it wholesale here made a neutral or valid sentence read
+        // as an alarm until the next keystroke fixed it.
+        updateKeywordStatus(for: editingSnippet)
         updatePermissionBanner()
 
         if let window = view.window, hasConfiguredMainWindowToolbar {

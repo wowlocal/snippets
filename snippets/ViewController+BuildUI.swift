@@ -346,38 +346,25 @@ extension ViewController {
     }
 
     private func makeListEmptyStateActionButtons() -> [NSButton] {
-        // createSnippetFromClipboard(_:) lives in ViewController+Actions, so this
-        // is a named selector rather than a #selector — the extra parentheses are
-        // what silence "no method declared with this selector" while that file
-        // catches up. The button is only offered once it actually responds.
-        let clipboardAction = Selector(("createSnippetFromClipboard:"))
-
-        var buttons = [
+        [
             makeListEmptyStateActionButton(
                 title: "New Snippet",
                 action: #selector(createSnippet(_:)),
                 tag: .newSnippet
-            )
-        ]
-        if responds(to: clipboardAction) {
-            buttons.append(
-                makeListEmptyStateActionButton(
-                    title: "New from Clipboard",
-                    action: clipboardAction,
-                    tag: .newFromClipboard
-                )
-            )
-        }
-        // Import is the shortest path from "no snippets" to a full library, and
-        // it lived three levels deep in Menu ▸ More ▸ Import…
-        buttons.append(
+            ),
+            makeListEmptyStateActionButton(
+                title: "New from Clipboard",
+                action: #selector(createSnippetFromClipboard(_:)),
+                tag: .newFromClipboard
+            ),
+            // Import is the shortest path from "no snippets" to a full library,
+            // and it lived three levels deep in Menu ▸ More ▸ Import…
             makeListEmptyStateActionButton(
                 title: "Import…",
                 action: #selector(runImport(_:)),
                 tag: .importSnippets
             )
-        )
-        return buttons
+        ]
     }
 
     private func makeListEmptyStateActionButton(
@@ -631,6 +618,12 @@ extension ViewController {
         keywordWarningLabel.translatesAutoresizingMaskIntoConstraints = false
         keywordWarningLabel.heightAnchor.constraint(equalToConstant: 15).isActive = true
 
+        // Unlike the status line this row does come and go — it exists only
+        // while there is no keyword — so it collapses out of the stack rather
+        // than reserving a gap under every snippet that already works.
+        editorSuggestedKeywordsFlow.collapsedRowLimit = 1
+        editorSuggestedKeywordsFlow.isHidden = true
+
         let tagsLabel = NSTextField(labelWithString: "Tags")
         tagsLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         tagsLabel.textColor = .secondaryLabelColor
@@ -704,6 +697,7 @@ extension ViewController {
         stack.addArrangedSubview(keywordLabel)
         stack.addArrangedSubview(keywordRow)
         stack.addArrangedSubview(keywordWarningLabel)
+        stack.addArrangedSubview(editorSuggestedKeywordsFlow)
         stack.addArrangedSubview(nameLabel)
         stack.addArrangedSubview(nameField)
         stack.addArrangedSubview(tagsLabel)
@@ -714,7 +708,7 @@ extension ViewController {
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, keywordRow, keywordWarningLabel, tagsField, editorSuggestedTagsFlow, snippetContainer, placeholderLabel, previewSeparator, previewSectionStack].forEach {
+        [nameField, keywordRow, keywordWarningLabel, editorSuggestedKeywordsFlow, tagsField, editorSuggestedTagsFlow, snippetContainer, placeholderLabel, previewSeparator, previewSectionStack].forEach {
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
