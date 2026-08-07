@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	Debug builds deliberately carry no Sparkle feed.
+
+	A Debug build has the same CFBundleVersion as the shipping app but a
+	different bundle layout (different executable name, no top-level
+	CodeResources), and Sparkle picks deltas by CFBundleVersion string alone.
+	So every delta the production appcast offers is one this bundle can never
+	apply — it would fail the source-tree hash check, and before Sparkle 2.9.1
+	that failure aborted the process outright.
+
+	SUEnableAutomaticChecks is present and false rather than simply omitted:
+	with the key absent, Sparkle asks the user whether to check automatically
+	on the next launch instead of staying quiet.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.khm.snippets.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>snippets</string>
+			</array>
+		</dict>
+	</array>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+</dict>
+</plist>
