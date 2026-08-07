@@ -26,7 +26,7 @@ enum ThemeManager {
     static func applyToggleAppearance(to button: NSButton) {
         button.wantsLayer = true
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
             button.layer?.filters = nil
             return
         }

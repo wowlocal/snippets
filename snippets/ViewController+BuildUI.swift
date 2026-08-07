@@ -133,7 +133,7 @@ extension ViewController {
         contentItem.minimumThickness = MainLayoutMetrics.editorMinWidth
         contentItem.holdingPriority = .defaultLow
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
             contentItem.automaticallyAdjustsSafeAreaInsets = true
         }
 
@@ -244,7 +244,7 @@ extension ViewController {
         permissionButtonsStack.spacing = 8
         [refreshButton, requestButton, accessibilityButton].forEach {
             $0.controlSize = .small
-            if #available(macOS 26.0, *) {
+            if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
                 $0.bezelStyle = .glass
             } else {
                 $0.bezelStyle = .rounded
@@ -300,7 +300,7 @@ extension ViewController {
         listEmptyStateClearButton.target = self
         listEmptyStateClearButton.action = #selector(clearTagFiltersFromEmptyState)
         listEmptyStateClearButton.controlSize = .small
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
             listEmptyStateClearButton.bezelStyle = .glass
         } else {
             listEmptyStateClearButton.bezelStyle = .rounded
@@ -390,7 +390,7 @@ extension ViewController {
         deleteButton.action = #selector(deleteSelectedSnippet)
         deleteButton.image = LiquidGlassDesign.symbol("trash", pointSize: 13)
         deleteButton.imagePosition = .imageLeading
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
             deleteButton.bezelStyle = .glass
         } else {
             deleteButton.bezelStyle = .rounded
