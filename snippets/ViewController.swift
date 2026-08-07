@@ -151,6 +151,15 @@ final class ViewController: NSViewController {
             name: .snippetsPaleThemeChanged,
             object: nil
         )
+        // Quitting does not have to close the window, so `viewWillDisappear` is
+        // not guaranteed to run: ⌘N, type nothing, ⌘Q has to leave snippets.json
+        // as it was, and this is the last point at which that is still possible.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleApplicationWillTerminate),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
 
         engine.startIfNeeded()
         startClipboardPreviewRefreshTimerIfNeeded()
@@ -186,6 +195,19 @@ final class ViewController: NSViewController {
         }
 
         requestFirstResponder(tableView)
+    }
+
+    /// ⌘W, closing the window and hiding to the menu bar all arrive here, and all
+    /// three mean the user is done with whatever was on screen. Safe on a
+    /// controller that was created, used and dismissed inside one runloop turn:
+    /// it asks the store what is open rather than assuming anything appeared.
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        discardOpenBlankDraft()
+    }
+
+    @objc private func handleApplicationWillTerminate() {
+        discardOpenBlankDraft()
     }
 
     override func viewDidLayout() {

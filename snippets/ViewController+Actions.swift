@@ -42,10 +42,51 @@ enum ClipboardCapture {
 
 extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     func selectSnippet(id: UUID, focus: EditorFocusTarget?) {
+        let outgoingSnippetID = selectedSnippetID
         selectedSnippetID = id
+        // Selecting from code never reaches `tableViewSelectionDidChange` with an
+        // outgoing ID to look at — the assignment above is what that callback
+        // compares against — so a blank draft left behind by a deep link, a
+        // search suggestion or a duplicate is taken back out here instead.
+        if outgoingSnippetID != id {
+            discardBlankDraftAfterLeaving(outgoingSnippetID)
+        }
         syncTableSelectionWithSelectedSnippet()
         applySelectedSnippetToEditor()
         restoreEditorFocus(focus)
+    }
+
+    /// Discards a still-blank ⌘N draft the user has just left.
+    ///
+    /// A runloop turn late on purpose. `requestFirstResponder` hands focus off
+    /// asynchronously and a token field only finalizes its trailing tag when
+    /// editing actually ends, so acting now could take away a snippet the user is
+    /// still mid-word in; and the table's own selection notification is no place
+    /// to remove one of its rows. By the time this runs, everything typed has
+    /// reached the store — and the store checks again, because a draft that is no
+    /// longer blank is no longer a draft.
+    func discardBlankDraftAfterLeaving(_ snippetID: UUID?) {
+        guard let snippetID, store.blankDraftSnippet?.id == snippetID else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, store.blankDraftSnippet?.id == snippetID else { return }
+            store.discardBlankDraft(id: snippetID)
+        }
+    }
+
+    /// The window is going away or the app is quitting, so whichever draft is
+    /// open is abandoned by definition and the selection is beside the point.
+    ///
+    /// Synchronous, unlike the above: termination has no next runloop turn, and
+    /// the discard writes to disk immediately. Ending editing first is what
+    /// finalizes a half-typed tag token — the one thing a blank draft can be
+    /// holding that the store has not been told about yet.
+    func discardOpenBlankDraft() {
+        guard store.blankDraftSnippet != nil else { return }
+        commitActiveEditorState(endingEditing: true)
+
+        guard let draftID = store.blankDraftSnippet?.id else { return }
+        store.discardBlankDraft(id: draftID)
     }
 
     func showErrorAlert(message: String) {
@@ -275,6 +316,23 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         let inheritedTags = activeTagFilterTags()
         // A caller that already knows the name outranks the search query.
         let name = seededName.flatMap { $0.isEmpty ? nil : $0 } ?? queryName
+
+        // ⌘N with an untouched one already open is the same request twice rather
+        // than a request for a second blank row — the one on screen is exactly
+        // what this would create. Anything seeded is a different request, and
+        // then the untouched draft goes instead of lingering beside the real
+        // snippet the user came here to make.
+        if let draft = store.blankDraftSnippet {
+            if seededContent == nil, name == nil, inheritedTags.isEmpty {
+                reloadVisibleSnippets(keepSelection: true)
+                selectSnippet(id: draft.id, focus: .content)
+                importExportMessage = "Already editing a new snippet."
+                return
+            }
+
+            store.discardBlankDraft(id: draft.id)
+        }
+
         let snippet = store.addSnippet(name: name ?? "", content: seededContent ?? "", tags: inheritedTags)
 
         reloadVisibleSnippets(keepSelection: true)
