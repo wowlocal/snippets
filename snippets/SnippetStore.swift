@@ -89,9 +89,13 @@ final class SnippetStore {
         }
     }
 
-    func addSnippet(content: String = "", tags: [String] = []) -> Snippet {
+    /// `name` is set here rather than by a follow-up `update`: creation pushes
+    /// one undo entry, and a second call to name the new snippet would push
+    /// another, so one ⌘Z would clear the name and only a second would undo the
+    /// creation the user actually asked to take back.
+    func addSnippet(name: String = "", content: String = "", tags: [String] = []) -> Snippet {
         pushUndo()
-        let snippet = Snippet(name: "", keyword: "", content: content, tags: SnippetTagging.normalizedTags(tags))
+        let snippet = Snippet(name: name, keyword: "", content: content, tags: SnippetTagging.normalizedTags(tags))
         snippets.insert(snippet, at: 0)
         persist(immediately: true)
         return snippet

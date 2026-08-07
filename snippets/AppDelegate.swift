@@ -5,7 +5,7 @@ import Sparkle
 #endif
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     enum QuitBehaviorPreference: String, CaseIterable {
         case ask
         case hide
@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
     private weak var statusMenuOpenItem: NSMenuItem?
+    private weak var statusMenuClipboardItem: NSMenuItem?
     private var hotkeyPromotedFromAccessory = false
     private var shouldTerminateForReal = false
     #if !NO_SPARKLE
@@ -121,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         #endif
         setupStatusItem()
         setupGlobalHotkey()
+        setupServicesProvider()
         #if !NO_SPARKLE
         updaterController.updater.automaticallyDownloadsUpdates = true
         #endif
@@ -244,6 +246,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showMainWindow()?.createSnippet(sender)
     }
 
+    @IBAction func newSnippetFromClipboard(_ sender: Any?) {
+        showMainWindow()?.createSnippetFromClipboard(sender)
+    }
+
+    /// The Help item used to call `showHelp:`, and this bundle has no
+    /// `CFBundleHelpBookName` and ships no help book, so the only thing it could
+    /// ever produce was the system "Help isn't available" alert. The ⌘K panel is
+    /// where this app's shortcuts are actually written down.
+    @IBAction func showSnippetsHelp(_ sender: Any?) {
+        showMainWindow()
+        NotificationCenter.default.post(name: .snippetsToggleActions, object: nil)
+    }
+
     @IBAction func toggleLaunchAtLogin(_ sender: Any?) {
         let service = SMAppService.mainApp
         do {
@@ -296,6 +311,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
             return true
         }
+        if menuItem.action == #selector(newSnippetFromClipboard(_:)) {
+            // Only the status-bar copy, whose entire title is a clipboard
+            // preview: with nothing to preview it has nothing to offer. The File
+            // item stays enabled so ⇧⌘N can say why nothing happened rather than
+            // going silently dead.
+            return menuItem !== statusMenuClipboardItem || ClipboardCapture.text != nil
+        }
         if menuItem.action == #selector(resetQuitBehaviorPreference(_:)) {
             let hasRemembered = hasRememberedQuitBehavior
             menuItem.isHidden = !hasRemembered
@@ -316,6 +338,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         #endif
         return true
+    }
+
+    // MARK: - Services
+
+    private func setupServicesProvider() {
+        NSApp.servicesProvider = self
+        // The Services cache is keyed off the bundle's own NSServices, and a
+        // build that has never lived in /Applications is not scanned on its own.
+        // This is what gives the entry a chance to appear without a login cycle.
+        NSUpdateDynamicServices()
+    }
+
+    /// Declared in every Info plist as `NSMessage = makeSnippetFromSelection`.
+    /// The selection arrives as content and not as a name: it is the text the
+    /// snippet has to expand to, and naming a snippet after its own body is what
+    /// `displayName`'s first-line fallback already does for free.
+    @objc func makeSnippetFromSelection(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString>
+    ) {
+        guard let selection = pboard.string(forType: .string),
+              !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            error.pointee = "Select some text to make a snippet from it." as NSString
+            return
+        }
+
+        showMainWindow()?.createSnippet(seededContent: selection, seededName: nil)
     }
 
     // MARK: - Status Bar Item
@@ -343,6 +393,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         LiquidGlassDesign.applyMenuSymbol("macwindow", to: openItem)
         // `setupGlobalHotkey()` runs next and fills in the ⌘\ hint.
         statusMenuOpenItem = openItem
+        let clipboardItem = NSMenuItem(
+            title: "",
+            action: #selector(newSnippetFromClipboard(_:)),
+            keyEquivalent: ""
+        )
+        clipboardItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("doc.on.clipboard", to: clipboardItem)
+        // `menuWillOpen` fills the title in: it carries a preview of what the
+        // clipboard holds right now, which is only knowable at open time.
+        statusMenuClipboardItem = clipboardItem
         let resetQuitBehaviorItem = NSMenuItem(
             title: "Reset Remembered Cmd+Q Choice",
             action: #selector(resetQuitBehaviorPreference(_:)),
@@ -354,11 +414,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         quitItem.target = self
         LiquidGlassDesign.applyMenuSymbol("power", to: quitItem)
 
+        menu.delegate = self
         menu.addItem(openItem)
+        menu.addItem(clipboardItem)
         menu.addItem(.separator())
         menu.addItem(resetQuitBehaviorItem)
         menu.addItem(quitItem)
+        refreshStatusMenuClipboardItem()
         statusItem.menu = menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        refreshStatusMenuClipboardItem()
+    }
+
+    /// The point of the item is that you can see what it would save before you
+    /// pick it — the menu bar is the one surface reachable while the text you
+    /// just copied is still on screen in another app.
+    private func refreshStatusMenuClipboardItem() {
+        guard let clipboardItem = statusMenuClipboardItem else { return }
+
+        guard let preview = ClipboardCapture.text.map(ClipboardCapture.menuPreview(of:)), !preview.isEmpty else {
+            clipboardItem.title = "New from Clipboard"
+            return
+        }
+
+        clipboardItem.title = "New from Clipboard — “\(preview)”"
     }
 
     // MARK: - Global Shortcut

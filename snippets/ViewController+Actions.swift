@@ -11,6 +11,35 @@ private enum SeededName {
     static let maxLength = 50
 }
 
+/// The one pasteboard read behind ⇧⌘N, the Services handler and the status-bar
+/// item's live title, so the three can never disagree about what "the clipboard"
+/// currently holds.
+enum ClipboardCapture {
+    /// Nil rather than "" for whitespace-only content: a snippet made of blanks
+    /// draws an empty row and expands to nothing, which reads as a broken app.
+    static var text: String? {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
+    }
+
+    /// One short line. What lands on the clipboard is routinely a paragraph, and
+    /// a menu item is a single line that NSMenu will happily draw at the full
+    /// width of the screen, so the newlines have to go before the truncation.
+    static func menuPreview(of text: String) -> String {
+        let maxCharacters = 30
+        let singleLine = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        guard singleLine.count > maxCharacters else { return singleLine }
+        let endIndex = singleLine.index(singleLine.startIndex, offsetBy: maxCharacters)
+        return String(singleLine[..<endIndex]) + "…"
+    }
+}
+
 extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     func selectSnippet(id: UUID, focus: EditorFocusTarget?) {
         selectedSnippetID = id
@@ -219,6 +248,18 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         createSnippet(seededContent: nil, seededName: nil)
     }
 
+    /// Deliberately a no-op with a status line rather than an empty snippet: the
+    /// user asked to save something specific, and creating a blank draft instead
+    /// looks like the clipboard was captured when it was not.
+    @objc func createSnippetFromClipboard(_ sender: Any?) {
+        guard let text = ClipboardCapture.text else {
+            importExportMessage = "Clipboard has no text to save."
+            return
+        }
+
+        createSnippet(seededContent: text, seededName: nil)
+    }
+
     func createSnippet(seededContent: String?, seededName: String?) {
         commitActiveEditorState(endingEditing: true)
 
@@ -232,15 +273,9 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         // Adopt the active tag filters so the snippet lands inside the list the
         // user is looking at instead of being created invisible.
         let inheritedTags = activeTagFilterTags()
-        let snippet = store.addSnippet(content: seededContent ?? "", tags: inheritedTags)
-
         // A caller that already knows the name outranks the search query.
         let name = seededName.flatMap { $0.isEmpty ? nil : $0 } ?? queryName
-        if let name {
-            var namedSnippet = snippet
-            namedSnippet.name = name
-            store.update(namedSnippet)
-        }
+        let snippet = store.addSnippet(name: name ?? "", content: seededContent ?? "", tags: inheritedTags)
 
         reloadVisibleSnippets(keepSelection: true)
         // With nothing seeded the content box is where the snippet begins;
@@ -297,7 +332,10 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     func editSelectedSnippet() {
         guard selectedSnippet != nil else { return }
         closeActionPanel()
-        requestFirstResponder(nameField)
+        // The content box, not the name field: with the editor content-first the
+        // name is the fourth field down, so "Edit Snippet" was dropping the caret
+        // past everything the user is likely to have opened it to change.
+        requestFirstResponder(snippetTextView)
     }
 
     func duplicateSelectedSnippet() {
@@ -416,6 +454,15 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         panel.message = "Choose a snippets JSON file to import."
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        performImport(from: url)
+    }
+
+    /// Everything after a file has been chosen, so a route that already holds a
+    /// URL does not have to reopen the open panel to reach the Raycast
+    /// migration — today the app's strongest import path is only reachable from
+    /// one menu three levels deep.
+    func performImport(from url: URL) {
+        commitActiveEditorState(endingEditing: true)
 
         var options = SnippetStore.ImportOptions()
 
