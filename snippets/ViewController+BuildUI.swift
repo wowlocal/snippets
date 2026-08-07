@@ -38,6 +38,10 @@ private enum ActionPanelContent {
         ActionShortcutDescriptor(title: "Search", shortcut: "⌘F", isEssential: true),
         ActionShortcutDescriptor(title: "Toggle Sidebar", shortcut: "⌘B", isEssential: true),
         ActionShortcutDescriptor(title: "Create New Snippet", shortcut: "⌘N", isEssential: true),
+        // Beside ⌘N, where the File menu also puts it: this panel is where the
+        // app's shortcuts are written down, and a list that promises all of them
+        // and omits the clipboard capture reads as "there isn't one".
+        ActionShortcutDescriptor(title: "New from Clipboard", shortcut: "⇧⌘N", isEssential: true),
         ActionShortcutDescriptor(title: "Edit Snippet", shortcut: "⌘E", isEssential: true),
         ActionShortcutDescriptor(title: "Delete Snippet", shortcut: "⌘⌫", isEssential: true),
         ActionShortcutDescriptor(title: "Copy Share Link", shortcut: "⇧⌘C", isEssential: false),

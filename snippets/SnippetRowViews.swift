@@ -191,7 +191,10 @@ final class SnippetRowCellView: NSTableCellView {
         keywordLabel.stringValue = status.keywordText
         keywordLabel.isHidden = false
 
-        let preview = snippet.contentFirstLine
+        // Uncut: the label truncates at the row's own edge, so a count decided
+        // up front would leave the "…" mid-row with empty space after it on any
+        // sidebar wider than the minimum.
+        let preview = snippet.contentFirstLineUntruncated
         contentPreviewLabel.stringValue = preview
         // With no name the title above is already this exact line; printing it
         // twice in one row reads as a rendering bug.

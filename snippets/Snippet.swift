@@ -131,27 +131,37 @@ extension Snippet {
         tags.contains { SnippetTagging.filterKey(for: $0) == key }
     }
 
-    /// The one line that stands in for an unnamed snippet, shared by `displayName`
-    /// and the row's content preview so the two can never disagree.
+    /// The one line that stands in for an unnamed snippet, whole. Which line it
+    /// is gets decided here and nowhere else, so `displayName` and the row's
+    /// content preview can never disagree about it.
     ///
     /// Lines that hold only whitespace are skipped rather than returned: a name
     /// made of blanks paints an empty row, which reads as a broken app rather
-    /// than as a snippet nobody named. The "…" is baked in because most consumers
-    /// are plain text — status strings, alerts, the CLI — where a silent cut at 50
-    /// characters would pass a truncated line off as the whole name.
-    var contentFirstLine: String {
-        let maxCharacters = 50
-
+    /// than as a snippet nobody named.
+    var contentFirstLineUntruncated: String {
         for rawLine in content.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { continue }
-            guard line.count > maxCharacters else { return line }
-
-            let endIndex = line.index(line.startIndex, offsetBy: maxCharacters)
-            return String(line[..<endIndex]) + "…"
+            if !line.isEmpty { return line }
         }
 
         return ""
+    }
+
+    /// The same line cut to a name's length, with the "…" baked in because these
+    /// consumers are plain text — `displayName`, status strings, alerts, the CLI
+    /// — where a silent cut would pass a truncated line off as the whole name.
+    ///
+    /// A label that truncates for itself wants `contentFirstLineUntruncated`: a
+    /// count decided here lands the ellipsis wherever 50 characters happen to
+    /// end, which in a resizable row is mid-width with empty space after it.
+    var contentFirstLine: String {
+        let maxCharacters = 50
+
+        let line = contentFirstLineUntruncated
+        guard line.count > maxCharacters else { return line }
+
+        let endIndex = line.index(line.startIndex, offsetBy: maxCharacters)
+        return String(line[..<endIndex]) + "…"
     }
 }
 

@@ -476,6 +476,13 @@ extension ViewController {
     /// this snippet will actually fire, because the keyword is the only field
     /// that decides that and nothing else on screen reports it. Empty text is
     /// reserved for "no snippet selected" — there is nothing to be true about.
+    ///
+    /// Every sentence here is written to survive being cut off. The label is one
+    /// line pinned to the editor's width, which is 182pt on a default first-run
+    /// window — about five words — and `displayName` alone can be 51 characters,
+    /// so no wording fits at every width. What each sentence can do is put the
+    /// verdict first and the name of the other snippet last, so the ellipsis eats
+    /// the detail rather than the meaning; the tooltip carries the whole line.
     func updateKeywordStatus(for snippet: Snippet?) {
         guard let snippet else {
             setKeywordStatus("", isFailure: false)
@@ -490,20 +497,20 @@ extension ViewController {
         guard !keyword.isEmpty else {
             // The most common broken snippet in the library, and the one the old
             // warning was careful to say nothing about.
-            setKeywordStatus("Add a keyword — this won't expand yet.", isFailure: false)
+            setKeywordStatus("Add a keyword to expand this.", isFailure: false)
             return
         }
         guard snippet.isEnabled else {
             // A disabled snippet is invisible to the engine, so it neither fires
             // nor blocks anyone; reporting conflicts here would be a lie.
-            setKeywordStatus("Disabled — \(trigger) won't expand until you turn it on.", isFailure: false)
+            setKeywordStatus("Disabled — \(trigger) won't expand.", isFailure: false)
             return
         }
         // Transcribed from SnippetExpansionEngine.unambiguousExactMatch: the
         // trigger deletion is counted in graphemes, so a keyword containing one
         // built from several scalars is refused outright.
         guard !snippet.normalizedKeyword.contains(where: { $0.unicodeScalars.count > 1 }) else {
-            setKeywordStatus("\(trigger) won't auto-expand — use letters, digits or -.", isFailure: true)
+            setKeywordStatus("\(trigger) needs letters, digits or -.", isFailure: true)
             return
         }
 
@@ -529,18 +536,22 @@ extension ViewController {
         }
 
         if let duplicate {
-            setKeywordStatus("\(trigger) is already used by \(duplicate.displayName) — neither expands.", isFailure: true)
+            setKeywordStatus("\(trigger) is taken, neither expands: \(duplicate.displayName)", isFailure: true)
         } else if let blockedBy {
             // This snippet's own failure outranks the damage it does elsewhere:
             // the line sits under this snippet's keyword, and naming only the
             // other victim would read as "this one is fine". The line recomputes
             // on every keystroke, so `blocks` surfaces the moment this is fixed.
+            //
+            // The longer keyword trails the name because it is the one part a
+            // user can reconstruct — something starting with this keyword is in
+            // the library — so it is the right thing to lose first.
             setKeywordStatus(
-                "\(trigger) won't auto-expand — \(blockedBy.displayName) uses the longer \\\(blockedBy.normalizedKeyword).",
+                "\(trigger) won't expand, blocked by \(blockedBy.displayName) (\\\(blockedBy.normalizedKeyword))",
                 isFailure: true
             )
         } else if let blocks {
-            setKeywordStatus("This stops \(blocks.displayName) (\\\(blocks.normalizedKeyword)) from auto-expanding.", isFailure: true)
+            setKeywordStatus("This stops \\\(blocks.normalizedKeyword) expanding: \(blocks.displayName)", isFailure: true)
         } else {
             // Silence used to mean this, and silence is also what a keyword-less
             // snippet got, so it meant nothing.
@@ -552,7 +563,7 @@ extension ViewController {
         keywordWarningLabel.stringValue = text
         keywordWarningLabel.textColor = isFailure ? ThemeManager.alertColor : .secondaryLabelColor
         // The row is one line high, so the sentence truncates at narrow editor
-        // widths; the tooltip is the rest of it.
+        // widths; the tooltip is the rest of it, for every case above.
         keywordWarningLabel.toolTip = text.isEmpty ? nil : text
     }
 
