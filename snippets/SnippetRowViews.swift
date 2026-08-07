@@ -1,13 +1,36 @@
 import AppKit
 
 private final class DotView: NSView {
+    /// A ring rather than a second fill colour, because the dot has to carry three
+    /// states and colour alone cannot: the pale theme collapses `snippetDotColor`,
+    /// `pinColor` and `alertColor` all onto `.secondaryLabelColor`, which is also
+    /// the disabled fill. Shape survives that, survives dark mode, and survives
+    /// colour blindness.
+    enum Style {
+        case filled
+        case ring
+    }
+
+    var style: Style = .filled {
+        didSet { needsDisplay = true }
+    }
+
     var color: NSColor = .secondaryLabelColor {
         didSet { needsDisplay = true }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        color.setFill()
-        NSBezierPath(ovalIn: bounds).fill()
+        switch style {
+        case .filled:
+            color.setFill()
+            NSBezierPath(ovalIn: bounds).fill()
+        case .ring:
+            let lineWidth: CGFloat = 2
+            let path = NSBezierPath(ovalIn: bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2))
+            path.lineWidth = lineWidth
+            color.setStroke()
+            path.stroke()
+        }
     }
 }
 
@@ -19,6 +42,7 @@ final class SnippetRowCellView: NSTableCellView {
     private let contentPreviewLabel = NSTextField(labelWithString: "")
     private let tagChipsStack = NSStackView()
     private var isDisabledSnippet = false
+    private var hasKeyword = false
     private var renderedTagState: (tags: [String], muted: Bool)?
     private static let maxVisibleTagChips = 3
 
@@ -111,15 +135,19 @@ final class SnippetRowCellView: NSTableCellView {
         nameLabel.stringValue = snippet.displayName
 
         let keyword = snippet.normalizedKeyword
-        keywordLabel.stringValue = keyword.isEmpty ? "" : "\\\(keyword)"
-        keywordLabel.isHidden = keyword.isEmpty
+        hasKeyword = !keyword.isEmpty
+        // Spelled out rather than hidden: a keyword-less snippet never expands, and
+        // a blank slot said nothing about why. It also gives that state a text form —
+        // the dot beside it is a plain view VoiceOver has nothing to say about.
+        keywordLabel.stringValue = hasKeyword ? "\\\(keyword)" : "No keyword"
+        keywordLabel.isHidden = false
 
-        let preview = snippet.content
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: .newlines)
-            .first ?? ""
+        let preview = snippet.contentFirstLine
         contentPreviewLabel.stringValue = preview
-        contentPreviewLabel.isHidden = preview.isEmpty
+        // With no name the title above is already this exact line; printing it
+        // twice in one row reads as a rendering bug.
+        let hasName = !snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        contentPreviewLabel.isHidden = preview.isEmpty || !hasName
 
         updateTagChips(tags: snippet.tags, muted: !snippet.isEnabled)
 
@@ -130,7 +158,16 @@ final class SnippetRowCellView: NSTableCellView {
         } else {
             dotView.isHidden = false
             pinView.isHidden = true
-            dotView.color = snippet.isEnabled ? ThemeManager.snippetDotColor : .secondaryLabelColor
+            if !snippet.isEnabled {
+                dotView.style = .filled
+                dotView.color = .secondaryLabelColor
+            } else if hasKeyword {
+                dotView.style = .filled
+                dotView.color = ThemeManager.snippetDotColor
+            } else {
+                dotView.style = .ring
+                dotView.color = ThemeManager.alertColor
+            }
         }
 
         applyTextColors()
@@ -161,7 +198,9 @@ final class SnippetRowCellView: NSTableCellView {
             contentPreviewLabel.textColor = .tertiaryLabelColor
         } else {
             nameLabel.textColor = .labelColor
-            keywordLabel.textColor = .secondaryLabelColor
+            // Matches the ring the dot draws for the same state; a disabled snippet
+            // keeps the muted colour because "off" is the failure that applies there.
+            keywordLabel.textColor = hasKeyword ? .secondaryLabelColor : ThemeManager.alertColor
             contentPreviewLabel.textColor = .secondaryLabelColor
         }
     }
