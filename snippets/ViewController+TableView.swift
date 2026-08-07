@@ -74,6 +74,7 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         let nextSelectionID = visibleSnippets[row].id
         let didChangeSelection = nextSelectionID != selectedSnippetID
+        let outgoingSnippetID = selectedSnippetID
         selectedSnippetID = nextSelectionID
 
         if didChangeSelection || !isEditingDetails {
@@ -81,6 +82,12 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
         }
 
         deleteButton.isEnabled = true
+
+        // Moving to another row is the editor's other real exit, and like Escape
+        // it commits nothing, so a ⌘N nobody typed into does not survive it.
+        if didChangeSelection {
+            discardBlankDraftAfterLeaving(outgoingSnippetID)
+        }
     }
 
     /// Text dropped anywhere on the list becomes a snippet. Registering `.string`

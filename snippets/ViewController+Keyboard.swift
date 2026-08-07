@@ -64,7 +64,12 @@ extension ViewController {
             } else if isSearchSuggestionOverlayVisible {
                 hideSearchSuggestionOverlay()
             } else {
+                // One of the two real ways out of the editor, and it commits
+                // nothing on the way, so the draft has to be dealt with here
+                // rather than anywhere the exits have in common.
+                let abandonedSnippetID = selectedSnippetID
                 requestFirstResponder(tableView)
+                discardBlankDraftAfterLeaving(abandonedSnippetID)
             }
             return nil
         }

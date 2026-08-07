@@ -300,6 +300,7 @@ extension ViewController {
             updatePreview(withTemplate: "")
             setEditorEnabled(false)
             updateSuggestedTagsRow()
+            updateSuggestedKeywordsRow(for: nil)
             isApplyingSnippetToEditor = false
             return
         }
@@ -330,6 +331,7 @@ extension ViewController {
         updateKeywordStatus(for: snippet)
         setEditorEnabled(true)
         updateSuggestedTagsRow()
+        updateSuggestedKeywordsRow(for: snippet)
         isApplyingSnippetToEditor = false
     }
 
@@ -381,6 +383,9 @@ extension ViewController {
         store.update(snippet)
         updatePreview(withTemplate: snippet.content)
         updateKeywordStatus(for: snippet)
+        // Cheap while a keyword exists — it stops at the first guard — and the
+        // name and the content it derives from are both edited here.
+        updateSuggestedKeywordsRow(for: snippet)
         // The chips are the library's tags minus this snippet's, and this update
         // is the only thing that touched the library, so nothing can have moved
         // unless these tags did. Deciding that here rather than inside the row
@@ -502,22 +507,24 @@ extension ViewController {
             return
         }
 
-        // Also from unambiguousExactMatch: a keyword fires only when it is the
-        // single exact match and no *longer* enabled keyword starts with it. That
-        // relation runs one way, so the two sides are two different failures on
-        // two different snippets and both have to be computed. The old symmetric
-        // test collapsed them and then reported the wrong one.
+        // Also from unambiguousExactMatch, via the `KeywordRelation` the keyword
+        // chips choose with: the two sides of the prefix relation are two
+        // different failures on two different snippets and both have to be
+        // computed. Sharing the rule is what stops a chip from ever offering a
+        // keyword this line would then call broken.
         var duplicate: Snippet?
         var blockedBy: Snippet?
         var blocks: Snippet?
         for other in store.enabledSnippetsSorted() where other.id != snippet.id {
-            let otherKeyword = SnippetTagging.filterKey(for: other.normalizedKeyword)
-            if otherKeyword == keyword {
+            switch KeywordRelation.between(keyword, SnippetTagging.filterKey(for: other.normalizedKeyword)) {
+            case .duplicate:
                 duplicate = duplicate ?? other
-            } else if otherKeyword.hasPrefix(keyword) {
+            case .blockedByLonger:
                 blockedBy = blockedBy ?? other
-            } else if keyword.hasPrefix(otherKeyword) {
+            case .blocksShorter:
                 blocks = blocks ?? other
+            case .unrelated:
+                break
             }
         }
 
@@ -547,6 +554,73 @@ extension ViewController {
         // The row is one line high, so the sentence truncates at narrow editor
         // widths; the tooltip is the rest of it.
         keywordWarningLabel.toolTip = text.isEmpty ? nil : text
+    }
+
+    /// The clickable candidates under the status line, offered only while the
+    /// keyword is empty — the one state in which the line above has nothing to
+    /// report and the snippet cannot fire. Anything offered here is a keyword
+    /// that line would immediately call valid: the collision test runs in *both*
+    /// prefix directions, so a chip can neither be swallowed by a longer keyword
+    /// nor stop a shorter one that already works.
+    func updateSuggestedKeywordsRow(for snippet: Snippet?) {
+        let suggestions = suggestedKeywords(for: snippet)
+
+        guard suggestions != renderedSuggestedKeywords else { return }
+        renderedSuggestedKeywords = suggestions
+
+        let chips = suggestions.map { keyword -> TagChipView in
+            let chip = TagChipView(fontSize: 11)
+            chip.configure(text: "\\\(keyword)", color: .controlAccentColor, style: .tinted)
+            chip.toolTip = "Use \\\(keyword) as this snippet's keyword"
+            chip.setAccessibility(label: "Use keyword \(keyword)", isButton: true)
+            chip.onClick = { [weak self] in
+                self?.applySuggestedKeyword(keyword)
+            }
+            return chip
+        }
+        editorSuggestedKeywordsFlow.setChips(chips)
+        editorSuggestedKeywordsFlow.isHidden = chips.isEmpty
+    }
+
+    private func suggestedKeywords(for snippet: Snippet?) -> [String] {
+        guard let snippet, keywordField.isEnabled, snippet.normalizedKeyword.isEmpty else { return [] }
+
+        let candidates = KeywordSuggestions.candidates(
+            name: snippet.name,
+            contentFirstLine: snippet.contentFirstLine
+        )
+        // The snippet being edited has no keyword of its own here, so it cannot
+        // be the collision it is measured against. Three candidates are a
+        // choice; a fourth is a list to read, and this is meant to be faster
+        // than typing three characters.
+        return Array(
+            candidates
+                .filter { candidate in
+                    enabledKeywordKeys.allSatisfy { KeywordRelation.between(candidate, $0) == .unrelated }
+                }
+                .prefix(3)
+        )
+    }
+
+    private func applySuggestedKeyword(_ keyword: String) {
+        guard editingSnippet != nil, keywordField.isEnabled else { return }
+
+        // Write through the field rather than the store: a chip is a shortcut
+        // for typing, so it has to land where typing lands, or the status line
+        // and the stored snippet stop agreeing about what the keyword is.
+        // The cell is written first because `stringValue` is what the commit
+        // below reads, and a field editor filled in on its own posts nothing
+        // back — then the editor is matched to it, since the chip never becomes
+        // first responder and the caret is still sitting in the field.
+        keywordField.stringValue = keyword
+        if let editor = keywordField.currentEditor() {
+            if editor.string != keyword {
+                editor.string = keyword
+            }
+            editor.selectedRange = NSRange(location: (keyword as NSString).length, length: 0)
+        }
+        updateSelectedSnippetFromEditor()
+        reloadVisibleSnippets(keepSelection: true)
     }
 
     func updatePreview(withTemplate template: String) {
