@@ -14,8 +14,25 @@ enum LiquidGlassDesign {
         static let concentricRowInset: CGFloat = panelCornerRadius - rowCornerRadius
     }
 
+    #if DEBUG
+    /// Renders every surface and control the way a machine without Liquid Glass
+    /// would, so the pre-26 fallback can be looked at without a pre-26 machine.
+    ///
+    /// Turn it on with the launch argument `-ForceLegacyAppearance YES` — the
+    /// argument domain, because a `defaults write` from a shell never reaches a
+    /// running app — or flip it from the debugger before the panel is built.
+    ///
+    /// It is not a pixel-accurate simulation: an `NSVisualEffectView` on macOS 26
+    /// still uses macOS 26's recipe for its material, so what this shows is the
+    /// arrangement, the geometry and the colour choices, not the exact backdrop a
+    /// macOS 15 machine would blur.
+    static var forcesLegacyAppearance = UserDefaults.standard.bool(forKey: "ForceLegacyAppearance")
+    #else
+    static var forcesLegacyAppearance: Bool { false }
+    #endif
+
     static var usesNativeGlass: Bool {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             return true
         }
         return false
@@ -148,7 +165,7 @@ enum LiquidGlassDesign {
         tintColor: NSColor? = subtleTintColor,
         clearGlass: Bool = false
     ) -> NSView {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             let glassView = NSGlassEffectView()
             glassView.translatesAutoresizingMaskIntoConstraints = false
             glassView.cornerRadius = cornerRadius
@@ -206,7 +223,7 @@ enum LiquidGlassDesign {
         clipper.layer?.masksToBounds = true
         pin(content, to: clipper)
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             let glassView = NSGlassEffectView()
             glassView.translatesAutoresizingMaskIntoConstraints = false
             glassView.cornerRadius = cornerRadius
@@ -232,7 +249,7 @@ enum LiquidGlassDesign {
     }
 
     static func makeGlassContainer(containing content: NSView, spacing: CGFloat = 8) -> NSView {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             let container = NSGlassEffectContainerView()
             container.translatesAutoresizingMaskIntoConstraints = false
             container.spacing = spacing
@@ -245,7 +262,7 @@ enum LiquidGlassDesign {
     }
 
     static func makeSidebarSurface(containing content: NSView) -> NSView {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             return content
         }
 
@@ -297,7 +314,7 @@ enum LiquidGlassDesign {
         button.setContentHuggingPriority(.required, for: .horizontal)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             button.bezelStyle = .glass
         } else {
             button.bezelStyle = .rounded
@@ -312,7 +329,7 @@ enum LiquidGlassDesign {
             button.imagePosition = .imageLeading
         }
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             button.bezelStyle = .glass
         } else {
             button.bezelStyle = .rounded
@@ -323,7 +340,7 @@ enum LiquidGlassDesign {
         item.isBordered = true
         item.visibilityPriority = .high
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             item.style = .prominent
             item.backgroundTintColor = primaryTintColor
         }
@@ -333,7 +350,7 @@ enum LiquidGlassDesign {
         item.isBordered = true
         item.visibilityPriority = .standard
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !forcesLegacyAppearance {
             item.style = .plain
         }
     }

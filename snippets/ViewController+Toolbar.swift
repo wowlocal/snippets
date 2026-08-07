@@ -96,7 +96,7 @@ extension ViewController: NSToolbarDelegate {
             return item
 
         case .snippetsMore:
-            if #available(macOS 26.0, *) {
+            if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
                 let item = NSToolbarItem(itemIdentifier: itemIdentifier)
                 configureMoreToolbarItem(item)
                 let button = makeMoreToolbarButton(toolTip: item.toolTip)
@@ -155,7 +155,7 @@ extension ViewController: NSToolbarDelegate {
         button.setContentHuggingPriority(.required, for: .horizontal)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
             button.bezelStyle = .glass
         } else {
             button.bezelStyle = .rounded
