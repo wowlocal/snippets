@@ -7,7 +7,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         if field == searchField {
             reloadVisibleSnippets(keepSelection: true)
             if selectedSnippetID == nil, let firstID = visibleSnippets.first?.id {
-                selectSnippet(id: firstID, focusEditorName: false)
+                selectSnippet(id: firstID, focus: nil)
             }
             updateSearchSuggestionOverlay()
             return
@@ -102,7 +102,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
 
     // MARK: - Editor key loop
 
-    /// Explicit tab order for the editor: Name → Keyword → Tags → Snippet, and
+    /// Explicit tab order for the editor: Snippet → Keyword → Name → Tags, and
     /// back again with Shift-Tab. AppKit's automatic key view loop is recomputed
     /// whenever the suggested-tag chips or the filter bar rebuild their
     /// subviews, which kept dropping the multi-line snippet view out of the
@@ -117,10 +117,11 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard textView === snippetTextView,
-              let forward = tabDirection(for: commandSelector) else { return false }
+              let forward = tabDirection(for: commandSelector),
+              let next = editorNeighbor(of: textView, forward: forward) else { return false }
 
         // ⌥⇥ still inserts a literal tab (insertTabIgnoringFieldEditor:).
-        requestFirstResponder(forward ? nameField : tagsField)
+        requestFirstResponder(next)
         return true
     }
 
@@ -132,15 +133,21 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         }
     }
 
-    private func editorNeighbor(of control: NSControl, forward: Bool) -> NSResponder? {
-        if control === nameField {
-            return forward ? keywordField : snippetTextView
+    private func editorNeighbor(of responder: NSResponder, forward: Bool) -> NSResponder? {
+        if responder === snippetTextView {
+            // Shift-Tab out of the first field leaves the editor for the list,
+            // the same exit Escape takes. Without it the loop is closed and
+            // Escape is the only way out of it.
+            return forward ? keywordField : tableView
         }
-        if control === keywordField {
-            return forward ? tagsField : nameField
+        if responder === keywordField {
+            return forward ? nameField : snippetTextView
         }
-        if control === tagsField {
-            return forward ? snippetTextView : keywordField
+        if responder === nameField {
+            return forward ? tagsField : keywordField
+        }
+        if responder === tagsField {
+            return forward ? snippetTextView : nameField
         }
         return nil
     }

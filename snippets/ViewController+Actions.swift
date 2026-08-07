@@ -6,15 +6,17 @@ private extension NSUserInterfaceItemIdentifier {
     static let snippetsMoreMenu = NSUserInterfaceItemIdentifier("SnippetsMoreMenu")
 }
 
+private enum SeededName {
+    /// Matches the cap `Snippet.contentFirstLine` uses for a derived name.
+    static let maxLength = 50
+}
+
 extension ViewController: NSMenuDelegate, NSMenuItemValidation {
-    func selectSnippet(id: UUID, focusEditorName: Bool) {
+    func selectSnippet(id: UUID, focus: EditorFocusTarget?) {
         selectedSnippetID = id
         syncTableSelectionWithSelectedSnippet()
         applySelectedSnippetToEditor()
-
-        if focusEditorName {
-            requestFirstResponder(nameField)
-        }
+        restoreEditorFocus(focus)
     }
 
     func showErrorAlert(message: String) {
@@ -209,17 +211,20 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         }
     }
 
-    @objc func handleCreateNewNotification() {
-        createSnippet(nil)
-    }
-
     @objc func handleToggleActionsNotification() {
         toggleActionPanel()
     }
 
     @objc func createSnippet(_ sender: Any?) {
+        createSnippet(seededContent: nil, seededName: nil)
+    }
+
+    func createSnippet(seededContent: String?, seededName: String?) {
         commitActiveEditorState(endingEditing: true)
 
+        // Read the query before clearing it: the search field is the only place
+        // the user has already said what the missing snippet is called.
+        let queryName = nameSeedFromSearchQuery()
         if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             searchField.stringValue = ""
         }
@@ -227,12 +232,52 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         // Adopt the active tag filters so the snippet lands inside the list the
         // user is looking at instead of being created invisible.
         let inheritedTags = activeTagFilterTags()
-        let snippet = store.addSnippet(tags: inheritedTags)
+        let snippet = store.addSnippet(content: seededContent ?? "", tags: inheritedTags)
+
+        // A caller that already knows the name outranks the search query.
+        let name = seededName.flatMap { $0.isEmpty ? nil : $0 } ?? queryName
+        if let name {
+            var namedSnippet = snippet
+            namedSnippet.name = name
+            store.update(namedSnippet)
+        }
+
         reloadVisibleSnippets(keepSelection: true)
-        selectSnippet(id: snippet.id, focusEditorName: true)
+        // With nothing seeded the content box is where the snippet begins;
+        // once text arrives the keyword is the only thing still stopping it
+        // from working.
+        selectSnippet(id: snippet.id, focus: seededContent == nil ? .content : .keyword)
+
+        // Name the snippet in the status line: it is now the fourth field down
+        // and can sit below the fold, so a silently adopted search query would
+        // otherwise be invisible.
+        let subject = name.map { "“\($0)”" } ?? "snippet"
         importExportMessage = inheritedTags.isEmpty
-            ? "Created snippet."
-            : "Created snippet tagged \(inheritedTags.joined(separator: ", "))."
+            ? "Created \(subject)."
+            : "Created \(subject) tagged \(inheritedTags.joined(separator: ", "))."
+    }
+
+    /// The search query, when it can plausibly be a name rather than a filter.
+    ///
+    /// Only when it matched nothing: a query that is still narrowing a visible
+    /// list is being used as a filter, and adopting it would put a name on a
+    /// snippet the user never described. A query that found nothing is the
+    /// opposite — it is the thing that does not exist yet, which is why ⌘N was
+    /// pressed. A leading backslash is dropped because that is how this app
+    /// writes keywords, so "\sig" is someone hunting a keyword, not a name.
+    private func nameSeedFromSearchQuery() -> String? {
+        guard visibleSnippets.isEmpty else { return nil }
+
+        var query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        while query.hasPrefix("\\") {
+            query.removeFirst()
+            query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Past the length a name is ever displayed at, this is someone
+        // searching for a phrase inside snippet bodies.
+        guard !query.isEmpty, query.count <= SeededName.maxLength else { return nil }
+        return query
     }
 
     @objc func deleteSelectedSnippet(_ sender: Any?) {
@@ -268,7 +313,9 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             importExportMessage = "Duplicated \(duplicate.displayName) and disabled the copy to avoid a duplicate keyword."
         }
         reloadVisibleSnippets(keepSelection: true)
-        selectSnippet(id: duplicate.id, focusEditorName: true)
+        // The copy carries the source's keyword verbatim and was disabled for
+        // exactly that reason, so the keyword is the one field that must change.
+        selectSnippet(id: duplicate.id, focus: .keyword)
         closeActionPanel()
     }
 
@@ -387,7 +434,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             importExportMessage = "Imported \(count) snippet(s) from \(url.lastPathComponent)."
             reloadVisibleSnippets(keepSelection: true)
             if selectedSnippetID == nil, let id = visibleSnippets.first?.id {
-                selectSnippet(id: id, focusEditorName: false)
+                selectSnippet(id: id, focus: nil)
             }
             requestFirstResponder(tableView)
         } catch {

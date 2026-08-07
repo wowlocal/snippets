@@ -725,7 +725,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     viewController.searchField.stringValue = ""
                     viewController.reloadVisibleSnippets(keepSelection: true)
                 }
-                viewController.selectSnippet(id: importedSnippet.id, focusEditorName: false)
+                viewController.selectSnippet(id: importedSnippet.id, focus: nil)
                 viewController.importExportMessage = "Imported shared snippet \(importedSnippet.displayName)."
                 viewController.requestFirstResponder(viewController.tableView)
             }
