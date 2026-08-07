@@ -7,7 +7,15 @@ final class SnippetExpansionEngine {
     private(set) var accessibilityGranted = false { didSet { onStateChange?() } }
     private(set) var listening = false
     private(set) var lastExpansionName: String? { didSet { onStateChange?() } }
-    private(set) var statusText = "Grant Accessibility permissions to start snippet expansion." { didSet { onStateChange?() } }
+    private(set) var statusText = SnippetExpansionEngine.accessibilityRequiredStatus { didSet { onStateChange?() } }
+
+    /// One sentence for one blocked state. It used to be described by two
+    /// different sentences depending on whether the engine had run its first
+    /// check yet, with a third label ("Permissions Required") stacked on top of
+    /// whichever won. This names the app, the permission and the consequence,
+    /// and says "expand keywords" — the user's word for the feature — rather
+    /// than "watch typing and insert snippets", which is the implementation's.
+    static let accessibilityRequiredStatus = "Snippets needs Accessibility access to expand keywords."
 
     var onStateChange: (() -> Void)?
 
@@ -292,7 +300,7 @@ final class SnippetExpansionEngine {
                 statusText = listening ? "Listening for snippet keywords in all apps." : "Ready to start listening."
             }
         } else {
-            statusText = "Accessibility access is required to watch typing and insert snippets."
+            statusText = SnippetExpansionEngine.accessibilityRequiredStatus
         }
     }
 

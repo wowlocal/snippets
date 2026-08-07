@@ -18,8 +18,7 @@ extension ViewController {
             permissionBannerDivider.isHidden = false
             permissionIconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
             permissionIconView.contentTintColor = ThemeManager.alertColor
-            permissionTitleLabel.stringValue = "Permissions Required"
-            permissionTitleLabel.textColor = ThemeManager.alertColor
+            permissionIconView.setAccessibilityLabel("Permissions required")
             permissionButtonsStack.isHidden = false
             permissionStatusLabel.stringValue = engine.statusText
         }
@@ -150,11 +149,15 @@ extension ViewController {
         let actions: Set<ListEmptyStateAction>
 
         if store.snippets.isEmpty {
-            // An empty library is the one screen with room to say what the app
-            // is: nothing else here ever mentions that a snippet is typed rather
-            // than clicked. "Press ⌘N" answered a question nobody had yet.
+            // No teaching sentence here, because this screen cannot be a first
+            // run: `SnippetStore.load()` seeds the starter snippet when there is
+            // no file, so an empty library only happens to someone who deleted
+            // everything — who already knows how expansion works. Three buttons
+            // below already say what to do next. (If the starter snippet is ever
+            // removed from `load()`, this becomes a genuine first-run screen and
+            // the explanation should come back.)
             iconName = "square.dashed"
-            message = "No snippets yet.\nType \\ followed by a keyword in any app to paste a snippet."
+            message = "No snippets yet."
             actions = [.newSnippet, .newFromClipboard, .importSnippets]
         } else if isSearching && isFiltering {
             iconName = "magnifyingglass"
@@ -298,6 +301,7 @@ extension ViewController {
             }
             updateKeywordStatus(for: nil)
             updatePreview(withTemplate: "")
+            updateNameFieldPlaceholder()
             setEditorEnabled(false)
             updateSuggestedTagsRow()
             updateSuggestedKeywordsRow(for: nil)
@@ -329,6 +333,7 @@ extension ViewController {
         }
         updatePreview(withTemplate: snippet.content)
         updateKeywordStatus(for: snippet)
+        updateNameFieldPlaceholder()
         setEditorEnabled(true)
         updateSuggestedTagsRow()
         updateSuggestedKeywordsRow(for: snippet)
@@ -383,6 +388,7 @@ extension ViewController {
         store.update(snippet)
         updatePreview(withTemplate: snippet.content)
         updateKeywordStatus(for: snippet)
+        updateNameFieldPlaceholder()
         // Cheap while a keyword exists — it stops at the first guard — and the
         // name and the content it derives from are both edited here.
         updateSuggestedKeywordsRow(for: snippet)
@@ -396,6 +402,35 @@ extension ViewController {
         }
     }
 
+    /// Name's placeholder is the title the sidebar row would use if the field
+    /// stays empty — the actual first line of the content, not a sentence about
+    /// it. "Optional — first line is used if blank" was the longest string in the
+    /// form (212pt in a field that was 182pt wide on the window this app used to
+    /// open at) and a rule the user learns once; showing the value states the
+    /// same rule in zero words and is not fiction, because `displayName` really
+    /// does fall back to `contentFirstLine`.
+    ///
+    /// Reassigned on every keystroke in the content view, hence the equality
+    /// guard: it is a placeholder on a fixed-height single-line field, so nothing
+    /// reflows, but there is no reason to redraw it for an unchanged string.
+    func updateNameFieldPlaceholder() {
+        let firstLine = snippetTextView.string
+            .prefix(while: { !$0.isNewline })
+            .trimmingCharacters(in: .whitespaces)
+
+        let placeholder: String
+        if firstLine.isEmpty {
+            placeholder = EditorCopy.namePlaceholderFallback
+        } else if firstLine.count > EditorCopy.namePlaceholderCharacterLimit {
+            placeholder = String(firstLine.prefix(EditorCopy.namePlaceholderCharacterLimit)) + "…"
+        } else {
+            placeholder = firstLine
+        }
+
+        guard nameField.placeholderString != placeholder else { return }
+        nameField.placeholderString = placeholder
+    }
+
     func tagsFromEditor() -> [String] {
         let tokens = (tagsField.objectValue as? [Any]) ?? []
         return SnippetTagging.normalizedTags(tokens.compactMap { $0 as? String })
@@ -403,12 +438,19 @@ extension ViewController {
 
     /// Rebuilds the one-click "+ tag" suggestions under the tags field:
     /// existing tags not yet on the edited snippet, most-used first.
+    ///
+    /// Only while the snippet has no tags at all. Offered on any snippet missing
+    /// any library tag — which for anyone with tags is essentially always — this
+    /// was up to eight coloured pills permanently parked under the field, and the
+    /// token field already completes "w" to "work" on its own. Gated on empty it
+    /// obeys the same rule as the keyword chips above it: chips are a starting
+    /// point when the field has nothing, and get out of the way once it does.
     func updateSuggestedTagsRow() {
         let suggestions: [String]
-        if editingSnippetID != nil, tagsField.isEnabled {
-            let currentKeys = Set(tagsFromEditor().map { SnippetTagging.filterKey(for: $0) })
+        if editingSnippetID != nil, tagsField.isEnabled, tagsFromEditor().isEmpty {
+            // No "minus this snippet's tags" filter any more: the guard above is
+            // that this snippet has none, so every library tag is a candidate.
             suggestions = store.tagUsage()
-                .filter { !currentKeys.contains(SnippetTagging.filterKey(for: $0.tag)) }
                 .sorted { $0.count > $1.count }
                 .prefix(8)
                 .map(\.tag)
@@ -472,10 +514,16 @@ extension ViewController {
         return sanitizedKeyword
     }
 
-    /// The one line under Keyword. It never hides and it always says whether
-    /// this snippet will actually fire, because the keyword is the only field
-    /// that decides that and nothing else on screen reports it. Empty text is
-    /// reserved for "no snippet selected" — there is nothing to be true about.
+    /// The one line under Keyword. It never hides — the slot keeps its height so
+    /// the form cannot reflow while someone is typing — and it speaks only when
+    /// something is wrong or missing, because the keyword is the only field that
+    /// decides whether a snippet fires and nothing else on screen reports it.
+    ///
+    /// Silence therefore means "this works", and means only that. It used to be
+    /// ambiguous, because a snippet with no keyword at all was silent too; that
+    /// case now says so, which is what earns the working case its silence back.
+    /// "Type \sig in any app." was the app's whole mechanic restated on every
+    /// correctly configured snippet forever.
     ///
     /// Every sentence here is written to survive being cut off. The label is one
     /// line pinned to the editor's width, which is 182pt on a default first-run
@@ -553,9 +601,9 @@ extension ViewController {
         } else if let blocks {
             setKeywordStatus("This stops \\\(blocks.normalizedKeyword) expanding: \(blocks.displayName)", isFailure: true)
         } else {
-            // Silence used to mean this, and silence is also what a keyword-less
-            // snippet got, so it meant nothing.
-            setKeywordStatus("Type \(trigger) in any app.", isFailure: false)
+            // Nothing to report. The slot keeps its 15pt height, so this is a
+            // blank line and not a collapsed row.
+            setKeywordStatus("", isFailure: false)
         }
     }
 
@@ -638,7 +686,10 @@ extension ViewController {
         let rendered = PlaceholderResolver.resolveForPreview(template: template)
         let hasDynamicContent = !template.isEmpty
             && PlaceholderResolver.containsResolvablePlaceholder(in: template)
-        previewSeparator.isHidden = !hasDynamicContent
+        // Hides the whole section, label included — no separator above it any
+        // more, because with the token hint gone it was a horizontal rule no
+        // other section had, fencing a section already fenced by being
+        // conditional, by its own label, and by the 16pt gap below it.
         previewSectionStack.isHidden = !hasDynamicContent
         previewValueField.stringValue = rendered
     }

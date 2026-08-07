@@ -34,6 +34,60 @@ final class SnippetContentTextView: NSTextView {
         needsDisplay = true
     }
 
+    /// Typing `{` offers the placeholder tokens, which is what replaced the
+    /// permanent list of them that used to sit under this box. An action at the
+    /// point of need rather than a line to read and transcribe.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText(string, replacementRange: replacementRange)
+
+        let inserted = (string as? String) ?? (string as? NSAttributedString)?.string
+        guard inserted == "{", isEditable else { return }
+
+        // Not synchronously: AppKit is still inside its own insertion here, and
+        // the completion machinery reads the text storage this just wrote to.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, isEditable else { return }
+            complete(nil)
+        }
+    }
+
+    /// The word being completed starts at the `{` the user typed, not wherever
+    /// AppKit's word boundaries land inside `{da`. Without this the completion
+    /// would insert a token beside the brace instead of replacing it.
+    override var rangeForUserCompletion: NSRange {
+        let text = string as NSString
+        let caret = selectedRange()
+        guard caret.length == 0, caret.location > 0, caret.location <= text.length else {
+            return super.rangeForUserCompletion
+        }
+
+        let precedingRange = NSRange(location: 0, length: caret.location)
+        let braceRange = text.rangeOfCharacter(
+            from: SnippetContentTextView.tokenBoundaryCharacters,
+            options: .backwards,
+            range: precedingRange
+        )
+        guard braceRange.location != NSNotFound, text.substring(with: braceRange) == "{" else {
+            return super.rangeForUserCompletion
+        }
+
+        // A `{` further back than any token could reach, or with a line break in
+        // between, is not the one being typed.
+        let length = caret.location - braceRange.location
+        guard length <= SnippetContentTextView.maximumTokenCompletionLength else {
+            return super.rangeForUserCompletion
+        }
+        let partial = text.substring(with: NSRange(location: braceRange.location, length: length))
+        guard !partial.contains(where: \.isNewline) else {
+            return super.rangeForUserCompletion
+        }
+
+        return NSRange(location: braceRange.location, length: length)
+    }
+
+    private static let tokenBoundaryCharacters = CharacterSet(charactersIn: "{}\n")
+    private static let maximumTokenCompletionLength = 24
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 

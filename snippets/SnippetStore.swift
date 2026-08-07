@@ -455,6 +455,11 @@ final class SnippetStore {
 
     private func load() {
         guard FileManager.default.fileExists(atPath: saveURL.path) else {
+            // Seeding here is why the list's empty state carries no explanation
+            // of how expansion works: a genuinely new user always has this
+            // snippet, so that screen only ever appears to someone who deleted
+            // everything. Remove the seed and the teaching sentence has to come
+            // back with it.
             snippets = [Snippet.starterSnippet]
             persist()
             return
