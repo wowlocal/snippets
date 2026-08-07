@@ -623,9 +623,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         exportItem.target = self
         LiquidGlassDesign.applyMenuSymbol("square.and.arrow.up", to: exportItem)
 
-        let insertionIndex = fileMenu.items.firstIndex(where: { $0.isSeparatorItem }) ?? fileMenu.items.count
+        // Anchored on Close, and carrying its own separators. This used to point
+        // at the first separator in the menu, and when the dead document commands
+        // went so did both separators — the `?? count` fallback then appended
+        // Import and Export below Close, five items in one undifferentiated
+        // block. Close is an item this menu means to have; a separator is only
+        // ever a consequence of the items around it.
+        let closeIndex = fileMenu.items.firstIndex { $0.action == #selector(NSWindow.performClose(_:)) }
+        let insertionIndex = closeIndex ?? fileMenu.items.count
+        if closeIndex != nil {
+            fileMenu.insertItem(.separator(), at: insertionIndex)
+        }
         fileMenu.insertItem(exportItem, at: insertionIndex)
         fileMenu.insertItem(importItem, at: insertionIndex)
+        if insertionIndex > 0 {
+            fileMenu.insertItem(.separator(), at: insertionIndex)
+        }
     }
 
     @objc private func openFromStatusBar() {
@@ -796,17 +809,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         do {
             let snippet = try SnippetDeepLink.snippet(from: url)
 
+            if SnippetDeepLink.isCreationLink(url) {
+                createSnippetFromDeepLink(snippet, in: viewController)
+                return
+            }
+
             guard confirmImportOfSharedSnippet(snippet) else { return }
 
             let importedSnippet = try store.importSharedSnippet(snippet)
             if let viewController {
-                let hasActiveSearch = !viewController.searchField.stringValue
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .isEmpty
-                if hasActiveSearch {
-                    viewController.searchField.stringValue = ""
-                    viewController.reloadVisibleSnippets(keepSelection: true)
-                }
+                clearActiveSearch(in: viewController)
                 viewController.selectSnippet(id: importedSnippet.id, focus: nil)
                 viewController.importExportMessage = "Imported shared snippet \(importedSnippet.displayName)."
                 viewController.requestFirstResponder(viewController.tableView)
@@ -818,6 +830,133 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 style: .warning
             )
         }
+    }
+
+    /// `snippets://new` adds a snippet. It never replaces one.
+    ///
+    /// The share host merges on keyword equality and rewrites the whole row it
+    /// lands on, which is right for a link this app wrote — that one carries a
+    /// complete record — and wrong for a link anybody can put on a web page,
+    /// where every field the URL omits arrives empty. Routed through that merge,
+    /// `?keyword=sig&content=…` took the name, the tags and the pin off whatever
+    /// snippet already answered to `\sig`, and switched it back on if the user
+    /// had deliberately switched it off. A host called "new" creates.
+    private func createSnippetFromDeepLink(_ snippet: Snippet, in viewController: ViewController?) {
+        guard confirmCreationOfLinkedSnippet(snippet) else { return }
+
+        // Before `addSnippet`, which tracks one blank draft at a time: an
+        // untouched ⌘N row still open here would lose its tracking and stay in
+        // the library forever. This is what `createSnippet` does with a seed.
+        if let draft = store.blankDraftSnippet {
+            store.discardBlankDraft(id: draft.id)
+        }
+
+        var created = store.addSnippet(name: snippet.name, content: snippet.content, tags: snippet.tags)
+        if !snippet.normalizedKeyword.isEmpty {
+            created.keyword = snippet.normalizedKeyword
+            // The keyword arrives in a second call because `addSnippet` does not
+            // take one, and `update` writes on the editor's typing debounce —
+            // which is wrong for a discrete action. Every other one is on disk
+            // before it returns, and so is this.
+            store.update(created)
+            store.flushPendingWrites()
+        }
+
+        guard let viewController else { return }
+        clearActiveSearch(in: viewController)
+        // Reloaded again even when there was no search to clear: `store.onChange`
+        // defers the list reload while the editor has focus, and the new row has
+        // to be in the table before the selection below can land on it.
+        viewController.reloadVisibleSnippets(keepSelection: true)
+        // The keyword lands focused because it is the field a hand-written link
+        // most often leaves out or collides with, and the status line under it is
+        // the one place that says whether this snippet will ever fire.
+        viewController.selectSnippet(id: created.id, focus: .keyword)
+        viewController.importExportMessage = "Created \(created.displayName) from a link."
+    }
+
+    /// A link that adds is still a link any web page can navigate to, and the
+    /// engine has no terminator, so a short enabled keyword arriving unannounced
+    /// fires by accident. The modal stays for the creation host too.
+    private func confirmCreationOfLinkedSnippet(_ snippet: Snippet) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Create Snippet From Link?"
+
+        if let notice = linkedSnippetKeywordNotice(snippet) {
+            alert.informativeText = """
+            \(sharedSnippetSummary(snippet))
+
+            \(notice.text)
+            """
+            alert.alertStyle = notice.isFailure ? .warning : .informational
+        } else {
+            alert.informativeText = sharedSnippetSummary(snippet)
+            alert.alertStyle = .informational
+        }
+
+        alert.addButton(withTitle: "Create Snippet")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// What this keyword will do to the library, decided with the `KeywordRelation`
+    /// the editor's status line and the keyword chips already share, so the alert
+    /// cannot promise something the line under the field then contradicts.
+    ///
+    /// A colliding keyword is a legal state and nothing here resolves it — silently
+    /// dropping or renaming it would be its own trap. It is said out loud instead,
+    /// and the snippet opens with the keyword field focused.
+    private func linkedSnippetKeywordNotice(_ snippet: Snippet) -> (text: String, isFailure: Bool)? {
+        let incomingKey = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
+        guard !incomingKey.isEmpty else {
+            return ("This link carries no keyword, so the new snippet will not expand until you give it one.", false)
+        }
+
+        let trigger = "\\\(snippet.normalizedKeyword)"
+        var duplicate: Snippet?
+        var blockedBy: Snippet?
+        var blocks: Snippet?
+        for other in store.enabledSnippetsSorted() {
+            switch KeywordRelation.between(incomingKey, SnippetTagging.filterKey(for: other.normalizedKeyword)) {
+            case .duplicate:
+                duplicate = duplicate ?? other
+            case .blockedByLonger:
+                blockedBy = blockedBy ?? other
+            case .blocksShorter:
+                blocks = blocks ?? other
+            case .unrelated:
+                break
+            }
+        }
+
+        if let duplicate {
+            return (
+                "\(trigger) is already used by \(duplicate.displayName) — create this and neither will expand. \(duplicate.displayName) is kept as it is; nothing is replaced.",
+                true
+            )
+        }
+        if let blockedBy {
+            return (
+                "\(trigger) won't auto-expand — \(blockedBy.displayName) uses the longer \\\(blockedBy.normalizedKeyword).",
+                true
+            )
+        }
+        if let blocks {
+            return ("This will stop \(blocks.displayName) (\\\(blocks.normalizedKeyword)) from auto-expanding.", true)
+        }
+        return nil
+    }
+
+    /// A snippet arriving from a link lands outside whatever the list is
+    /// filtered to, so the filter goes rather than the new row being invisible.
+    private func clearActiveSearch(in viewController: ViewController) {
+        let hasActiveSearch = !viewController.searchField.stringValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        guard hasActiveSearch else { return }
+
+        viewController.searchField.stringValue = ""
+        viewController.reloadVisibleSnippets(keepSelection: true)
     }
 
     private func confirmImportOfSharedSnippet(_ snippet: Snippet) -> Bool {
