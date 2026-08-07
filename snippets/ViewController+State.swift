@@ -147,19 +147,30 @@ extension ViewController {
         let isFiltering = !activeTagFilterKeys.isEmpty
         let iconName: String
         let message: String
+        let actions: Set<ListEmptyStateAction>
 
         if store.snippets.isEmpty {
+            // An empty library is the one screen with room to say what the app
+            // is: nothing else here ever mentions that a snippet is typed rather
+            // than clicked. "Press ⌘N" answered a question nobody had yet.
             iconName = "square.dashed"
-            message = "No snippets yet.\nPress ⌘N to create one."
+            message = "No snippets yet.\nType \\ followed by a keyword in any app to paste a snippet."
+            actions = [.newSnippet, .newFromClipboard, .importSnippets]
         } else if isSearching && isFiltering {
             iconName = "magnifyingglass"
             message = "No results for “\(searchField.stringValue)”\nwith the selected tags."
+            actions = [.newSnippet]
         } else if isSearching {
+            // A search that found nothing is the app's own evidence that the
+            // thing does not exist yet, and `createSnippet` seeds the name from
+            // exactly that query.
             iconName = "magnifyingglass"
             message = "No results for “\(searchField.stringValue)”."
+            actions = [.newSnippet]
         } else if isFiltering {
             iconName = "tag"
             message = "No snippets match\nthe selected tags."
+            actions = []
         } else {
             listEmptyStateView.isHidden = true
             return
@@ -167,6 +178,7 @@ extension ViewController {
 
         listEmptyStateIconView.image = LiquidGlassDesign.symbol(iconName, pointSize: 24, weight: .regular)
         listEmptyStateLabel.stringValue = message
+        showListEmptyStateActions(actions)
         listEmptyStateClearButton.isHidden = !isFiltering
         listEmptyStateView.isHidden = false
     }
@@ -284,7 +296,7 @@ extension ViewController {
             if enabledCheckbox.state != .off {
                 enabledCheckbox.state = .off
             }
-            keywordWarningLabel.isHidden = true
+            updateKeywordStatus(for: nil)
             updatePreview(withTemplate: "")
             setEditorEnabled(false)
             updateSuggestedTagsRow()
@@ -315,7 +327,7 @@ extension ViewController {
             enabledCheckbox.state = targetEnabledState
         }
         updatePreview(withTemplate: snippet.content)
-        updateKeywordWarning(for: snippet)
+        updateKeywordStatus(for: snippet)
         setEditorEnabled(true)
         updateSuggestedTagsRow()
         isApplyingSnippetToEditor = false
@@ -356,6 +368,7 @@ extension ViewController {
 
     func updateSelectedSnippetFromEditor() {
         guard !isApplyingSnippetToEditor, var snippet = editingSnippet else { return }
+        let previousTags = snippet.tags
 
         snippet.name = nameField.stringValue
         snippet.content = snippetTextView.string
@@ -367,8 +380,15 @@ extension ViewController {
 
         store.update(snippet)
         updatePreview(withTemplate: snippet.content)
-        updateKeywordWarning(for: snippet)
-        updateSuggestedTagsRow()
+        updateKeywordStatus(for: snippet)
+        // The chips are the library's tags minus this snippet's, and this update
+        // is the only thing that touched the library, so nothing can have moved
+        // unless these tags did. Deciding that here rather than inside the row
+        // keeps `store.tagUsage()` — a walk over every snippet's every tag plus a
+        // localized sort — off every keystroke in Name, Keyword and Snippet.
+        if snippet.tags != previousTags {
+            updateSuggestedTagsRow()
+        }
     }
 
     func tagsFromEditor() -> [String] {
@@ -421,6 +441,17 @@ extension ViewController {
         let sanitizedKeyword = Snippet.sanitizedKeyword(rawKeyword)
         guard sanitizedKeyword != rawKeyword else { return sanitizedKeyword }
 
+        // A space at the very end is a word the user has not finished typing,
+        // not stray input: rewriting the field there swallows it, so "my sig"
+        // can never reach "my-sig" — the field goes straight from "my" to "mys".
+        // Interior spaces are still joined on the spot, and the stored keyword is
+        // sanitized either way.
+        var withoutTrailingWhitespace = rawKeyword
+        while let last = withoutTrailingWhitespace.last, last.isWhitespace {
+            withoutTrailingWhitespace.removeLast()
+        }
+        guard withoutTrailingWhitespace != sanitizedKeyword else { return sanitizedKeyword }
+
         if let editor = keywordField.currentEditor() {
             let selectedRange = editor.selectedRange
             let sanitizedLength = (sanitizedKeyword as NSString).length
@@ -436,27 +467,86 @@ extension ViewController {
         return sanitizedKeyword
     }
 
-    func updateKeywordWarning(for snippet: Snippet) {
-        // Fold like the expansion engine (case + diacritics) so e.g.
-        // "cafe" vs "café" is flagged — both stop expanding.
-        let keyword = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
-        guard snippet.isEnabled, !keyword.isEmpty else {
-            keywordWarningLabel.isHidden = true
+    /// The one line under Keyword. It never hides and it always says whether
+    /// this snippet will actually fire, because the keyword is the only field
+    /// that decides that and nothing else on screen reports it. Empty text is
+    /// reserved for "no snippet selected" — there is nothing to be true about.
+    func updateKeywordStatus(for snippet: Snippet?) {
+        guard let snippet else {
+            setKeywordStatus("", isFailure: false)
             return
         }
 
-        let conflicting = store.enabledSnippetsSorted().filter { other in
-            guard other.id != snippet.id else { return false }
-            let otherKeyword = SnippetTagging.filterKey(for: other.normalizedKeyword)
-            return otherKeyword.hasPrefix(keyword) || keyword.hasPrefix(otherKeyword)
+        // Fold like the expansion engine (case + diacritics) so e.g.
+        // "cafe" vs "café" is flagged — both stop expanding.
+        let keyword = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
+        let trigger = "\\\(snippet.normalizedKeyword)"
+
+        guard !keyword.isEmpty else {
+            // The most common broken snippet in the library, and the one the old
+            // warning was careful to say nothing about.
+            setKeywordStatus("Add a keyword — this won't expand yet.", isFailure: false)
+            return
+        }
+        guard snippet.isEnabled else {
+            // A disabled snippet is invisible to the engine, so it neither fires
+            // nor blocks anyone; reporting conflicts here would be a lie.
+            setKeywordStatus("Disabled — \(trigger) won't expand until you turn it on.", isFailure: false)
+            return
+        }
+        // Transcribed from SnippetExpansionEngine.unambiguousExactMatch: the
+        // trigger deletion is counted in graphemes, so a keyword containing one
+        // built from several scalars is refused outright.
+        guard !snippet.normalizedKeyword.contains(where: { $0.unicodeScalars.count > 1 }) else {
+            setKeywordStatus("\(trigger) won't auto-expand — use letters, digits or -.", isFailure: true)
+            return
         }
 
-        if let first = conflicting.first {
-            keywordWarningLabel.stringValue = "Overlaps with \\\(first.normalizedKeyword) — won't auto-expand"
-            keywordWarningLabel.isHidden = false
-        } else {
-            keywordWarningLabel.isHidden = true
+        // Also from unambiguousExactMatch: a keyword fires only when it is the
+        // single exact match and no *longer* enabled keyword starts with it. That
+        // relation runs one way, so the two sides are two different failures on
+        // two different snippets and both have to be computed. The old symmetric
+        // test collapsed them and then reported the wrong one.
+        var duplicate: Snippet?
+        var blockedBy: Snippet?
+        var blocks: Snippet?
+        for other in store.enabledSnippetsSorted() where other.id != snippet.id {
+            let otherKeyword = SnippetTagging.filterKey(for: other.normalizedKeyword)
+            if otherKeyword == keyword {
+                duplicate = duplicate ?? other
+            } else if otherKeyword.hasPrefix(keyword) {
+                blockedBy = blockedBy ?? other
+            } else if keyword.hasPrefix(otherKeyword) {
+                blocks = blocks ?? other
+            }
         }
+
+        if let duplicate {
+            setKeywordStatus("\(trigger) is already used by \(duplicate.displayName) — neither expands.", isFailure: true)
+        } else if let blockedBy {
+            // This snippet's own failure outranks the damage it does elsewhere:
+            // the line sits under this snippet's keyword, and naming only the
+            // other victim would read as "this one is fine". The line recomputes
+            // on every keystroke, so `blocks` surfaces the moment this is fixed.
+            setKeywordStatus(
+                "\(trigger) won't auto-expand — \(blockedBy.displayName) uses the longer \\\(blockedBy.normalizedKeyword).",
+                isFailure: true
+            )
+        } else if let blocks {
+            setKeywordStatus("This stops \(blocks.displayName) (\\\(blocks.normalizedKeyword)) from auto-expanding.", isFailure: true)
+        } else {
+            // Silence used to mean this, and silence is also what a keyword-less
+            // snippet got, so it meant nothing.
+            setKeywordStatus("Type \(trigger) in any app.", isFailure: false)
+        }
+    }
+
+    private func setKeywordStatus(_ text: String, isFailure: Bool) {
+        keywordWarningLabel.stringValue = text
+        keywordWarningLabel.textColor = isFailure ? ThemeManager.alertColor : .secondaryLabelColor
+        // The row is one line high, so the sentence truncates at narrow editor
+        // widths; the tooltip is the rest of it.
+        keywordWarningLabel.toolTip = text.isEmpty ? nil : text
     }
 
     func updatePreview(withTemplate template: String) {

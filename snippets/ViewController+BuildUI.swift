@@ -20,8 +20,19 @@ private struct ActionShortcutDescriptor {
     let isEssential: Bool
 }
 
+/// An action the list's empty state can offer. The raw values are view tags, so
+/// none of them may be 0 — that is every untagged view in the stack.
+enum ListEmptyStateAction: Int {
+    case newSnippet = 1
+    case newFromClipboard = 2
+    case importSnippets = 3
+}
+
 private enum ActionPanelContent {
     static let shortcuts: [ActionShortcutDescriptor] = [
+        // The mechanic the whole app exists for led this list nowhere: a user
+        // could read every row and still not know a snippet is typed, not clicked.
+        ActionShortcutDescriptor(title: "Expand a Snippet", shortcut: "\\keyword", isEssential: true),
         ActionShortcutDescriptor(title: "Copy Snippet", shortcut: "↩", isEssential: true),
         ActionShortcutDescriptor(title: "Paste Snippet", shortcut: "⌘↩", isEssential: true),
         ActionShortcutDescriptor(title: "Search", shortcut: "⌘F", isEssential: true),
@@ -38,7 +49,9 @@ private enum ActionPanelContent {
         ActionShortcutDescriptor(title: "Toggle Shortcuts", shortcut: "⌘K", isEssential: false),
         ActionShortcutDescriptor(title: "Next Snippet", shortcut: "⌃N", isEssential: false),
         ActionShortcutDescriptor(title: "Previous Snippet", shortcut: "⌃P", isEssential: false),
-        ActionShortcutDescriptor(title: "Dismiss Panel", shortcut: "esc", isEssential: false)
+        // Escape is the only way out of the panel, so it cannot be one of the
+        // rows you have to already know about Option to discover.
+        ActionShortcutDescriptor(title: "Dismiss Panel", shortcut: "esc", isEssential: true)
     ]
 
     static let compactTip = "Hold Option for all keybindings. Esc dismisses."
@@ -313,6 +326,12 @@ extension ViewController {
         listEmptyStateView.isHidden = true
         listEmptyStateView.addArrangedSubview(listEmptyStateIconView)
         listEmptyStateView.addArrangedSubview(listEmptyStateLabel)
+        for button in makeListEmptyStateActionButtons() {
+            listEmptyStateView.addArrangedSubview(button)
+            // One column of matching buttons: the sidebar is 260pt at its
+            // narrowest, where "New from Clipboard" alone fills the row.
+            button.widthAnchor.constraint(equalTo: listEmptyStateView.widthAnchor).isActive = true
+        }
         listEmptyStateView.addArrangedSubview(listEmptyStateClearButton)
         listEmptyStateView.setCustomSpacing(12, after: listEmptyStateLabel)
 
@@ -324,6 +343,67 @@ extension ViewController {
             listEmptyStateView.leadingAnchor.constraint(greaterThanOrEqualTo: listContainer.leadingAnchor, constant: 12),
             listEmptyStateView.trailingAnchor.constraint(lessThanOrEqualTo: listContainer.trailingAnchor, constant: -12)
         ])
+    }
+
+    private func makeListEmptyStateActionButtons() -> [NSButton] {
+        // createSnippetFromClipboard(_:) lives in ViewController+Actions, so this
+        // is a named selector rather than a #selector — the extra parentheses are
+        // what silence "no method declared with this selector" while that file
+        // catches up. The button is only offered once it actually responds.
+        let clipboardAction = Selector(("createSnippetFromClipboard:"))
+
+        var buttons = [
+            makeListEmptyStateActionButton(
+                title: "New Snippet",
+                action: #selector(createSnippet(_:)),
+                tag: .newSnippet
+            )
+        ]
+        if responds(to: clipboardAction) {
+            buttons.append(
+                makeListEmptyStateActionButton(
+                    title: "New from Clipboard",
+                    action: clipboardAction,
+                    tag: .newFromClipboard
+                )
+            )
+        }
+        // Import is the shortest path from "no snippets" to a full library, and
+        // it lived three levels deep in Menu ▸ More ▸ Import…
+        buttons.append(
+            makeListEmptyStateActionButton(
+                title: "Import…",
+                action: #selector(runImport(_:)),
+                tag: .importSnippets
+            )
+        )
+        return buttons
+    }
+
+    private func makeListEmptyStateActionButton(
+        title: String,
+        action: Selector,
+        tag: ListEmptyStateAction
+    ) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.tag = tag.rawValue
+        button.controlSize = .small
+        if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
+            button.bezelStyle = .glass
+        } else {
+            button.bezelStyle = .rounded
+        }
+        return button
+    }
+
+    /// Shows exactly `actions` in the empty state. The buttons are found by tag
+    /// rather than held: a hidden arranged subview is detached from the stack's
+    /// `subviews`, so `viewWithTag` would stop seeing one the moment it is hidden.
+    func showListEmptyStateActions(_ actions: Set<ListEmptyStateAction>) {
+        for view in listEmptyStateView.arrangedSubviews {
+            guard let action = ListEmptyStateAction(rawValue: view.tag) else { continue }
+            view.isHidden = !actions.contains(action)
+        }
     }
 
     @objc private func clearTagFiltersFromEmptyState() {
@@ -465,7 +545,10 @@ extension ViewController {
         nameLabel.alignment = .left
 
         nameField.delegate = self
-        nameField.placeholderString = "Temporary Password"
+        // The old placeholders were the starter snippet's own name and keyword,
+        // so on first run the empty editor read as a filled-in duplicate of the
+        // one row in the list. These say what the field is for instead.
+        nameField.placeholderString = "Optional — first line is used if blank"
         nameField.controlSize = .large
 
         let snippetLabel = NSTextField(labelWithString: "Snippet")
@@ -533,13 +616,20 @@ extension ViewController {
         keywordPrefixLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         keywordField.delegate = self
-        keywordField.placeholderString = "tp"
+        keywordField.placeholderString = "sig"
         keywordField.controlSize = .large
 
         keywordWarningLabel.font = .systemFont(ofSize: 12)
-        keywordWarningLabel.textColor = ThemeManager.alertColor
+        keywordWarningLabel.textColor = .secondaryLabelColor
         keywordWarningLabel.alignment = .left
-        keywordWarningLabel.isHidden = true
+        // The status line always says something and is never hidden: it sits
+        // mid-form now, so a label that comes and goes would shove Name, Tags and
+        // Enabled up and down on the keystroke that fixes or breaks a keyword.
+        // One pinned row also means a long sentence truncates instead of wrapping.
+        keywordWarningLabel.maximumNumberOfLines = 1
+        keywordWarningLabel.lineBreakMode = .byTruncatingTail
+        keywordWarningLabel.translatesAutoresizingMaskIntoConstraints = false
+        keywordWarningLabel.heightAnchor.constraint(equalToConstant: 15).isActive = true
 
         let tagsLabel = NSTextField(labelWithString: "Tags")
         tagsLabel.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -552,6 +642,10 @@ extension ViewController {
         tagsField.tokenizingCharacterSet = CharacterSet(charactersIn: ",")
         tagsField.completionDelay = 0.2
 
+        // Without a row limit the editor's chips cannot collapse, so eight
+        // suggestions wrap to four rows at the narrow end and push Enabled off
+        // screen on every new snippet. The filter bar has always had this.
+        editorSuggestedTagsFlow.collapsedRowLimit = 1
         editorSuggestedTagsFlow.isHidden = true
 
         enabledCheckbox.target = self
