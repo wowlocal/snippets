@@ -142,13 +142,13 @@ final class SearchSuggestionOverlayView: NSView {
 }
 
 private final class SearchSuggestionRowView: NSView {
-    private let dotView = SearchSuggestionDotView()
+    private let dotView = DotView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
     private let contentPreviewLabel = NSTextField(labelWithString: "")
     private let tagChipsStack = NSStackView()
     private var trackingArea: NSTrackingArea?
-    private var isDisabledSnippet = false
+    private var status = SnippetRowStatus.unconfigured
     private var isHovering = false {
         didSet {
             guard oldValue != isHovering else { return }
@@ -286,20 +286,26 @@ private final class SearchSuggestionRowView: NSView {
     }
 
     func configure(with snippet: Snippet) {
-        isDisabledSnippet = !snippet.isEnabled
-
-        let keyword = snippet.normalizedKeyword
-        let preview = snippet.content
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: .newlines)
-            .first ?? ""
+        status = SnippetRowStatus(snippet)
 
         nameLabel.stringValue = snippet.displayName
-        keywordLabel.stringValue = keyword.isEmpty ? "" : "\\\(keyword)"
-        keywordLabel.isHidden = keyword.isEmpty
+        // Monospaced only when there is something to type: this slot is otherwise
+        // reserved for literal keywords, and "No keyword" is not one of them.
+        keywordLabel.font = status.hasKeyword
+            ? .monospacedSystemFont(ofSize: 12, weight: .medium)
+            : .systemFont(ofSize: 12, weight: .medium)
+        keywordLabel.stringValue = status.keywordText
+        keywordLabel.isHidden = false
+
+        let preview = snippet.contentFirstLine
         contentPreviewLabel.stringValue = preview
-        contentPreviewLabel.isHidden = preview.isEmpty
-        dotView.color = snippet.isEnabled ? ThemeManager.snippetDotColor : .secondaryLabelColor
+        // With no name the title above is already this exact line; printing it
+        // twice in one row reads as a rendering bug.
+        let hasName = !snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        contentPreviewLabel.isHidden = preview.isEmpty || !hasName
+
+        dotView.style = status.dotStyle
+        dotView.color = status.dotColor
 
         tagChipsStack.arrangedSubviews.forEach { view in
             tagChipsStack.removeArrangedSubview(view)
@@ -317,25 +323,8 @@ private final class SearchSuggestionRowView: NSView {
     }
 
     private func applyTextColors() {
-        if isDisabledSnippet {
-            nameLabel.textColor = .secondaryLabelColor
-            keywordLabel.textColor = .tertiaryLabelColor
-            contentPreviewLabel.textColor = .tertiaryLabelColor
-        } else {
-            nameLabel.textColor = .labelColor
-            keywordLabel.textColor = .secondaryLabelColor
-            contentPreviewLabel.textColor = .secondaryLabelColor
-        }
-    }
-}
-
-private final class SearchSuggestionDotView: NSView {
-    var color: NSColor = .secondaryLabelColor {
-        didSet { needsDisplay = true }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        color.setFill()
-        NSBezierPath(ovalIn: bounds).fill()
+        nameLabel.textColor = status.nameColor
+        keywordLabel.textColor = status.keywordColor
+        contentPreviewLabel.textColor = status.previewColor
     }
 }
