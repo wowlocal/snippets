@@ -582,6 +582,11 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        // A ⌘N draft nobody typed into is not a snippet anyone meant to export,
+        // and abandoning it any other way leaves nothing behind. Discard after
+        // the panel commits, so cancelling the export does not delete the draft.
+        discardOpenBlankDraft()
+
         do {
             let count = try store.exportSnippets(to: url)
             importExportMessage = "Exported \(count) snippet(s) to \(url.lastPathComponent)."
