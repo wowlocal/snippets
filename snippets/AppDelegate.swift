@@ -237,8 +237,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         true
     }
 
+    // Routed through `showMainWindow()` rather than a notification because
+    // `applicationShouldTerminateAfterLastWindowClosed` is false: with the window closed there is
+    // no ViewController listening, so ⌘N used to do nothing at all.
     @IBAction func newDocument(_ sender: Any?) {
-        NotificationCenter.default.post(name: .snippetsCreateNew, object: nil)
+        showMainWindow()?.createSnippet(sender)
     }
 
     @IBAction func toggleLaunchAtLogin(_ sender: Any?) {
