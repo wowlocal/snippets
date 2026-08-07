@@ -40,7 +40,9 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private let wrappedNameRowHeight: CGFloat = 62
     /// Static so the panel and its column can size themselves during init.
     private static let panelWidth: CGFloat = 320
-    private let horizontalCellPadding: CGFloat = 20
+    /// The cell's leading/trailing inset doubled: 6pt of it is the highlight pill's
+    /// own inset, 8pt is breathing room between the pill edge and the text.
+    private let horizontalCellPadding: CGFloat = 28
 
     private var maxVisibleRowsOnScreen: Int {
         let anchorPoint = anchorRect.map { NSPoint(x: $0.midX, y: $0.midY) }
@@ -95,18 +97,17 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let visualEffect = NSVisualEffectView()
-        visualEffect.material = .menu
-        visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 8
-        visualEffect.layer?.masksToBounds = true
-
         tableView = NSTableView()
         tableView.headerView = nil
+        // `.automatic` resolves to `.inset` on macOS 26, which squeezes the column
+        // and offsets the first row. This panel draws its own row pill, so no
+        // system insets or decoration are wanted.
+        tableView.style = .plain
         tableView.backgroundColor = .clear
-        tableView.selectionHighlightStyle = .regular
-        tableView.intercellSpacing = NSSize(width: 0, height: 2)
+        // The panel is never key, so AppKit's own selection would paint the
+        // unemphasized grey bar. SuggestionTableRowView draws the pill instead.
+        tableView.selectionHighlightStyle = .none
+        tableView.intercellSpacing = NSSize(width: 0, height: 4)
         tableView.rowHeight = singleLineRowHeight
         tableView.focusRingType = .none
 
@@ -117,17 +118,29 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         scrollView = NSScrollView()
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = false
+        // A legacy scroller shrinks the document view, which pulls every row pill
+        // off the right edge and out of its concentric fit in the glass corner.
+        scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
+        // 4 here plus the row view's half-spacing inset of 2 makes the gap above the
+        // first pill and below the last one match the 6pt gap at the sides.
+        scrollView.contentInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
 
-        visualEffect.frame = panel.contentView!.bounds
-        visualEffect.autoresizingMask = [.width, .height]
-        panel.contentView!.addSubview(visualEffect)
+        let surface = LiquidGlassDesign.makeFloatingPanelSurface(containing: scrollView)
 
-        scrollView.frame = visualEffect.bounds
-        scrollView.autoresizingMask = [.width, .height]
-        visualEffect.addSubview(scrollView)
+        // The surface is Auto Layout driven and has no size of its own, so pinning
+        // it is mandatory. Setting `frame`/`autoresizingMask` on it instead is what
+        // collapsed the panel in the earlier glass attempt (d00b1ea, reverted in
+        // 7c6e918).
+        let panelContentView = panel.contentView!
+        panelContentView.addSubview(surface)
+        NSLayoutConstraint.activate([
+            surface.leadingAnchor.constraint(equalTo: panelContentView.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: panelContentView.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: panelContentView.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: panelContentView.bottomAnchor)
+        ])
 
         super.init()
 
@@ -175,15 +188,23 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         let lastRowRect = tableView.rect(ofRow: lastRowIndex)
 
         let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
-        let safety: CGFloat = 4 // prevents 1-row clipping due to rounding / visual effect view
 
-        let height = lastRowRect.maxY + insets + safety
+        // `rect(ofRow:)` already carries half of `intercellSpacing.height` above and
+        // below every row, so `maxY` is the exact document height for the visible
+        // prefix. `ceil` only guards a fractional row height landing on a half
+        // point; the old +4 fudge dated from the visual effect view and would now
+        // show as a strip of bare glass under the last row.
+        let height = ceil(lastRowRect.maxY + insets)
 
         panel.setContentSize(NSSize(width: Self.panelWidth, height: height))
 
         // Position using the anchor from when suggestions first activated.
         // This prevents the panel from jumping as the caret moves.
         positionPanelAtAnchor()
+
+        // The panel is transparent and resizes on every keystroke; without this the
+        // window shadow keeps the outline of the previous size.
+        panel.invalidateShadow()
 
         scrollView.hasVerticalScroller = (count > visibleCount)
 
@@ -274,8 +295,24 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private func handleOutsideClick(_ event: NSEvent) {
         guard panel.isVisible else { return }
         let mouseLocation = NSEvent.mouseLocation
-        if panel.frame.contains(mouseLocation) { return }
+        if panelShapeContains(mouseLocation) { return }
         onDismiss?()
+    }
+
+    /// `panel.frame` is a rectangle but the surface is a rounded rect, so the four
+    /// corner regions sit inside the frame and outside the visible panel. A click
+    /// there passes through the transparent pixels to the host app — testing the
+    /// frame would keep the panel up while the caret moves out from under it.
+    private func panelShapeContains(_ point: NSPoint) -> Bool {
+        let frame = panel.frame
+        guard frame.contains(point) else { return false }
+
+        let radius = LiquidGlassDesign.effectivePanelCornerRadius
+        let dx = min(point.x - frame.minX, frame.maxX - point.x)
+        let dy = min(point.y - frame.minY, frame.maxY - point.y)
+        guard dx < radius, dy < radius else { return true }
+
+        return hypot(radius - dx, radius - dy) <= radius
     }
 
     // MARK: - Positioning
@@ -729,6 +766,10 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     // MARK: - NSTableViewDelegate
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        SuggestionTableRowView()
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard items.indices.contains(row) else { return nil }
 
@@ -820,8 +861,8 @@ private final class SuggestionCellView: NSTableCellView {
         addSubview(labelsStack)
 
         NSLayoutConstraint.activate([
-            labelsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            labelsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            labelsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            labelsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             labelsStack.centerYAnchor.constraint(equalTo: centerYAnchor),
             labelsStack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 4),
             labelsStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4),

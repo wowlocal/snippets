@@ -8,6 +8,10 @@ enum LiquidGlassDesign {
         static let contentCornerRadius: CGFloat = 12
         static let rowCornerRadius: CGFloat = 12
         static let hairlineWidth: CGFloat = 1
+        /// Inset that makes a `rowCornerRadius` pill concentric inside a
+        /// `panelCornerRadius` surface: both corner arcs end up sharing a centre,
+        /// so the gap around the pill is uniform on every side.
+        static let concentricRowInset: CGFloat = panelCornerRadius - rowCornerRadius
     }
 
     static var usesNativeGlass: Bool {
@@ -15,6 +19,12 @@ enum LiquidGlassDesign {
             return true
         }
         return false
+    }
+
+    /// Glass draws a wider squircle than the pre-26 material did; keeping the old
+    /// radius on the fallback path avoids an unrelated visual change there.
+    static var effectivePanelCornerRadius: CGFloat {
+        usesNativeGlass ? Metrics.panelCornerRadius : 8
     }
 
     static var primaryTintColor: NSColor? {
@@ -29,6 +39,16 @@ enum LiquidGlassDesign {
 
     static var rowHighlightCornerRadius: CGFloat {
         usesNativeGlass ? Metrics.rowCornerRadius : 8
+    }
+
+    /// Increase Contrast forcibly turns off translucency on macOS 26, flattening the
+    /// glass — and the few-percent wash below then reads as almost nothing. The
+    /// suggestion panel has no other selection cue, and picking the wrong row types
+    /// the wrong snippet into someone else's document, so strengthen the pill.
+    static var prefersHighContrastHighlight: Bool {
+        let workspace = NSWorkspace.shared
+        return workspace.accessibilityDisplayShouldIncreaseContrast
+            || workspace.accessibilityDisplayShouldReduceTransparency
     }
 
     static func rowHighlightRect(
@@ -47,6 +67,14 @@ enum LiquidGlassDesign {
     }
 
     static func rowHighlightFillColor(isSelected: Bool, isDark: Bool) -> NSColor {
+        if prefersHighContrastHighlight {
+            // Still translucent on purpose: the labels keep `labelColor`, so an
+            // opaque accent fill would leave the selected row unreadable.
+            return isSelected
+                ? NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.34 : 0.24)
+                : NSColor.secondaryLabelColor.withAlphaComponent(0.12)
+        }
+
         if usesNativeGlass {
             if isSelected {
                 return isDark
@@ -69,6 +97,10 @@ enum LiquidGlassDesign {
     }
 
     static func rowHighlightStrokeColor(isDark: Bool) -> NSColor? {
+        if prefersHighContrastHighlight {
+            return .controlAccentColor
+        }
+
         guard usesNativeGlass else { return nil }
         return NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16)
     }
@@ -104,6 +136,60 @@ enum LiquidGlassDesign {
         )
         effectView.addSubview(content)
         pin(content, to: effectView)
+        return effectView
+    }
+
+    /// Surface for a window-filling, free-floating panel that renders over *other*
+    /// applications — the suggestion popup.
+    ///
+    /// Deliberately separate from `makeTransientSurface`, which is for surfaces that
+    /// live inside one of our own windows:
+    ///
+    /// * the pre-26 fallback blends `.behindWindow`, because a `.withinWindow` blur
+    ///   has nothing to sample inside a transparent, borderless panel;
+    /// * the content is wrapped in a clipping container, because `NSGlassEffectView`
+    ///   masks its own material but *not* its `contentView` — without this the
+    ///   square corners of the scroll view punch straight through the rounded glass.
+    ///
+    /// The returned view is Auto Layout driven and has no size of its own: the
+    /// caller must pin it to the panel's content view.
+    static func makeFloatingPanelSurface(
+        containing content: NSView,
+        cornerRadius: CGFloat = effectivePanelCornerRadius,
+        fallbackMaterial: NSVisualEffectView.Material = .menu
+    ) -> NSView {
+        let clipper = NSView()
+        clipper.translatesAutoresizingMaskIntoConstraints = false
+        clipper.wantsLayer = true
+        clipper.layer?.cornerRadius = cornerRadius
+        // Continuous, not circular: the glass shape is a squircle, and a circular
+        // mask visibly diverges from it around the 45° point.
+        clipper.layer?.cornerCurve = .continuous
+        clipper.layer?.masksToBounds = true
+        pin(content, to: clipper)
+
+        if #available(macOS 26.0, *) {
+            let glassView = NSGlassEffectView()
+            glassView.translatesAutoresizingMaskIntoConstraints = false
+            glassView.cornerRadius = cornerRadius
+            glassView.style = .regular
+            glassView.contentView = clipper
+            pin(clipper, to: glassView)
+            return glassView
+        }
+
+        let effectView = NSVisualEffectView()
+        effectView.translatesAutoresizingMaskIntoConstraints = false
+        effectView.material = fallbackMaterial
+        // The panel window is transparent and floats over other apps, so the
+        // backdrop this has to blur is not inside our own window.
+        effectView.blendingMode = .behindWindow
+        // Our app is never frontmost while the panel is up.
+        effectView.state = .active
+        configureRoundedLayer(effectView, cornerRadius: cornerRadius, borderColor: nil)
+        effectView.layer?.cornerCurve = .continuous
+        effectView.addSubview(clipper)
+        pin(clipper, to: effectView)
         return effectView
     }
 
