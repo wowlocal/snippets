@@ -486,6 +486,7 @@ extension ViewController {
         snippetScrollView.scrollerStyle = .overlay
 
         snippetTextView.delegate = self
+        snippetTextView.emptyStatePrompt = "Paste or type the text this snippet expands to"
         snippetTextView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         snippetTextView.textColor = .textColor
         snippetTextView.drawsBackground = false
@@ -598,20 +599,23 @@ extension ViewController {
         keywordRow.spacing = 2
         keywordRow.alignment = .firstBaseline
 
-        stack.addArrangedSubview(nameLabel)
-        stack.addArrangedSubview(nameField)
-        stack.addArrangedSubview(keywordLabel)
-        stack.addArrangedSubview(keywordRow)
-        stack.addArrangedSubview(keywordWarningLabel)
-        stack.addArrangedSubview(tagsLabel)
-        stack.addArrangedSubview(tagsField)
-        stack.addArrangedSubview(editorSuggestedTagsFlow)
-        stack.addArrangedSubview(enabledCheckbox)
+        // Content leads: it is the only field a snippet cannot do without, and
+        // the keyword follows because it is the only one that makes it fire.
+        // Name, tags and the enabled toggle are all optional, so they sink.
         stack.addArrangedSubview(snippetLabel)
         stack.addArrangedSubview(snippetContainer)
         stack.addArrangedSubview(placeholderLabel)
         stack.addArrangedSubview(previewSeparator)
         stack.addArrangedSubview(previewSectionStack)
+        stack.addArrangedSubview(keywordLabel)
+        stack.addArrangedSubview(keywordRow)
+        stack.addArrangedSubview(keywordWarningLabel)
+        stack.addArrangedSubview(nameLabel)
+        stack.addArrangedSubview(nameField)
+        stack.addArrangedSubview(tagsLabel)
+        stack.addArrangedSubview(tagsField)
+        stack.addArrangedSubview(editorSuggestedTagsFlow)
+        stack.addArrangedSubview(enabledCheckbox)
 
         contentView.addSubview(stack)
         container.addSubview(scrollView)
@@ -628,13 +632,20 @@ extension ViewController {
         )
         preferredEditorWidth.isActive = true
 
-        stack.setCustomSpacing(8, after: nameLabel)
+        stack.setCustomSpacing(10, after: snippetLabel)
+        // The token hint is a footnote to the box above it, not a row of its
+        // own: at the default 12 it floats between the content box and whatever
+        // now follows, which used to be nothing and is now a whole section.
+        stack.setCustomSpacing(6, after: snippetContainer)
+        stack.setCustomSpacing(8, after: previewSeparator)
+        // The separator fences the preview's top; with Keyword underneath it
+        // the preview needs a bottom edge too, or it reads as the same block.
+        stack.setCustomSpacing(16, after: previewSectionStack)
         stack.setCustomSpacing(8, after: keywordLabel)
         stack.setCustomSpacing(4, after: keywordRow)
+        stack.setCustomSpacing(8, after: nameLabel)
         stack.setCustomSpacing(8, after: tagsLabel)
         stack.setCustomSpacing(6, after: tagsField)
-        stack.setCustomSpacing(10, after: snippetLabel)
-        stack.setCustomSpacing(8, after: previewSeparator)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.leadingAnchor),

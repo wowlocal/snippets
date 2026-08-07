@@ -96,7 +96,7 @@ final class ViewController: NSViewController {
     let listEmptyStateClearButton = NSButton(title: "Clear Filters", target: nil, action: nil)
 
     let nameField = NSTextField(string: "")
-    let snippetTextView = NSTextView()
+    let snippetTextView = SnippetContentTextView()
     let keywordField = NSTextField(string: "")
     let tagsField = NSTokenField(string: "")
     let editorSuggestedTagsFlow = TagFlowView()
@@ -134,12 +134,6 @@ final class ViewController: NSViewController {
 
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(handleCreateNewNotification),
-            name: .snippetsCreateNew,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
             selector: #selector(handleToggleActionsNotification),
             name: .snippetsToggleActions,
             object: nil
@@ -156,7 +150,7 @@ final class ViewController: NSViewController {
         loadPersistedTagFilters()
         reloadVisibleSnippets(keepSelection: false)
         if let firstID = visibleSnippets.first?.id {
-            selectSnippet(id: firstID, focusEditorName: false)
+            selectSnippet(id: firstID, focus: nil)
         } else {
             applySelectedSnippetToEditor()
         }

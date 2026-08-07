@@ -186,7 +186,7 @@ extension ViewController {
     }
 
     func selectSnippetFromSearchSuggestions(_ snippet: Snippet) {
-        selectSnippet(id: snippet.id, focusEditorName: false)
+        selectSnippet(id: snippet.id, focus: nil)
         searchSuggestionOverlayView.update(
             snippets: visibleSnippets,
             selectedSnippetID: selectedSnippetID
