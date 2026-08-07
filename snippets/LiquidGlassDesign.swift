@@ -31,13 +31,6 @@ enum LiquidGlassDesign {
     static var forcesLegacyAppearance: Bool { false }
     #endif
 
-    static var usesNativeGlass: Bool {
-        if #available(macOS 26.0, *), !forcesLegacyAppearance {
-            return true
-        }
-        return false
-    }
-
     /// The floating panel keeps one shape on both paths. The pre-26 difference is a
     /// material, not a design language, and a 320pt completion list is nowhere near
     /// the ~200pt, 22pt-per-row menu whose small radius is the native pre-26 idiom.
@@ -58,7 +51,7 @@ enum LiquidGlassDesign {
     }
 
     static var rowHighlightCornerRadius: CGFloat {
-        usesNativeGlass ? Metrics.rowCornerRadius : 8
+        Metrics.rowCornerRadius
     }
 
     /// Increase Contrast forcibly turns off translucency on macOS 26, flattening the
@@ -76,14 +69,10 @@ enum LiquidGlassDesign {
         horizontalInset: CGFloat,
         verticalInset: CGFloat
     ) -> NSRect {
-        if usesNativeGlass {
-            return bounds.insetBy(dx: horizontalInset, dy: verticalInset)
-        }
-
-        return bounds.insetBy(
-            dx: max(horizontalInset, 10),
-            dy: max(verticalInset, 7)
-        )
+        // No floor on either inset: each drawing site sizes its own gutter — the list
+        // 5/1, the search overlay 8/3, the suggestion panel one concentric with its
+        // surface corner — and a floor here could only discard it.
+        bounds.insetBy(dx: horizontalInset, dy: verticalInset)
     }
 
     static func rowHighlightFillColor(isSelected: Bool, isDark: Bool) -> NSColor {
@@ -95,66 +84,32 @@ enum LiquidGlassDesign {
                 : NSColor.secondaryLabelColor.withAlphaComponent(0.12)
         }
 
-        if usesNativeGlass {
-            if isSelected {
-                return isDark
-                    ? NSColor.white.withAlphaComponent(0.13)
-                    : NSColor.controlAccentColor.withAlphaComponent(0.11)
-            }
-
-            return isDark
-                ? NSColor.white.withAlphaComponent(0.055)
-                : NSColor.black.withAlphaComponent(0.035)
-        }
-
         if isSelected {
-            return NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.20 : 0.12)
+            // Neutral in dark mode rather than an accent wash. The tables run
+            // `selectionHighlightStyle = .none` and force `isEmphasized` off, so what
+            // this app implements is AppKit's *unemphasized* selection, and that one
+            // is a grey. The hairline below carries most of the row's identity
+            // anyway: against the row background it is worth ΔL* 16.7 where this fill
+            // is worth 10.9.
+            return isDark
+                ? NSColor.white.withAlphaComponent(0.13)
+                : NSColor.controlAccentColor.withAlphaComponent(0.11)
         }
 
         return isDark
-            ? NSColor.white.withAlphaComponent(0.035)
-            : NSColor.black.withAlphaComponent(0.025)
+            ? NSColor.white.withAlphaComponent(0.055)
+            : NSColor.black.withAlphaComponent(0.035)
     }
 
-    static func rowHighlightStrokeColor(isDark: Bool) -> NSColor? {
+    /// Never nil. The pill's edge does more for the selected state than its fill —
+    /// against the row background the edge is worth ΔL* 16.7 to the fill's 10.9 — and
+    /// it is the one cue hover never gets, so a selected row stays legible by its
+    /// outline even where the fill washes out against a lighter backdrop.
+    static func rowHighlightStrokeColor(isDark: Bool) -> NSColor {
         if prefersHighContrastHighlight {
             return .controlAccentColor
         }
 
-        guard usesNativeGlass else { return nil }
-        return NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16)
-    }
-
-    /// The suggestion panel's own row-pill vocabulary.
-    ///
-    /// Separate from the shared `rowHighlight*` helpers on purpose. The panel is the
-    /// one surface whose pre-26 rendering has to carry the design alone — it floats
-    /// over another application with no window frame and no glass — so it needs the
-    /// geometry and the stroke that the main window list and the in-app search
-    /// overlay do without. Those two keep calling the shared helpers unchanged.
-    static var floatingPanelRowHighlightCornerRadius: CGFloat {
-        Metrics.rowCornerRadius
-    }
-
-    static func floatingPanelRowHighlightRect(
-        in bounds: NSRect,
-        horizontalInset: CGFloat,
-        verticalInset: CGFloat
-    ) -> NSRect {
-        // No pre-26 floor, unlike `rowHighlightRect`: the panel sizes its own gutter
-        // so the pill stays concentric inside the surface, and a floor of 10/7 would
-        // discard that on exactly the path that has nothing else going for it.
-        bounds.insetBy(dx: horizontalInset, dy: verticalInset)
-    }
-
-    static func floatingPanelRowHighlightStrokeColor(isDark: Bool) -> NSColor? {
-        if prefersHighContrastHighlight {
-            return .controlAccentColor
-        }
-
-        // The shared helper draws nothing pre-26, which leaves the selected pill a
-        // bare wash with no edge of its own over whatever the host app shows through
-        // the blur. Glass gets this hairline; the fallback needs it more.
         return NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16)
     }
 

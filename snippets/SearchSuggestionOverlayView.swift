@@ -283,6 +283,14 @@ private final class SearchSuggestionRowView: NSView {
         let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: isSelected, isDark: isDark)
         color.setFill()
         path.fill()
+
+        // Selection and hover are both neutral washes a few percent apart, and here
+        // the fill is the only cue there is — these rows never restyle their text for
+        // selection. The edge is what tells them apart, and hover never gets one.
+        guard isSelected else { return }
+        LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark).setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 
     func configure(with snippet: Snippet) {

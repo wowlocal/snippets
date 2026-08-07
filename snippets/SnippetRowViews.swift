@@ -183,27 +183,6 @@ class SnippetTableRowView: NSTableRowView {
     /// Vertical inset of the highlight pill inside the row.
     var highlightVerticalInset: CGFloat { 1 }
 
-    /// Shape and edge of the highlight pill, split out so a subclass can carry its
-    /// own design without reaching into `drawHighlight`, which is private and so
-    /// invisible to subclasses even in this file. Every default is the shared
-    /// `LiquidGlassDesign` value, so this class draws exactly what it drew before
-    /// the hooks existed.
-    func highlightRect(in bounds: NSRect) -> NSRect {
-        LiquidGlassDesign.rowHighlightRect(
-            in: bounds,
-            horizontalInset: highlightHorizontalInset,
-            verticalInset: highlightVerticalInset
-        )
-    }
-
-    var highlightCornerRadius: CGFloat {
-        LiquidGlassDesign.rowHighlightCornerRadius
-    }
-
-    func highlightStrokeColor(isDark: Bool) -> NSColor? {
-        LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark)
-    }
-
     override var isEmphasized: Bool {
         get { false }
         set {}
@@ -273,17 +252,21 @@ class SnippetTableRowView: NSTableRowView {
 
     private func drawHighlight(isSelected: Bool) {
         let path = NSBezierPath(
-            roundedRect: highlightRect(in: bounds),
-            xRadius: highlightCornerRadius,
-            yRadius: highlightCornerRadius
+            roundedRect: LiquidGlassDesign.rowHighlightRect(
+                in: bounds,
+                horizontalInset: highlightHorizontalInset,
+                verticalInset: highlightVerticalInset
+            ),
+            xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
+            yRadius: LiquidGlassDesign.rowHighlightCornerRadius
         )
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: isSelected, isDark: isDark)
         color.setFill()
         path.fill()
 
-        if isSelected, let strokeColor = highlightStrokeColor(isDark: isDark) {
-            strokeColor.setStroke()
+        if isSelected {
+            LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark).setStroke()
             path.lineWidth = 1
             path.stroke()
         }
@@ -309,24 +292,5 @@ final class SuggestionTableRowView: SnippetTableRowView {
     override var highlightVerticalInset: CGFloat {
         let spacing = (superview as? NSTableView)?.intercellSpacing.height ?? 4
         return max(1, spacing / 2)
-    }
-
-    /// The shared helper floors the pre-26 insets at 10/7, which suits a row inside
-    /// one of our windows but throws both insets above away — pre-26 the panel drew
-    /// a 300x36 pill in a 320x50 row, and none of its own tuning reached the screen.
-    override func highlightRect(in bounds: NSRect) -> NSRect {
-        LiquidGlassDesign.floatingPanelRowHighlightRect(
-            in: bounds,
-            horizontalInset: highlightHorizontalInset,
-            verticalInset: highlightVerticalInset
-        )
-    }
-
-    override var highlightCornerRadius: CGFloat {
-        LiquidGlassDesign.floatingPanelRowHighlightCornerRadius
-    }
-
-    override func highlightStrokeColor(isDark: Bool) -> NSColor? {
-        LiquidGlassDesign.floatingPanelRowHighlightStrokeColor(isDark: isDark)
     }
 }
