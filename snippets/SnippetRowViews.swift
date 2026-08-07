@@ -167,7 +167,7 @@ final class SnippetRowCellView: NSTableCellView {
     }
 }
 
-final class SnippetTableRowView: NSTableRowView {
+class SnippetTableRowView: NSTableRowView {
     private var hoverTrackingArea: NSTrackingArea?
     private var isHovering = false {
         didSet {
@@ -177,9 +177,26 @@ final class SnippetTableRowView: NSTableRowView {
         }
     }
 
+    /// Horizontal inset of the highlight pill inside the row.
+    var highlightHorizontalInset: CGFloat { 5 }
+
+    /// Vertical inset of the highlight pill inside the row.
+    var highlightVerticalInset: CGFloat { 1 }
+
     override var isEmphasized: Bool {
         get { false }
         set {}
+    }
+
+    /// With `selectionHighlightStyle = .none` AppKit has no selection of its own to
+    /// draw, so redraw explicitly rather than trusting it to dirty the row — the
+    /// suggestion panel moves its selection with the arrow keys without reloading.
+    override var isSelected: Bool {
+        didSet {
+            if oldValue != isSelected {
+                needsDisplay = true
+            }
+        }
     }
 
     override func updateTrackingAreas() {
@@ -236,8 +253,8 @@ final class SnippetTableRowView: NSTableRowView {
     private func drawHighlight(isSelected: Bool) {
         let highlightRect = LiquidGlassDesign.rowHighlightRect(
             in: bounds,
-            horizontalInset: 5,
-            verticalInset: 1
+            horizontalInset: highlightHorizontalInset,
+            verticalInset: highlightVerticalInset
         )
         let path = NSBezierPath(
             roundedRect: highlightRect,
@@ -254,5 +271,27 @@ final class SnippetTableRowView: NSTableRowView {
             path.lineWidth = 1
             path.stroke()
         }
+    }
+}
+
+/// Row background for the suggestion panel.
+///
+/// The panel is a `.nonactivatingPanel` with `becomesKeyOnlyIfNeeded` that is only
+/// ever ordered front, so it is never key. AppKit's own selection would therefore
+/// paint the unemphasized grey bar — a flat opaque smear across translucent glass.
+/// The table runs `selectionHighlightStyle = .none` and this view paints instead.
+final class SuggestionTableRowView: SnippetTableRowView {
+    /// Concentric with the glass surface: the pill's corner arc and the panel's
+    /// share a centre, so the gap around the pill is even on every side.
+    override var highlightHorizontalInset: CGFloat {
+        LiquidGlassDesign.Metrics.concentricRowInset
+    }
+
+    /// Row rects tile contiguously and carry half of `intercellSpacing.height`
+    /// above and below their cell, so half the spacing lands the pill exactly on
+    /// the cell frame and leaves a full-spacing gap between neighbouring pills.
+    override var highlightVerticalInset: CGFloat {
+        let spacing = (superview as? NSTableView)?.intercellSpacing.height ?? 4
+        return max(1, spacing / 2)
     }
 }
