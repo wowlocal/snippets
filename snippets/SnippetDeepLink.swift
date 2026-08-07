@@ -50,6 +50,16 @@ enum SnippetDeepLink {
         return scheme == self.scheme && (host == self.host || host == creationHost)
     }
 
+    /// Whether this link asks for a new snippet rather than for the share link's
+    /// keyword-keyed merge. The two hosts carry different things and so cannot
+    /// mean the same thing to the library: a share link is machine-written and
+    /// round-trips a whole record, while this one carries only what somebody put
+    /// in a URL, and every field it leaves out arrives empty.
+    static func isCreationLink(_ url: URL) -> Bool {
+        guard canHandle(url) else { return false }
+        return url.host?.lowercased() == creationHost
+    }
+
     static func url(for snippet: Snippet) throws -> URL {
         let payload = Payload(
             version: currentVersion,
