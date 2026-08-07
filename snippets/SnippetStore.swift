@@ -139,8 +139,13 @@ final class SnippetStore {
 
         let source = snippets[index]
         let shouldDisableDuplicate = source.isEnabled && !source.normalizedKeyword.isEmpty
+        // Derived from `name`, never from `displayName`: an unnamed snippet shows
+        // its first line of content, and freezing that into the stored name would
+        // stop the copy tracking its own content forever. An empty name stays
+        // empty for the same reason — " Copy" on its own is not a name.
+        let sourceName = source.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let duplicate = Snippet(
-            name: source.displayName + " Copy",
+            name: sourceName.isEmpty ? "" : sourceName + " Copy",
             keyword: source.normalizedKeyword,
             content: source.content,
             tags: source.tags,

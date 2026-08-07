@@ -43,7 +43,10 @@ struct Snippet: Identifiable, Codable, Equatable {
 
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Untitled Snippet" : trimmed
+        if !trimmed.isEmpty { return trimmed }
+
+        let firstLine = contentFirstLine
+        return firstLine.isEmpty ? "Untitled Snippet" : firstLine
     }
 
     var normalizedKeyword: String {
@@ -126,6 +129,29 @@ enum SnippetTagging {
 extension Snippet {
     func hasTag(withKey key: String) -> Bool {
         tags.contains { SnippetTagging.filterKey(for: $0) == key }
+    }
+
+    /// The one line that stands in for an unnamed snippet, shared by `displayName`
+    /// and the row's content preview so the two can never disagree.
+    ///
+    /// Lines that hold only whitespace are skipped rather than returned: a name
+    /// made of blanks paints an empty row, which reads as a broken app rather
+    /// than as a snippet nobody named. The "…" is baked in because most consumers
+    /// are plain text — status strings, alerts, the CLI — where a silent cut at 50
+    /// characters would pass a truncated line off as the whole name.
+    var contentFirstLine: String {
+        let maxCharacters = 50
+
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            guard line.count > maxCharacters else { return line }
+
+            let endIndex = line.index(line.startIndex, offsetBy: maxCharacters)
+            return String(line[..<endIndex]) + "…"
+        }
+
+        return ""
     }
 }
 
