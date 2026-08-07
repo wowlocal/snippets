@@ -357,7 +357,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = Info-Debug.plist;
 				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Snippets needs Accessibility access to replace typed keywords with snippet content.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSInputMonitoringUsageDescription = "Snippets monitors typed keywords to trigger snippet expansion in any app.";
@@ -491,7 +491,7 @@
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 2.7.0;
+				minimumVersion = 2.9.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

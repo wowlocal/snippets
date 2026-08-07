@@ -953,6 +953,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
 #if !NO_SPARKLE
 extension AppDelegate: SPUUpdaterDelegate {
+    #if DEBUG
+    // A Debug build advertises the shipping app's CFBundleVersion from a bundle
+    // the shipping deltas can never patch — different executable name, no
+    // top-level CodeResources — and Sparkle matches deltas on CFBundleVersion
+    // alone. So a background check here can only ever download an update that
+    // fails to install. Refuse before the appcast is even fetched.
+    // Info-Debug.plist already withholds the feed; this is the backstop that
+    // outlives a plist mistake or an INFOPLIST_FILE refactor.
+    func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        // "Check for Updates…" also routes through `checkForUpdatesInBackground()`,
+        // so gate on the flag it sets rather than on the check type alone.
+        guard updateCheck == .updatesInBackground, !userInitiatedUpdateCheck else { return }
+        throw NSError(
+            domain: "com.khm.snippets.debug",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Background update checks are disabled in Debug builds."
+            ]
+        )
+    }
+    #endif
+
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         let version = updateVersionString(from: item)
         setUpdateStatus("Update \(version) found. Downloading…", showProgress: true, autoClearAfter: nil)
