@@ -111,7 +111,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         guard let forward = tabDirection(for: commandSelector),
               let next = editorNeighbor(of: control, forward: forward) else { return false }
 
-        requestFirstResponder(next)
+        moveFocus(to: next)
         return true
     }
 
@@ -121,7 +121,9 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
               let next = editorNeighbor(of: textView, forward: forward) else { return false }
 
         // ⌥⇥ still inserts a literal tab (insertTabIgnoringFieldEditor:).
-        requestFirstResponder(next)
+        // Backwards this hop leaves the editor for the list, which is the same
+        // abandonment Escape is, so it goes through the same helper.
+        moveFocus(to: next)
         return true
     }
 
