@@ -21,10 +21,13 @@ enum LiquidGlassDesign {
         return false
     }
 
-    /// Glass draws a wider squircle than the pre-26 material did; keeping the old
-    /// radius on the fallback path avoids an unrelated visual change there.
+    /// The floating panel keeps one shape on both paths. The pre-26 difference is a
+    /// material, not a design language, and a 320pt completion list is nowhere near
+    /// the ~200pt, 22pt-per-row menu whose small radius is the native pre-26 idiom.
+    /// The in-window action panel already ships this radius on every OS version, so
+    /// matching it keeps the app speaking one shape rather than two.
     static var effectivePanelCornerRadius: CGFloat {
-        usesNativeGlass ? Metrics.panelCornerRadius : 8
+        Metrics.panelCornerRadius
     }
 
     static var primaryTintColor: NSColor? {
@@ -105,6 +108,39 @@ enum LiquidGlassDesign {
         return NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16)
     }
 
+    /// The suggestion panel's own row-pill vocabulary.
+    ///
+    /// Separate from the shared `rowHighlight*` helpers on purpose. The panel is the
+    /// one surface whose pre-26 rendering has to carry the design alone — it floats
+    /// over another application with no window frame and no glass — so it needs the
+    /// geometry and the stroke that the main window list and the in-app search
+    /// overlay do without. Those two keep calling the shared helpers unchanged.
+    static var floatingPanelRowHighlightCornerRadius: CGFloat {
+        Metrics.rowCornerRadius
+    }
+
+    static func floatingPanelRowHighlightRect(
+        in bounds: NSRect,
+        horizontalInset: CGFloat,
+        verticalInset: CGFloat
+    ) -> NSRect {
+        // No pre-26 floor, unlike `rowHighlightRect`: the panel sizes its own gutter
+        // so the pill stays concentric inside the surface, and a floor of 10/7 would
+        // discard that on exactly the path that has nothing else going for it.
+        bounds.insetBy(dx: horizontalInset, dy: verticalInset)
+    }
+
+    static func floatingPanelRowHighlightStrokeColor(isDark: Bool) -> NSColor? {
+        if prefersHighContrastHighlight {
+            return .controlAccentColor
+        }
+
+        // The shared helper draws nothing pre-26, which leaves the selected pill a
+        // bare wash with no edge of its own over whatever the host app shows through
+        // the blur. Glass gets this hairline; the fallback needs it more.
+        return NSColor.separatorColor.withAlphaComponent(isDark ? 0.20 : 0.16)
+    }
+
     static func makeTransientSurface(
         containing content: NSView,
         cornerRadius: CGFloat = Metrics.panelCornerRadius,
@@ -146,7 +182,9 @@ enum LiquidGlassDesign {
     /// live inside one of our own windows:
     ///
     /// * the pre-26 fallback blends `.behindWindow`, because a `.withinWindow` blur
-    ///   has nothing to sample inside a transparent, borderless panel;
+    ///   has nothing to sample inside a transparent, borderless panel, and it draws
+    ///   its own rim, because unlike glass it has no edge of its own and a borderless
+    ///   panel over another application never gets the window server's menu rim;
     /// * the content is wrapped in a clipping container, because `NSGlassEffectView`
     ///   masks its own material but *not* its `contentView` — without this the
     ///   square corners of the scroll view punch straight through the rounded glass.
@@ -178,7 +216,7 @@ enum LiquidGlassDesign {
             return glassView
         }
 
-        let effectView = NSVisualEffectView()
+        let effectView = FloatingPanelSurfaceView()
         effectView.translatesAutoresizingMaskIntoConstraints = false
         effectView.material = fallbackMaterial
         // The panel window is transparent and floats over other apps, so the
@@ -328,6 +366,36 @@ enum LiquidGlassDesign {
             content.topAnchor.constraint(equalTo: container.topAnchor),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
+    }
+}
+
+/// The pre-26 surface of the floating suggestion panel.
+///
+/// Exists only to own the rim. Over a light host application an `NSVisualEffectView`
+/// simply stops at its bounds with nothing marking where the panel ends, and unlike
+/// `NSGlassEffectView` it draws no edge for us.
+///
+/// The rim goes on the layer rather than into `draw(_:)` so it follows the same
+/// continuous corner as the mask — `NSBezierPath(roundedRect:xRadius:yRadius:)` is a
+/// circular corner and would diverge from it. That in turn means the colour has to be
+/// resolved by hand: a dynamic system colour turned into a `CGColor` outside a drawing
+/// pass yields the vibrancy *source* value, and inside a visual effect view that is
+/// inverted — near-black in dark mode, near-white in light.
+private final class FloatingPanelSurfaceView: NSVisualEffectView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateRim()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateRim()
+    }
+
+    private func updateRim() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.borderWidth = LiquidGlassDesign.Metrics.hairlineWidth
+        layer?.borderColor = NSColor(white: isDark ? 1 : 0, alpha: 0.18).cgColor
     }
 }
 
