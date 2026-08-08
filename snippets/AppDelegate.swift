@@ -47,6 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // one-off `createDirectory` would fire it at an arbitrary later moment.
     let usageStore = SnippetUsageStore()
     let store = SnippetStore()
+    /// Constructed eagerly but does nothing until a vault exists: with no key it settles
+    /// into `.noKey` without ever touching the keychain, so there is no prompt and no
+    /// cost for the vast majority of users who never create a secure snippet.
+    let vaultSession = VaultSession()
+    lazy var secureStore = SecureSnippetStore(session: vaultSession, deviceID: store.deviceID)
     lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStore)
     private lazy var settingsWindowController = SettingsWindowController()
     #if !NO_SPARKLE
@@ -112,6 +117,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             name: NSWorkspace.willSleepNotification,
             object: nil
         )
+
+        // Finish any secure-snippet move that a crash interrupted. Runs before the
+        // expansion engine starts, so the keyword matcher never sees the duplicate a
+        // half-finished promote leaves behind.
+        secureStore.reconcileInterruptedMove()
 
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
