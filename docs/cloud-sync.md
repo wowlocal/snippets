@@ -306,14 +306,25 @@ plaintext HMAC with a hash of ciphertext and break locked merge comparisons.
 - **Memory.** Swift `String` cannot be reliably zeroed — short strings live inline and copy by
   value, longer ones are immutable and COW-shared, and `NSTextField.stringValue`,
   `AXUIElementSetAttributeValue`, and `JSONEncoder` all take copies out of reach. Plaintext is
-  kept as `Data` end-to-end and converted at the final hop only.
+  kept as bytes until the final hop. Secure expansion moves the decrypted `Data` immediately into
+  a one-owner raw allocation, wipes the source best-effort, and erases that controlled allocation
+  with `memset_s` before insertion starts. The final transient `String` references are discarded
+  after insertion, but claiming they were physically zeroed would be false.
 
 ### Expansion
 
 `enabledSnippetsSorted()` — the auto-expansion path — does **not** include secure records. Its not
 containing them is the structural gate that makes "a secret is never typed by an unauthenticated
 keystroke trigger" true, rather than a policy a later refactor can quietly drop. The merged view is
-`snippetsSortedForDisplay()`, which is display only.
+`snippetsSortedForDisplay()`, which supplies content-free shells to both the main list and the
+suggestion panel; suggestion rows mark them with a lock and `Secure`.
+
+Explicitly accepting a secure suggestion is a separate one-use path. It asks
+`deviceOwnerAuthentication` on every acceptance even if the five-minute editor reveal window was
+already open, decrypts exactly one record, and drops the in-memory vault key and authentication
+context before returning the plaintext lease to the injection engine. Authentication can take
+seconds, so the engine then restores the original target and re-proves the exact trigger before it
+deletes or inserts anything. Cancellation and every failed revalidation wipe the lease too.
 
 ### Where content could escape, and what stops it
 
@@ -322,8 +333,9 @@ keystroke trigger" true, rather than a policy a later refactor can quietly drop.
 | `snippets.json`, export, the undo stack | Secure records are never in `SnippetStore.snippets`. Structural — nothing to filter. |
 | Share deep link | `SnippetDeepLink.url(for:isSecure:)` has **no default** for `isSecure`, so omitting the check does not compile. |
 | Auto-expansion from the keystroke buffer | Secure records are absent from `enabledSnippetsSorted()`. |
+| Authenticated suggestion expansion | Every explicit acceptance gets a fresh LocalAuthentication context. `VaultSession.withOneUseAuthentication` locks before prompting and on every exit; `SecurePlaintextLease` zeroes its owned byte allocation on success, refusal, cancellation, and deinit. |
 | Clipboard managers | Secure expansion prefers the Accessibility write path, which never touches the pasteboard. Where the pasteboard is unavoidable, `TemporaryPasteboardLease(isConcealed:)` sets `org.nspasteboard.ConcealedType` and `TransientType` — a **courtesy, not a control**: there is no AppKit constant, managers honour it only by convention, and anything that ignores it still sees the text. |
-| The snippet list | A secure row renders `••••••••`; it carries a shell with `content == ""`, so there is nothing to render even if the view forgot. |
+| The snippet list and suggestion panel | A secure main-list row renders `••••••••`, and a suggestion row shows a lock marker. Both carry a shell with `content == ""`, so there is nothing to render even if either view forgot. |
 | Two-file moves | `LibraryTransaction` — one lock over both files, destination written before source removal, crash marker. A mixed-direction sync batch first writes an intentional duplicate state. An interruption duplicates, never disappears. |
 
 ### The CLI can ask for a secret; it cannot take one

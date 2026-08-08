@@ -82,7 +82,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         syncEngine = engine
     }
-    lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStore)
+    lazy var expansionEngine: SnippetExpansionEngine = {
+        let engine = SnippetExpansionEngine(store: store, usage: usageStore)
+        // Keep key ownership outside the typing engine. Every explicit secure
+        // suggestion gets its own user-presence decision, one record is decrypted into
+        // a wipeable lease, and VaultSession drops the key before this closure returns.
+        let session = vaultSession
+        let secureStore = secureStore
+        engine.secureSnippetContentResolver = { snippet, reason in
+            try await session.withOneUseAuthentication(reason: reason) {
+                var plaintext = try secureStore.contentData(for: snippet.id)
+                return SecurePlaintextLease(consuming: &plaintext)
+            }
+        }
+        return engine
+    }()
     private lazy var settingsWindowController = SettingsWindowController()
     #if !NO_SPARKLE
     private lazy var updaterController = SPUStandardUpdaterController(
@@ -127,6 +141,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        // `swift test` runs unsigned, so it can only ever exercise the login-keychain
+        // tier. The data-protection tier — the one that carries the vault key to other
+        // Macs through iCloud Keychain — needs the app's real entitlements, which means
+        // it can only be exercised from inside the signed app. This is that hook.
+        if CommandLine.arguments.contains("--keychain-selftest") {
+            KeychainSelfCheck.run()
+            NSApp.terminate(nil)
+            return
+        }
+        #endif
+
         // Consulted only when the usage file hits its record cap, so that a
         // forced eviction drops UUIDs of deleted snippets before live ones.
         usageStore.liveSnippetIDs = { [weak store] in
@@ -162,6 +188,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // expansion engine starts, so the keyword matcher never sees the duplicate a
         // half-finished promote leaves behind.
         secureStore.reconcileInterruptedMove()
+
+        // A storyboard can load ViewController (and therefore its initial list) before
+        // applicationDidFinishLaunching attaches the secure provider above. Reconcile
+        // is intentionally silent when there is no interrupted move, so publish the
+        // completed attachment explicitly; otherwise existing secure shells remain
+        // invisible until some unrelated library change forces another reload.
+        store.onChange?(.external)
         controlServer.start()
 
         expansionEngine.startIfNeeded()

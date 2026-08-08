@@ -70,7 +70,7 @@ extension ViewController {
             // selection to another snippet mid-typing.
             let keepEditingHiddenSnippet = isEditingDetails
                 && editingSnippetID == selectedSnippetID
-                && store.snippet(id: selectedSnippetID) != nil
+                && store.snippetForDisplay(id: selectedSnippetID) != nil
             // Likewise when the snippet open in the editor drops out because
             // its own tags changed (the user cleared the tag the filter is on)
             // rather than because the filter itself changed. That is editing,
@@ -334,12 +334,12 @@ extension ViewController {
 
     var selectedSnippet: Snippet? {
         guard let selectedSnippetID else { return nil }
-        return store.snippet(id: selectedSnippetID)
+        return store.snippetForDisplay(id: selectedSnippetID)
     }
 
     var editingSnippet: Snippet? {
         guard let editingSnippetID else { return nil }
-        return store.snippet(id: editingSnippetID)
+        return store.snippetForDisplay(id: editingSnippetID)
     }
 
     func activeCommandSnippetID() -> UUID? {

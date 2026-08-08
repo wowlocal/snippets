@@ -257,11 +257,16 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
     // MARK: - Content, requires an unlocked vault
 
-    func content(for id: UUID) throws -> String {
+    func contentData(for id: UUID) throws -> Data {
         let document = try requireDocument()
         guard let record = document.record(id) else { throw Failure.noSuchRecord }
-        let plaintext = try SnippetCrypto.open(
+        return try SnippetCrypto.open(
             record.sealed, for: context(for: id, in: document), keyring: try keyring(document))
+    }
+
+    func content(for id: UUID) throws -> String {
+        var plaintext = try contentData(for: id)
+        defer { SecureMemory.wipe(&plaintext) }
         // Converted to `String` only here, at the last possible moment. Everything
         // upstream is `Data`, because a `String` is copied by value and cannot be
         // scrubbed.

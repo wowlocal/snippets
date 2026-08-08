@@ -6,6 +6,9 @@ protocol SnippetPasteboardAccess: AnyObject {
     var changeCount: Int { get }
     var pasteboardItems: [NSPasteboardItem]? { get }
     @discardableResult func clearContents() -> Int
+    /// `NSPasteboard` already has this; the protocol carries it so the concealed path
+    /// can scope a write to this Mac and the test fake can observe that it did.
+    @discardableResult func prepareForNewContents(with options: NSPasteboard.ContentsOptions) -> Int
     func writeObjects(_ objects: [any NSPasteboardWriting]) -> Bool
 }
 
@@ -152,10 +155,14 @@ final class TemporaryPasteboardLease {
             return nil
         }
 
-        if let originalStringData = snapshot.firstStringData,
+        // The in-place strategy can restore the original string bytes without a
+        // second pasteboard write, but NSPasteboardItem has no API for removing the
+        // concealed/transient marker types afterwards. Secure content therefore uses
+        // the snapshot/rewrite strategy below so its markers disappear with it.
+        if !isConcealed,
+           let originalStringData = snapshot.firstStringData,
            let temporaryItems = snapshot.makeItems(replacingFirstStringWith: text),
            let temporaryItem = temporaryItems.first {
-            if isConcealed { Self.markConcealed(temporaryItem) }
             pasteboard.clearContents()
             guard pasteboard.writeObjects(temporaryItems) else {
                 if let originalItems = snapshot.makeItems() {
@@ -172,8 +179,16 @@ final class TemporaryPasteboardLease {
 
         let temporaryItem = NSPasteboardItem()
         guard temporaryItem.setString(text, forType: .string) else { return nil }
-        if isConcealed { Self.markConcealed(temporaryItem) }
-        pasteboard.clearContents()
+        if isConcealed {
+            Self.markConcealed(temporaryItem)
+            // Scope the write to this Mac. Without it, Universal Clipboard can carry a
+            // secret to the user's iPhone and iPad, where `ConcealedType` means nothing
+            // at all — the marker is a macOS clipboard-manager convention, not a
+            // cross-device one. This is the one place the courtesy becomes a control.
+            pasteboard.prepareForNewContents(with: .currentHostOnly)
+        } else {
+            pasteboard.clearContents()
+        }
         guard pasteboard.writeObjects([temporaryItem]) else {
             if !items.isEmpty, let originalItems = snapshot.makeItems() {
                 _ = pasteboard.writeObjects(originalItems)

@@ -2,6 +2,7 @@ import AppKit
 
 struct SuggestionItem {
     let snippet: Snippet
+    let isSecure: Bool
     let score: Int
     let nameMatchRanges: [NSRange]
     let keywordMatchRanges: [NSRange]
@@ -12,6 +13,7 @@ struct SuggestionItem {
 
     init(
         snippet: Snippet,
+        isSecure: Bool = false,
         score: Int,
         nameMatchRanges: [NSRange] = [],
         keywordMatchRanges: [NSRange] = [],
@@ -20,6 +22,7 @@ struct SuggestionItem {
         frecency: Double = 0
     ) {
         self.snippet = snippet
+        self.isSecure = isSecure
         self.score = score
         self.nameMatchRanges = nameMatchRanges
         self.keywordMatchRanges = keywordMatchRanges
@@ -787,6 +790,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             name: item.snippet.displayName,
             keyword: item.snippet.normalizedKeyword,
             tags: item.snippet.tags,
+            isSecure: item.isSecure,
             nameMatchRanges: item.nameMatchRanges,
             keywordMatchRanges: item.keywordMatchRanges,
             availableWidth: Self.panelWidth - horizontalCellPadding
@@ -813,6 +817,9 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 private final class SuggestionCellView: NSTableCellView {
     private let primaryLabel = NSTextField(labelWithString: "")
     private let secondaryLabel = NSTextField(labelWithString: "")
+    private let secureBadge = NSStackView()
+    private let secureIcon = NSImageView()
+    private let secureLabel = NSTextField(labelWithString: "Secure")
     private let tagChipsStack = NSStackView()
     private var renderedTags: [String] = []
     private var renderedChipWidth: CGFloat = -1
@@ -840,13 +847,41 @@ private final class SuggestionCellView: NSTableCellView {
             for: .horizontal
         )
 
+        let lockConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
+        secureIcon.image = NSImage(
+            systemSymbolName: "lock.fill",
+            accessibilityDescription: "Secure snippet"
+        )?.withSymbolConfiguration(lockConfiguration)
+        secureIcon.contentTintColor = .systemOrange
+        secureIcon.imageScaling = .scaleProportionallyDown
+        secureIcon.translatesAutoresizingMaskIntoConstraints = false
+
+        secureLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        secureLabel.textColor = .systemOrange
+        secureLabel.maximumNumberOfLines = 1
+
+        secureBadge.orientation = .horizontal
+        secureBadge.spacing = 3
+        secureBadge.alignment = .centerY
+        secureBadge.addArrangedSubview(secureIcon)
+        secureBadge.addArrangedSubview(secureLabel)
+        secureBadge.setContentHuggingPriority(.required, for: .horizontal)
+        secureBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
+        secureBadge.toolTip = "Secure snippet — authentication is required for every expansion"
+        secureBadge.isHidden = true
+
+        NSLayoutConstraint.activate([
+            secureIcon.widthAnchor.constraint(equalToConstant: 10),
+            secureIcon.heightAnchor.constraint(equalToConstant: 10),
+        ])
+
         tagChipsStack.orientation = .horizontal
         tagChipsStack.spacing = Self.tagChipSpacing
         tagChipsStack.alignment = .centerY
         tagChipsStack.setContentHuggingPriority(.required, for: .horizontal)
         tagChipsStack.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
-        let secondaryRow = NSStackView(views: [secondaryLabel, tagChipsStack])
+        let secondaryRow = NSStackView(views: [secondaryLabel, secureBadge, tagChipsStack])
         secondaryRow.orientation = .horizontal
         secondaryRow.spacing = Self.secondaryRowSpacing
         secondaryRow.alignment = .centerY
@@ -878,6 +913,7 @@ private final class SuggestionCellView: NSTableCellView {
         name: String,
         keyword: String,
         tags: [String],
+        isSecure: Bool,
         nameMatchRanges: [NSRange],
         keywordMatchRanges: [NSRange],
         availableWidth: CGFloat
@@ -896,9 +932,25 @@ private final class SuggestionCellView: NSTableCellView {
         )
         secondaryLabel.attributedStringValue = keywordString
         secondaryLabel.isHidden = keyword.isEmpty
+        secureBadge.isHidden = !isSecure
 
-        let keywordWidth = keyword.isEmpty ? 0 : ceil(keywordString.size().width) + Self.secondaryRowSpacing
-        updateTagChips(tags: tags, availableWidth: availableWidth - keywordWidth)
+        var fixedWidth: CGFloat = 0
+        var fixedViewCount = 0
+        if !keyword.isEmpty {
+            fixedWidth += ceil(keywordString.size().width)
+            fixedViewCount += 1
+        }
+        if isSecure {
+            fixedWidth += ceil(secureBadge.fittingSize.width)
+            fixedViewCount += 1
+        }
+        if fixedViewCount > 1 {
+            fixedWidth += CGFloat(fixedViewCount - 1) * Self.secondaryRowSpacing
+        }
+        if !tags.isEmpty, fixedViewCount > 0 {
+            fixedWidth += Self.secondaryRowSpacing
+        }
+        updateTagChips(tags: tags, availableWidth: max(0, availableWidth - fixedWidth))
     }
 
     /// Fits as many chips as the space left over by the keyword allows, so the

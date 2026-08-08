@@ -51,6 +51,13 @@
             ReferencedContainer = "container:Snippets.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "SNIPPETS_SUPPORT_DIR"
+            value = "/Users/mike/Library/Application Support/Snippets-Phase0a-Test"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

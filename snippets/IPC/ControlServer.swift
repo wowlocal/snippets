@@ -243,8 +243,14 @@ final class ControlServer: NSObject {
         }
 
         do {
-            try await session.unlock(reason: "Reveal “\(shell.displayName)” for \(peer.displayName)")
-            let content = try secureStore.content(for: shell.id)
+            // `withOneUseAuthentication`, not `unlock`: otherwise a reveal arriving while
+            // an in-app window happens to be open would be satisfied by the consent click
+            // alone, and the person at the keyboard would never be asked to prove they
+            // are there. The side effect is deliberate — a remote reveal ends any in-app
+            // unlock window, because the requester is provably not the person typing.
+            let content = try await session.withOneUseAuthentication(
+                reason: "Reveal “\(shell.displayName)” for \(peer.displayName)"
+            ) { try secureStore.content(for: shell.id) }
             record(audit: "revealed", keyword: lookup, peer: peer)
             return SnippetsIPC.Response(status: .ok, content: content)
         } catch VaultSession.Failure.noKey {

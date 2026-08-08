@@ -56,7 +56,7 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
             // is gone, but the editor must stay bound to it so it remains
             // editable instead of being blanked and disabled.
             if let selectedSnippetID,
-               store.snippet(id: selectedSnippetID) != nil,
+               store.snippetForDisplay(id: selectedSnippetID) != nil,
                !visibleSnippets.contains(where: { $0.id == selectedSnippetID }) {
                 deleteButton.isEnabled = true
                 return

@@ -300,6 +300,15 @@ final class SnippetStore {
         snippets.first { $0.id == id }
     }
 
+    /// Resolves a row in the merged UI without weakening `snippet(id:)`'s plaintext-only
+    /// contract. Secure records are represented by content-free shells, so callers that
+    /// only need selection and metadata can address them while export, expansion, undo,
+    /// and other plaintext paths continue to see only `snippets`.
+    func snippetForDisplay(id: UUID) -> Snippet? {
+        snippet(id: id)
+            ?? secureProvider?.secureShellsForDisplay().first { $0.id == id }
+    }
+
     /// All distinct tags across snippets, deduped case-insensitively and
     /// sorted alphabetically for stable filter/completion UI.
     func allTags() -> [String] {
@@ -751,7 +760,12 @@ final class SnippetStore {
                 // the wreckage. Recreate the file from what we have, which is exactly
                 // what the plain atomic write this replaced always did.
                 guard onDisk.fileExisted else {
-                    NSLog("Snippets: snippets.json disappeared; recreating it from memory rather than merging.")
+                    // Only alarming if we had previously seen a file. On a genuine first
+                    // launch there is nothing there yet and "disappeared" is both wrong
+                    // and frightening.
+                    if previousDigest != nil {
+                        NSLog("Snippets: snippets.json disappeared; recreating it from memory rather than merging.")
+                    }
                     pendingMerge = nil
                     return self.snippets
                 }

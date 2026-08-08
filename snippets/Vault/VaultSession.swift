@@ -56,6 +56,10 @@ final class VaultSession {
     /// the call site and therefore outside this type's actor.
     nonisolated static let defaultDuration: TimeInterval = 5 * 60
 
+    /// The longest the vault may stay open on one authentication, however much it is
+    /// used. Without this the sliding window has no ceiling at all.
+    nonisolated static let maximumWindow: TimeInterval = 30 * 60
+
     private(set) var state: State = .locked
     var onStateChange: ((State) -> Void)?
 
@@ -73,6 +77,10 @@ final class VaultSession {
     /// along the way is copied by value and out of reach. The honest claim is "we do not
     /// keep it around", not "it is gone".
     private var libraryKey: SymmetricKey?
+
+    /// When the user last actually proved presence. Distinct from the window deadline,
+    /// which slides; this does not.
+    private var authenticatedAt: Date?
     private var expiryTimer: Timer?
 
     /// Kept so a screen lock or explicit lock can cancel authentication already in
@@ -139,6 +147,9 @@ final class VaultSession {
         guard authenticationContext == nil else { throw Failure.locked }
 
         let context = LAContext()
+        // A fresh context should require fresh user presence. Make that contract
+        // explicit rather than relying on LocalAuthentication's default reuse value.
+        context.touchIDAuthenticationAllowableReuseDuration = 0
         authenticationContext = context
 
         do {
@@ -157,7 +168,7 @@ final class VaultSession {
             throw Failure.authentication(error.localizedDescription)
         }
 
-        let data: Data
+        var data: Data
         do {
             data = try keychain.loadKey(keyID: keyID)
         } catch KeychainSecretStore.Failure.notFound {
@@ -168,19 +179,46 @@ final class VaultSession {
             authenticationContext = nil
             throw Failure.keychain("\(error)")
         }
+        defer { SecureMemory.wipe(&data) }
 
         let key = SymmetricKey(data: data)
         libraryKey = key
+        // Set BEFORE extendWindow, which reads it to compute the ceiling. A fresh touch
+        // is what restarts the half-hour, so this is the one place it may move.
+        authenticatedAt = now()
         extendWindow()
         return key
+    }
+
+    /// Authenticates and exposes the unlocked vault to one synchronous operation only.
+    ///
+    /// Unlike `unlock`, this deliberately ignores the five-minute reveal window: an
+    /// explicit secure expansion is a new disclosure and must ask every time. The
+    /// previous key/context are discarded before the prompt, and the newly loaded key
+    /// is discarded on every exit (success, cancellation, or thrown error).
+    func withOneUseAuthentication<T>(
+        reason: String,
+        operation: @MainActor () throws -> T
+    ) async throws -> T {
+        // A retained context is normal while the session is already unlocked. A
+        // context while still locked, however, belongs to an in-flight prompt; do not
+        // invalidate somebody else's user-visible authentication attempt.
+        if authenticationContext != nil, !state.isUnlocked {
+            throw Failure.locked
+        }
+
+        lock()
+        defer { lock() }
+        _ = try await unlock(reason: reason)
+        return try operation()
     }
 
     /// The key, if the vault is already open. Never prompts.
     ///
     /// This is what the expansion path uses: raising a modal authentication sheet while
-    /// the user is mid-keystroke in another application steals focus and eats the very
-    /// keystrokes being expanded. The caller must decide what to do when locked —
-    /// see `SecureExpansionCoordinator`.
+    /// the user is mid-keystroke in another application is only safe after an explicit
+    /// suggestion selection. `SnippetExpansionEngine` owns that authenticated path and
+    /// revalidates the target and trigger after the prompt before inserting anything.
     func currentKey() throws -> SymmetricKey {
         guard case .unlocked(let until) = state, let libraryKey else {
             throw Failure.locked
@@ -206,6 +244,10 @@ final class VaultSession {
         expiryTimer?.invalidate()
         expiryTimer = nil
         libraryKey = nil
+        // Cleared with the key: the next unlock is a new authentication and gets a new
+        // half-hour, and leaving a stale value would let a re-unlock inherit an almost
+        // exhausted ceiling.
+        authenticatedAt = nil
         // Dropping the context is what actually ends the biometric reuse window; leaving
         // it alive would let a later prompt be skipped after we claimed to be locked.
         authenticationContext?.invalidate()
@@ -216,11 +258,25 @@ final class VaultSession {
     }
 
     private func extendWindow() {
-        let deadline = now().addingTimeInterval(duration)
+        // The five-minute window slides on every use, so a session that is merely
+        // *active* never expires — leave a Mac unattended with the app busy and the
+        // vault stays open indefinitely. The absolute cap is measured from the touch
+        // that actually authenticated, so no amount of subsequent activity can extend
+        // the vault beyond half an hour without the user proving presence again.
+        let ceiling = (authenticatedAt ?? now()).addingTimeInterval(Self.maximumWindow)
+        let deadline = min(now().addingTimeInterval(duration), ceiling)
+        let remaining = deadline.timeIntervalSince(now())
+
         expiryTimer?.invalidate()
+        guard remaining > 0 else {
+            // The cap has already passed; re-authenticating is the only way forward.
+            lock()
+            return
+        }
+
         // Tolerance lets the system coalesce this with other timers; a few seconds of
         // slop on a five-minute window is irrelevant and saves wakeups.
-        let timer = Timer(timeInterval: duration, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.lock() }
         }
         timer.tolerance = 5
@@ -257,10 +313,12 @@ final class VaultSession {
         // Screen lock has no AppKit notification; it is only published on the
         // distributed centre, and it is the trigger that matches "the user walked away"
         // most exactly.
-        DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.lock() }
+        for name in ["com.apple.screenIsLocked", "com.apple.screensaver.didstart"] {
+            DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name(name), object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.lock() }
+            }
         }
     }
 }

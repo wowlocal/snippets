@@ -7,6 +7,8 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 - Create, edit, delete, duplicate, enable/disable, and pin snippets.
 - Global expansion in other apps by typing `\` + keyword.
 - Suggestion panel near the caret with fuzzy matching on snippet name and keyword.
+- Secure snippets stay encrypted at rest, carry a lock marker in suggestions, never
+  auto-expand, and require a fresh Touch ID/login-password approval on every explicit insertion.
 - Usage-based ranking: snippets you expand often rise in the suggestion panel. Match quality and pinning always win over usage. Two toggles and a reset live in `Settings > General`; usage stays on this Mac and never travels in exports or share links.
 - Dynamic placeholders in snippet content:
   - `{clipboard}`
@@ -78,7 +80,8 @@ Global expansion pipeline:
 2. Typed characters are appended to an internal rolling buffer.
 3. On `\`, suggestion mode activates and `SuggestionPanelController` shows ranked matches.
 4. Ranking uses fuzzy scoring (`FuzzyMatch`) against snippet name and keyword, then keyword-match quality, then pinning, and only then how often you use each snippet.
-5. Selecting a snippet (or unambiguous exact-match auto-expand) triggers expansion.
+5. Selecting an ordinary snippet (or its unambiguous exact-match auto-expand) triggers expansion.
+   A secure suggestion must be selected explicitly and authenticates every time.
 6. The engine resolves placeholders with `PlaceholderResolver` and injects final text.
 
 Text replacement strategy:
