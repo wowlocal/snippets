@@ -169,7 +169,7 @@ private nonisolated enum JSONPassthroughBag {
 ///     "iterations": 600000,
 ///     "saltP": "Yh8pQm4kL1sTz0Wc7Vb9Ng"
 ///   },
-///   "wrapPass": "v1.<nonce>.<ciphertext+tag>",
+///   "wrapPass": null,
 ///   "wrapRecovery": "v1.<nonce>.<ciphertext+tag>",
 ///   "wrapCLI": null,
 ///   "teamScope": {"id": "t-1"},
@@ -244,16 +244,41 @@ nonisolated struct VaultDocument: Equatable {
     /// `contentHash` key, both `KeyWrap` wrapping keys), so two vaults that somehow
     /// shared a library key still do not share a single derived key.
     var vaultSalt: String
+    /// Parameters for the OPTIONAL passphrase wrap. Present even when `wrapPass` is
+    /// nil, so enabling a passphrase later does not have to invent them.
     var kdf: VaultKDFParameters
-    /// The library key sealed under the key derived from the user's passphrase.
-    var wrapPass: String
-    /// The library key sealed under the recovery key.
+
+    // MARK: - Where the library key actually lives
+    //
+    // The primary home of `K_lib` is the KEYCHAIN, not this file. Nothing here is
+    // required to open a vault on the machine that created it: `KeychainSecretStore`
+    // holds the key under `kid`, unlocked by Touch ID, and — where the entitlement
+    // allows it — synced to the user's other devices by iCloud Keychain.
+    //
+    // That is a deliberate trade, and it should be stated rather than implied: the
+    // guarantee now rests on Apple's iCloud Keychain rather than on something only the
+    // user knows. Someone who compromises the iCloud account AND passes its
+    // device-approval step reaches the secrets. In exchange there is no passphrase to
+    // forget, no prompt on every new device, and no permanently unrecoverable vault —
+    // which for a text expander is the right side of that trade.
+    //
+    // The wraps below are therefore ESCAPE HATCHES, all optional. A vault with none of
+    // them is valid and is the common case.
+
+    /// The library key sealed under a key derived from a user passphrase.
     ///
-    /// Always present. A vault whose only wrap is the passphrase is one forgotten
-    /// passphrase away from being unrecoverable, and "the user forgot it" is the
-    /// single most likely way this feature loses data. The recovery wrap is created
-    /// with the vault and there is no supported way to remove it.
-    var wrapRecovery: String
+    /// `nil` unless the user explicitly opts in. Kept because a passphrase is the only
+    /// way to move a vault to a machine with no iCloud Keychain, and the only thing
+    /// that keeps the secrets out of reach of the iCloud account itself.
+    var wrapPass: String?
+    /// The library key sealed under a printable recovery key.
+    ///
+    /// The escape hatch for the case the Keychain cannot cover: iCloud Keychain
+    /// switched off, a Mac that will not boot, a migration that drops the item. Strongly
+    /// recommended at vault creation and offered again if it is ever absent — but not
+    /// mandatory, because a key the user threw away should not make the vault refuse to
+    /// open on the machine that still has it in the Keychain.
+    var wrapRecovery: String?
     /// The library key sealed under a 32-byte secret held in the login keychain, so
     /// `snippets-cli reveal` can work with no human present.
     ///
@@ -274,8 +299,8 @@ nonisolated struct VaultDocument: Equatable {
         kid: String,
         vaultSalt: String,
         kdf: VaultKDFParameters,
-        wrapPass: String,
-        wrapRecovery: String,
+        wrapPass: String? = nil,
+        wrapRecovery: String? = nil,
         wrapCLI: String? = nil,
         x: [String: JSONValue] = [:],
         records: [VaultRecord] = []
@@ -316,8 +341,10 @@ nonisolated struct VaultDocument: Equatable {
     /// top level), and stitching them back together by hand at the unlock call site is
     /// how `alg` ends up transcribed as something the KDF refuses. One accessor, so
     /// there is one stitch.
-    var passphraseWrap: PassphraseKDF.WrappedKey {
-        PassphraseKDF.WrappedKey(
+    /// `nil` when this vault has no passphrase, which is the default.
+    var passphraseWrap: PassphraseKDF.WrappedKey? {
+        guard let wrapPass else { return nil }
+        return PassphraseKDF.WrappedKey(
             alg: kdf.alg, iterations: kdf.iterations, salt: kdf.saltP, envelope: wrapPass)
     }
 }

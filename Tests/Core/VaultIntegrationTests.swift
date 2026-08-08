@@ -93,7 +93,7 @@ struct VaultIntegrationTests {
         let vault = try NewVault(passphrase: "correct horse battery staple", iterations: fastIterations)
 
         let recovered = try PassphraseKDF.unwrap(
-            vault.document.passphraseWrap, passphrase: "correct horse battery staple", kid: vault.document.kid)
+            try #require(vault.document.passphraseWrap), passphrase: "correct horse battery staple", kid: vault.document.kid)
 
         #expect(keyBytes(recovered) == keyBytes(vault.keyring.libraryKey))
         #expect(vault.document.kdf.alg == PassphraseKDF.algorithm)
@@ -133,10 +133,10 @@ struct VaultIntegrationTests {
         let salt = try #require(vault.document.vaultSaltBytes)
 
         #expect(keyBytes(try PassphraseKDF.unwrap(
-            vault.document.passphraseWrap, passphrase: "p", kid: vault.document.kid)) == expected)
+            try #require(vault.document.passphraseWrap), passphrase: "p", kid: vault.document.kid)) == expected)
 
         #expect(keyBytes(try KeyWrap.unwrap(
-            vault.document.wrapRecovery, under: vault.recoveryKey,
+            try #require(vault.document.wrapRecovery), under: vault.recoveryKey,
             purpose: .recovery, kid: vault.document.kid, salt: salt)) == expected)
 
         let cliBlob = try #require(vault.document.wrapCLI)
@@ -156,7 +156,7 @@ struct VaultIntegrationTests {
         let retyped = try RecoveryKey.decode(printed.lowercased().replacingOccurrences(of: "-", with: " "))
 
         #expect(keyBytes(try KeyWrap.unwrap(
-            vault.document.wrapRecovery, under: retyped,
+            try #require(vault.document.wrapRecovery), under: retyped,
             purpose: .recovery, kid: vault.document.kid, salt: salt))
             == keyBytes(vault.keyring.libraryKey))
     }
@@ -176,7 +176,7 @@ struct VaultIntegrationTests {
         }
         #expect(throws: KeyWrap.Failure.wrongKey(.cli)) {
             try KeyWrap.unwrap(
-                vault.document.wrapRecovery, under: vault.recoveryKey,
+                try #require(vault.document.wrapRecovery), under: vault.recoveryKey,
                 purpose: .cli, kid: vault.document.kid, salt: salt)
         }
     }
@@ -230,11 +230,11 @@ struct VaultIntegrationTests {
         let otherKID = "k-after-rekey"
 
         #expect(throws: PassphraseKDF.Failure.wrongPassphrase) {
-            try PassphraseKDF.unwrap(vault.document.passphraseWrap, passphrase: "p", kid: otherKID)
+            try PassphraseKDF.unwrap(try #require(vault.document.passphraseWrap), passphrase: "p", kid: otherKID)
         }
         #expect(throws: KeyWrap.Failure.wrongKey(.recovery)) {
             try KeyWrap.unwrap(
-                vault.document.wrapRecovery, under: vault.recoveryKey,
+                try #require(vault.document.wrapRecovery), under: vault.recoveryKey,
                 purpose: .recovery, kid: otherKID, salt: salt)
         }
     }
@@ -246,7 +246,7 @@ struct VaultIntegrationTests {
 
         #expect(throws: KeyWrap.Failure.wrongKey(.recovery)) {
             try KeyWrap.unwrap(
-                vault.document.wrapRecovery, under: vault.recoveryKey,
+                try #require(vault.document.wrapRecovery), under: vault.recoveryKey,
                 purpose: .recovery, kid: vault.document.kid,
                 salt: SnippetCrypto.randomBytes(SnippetCrypto.saltByteCount))
         }
@@ -282,7 +282,7 @@ struct VaultIntegrationTests {
         // A cold start: nothing but the file and what the user can type.
         let loaded = try #require(VaultFile.load(from: vaultURL).value)
         let libraryKey = try PassphraseKDF.unwrap(
-            loaded.passphraseWrap, passphrase: "correct horse", kid: loaded.kid)
+            try #require(loaded.passphraseWrap), passphrase: "correct horse", kid: loaded.kid)
         let keyring = SnippetCrypto.Keyring(
             libraryKey: libraryKey, salt: try #require(loaded.vaultSaltBytes))
 

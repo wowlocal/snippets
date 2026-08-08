@@ -16,7 +16,7 @@ required not to break.
 |---|---|
 | 1. Cross-process locking + three-way merge | **Shipped.** No network, no crypto, no format change. |
 | 2. Wire record model, transport protocol, fake transport | Types exist and are tested in isolation. **Nothing calls them yet** — no `VaultRecord` ↔ `SyncEnvelope` bridge, no engine. |
-| 3. Secure snippets — crypto core | Crypto, key wrapping, and the vault document exist and are tested. **No Keychain wrapper, no unlock UX, no UI, no app integration** — you cannot create a secure snippet. |
+| 3. Secure snippets — crypto core | Crypto, key wrapping, the vault document, and the Keychain store exist. **No unlock session, no UI, no app integration** — you still cannot create a secure snippet. |
 | 4. Sync engine driven by the fake | Not started. |
 | 5. First real backend | Deliberately deferred — see §9. |
 | 6. Second backend, conflict UI | Not started. |
@@ -197,6 +197,12 @@ at all, so it can never type ciphertext into a chat window, and `exportSnippets(
 > `keychain-access-groups` + an embedded provisioning profile + Keychain Sharing on the App ID.
 > Without that portal work the key can still live in the login keychain, and secure snippets work
 > fully on one Mac — they just cannot sync.
+>
+> `KeychainSecretStore` picks between the two at runtime by reading the running binary's own
+> entitlements (`SecCodeCopySelf`), not from a build flag — a flag would be wrong in both
+> directions. The same binary therefore does the local tier today and the synchronizable tier the
+> moment the entitlement appears, with no code change and no migration beyond re-storing one key.
+> Verified: today's build carries no `keychain-access-groups`, and detection selects the local tier.
 
 A random 256-bit library key `K_lib` is the root and is never used to encrypt anything directly.
 Per-purpose subkeys come from HKDF-SHA256:
