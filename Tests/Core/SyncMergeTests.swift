@@ -47,7 +47,7 @@ private func merge(
     base: [Snippet] = [], local: [Snippet] = [], remote: [Snippet] = [],
     device: String = thisDevice
 ) -> SyncMerge.Outcome {
-    SyncMerge.mergeLocal(base: base, local: local, remote: remote, localDevice: device)
+    SyncMerge.mergeLocal(base: base, local: local, remote: remote)
 }
 
 extension Array where Element == Snippet {
@@ -536,11 +536,19 @@ private func makeScenario(seed: UInt64, recordCount: Int = 5) -> Scenario {
     /// already has "work" is not an addition — otherwise every capitalisation
     /// difference between two Macs would double the tag list.
     @Test func aTagDifferingOnlyInCaseOrDiacriticsIsNotANewTag() throws {
+        // Identity is the folded key, so this is one tag, not two — but the SPELLING
+        // that survives is the winning side's, not the ancestor's. Re-emitting the
+        // ancestor's string would silently revert a capitalisation both devices
+        // deliberately changed, which is exactly what the per-field rule forbids.
         let cased = SyncMerge.mergeTags(["work"], ["Work", "extra"], ["work"], localWins: true)
-        #expect(cased == ["work", "extra"], "the ancestor's casing is what survives")
+        #expect(cased == ["Work", "extra"], "the winning side's casing survives, not the ancestor's")
 
         let folded = SyncMerge.mergeTags(["café"], ["Cafe"], ["café", "x"], localWins: true)
-        #expect(folded == ["café", "x"])
+        #expect(folded == ["Cafe", "x"])
+
+        // …and the loser's spelling is the one that loses.
+        let loserCasing = SyncMerge.mergeTags(["work"], ["Work"], ["WORK"], localWins: false)
+        #expect(loserCasing == ["WORK"])
 
         // The same rule end to end, not just in the helper.
         let ancestor = rec(0, tags: ["work"])
@@ -741,14 +749,23 @@ private func makeScenario(seed: UInt64, recordCount: Int = 5) -> Scenario {
             #expect(Set(outcome.snippets.ids).count == outcome.snippets.count,
                     "seed \(seed) produced a duplicate id")
 
-            // No two live snippets may share a folded keyword — that is what the final
-            // pass is for, and a survivor of it is what the expander sees.
-            var liveKeywords = Set<String>()
-            for snippet in outcome.snippets where snippet.isEnabled {
-                let key = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
-                guard !key.isEmpty else { continue }
-                #expect(liveKeywords.insert(key).inserted, "seed \(seed) left \(key) live twice")
+            // The merge must not INTRODUCE a live keyword collision. It deliberately
+            // does not resolve one that already existed: the app has always merely
+            // warned about duplicate keywords, and a merge silently disabling a
+            // snippet the user has been living with for months would be a nasty
+            // surprise arriving from an unrelated background write.
+            func liveCollisions(_ snippets: [Snippet]) -> Set<String> {
+                var seen = Set<String>(), duplicated = Set<String>()
+                for snippet in snippets where snippet.isEnabled {
+                    let key = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
+                    guard !key.isEmpty else { continue }
+                    if !seen.insert(key).inserted { duplicated.insert(key) }
+                }
+                return duplicated
             }
+            let preExisting = liveCollisions(scenario.local).union(liveCollisions(scenario.remote))
+            #expect(liveCollisions(outcome.snippets).subtracting(preExisting).isEmpty,
+                    "seed \(seed) introduced a keyword collision that neither side had")
 
             for snippet in outcome.snippets {
                 let keys = snippet.tags.map { SnippetTagging.filterKey(for: $0) }
@@ -881,8 +898,8 @@ struct SyncMergeConvergenceTests {
         base: [Snippet], onA: [Snippet], onB: [Snippet],
         _ what: String, sourceLocation: SourceLocation = #_sourceLocation
     ) {
-        let a = SyncMerge.mergeLocal(base: base, local: onA, remote: onB, localDevice: deviceA)
-        let b = SyncMerge.mergeLocal(base: base, local: onB, remote: onA, localDevice: deviceB)
+        let a = SyncMerge.mergeLocal(base: base, local: onA, remote: onB)
+        let b = SyncMerge.mergeLocal(base: base, local: onB, remote: onA)
 
         // Order is each device's own list order, which legitimately differs; identity
         // and field content are what must agree.
@@ -893,7 +910,7 @@ struct SyncMergeConvergenceTests {
         // And the result must be a fixed point: feeding each device the other's
         // now-identical output must change nothing, or the next round writes again.
         let again = SyncMerge.mergeLocal(
-            base: a.snippets, local: a.snippets, remote: b.snippets, localDevice: deviceA)
+            base: a.snippets, local: a.snippets, remote: b.snippets)
         #expect(byID(again.snippets) == byID(a.snippets), "\(what): not a fixed point",
                 sourceLocation: sourceLocation)
     }
@@ -915,8 +932,8 @@ struct SyncMergeConvergenceTests {
         Self.assertConverges(base: base, onA: onA, onB: onB, "simultaneous content edit")
 
         // Both sides must also mint the SAME conflict copy, or the copies breed.
-        let a = SyncMerge.mergeLocal(base: base, local: onA, remote: onB, localDevice: Self.deviceA)
-        let b = SyncMerge.mergeLocal(base: base, local: onB, remote: onA, localDevice: Self.deviceB)
+        let a = SyncMerge.mergeLocal(base: base, local: onA, remote: onB)
+        let b = SyncMerge.mergeLocal(base: base, local: onB, remote: onA)
         #expect(a.conflictCopies.map(\.id) == b.conflictCopies.map(\.id))
         #expect(a.conflictCopies.count == 1)
         // …and agree on its name, which a locale-local DateFormatter would break.
@@ -947,7 +964,7 @@ struct SyncMergeConvergenceTests {
                              keyword: "dup", content: "b", updatedAt: 200)
         Self.assertConverges(base: [], onA: [a], onB: [b], "simultaneous keyword collision")
 
-        let merged = SyncMerge.mergeLocal(base: [], local: [a], remote: [b], localDevice: Self.deviceA)
+        let merged = SyncMerge.mergeLocal(base: [], local: [a], remote: [b])
         #expect(merged.snippets.filter(\.isEnabled).count == 1)
         #expect(merged.disabledByKeywordCollision.count == 1)
     }

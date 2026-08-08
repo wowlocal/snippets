@@ -19,7 +19,10 @@ private func loadSnippets() -> [Snippet] {
     do {
         return try LibraryWriter.read(from: saveURL).snippets
     } catch {
-        fail("snippets file at '\(saveURL.path)' exists but could not be decoded; fix or move it aside and retry")
+        // Report what actually went wrong. Telling someone to "move it aside" when the
+        // file is merely unreadable — a permissions problem, an unmounted volume, a
+        // half-finished restore — is advice that destroys a perfectly good library.
+        fail("\(error)")
     }
 }
 

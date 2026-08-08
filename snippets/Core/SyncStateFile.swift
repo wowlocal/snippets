@@ -64,8 +64,13 @@ nonisolated struct SyncState: Codable, Equatable {
     var generation: UInt64
     /// SHA-256 of the `snippets.json` bytes that produced `generation`.
     var librarySHA256: String?
-    /// Scopes the wire crypto. Reserved so shared/team vaults can be added later
-    /// without re-encrypting every existing record.
+    /// Scopes the wire *protocol* — which library this device is talking about.
+    ///
+    /// **Never use this as crypto scope.** It lives in a file that regenerates itself
+    /// whenever it cannot be read (see `fresh`), so binding ciphertext to it would
+    /// destroy every secure snippet the first time this file went missing. The crypto
+    /// scope is `VaultDocument.kid`, which lives in the same file as the records it
+    /// protects. See `SnippetCrypto.RecordContext.scopeID`.
     var scopeID: String
     var backend: Backend
     var cursor: String?

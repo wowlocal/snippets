@@ -98,6 +98,18 @@ nonisolated enum AtomicFileWriter {
             throw Failure.renameFailed(destination: url.path, errno: code)
         }
         shouldUnlink = false
+
+        // fsync the *directory* as well. Syncing the file guarantees its contents are
+        // on stable storage; it says nothing about the directory entry that now points
+        // at them. Without this the rename can be lost across a power failure while
+        // the data blocks survive — which presents as the old file, or as no file at
+        // all, and makes the durability claim above untrue.
+        let parent = url.deletingLastPathComponent()
+        let directory = open(parent.path, O_RDONLY | O_CLOEXEC)
+        if directory >= 0 {
+            fsync(directory)
+            close(directory)
+        }
     }
 
     /// `write(2)` is permitted to write fewer bytes than asked, and does on large

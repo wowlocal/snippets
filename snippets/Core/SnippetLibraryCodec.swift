@@ -40,9 +40,9 @@ nonisolated enum SnippetLibraryCodec {
     }
 
     /// Byte-for-byte the encoder the app has always used. Changing `outputFormatting`
-    /// here would rewrite every user's file on first launch, produce a spurious
-    /// external-change event on every other device, and break
-    /// `snippetsJSONBytesUnchangedAfterSyncEnabled`.
+    /// here would rewrite every user's file on first launch and produce a spurious
+    /// external-change event on every other device. Pinned by
+    /// `encodingADecodedLibraryReproducesTheOriginalBytes` in `LibraryWriterTests`.
     static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -86,7 +86,16 @@ nonisolated enum SnippetLibraryCodec {
     /// Returns `nil` when the file does not exist — which is a legitimate empty
     /// library, distinct from an unreadable one.
     static func read(from url: URL) throws -> (snippets: [Snippet], data: Data, digest: String)? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            // Only "no such file" is a legitimately absent library. Swallowing
+            // permissions and I/O errors here too would report an unreadable file as
+            // "you have no snippets", which a caller then saves.
+            if (error as NSError).isFileNotFound { return nil }
+            throw error
+        }
         let snippets = try decode(data)
         return (snippets, data, digest(of: data))
     }

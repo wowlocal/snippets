@@ -74,17 +74,14 @@ nonisolated enum SyncMerge {
     ///     app maintains this for free as `lastKnownDiskData`.
     ///   - local: this process's in-memory library.
     ///   - remote: what is on disk now.
-    ///   - localDevice: this device's eight-hex id, used to break exact ties.
     ///
-    /// `remote` records are stamped with `HLC.foreignDevice`, which sorts below every
-    /// real device id. So on an exact `updatedAt` tie the in-app edit wins — the same
-    /// intent as the behaviour this replaces, narrowed from "always" to "only on a
-    /// tie".
+    /// Takes no device identity: the tiebreak is symmetric by construction (see
+    /// `localOutranksRemote`), and an earlier version that used device identity here
+    /// could not converge.
     static func mergeLocal(
         base: [Snippet],
         local: [Snippet],
-        remote: [Snippet],
-        localDevice: String
+        remote: [Snippet]
     ) -> Outcome {
         let baseByID = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let localByID = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -95,8 +92,7 @@ nonisolated enum SyncMerge {
 
         for id in Set(baseByID.keys).union(localByID.keys).union(remoteByID.keys) {
             let (survivor, copy) = mergeRecord(
-                base: baseByID[id], local: localByID[id], remote: remoteByID[id],
-                localDevice: localDevice)
+                base: baseByID[id], local: localByID[id], remote: remoteByID[id])
             if let survivor { merged[id] = survivor }
             if let copy { conflictCopies.append(copy) }
         }
@@ -111,10 +107,63 @@ nonisolated enum SyncMerge {
         for copy in conflictCopies { merged[copy.id] = copy }
 
         var ordered = orderedResult(merged: merged, local: local, remote: remote)
-        let disabled = resolveKeywordCollisions(&ordered)
+
+        // Only records this merge created or changed are candidates for being
+        // disabled. A duplicate keyword that already existed in `local` and was
+        // untouched here is the editor's warning to surface, not ours to enforce.
+        var touched = Set(conflictCopies.map(\.id))
+        let localByIDForTouch = localByID
+        for record in ordered where !(localByIDForTouch[record.id].map { payloadEquals($0, record) } ?? false) {
+            touched.insert(record.id)
+        }
+        let disabled = resolveKeywordCollisions(&ordered, touched: touched)
 
         return Outcome(
             snippets: ordered, conflictCopies: conflictCopies, disabledByKeywordCollision: disabled)
+    }
+
+    /// Rebases an undo/redo snapshot onto a merged library.
+    ///
+    /// **Not a merge, deliberately.** An undo entry is a *stated intent* — "put the
+    /// library back to exactly this" — not a competing edit by another device. Running
+    /// it through `mergeLocal` treats it as one, and that goes wrong with no
+    /// concurrency at all: edit a snippet v1 → v2, let the CLI write v3, and the
+    /// rebase sees base v2, local v1, remote v3, all three distinct. That is the
+    /// definition of a content conflict, so undo would restore nothing and instead
+    /// mint a disabled `(conflict …)` record into the shared library — which then
+    /// survives every later rebase. Pressing ⌘Z would create junk rather than undo.
+    ///
+    /// So the rebase replays only what the snapshot actually *changes* relative to the
+    /// state it was captured against, and takes the merged library for everything
+    /// else. No clock, no arbitration, no conflict copies.
+    static func rebaseSnapshot(
+        _ snapshot: [Snippet], from capturedAgainst: [Snippet], onto merged: [Snippet]
+    ) -> [Snippet] {
+        let capturedByID = Dictionary(
+            capturedAgainst.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let snapshotByID = Dictionary(
+            snapshot.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        // What this snapshot means, expressed against its own baseline.
+        let deletedByUndo = Set(capturedByID.keys).subtracting(snapshotByID.keys)
+        let changedByUndo = snapshotByID.filter { id, value in
+            guard let captured = capturedByID[id] else { return true }   // undo re-adds it
+            return !payloadEquals(captured, value)
+        }
+
+        var out: [Snippet] = []
+        var emitted = Set<UUID>()
+        for record in merged {
+            if deletedByUndo.contains(record.id) { continue }
+            emitted.insert(record.id)
+            out.append(changedByUndo[record.id] ?? record)
+        }
+        // Records the undo brings back that the merged library no longer has, in the
+        // snapshot's own order so undo restores the list the user remembers.
+        for record in snapshot where !emitted.contains(record.id) {
+            out.append(record)
+        }
+        return out
     }
 
     /// Resolves one record. Returns the survivor (or `nil` if it should not exist)
@@ -122,8 +171,7 @@ nonisolated enum SyncMerge {
     static func mergeRecord(
         base: Snippet?,
         local: Snippet?,
-        remote: Snippet?,
-        localDevice: String
+        remote: Snippet?
     ) -> (survivor: Snippet?, conflictCopy: Snippet?) {
         switch (local, remote) {
         case (nil, nil):
@@ -150,7 +198,7 @@ nonisolated enum SyncMerge {
                 survivor.updatedAt = max(local.updatedAt, remote.updatedAt)
                 return (survivor, nil)
             }
-            return mergeChangedRecord(base: base, local: local, remote: remote, localDevice: localDevice)
+            return mergeChangedRecord(base: base, local: local, remote: remote)
         }
     }
 
@@ -194,8 +242,7 @@ nonisolated enum SyncMerge {
     private static func mergeChangedRecord(
         base: Snippet?,
         local: Snippet,
-        remote: Snippet,
-        localDevice: String
+        remote: Snippet
     ) -> (survivor: Snippet?, conflictCopy: Snippet?) {
         let localWins = localOutranksRemote(local, remote)
 
@@ -268,15 +315,27 @@ nonisolated enum SyncMerge {
                 preferred + other.filter { !preferredKeys.contains(key($0)) })
         }
 
-        var ordered = (base ?? []).filter { kept.contains(key($0)) }
+        // Surviving tags keep the ancestor's ORDER but take the winning side's
+        // spelling. Emitting the ancestor's string outright would revert a casing
+        // change both devices agreed on — base ["work"], both sides ["Work"], result
+        // "work" — which breaks the per-field rule this file is built on: a value both
+        // sides moved must never be overridden by the value neither of them kept.
+        let preferredSide = localWins ? local : remote
+        let otherSide = localWins ? remote : local
+        func spelling(_ tagKey: String, fallback: String) -> String {
+            preferredSide.first { key($0) == tagKey }
+                ?? otherSide.first { key($0) == tagKey }
+                ?? fallback
+        }
+
+        var ordered = (base ?? [])
+            .filter { kept.contains(key($0)) }
+            .map { spelling(key($0), fallback: $0) }
         // Newly added ones go in a deterministic order so both sides converge.
         for tagKey in added.sorted() {
-            let preferred = localWins ? local : remote
-            let fallback = localWins ? remote : local
-            if let casing = preferred.first(where: { key($0) == tagKey })
-                ?? fallback.first(where: { key($0) == tagKey }) {
-                ordered.append(casing)
-            }
+            guard let casing = preferredSide.first(where: { key($0) == tagKey })
+                ?? otherSide.first(where: { key($0) == tagKey }) else { continue }
+            ordered.append(casing)
         }
         return SnippetTagging.normalizedTags(ordered)
     }
@@ -383,12 +442,29 @@ nonisolated enum SyncMerge {
     /// keyword is deliberately **not** cleared — that would destroy what the user
     /// typed, and the existing keyword-conflict warning in the editor already
     /// surfaces the situation for them to resolve.
+    ///
+    /// Scoped to records the merge actually touched. Sweeping the whole array would
+    /// mean the first merge after this code ships silently disables any duplicate
+    /// keyword the user has been living with for months — the app only ever *warned*
+    /// about those, and a merge is not the place to start enforcing a rule
+    /// retroactively.
     @discardableResult
-    static func resolveKeywordCollisions(_ snippets: inout [Snippet]) -> [UUID] {
+    static func resolveKeywordCollisions(
+        _ snippets: inout [Snippet], touched: Set<UUID>? = nil
+    ) -> [UUID] {
         var winners: [String: Int] = [:]
         var disabled: [UUID] = []
 
-        for index in snippets.indices where snippets[index].isEnabled {
+        // Incumbents first, so an untouched record always wins against a newly merged
+        // one and a pre-existing duplicate is never the side that gets disabled.
+        let order = snippets.indices.sorted { lhs, rhs in
+            let lhsTouched = touched?.contains(snippets[lhs].id) ?? true
+            let rhsTouched = touched?.contains(snippets[rhs].id) ?? true
+            if lhsTouched != rhsTouched { return !lhsTouched }
+            return lhs < rhs
+        }
+
+        for index in order where snippets[index].isEnabled {
             let key = SnippetTagging.filterKey(for: snippets[index].normalizedKeyword)
             guard !key.isEmpty else { continue }
 
@@ -396,6 +472,11 @@ nonisolated enum SyncMerge {
                 winners[key] = index
                 continue
             }
+
+            // Neither side is new: this collision predates the merge, so leave it to
+            // the editor's existing keyword warning rather than disabling silently.
+            if let touched, !touched.contains(snippets[index].id),
+               !touched.contains(snippets[incumbent].id) { continue }
 
             // Newer wins; an exact tie falls back to id order so both devices agree.
             let challengerWins: Bool

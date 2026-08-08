@@ -39,11 +39,13 @@ nonisolated struct HLC: Comparable, Hashable, Sendable, Codable, CustomStringCon
     /// The device id given to records written by something with no clock of its own:
     /// a stale CLI, `vim`, a Time Machine restore.
     ///
-    /// All zeroes sorts strictly below every real device id, so when a foreign write
-    /// and an in-app edit carry the very same millisecond, the in-app edit wins. That
-    /// preserves the intent of the behaviour this replaced (the app's pending write
-    /// used to beat any external change unconditionally) but narrows it from "always"
-    /// to "only on an exact tie".
+    /// All zeroes sorts strictly below every real device id.
+    ///
+    /// NOTE: `SyncMerge` deliberately does **not** use this to break ties. Doing so is
+    /// asymmetric — each device would label its own record with the higher-sorting id,
+    /// both would conclude they had won, and the two would rewrite the file at each
+    /// other forever. `SyncMerge.localOutranksRemote` hashes the payloads instead. This
+    /// constant remains for ordering records that genuinely arrived without a clock.
     static let foreignDevice = "00000000"
 
     init(wallMs: UInt64, counter: UInt16, device: String) {

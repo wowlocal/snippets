@@ -45,19 +45,33 @@ final class SnippetStore {
     /// answer "did the file change under me?" without rehashing the whole library.
     private var lastKnownDigest: String?
 
-    /// This install's eight-hex identity, used to break exact merge ties in our
-    /// favour. Persisted in `Sync/state.json`; regenerated if that file is lost,
-    /// which costs nothing.
+    /// This install's eight-hex identity, from `Sync/state.json`.
+    ///
+    /// Not used by the merge — that tiebreak is symmetric and takes no identity. This
+    /// is for sync bookkeeping (which device authored a change) and diagnostics.
+    /// Regenerated if the state file is lost, which costs nothing.
     private(set) var deviceID: String = HLC.foreignDevice
 
     /// How long the writer has been unable to take the cross-process lock. Drives an
     /// escalating retry rather than a dropped write.
     private var lockFailureCount = 0
 
+    /// Set by `writeToDisk` when a write genuinely lands. Only `flushPendingWrites`
+    /// reads it, because on the terminate path "did it work?" cannot be answered by
+    /// scheduling anything.
+    private var didWriteDuringTerminate = false
+
     /// How long to wait for the library lock on the ordinary debounced write path.
-    /// Short: this runs on the main thread, and a slow peer must degrade to "retry
-    /// shortly", never to a beachball.
-    private let lockTimeout: TimeInterval = 2.0
+    ///
+    /// Deliberately small. This runs on the main thread, which also hosts a
+    /// head-inserted `CGEventTap` for `keyDown` — every millisecond spent polling here
+    /// is a millisecond of the user's typing held up system-wide. It also holds a
+    /// cross-process lock for its whole duration, against a CLI that gives up after
+    /// five seconds. An uncontended acquire is immediate and a CLI write holds the
+    /// lock for single-digit milliseconds, so 250 ms is many times the realistic
+    /// worst case; anything beyond that is a stuck peer, and the right answer then is
+    /// to back off and retry rather than to wait.
+    private let lockTimeout: TimeInterval = 0.25
     /// The terminate path has nothing left to reschedule onto, so it waits longer.
     private let terminateLockTimeout: TimeInterval = 5.0
 
@@ -646,9 +660,16 @@ final class SnippetStore {
     /// Everyone behaved correctly and an edit still vanished. So the writer re-reads
     /// *inside* the lock and merges when the bytes moved, instead of trusting its own
     /// snapshot to still be current.
-    private func writeToDisk(lockTimeout timeout: TimeInterval? = nil) {
+    private func writeToDisk(lockTimeout timeout: TimeInterval? = nil, isTerminating: Bool = false) {
         let previousDigest = lastKnownDigest
         let ancestor = lastKnownDiskData.flatMap { try? SnippetLibraryCodec.decode($0) } ?? []
+
+        // The transform below may run more than once: `LibraryWriter` retries it when a
+        // peer writes inside the critical section. It must therefore be free of side
+        // effects — the merge result is stashed here and applied only once, after the
+        // write is confirmed. Mutating `snippets` or the undo stacks from inside would
+        // apply them once per attempt.
+        var pendingMerge: (outcome: SyncMerge.Outcome, preMergeLocal: [Snippet])?
 
         do {
             let outcome = try LibraryWriter.update(
@@ -657,17 +678,42 @@ final class SnippetStore {
                 expectedDigest: previousDigest
             ) { onDisk in
                 // Fast path: nobody moved the file, so there is nothing to reconcile.
-                guard onDisk.digest != previousDigest else { return self.snippets }
+                guard onDisk.digest != previousDigest else {
+                    pendingMerge = nil
+                    return self.snippets
+                }
+
+                // The file is GONE, not empty. Nobody deleted these records — there is
+                // simply no remote side to merge against, so merging would read every
+                // untouched record as "the peer deleted this" and write one snippet
+                // over the whole library, durably, with the undo stacks rebased onto
+                // the wreckage. Recreate the file from what we have, which is exactly
+                // what the plain atomic write this replaced always did.
+                guard onDisk.fileExisted else {
+                    NSLog("Snippets: snippets.json disappeared; recreating it from memory rather than merging.")
+                    pendingMerge = nil
+                    return self.snippets
+                }
 
                 let merged = SyncMerge.mergeLocal(
-                    base: ancestor, local: self.snippets, remote: onDisk.snippets,
-                    localDevice: self.deviceID)
-                self.adoptMergedLibrary(merged, preMergeLocal: self.snippets)
-                return self.snippets
+                    base: ancestor, local: self.snippets, remote: onDisk.snippets)
+                pendingMerge = (merged, self.snippets)
+                return merged.snippets
             }
 
             lockFailureCount = 0
+            didWriteDuringTerminate = true
+            if let pendingMerge {
+                adoptMergedLibrary(pendingMerge.outcome, preMergeLocal: pendingMerge.preMergeLocal)
+            }
             rememberDiskBytes(outcome.data)
+
+            if outcome.attempts > 1 {
+                // Only reachable if the cross-process lock was bypassed — most likely
+                // the lock file was replaced underneath us. The data is fine (that is
+                // what the retry is for), but the lock is not doing its job.
+                NSLog("Snippets: library write needed \(outcome.attempts) attempts; the advisory lock is not holding.")
+            }
 
             if outcome.foldedInForeignWrite {
                 // Someone else's edit just became part of our state. The UI has to be
@@ -677,15 +723,27 @@ final class SnippetStore {
             if outcome.wroteWithoutLock {
                 NSLog("Snippets: wrote the library without an advisory lock; this filesystem does not support flock.")
             }
-        } catch LibraryWriter.Failure.busy {
-            // NEVER return silently here. `persist()` has already cleared
-            // `persistWorkItem`, so nothing else would ever reschedule this write and
-            // the user's in-memory edit would be lost — a data-loss bug introduced by
-            // a data-loss fix.
-            lockFailureCount += 1
-            schedulePersistRetry()
         } catch {
-            NSLog("Failed to save snippets: \(error)")
+            // NEVER return silently here, for ANY error. `persist()` has already
+            // cleared `persistWorkItem`, so nothing else would reschedule this write —
+            // and by this point the transform may already have mutated `snippets` and
+            // the undo stacks. A disk-full or permissions failure would leave the
+            // user's edit existing only in RAM, with no indication anything was wrong,
+            // until the process exits.
+            //
+            // `.busy` is the ordinary case and retries quickly. Everything else is
+            // probably persistent, so it backs off further but still keeps trying:
+            // disks get emptied and permissions get repaired, and the alternative is
+            // discarding work the user can see on screen.
+            lockFailureCount += 1
+            if case LibraryWriter.Failure.busy = error {} else {
+                NSLog("Snippets: could not save the library (attempt \(lockFailureCount)): \(error)")
+            }
+            // On the terminate path the run loop will never spin again, so an
+            // asyncAfter retry would silently never run. `flushPendingWrites` retries
+            // inline instead and falls back to a recovery file.
+            guard !isTerminating else { return }
+            schedulePersistRetry()
         }
     }
 
@@ -719,13 +777,38 @@ final class SnippetStore {
         syncDelegate?.libraryDidChange(source)
     }
 
+    /// Flushes a pending write, synchronously, with nowhere to defer to.
+    ///
+    /// This runs from `applicationWillTerminate`, which returns and then the process
+    /// dies — so the run loop never spins again and `schedulePersistRetry`'s
+    /// `asyncAfter` would simply never fire. Retrying has to happen inline, and if it
+    /// still cannot land, the edit has to go *somewhere* rather than evaporate.
     func flushPendingWrites() {
         guard persistWorkItem != nil else { return }
         persistWorkItem?.cancel()
         persistWorkItem = nil
-        // The terminate path calls this synchronously and then the process dies, so
-        // there is nothing left to retry onto — wait longer for the lock instead.
-        writeToDisk(lockTimeout: terminateLockTimeout)
+
+        let pending = snippets
+        for attempt in 0..<3 {
+            didWriteDuringTerminate = false
+            writeToDisk(lockTimeout: terminateLockTimeout, isTerminating: true)
+            if didWriteDuringTerminate { return }
+            if attempt < 2 { Thread.sleep(forTimeInterval: 0.1) }
+        }
+
+        // Three locked attempts failed and the process is about to exit. Overwriting
+        // the library unlocked would risk clobbering whatever peer is holding the
+        // lock, so the edit goes to a recovery file instead: nothing is lost, nothing
+        // is corrupted, and the next launch can offer it back.
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let rescue = SnippetStorageLocations.backupsFolderURL.appendingPathComponent(
+            "unsaved-\(formatter.string(from: Date())).json", isDirectory: false)
+        if let data = try? SnippetLibraryCodec.encode(pending) {
+            try? AtomicFileWriter.write(data, to: rescue)
+            NSLog("Snippets: could not save on quit; the pending library was written to \(rescue.path)")
+        }
     }
 
     // MARK: - Undo / Redo
@@ -874,7 +957,7 @@ final class SnippetStore {
 
         let preMergeLocal = snippets
         let merged = SyncMerge.mergeLocal(
-            base: ancestor, local: snippets, remote: reloaded, localDevice: deviceID)
+            base: ancestor, local: snippets, remote: reloaded)
 
         guard merged.snippets != preMergeLocal else { return }
         adoptMergedLibrary(merged, preMergeLocal: preMergeLocal)
@@ -913,20 +996,20 @@ final class SnippetStore {
     /// Above the threshold it degrades to the previous behaviour, which is safe: a
     /// cleared stack loses undo history, never data.
     private func rebaseUndoHistory(preMergeLocal: [Snippet], merged: [Snippet]) {
-        func rebase(_ snapshot: [Snippet]) -> [Snippet] {
-            SyncMerge.mergeLocal(
-                base: preMergeLocal, local: snapshot, remote: merged, localDevice: deviceID
-            ).snippets
-        }
-
         let work = (undoStack.count + redoStack.count) * max(merged.count, 1)
-        guard work <= 50_000 else {
+        guard work <= 20_000 else {
+            // Above the budget this runs long enough on the main thread to be felt,
+            // and the main thread also hosts the keyDown event tap. Clearing the
+            // stacks loses undo history; it never loses data.
             undoStack.removeAll()
             redoStack.removeAll()
             editTransactionSnapshot = editTransactionSnapshot.map { _ in merged }
             return
         }
 
+        func rebase(_ snapshot: [Snippet]) -> [Snippet] {
+            SyncMerge.rebaseSnapshot(snapshot, from: preMergeLocal, onto: merged)
+        }
         undoStack = undoStack.map(rebase)
         redoStack = redoStack.map(rebase)
         editTransactionSnapshot = editTransactionSnapshot.map(rebase)

@@ -15,13 +15,16 @@ required not to break.
 | Phase | State |
 |---|---|
 | 1. Cross-process locking + three-way merge | **Shipped.** No network, no crypto, no format change. |
-| 2. Wire record model, transport protocol, fake transport | Core types landed; not wired to the app. |
-| 3. Secure snippets — crypto core | Landed; the Keychain wrapper, unlock UX, and UI are not. |
+| 2. Wire record model, transport protocol, fake transport | Types exist and are tested in isolation. **Nothing calls them yet** — no `VaultRecord` ↔ `SyncEnvelope` bridge, no engine. |
+| 3. Secure snippets — crypto core | Crypto, key wrapping, and the vault document exist and are tested. **No Keychain wrapper, no unlock UX, no UI, no app integration** — you cannot create a secure snippet. |
 | 4. Sync engine driven by the fake | Not started. |
-| 5. First real backend (CloudKit **or** object storage) | Not started; gated on §8. |
+| 5. First real backend | Deliberately deferred — see §9. |
 | 6. Second backend, conflict UI | Not started. |
 | 7. Hosted server tier | Optional; not started. |
-| 8. iOS app | Not started. `snippets/Core/` is already platform-agnostic for it. |
+| 8. iOS app | Deferred by decision. `snippets/Core/` is already platform-agnostic for it. |
+
+Only Phase 1 is wired into the running app. Phases 2 and 3 are libraries with tests and no
+callers; treat "landed" as "the pieces exist and are proven in isolation", not as a feature.
 
 Phase 1 was worth shipping on its own and does not depend on anything after it.
 
@@ -33,6 +36,8 @@ The app and `snippets-cli` each did an unlocked read-modify-write of the whole f
 array, edit a private copy, rename a complete replacement into place. Concurrently, that loses
 most of the writes — measured at a realistic read-to-write gap, 60 concurrent writers keep 10–18
 of their edits. The CLI printed a success receipt for every one.
+
+Every figure here comes from `Tests/concurrency-harness.sh`, which is committed and runnable.
 
 Locking alone does not fix it. A second race survives correct locking entirely:
 
@@ -50,13 +55,23 @@ existed. It is not one now.
 **The fix**: one funnel (`LibraryWriter.update`) that takes an `flock`, re-reads *inside* the
 lock, and three-way merges when the bytes moved.
 
-The lock lives on its own zero-byte file that is created once and never unlinked or replaced.
-`flock` attaches to an inode, and an atomic write renames the inode away — so locking
-`snippets.json` itself measures the same as no lock at all.
+The lock alone is still not sufficient, because it can be defeated from outside: `flock` binds to
+an inode, so replacing the lock file — a folder restore, a file-syncing tool, a cleanup script —
+leaves peers holding locks on different inodes, both believing they are serialized. Correctness
+therefore does not rest on the lock at all. Every write re-reads immediately before writing and
+confirms immediately after, and retries the whole transform if the bytes moved either time.
+Measured with the lock file deleted every 5 ms underneath 60 concurrent writers: **31/61** records
+survived with neither guard, **54/61** with inode revalidation alone, **61/61** with the
+compare-and-swap. `Tests/concurrency-harness.sh` reproduces all of it.
+
+The lock lives on its own zero-byte file rather than on `snippets.json`, because an atomic write
+renames the data file's inode away and peers would end up locking different inodes — measurably
+the same as no lock at all.
 
 `flock` failing because the filesystem does not implement it (some network-mounted home
-directories) is **not** fatal: the write proceeds and the generation counter catches the
-collision afterwards. A *timeout* is fatal, because it means a peer genuinely holds the lock.
+directories) is **not** fatal: the write proceeds and the compare-and-swap above provides
+correctness on its own. A *timeout* is different — it means a peer genuinely holds the lock — so
+the caller backs off and retries rather than writing.
 
 ---
 
@@ -114,9 +129,19 @@ asymmetric tiebreak fails four of them, including a randomized property test.
 
 An undo entry is "the library as it was before my edit", stated relative to the pre-merge local
 array. Left alone after a merge, `⌘Z` would persist an array that predates every record the other
-writer just added — undo would delete someone else's snippets. So the stacks are rebased through
-the same merge. Above a size threshold this degrades to the previous behaviour of clearing them,
-which loses undo history but never data.
+writer just added — undo would delete someone else's snippets. So the stacks are rebased.
+
+The rebase is **not** the three-way merge, and using the merge here was a real bug. An undo entry
+is a stated *intent* — "put it back to exactly this" — not a competing edit by another device, and
+the merge treats it as one. No concurrency is needed to break it: edit v1 → v2, let the CLI write
+v3, and the rebase sees base v2, local v1, remote v3, all distinct. That is a content conflict by
+definition, so `⌘Z` restored nothing and instead minted a disabled `(conflict …)` record into the
+shared library, which then survived every later rebase. `SyncMerge.rebaseSnapshot` replays only
+what the snapshot actually changes relative to its own baseline and takes the merged library for
+everything else — no clock, no arbitration, no conflict copies.
+
+Above a size threshold the rebase degrades to clearing the stacks, which loses undo history but
+never data.
 
 ---
 
@@ -159,6 +184,19 @@ at all, so it can never type ciphertext into a chat window, and `exportSnippets(
 `SnippetDeepLink` cannot leak one because they never encounter it.
 
 ### Keys
+
+> **Decided 2026-08-08:** the vault key lives in the **Keychain**, with no mandatory passphrase.
+> `K_lib` is stored with `kSecAttrSynchronizable` so iCloud Keychain carries it between devices,
+> and unlocks with Touch ID. Say the consequence plainly rather than burying it: the guarantee now
+> rests on Apple's iCloud Keychain rather than on something only the user knows, so an attacker who
+> compromises the iCloud account *and* passes its device-approval step reaches the secrets. The
+> passphrase path below is retained only for the printable recovery key and for
+> passphrase-protected export — it is not on the primary path.
+>
+> Note also that `kSecAttrSynchronizable` requires the *data-protection* keychain, which requires
+> `keychain-access-groups` + an embedded provisioning profile + Keychain Sharing on the App ID.
+> Without that portal work the key can still live in the login keychain, and secure snippets work
+> fully on one Mac — they just cannot sync.
 
 A random 256-bit library key `K_lib` is the root and is never used to encrypt anything directly.
 Per-purpose subkeys come from HKDF-SHA256:
@@ -217,6 +255,12 @@ Only four fields leave the device:
 Name, keyword, tags, clock, origin, and the secure flag all live *inside* the blob, and blobs are
 padded to a fixed multiple, so the backend cannot tell which records are secure or how long
 anything is. `deleted` is in the clear only so a backend can garbage-collect tombstones.
+
+**The crypto scope must come from the vault document, never from `Sync/state.json`.** That file is
+designed to regenerate itself whenever it cannot be read, because it holds no user data — so
+binding ciphertext to a value stored there would destroy every secure snippet the first time it
+went missing. The scope is `VaultDocument.kid`, which lives in the same file as the records it
+protects. The rule generalises: the value that unlocks a file belongs in that file.
 
 `SyncTransport` is the seam. CloudKit and an object-storage backend are two implementations of it,
 and `InMemoryTransport` — with fault injection for rejection, latency, partial batches, cursor
@@ -290,4 +334,4 @@ notarization does **not** check that.
 | Conflict copies for content only | Content is the only irreplaceable field | A text CRDT — content is a *template*, and character-merging `{date:yyyyMMdd}` yields garbage |
 | Keep JSON + `flock` + CAS | Human-readable, git-friendly, keeps old writers first-class | SQLite, directory-per-snippet — both give a stale CLI a silent split-brain library |
 | Usage never syncs | An already-published promise | An opt-in toggle |
-| CLI cannot decrypt by default | Otherwise every `curl \| sh` becomes a silent exfiltration primitive | Giving the CLI the Keychain group unconditionally |
+| CLI reveal is app-brokered | A CLI that can decrypt unattended makes every `curl \| sh` an exfiltration primitive; routing through the app puts a human in the loop | Never revealing at all (simpler, ~900 lines lighter); giving the CLI the Keychain group unconditionally |

@@ -232,18 +232,30 @@ nonisolated enum SnippetTagging {
     }
 
     /// Canonical key used for tag comparison, filtering, and color hashing.
+    ///
+    /// Folded against a FIXED locale, never `.current`. This key decides tag identity
+    /// and keyword collisions, and the merge is specified as a pure function of its
+    /// inputs — reading `Locale.current` would make it a function of ambient process
+    /// state as well, so two machines with different system languages could compute
+    /// different results from byte-identical files and never converge. Turkish is the
+    /// live case: with a Turkish locale `I` folds to `ı`, not `i`, so a tag written on
+    /// one Mac stops matching itself on another.
+    ///
+    /// `en_US_POSIX` is the usual choice for a locale that is guaranteed not to drift.
     static func filterKey(for tag: String) -> String {
-        tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: foldingLocale)
     }
+
+    private static let foldingLocale = Locale(identifier: "en_US_POSIX")
 }
 
-extension Snippet {
+nonisolated extension Snippet {
     func hasTag(withKey key: String) -> Bool {
         tags.contains { SnippetTagging.filterKey(for: $0) == key }
     }
 }
 
-extension Snippet {
+nonisolated extension Snippet {
     private enum CodingKeys: String, CodingKey {
         case id
         case name

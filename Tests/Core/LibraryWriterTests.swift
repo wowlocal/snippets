@@ -682,8 +682,8 @@ import Darwin
         defer { sandbox.destroy() }
 
         #expect(try SnippetLibraryCodec.read(from: sandbox.library) == nil)
-        let snapshot = try LibraryWriter.read(from: sandbox.library)
-        #expect(snapshot == LibraryWriter.Snapshot.empty)
+        let snapshot = try LibraryWriter.read(from: sandbox.library)  // missing file
+        #expect(snapshot == LibraryWriter.Snapshot.missing)
         #expect(snapshot.snippets.isEmpty)
         #expect(snapshot.digest.isEmpty)
 
