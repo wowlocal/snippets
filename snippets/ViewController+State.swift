@@ -533,7 +533,7 @@ extension ViewController {
     /// the detail rather than the meaning; the tooltip carries the whole line.
     func updateKeywordStatus(for snippet: Snippet?) {
         guard let snippet else {
-            setKeywordStatus("", isFailure: false)
+            setKeywordStatus("")
             return
         }
 
@@ -545,20 +545,20 @@ extension ViewController {
         guard !keyword.isEmpty else {
             // The most common broken snippet in the library, and the one the old
             // warning was careful to say nothing about.
-            setKeywordStatus("Add a keyword to expand this.", isFailure: false)
+            setKeywordStatus("Add a keyword to expand this.")
             return
         }
         guard snippet.isEnabled else {
             // A disabled snippet is invisible to the engine, so it neither fires
             // nor blocks anyone; reporting conflicts here would be a lie.
-            setKeywordStatus("Disabled — \(trigger) won't expand.", isFailure: false)
+            setKeywordStatus("Disabled — \(trigger) won't expand.")
             return
         }
         // Transcribed from SnippetExpansionEngine.unambiguousExactMatch: the
         // trigger deletion is counted in graphemes, so a keyword containing one
         // built from several scalars is refused outright.
         guard !snippet.normalizedKeyword.contains(where: { $0.unicodeScalars.count > 1 }) else {
-            setKeywordStatus("\(trigger) needs letters, digits or -.", isFailure: true)
+            setKeywordStatus("\(trigger) needs letters, digits or -.")
             return
         }
 
@@ -584,7 +584,7 @@ extension ViewController {
         }
 
         if let duplicate {
-            setKeywordStatus("\(trigger) is taken, neither expands: \(duplicate.displayName)", isFailure: true)
+            setKeywordStatus("\(trigger) is taken, neither expands: \(duplicate.displayName)")
         } else if let blockedBy {
             // This snippet's own failure outranks the damage it does elsewhere:
             // the line sits under this snippet's keyword, and naming only the
@@ -595,24 +595,23 @@ extension ViewController {
             // user can reconstruct — something starting with this keyword is in
             // the library — so it is the right thing to lose first.
             setKeywordStatus(
-                "\(trigger) won't expand, blocked by \(blockedBy.displayName) (\\\(blockedBy.normalizedKeyword))",
-                isFailure: true
+                "\(trigger) won't expand, blocked by \(blockedBy.displayName) (\\\(blockedBy.normalizedKeyword))"
             )
         } else if let blocks {
-            setKeywordStatus("This stops \\\(blocks.normalizedKeyword) expanding: \(blocks.displayName)", isFailure: true)
+            setKeywordStatus("This stops \\\(blocks.normalizedKeyword) expanding: \(blocks.displayName)")
         } else {
             // Nothing to report. The slot keeps its 15pt height, so this is a
             // blank line and not a collapsed row.
-            setKeywordStatus("", isFailure: false)
+            setKeywordStatus("")
         }
     }
 
-    private func setKeywordStatus(_ text: String, isFailure: Bool) {
-        keywordWarningLabel.stringValue = text
-        keywordWarningLabel.textColor = isFailure ? ThemeManager.alertColor : .secondaryLabelColor
-        // The row is one line high, so the sentence truncates at narrow editor
-        // widths; the tooltip is the rest of it, for every case above.
-        keywordWarningLabel.toolTip = text.isEmpty ? nil : text
+    /// The verdict rides on the keyword field itself rather than a line of prose
+    /// beneath it. Every sentence here describes a state most snippets are never
+    /// in, and a permanent row for them left a gap under every keyword that
+    /// already worked.
+    private func setKeywordStatus(_ text: String) {
+        keywordField.toolTip = text.isEmpty ? nil : text
     }
 
     /// The clickable candidates under the status line, offered only while the

@@ -5,19 +5,6 @@ enum MainLayoutMetrics {
     static let sidebarMaxWidth: CGFloat = 520
     static let sidebarPreferredFraction: CGFloat = 0.28
     static let editorMinWidth: CGFloat = 230
-    /// Editor pane widths — not window widths — at which the form changes shape.
-    ///
-    /// Enter measured, not picked: at pane 520 the stack is 472pt, so the field
-    /// column beside a 58pt label column is 402pt, which clears the longest
-    /// status sentence in the app ("\sig won't expand, blocked by Email
-    /// Signature (\signature)", 328pt) with room to spare. Below that the wide
-    /// form would start cutting text the stacked form would have shown.
-    ///
-    /// The 40pt band exists because the layout can change its own width: a
-    /// legacy vertical scroller is 17pt, and 40 > 2 × 17, so no width change the
-    /// flip causes can re-cross the threshold and start it thrashing.
-    static let editorWideLayoutEnterWidth: CGFloat = 520
-    static let editorWideLayoutExitWidth: CGFloat = 480
     static let editorHorizontalPadding: CGFloat = 24
     static let previewMaxHeight: CGFloat = 150
     static let minimumInlineSidebarWidth: CGFloat = 300
@@ -187,29 +174,12 @@ extension ViewController {
         mainSidebarSplitItem = sidebarItem
         mainContentSplitItem = contentItem
         sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
-
-        // The editor pane's own frame, not `viewDidLayout`. Measured on a rig
-        // with this exact item configuration: dragging the divider and
-        // collapsing the sidebar both move the pane by hundreds of points
-        // without the root view controller laying out once, because the root's
-        // bounds never change. This notification fired 1:1 with every real width
-        // change. `viewDidLayout` and the split-view resize notification still
-        // call in as belt and braces; the mode compare makes them free.
-        editorPaneContainer = editorController.view
-        editorController.view.postsFrameChangedNotifications = true
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleEditorPaneFrameChanged),
-            name: NSView.frameDidChangeNotification,
-            object: editorController.view
-        )
     }
 
     @objc
     func handleMainSplitViewDidResize(_ notification: Notification) {
         guard mainSplitView.subviews.count >= 2 else { return }
 
-        updateEditorLayoutMode()
         updateSnippetTextViewWrappingWidth()
         if isSearchSuggestionOverlayVisible {
             updateSearchSuggestionOverlay()
@@ -643,26 +613,13 @@ extension ViewController {
         keywordField.placeholderString = "sig"
         keywordField.controlSize = .large
 
-        keywordWarningLabel.font = .systemFont(ofSize: 12)
-        keywordWarningLabel.textColor = .secondaryLabelColor
-        keywordWarningLabel.alignment = .left
-        // The status line always says something and is never hidden: it sits
-        // mid-form now, so a label that comes and goes would shove Name, Tags and
-        // Enabled up and down on the keystroke that fixes or breaks a keyword.
-        // One pinned row also means a long sentence truncates instead of wrapping.
-        keywordWarningLabel.maximumNumberOfLines = 1
-        keywordWarningLabel.lineBreakMode = .byTruncatingTail
-        keywordWarningLabel.translatesAutoresizingMaskIntoConstraints = false
-        keywordWarningLabel.heightAnchor.constraint(equalToConstant: 15).isActive = true
-        // The longest sentence this label carries is 328pt wide, and at the
-        // default 750 it would hold its whole column open to fit — measured, it
-        // beats even an explicit equal-width constraint. It is already a single
-        // truncating line with the full text in its tooltip, so it is designed
-        // to be cut rather than to decide anyone else's width.
-        keywordWarningLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        keywordWarningLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        // A keyword that cannot expand — empty, duplicated, or in a prefix
+        // collision — says so through the field's own tooltip rather than a line
+        // of prose under it. The sentence was permanent furniture for a state
+        // most snippets are never in, and reserving its row left a gap under
+        // every keyword that was perfectly fine.
 
-        // Unlike the status line this row does come and go — it exists only
+        // This row does come and go — it exists only
         // while there is no keyword — so it collapses out of the stack rather
         // than reserving a gap under every snippet that already works.
         editorSuggestedKeywordsFlow.collapsedRowLimit = 1
@@ -715,48 +672,34 @@ extension ViewController {
         // the keyword follows because it is the only one that makes it fire.
         // Name, tags and the enabled toggle are all optional, so they sink.
         //
-        // Keyword, Name, Tags must stay in this order and never be reordered per
-        // layout mode: `editorNeighbor` in ViewController+TextEditing.swift is a
-        // hand-wired tab loop that walks exactly this sequence.
+        // Keyword, Name, Tags must stay in this order: `editorNeighbor` in
+        // ViewController+TextEditing.swift is a hand-wired tab loop that walks
+        // exactly this sequence.
         let snippetSection = EditorFormSection(
             title: "Snippet",
             fields: [snippetContainer],
-            stackedSpacing: 10,
-            wideLabelTopInset: 10
+            labelSpacing: 10
         )
         // Reuses the stack the controller already holds, so `updatePreview` goes
         // on hiding one view and now collapses the label with it.
         let previewSection = EditorFormSection(
             title: "Preview",
             fields: [previewContainer],
-            row: previewSectionStack,
-            stackedSpacing: 8,
-            wideLabelTopInset: 8
+            row: previewSectionStack
         )
         let keywordSection = EditorFormSection(
             title: "Keyword",
-            fields: [keywordRow, keywordWarningLabel, editorSuggestedKeywordsFlow],
-            fieldSpacing: 4,
-            stackedSpacing: 8,
-            wideLabelTopInset: 5
+            fields: [keywordRow, editorSuggestedKeywordsFlow],
+            fieldSpacing: 6
         )
-        keywordSection.fieldColumn.setCustomSpacing(8, after: keywordWarningLabel)
-        let nameSection = EditorFormSection(
-            title: "Name",
-            fields: [nameField],
-            stackedSpacing: 8,
-            wideLabelTopInset: 5
-        )
+        let nameSection = EditorFormSection(title: "Name", fields: [nameField])
         let tagsSection = EditorFormSection(
             title: "Tags",
             fields: [tagsField, editorSuggestedTagsFlow],
-            fieldSpacing: 6,
-            stackedSpacing: 8,
-            wideLabelTopInset: 5
+            fieldSpacing: 6
         )
         // No label of its own — the checkbox states a property rather than
-        // filling a field — but it still indents past the label column when
-        // wide, so it reads as part of the form instead of floating loose.
+        // filling a field, and its own title already says which.
         let enabledSection = EditorFormSection(
             title: nil,
             fields: [enabledCheckbox],

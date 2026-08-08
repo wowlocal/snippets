@@ -126,7 +126,6 @@ final class ViewController: NSViewController {
     let editorSuggestedTagsFlow = TagFlowView()
     let editorSuggestedKeywordsFlow = TagFlowView()
     let keywordPrefixLabel = NSTextField(labelWithString: "\\")
-    let keywordWarningLabel = NSTextField(labelWithString: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
     let previewSectionStack = NSStackView()
@@ -136,11 +135,6 @@ final class ViewController: NSViewController {
     /// Keyword, Name and Tags must stay in that relative order — the hand-wired
     /// tab loop in `editorNeighbor` walks it.
     var editorSections: [EditorFormSection] = []
-    var currentEditorLayoutMode: EditorLayoutMode = .stacked
-    var hasAppliedEditorLayout = false
-    /// The editor split item's own view. Its width, not the window's, is what
-    /// decides the form's shape — the divider and ⌘B both move it on their own.
-    weak var editorPaneContainer: NSView?
 
     let mainSplitViewController = NSSplitViewController()
     var mainSplitView: NSSplitView { mainSplitViewController.splitView }
@@ -303,7 +297,7 @@ final class ViewController: NSViewController {
             relaxWindowResizeLimits(window)
         }
         restoreMainSplitViewDividerIfNeeded()
-        updateEditorLayoutMode()
+
         updateSnippetTextViewWrappingWidth()
         updateSearchSuggestionOverlayLayout()
     }
