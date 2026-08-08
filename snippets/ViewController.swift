@@ -4,7 +4,12 @@ import UniformTypeIdentifiers
 
 private enum MainWindowAutosave {
     static let frameName = NSWindow.FrameAutosaveName("SnippetsMainWindowFrame")
-    static let relaxedMinimumContentSize = NSSize(width: 1, height: 1)
+    /// Keep the width free for the adaptive sidebar rule, but stop vertical
+    /// resizing at the editor's measured no-scroll floor. This is a *frame*
+    /// height: the window converts it to content height after accounting for its
+    /// toolbar and titlebar, which currently take about 72pt.
+    static let minimumContentWidth: CGFloat = 1
+    static let minimumFrameHeight: CGFloat = 430
     /// First run only. The sidebar takes 0.28 of this and the editor the rest,
     /// which puts the editor pane at ~700pt — well into its wide shape, and wide
     /// enough that no string in the form is cut.
@@ -229,7 +234,7 @@ final class ViewController: NSViewController {
 
         if let window = view.window {
             configureMainWindowChrome(window)
-            relaxWindowResizeLimits(window)
+            applyMainWindowResizeLimits(window)
 
             if !hasConfiguredWindowFrameAutosave {
                 hasConfiguredWindowFrameAutosave = true
@@ -315,7 +320,7 @@ final class ViewController: NSViewController {
     override func viewDidLayout() {
         super.viewDidLayout()
         if let window = view.window {
-            relaxWindowResizeLimits(window)
+            applyMainWindowResizeLimits(window)
         }
         restoreMainSplitViewDividerIfNeeded()
 
@@ -418,10 +423,21 @@ final class ViewController: NSViewController {
         updatePreview(withTemplate: template)
     }
 
-    private func relaxWindowResizeLimits(_ window: NSWindow) {
-        window.contentMinSize = MainWindowAutosave.relaxedMinimumContentSize
+    private func applyMainWindowResizeLimits(_ window: NSWindow) {
+        let decorationHeight = window.frameRect(
+            forContentRect: NSRect(
+                origin: .zero,
+                size: NSSize(width: MainWindowAutosave.minimumContentWidth, height: 0)
+            )
+        ).height
+        let minimumContentSize = NSSize(
+            width: MainWindowAutosave.minimumContentWidth,
+            height: max(1, MainWindowAutosave.minimumFrameHeight - decorationHeight)
+        )
+
+        window.contentMinSize = minimumContentSize
         window.minSize = window.frameRect(
-            forContentRect: NSRect(origin: .zero, size: MainWindowAutosave.relaxedMinimumContentSize)
+            forContentRect: NSRect(origin: .zero, size: minimumContentSize)
         ).size
     }
 
