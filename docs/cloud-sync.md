@@ -16,7 +16,7 @@ required not to break.
 |---|---|
 | 1. Cross-process locking + three-way merge | **Shipped.** No network, no crypto, no format change. |
 | 2. Wire record model, transport protocol, fake transport | Types exist and are tested in isolation. **Nothing calls them yet** — no `VaultRecord` ↔ `SyncEnvelope` bridge, no engine. |
-| 3. Secure snippets — crypto core | Crypto, key wrapping, the vault document, and the Keychain store exist. **No unlock session, no UI, no app integration** — you still cannot create a secure snippet. |
+| 3. Secure snippets | Crypto, vault document, Keychain store, unlock session, the store that owns `vault.json`, the two-file move, and the leak scrubbing are all in and wired. **No UI** — nothing in the app can create one yet. |
 | 4. Sync engine driven by the fake | Not started. |
 | 5. First real backend | Deliberately deferred — see §9. |
 | 6. Second backend, conflict UI | Not started. |
@@ -268,9 +268,25 @@ merge, and so a fresh GCM nonce does not look like an edit.
 
 ### Expansion
 
-`enabledSnippetsSorted()` — the auto-expansion path — must **not** include secure records. Its not
+`enabledSnippetsSorted()` — the auto-expansion path — does **not** include secure records. Its not
 containing them is the structural gate that makes "a secret is never typed by an unauthenticated
-keystroke trigger" true, rather than a policy a later refactor can quietly drop.
+keystroke trigger" true, rather than a policy a later refactor can quietly drop. The merged view is
+`snippetsSortedForDisplay()`, which is display only.
+
+### Where content could escape, and what stops it
+
+| Path | What stops a secret going through it |
+|---|---|
+| `snippets.json`, export, the undo stack | Secure records are never in `SnippetStore.snippets`. Structural — nothing to filter. |
+| Share deep link | `SnippetDeepLink.url(for:isSecure:)` has **no default** for `isSecure`, so omitting the check does not compile. |
+| Auto-expansion from the keystroke buffer | Secure records are absent from `enabledSnippetsSorted()`. |
+| Clipboard managers | Secure expansion prefers the Accessibility write path, which never touches the pasteboard. Where the pasteboard is unavoidable, `TemporaryPasteboardLease(isConcealed:)` sets `org.nspasteboard.ConcealedType` and `TransientType` — a **courtesy, not a control**: there is no AppKit constant, managers honour it only by convention, and anything that ignores it still sees the text. |
+| The snippet list | A secure row renders `••••••••`; it carries a shell with `content == ""`, so there is nothing to render even if the view forgot. |
+| Two-file moves | `LibraryTransaction` — one lock over both files, vault written first, crash marker. An interrupted move duplicates, never disappears. |
+
+Tags and keyword uniqueness deliberately *do* span both stores: a tag used only by secure snippets
+must still appear in the filter bar, and a plaintext snippet must not be able to claim a keyword a
+secure one already uses, or the expander becomes ambiguous with no way for the user to see why.
 
 ---
 

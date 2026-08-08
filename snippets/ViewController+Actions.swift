@@ -347,7 +347,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
               let snippet = store.snippet(id: targetSnippetID) else { return }
 
         do {
-            let url = try SnippetDeepLink.url(for: snippet)
+            let url = try SnippetDeepLink.url(for: snippet, isSecure: store.isSecure(snippet.id))
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(url.absoluteString, forType: .string)

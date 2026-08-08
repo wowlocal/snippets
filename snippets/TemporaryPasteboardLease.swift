@@ -123,11 +123,29 @@ final class TemporaryPasteboardLease {
         self.strategy = strategy
     }
 
+    /// Markers that ask clipboard managers not to record an item.
+    ///
+    /// There is no AppKit constant for these — they are a community convention that the
+    /// major clipboard managers happen to honour, so this is **a courtesy, not a
+    /// control**. Anything that ignores them still sees the text, and the threat model
+    /// says so. The reason to set them anyway is that a secret silently accumulating in
+    /// someone's clipboard history is the most likely real-world leak this feature has,
+    /// and the mitigation costs two lines.
+    ///
+    /// The genuine protection is elsewhere: secure expansion prefers the Accessibility
+    /// write path, which never touches the pasteboard at all.
+    private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+
     /// `nil` means the pasteboard could not be read back safely. The caller must then abandon the
     /// expansion — which is why the lease is taken before the trigger is deleted, not after.
+    ///
+    /// - Parameter isConcealed: set for secure-snippet content. Adds the
+    ///   clipboard-manager opt-out markers described on `concealedType`.
     static func begin(
         text: String,
-        pasteboard: any SnippetPasteboardAccess
+        pasteboard: any SnippetPasteboardAccess,
+        isConcealed: Bool = false
     ) -> TemporaryPasteboardLease? {
         let snapshot = PasteboardSnapshot(reading: pasteboard)
         guard let items = snapshot.items, pasteboard.changeCount == snapshot.changeCount else {
@@ -137,6 +155,7 @@ final class TemporaryPasteboardLease {
         if let originalStringData = snapshot.firstStringData,
            let temporaryItems = snapshot.makeItems(replacingFirstStringWith: text),
            let temporaryItem = temporaryItems.first {
+            if isConcealed { Self.markConcealed(temporaryItem) }
             pasteboard.clearContents()
             guard pasteboard.writeObjects(temporaryItems) else {
                 if let originalItems = snapshot.makeItems() {
@@ -153,6 +172,7 @@ final class TemporaryPasteboardLease {
 
         let temporaryItem = NSPasteboardItem()
         guard temporaryItem.setString(text, forType: .string) else { return nil }
+        if isConcealed { Self.markConcealed(temporaryItem) }
         pasteboard.clearContents()
         guard pasteboard.writeObjects([temporaryItem]) else {
             if !items.isEmpty, let originalItems = snapshot.makeItems() {
@@ -165,6 +185,14 @@ final class TemporaryPasteboardLease {
             ownedChangeCount: pasteboard.changeCount,
             strategy: .rewrite(snapshot)
         )
+    }
+
+    /// Both markers, because managers differ on which they read. Failures are ignored:
+    /// a manager that refuses the type is exactly the manager that was never going to
+    /// honour it, and losing the whole expansion over a hint would be the wrong trade.
+    private static func markConcealed(_ item: NSPasteboardItem) {
+        _ = item.setString("", forType: concealedType)
+        _ = item.setString("", forType: transientType)
     }
 
     /// Idempotent: after a successful restore, later calls report `.superseded`.

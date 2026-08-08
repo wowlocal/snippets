@@ -21,7 +21,7 @@ import Foundation
 /// `LibraryTransaction` — one lock over both, vault written first, with a marker
 /// describing what is in flight. See `reconcileInterruptedMove`.
 @MainActor
-final class SecureSnippetStore {
+final class SecureSnippetStore: SecureSnippetProviding {
 
     enum Failure: Error, CustomStringConvertible {
         case vaultUnreadable(String)
@@ -112,6 +112,9 @@ final class SecureSnippetStore {
     var isEmpty: Bool { document?.records.isEmpty ?? true }
 
     func isSecure(_ id: UUID) -> Bool { document?.record(id) != nil }
+
+    /// `SecureSnippetProviding`. Shells only — never content, never a key.
+    func secureShellsForDisplay() -> [Snippet] { shells }
 
     func record(_ id: UUID) -> VaultRecord? { document?.record(id) }
 

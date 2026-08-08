@@ -105,7 +105,10 @@ final class SnippetRowCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(with snippet: Snippet) {
+    /// - Parameter isSecure: the row belongs to a vault record. Its `content` is empty
+    ///   because the vault hands out shells, so without this the row would render blank
+    ///   and read as an unfinished draft rather than as something deliberately hidden.
+    func configure(with snippet: Snippet, isSecure: Bool = false) {
         isDisabledSnippet = !snippet.isEnabled
 
         nameLabel.stringValue = snippet.displayName
@@ -114,12 +117,20 @@ final class SnippetRowCellView: NSTableCellView {
         keywordLabel.stringValue = keyword.isEmpty ? "" : "\\\(keyword)"
         keywordLabel.isHidden = keyword.isEmpty
 
-        let preview = snippet.content
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: .newlines)
-            .first ?? ""
-        contentPreviewLabel.stringValue = preview
-        contentPreviewLabel.isHidden = preview.isEmpty
+        // A secure snippet arrives here as a shell with empty content, which would
+        // otherwise render as a blank row indistinguishable from an unfinished draft.
+        // Show that something is deliberately hidden instead.
+        if isSecure {
+            contentPreviewLabel.stringValue = "••••••••"
+            contentPreviewLabel.isHidden = false
+        } else {
+            let preview = snippet.content
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: .newlines)
+                .first ?? ""
+            contentPreviewLabel.stringValue = preview
+            contentPreviewLabel.isHidden = preview.isEmpty
+        }
 
         updateTagChips(tags: snippet.tags, muted: !snippet.isEnabled)
 

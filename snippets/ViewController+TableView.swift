@@ -38,7 +38,7 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
             return view
         }()
 
-        cell.configure(with: snippet)
+        cell.configure(with: snippet, isSecure: store.isSecure(snippet.id))
         return cell
     }
 

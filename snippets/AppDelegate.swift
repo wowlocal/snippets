@@ -118,6 +118,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             object: nil
         )
 
+        // The plaintext store shows secure records in the list, counts their tags, and
+        // enforces keyword uniqueness against them — but can never reach their content.
+        store.secureProvider = secureStore
+        secureStore.onChange = { [weak self] in
+            guard let self else { return }
+            // A vault change alters the merged display list, so the same channel a
+            // library change uses has to fire, or the list silently goes stale.
+            self.store.onChange?(.external)
+        }
+
         // Finish any secure-snippet move that a crash interrupted. Runs before the
         // expansion engine starts, so the keyword matcher never sees the duplicate a
         // half-finished promote leaves behind.

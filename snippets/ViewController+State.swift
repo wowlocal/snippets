@@ -104,7 +104,7 @@ extension ViewController {
     private func reconfigureVisibleRows() {
         for row in 0..<visibleSnippets.count {
             if let cellView = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SnippetRowCellView {
-                cellView.configure(with: visibleSnippets[row])
+                cellView.configure(with: visibleSnippets[row], isSecure: store.isSecure(visibleSnippets[row].id))
             }
         }
     }

@@ -29,6 +29,14 @@ final class SnippetStore {
     var onChange: ((ChangeSource) -> Void)?
     weak var syncDelegate: SnippetStoreSyncDelegate?
 
+    /// Vends content-free shells for the secure snippets held in `Vault/vault.json`.
+    ///
+    /// The two stores stay separate on disk and in memory; only the *display* and
+    /// *uniqueness* views below merge them. `snippets` itself remains plaintext-only,
+    /// which is what keeps export, the undo stack, and `writeToDisk` structurally
+    /// incapable of touching a secret.
+    weak var secureProvider: SecureSnippetProviding?
+
     private let saveURL: URL
     private let saveFolderURL: URL
     private let encoder = JSONEncoder()
@@ -303,7 +311,9 @@ final class SnippetStore {
         var canonicalTags: [String: String] = [:]
         var counts: [String: Int] = [:]
 
-        for snippet in snippets {
+        // Both stores: a tag used only by secure snippets must still appear in the
+        // filter bar, or filtering by it would show an empty list.
+        for snippet in snippets + (secureProvider?.secureShellsForDisplay() ?? []) {
             for tag in snippet.tags {
                 let key = SnippetTagging.filterKey(for: tag)
                 if canonicalTags[key] == nil {
@@ -335,12 +345,41 @@ final class SnippetStore {
         persist(immediately: true)
     }
 
+    /// Everything the user should see in the list, plaintext and secure together.
     func snippetsSortedForDisplay() -> [Snippet] {
-        let pinned = snippets.filter(\.isPinned)
-        let unpinned = snippets.filter { !$0.isPinned }
+        let combined = snippets + (secureProvider?.secureShellsForDisplay() ?? [])
+        let pinned = combined.filter(\.isPinned)
+        let unpinned = combined.filter { !$0.isPinned }
         return pinned + unpinned
     }
 
+    /// Whether this id belongs to a secure record rather than to `snippets`.
+    func isSecure(_ id: UUID) -> Bool {
+        secureProvider?.isSecure(id) ?? false
+    }
+
+    /// Every keyword in use across BOTH stores, folded.
+    ///
+    /// Uniqueness has to span the two files or the expander becomes ambiguous: a
+    /// plaintext snippet and a secure one sharing `awsroot` would both match, and the
+    /// user would have no way to see why. The editor's existing conflict warning reads
+    /// this rather than `snippets` alone.
+    func keywordKeysInUse(excluding id: UUID? = nil) -> Set<String> {
+        var keys = Set<String>()
+        for snippet in snippets + (secureProvider?.secureShellsForDisplay() ?? []) where snippet.id != id {
+            let key = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
+            if !key.isEmpty { keys.insert(key) }
+        }
+        return keys
+    }
+
+    /// The auto-expansion candidates — deliberately **plaintext only**.
+    ///
+    /// Do not merge secure shells in here. This is the list the keystroke buffer is
+    /// matched against, and its not containing secure records is what makes "a secret
+    /// is never typed by an unauthenticated trigger" a structural property rather than
+    /// a policy some later refactor forgets. A secure snippet is reachable only through
+    /// the picker, which can require an unlock.
     func enabledSnippetsSorted() -> [Snippet] {
         snippets
             .filter { $0.isEnabled && !$0.normalizedKeyword.isEmpty }

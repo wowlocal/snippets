@@ -393,3 +393,40 @@ struct VaultWriteSafetyTests {
         #expect(try String(contentsOf: url, encoding: .utf8) == "not json at all")
     }
 }
+
+/// Secure content must not be able to leave through a share link.
+///
+/// A share link is a plaintext payload in a URL that lands on the pasteboard and from
+/// there into a chat window and shell history — the worst possible destination for a
+/// secret. The parameter has no default precisely so that omitting the check is a
+/// compile error rather than something a reviewer has to notice.
+@Suite("Share link refuses secrets")
+struct ShareLinkTests {
+
+    private func snippet() -> Snippet {
+        Snippet(name: "AWS root", keyword: "awsroot", content: "hunter2")
+    }
+
+    @Test func aSecureSnippetCannotBeTurnedIntoAShareLink() {
+        #expect(throws: SnippetDeepLinkError.secureSnippetNotShareable) {
+            _ = try SnippetDeepLink.url(for: snippet(), isSecure: true)
+        }
+    }
+
+    @Test func anOrdinarySnippetStillShares() throws {
+        let url = try SnippetDeepLink.url(for: snippet(), isSecure: false)
+        #expect(SnippetDeepLink.canHandle(url))
+    }
+
+    /// The refusal happens before any encoding, so the content never reaches a buffer
+    /// that could end up in a log line or an error message.
+    @Test func theRefusalMentionsNoContent() {
+        do {
+            _ = try SnippetDeepLink.url(for: snippet(), isSecure: true)
+            Issue.record("expected a refusal")
+        } catch {
+            let text = "\(error) \((error as? LocalizedError)?.errorDescription ?? "")"
+            #expect(!text.contains("hunter2"))
+        }
+    }
+}
