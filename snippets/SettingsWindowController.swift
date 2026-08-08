@@ -42,6 +42,7 @@ final class SettingsWindowController: NSWindowController {
 private final class SettingsTabViewController: NSTabViewController {
     private let generalViewController = GeneralSettingsViewController()
     private let vaultViewController = VaultSettingsViewController()
+    private let syncViewController = SyncSettingsViewController()
     private let browsersViewController = BrowserSettingsViewController()
 
     init() {
@@ -51,6 +52,8 @@ private final class SettingsTabViewController: NSTabViewController {
 
         addTab(title: "General", symbolName: "gearshape", viewController: generalViewController)
         addTab(title: "Secure", symbolName: "lock", viewController: vaultViewController)
+        // After Secure, because sync depends on it: the sealing key is the vault's.
+        addTab(title: "Sync", symbolName: "arrow.triangle.2.circlepath", viewController: syncViewController)
         addTab(title: "Browsers", symbolName: "globe", viewController: browsersViewController)
     }
 
@@ -69,6 +72,7 @@ private final class SettingsTabViewController: NSTabViewController {
     func reloadFromStorage() {
         generalViewController.reloadFromStorage()
         vaultViewController.reloadFromStorage()
+        syncViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
     }
 
@@ -1211,6 +1215,134 @@ private extension NSBox {
         let box = NSBox()
         box.boxType = .separator
         return box
+    }
+}
+
+/// The opt-in switch for iCloud sync, and an honest account of what it does.
+///
+/// Off by default, and off means nothing is constructed — see `SyncCoordinator`. The pane
+/// exists mainly so that the two states this feature can be *waiting* in are visible: a
+/// user who ticks the box without a vault, and one whose vault is locked, both need to be
+/// told which it is rather than watching a checkbox that appears to do nothing.
+@MainActor
+private final class SyncSettingsViewController: NSViewController {
+    private let enableCheckbox = NSButton(
+        checkboxWithTitle: "Sync snippets with iCloud", target: nil, action: nil)
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let syncNowButton = NSButton(title: "Sync Now", target: nil, action: nil)
+    private let clearHaltButton = NSButton(title: "Resume After Review", target: nil, action: nil)
+    private let secondMacLabel = NSTextField(wrappingLabelWithString: "")
+
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+
+        let title = NSTextField(labelWithString: "iCloud Sync")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+
+        let intro = makeSecondaryLabel(
+            "Keeps your snippets on every Mac signed in to this iCloud account. "
+            + "Every snippet is encrypted with your secure-snippets key before it leaves this Mac, "
+            + "so Apple stores only ciphertext \u{2014} names, keywords and tags included.")
+
+        enableCheckbox.target = self
+        enableCheckbox.action = #selector(handleEnabledChanged(_:))
+
+        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
+
+        syncNowButton.target = self
+        syncNowButton.action = #selector(syncNow)
+        LiquidGlassDesign.configureActionButton(syncNowButton, symbolName: "arrow.triangle.2.circlepath")
+
+        clearHaltButton.target = self
+        clearHaltButton.action = #selector(clearHalt)
+        clearHaltButton.bezelStyle = .rounded
+
+        let buttonRow = NSStackView(views: [syncNowButton, clearHaltButton, NSView()])
+        buttonRow.orientation = .horizontal
+        buttonRow.spacing = 8
+
+        // Usage data is the one thing that must never travel, and README already promises
+        // it. Saying so here is cheaper than a support question.
+        let limits = makeTertiaryLabel(
+            "How often you use each snippet stays on this Mac and never syncs. "
+            + "Snippets does not use push notifications for sync, so a change made on another "
+            + "Mac can take up to two minutes to appear.")
+
+        secondMacLabel.font = .systemFont(ofSize: 12)
+        secondMacLabel.textColor = .secondaryLabelColor
+
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(intro)
+        stack.addArrangedSubview(enableCheckbox)
+        stack.addArrangedSubview(statusLabel)
+        stack.addArrangedSubview(buttonRow)
+        stack.addArrangedSubview(NSBox.horizontalSeparator())
+        stack.addArrangedSubview(secondMacLabel)
+        stack.addArrangedSubview(limits)
+
+        for label in [intro, limits, statusLabel, secondMacLabel] {
+            label.preferredMaxLayoutWidth = 620
+        }
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        guard let coordinator = Self.coordinator else { return }
+        // Redraw as rounds complete, so "Syncing…" does not stay on screen after it stops.
+        coordinator.onStateChange = { [weak self] _ in self?.reloadFromStorage() }
+        reloadFromStorage()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        Self.coordinator?.onStateChange = nil
+    }
+
+    private static var coordinator: SyncCoordinator? {
+        (NSApp.delegate as? AppDelegate)?.syncCoordinator
+    }
+
+    func reloadFromStorage() {
+        guard isViewLoaded, let coordinator = Self.coordinator else { return }
+
+        enableCheckbox.state = SyncCoordinator.isEnabled ? .on : .off
+        statusLabel.stringValue = coordinator.statusDescription
+
+        let running = coordinator.engine != nil
+        syncNowButton.isHidden = !running
+        clearHaltButton.isHidden = !coordinator.state.isHalted
+
+        // The honest sentence, and the reason this pane is not just a checkbox.
+        //
+        // A second Mac derives the sealing key from *its own* vault, and
+        // `createVaultIfNeeded` mints a fresh key and `kid` per device — so two Macs that
+        // both set up secure snippets independently cannot read each other's records at
+        // all. Records arrive and are quarantined. Until an enrolment flow exists, the
+        // vault has to be carried across once by hand, and a user who is not told that
+        // will conclude the feature is broken.
+        secondMacLabel.stringValue = SyncCoordinator.isEnabled
+            ? "Setting up another Mac: it must use the same secure-snippets key as this one. "
+                + "Copy Vault/vault.json from this Mac's application-support folder to the other "
+                + "Mac before turning sync on there, and keep iCloud Keychain enabled on both. "
+                + "A Mac that makes its own key will receive snippets it cannot decrypt."
+            : ""
+    }
+
+    @objc private func handleEnabledChanged(_ sender: NSButton) {
+        guard let coordinator = Self.coordinator else { return }
+        coordinator.setEnabled(sender.state == .on)
+        reloadFromStorage()
+    }
+
+    @objc private func syncNow() {
+        Self.coordinator?.syncNow()
+        reloadFromStorage()
+    }
+
+    @objc private func clearHalt() {
+        Self.coordinator?.clearHaltAfterUserReview()
+        reloadFromStorage()
     }
 }
 

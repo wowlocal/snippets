@@ -102,11 +102,16 @@ function read_version() {
 function archive_app() {
     local archive_path="$1"
     mkdir -p "$(dirname "$archive_path")"
+    # -allowProvisioningUpdates because the restricted entitlements mean a profile is now
+    # mandatory, and nothing else renews one: the Xcode-managed development profiles carry
+    # TimeToLive 365. Without this, the first release cut after they lapse fails somewhere
+    # further down, where the cause is much harder to see.
     xcodebuild archive \
         -project "$PROJECT_DIR/Snippets.xcodeproj" \
         -scheme "$SCHEME" \
         -configuration Release \
         -archivePath "$archive_path" \
+        -allowProvisioningUpdates \
         -quiet
 
     if [ ! -d "$archive_path" ]; then
@@ -118,22 +123,36 @@ function archive_app() {
 }
 
 # export_app <archive_path> <app_path> — exports and signs the archived app
+#
+# `developer-id` used to be special-cased here to `export_developer_id_app`, which copied
+# the archived .app and re-signed it by hand. Measured, that produced a bundle that could
+# not launch: `xcodebuild archive` signs with Apple Development and embeds the
+# *development* profile, the re-sign swapped in the Developer ID identity and left that
+# profile sealed in place, and a profile whose `DeveloperCertificates` do not contain the
+# signing leaf fails validation — so AMFI SIGKILLed the app before any of its code ran.
+# `codesign --verify --deep --strict` called that bundle "valid on disk", and
+# `assert_provisioning_profile` passed it too: the profile was present, parsed, unexpired,
+# and did authorise every entitlement. Only the certificate did not match.
+#
+# `-exportArchive` is the path that gets this right. It embeds the Developer ID Direct
+# profile (ProvisionsAllDevices, expiring 2044 rather than in a year) and injects
+# `com.apple.developer.icloud-container-environment = Production`, which the hand-rolled
+# path silently omitted — so CloudKit would have addressed the Development database even if
+# the app had launched.
+#
+# `export_developer_id_app` and the sign_* helpers below are now unreferenced and can be
+# deleted; they are left in place only so this change is easy to revert.
 function export_app() {
     local archive_path="$1"
     local app_path="$2"
-    local export_method
-    export_method=$(/usr/libexec/PlistBuddy -c "Print :method" "ExportOptions.plist" 2>/dev/null || true)
-
-    if [ "$export_method" = "developer-id" ]; then
-        export_developer_id_app "$archive_path" "$app_path"
-        return
-    fi
 
     mkdir -p exported-apps
+    rm -rf exported-apps/*.app
     if ! xcodebuild -exportArchive \
         -archivePath "$archive_path" \
         -exportOptionsPlist "ExportOptions.plist" \
         -exportPath "exported-apps" \
+        -allowProvisioningUpdates \
         -quiet; then
         red_text
         echo "Export failed"
@@ -142,6 +161,9 @@ function export_app() {
     fi
 
     move_exported_app "$app_path"
+
+    assert_provisioning_profile "$app_path"
+    assert_app_launches "$app_path"
 }
 
 function move_exported_app() {
@@ -286,10 +308,145 @@ function assert_provisioning_profile() {
         fi
     fi
 
+    # The check the other four miss, and the only one that catches the failure that
+    # actually shipped: a profile can be present, parse, be years from expiry, and
+    # authorise every entitlement claimed — and still not vouch for the certificate the
+    # bundle is signed with. A development profile lists the Apple Development certificate,
+    # so a bundle re-signed with Developer ID carries a profile that does not cover its own
+    # signature. macOS refuses to start it. Verified: without this check the broken bundle
+    # was reported "Provisioning profile OK" and then died with SIGKILL.
+    if ! profile_vouches_for_signature "$app_path" "$plist"; then
+        red_text
+        echo "Export failed — the embedded profile does not list the signing certificate"
+        echo "The profile is valid, but it does not vouch for the identity this bundle is"
+        echo "signed with, so macOS will kill the app at launch before any code runs."
+        echo "Profile: $(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist" 2>/dev/null)"
+        normal_text
+        rm -f "$plist" "$claimed"
+        exit 1
+    fi
+
+    # A profile scoped to registered devices launches on this Mac and nowhere else, which
+    # is the worst way to learn about it — the build tests clean and fails for every user.
+    if ! /usr/libexec/PlistBuddy -c "Print :ProvisionsAllDevices" "$plist" >/dev/null 2>&1; then
+        red_text
+        echo "Export failed — the embedded profile is limited to registered devices"
+        echo "It has no ProvisionsAllDevices flag, so it is a development profile."
+        echo "Profile: $(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist" 2>/dev/null)"
+        normal_text
+        rm -f "$plist" "$claimed"
+        exit 1
+    fi
+
     gray_text
     echo "  Provisioning profile OK (expires $expiry)"
     normal_text
     rm -f "$plist" "$claimed"
+}
+
+# profile_vouches_for_signature <app_path> <decoded_profile_plist>
+#
+# True when the leaf certificate the bundle is signed with is one of the profile's
+# DeveloperCertificates. Compared by digest of the DER, which is exact — a name comparison
+# would pass for two different certificates issued to the same team.
+function profile_vouches_for_signature() {
+    local app_path="$1"
+    local plist="$2"
+    local work
+    work=$(mktemp -d "${TMPDIR:-/tmp}/snippets-certs.XXXXXX")
+
+    if ! codesign -d --extract-certificates="$work/leaf" "$app_path" >/dev/null 2>&1 \
+       || [ ! -f "$work/leaf0" ]; then
+        rm -rf "$work"
+        return 1
+    fi
+
+    local leaf_digest
+    leaf_digest=$(shasum -a 256 "$work/leaf0" | cut -d' ' -f1)
+
+    local index=0
+    while /usr/libexec/PlistBuddy -c "Print :DeveloperCertificates:$index" "$plist" >/dev/null 2>&1; do
+        if plutil -extract "DeveloperCertificates.$index" raw -o - "$plist" 2>/dev/null \
+           | base64 -d >"$work/candidate" 2>/dev/null; then
+            if [ "$(shasum -a 256 "$work/candidate" | cut -d' ' -f1)" = "$leaf_digest" ]; then
+                rm -rf "$work"
+                return 0
+            fi
+        fi
+        index=$((index + 1))
+    done
+
+    rm -rf "$work"
+    return 1
+}
+
+# assert_app_launches <app_path>
+#
+# The empirical backstop. Every static check above encodes a rule that Apple can change,
+# and the rule that mattered was missing for one release cycle. This one just runs the
+# thing — it is the check that cannot be fooled by a bundle that looks correct.
+#
+# SNIPPETS_SUPPORT_DIR is redirected so a release check can never touch the real snippet
+# library, and the process is killed the moment it has proven it survived. Set
+# SKIP_LAUNCH_SMOKE_TEST=1 to opt out on a machine where launching is not possible.
+function assert_app_launches() {
+    local app_path="$1"
+
+    if [ -n "${SKIP_LAUNCH_SMOKE_TEST:-}" ]; then
+        orange_text
+        echo "  SKIP_LAUNCH_SMOKE_TEST set — not verifying that the app launches."
+        normal_text
+        return 0
+    fi
+
+    local executable_name
+    executable_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" \
+        "$app_path/Contents/Info.plist" 2>/dev/null || true)
+    if [ -z "$executable_name" ]; then
+        red_text
+        echo "Export failed — could not read CFBundleExecutable from $app_path"
+        normal_text
+        exit 1
+    fi
+
+    local scratch output
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/snippets-launch.XXXXXX")
+    output="$scratch/launch.log"
+
+    ( SNIPPETS_SUPPORT_DIR="$scratch/support" \
+        "$app_path/Contents/MacOS/$executable_name" >"$output" 2>&1 ) &
+    local pid=$!
+
+    sleep 3
+
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null
+        sleep 1
+        kill -9 "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null || true
+        rm -rf "$scratch"
+        gray_text
+        echo "  App launches and stays running."
+        normal_text
+        return 0
+    fi
+
+    wait "$pid" 2>/dev/null
+    local code=$?
+    red_text
+    echo "Export failed — the exported app does not launch (exit code $code)."
+    if [ "$code" -eq 137 ]; then
+        echo "137 is SIGKILL: the kernel refused the binary before any code ran, which is"
+        echo "almost always the embedded provisioning profile failing to authorise a"
+        echo "restricted entitlement the binary claims."
+    fi
+    if [ -s "$output" ]; then
+        echo "--- first lines of output ---"
+        head -20 "$output"
+    fi
+    normal_text
+    rm -rf "$scratch"
+    exit 1
 }
 
 function developer_id_application_identity() {

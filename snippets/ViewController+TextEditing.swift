@@ -18,6 +18,11 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         }
     }
 
+    /// The content editor gets its own undo manager — see `snippetContentUndoManager`.
+    func undoManager(for view: NSTextView) -> UndoManager? {
+        view === snippetTextView ? snippetContentUndoManager : nil
+    }
+
     func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView, textView === snippetTextView else { return }
         updateSelectedSnippetFromEditor()

@@ -524,3 +524,53 @@ struct IPCAddressingTests {
         #expect(request.v == 1)
     }
 }
+
+/// Encrypting a snippet must not leave its plaintext recoverable by ⌘Z.
+///
+/// Promotion removes the record from the plaintext library, but every undo level
+/// captured beforehand still holds it *with its content*. `rebaseSnapshot`'s final loop
+/// used to re-append anything the merge had removed, which put the secret back into the
+/// rebased level — and ⌘Z, the reflex gesture immediately after clicking the lock, then
+/// wrote it into `snippets.json` beside the sealed copy. From there it reached exports,
+/// share links and `snippets-cli list`, and the launch-time reconcile deleted it again
+/// without a word, so the leak was durable for the session and closed silently.
+///
+/// The distinction that fixes it: an undo entry has an opinion about a record only if it
+/// differs from the state the entry was captured against. Anything else is baggage.
+@Suite("Undo cannot resurrect an encrypted secret")
+struct UndoDoesNotResurrectSecretsTests {
+
+    private func snippet(_ name: String, content: String) -> Snippet {
+        Snippet(name: name, keyword: name, content: content,
+                createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 1))
+    }
+
+    @Test func aRecordRemovedByTheMergeStaysRemovedWhenTheUndoNeverTouchedIt() {
+        let secret = snippet("awsroot", content: "hunter2")
+        let other = snippet("sig", content: "Best, Mike")
+
+        // The undo level predates encryption, so it still carries the plaintext. The
+        // merge has since removed the record, because promotion moved it to the vault.
+        let rebased = SyncMerge.rebaseSnapshot(
+            [secret, other], from: [secret, other], onto: [other])
+
+        #expect(rebased.map(\.id) == [other.id])
+        #expect(!rebased.contains { $0.content == "hunter2" },
+                "the plaintext must not survive in an undo level")
+    }
+
+    /// The counterpart, so the fix cannot be "drop everything": an undo that genuinely
+    /// re-adds a record it deleted must still restore it, content and all.
+    @Test func anUndoThatReAddsARecordStillRestoresIt() {
+        let restored = snippet("note", content: "v1")
+        let other = snippet("sig", content: "Best, Mike")
+
+        // Captured against a state where `restored` was gone; the snapshot brings it
+        // back. That is a real undo intent, not baggage.
+        let rebased = SyncMerge.rebaseSnapshot(
+            [restored, other], from: [other], onto: [other])
+
+        #expect(Set(rebased.map(\.id)) == [restored.id, other.id])
+        #expect(rebased.first { $0.id == restored.id }?.content == "v1")
+    }
+}

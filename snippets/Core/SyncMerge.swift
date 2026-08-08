@@ -158,9 +158,22 @@ nonisolated enum SyncMerge {
             emitted.insert(record.id)
             out.append(changedByUndo[record.id] ?? record)
         }
-        // Records the undo brings back that the merged library no longer has, in the
-        // snapshot's own order so undo restores the list the user remembers.
-        for record in snapshot where !emitted.contains(record.id) {
+        // Records the undo genuinely brings BACK — not ones it merely carries along.
+        //
+        // `changedByUndo` is the difference between the snapshot and the state it was
+        // captured against, so a record in it is one the undo has an opinion about:
+        // either it was re-added, or its content differs. A record absent from it is
+        // untouched baggage, and re-appending that resurrects whatever the merge just
+        // decided to remove.
+        //
+        // That is not theoretical. Encrypting a snippet removes it from the plaintext
+        // library, but every undo level captured beforehand still holds it *with its
+        // content*. Without this condition the next rebase put it back, and ⌘Z — the
+        // reflex gesture right after clicking the lock — wrote the plaintext into
+        // snippets.json next to the sealed copy, from where it reached exports, share
+        // links and `snippets-cli list`. The recovery gesture was the leak.
+        for record in snapshot
+        where !emitted.contains(record.id) && changedByUndo[record.id] != nil {
             out.append(record)
         }
         return out

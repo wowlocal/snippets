@@ -142,14 +142,28 @@ final class SyncEngine {
             let records = try pending.map { try WireCodec.seal($0, using: sealer) }
             let submission = try await transport.submit(records, at: base.cursor)
 
-            for (index, result) in submission.results.enumerated() {
-                guard index < pending.count else { break }
+            // Matched by id, never by position.
+            //
+            // `SyncSubmission.results` is documented as parallel to the submitted batch,
+            // and a conformant transport keeps it that way — but CloudKit answers a
+            // modify with `modificationResultsByID`, a *dictionary*, so any transport
+            // that forwards its backend's natural order is one refactor away from
+            // pairing an outcome with the wrong record. Position matching makes that
+            // mistake silent and permanent in the worst direction: the record that was
+            // really accepted is re-pushed forever, which is harmless, and the record
+            // wrongly recorded as accepted is never pushed again, which loses it on
+            // every other device. Matching by id costs a dictionary and cannot.
+            let pendingByID = Dictionary(pending.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+            for result in submission.results {
                 switch result.outcome {
                 case .accepted:
                     // Only now is it agreed. Recording it before the backend accepted
                     // would make the next diff skip it, and the record would never be
-                    // pushed again.
-                    base.record(pending[index])
+                    // pushed again. An outcome for an id we did not submit is ignored
+                    // rather than trusted.
+                    guard let accepted = pendingByID[result.id] else { continue }
+                    base.record(accepted)
                 case .rejected(.authenticationRequired(let detail)):
                     // Not a halt. An expired token is an ordinary, recoverable state and
                     // halting for it would put a scary sticky error in front of someone

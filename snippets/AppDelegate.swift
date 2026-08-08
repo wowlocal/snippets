@@ -63,25 +63,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// exercised by the app's own object graph rather than only by tests.
     lazy var syncLibrary = SnippetLibraryBridge(store: store, secureStore: secureStore)
 
-    /// `nil` until a backend is configured, which is the shipped state.
+    /// Owns whether sync runs, and runs it. Opt-in: constructing this costs nothing and
+    /// starts nothing.
     ///
-    /// The engine is deliberately not constructed with a placeholder transport. A
-    /// SyncEngine that exists but talks to nothing would still run its loop, write a
+    /// The engine inside it is deliberately not constructed with a placeholder transport.
+    /// A `SyncEngine` that exists but talks to nothing would still run its loop, write a
     /// base file, and report states — all describing a synchronisation that is not
     /// happening. Absent is the honest representation of "sync is off", and it is what
     /// `SyncState.Backend.none` means.
-    private(set) var syncEngine: SyncEngine?
+    lazy var syncCoordinator = SyncCoordinator(
+        library: syncLibrary,
+        session: vaultSession,
+        secureStore: secureStore,
+        device: store.deviceID)
 
-    /// Builds the engine for a chosen backend. Nothing calls this yet: no transport
-    /// ships, by decision — see docs/cloud-sync.md.
-    func startSync(with transport: any SyncTransport, sealer: any SyncBlobSealing) {
-        let engine = SyncEngine(
-            transport: transport, library: syncLibrary, sealer: sealer, device: store.deviceID)
-        engine.onStateChange = { state in
-            NSLog("Snippets: sync state \(state)")
-        }
-        syncEngine = engine
-    }
+    /// The engine, when one is running. Read by the settings pane; `nil` whenever the
+    /// user has not opted in or the vault is not open.
+    var syncEngine: SyncEngine? { syncCoordinator.engine }
     lazy var expansionEngine: SnippetExpansionEngine = {
         let engine = SnippetExpansionEngine(store: store, usage: usageStore)
         // Keep key ownership outside the typing engine. Every explicit secure
@@ -183,6 +181,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             // A vault change alters the merged display list, so the same channel a
             // library change uses has to fire, or the list silently goes stale.
             self.store.onChange?(.external)
+            // Sync seals with the vault key, so creating or unlocking a vault is what
+            // makes an opted-in-but-waiting coordinator able to start. Without this the
+            // user would have to relaunch after setting up secure snippets.
+            self.syncCoordinator.vaultStateChanged()
         }
 
         // Finish any secure-snippet move that a crash interrupted. Runs before the
@@ -197,6 +199,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // invisible until some unrelated library change forces another reload.
         store.onChange?(.external)
         controlServer.start()
+
+        // Opt-in. Returns immediately without touching CloudKit, without writing `Sync/`,
+        // and without scheduling anything unless the user has ticked the box in Settings.
+        syncCoordinator.startIfEnabled()
 
         expansionEngine.startIfNeeded()
         configureAppMenuItems()

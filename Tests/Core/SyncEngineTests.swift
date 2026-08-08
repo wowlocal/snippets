@@ -306,6 +306,77 @@ struct SyncEngineTests {
         #expect(h.library.envelopes[id] != nil, "a resync must not lose what was already applied")
     }
 
+    // MARK: - Submit results are paired by id, not by position
+
+    /// Hands back submit results in a different order than they were submitted.
+    ///
+    /// Not a contrived fault: CloudKit answers `modifyRecords` with
+    /// `saveResults: [CKRecord.ID: Result<...>]`, a **dictionary**, so a transport that
+    /// forwards its backend's natural iteration order produces exactly this. Reversal is
+    /// used because it is the permutation guaranteed to differ for any batch of two or
+    /// more, which keeps the test deterministic.
+    private final class ResultReorderingTransport: SyncTransport, @unchecked Sendable {
+        private let inner: InMemoryTransport
+
+        init(_ inner: InMemoryTransport) { self.inner = inner }
+
+        var identifier: String { inner.identifier }
+        var supportsPush: Bool { inner.supportsPush }
+        var pollInterval: TimeInterval { inner.pollInterval }
+        var events: AsyncStream<SyncTransportEvent> { inner.events }
+
+        func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+            try await inner.fetchChanges(since: cursor)
+        }
+
+        func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
+            var submission = try await inner.submit(records, at: cursor)
+            submission.results.reverse()
+            return submission
+        }
+    }
+
+    /// The engine must pair each outcome with the record it belongs to.
+    ///
+    /// Pairing by position instead fails in the worst available direction. The record that
+    /// was really accepted is left out of the base and re-pushed forever, which is merely
+    /// wasteful — but the record that was *rejected* gets recorded as agreed, so the next
+    /// diff skips it and it is never pushed again. The user's edit exists on this Mac and
+    /// on no other, and nothing anywhere reports a problem.
+    @Test func aSubmitOutcomeIsPairedWithItsOwnRecordNotWithItsPosition() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("engine-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let inner = InMemoryTransport()
+        let transport = ResultReorderingTransport(inner)
+        let library = FakeLibrary()
+        let sealer = SnippetCryptoSealer(
+            keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test")
+        let engine = SyncEngine(
+            transport: transport, library: library, sealer: sealer, device: "aaaaaaa1",
+            baseURL: dir.appendingPathComponent("base.json"), temporaryDirectory: dir)
+
+        // `pendingChanges` sorts by uuid string, so sorting here identifies which record
+        // lands in which position of the submitted batch.
+        let ids = [UUID(), UUID()].sorted { $0.uuidString < $1.uuidString }
+        let refused = ids[0]
+        let accepted = ids[1]
+        library.envelopes[refused] = envelope(refused, name: "refused")
+        library.envelopes[accepted] = envelope(accepted, name: "accepted")
+
+        // One retryable rejection and one acceptance, then the results come back reversed.
+        inner.configure { $0.rejectRecords[refused] = .rateLimited(retryAfter: 1) }
+
+        _ = await engine.sync()
+
+        #expect(engine.agreedBase.envelope(accepted) != nil,
+                "the record the backend accepted must be recorded as agreed")
+        #expect(engine.agreedBase.envelope(refused) == nil,
+                "a rejected record recorded as agreed is never pushed again — it is lost")
+    }
+
     // MARK: - Persistence
 
     @Test func theAgreedBaseSurvivesARestart() async throws {

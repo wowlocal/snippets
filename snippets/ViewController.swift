@@ -152,6 +152,20 @@ final class ViewController: NSViewController {
     /// The debounce for secure content edits, mirroring `SnippetStore`'s own.
     var pendingSecureEdit: Snippet?
     var secureEditWorkItem: DispatchWorkItem?
+
+    /// A private undo manager for the content editor.
+    ///
+    /// By default an `NSTextView` uses the *window's* undo manager, which the name,
+    /// keyword and tag fields share — and which nothing ever resets. One long-lived text
+    /// view is rebound to every snippet in turn, so its undo stack accumulated edits
+    /// across records: revealing a secret, editing it, selecting an ordinary snippet and
+    /// pressing ⌘Z pasted the secret's plaintext into that snippet, and the next commit
+    /// wrote it to snippets.json. On an emptied storage — the masked state — the same
+    /// undo raised `NSRangeException` and killed the process with the vault open.
+    ///
+    /// Owning the manager keeps that history out of the rest of the window, and lets it
+    /// be cleared on every rebind without discarding the other fields' undo.
+    let snippetContentUndoManager = UndoManager()
     /// Inline replacement for the demote confirmation alert.
     let secureDemoteStrip = NSStackView()
     let secureDemoteLabel = NSTextField(wrappingLabelWithString: "")

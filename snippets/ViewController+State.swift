@@ -288,6 +288,7 @@ extension ViewController {
                 nameField.stringValue = ""
             }
             if !snippetTextView.string.isEmpty {
+                resetContentUndoHistory()
                 snippetTextView.string = ""
             }
             if !keywordField.stringValue.isEmpty {
@@ -319,6 +320,7 @@ extension ViewController {
             nameField.stringValue = snippet.name
         }
         if snippetTextView.string != snippet.content {
+            resetContentUndoHistory()
             snippetTextView.string = snippet.content
         }
         if keywordField.stringValue != snippet.normalizedKeyword {
@@ -865,6 +867,7 @@ extension ViewController {
 
         func mask(_ message: String, action: String? = nil) {
             secureContentEditableForID = nil
+            resetContentUndoHistory()
             snippetTextView.string = ""
             snippetTextView.isEditable = false
             secureLockOverlayLabel.stringValue = message
@@ -898,11 +901,22 @@ extension ViewController {
             return
         }
 
+        resetContentUndoHistory()
         snippetTextView.string = text
         snippetTextView.isEditable = true
         secureLockOverlay.isHidden = true
         secureContentEditableForID = snippet.id
         updatePreview(withTemplate: text)
+    }
+
+    /// Drops the content editor's undo history.
+    ///
+    /// Called wherever the text view is rebound to different content. Undo is only
+    /// coherent within one record's editing session; carried across a rebind it can
+    /// apply a recorded range from the previous snippet — including a revealed secret —
+    /// to whatever is showing now, and on emptied storage it throws instead.
+    func resetContentUndoHistory() {
+        snippetContentUndoManager.removeAllActions()
     }
 
     /// Clears the secure chrome for an ordinary snippet. Without this the overlay from a
