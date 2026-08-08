@@ -338,7 +338,7 @@ enum SnippetFrecency {
 
 ### 3.3 Почему ничья — частый случай, а не подстроенный
 
-`FuzzyMatch.scoreContribution` (`snippets/FuzzyMatch.swift:163-184`): база 1, `+2 × consecutive`, `+3` за начало слова, `+5` если `queryIndex == 0 && targetIndex == 0`. Значит вклад зависит только от *позиции* совпадений в цели, а не от длины цели. Для префиксного совпадения длины *k* в позиции 0:
+`FuzzyMatch.scoreContribution` (`snippets/Core/FuzzyMatch.swift:163-184`): база 1, `+2 × consecutive`, `+3` за начало слова, `+5` если `queryIndex == 0 && targetIndex == 0`. Значит вклад зависит только от *позиции* совпадений в цели, а не от длины цели. Для префиксного совпадения длины *k* в позиции 0:
 
 | длина запроса | score |
 |---|---|
@@ -1475,8 +1475,8 @@ lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStor
 Запуск:
 
 ```bash
-swiftc -O snippets/Core/Snippet.swift snippets/FuzzyMatch.swift \
-       snippets/SnippetFrecency.swift snippets/SnippetUsageDocument.swift \
+swiftc -O snippets/Core/Snippet.swift snippets/Core/FuzzyMatch.swift \
+       snippets/Core/SnippetFrecency.swift snippets/SnippetUsageDocument.swift \
        Tests/SnippetFrecencyTests.swift \
        -o /tmp/frecency-tests && /tmp/frecency-tests
 ```

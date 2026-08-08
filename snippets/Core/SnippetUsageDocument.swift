@@ -1,6 +1,6 @@
 import Foundation
 
-struct SnippetUsageRecord: Codable, Equatable {
+nonisolated struct SnippetUsageRecord: Codable, Equatable {
     /// Weight in the document's `epoch` frame. The true decayed weight at time
     /// `t` is `weight * 2^(-(t - epoch)/H)`; that factor is the same for every
     /// record, so comparing raw weights is comparing decayed weights.
@@ -30,7 +30,7 @@ struct SnippetUsageRecord: Codable, Equatable {
     }
 }
 
-struct SnippetUsageDocument: Codable, Equatable {
+nonisolated struct SnippetUsageDocument: Codable, Equatable {
     static let currentVersion = 1
 
     var version: Int
@@ -110,11 +110,11 @@ struct SnippetUsageDocument: Codable, Equatable {
 /// Read before the full decoder: decoding a future format may fail outright,
 /// and when it does the failure has to land in read-only rather than in
 /// "start from scratch".
-struct SnippetUsageVersionProbe: Decodable {
+nonisolated struct SnippetUsageVersionProbe: Decodable {
     let v: Int?
 }
 
-enum SnippetUsageFile {
+nonisolated enum SnippetUsageFile {
 
     // MARK: - Frame conversion
 

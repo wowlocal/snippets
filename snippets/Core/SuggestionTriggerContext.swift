@@ -1,6 +1,6 @@
 import Foundation
 
-struct SuggestionTriggerContext: Equatable {
+nonisolated struct SuggestionTriggerContext: Equatable {
     let query: String
     let triggerLength: Int
 
@@ -64,7 +64,7 @@ nonisolated struct TriggerDeletion: Equatable {
     }
 }
 
-enum SuggestionContextRefreshResult: Equatable {
+nonisolated enum SuggestionContextRefreshResult: Equatable {
     case synced
     case localFallback
     case missingTrigger

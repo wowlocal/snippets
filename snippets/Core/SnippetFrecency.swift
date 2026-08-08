@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Deliberately free of AppKit and actor isolation so `Tests/` can compile it
 /// standalone with `swiftc`, the same way `SuggestionTriggerContext` is tested.
-enum SnippetFrecency {
+nonisolated enum SnippetFrecency {
     // MARK: - Decay
 
     /// One sprint. Short enough that an abandoned snippet stops crowding the
@@ -60,7 +60,7 @@ enum SnippetFrecency {
 /// Building these once per element and sorting over them (rather than deriving
 /// them inside the sort closure) is what keeps the comparator free of string
 /// folding on the keystroke path.
-struct SnippetRankingKey {
+nonisolated struct SnippetRankingKey {
     var score: Int = 0
     var keywordRank: Int = 0
     var isPinned: Bool = false
@@ -71,7 +71,7 @@ struct SnippetRankingKey {
     var id: UUID = UUID()
 }
 
-extension SnippetFrecency {
+nonisolated extension SnippetFrecency {
 
     /// Multiplier converting a use at `now` into the frame anchored at `epoch`.
     ///
@@ -191,7 +191,7 @@ extension SnippetFrecency {
 /// The panel refreshes up to three times per keystroke (once locally, twice
 /// after accessibility resyncs); all three must rank against identical data or
 /// rows would reshuffle under the user's fingers between typing and Return.
-struct FrecencySnapshot {
+nonisolated struct FrecencySnapshot {
     static let empty = FrecencySnapshot(weights: [:], bindings: [:], cutoff: .infinity)
 
     /// Copy-on-write reference to the store's dictionary: capturing is one

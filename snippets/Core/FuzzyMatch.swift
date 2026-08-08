@@ -1,6 +1,6 @@
 import Foundation
 
-struct FuzzyMatch {
+nonisolated struct FuzzyMatch {
     struct Result {
         let score: Int
         let matched: Bool
