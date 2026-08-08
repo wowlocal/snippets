@@ -319,7 +319,22 @@ extension ViewController {
         setEditorEnabled(true)
         // Must run after `setEditorEnabled(true)`, which unconditionally makes the text
         // view editable — a locked secret has to end up read-only regardless.
-        applySecureStateToEditor(for: snippet)
+        let isSecure = store.isSecure(snippet.id)
+        secureLockToggle.state = isSecure ? .on : .off
+        secureLockToggle.contentTintColor = isSecure ? .controlAccentColor : .secondaryLabelColor
+        secureLockToggle.toolTip = isSecure
+            ? "Make this an ordinary snippet again (\u{2303}\u{2318}L)."
+            : "Encrypt this snippet (\u{2303}\u{2318}L). It will stop expanding on its own \u{2014} "
+                + "you\u{2019}ll pick it from the \\ list instead."
+        secureDemoteStrip.isHidden = true
+
+        if isSecure {
+            applySecureStateToEditor(for: snippet)
+        } else {
+            // Otherwise the overlay from a previously selected secure snippet would sit
+            // over this one, and the caption would describe the wrong record.
+            clearSecureEditorChrome()
+        }
         updateSuggestedTagsRow()
         isApplyingSnippetToEditor = false
     }
@@ -495,10 +510,6 @@ extension ViewController {
 extension ViewController {
 
     /// Whether the selected record's text is currently readable.
-    var isSecureContentRevealed: Bool {
-        guard let id = editingSnippetID, store.isSecure(id) else { return true }
-        return (NSApp.delegate as? AppDelegate)?.vaultSession.state.isUnlocked ?? false
-    }
 
     /// Writes an edit of a secure record back to the vault rather than to `snippets.json`.
     ///
@@ -519,8 +530,10 @@ extension ViewController {
                 tags: snippet.tags,
                 isEnabled: snippet.isEnabled)
 
-            if app.vaultSession.state.isUnlocked,
-               snippet.content != secureContentPlaceholder,
+            // The latch, not a string comparison: content is written back only if this
+            // editor is currently displaying the real decrypted text for this exact
+            // record.
+            if secureContentEditableForID == snippet.id,
                (try? secureStore.content(for: snippet.id)) != snippet.content {
                 try secureStore.setContent(snippet.content, for: snippet.id)
             }
@@ -533,9 +546,6 @@ extension ViewController {
     ///
     /// Deliberately a sentence rather than dots: a row of bullets in an editable text
     /// view reads as content the user could overwrite, and someone would.
-    var secureContentPlaceholder: String {
-        "\u{1F512} Locked \u{2014} unlock to reveal this snippet\u{2019}s text."
-    }
 
     /// Swaps the editor between the real text and the placeholder.
     ///
@@ -548,21 +558,66 @@ extension ViewController {
         isApplyingSnippetToEditor = true
         defer { isApplyingSnippetToEditor = wasApplying }
 
-        if app.vaultSession.state.isUnlocked, let text = try? app.secureStore.content(for: snippet.id) {
-            snippetTextView.string = text
-            snippetTextView.isEditable = true
-            updatePreview(withTemplate: text)
-        } else {
-            snippetTextView.string = secureContentPlaceholder
+        secureCaptionLabel.stringValue =
+            "Encrypted on this Mac. Won\u{2019}t expand when you type its keyword \u{2014} type \\, "
+            + "pick it from the list, and confirm with Touch ID. Never in exports, share links, or "
+            + "snippets.json. Its name, keyword and tags stay readable so Snippets can find it while locked."
+        secureCaptionLabel.isHidden = !secureDemoteStrip.isHidden
+
+        func mask(_ message: String, action: String? = nil) {
+            secureContentEditableForID = nil
+            snippetTextView.string = ""
             snippetTextView.isEditable = false
+            secureLockOverlayLabel.stringValue = message
+            secureLockOverlayButton.isEnabled = action != nil
+            secureLockOverlay.isHidden = false
             // The preview renders placeholders like {clipboard}; feeding it the real
             // text of a locked snippet would display exactly what the lock is hiding.
             updatePreview(withTemplate: "")
         }
+
+        if app.secureStore.isUnreadable {
+            mask("Snippets can\u{2019}t read your vault file, so it has been left completely untouched.")
+            return
+        }
+        if case .noKey = app.vaultSession.state {
+            mask("This snippet\u{2019}s key isn\u{2019}t on this Mac, so its text can\u{2019}t be read here. "
+                 + "Its name and keyword still work.")
+            return
+        }
+        // Masked whenever Snippets is not the frontmost app. This costs nothing — the
+        // key's lifetime is untouched, and it comes straight back on activation — but it
+        // means a revealed secret is not sitting on screen behind a screen share, or
+        // visible over a shoulder while the user works in another window.
+        guard NSApp.isActive else {
+            mask("Hidden while Snippets is in the background.")
+            return
+        }
+        guard app.vaultSession.state.isUnlocked,
+              let text = try? app.secureStore.content(for: snippet.id) else {
+            mask("Locked. Click to unlock with Touch ID or your login password.", action: "unlock")
+            return
+        }
+
+        snippetTextView.string = text
+        snippetTextView.isEditable = true
+        secureLockOverlay.isHidden = true
+        secureContentEditableForID = snippet.id
+        updatePreview(withTemplate: text)
     }
 
-    /// Unlocks and shows the selected secure snippet.
-    @objc func revealSelectedSecureSnippet() {
+    /// Clears the secure chrome for an ordinary snippet. Without this the overlay from a
+    /// previously selected secure snippet would stay over the next one.
+    func clearSecureEditorChrome() {
+        secureContentEditableForID = nil
+        secureLockOverlay.isHidden = true
+        secureCaptionLabel.isHidden = true
+        secureDemoteStrip.isHidden = true
+    }
+
+    /// The whole content area is the button. Clicking where the text should be is what
+    /// people try first, so it is what unlocks.
+    @objc func unlockFromEditorOverlay() {
         guard let snippet = selectedSnippet,
               store.isSecure(snippet.id),
               let app = NSApp.delegate as? AppDelegate else { return }
@@ -570,15 +625,20 @@ extension ViewController {
             guard let self else { return }
             do {
                 try await app.vaultSession.unlock(
-                    reason: "Reveal \u{201C}\(snippet.displayName)\u{201D}")
-                // Authentication suspends the main actor. If another row was selected
-                // while the system prompt was open, never render this row's plaintext
-                // into that row's editor.
-                guard selectedSnippet?.id == snippet.id else { return }
-                applySecureStateToEditor(for: snippet)
+                    reason: "Show \u{201C}\(snippet.displayName)\u{201D}")
+                // Authentication suspends the main actor; the selection may have moved.
+                guard self.selectedSnippet?.id == snippet.id else { return }
+                self.applySecureStateToEditor(for: snippet)
+                self.view.window?.makeFirstResponder(self.snippetTextView)
+                self.snippetTextView.setSelectedRange(
+                    NSRange(location: self.snippetTextView.string.count, length: 0))
+            } catch VaultSession.Failure.authentication {
+                // Cancelling is an ordinary answer, not an error worth announcing.
             } catch {
-                importExportMessage = "Could not unlock: \(error)"
+                self.importExportMessage = "Couldn\u{2019}t unlock: \(error)"
             }
         }
     }
+
+    /// Unlocks and shows the selected secure snippet.
 }

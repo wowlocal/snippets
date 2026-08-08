@@ -289,21 +289,33 @@ private enum SnippetInjectionGateTests {
         )
         assertTrue(
             !SnippetInjectionGate.applicationActivationInvalidatesContext(
-                activatedPID: target,
+                activatedPID: 30,
+                currentFrontmostPID: target,
                 ownPID: own,
                 secureAuthenticationTargetPID: nil,
                 secureExpansionTargetPID: target,
                 secureEventInputEnabled: false),
-            "a delayed activation receipt cannot cancel the queued secure insertion"
+            "a stale authentication activation cannot cancel insertion into the still-frontmost target"
         )
         assertTrue(
             SnippetInjectionGate.applicationActivationInvalidatesContext(
                 activatedPID: 30,
+                currentFrontmostPID: 30,
                 ownPID: own,
                 secureAuthenticationTargetPID: nil,
                 secureExpansionTargetPID: target,
                 secureEventInputEnabled: false),
-            "the activation grace applies only to the exact restored target"
+            "a real switch away from the restored target still cancels insertion"
+        )
+        assertTrue(
+            !SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: target,
+                currentFrontmostPID: nil,
+                ownPID: own,
+                secureAuthenticationTargetPID: nil,
+                secureExpansionTargetPID: target,
+                secureEventInputEnabled: false),
+            "the notification PID remains a fallback when frontmost state is unavailable"
         )
         assertTrue(
             !SnippetInjectionGate.applicationActivationInvalidatesContext(

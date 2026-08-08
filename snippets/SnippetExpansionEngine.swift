@@ -55,7 +55,7 @@ final class SnippetExpansionEngine {
     /// suggestion. Its own activation/secure-input transitions must not invalidate
     /// the target we are about to restore and re-check.
     private var secureSuggestionAuthenticationTargetPID: pid_t?
-    /// Survives the prompt itself until the queued insertion finishes. NSWorkspace
+    /// Survives the prompt itself until the authenticated insertion finishes. NSWorkspace
     /// sometimes delivers the restored target's activation notification late; only
     /// that exact PID gets this grace, while activating any other app still cancels.
     private var secureExpansionActivationTargetPID: pid_t?
@@ -192,6 +192,7 @@ final class SnippetExpansionEngine {
                     )?.processIdentifier
                     if SnippetInjectionGate.applicationActivationInvalidatesContext(
                         activatedPID: activatedPID,
+                        currentFrontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                         ownPID: ProcessInfo.processInfo.processIdentifier,
                         secureAuthenticationTargetPID: self.secureSuggestionAuthenticationTargetPID,
                         secureExpansionTargetPID: self.secureExpansionActivationTargetPID,
@@ -713,13 +714,11 @@ final class SnippetExpansionEngine {
         statusText = "Waiting for authentication to expand \(shell.displayName)\u{2026}"
         secureSuggestionAuthenticationTargetPID = targetPID
         secureExpansionActivationTargetPID = targetPID
-        var activationGraceHandedToInjectionQueue = false
         defer {
             if secureSuggestionAuthenticationTargetPID == targetPID {
                 secureSuggestionAuthenticationTargetPID = nil
             }
-            if !activationGraceHandedToInjectionQueue,
-               secureExpansionActivationTargetPID == targetPID {
+            if secureExpansionActivationTargetPID == targetPID {
                 secureExpansionActivationTargetPID = nil
             }
         }
@@ -732,10 +731,7 @@ final class SnippetExpansionEngine {
             statusText = "Could not expand \(shell.displayName): \(error)"
             return
         }
-        var handedToInjectionQueue = false
-        defer {
-            if !handedToInjectionQueue { plaintext.wipe() }
-        }
+        defer { plaintext.wipe() }
 
         guard await restoreSecureExpansionTarget(
             targetPID: targetPID,
@@ -768,17 +764,41 @@ final class SnippetExpansionEngine {
             return
         }
 
-        enqueueExpansion(
+        // Password/Touch ID input is over, so real user input must invalidate the
+        // freshly confirmed trigger again. The activation grace remains until the
+        // direct insertion finishes, but applies only while this exact target is still
+        // genuinely frontmost.
+        if secureSuggestionAuthenticationTargetPID == targetPID {
+            secureSuggestionAuthenticationTargetPID = nil
+        }
+
+        let refusal = SnippetInjectionGate.refusal(
+            secureEventInputEnabled: secureEventInputEnabled,
+            isSecureSnippet: store.isSecure(shell.id),
+            secureSnippetIsAuthenticated: true,
+            isListening: listening,
+            ownAppIsFrontmost: frontmostProcessIsThisApp(),
+            deleteCount: deletion.characterCount)
+        guard deletion.isSelfConsistent,
+              store.isSecure(shell.id),
+              refusal == nil
+        else {
+            pendingSelectionMemoryQuery = nil
+            statusText = "Skipped \(shell.displayName): secure insertion was no longer available."
+            return
+        }
+
+        // We already hold the outer `beginInjection()` from accepting the suggestion.
+        // Running directly removes the task-queue handoff that let a delayed workspace
+        // notification invalidate every other otherwise-valid Touch ID expansion.
+        await performExpansion(
             of: shell,
             deletion: deletion,
+            bindingQuery: consumePendingSelectionMemoryQuery(),
+            generation: acceptedGeneration,
+            targetPID: targetPID,
             authorization: .authenticatedSecure,
-            expectedGeneration: acceptedGeneration,
-            expectedTargetPID: targetPID,
             securePlaintext: plaintext)
-        // `enqueueExpansion` wipes refused payloads itself; accepted payloads are now
-        // strongly held by the queued operation and wiped on every exit from it.
-        handedToInjectionQueue = true
-        activationGraceHandedToInjectionQueue = true
     }
 
     private func restoreSecureExpansionTarget(

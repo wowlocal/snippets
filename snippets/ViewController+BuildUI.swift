@@ -473,6 +473,46 @@ extension ViewController {
         snippetLabel.textColor = .secondaryLabelColor
         snippetLabel.alignment = .left
 
+        // The lock lives on the section header, beside the word "Snippet", because that
+        // is the thing it applies to. Reaching it through a menu was two clicks and a
+        // modal for a state that is really just a property of the snippet.
+        secureLockToggle.bezelStyle = .accessoryBarAction
+        secureLockToggle.isBordered = false
+        secureLockToggle.setButtonType(.toggle)
+        secureLockToggle.imagePosition = .imageOnly
+        secureLockToggle.image = NSImage(systemSymbolName: "lock", accessibilityDescription: "Make secure")
+        secureLockToggle.alternateImage = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Secure")
+        secureLockToggle.contentTintColor = .secondaryLabelColor
+        secureLockToggle.target = self
+        secureLockToggle.action = #selector(toggleSelectedSnippetSecurity)
+        secureLockToggle.keyEquivalent = "l"
+        secureLockToggle.keyEquivalentModifierMask = [.control, .command]
+
+        let snippetHeaderRow = NSStackView(views: [snippetLabel, NSView(), secureLockToggle])
+        snippetHeaderRow.orientation = .horizontal
+        snippetHeaderRow.alignment = .centerY
+        snippetHeaderRow.spacing = 6
+
+        secureCaptionLabel.font = .systemFont(ofSize: 11)
+        secureCaptionLabel.textColor = .tertiaryLabelColor
+        secureCaptionLabel.isHidden = true
+
+        secureDemoteLabel.font = .systemFont(ofSize: 12)
+        secureDemoteLabel.textColor = .labelColor
+        let demoteConfirm = NSButton(
+            title: "Make Ordinary", target: self, action: #selector(confirmDemoteSelectedSnippet))
+        demoteConfirm.bezelStyle = NSButton.BezelStyle.rounded
+        demoteConfirm.hasDestructiveAction = true
+        let demoteCancel = NSButton(
+            title: "Cancel", target: self, action: #selector(cancelDemoteConfirmation))
+        demoteCancel.bezelStyle = NSButton.BezelStyle.rounded
+        demoteCancel.keyEquivalent = "\u{1b}"
+        secureDemoteStrip.orientation = .horizontal
+        secureDemoteStrip.alignment = .centerY
+        secureDemoteStrip.spacing = 8
+        secureDemoteStrip.setViews([secureDemoteLabel, NSView(), demoteCancel, demoteConfirm], in: .leading)
+        secureDemoteStrip.isHidden = true
+
         let snippetContainer = NSView()
         snippetContainer.translatesAutoresizingMaskIntoConstraints = false
         configureEditorSurface(snippetContainer, backgroundColor: .textBackgroundColor)
@@ -505,6 +545,45 @@ extension ViewController {
 
         snippetScrollView.documentView = snippetTextView
         snippetContainer.addSubview(snippetScrollView)
+
+        // Above the scroll view, filling the container. A full-bleed transparent button
+        // sits behind the label so a click anywhere on the area unlocks — matching what
+        // people instinctively do, which is click where the text should be.
+        secureLockOverlay.translatesAutoresizingMaskIntoConstraints = false
+        secureLockOverlay.wantsLayer = true
+        secureLockOverlay.isHidden = true
+
+        secureLockOverlayButton.title = ""
+        secureLockOverlayButton.isBordered = false
+        secureLockOverlayButton.bezelStyle = .shadowlessSquare
+        secureLockOverlayButton.target = self
+        secureLockOverlayButton.action = #selector(unlockFromEditorOverlay)
+        secureLockOverlayButton.translatesAutoresizingMaskIntoConstraints = false
+
+        secureLockOverlayLabel.font = .systemFont(ofSize: 13)
+        secureLockOverlayLabel.textColor = .secondaryLabelColor
+        secureLockOverlayLabel.alignment = .center
+        secureLockOverlayLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        secureLockOverlay.addSubview(secureLockOverlayButton)
+        secureLockOverlay.addSubview(secureLockOverlayLabel)
+        snippetContainer.addSubview(secureLockOverlay)
+
+        NSLayoutConstraint.activate([
+            secureLockOverlay.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
+            secureLockOverlay.trailingAnchor.constraint(equalTo: snippetContainer.trailingAnchor),
+            secureLockOverlay.topAnchor.constraint(equalTo: snippetContainer.topAnchor),
+            secureLockOverlay.bottomAnchor.constraint(equalTo: snippetContainer.bottomAnchor),
+            secureLockOverlayButton.leadingAnchor.constraint(equalTo: secureLockOverlay.leadingAnchor),
+            secureLockOverlayButton.trailingAnchor.constraint(equalTo: secureLockOverlay.trailingAnchor),
+            secureLockOverlayButton.topAnchor.constraint(equalTo: secureLockOverlay.topAnchor),
+            secureLockOverlayButton.bottomAnchor.constraint(equalTo: secureLockOverlay.bottomAnchor),
+            secureLockOverlayLabel.centerYAnchor.constraint(equalTo: secureLockOverlay.centerYAnchor),
+            secureLockOverlayLabel.leadingAnchor.constraint(
+                equalTo: secureLockOverlay.leadingAnchor, constant: 20),
+            secureLockOverlayLabel.trailingAnchor.constraint(
+                equalTo: secureLockOverlay.trailingAnchor, constant: -20),
+        ])
         snippetContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
 
         NSLayoutConstraint.activate([
@@ -607,8 +686,10 @@ extension ViewController {
         stack.addArrangedSubview(tagsField)
         stack.addArrangedSubview(editorSuggestedTagsFlow)
         stack.addArrangedSubview(enabledCheckbox)
-        stack.addArrangedSubview(snippetLabel)
+        stack.addArrangedSubview(snippetHeaderRow)
         stack.addArrangedSubview(snippetContainer)
+        stack.addArrangedSubview(secureCaptionLabel)
+        stack.addArrangedSubview(secureDemoteStrip)
         stack.addArrangedSubview(placeholderLabel)
         stack.addArrangedSubview(previewSeparator)
         stack.addArrangedSubview(previewSectionStack)
@@ -616,7 +697,7 @@ extension ViewController {
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, keywordRow, keywordWarningLabel, tagsField, editorSuggestedTagsFlow, snippetContainer, placeholderLabel, previewSeparator, previewSectionStack].forEach {
+        [nameField, keywordRow, keywordWarningLabel, tagsField, editorSuggestedTagsFlow, snippetHeaderRow, snippetContainer, secureCaptionLabel, secureDemoteStrip, placeholderLabel, previewSeparator, previewSectionStack].forEach {
             $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
@@ -633,7 +714,7 @@ extension ViewController {
         stack.setCustomSpacing(4, after: keywordRow)
         stack.setCustomSpacing(8, after: tagsLabel)
         stack.setCustomSpacing(6, after: tagsField)
-        stack.setCustomSpacing(10, after: snippetLabel)
+        stack.setCustomSpacing(10, after: snippetHeaderRow)
         stack.setCustomSpacing(8, after: previewSeparator)
 
         NSLayoutConstraint.activate([

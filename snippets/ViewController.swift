@@ -97,6 +97,31 @@ final class ViewController: NSViewController {
 
     let nameField = NSTextField(string: "")
     let snippetTextView = NSTextView()
+
+    // MARK: - Secure snippet editor chrome
+    //
+    // These three replace a menu item, a confirmation alert, and a second menu item.
+    // Marking a snippet secure and reading a locked one are the two things a user does
+    // most often, so both are one click, in the editor, where the snippet already is.
+
+    /// One click to encrypt a snippet, or to begin making it ordinary again.
+    let secureLockToggle = NSButton()
+    /// Permanently visible for a secure snippet. This is the text that used to be a
+    /// first-run modal — the consequences are worth stating, but not worth a dialog the
+    /// user dismisses once and can never see again.
+    let secureCaptionLabel = NSTextField(wrappingLabelWithString: "")
+    /// Covers the content area while a secure snippet is not readable. The whole area is
+    /// the click target, because "click where the text should be" is the gesture people
+    /// already try.
+    let secureLockOverlay = NSView()
+    let secureLockOverlayLabel = NSTextField(wrappingLabelWithString: "")
+    let secureLockOverlayButton = NSButton()
+    /// Which secure snippet's real text is on screen right now. This identity latch,
+    /// rather than placeholder text, gates whether editor content may be written back.
+    var secureContentEditableForID: UUID?
+    /// Inline replacement for the demote confirmation alert.
+    let secureDemoteStrip = NSStackView()
+    let secureDemoteLabel = NSTextField(wrappingLabelWithString: "")
     let keywordField = NSTextField(string: "")
     let tagsField = NSTokenField(string: "")
     let editorSuggestedTagsFlow = TagFlowView()
@@ -222,6 +247,22 @@ final class ViewController: NSViewController {
             reloadVisibleSnippets(keepSelection: true)
             if source == .external || !isEditingDetails {
                 applySelectedSnippetToEditor()
+            }
+        }
+
+        // Masking follows the frontmost app. This never touches the key's lifetime —
+        // VaultSession deliberately does NOT lock on resign-active, because this app is
+        // backgrounded exactly when a snippet is being used — it only stops a revealed
+        // secret sitting on screen behind a screen share or over a shoulder.
+        for name in [NSApplication.didResignActiveNotification, NSApplication.didBecomeActiveNotification] {
+            NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let snippet = self.selectedSnippet,
+                          self.store.isSecure(snippet.id) else { return }
+                    self.applySecureStateToEditor(for: snippet)
+                }
             }
         }
 

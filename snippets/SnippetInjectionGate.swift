@@ -44,6 +44,7 @@ nonisolated enum SnippetInjectionGate {
     /// Input before returning to the original target.
     nonisolated static func applicationActivationInvalidatesContext(
         activatedPID: Int32?,
+        currentFrontmostPID: Int32? = nil,
         ownPID: Int32,
         secureAuthenticationTargetPID: Int32?,
         secureExpansionTargetPID: Int32? = nil,
@@ -55,12 +56,15 @@ nonisolated enum SnippetInjectionGate {
         // path restores the original app and re-reads the exact trigger before writing.
         if secureAuthenticationTargetPID != nil { return false }
 
-        // NSWorkspace can deliver the target's activation notification after
-        // LocalAuthentication has returned and the insertion has already been queued.
-        // That delayed notification confirms the target we just revalidated; it is not
-        // a new app switch and must not cancel the queued insertion.
-        if let secureExpansionTargetPID, activatedPID == secureExpansionTargetPID {
-            return false
+        // NSWorkspace can deliver LocalAuthentication's own activation notifications
+        // after the target has already been restored and insertion has started. The
+        // notification PID is then stale; the current frontmost process is authoritative.
+        // This still fails closed on a real app switch.
+        if let secureExpansionTargetPID {
+            if let currentFrontmostPID {
+                return currentFrontmostPID != secureExpansionTargetPID
+            }
+            if activatedPID == secureExpansionTargetPID { return false }
         }
 
         // Outside our own prompt, Secure Event Input must tear down the tracked
