@@ -507,10 +507,15 @@ Deferral is per record when the vault has not arrived yet. Plaintext records in 
 page still apply, while the cursor is held so that temporarily unfileable record is offered again
 without backoff. A *different* `kid` cannot heal by waiting: the engine excludes its tombstones from
 the deletion guard, applies the compatible records in the batch, then enters a sticky vault halt
-instead of polling one cursor forever. Conversely, an unreadable or unexpectedly missing local
-vault fails closed before projection: it must never appear as an empty vault and manufacture
-tombstones. The engine passes its live in-memory base into that check, because a failed `base.json`
-write cannot hide records the running process knows were accepted.
+instead of polling one cursor forever. Safety halts are written to `Sync/state.json` under the
+library lock and restored before the first round after launch; clearing one removes that durable
+marker with a compare-and-swap, so reviewing one halt cannot erase a newer stop written by a peer.
+A future-version state file fails closed without being rewritten. If the halt cannot be locked or
+written at all, the independent persisted sync preference is switched off and the engine is torn down
+after its in-flight round drains. Conversely, an unreadable or unexpectedly missing local vault fails
+closed before projection: it must never appear as an empty vault and manufacture tombstones. The engine
+passes its live in-memory base into that check, because a failed `base.json` write cannot hide records
+the running process knows were accepted.
 
 Turning sync off cancels and drains the retained round task before local vault removal is allowed.
 Cancellation checks bracket every awaited backend operation, so a CloudKit request that finishes

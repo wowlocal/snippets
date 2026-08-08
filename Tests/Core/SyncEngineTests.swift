@@ -108,7 +108,10 @@ struct SyncEngineTests {
             keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test")
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: "aaaaaaa1",
-            baseURL: dir.appendingPathComponent("base.json"), temporaryDirectory: dir)
+            baseURL: dir.appendingPathComponent("base.json"),
+            stateURL: dir.appendingPathComponent("state.json"),
+            lockURL: dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: dir)
         return Harness(transport: transport, library: library, engine: engine, sealer: sealer, dir: dir)
     }
 
@@ -157,7 +160,10 @@ struct SyncEngineTests {
             keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test")
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: "aaaaaaa1",
-            baseURL: dir.appendingPathComponent("base.json"), temporaryDirectory: dir)
+            baseURL: dir.appendingPathComponent("base.json"),
+            stateURL: dir.appendingPathComponent("state.json"),
+            lockURL: dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: dir)
 
         var enteredIterator = entered.stream.makeAsyncIterator()
         let round = Task { await engine.sync() }
@@ -324,6 +330,8 @@ struct SyncEngineTests {
             sealer: SnippetCryptoSealer(
                 keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test"),
             device: "aaaaaaa1", baseURL: dir.appendingPathComponent("base.json"),
+            stateURL: dir.appendingPathComponent("state.json"),
+            lockURL: dir.appendingPathComponent("library.lock"),
             temporaryDirectory: dir)
 
         let state = await engine.sync()
@@ -512,6 +520,108 @@ struct SyncEngineTests {
         _ = await h.engine.sync()
         #expect(h.transport.fetchAttempts == fetchesAtHalt,
                 "a permanent vault mismatch must halt, not re-fetch one cursor forever")
+
+        // The stop has to outlive this engine. Before halt persistence, relaunching made
+        // a fresh `.disabled` engine fetch the held cursor once, halt again, and repeat
+        // that cycle on every launch despite the UI calling the stop sticky.
+        let restarted = SyncEngine(
+            transport: h.transport, library: h.library, sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: h.dir.appendingPathComponent("state.json"),
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        guard case .halted(let restoredReason, let restoredDetail) = restarted.state else {
+            Issue.record("expected the rival-vault halt to survive restart")
+            return
+        }
+        #expect(restoredReason == .vaultUnreadable)
+        #expect(restoredDetail.contains("different vault identity"))
+        _ = await restarted.sync()
+        #expect(h.transport.fetchAttempts == fetchesAtHalt,
+                "a restored halt must not fetch before explicit user review")
+
+        // Review is compare-and-swap, not "set halt = nil". If a peer discovers a new
+        // safety problem while this pane still displays the old one, reviewing the old
+        // stop must adopt the new one rather than erase it.
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        guard case .loaded(var peerState) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("expected persisted sync state before peer halt replacement")
+            return
+        }
+        let peerHalt = SyncState.Halt(
+            reason: .backendRefused, detail: "newer stop from a peer",
+            at: Date(timeIntervalSince1970: 123))
+        peerState.halt = peerHalt
+        try SyncStateFile.write(peerState, to: stateURL, temporaryDirectory: h.dir)
+
+        restarted.clearHaltAfterUserReview()
+        #expect(restarted.state == .halted(.backendRefused, detail: peerHalt.detail),
+                "reviewing an older halt must surface, not clear, the peer's newer halt")
+        guard case .loaded(let stillStopped) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("expected the peer halt to remain persisted")
+            return
+        }
+        #expect(stillStopped.halt == peerHalt)
+
+        // A second review now covers the halt actually displayed and may clear it.
+        restarted.clearHaltAfterUserReview()
+        guard case .loaded(let reviewed) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("expected persisted sync state after clearing the halt")
+            return
+        }
+        #expect(reviewed.halt == nil, "Resume After Review must clear the durable halt")
+    }
+
+    @Test func aFutureSyncStateFailsClosedBeforeTheFirstFetch() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        var future = SyncState.fresh(deviceID: "aaaaaaa1", now: Date(timeIntervalSince1970: 0))
+        future.schemaVersion = SyncState.currentSchemaVersion + 1
+        let stateURL = h.dir.appendingPathComponent("future-state.json")
+        try SyncStateFile.write(future, to: stateURL, temporaryDirectory: h.dir)
+
+        let engine = SyncEngine(
+            transport: h.transport, library: h.library, sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("future-base.json"),
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        guard case .halted(let reason, _) = engine.state else {
+            Issue.record("a future state file must stop this older engine")
+            return
+        }
+        #expect(reason == .schemaTooNew)
+        let fetches = h.transport.fetchAttempts
+        _ = await engine.sync()
+        #expect(h.transport.fetchAttempts == fetches)
+
+        engine.clearHaltAfterUserReview()
+        #expect(engine.state.isHalted, "Resume cannot overwrite a future state schema")
+    }
+
+    @Test func anUnwritableHaltUsesTheIndependentFailClosedChannel() throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let stateDirectory = h.dir.appendingPathComponent("state-is-a-directory", isDirectory: true)
+        try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+        let engine = SyncEngine(
+            transport: h.transport, library: h.library, sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("fallback-base.json"),
+            stateURL: stateDirectory,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        var disabledPersistentOptIn = false
+        engine.onSafetyHaltPersistenceFailure = { disabledPersistentOptIn = true }
+
+        engine.halt(.massDeletion, detail: "test persistence failure")
+        #expect(engine.state.isHalted)
+        #expect(disabledPersistentOptIn,
+                "a memory-only stop must disable sync through an independent durable channel")
     }
 
     @Test func anInvalidatedCursorTriggersAFullResyncRatherThanSilentDivergence() async throws {
@@ -578,7 +688,10 @@ struct SyncEngineTests {
             keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test")
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: "aaaaaaa1",
-            baseURL: dir.appendingPathComponent("base.json"), temporaryDirectory: dir)
+            baseURL: dir.appendingPathComponent("base.json"),
+            stateURL: dir.appendingPathComponent("state.json"),
+            lockURL: dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: dir)
 
         // `pendingChanges` sorts by uuid string, so sorting here identifies which record
         // lands in which position of the submitted batch.
@@ -613,7 +726,10 @@ struct SyncEngineTests {
         // every launch would re-push the entire library.
         let restarted = SyncEngine(
             transport: h.transport, library: h.library, sealer: h.sealer, device: "aaaaaaa1",
-            baseURL: h.dir.appendingPathComponent("base.json"), temporaryDirectory: h.dir)
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: h.dir.appendingPathComponent("state.json"),
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
         #expect(restarted.agreedBase.envelope(id) != nil)
 
         let batchesBefore = await h.transport.submittedBatches.count

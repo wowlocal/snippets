@@ -1352,7 +1352,11 @@ private final class SyncSettingsViewController: NSViewController {
         // on the keychain leaves no engine and no poll timer, and this button is what
         // retries it. Hiding it there was offering "relaunch the app" as the only cure.
         syncNowButton.isHidden = !SyncCoordinator.isEnabled
-        clearHaltButton.isHidden = !coordinator.state.isHalted
+        if case .halted(let reason, _) = coordinator.state {
+            clearHaltButton.isHidden = !reason.isUserRecoverable
+        } else {
+            clearHaltButton.isHidden = true
+        }
 
         secondMacLabel.stringValue = secondMacAdvice()
     }

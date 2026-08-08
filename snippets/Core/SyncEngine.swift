@@ -110,10 +110,21 @@ final class SyncEngine {
     private let library: any SyncLibraryAccess
     private let sealer: any SyncBlobSealing
     private let baseURL: URL
+    private let stateURL: URL
+    private let lockURL: URL
     private let temporaryDirectory: URL
+    private let stateLockTimeout: TimeInterval
     private let device: String
     private var base: SyncBase
     private var consecutiveFailures = 0
+    /// The exact halt value read from or written to disk. It is a compare-and-swap
+    /// token: Resume may clear only this halt, never a newer stop written by a peer.
+    private var durableHalt: SyncState.Halt?
+
+    /// Production sets this to turn off the persisted sync preference if a safety halt
+    /// cannot be saved. The in-memory halt still stops this process; the preference is
+    /// the independent fail-closed channel that stops a relaunch.
+    var onSafetyHaltPersistenceFailure: (() -> Void)?
 
     /// Backoff: 2s, 4s, 8s … capped at five minutes.
     ///
@@ -127,18 +138,40 @@ final class SyncEngine {
         sealer: any SyncBlobSealing,
         device: String,
         baseURL: URL = SnippetStorageLocations.syncBaseFileURL,
-        temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL
+        stateURL: URL = SnippetStorageLocations.syncStateFileURL,
+        lockURL: URL = SnippetStorageLocations.libraryLockFileURL,
+        temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
+        stateLockTimeout: TimeInterval = 2.0
     ) {
         self.transport = transport
         self.library = library
         self.sealer = sealer
         self.device = device
         self.baseURL = baseURL
+        self.stateURL = stateURL
+        self.lockURL = lockURL
         self.temporaryDirectory = temporaryDirectory
+        self.stateLockTimeout = stateLockTimeout
         if case .loaded(let loaded) = SyncBaseFile.load(from: baseURL) {
             self.base = loaded
         } else {
             self.base = SyncBase()
+        }
+        switch SyncStateFile.load(from: stateURL) {
+        case .loaded(let persisted):
+            if let halt = persisted.halt {
+                self.durableHalt = halt
+                self.state = .halted(halt.reason, detail: halt.detail)
+            }
+        case .tooNew(let version):
+            // Once halts live in state.json, an older build cannot assume a future file
+            // contains no stop it understands. Fail closed without rewriting the file.
+            self.state = .halted(
+                .schemaTooNew,
+                detail: "Sync/state.json is version \(version); this build understands "
+                    + "\(SyncState.currentSchemaVersion) and will not sync over it.")
+        case .fresh:
+            break
         }
     }
 
@@ -146,15 +179,35 @@ final class SyncEngine {
 
     /// Refuses to run again until a human clears it.
     func halt(_ reason: SyncState.HaltReason, detail: String) {
-        transition(to: .halted(reason, detail: detail))
+        enterHalt(reason, detail: detail)
     }
 
     /// The only way out of a halt. Named for what it demands rather than what it does,
     /// because "resume" would read as something safe to call automatically.
     func clearHaltAfterUserReview() {
-        guard state.isHalted else { return }
-        consecutiveFailures = 0
-        transition(to: .idle(lastSync: nil))
+        guard case .halted(let reason, let detail) = state else { return }
+        switch updatePersistedHalt(nil, expecting: durableHalt) {
+        case .written:
+            durableHalt = nil
+            consecutiveFailures = 0
+            transition(to: .idle(lastSync: nil))
+        case .superseded(let newer):
+            // A peer stopped for a different reason after this pane was drawn. The
+            // user's review covered the old stop, not this one; adopt it and ask again.
+            durableHalt = newer
+            transition(to: .halted(newer.reason, detail: newer.detail))
+        case .tooNew(let version):
+            durableHalt = nil
+            transition(to: .halted(
+                .schemaTooNew,
+                detail: "Sync/state.json is version \(version); update Snippets before "
+                    + "sync can resume."))
+        case .failed:
+            transition(to: .halted(
+                reason,
+                detail: detail + " The reviewed stop could not be cleared from disk; "
+                    + "sync remains stopped."))
+        }
     }
 
     // MARK: - One round
@@ -184,7 +237,7 @@ final class SyncEngine {
         } catch let failure as SyncTransportFailure {
             handle(failure)
         } catch let failure as SyncEngineFailure {
-            transition(to: .halted(failure.reason, detail: failure.detail))
+            enterHalt(failure.reason, detail: failure.detail)
         } catch {
             handle(.unreachable(detail: "\(error)"))
         }
@@ -381,7 +434,7 @@ final class SyncEngine {
             // them to check a sign-in that was never the problem. The submit leg already
             // routes this to `backendRefused`; the same condition must not describe
             // itself two different ways depending on which half of the round saw it.
-            transition(to: .halted(.backendRefused, detail: detail))
+            enterHalt(.backendRefused, detail: detail)
         case .pushUnsupported:
             transition(to: .needsAuthentication("this backend does not accept pushes"))
         case .unreachable, .rejected:
@@ -406,6 +459,110 @@ final class SyncEngine {
             // Not fatal: the base is derived, and losing it costs one full reconcile
             // rather than any data. Worth surfacing, not worth halting for.
             NSLog("Snippets: could not write the sync base: \(error)")
+        }
+    }
+
+    /// Makes a safety stop survive process death and an ordinary relaunch.
+    ///
+    /// `SyncState.halt` has always promised this, but the engine previously kept its
+    /// halt only in memory. A rival vault therefore stopped the two-minute poll in one
+    /// process, then fetched the same held cursor and stopped again after every launch.
+    /// Backend refusals and mass-deletion stops had the same hole. All safety halts now
+    /// go through this one door.
+    private func enterHalt(_ reason: SyncState.HaltReason, detail: String) {
+        // JSON's ISO-8601 strategy stores whole seconds. Normalize before using the
+        // value as a CAS token so an immediate same-process Resume compares equal to
+        // what another decoder reads from disk.
+        let at = Date(timeIntervalSince1970: floor(now().timeIntervalSince1970))
+        let halt = SyncState.Halt(reason: reason, detail: detail, at: at)
+        switch updatePersistedHalt(halt, expecting: durableHalt) {
+        case .written(let stored):
+            durableHalt = stored
+            transition(to: .halted(reason, detail: detail))
+        case .superseded(let newer):
+            durableHalt = newer
+            transition(to: .halted(newer.reason, detail: newer.detail))
+        case .tooNew(let version):
+            durableHalt = nil
+            transition(to: .halted(
+                .schemaTooNew,
+                detail: "Sync/state.json is version \(version); update Snippets before "
+                    + "sync can resume."))
+        case .failed:
+            // The in-memory halt protects this process. Turning off the separate,
+            // persisted opt-in protects the next process even when state.json itself
+            // is unwritable or its lock cannot be taken.
+            onSafetyHaltPersistenceFailure?()
+            transition(to: .halted(
+                reason,
+                detail: detail + " The safety stop could not be saved to disk, so iCloud "
+                    + "Sync was turned off before relaunch."))
+        }
+    }
+
+    private enum HaltUpdateResult {
+        case written(SyncState.Halt?)
+        case superseded(SyncState.Halt)
+        case tooNew(Int)
+        case failed
+    }
+
+    /// Updates only the halt field while holding the same cross-process lock as every
+    /// library writer. Loading and rewriting `state.json` without that lock can erase a
+    /// generation bump or crash marker written by the CLI between the two operations.
+    ///
+    /// A future-version state file is never overwritten. The result distinguishes a
+    /// newer peer halt, a future schema, and an I/O/locking failure so every caller can
+    /// fail closed without erasing or stepping past the durable stop.
+    private func updatePersistedHalt(
+        _ halt: SyncState.Halt?, expecting expected: SyncState.Halt?
+    ) -> HaltUpdateResult {
+        let held: FileGuard.Held
+        do {
+            held = try FileGuard.acquire(at: lockURL, timeout: stateLockTimeout)
+        } catch {
+            NSLog("Snippets: could not lock sync state while changing its halt (\(error)).")
+            return .failed
+        }
+        defer { held.release() }
+
+        // `FileGuard.none` lets ordinary user-data writes use their verified retry path
+        // on exotic filesystems. This read-modify-write has no such CAS verification:
+        // proceeding unlocked could erase a concurrent crash marker, generation bump,
+        // or newer halt. A safety marker must fail closed instead.
+        guard !held.isUnlocked else {
+            NSLog("Snippets: refusing to change a sync halt without a filesystem lock.")
+            return .failed
+        }
+
+        var persisted: SyncState
+        switch SyncStateFile.load(
+            from: stateURL,
+            makeFresh: { SyncState.fresh(deviceID: device, now: now()) }
+        ) {
+        case .loaded(let loaded), .fresh(let loaded):
+            persisted = loaded
+        case .tooNew(let version):
+            NSLog("Snippets: refusing to change a halt in sync state version \(version).")
+            return .tooNew(version)
+        }
+
+        if persisted.halt != expected {
+            // A peer may have cleared the halt already. Clearing nil again is safe; a
+            // different non-nil halt is a new stop this caller has not reviewed.
+            if halt == nil, persisted.halt == nil { return .written(nil) }
+            if let newer = persisted.halt { return .superseded(newer) }
+        }
+
+        if persisted.halt == halt { return .written(halt) }
+        persisted.halt = halt
+        do {
+            try SyncStateFile.write(
+                persisted, to: stateURL, temporaryDirectory: temporaryDirectory)
+            return .written(halt)
+        } catch {
+            NSLog("Snippets: could not persist the sync halt (\(error)).")
+            return .failed
         }
     }
 

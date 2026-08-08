@@ -171,6 +171,13 @@ final class SyncCoordinator {
         let transport = CloudKitTransport()
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: device)
+        engine.onSafetyHaltPersistenceFailure = {
+            // Independent fail-closed channel: if state.json or its lock is unavailable,
+            // this process remains halted in memory and the next launch does not build a
+            // sync engine at all. Re-enabling the checkbox is then an explicit user act.
+            UserDefaults.standard.set(false, forKey: Self.enabledDefaultsKey)
+            _ = UserDefaults.standard.synchronize()
+        }
         let generation = lifecycleGeneration
         engine.onStateChange = { [weak self] state in
             MainActor.assumeIsolated {
@@ -181,6 +188,12 @@ final class SyncCoordinator {
 
         self.transport = transport
         self.engine = engine
+
+        // A safety halt restored from `Sync/state.json` is already the engine's state;
+        // it does not transition during the no-op `sync()` below, so its callback will
+        // not fire. Publish it explicitly or Settings would show `.disabled` after a
+        // relaunch even though the engine correctly refuses to fetch.
+        if engine.state.isHalted { publish(engine.state) }
 
         startPolling(every: transport.pollInterval)
         startEventPump(for: transport)
@@ -274,7 +287,14 @@ final class SyncCoordinator {
     /// awkwardly-named method so the intent stays visible: a halt means a human looked.
     func clearHaltAfterUserReview() {
         engine?.clearHaltAfterUserReview()
-        syncNow()
+        if Self.isEnabled {
+            syncNow()
+        } else {
+            // Halt persistence failed and turned the opt-in off. Do not let the existing
+            // in-memory engine bypass that preference after Review; a later checkbox-on
+            // constructs a fresh engine deliberately.
+            stop()
+        }
     }
 
     // MARK: - Internals
@@ -359,14 +379,21 @@ final class SyncCoordinator {
 
     private func finishRound(generation: UInt64) {
         roundTask = nil
-        let replay = wantsAnotherRound || generation != lifecycleGeneration
-        wantsAnotherRound = false
-        guard replay, Self.isEnabled, engine != nil else {
-            // A stopped coordinator still needs Settings to learn that it is now safe to
-            // perform local maintenance.
-            if !Self.isEnabled { publish(.disabled) }
+
+        // The safety-halt fallback can switch the persisted opt-in off from inside this
+        // round. Keep the task retained until this point so destructive maintenance still
+        // sees the real quiescence boundary, then tear the engine down completely. Merely
+        // publishing `.disabled` leaves `engine != nil`, and a later checkbox-on makes
+        // `start()` return early forever instead of constructing the fresh engine that
+        // explicit re-enablement promises.
+        guard Self.isEnabled else {
+            stop()
             return
         }
+
+        let replay = wantsAnotherRound || generation != lifecycleGeneration
+        wantsAnotherRound = false
+        guard replay, engine != nil else { return }
         syncNow()
     }
 
