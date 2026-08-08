@@ -107,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private weak var statusMenuClipboardItem: NSMenuItem?
     private var hotkeyPromotedFromAccessory = false
     private var shouldTerminateForReal = false
+    private var terminationReplyPending = false
     #if !NO_SPARKLE
     private var pendingUpdateInstallHandler: (() -> Void)?
     private var pendingUpdateVersion: String?
@@ -261,7 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         (NSApp.windows.compactMap { $0.contentViewController as? ViewController }.first)?
             .flushPendingSecureEdit()
         controlServer.stop()
-        expansionEngine.prepareForTermination()
+        _ = expansionEngine.prepareForTermination()
         // Synchronous on purpose: this method returns and the process dies long
         // before an async write would run, so an async flush here writes nothing.
         usageStore.flush(synchronously: true)
@@ -289,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // just when Sparkle relaunches to install. The legit install relaunch is
         // covered by `shouldTerminateForReal`, set before invoking the install handler.
         if shouldTerminateForReal || systemIsTerminating {
-            return .terminateNow
+            return terminationReplyAfterRestoringClipboard(sender)
         }
 
         switch quitBehaviorPreference {
@@ -297,18 +298,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             hideToBackground()
             return .terminateCancel
         case .quit:
-            return .terminateNow
+            return terminationReplyAfterRestoringClipboard(sender)
         case .ask:
             switch promptForQuitDecision() {
             case .hide:
                 hideToBackground()
                 return .terminateCancel
             case .quit:
-                return .terminateNow
+                return terminationReplyAfterRestoringClipboard(sender)
             case .cancel:
                 return .terminateCancel
             }
         }
+    }
+
+    /// A retained recovery lease may be the only remaining copy of the user's pre-expansion
+    /// clipboard. Keep the app's run loop alive for its bounded retries; if they still cannot write,
+    /// cancel Quit instead of destroying that snapshot with the process.
+    private func terminationReplyAfterRestoringClipboard(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard !terminationReplyPending else { return .terminateLater }
+        terminationReplyPending = true
+
+        let ready = expansionEngine.prepareForTermination { [weak self] canTerminate in
+            guard let self else {
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            self.terminationReplyPending = false
+            if !canTerminate {
+                self.expansionEngine.cancelTerminationPreparation()
+            }
+            sender.reply(toApplicationShouldTerminate: canTerminate)
+        }
+        guard !ready else {
+            terminationReplyPending = false
+            return .terminateNow
+        }
+
+        return .terminateLater
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
