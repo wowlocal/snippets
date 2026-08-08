@@ -6,15 +6,111 @@ private extension NSUserInterfaceItemIdentifier {
     static let snippetsMoreMenu = NSUserInterfaceItemIdentifier("SnippetsMoreMenu")
 }
 
+private enum SeededName {
+    /// Matches the cap `Snippet.contentFirstLine` uses for a derived name.
+    static let maxLength = 50
+}
+
+/// The one pasteboard read behind ⇧⌘N, the Services handler and the status-bar
+/// item's live title, so the three can never disagree about what "the clipboard"
+/// currently holds.
+enum ClipboardCapture {
+    /// Nil rather than "" for whitespace-only content: a snippet made of blanks
+    /// draws an empty row and expands to nothing, which reads as a broken app.
+    static var text: String? {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
+    }
+
+    /// One short line. What lands on the clipboard is routinely a paragraph, and
+    /// a menu item is a single line that NSMenu will happily draw at the full
+    /// width of the screen, so the newlines have to go before the truncation.
+    static func menuPreview(of text: String) -> String {
+        let maxCharacters = 30
+        let singleLine = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        guard singleLine.count > maxCharacters else { return singleLine }
+        let endIndex = singleLine.index(singleLine.startIndex, offsetBy: maxCharacters)
+        return String(singleLine[..<endIndex]) + "…"
+    }
+}
+
 extension ViewController: NSMenuDelegate, NSMenuItemValidation {
-    func selectSnippet(id: UUID, focusEditorName: Bool) {
+    func selectSnippet(id: UUID, focus: EditorFocusTarget?) {
+        let outgoingSnippetID = selectedSnippetID
         selectedSnippetID = id
+        // Selecting from code never reaches `tableViewSelectionDidChange` with an
+        // outgoing ID to look at — the assignment above is what that callback
+        // compares against — so a blank draft left behind by a deep link, a
+        // search suggestion or a duplicate is taken back out here instead.
+        if outgoingSnippetID != id {
+            discardBlankDraftAfterLeaving(outgoingSnippetID)
+        }
         syncTableSelectionWithSelectedSnippet()
         applySelectedSnippetToEditor()
+        restoreEditorFocus(focus)
+    }
 
-        if focusEditorName {
-            requestFirstResponder(nameField)
+    /// Discards a still-blank ⌘N draft the user has just left.
+    ///
+    /// A runloop turn late on purpose. `requestFirstResponder` hands focus off
+    /// asynchronously and a token field only finalizes its trailing tag when
+    /// editing actually ends, so acting now could take away a snippet the user is
+    /// still mid-word in; and the table's own selection notification is no place
+    /// to remove one of its rows. By the time this runs, everything typed has
+    /// reached the store — and the store checks again, because a draft that is no
+    /// longer blank is no longer a draft.
+    func discardBlankDraftAfterLeaving(_ snippetID: UUID?) {
+        guard let snippetID, store.blankDraftSnippet?.id == snippetID else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, store.blankDraftSnippet?.id == snippetID else { return }
+            store.discardBlankDraft(id: snippetID)
         }
+    }
+
+    /// Hands focus over, and takes back the blank draft behind it when that
+    /// leaves the editor.
+    ///
+    /// There is no funnel every exit passes through — Escape, ⌘F and Shift-Tab
+    /// off the content box each go straight to `requestFirstResponder` and commit
+    /// nothing on the way — so leaving them to say so one at a time is how the
+    /// Shift-Tab exit shipped without saying it. Routing the hops through here
+    /// instead means the next one anybody adds cannot forget, and the hops that
+    /// land on another editor field pass through unchanged: the draft is only
+    /// abandoned when the whole editor is.
+    func moveFocus(to responder: NSResponder) {
+        let abandonedSnippetID = isEditorField(responder) ? nil : selectedSnippetID
+        requestFirstResponder(responder)
+        discardBlankDraftAfterLeaving(abandonedSnippetID)
+    }
+
+    private func isEditorField(_ responder: NSResponder) -> Bool {
+        responder === snippetTextView
+            || responder === keywordField
+            || responder === nameField
+            || responder === tagsField
+            || responder === enabledCheckbox
+    }
+
+    /// The window is going away or the app is quitting, so whichever draft is
+    /// open is abandoned by definition and the selection is beside the point.
+    ///
+    /// Synchronous, unlike the above: termination has no next runloop turn, and
+    /// the discard writes to disk immediately. Ending editing first is what
+    /// finalizes a half-typed tag token — the one thing a blank draft can be
+    /// holding that the store has not been told about yet.
+    func discardOpenBlankDraft() {
+        guard store.blankDraftSnippet != nil else { return }
+        commitActiveEditorState(endingEditing: true)
+
+        guard let draftID = store.blankDraftSnippet?.id else { return }
+        store.discardBlankDraft(id: draftID)
     }
 
     func showErrorAlert(message: String) {
@@ -35,6 +131,18 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         let willCollapse = !sidebarItem.isCollapsed
         let shouldMoveFocusAfterCollapse = willCollapse && shouldMoveFocusAfterCollapsingSidebar()
         storeSidebarCollapsedState(isCollapsed: willCollapse)
+        // ⌘B is the user taking the wheel, so the width rule no longer owns this
+        // sidebar's state either way. Asking for it *back* at a width the rule
+        // would immediately hide it at also stands the rule down, until the
+        // window is wide again — otherwise the sidebar would vanish again in the
+        // same breath. (Showing it usually widens the window past the expand
+        // width on its own, which clears the suppression immediately; that is
+        // fine, the end state is the same. It matters when the window has no room
+        // to grow.)
+        isSidebarAutoCollapsed = false
+        if !willCollapse, adaptiveSidebarReferenceWidth < MainLayoutMetrics.sidebarAutoExpandWidth {
+            isAutomaticSidebarCollapseSuppressed = true
+        }
         hideSearchSuggestionOverlay()
 
         NSAnimationContext.runAnimationGroup { context in
@@ -96,10 +204,6 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         actionOverlayView.isHidden = true
         updateActionPanelShortcutVisibility(showAll: false)
         requestFirstResponder(tableView)
-    }
-
-    @objc func refreshPermissions() {
-        engine.refreshAccessibilityStatus(prompt: false)
     }
 
     @objc func requestPermission() {
@@ -209,17 +313,32 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         }
     }
 
-    @objc func handleCreateNewNotification() {
-        createSnippet(nil)
-    }
-
     @objc func handleToggleActionsNotification() {
         toggleActionPanel()
     }
 
     @objc func createSnippet(_ sender: Any?) {
+        createSnippet(seededContent: nil, seededName: nil)
+    }
+
+    /// Deliberately a no-op with a status line rather than an empty snippet: the
+    /// user asked to save something specific, and creating a blank draft instead
+    /// looks like the clipboard was captured when it was not.
+    @objc func createSnippetFromClipboard(_ sender: Any?) {
+        guard let text = ClipboardCapture.text else {
+            importExportMessage = "Clipboard has no text to save."
+            return
+        }
+
+        createSnippet(seededContent: text, seededName: nil)
+    }
+
+    func createSnippet(seededContent: String?, seededName: String?) {
         commitActiveEditorState(endingEditing: true)
 
+        // Read the query before clearing it: the search field is the only place
+        // the user has already said what the missing snippet is called.
+        let queryName = nameSeedFromSearchQuery()
         if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             searchField.stringValue = ""
         }
@@ -227,12 +346,63 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         // Adopt the active tag filters so the snippet lands inside the list the
         // user is looking at instead of being created invisible.
         let inheritedTags = activeTagFilterTags()
-        let snippet = store.addSnippet(tags: inheritedTags)
+        // A caller that already knows the name outranks the search query.
+        let name = seededName.flatMap { $0.isEmpty ? nil : $0 } ?? queryName
+
+        // ⌘N with an untouched one already open is the same request twice rather
+        // than a request for a second blank row — the one on screen is exactly
+        // what this would create. Anything seeded is a different request, and
+        // then the untouched draft goes instead of lingering beside the real
+        // snippet the user came here to make.
+        if let draft = store.blankDraftSnippet {
+            if seededContent == nil, name == nil, inheritedTags.isEmpty {
+                reloadVisibleSnippets(keepSelection: true)
+                selectSnippet(id: draft.id, focus: .content)
+                importExportMessage = "Already editing a new snippet."
+                return
+            }
+
+            store.discardBlankDraft(id: draft.id)
+        }
+
+        let snippet = store.addSnippet(name: name ?? "", content: seededContent ?? "", tags: inheritedTags)
+
         reloadVisibleSnippets(keepSelection: true)
-        selectSnippet(id: snippet.id, focusEditorName: true)
+        // With nothing seeded the content box is where the snippet begins;
+        // once text arrives the keyword is the only thing still stopping it
+        // from working.
+        selectSnippet(id: snippet.id, focus: seededContent == nil ? .content : .keyword)
+
+        // Name the snippet in the status line: it is now the fourth field down
+        // and can sit below the fold, so a silently adopted search query would
+        // otherwise be invisible.
+        let subject = name.map { "“\($0)”" } ?? "snippet"
         importExportMessage = inheritedTags.isEmpty
-            ? "Created snippet."
-            : "Created snippet tagged \(inheritedTags.joined(separator: ", "))."
+            ? "Created \(subject)."
+            : "Created \(subject) tagged \(inheritedTags.joined(separator: ", "))."
+    }
+
+    /// The search query, when it can plausibly be a name rather than a filter.
+    ///
+    /// Only when it matched nothing: a query that is still narrowing a visible
+    /// list is being used as a filter, and adopting it would put a name on a
+    /// snippet the user never described. A query that found nothing is the
+    /// opposite — it is the thing that does not exist yet, which is why ⌘N was
+    /// pressed. A leading backslash is dropped because that is how this app
+    /// writes keywords, so "\sig" is someone hunting a keyword, not a name.
+    private func nameSeedFromSearchQuery() -> String? {
+        guard visibleSnippets.isEmpty else { return nil }
+
+        var query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        while query.hasPrefix("\\") {
+            query.removeFirst()
+            query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Past the length a name is ever displayed at, this is someone
+        // searching for a phrase inside snippet bodies.
+        guard !query.isEmpty, query.count <= SeededName.maxLength else { return nil }
+        return query
     }
 
     @objc func deleteSelectedSnippet(_ sender: Any?) {
@@ -252,7 +422,10 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     func editSelectedSnippet() {
         guard selectedSnippet != nil else { return }
         closeActionPanel()
-        requestFirstResponder(nameField)
+        // The content box, not the name field: with the editor content-first the
+        // name is the fourth field down, so "Edit Snippet" was dropping the caret
+        // past everything the user is likely to have opened it to change.
+        requestFirstResponder(snippetTextView)
     }
 
     func duplicateSelectedSnippet() {
@@ -268,7 +441,9 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             importExportMessage = "Duplicated \(duplicate.displayName) and disabled the copy to avoid a duplicate keyword."
         }
         reloadVisibleSnippets(keepSelection: true)
-        selectSnippet(id: duplicate.id, focusEditorName: true)
+        // The copy carries the source's keyword verbatim and was disabled for
+        // exactly that reason, so the keyword is the one field that must change.
+        selectSnippet(id: duplicate.id, focus: .keyword)
         closeActionPanel()
     }
 
@@ -369,6 +544,15 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         panel.message = "Choose a snippets JSON file to import."
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        performImport(from: url)
+    }
+
+    /// Everything after a file has been chosen, so a route that already holds a
+    /// URL does not have to reopen the open panel to reach the Raycast
+    /// migration — today the app's strongest import path is only reachable from
+    /// one menu three levels deep.
+    func performImport(from url: URL) {
+        commitActiveEditorState(endingEditing: true)
 
         var options = SnippetStore.ImportOptions()
 
@@ -387,7 +571,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             importExportMessage = "Imported \(count) snippet(s) from \(url.lastPathComponent)."
             reloadVisibleSnippets(keepSelection: true)
             if selectedSnippetID == nil, let id = visibleSnippets.first?.id {
-                selectSnippet(id: id, focusEditorName: false)
+                selectSnippet(id: id, focus: nil)
             }
             requestFirstResponder(tableView)
         } catch {
@@ -405,6 +589,11 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         panel.message = "Choose where to save your snippets export."
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // A ⌘N draft nobody typed into is not a snippet anyone meant to export,
+        // and abandoning it any other way leaves nothing behind. Discard after
+        // the panel commits, so cancelling the export does not delete the draft.
+        discardOpenBlankDraft()
 
         do {
             let count = try store.exportSnippets(to: url)

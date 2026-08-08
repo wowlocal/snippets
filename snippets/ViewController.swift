@@ -4,7 +4,16 @@ import UniformTypeIdentifiers
 
 private enum MainWindowAutosave {
     static let frameName = NSWindow.FrameAutosaveName("SnippetsMainWindowFrame")
-    static let relaxedMinimumContentSize = NSSize(width: 1, height: 1)
+    /// Keep the width free for the adaptive sidebar rule, but stop vertical
+    /// resizing at the editor's measured no-scroll floor. This is a *frame*
+    /// height: the window converts it to content height after accounting for its
+    /// toolbar and titlebar, which currently take about 72pt.
+    static let minimumContentWidth: CGFloat = 1
+    static let minimumFrameHeight: CGFloat = 430
+    /// First run only. The sidebar takes 0.28 of this and the editor the rest,
+    /// which puts the editor pane at ~700pt — well into its wide shape, and wide
+    /// enough that no string in the form is cut.
+    static let preferredFirstRunContentSize = NSSize(width: 1000, height: 660)
 }
 
 private enum ActionStatusMessage {
@@ -18,6 +27,14 @@ private enum ClipboardPreviewRefresh {
 
 private enum EditorListReload {
     static let delay: TimeInterval = 0.12
+}
+
+/// Passes every click straight through to what is underneath. The status
+/// message floats over the editor for four seconds at a time, and a surface that
+/// eats a click on the Enabled checkbox for being in the way is worse than the
+/// silence it is there to fix.
+private final class StatusMessageOverlayView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 @MainActor
@@ -62,6 +79,11 @@ final class ViewController: NSViewController {
     /// (follow the new list).
     var lastAppliedTagFilterKeys: Set<String>?
     var renderedSuggestedTags: [String] = []
+    var renderedSuggestedKeywords: [String] = []
+    /// Folded keywords of every enabled snippet, so a keyword chip can be tested
+    /// against the whole library with a set walk instead of filtering and
+    /// sorting it again on every keystroke. Only a store change can move it.
+    var enabledKeywordKeys: Set<String> = []
     private var importExportMessageDismissWorkItem: DispatchWorkItem?
     /// Bumped on every status message change so an in-flight dismiss task can
     /// detect it is stale. Text equality is not enough: re-showing the same
@@ -78,10 +100,17 @@ final class ViewController: NSViewController {
         }
     }
 
+    /// The same sentence, over the editor, for when the sidebar footer that
+    /// normally carries it is not on screen. Built here rather than into the
+    /// editor stack because it must not reserve a row: it appears for four
+    /// seconds at a time and the editor is a stack view whose layout is not to
+    /// reflow while someone is typing in it.
+    private let statusMessageOverlayLabel = NSTextField(labelWithString: "")
+    private var statusMessageOverlayView: NSView?
+
     let permissionBannerContainer = NSView()
     let permissionBannerDivider = NSBox()
     let permissionIconView = NSImageView()
-    let permissionTitleLabel = NSTextField(labelWithString: "")
     let permissionStatusLabel = NSTextField(labelWithString: "")
     let permissionButtonsStack = NSStackView()
 
@@ -96,20 +125,40 @@ final class ViewController: NSViewController {
     let listEmptyStateClearButton = NSButton(title: "Clear Filters", target: nil, action: nil)
 
     let nameField = NSTextField(string: "")
-    let snippetTextView = NSTextView()
+    let snippetTextView = SnippetContentTextView()
     let keywordField = NSTextField(string: "")
     let tagsField = NSTokenField(string: "")
     let editorSuggestedTagsFlow = TagFlowView()
+    let editorSuggestedKeywordsFlow = TagFlowView()
     let keywordPrefixLabel = NSTextField(labelWithString: "\\")
-    let keywordWarningLabel = NSTextField(labelWithString: "")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")
-    let previewSeparator = NSBox()
     let previewSectionStack = NSStackView()
+
+    let editorStack = NSStackView()
+    /// The editor form, one object per labelled section, in arranged order.
+    /// Keyword, Name and Tags must stay in that relative order — the hand-wired
+    /// tab loop in `editorNeighbor` walks it.
+    var editorSections: [EditorFormSection] = []
+
     let mainSplitViewController = NSSplitViewController()
     var mainSplitView: NSSplitView { mainSplitViewController.splitView }
     var mainSidebarSplitItem: NSSplitViewItem?
     var mainContentSplitItem: NSSplitViewItem?
+
+    /// The sidebar is hidden because the *window* is narrow, not because anyone
+    /// asked for it. Never persisted: it is recomputed from the restored window
+    /// width at launch, so a narrow window opens collapsed, a wide one does not,
+    /// and nothing is written either way.
+    var isSidebarAutoCollapsed = false
+    /// The user pressed ⌘B to *show* the sidebar at a width where the rule would
+    /// immediately hide it again. Stands the rule down until the window is back
+    /// in the wide regime, where automatic behaviour is unsurprising again.
+    var isAutomaticSidebarCollapseSuppressed = false
+    /// True while an automatic collapse or expand is being laid out, so
+    /// `handleMainSplitViewDidResize` can tell the app's own doing from the
+    /// user's and persist only theirs.
+    var isApplyingAutomaticSidebarCollapse = false
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSView()
@@ -125,19 +174,17 @@ final class ViewController: NSViewController {
     var hasConfiguredWindowFrameAutosave = false
     var hasConfiguredMainWindowToolbar = false
     var hasRestoredSplitViewDivider = false
+    var hasObservedWindowResize = false
+    private var hasObservedWindowWillClose = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
         buildUI()
+        buildStatusMessageOverlay()
         bindState()
+        configureSnippetDropTarget()
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleCreateNewNotification),
-            name: .snippetsCreateNew,
-            object: nil
-        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleToggleActionsNotification),
@@ -150,13 +197,33 @@ final class ViewController: NSViewController {
             name: .snippetsPaleThemeChanged,
             object: nil
         )
+        // Quitting does not have to close the window, so `viewWillDisappear` is
+        // not guaranteed to run: ⌘N, type nothing, ⌘Q has to leave snippets.json
+        // as it was, and this is the last point at which that is still possible.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleApplicationWillTerminate),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
+        // The permission banner used to carry a Refresh button because nothing
+        // re-checked the grant: `refreshAccessibilityStatus` ran at startup and
+        // nowhere else. Granting access means leaving for System Settings and
+        // coming back, so coming back is the moment to look again — and the
+        // banner then removes itself instead of waiting to be told.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleApplicationDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
 
         engine.startIfNeeded()
         startClipboardPreviewRefreshTimerIfNeeded()
         loadPersistedTagFilters()
         reloadVisibleSnippets(keepSelection: false)
         if let firstID = visibleSnippets.first?.id {
-            selectSnippet(id: firstID, focusEditorName: false)
+            selectSnippet(id: firstID, focus: nil)
         } else {
             applySelectedSnippetToEditor()
         }
@@ -167,15 +234,42 @@ final class ViewController: NSViewController {
 
         if let window = view.window {
             configureMainWindowChrome(window)
-            relaxWindowResizeLimits(window)
+            applyMainWindowResizeLimits(window)
 
             if !hasConfiguredWindowFrameAutosave {
                 hasConfiguredWindowFrameAutosave = true
                 let restoredFromAutosave = window.setFrameAutosaveName(MainWindowAutosave.frameName)
                 if !restoredFromAutosave {
+                    // Only when there is nothing stored, so an existing user's
+                    // window is left exactly where they put it.
+                    //
+                    // The storyboard's 480×270 is upstream of nearly every
+                    // truncation this app had: the split view's own minimums
+                    // force it out to ~491pt, which puts the editor at its 230pt
+                    // floor and the form at 182pt, and 270pt of height against a
+                    // 500pt form means a new user's first screen is a fragment.
+                    // At this size the form is in its wide shape from the start
+                    // and every string in it fits.
+                    window.setContentSize(defaultMainWindowContentSize(on: window.screen))
                     window.center()
                 }
             }
+
+            if !hasObservedWindowWillClose {
+                hasObservedWindowWillClose = true
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(handleWindowWillClose),
+                    name: NSWindow.willCloseNotification,
+                    object: window
+                )
+            }
+
+            observeWindowResizeForAdaptiveSidebar(window)
+            // Once, here, after the autosaved frame has been restored above — the
+            // width rule has to see the window the user actually gets.
+            view.layoutSubtreeIfNeeded()
+            evaluateAutomaticSidebarCollapse()
         }
 
         installKeyboardMonitorIfNeeded()
@@ -187,12 +281,49 @@ final class ViewController: NSViewController {
         requestFirstResponder(tableView)
     }
 
+    /// Closing the window is the only way out of it that means the user is done
+    /// with what was open.
+    ///
+    /// `viewWillDisappear` looks like the place for this and is not: AppKit sends
+    /// it for every trip off screen, so ⌘H, ⌘M, the yellow button and this app's
+    /// own ⌘\ round trip each took back the snippet the user had just made and
+    /// left the editor bound to an unrelated one on the way back in. Nothing
+    /// inside that callback tells the four apart — the window still reports
+    /// `isVisible` for all of them, close included — while this notification is
+    /// posted on a close and on nothing else.
+    @objc private func handleWindowWillClose() {
+        discardOpenBlankDraft()
+    }
+
+    @objc private func handleApplicationWillTerminate() {
+        discardOpenBlankDraft()
+    }
+
+    @objc private func handleApplicationDidBecomeActive() {
+        guard !engine.accessibilityGranted else { return }
+        engine.refreshAccessibilityStatus(prompt: false)
+    }
+
+    /// 1000×660 wants a 1152pt-class display to centre comfortably, so it is
+    /// clamped to whatever the screen actually has rather than opening off the
+    /// edge of a small laptop.
+    private func defaultMainWindowContentSize(on screen: NSScreen?) -> NSSize {
+        guard let visible = (screen ?? NSScreen.main)?.visibleFrame else {
+            return MainWindowAutosave.preferredFirstRunContentSize
+        }
+        return NSSize(
+            width: min(MainWindowAutosave.preferredFirstRunContentSize.width, visible.width - 80),
+            height: min(MainWindowAutosave.preferredFirstRunContentSize.height, visible.height - 80)
+        )
+    }
+
     override func viewDidLayout() {
         super.viewDidLayout()
         if let window = view.window {
-            relaxWindowResizeLimits(window)
+            applyMainWindowResizeLimits(window)
         }
         restoreMainSplitViewDividerIfNeeded()
+
         updateSnippetTextViewWrappingWidth()
         updateSearchSuggestionOverlayLayout()
     }
@@ -211,8 +342,13 @@ final class ViewController: NSViewController {
     }
 
     func bindState() {
+        rebuildEnabledKeywordKeys()
         store.onChange = { [weak self] source in
             guard let self else { return }
+            // Ahead of the early return below: a local edit while the editor has
+            // focus is precisely when a keyword moves, and the suggestion chips
+            // are filtered against this on that same keystroke.
+            rebuildEnabledKeywordKeys()
             if source == .local && isEditingDetails {
                 scheduleEditorListReload()
                 return
@@ -233,6 +369,15 @@ final class ViewController: NSViewController {
                 importExportMessage = engine.statusText
             }
         }
+    }
+
+    private func rebuildEnabledKeywordKeys() {
+        enabledKeywordKeys = Set(
+            store.snippets.lazy
+                .filter(\.isEnabled)
+                .map { SnippetTagging.filterKey(for: $0.normalizedKeyword) }
+                .filter { !$0.isEmpty }
+        )
     }
 
     func scheduleEditorListReload() {
@@ -278,11 +423,100 @@ final class ViewController: NSViewController {
         updatePreview(withTemplate: template)
     }
 
-    private func relaxWindowResizeLimits(_ window: NSWindow) {
-        window.contentMinSize = MainWindowAutosave.relaxedMinimumContentSize
+    private func applyMainWindowResizeLimits(_ window: NSWindow) {
+        let decorationHeight = window.frameRect(
+            forContentRect: NSRect(
+                origin: .zero,
+                size: NSSize(width: MainWindowAutosave.minimumContentWidth, height: 0)
+            )
+        ).height
+        let minimumContentSize = NSSize(
+            width: MainWindowAutosave.minimumContentWidth,
+            height: max(1, MainWindowAutosave.minimumFrameHeight - decorationHeight)
+        )
+
+        window.contentMinSize = minimumContentSize
         window.minSize = window.frameRect(
-            forContentRect: NSRect(origin: .zero, size: MainWindowAutosave.relaxedMinimumContentSize)
+            forContentRect: NSRect(origin: .zero, size: minimumContentSize)
         ).size
+    }
+
+    private func buildStatusMessageOverlay() {
+        statusMessageOverlayLabel.font = .systemFont(ofSize: 12)
+        statusMessageOverlayLabel.textColor = .labelColor
+        statusMessageOverlayLabel.alignment = .center
+        statusMessageOverlayLabel.lineBreakMode = .byTruncatingTail
+        statusMessageOverlayLabel.maximumNumberOfLines = 1
+        statusMessageOverlayLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(statusMessageOverlayLabel)
+
+        let surface = LiquidGlassDesign.makeTransientSurface(
+            containing: contentView,
+            cornerRadius: LiquidGlassDesign.Metrics.controlCornerRadius,
+            fallbackMaterial: .popover
+        )
+
+        let container = StatusMessageOverlayView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.isHidden = true
+        container.alphaValue = 0
+        container.addSubview(surface)
+        view.addSubview(container)
+        statusMessageOverlayView = container
+
+        NSLayoutConstraint.activate([
+            statusMessageOverlayLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            statusMessageOverlayLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
+            statusMessageOverlayLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 7),
+            statusMessageOverlayLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -7),
+
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            container.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            container.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            container.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20)
+        ])
+    }
+
+    /// `importExportMessageLabel` is the only surface this app has for a status
+    /// message and it sits in the sidebar footer, which ⌘B removes from the
+    /// window outright. Everything routed through here was therefore invisible
+    /// with the sidebar collapsed — including the one sentence ⇧⌘N exists to say
+    /// when the clipboard holds no text, which left a command the user explicitly
+    /// invoked with no observable effect at all.
+    private func presentStatusMessageOverlay(_ message: String?) {
+        guard let statusMessageOverlayView else { return }
+
+        guard let message, !message.isEmpty, isSidebarCollapsed else {
+            statusMessageOverlayView.isHidden = true
+            statusMessageOverlayView.alphaValue = 0
+            return
+        }
+
+        statusMessageOverlayLabel.stringValue = message
+        statusMessageOverlayView.isHidden = false
+        // Through the animator, like the label below: a message re-shown during
+        // the previous one's fade has an animation in flight, and assigning
+        // `alphaValue` directly would be overwritten by it.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            statusMessageOverlayView.animator().alphaValue = 1
+        }
+    }
+
+    /// The sidebar moved out from under a message that is already on screen.
+    /// `presentStatusMessageOverlay` chooses between the sidebar footer and the
+    /// overlay at the moment a message is *set*, so a collapse or expand under a
+    /// live message has to ask it again.
+    func refreshStatusMessagePresentation() {
+        presentStatusMessageOverlay(importExportMessage)
     }
 
     private func updateImportExportMessageLabel(from oldValue: String?, to newValue: String?) {
@@ -290,6 +524,8 @@ final class ViewController: NSViewController {
         let generation = importExportMessageGeneration
         importExportMessageDismissWorkItem?.cancel()
         importExportMessageDismissWorkItem = nil
+
+        presentStatusMessageOverlay(newValue)
 
         guard let newValue, !newValue.isEmpty else {
             importExportMessageLabel.stringValue = ""
@@ -309,6 +545,7 @@ final class ViewController: NSViewController {
                 await NSAnimationContext.runAnimationGroup { context in
                     context.duration = ActionStatusMessage.fadeDuration
                     self.importExportMessageLabel.animator().alphaValue = 0
+                    self.statusMessageOverlayView?.animator().alphaValue = 0
                 }
                 guard self.importExportMessageGeneration == generation else { return }
                 self.importExportMessageDismissWorkItem = nil
@@ -336,7 +573,10 @@ final class ViewController: NSViewController {
 
     func applyThemeColors() {
         ThemeManager.applyToggleAppearance(to: enabledCheckbox)
-        keywordWarningLabel.textColor = ThemeManager.alertColor
+        // The status line is alert-coloured only when it is reporting a failure,
+        // so repainting it wholesale here made a neutral or valid sentence read
+        // as an alarm until the next keystroke fixed it.
+        updateKeywordStatus(for: editingSnippet)
         updatePermissionBanner()
 
         if let window = view.window, hasConfiguredMainWindowToolbar {

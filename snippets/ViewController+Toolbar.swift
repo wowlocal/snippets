@@ -108,7 +108,10 @@ extension ViewController: NSToolbarDelegate {
             configureMoreToolbarItem(item)
             item.image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 14, weight: .regular)
             item.menu = makeMoreMenu()
-            item.showsIndicator = true
+            // Off, to match the Liquid Glass path above, which no longer draws a
+            // chevron beside the ellipsis. Its own indicator would otherwise make
+            // the fallback appearance the only one with two glyphs.
+            item.showsIndicator = false
             item.isBordered = true
             return item
 
@@ -130,7 +133,11 @@ extension ViewController: NSToolbarDelegate {
     }
 
     private func configureToolbarSearchField() {
-        searchField.placeholderString = "Search snippets"
+        // "snippets" was the second redundant naming of the same thing on one
+        // control: it is an NSSearchField, with a magnifier inside it, in an app
+        // whose entire content is snippets. The toolbar item's own label and
+        // tooltip still say "Search Snippets".
+        searchField.placeholderString = "Search"
         searchField.delegate = self
         searchField.controlSize = .regular
         searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -161,31 +168,17 @@ extension ViewController: NSToolbarDelegate {
             button.bezelStyle = .rounded
         }
 
-        let ellipsisView = NSImageView(image: LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 18, weight: .medium) ?? NSImage())
-        let chevronView = NSImageView(image: LiquidGlassDesign.symbol("chevron.down", pointSize: 9, weight: .semibold) ?? NSImage())
-        [ellipsisView, chevronView].forEach {
-            $0.translatesAutoresizingMaskIntoConstraints = false
-            $0.contentTintColor = .labelColor
-            $0.symbolConfiguration = .init(hierarchicalColor: .labelColor)
-        }
-
-        let imageStack = NSStackView(views: [ellipsisView, chevronView])
-        imageStack.translatesAutoresizingMaskIntoConstraints = false
-        imageStack.orientation = .horizontal
-        imageStack.alignment = .centerY
-        imageStack.spacing = 6
-        imageStack.distribution = .gravityAreas
-        button.addSubview(imageStack)
+        // One glyph, not two. `ellipsis.circle` already means "more, on click"
+        // everywhere in macOS, so the chevron beside it was the same statement
+        // made twice — and the 48×36 pill it needed was the only non-square item
+        // in a four-item toolbar, which is what made the row read as uneven.
+        button.imagePosition = .imageOnly
+        button.image = LiquidGlassDesign.symbol("ellipsis.circle", pointSize: 18, weight: .medium)
+        button.contentTintColor = .labelColor
 
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 48),
-            button.heightAnchor.constraint(equalToConstant: 36),
-            imageStack.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-            imageStack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            ellipsisView.widthAnchor.constraint(equalToConstant: 22),
-            ellipsisView.heightAnchor.constraint(equalToConstant: 22),
-            chevronView.widthAnchor.constraint(equalToConstant: 9),
-            chevronView.heightAnchor.constraint(equalToConstant: 9)
+            button.widthAnchor.constraint(equalToConstant: 36),
+            button.heightAnchor.constraint(equalToConstant: 36)
         ])
 
         return button

@@ -1,14 +1,93 @@
 import AppKit
 
-private final class DotView: NSView {
+/// Not file-private: the search overlay's rows carry the same three states and
+/// used to draw them with a copy of this class that only knew two.
+final class DotView: NSView {
+    /// A ring rather than a second fill colour, because the dot has to carry three
+    /// states and colour alone cannot: the pale theme collapses `snippetDotColor`,
+    /// `pinColor` and `alertColor` all onto `.secondaryLabelColor`, which is also
+    /// the disabled fill. Shape survives that, survives dark mode, and survives
+    /// colour blindness.
+    enum Style {
+        case filled
+        case ring
+    }
+
+    var style: Style = .filled {
+        didSet { needsDisplay = true }
+    }
+
     var color: NSColor = .secondaryLabelColor {
         didSet { needsDisplay = true }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        color.setFill()
-        NSBezierPath(ovalIn: bounds).fill()
+        switch style {
+        case .filled:
+            color.setFill()
+            NSBezierPath(ovalIn: bounds).fill()
+        case .ring:
+            let lineWidth: CGFloat = 2
+            let path = NSBezierPath(ovalIn: bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2))
+            path.lineWidth = lineWidth
+            color.setStroke()
+            path.stroke()
+        }
     }
+}
+
+/// Everything a row says about whether a snippet will expand at all.
+///
+/// `SnippetStore` and `SnippetExpansionEngine` both skip a snippet with no
+/// keyword, so "switched off" and "no keyword" are two separate dead states —
+/// and a snippet can be in both at once, which is why this keeps the two facts
+/// instead of collapsing them into one three-way enum.
+///
+/// The library list and the search overlay draw this same answer in their own
+/// fonts and layouts. Deciding it in one place is what stops them drifting: the
+/// overlay carried a transcribed copy of the list's rules and so kept every bug
+/// they had long after the list was fixed.
+struct SnippetRowStatus {
+    let isEnabled: Bool
+    let keyword: String
+
+    private init(isEnabled: Bool, keyword: String) {
+        self.isEnabled = isEnabled
+        self.keyword = keyword
+    }
+
+    init(_ snippet: Snippet) {
+        self.init(isEnabled: snippet.isEnabled, keyword: snippet.normalizedKeyword)
+    }
+
+    /// Stand-in for a cell nothing has configured yet. Only its colours are ever
+    /// read, and only if AppKit flips `backgroundStyle` before the first row.
+    static let unconfigured = SnippetRowStatus(isEnabled: true, keyword: "")
+
+    var hasKeyword: Bool { !keyword.isEmpty }
+
+    /// Spelled out rather than hidden: a keyword-less snippet never expands, and
+    /// a blank slot said nothing about why. It also gives that state a text form —
+    /// the dot beside it is a plain view VoiceOver has nothing to say about.
+    var keywordText: String { hasKeyword ? "\\\(keyword)" : "No keyword" }
+
+    var dotStyle: DotView.Style { isEnabled && !hasKeyword ? .ring : .filled }
+
+    var dotColor: NSColor {
+        guard isEnabled else { return .secondaryLabelColor }
+        return hasKeyword ? ThemeManager.snippetDotColor : ThemeManager.alertColor
+    }
+
+    var nameColor: NSColor { isEnabled ? .labelColor : .secondaryLabelColor }
+
+    /// Matches the ring the dot draws for the same state; a disabled snippet
+    /// keeps the muted colour because "off" is the failure that applies there.
+    var keywordColor: NSColor {
+        guard isEnabled else { return .tertiaryLabelColor }
+        return hasKeyword ? .secondaryLabelColor : ThemeManager.alertColor
+    }
+
+    var previewColor: NSColor { isEnabled ? .secondaryLabelColor : .tertiaryLabelColor }
 }
 
 final class SnippetRowCellView: NSTableCellView {
@@ -18,7 +97,7 @@ final class SnippetRowCellView: NSTableCellView {
     private let keywordLabel = NSTextField(labelWithString: "")
     private let contentPreviewLabel = NSTextField(labelWithString: "")
     private let tagChipsStack = NSStackView()
-    private var isDisabledSnippet = false
+    private var status = SnippetRowStatus.unconfigured
     private var renderedTagState: (tags: [String], muted: Bool)?
     private static let maxVisibleTagChips = 3
 
@@ -106,20 +185,21 @@ final class SnippetRowCellView: NSTableCellView {
     }
 
     func configure(with snippet: Snippet) {
-        isDisabledSnippet = !snippet.isEnabled
+        status = SnippetRowStatus(snippet)
 
         nameLabel.stringValue = snippet.displayName
+        keywordLabel.stringValue = status.keywordText
+        keywordLabel.isHidden = false
 
-        let keyword = snippet.normalizedKeyword
-        keywordLabel.stringValue = keyword.isEmpty ? "" : "\\\(keyword)"
-        keywordLabel.isHidden = keyword.isEmpty
-
-        let preview = snippet.content
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: .newlines)
-            .first ?? ""
+        // Uncut: the label truncates at the row's own edge, so a count decided
+        // up front would leave the "…" mid-row with empty space after it on any
+        // sidebar wider than the minimum.
+        let preview = snippet.contentFirstLineUntruncated
         contentPreviewLabel.stringValue = preview
-        contentPreviewLabel.isHidden = preview.isEmpty
+        // With no name the title above is already this exact line; printing it
+        // twice in one row reads as a rendering bug.
+        let hasName = !snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        contentPreviewLabel.isHidden = preview.isEmpty || !hasName
 
         updateTagChips(tags: snippet.tags, muted: !snippet.isEnabled)
 
@@ -130,7 +210,8 @@ final class SnippetRowCellView: NSTableCellView {
         } else {
             dotView.isHidden = false
             pinView.isHidden = true
-            dotView.color = snippet.isEnabled ? ThemeManager.snippetDotColor : .secondaryLabelColor
+            dotView.style = status.dotStyle
+            dotView.color = status.dotColor
         }
 
         applyTextColors()
@@ -155,15 +236,9 @@ final class SnippetRowCellView: NSTableCellView {
     }
 
     private func applyTextColors() {
-        if isDisabledSnippet {
-            nameLabel.textColor = .secondaryLabelColor
-            keywordLabel.textColor = .tertiaryLabelColor
-            contentPreviewLabel.textColor = .tertiaryLabelColor
-        } else {
-            nameLabel.textColor = .labelColor
-            keywordLabel.textColor = .secondaryLabelColor
-            contentPreviewLabel.textColor = .secondaryLabelColor
-        }
+        nameLabel.textColor = status.nameColor
+        keywordLabel.textColor = status.keywordColor
+        contentPreviewLabel.textColor = status.previewColor
     }
 }
 

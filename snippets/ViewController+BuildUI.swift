@@ -1,17 +1,88 @@
 import AppKit
 
-private enum MainLayoutMetrics {
+enum MainLayoutMetrics {
     static let sidebarMinWidth: CGFloat = 260
     static let sidebarMaxWidth: CGFloat = 520
     static let sidebarPreferredFraction: CGFloat = 0.28
     static let editorMinWidth: CGFloat = 230
-    static let editorComfortWidth: CGFloat = 520
     static let editorHorizontalPadding: CGFloat = 24
     static let previewMaxHeight: CGFloat = 150
-    static let minimumInlineSidebarWidth: CGFloat = 300
-    static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
+    /// AppKit's own responsive-sidebar mechanism, deliberately disarmed — see
+    /// `buildUI` for why the app runs the rule itself instead.
+    static let minimumInlineSidebarWidth: CGFloat = 0
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
     static let sidebarCollapsedDefaultsKey = "SnippetsMainSidebarCollapsed"
+
+    /// Window content width below which the sidebar takes itself out of the way.
+    ///
+    /// The sidebar is 268pt at its narrowest (260pt pane plus the 8pt Liquid
+    /// Glass inset), the editor pane is the rest, and the form inside it is 48pt
+    /// narrower again. At 680 that leaves a 40-column content box in the 14pt
+    /// monospaced font — and the box wraps `.byCharWrapping`, so below that it
+    /// stops breaking at spaces and starts breaking inside URLs and
+    /// `{placeholders}`. Under 680 the sidebar costs more than it gives.
+    static let sidebarAutoCollapseWidth: CGFloat = 680
+
+    /// …and the width at which it comes back. 140pt above the collapse width, not
+    /// equal to it: a single threshold flips on hand-wobble — measured 34 times
+    /// over 200 samples of ±6pt jitter versus once with this band. The rule reads
+    /// the *window's* width, never the editor's, so the band only has to absorb
+    /// input jitter rather than the 268pt step collapsing puts through the
+    /// editor.
+    static let sidebarAutoExpandWidth: CGFloat = 820
+
+    /// Enough that the editor can never be laid out at zero height. Without it,
+    /// dragging the window small enough reaches a state where the split view,
+    /// both panes and the editor's scroll view are all 0pt tall and only the
+    /// permission banner is on screen.
+    static let splitViewMinimumHeight: CGFloat = 120
+}
+
+/// The editor's vertical give. The content box is the only view in the form with
+/// a scroller of its own, so it is the only one that can lose height for free —
+/// these numbers make it the view that yields, and make it yield first.
+enum EditorVerticalMetrics {
+    /// Four lines of the 14pt monospaced font: `defaultLineHeight` measures 17.0
+    /// for it and `textContainerInset` is 8pt top and bottom, so 4 * 17 + 16 = 84.
+    /// Three lines is 67 and one is 33; four is the smallest box in which a
+    /// paragraph still has a shape and the caret has a line above and below it.
+    /// The cost is exactly linear — every point here is a point of minimum window
+    /// height — so 67 would buy 17pt of window and 50 would buy 34.
+    static let contentBoxMinimumHeight: CGFloat = 84
+
+    /// What the box asks for when there is room. Optional, so it is the first
+    /// thing in the whole editor that the layout gives up.
+    static let contentBoxPreferredHeight: CGFloat = 220
+    static let contentBoxPreferredPriority = NSLayoutConstraint.Priority(200)
+
+    /// Strictly below `windowSizeStayPut`, and that is the whole trick.
+    ///
+    /// The constraint this carries is `document height == viewport height`, whose
+    /// `<=` half reads "the viewport must be at least as tall as the form" — and
+    /// at or above 500 the layout engine happily satisfies that by *growing the
+    /// window*. Measured: asking a 300pt window for this at 700, 510 and 500 got
+    /// back 479, 479 and 373; at 490 and below the window stayed exactly where it
+    /// was put. 20 under keeps clear of all three of AppKit's window-drag
+    /// priorities (490 / 500 / 510) rather than tying with the lowest.
+    ///
+    /// Anyone tempted to raise this "so it works better" will silently break
+    /// window resizing instead: there is no constraint log for it, just a window
+    /// that will not get small.
+    static let editorFitsViewportPriority = NSLayoutConstraint.Priority(
+        rawValue: NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 20
+    )
+
+    /// Above `editorFitsViewportPriority`, so the preview keeps its lines.
+    ///
+    /// It used to be `.defaultLow`, which is below the viewport pull, so between
+    /// roughly 560 and 640pt of window height the form took its next 100pt out of
+    /// the preview while the box sat parked on its floor. The preview is a
+    /// wrapping label with no scroller of its own, so those lines were not
+    /// scrolled out of reach, they were gone — and showing what will actually be
+    /// pasted is the preview's entire job. It is still bounded by
+    /// `previewMaxHeight` and its own 8-line cap; past that the outer scroller
+    /// takes over, which is recoverable.
+    static let previewKeepsItsLinesPriority = NSLayoutConstraint.Priority.defaultHigh
 }
 
 private struct ActionShortcutDescriptor {
@@ -20,13 +91,33 @@ private struct ActionShortcutDescriptor {
     let isEssential: Bool
 }
 
+/// An action the list's empty state can offer. The raw values are view tags, so
+/// none of them may be 0 — that is every untagged view in the stack.
+enum ListEmptyStateAction: Int {
+    case newSnippet = 1
+    case newFromClipboard = 2
+    case importSnippets = 3
+}
+
 private enum ActionPanelContent {
     static let shortcuts: [ActionShortcutDescriptor] = [
+        // The mechanic the whole app exists for led this list nowhere: a user
+        // could read every row and still not know a snippet is typed, not clicked.
+        ActionShortcutDescriptor(title: "Expand a Snippet", shortcut: "\\keyword", isEssential: true),
+        // Beside it, because the two typed-syntax rows belong together. This is
+        // where the placeholder vocabulary is written down now that the list of
+        // tokens no longer sits permanently under the content box; the tokens
+        // themselves are offered by completion the moment a `{` is typed.
+        ActionShortcutDescriptor(title: "Insert a Placeholder", shortcut: "{", isEssential: true),
         ActionShortcutDescriptor(title: "Copy Snippet", shortcut: "↩", isEssential: true),
         ActionShortcutDescriptor(title: "Paste Snippet", shortcut: "⌘↩", isEssential: true),
         ActionShortcutDescriptor(title: "Search", shortcut: "⌘F", isEssential: true),
         ActionShortcutDescriptor(title: "Toggle Sidebar", shortcut: "⌘B", isEssential: true),
         ActionShortcutDescriptor(title: "Create New Snippet", shortcut: "⌘N", isEssential: true),
+        // Beside ⌘N, where the File menu also puts it: this panel is where the
+        // app's shortcuts are written down, and a list that promises all of them
+        // and omits the clipboard capture reads as "there isn't one".
+        ActionShortcutDescriptor(title: "New from Clipboard", shortcut: "⇧⌘N", isEssential: true),
         ActionShortcutDescriptor(title: "Edit Snippet", shortcut: "⌘E", isEssential: true),
         ActionShortcutDescriptor(title: "Delete Snippet", shortcut: "⌘⌫", isEssential: true),
         ActionShortcutDescriptor(title: "Copy Share Link", shortcut: "⇧⌘C", isEssential: false),
@@ -38,11 +129,23 @@ private enum ActionPanelContent {
         ActionShortcutDescriptor(title: "Toggle Shortcuts", shortcut: "⌘K", isEssential: false),
         ActionShortcutDescriptor(title: "Next Snippet", shortcut: "⌃N", isEssential: false),
         ActionShortcutDescriptor(title: "Previous Snippet", shortcut: "⌃P", isEssential: false),
-        ActionShortcutDescriptor(title: "Dismiss Panel", shortcut: "esc", isEssential: false)
+        // Escape is the only way out of the panel, so it cannot be one of the
+        // rows you have to already know about Option to discover.
+        ActionShortcutDescriptor(title: "Dismiss Panel", shortcut: "esc", isEssential: true)
     ]
 
-    static let compactTip = "Hold Option for all keybindings. Esc dismisses."
-    static let expandedTip = "Release Option for essentials. Esc dismisses."
+    // "Esc dismisses." is already a row in the list below, and it is `isEssential`
+    // so it is in the compact list too — the tip line was saying it twice on one
+    // screen. ⌥ rather than "Option" because every other glyph here is a glyph.
+    static let compactTip = "Hold ⌥ for all shortcuts."
+    static let expandedTip = "Release ⌥ for essentials."
+}
+
+/// Editor strings that more than one file has to agree on.
+enum EditorCopy {
+    /// What Name says when there is no content to show the sidebar title from.
+    static let namePlaceholderFallback = "Optional"
+    static let namePlaceholderCharacterLimit = 60
 }
 
 extension ViewController {
@@ -75,6 +178,12 @@ extension ViewController {
         splitView.translatesAutoresizingMaskIntoConstraints = false
         splitView.setContentHuggingPriority(.defaultLow, for: .vertical)
         splitView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        // Low compression resistance is what lets the editor give height back, but
+        // it has no floor of its own, so a small enough window laid the whole
+        // split view out at zero and left only the permission banner on screen.
+        splitView.heightAnchor
+            .constraint(greaterThanOrEqualToConstant: MainLayoutMetrics.splitViewMinimumHeight)
+            .isActive = true
         rootStack.addArrangedSubview(splitView)
 
         NotificationCenter.default.addObserver(
@@ -107,9 +216,24 @@ extension ViewController {
         let managedSplitView = NSSplitView()
         managedSplitView.isVertical = true
         managedSplitView.dividerStyle = .thin
-        managedSplitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
+        // Deliberately no `autosaveName`. NSSplitView's autosave records the
+        // collapsed flag as well as the divider, and it re-applies it on the next
+        // window open *after* the assignment below — so it, not the app, decided
+        // what the sidebar did. Worse, an automatic collapse landed in that store
+        // and came back looking exactly like something the user had chosen: leave
+        // the window narrow once, close it, and the sidebar was pinned hidden at
+        // every width, in that launch and every one after. The app persists both
+        // pieces itself, under its own keys, so there is nothing here to keep and
+        // one fewer source of truth to disagree with.
 
         mainSplitViewController.splitView = managedSplitView
+        // AppKit's own responsive-sidebar mechanism, disarmed. It never fired for
+        // a programmatic resize at any threshold tried, and what it promises is
+        // worse than useless here: it keeps its "I collapsed this" bit private,
+        // so an AppKit collapse is indistinguishable from ⌘B, and its documented
+        // auto-uncollapse would undo a deliberate collapse on every re-widen.
+        // `evaluateAutomaticSidebarCollapse` runs the rule instead, where the two
+        // are kept apart. 0 so the two can never race on `isCollapsed`.
         mainSplitViewController.minimumThicknessForInlineSidebars = MainLayoutMetrics.minimumInlineSidebarWidth
 
         let sidebarController = NSViewController()
@@ -142,7 +266,11 @@ extension ViewController {
 
         mainSidebarSplitItem = sidebarItem
         mainContentSplitItem = contentItem
-        sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
+        // The app's own key, unconditionally, and after `addSplitViewItem`. With
+        // the autosave gone this really is the only thing that decides the
+        // starting state; the width rule runs later, in `viewDidAppear`, once the
+        // restored frame is known.
+        sidebarItem.isCollapsed = userWantsSidebarCollapsed
     }
 
     @objc
@@ -153,14 +281,37 @@ extension ViewController {
         if isSearchSuggestionOverlayVisible {
             updateSearchSuggestionOverlay()
         }
-        storeSidebarCollapsedState(isCollapsed: isSidebarCollapsed)
+        // Only a collapse the user performed — ⌘B, or dragging the divider off
+        // the edge — is a preference. An automatic one is a fact about the window
+        // they happen to be dragging, and persisting it would make one narrow
+        // window a permanent decision no later wide window undoes.
+        if !isApplyingAutomaticSidebarCollapse, !isSidebarAutoCollapsed {
+            storeSidebarCollapsedState(isCollapsed: isSidebarCollapsed)
+        }
 
         guard !isSidebarCollapsed else { return }
-
-        let position = mainSplitView.subviews[0].frame.width
-        guard position.isFinite, position > 0 else { return }
+        guard let position = currentSidebarThickness() else { return }
 
         UserDefaults.standard.set(Double(position), forKey: MainLayoutMetrics.splitViewDividerPositionDefaultsKey)
+    }
+
+    /// The sidebar wrapper's width, i.e. the divider position.
+    ///
+    /// Found by ancestry, not by index. This used to read `subviews[0]`, which is
+    /// the *editor* wrapper on both appearance paths — on the glass path it is
+    /// full-bleed, so the app stored the window's width as the sidebar's, and
+    /// `clampedSidebarWidth` capped it at the 520pt maximum on the way back in.
+    /// Drag the sidebar to 300, get 520 next launch. The split view's subview
+    /// array is several entries of mostly private decoration on macOS 26 and its
+    /// order is not API.
+    func currentSidebarThickness() -> CGFloat? {
+        guard let sidebarView = mainSidebarSplitItem?.viewController.view else { return nil }
+        guard let wrapper = mainSplitView.subviews.first(where: { sidebarView.isDescendant(of: $0) })
+        else { return nil }
+
+        let width = wrapper.frame.width
+        guard width.isFinite, width > 0 else { return nil }
+        return width
     }
 
     func restoreMainSplitViewDividerIfNeeded() {
@@ -177,14 +328,34 @@ extension ViewController {
         let proposedMaximum = mainSplitView.bounds.width - mainSplitView.dividerThickness
         guard proposedMaximum > 0 else { return }
 
+        // Wait for a layout pass where the stored width actually fits, and only
+        // then restore — once, for good. The first `viewDidLayout` runs while the
+        // split view is still at its storyboard width, where a 320pt sidebar
+        // clamps to 269; marking it done there meant the clamped value got
+        // written back over the stored one and the sidebar reset to its minimum
+        // on every launch. Deferring is safe in a way that retrying is not: this
+        // returns without touching the divider, so it can never fight a drag,
+        // and it stops the moment the window is wide enough.
+        guard proposedMaximum - MainLayoutMetrics.editorMinWidth >= CGFloat(storedPosition) else { return }
+
         let clampedPosition = clampedSidebarWidth(in: mainSplitView, proposedWidth: CGFloat(storedPosition))
         mainSplitView.setPosition(clampedPosition, ofDividerAt: 0)
 
         hasRestoredSplitViewDivider = true
     }
 
+    /// Idempotent, because this runs on every split-view resize notification and
+    /// "how many times did the app record a decision the user did not make?" is
+    /// only answerable if a no-op write is not one of them.
     func storeSidebarCollapsedState(isCollapsed: Bool) {
-        UserDefaults.standard.set(isCollapsed, forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
+        let key = MainLayoutMetrics.sidebarCollapsedDefaultsKey
+        guard UserDefaults.standard.bool(forKey: key) != isCollapsed else { return }
+        UserDefaults.standard.set(isCollapsed, forKey: key)
+    }
+
+    /// What the user last asked for, as opposed to what is on screen right now.
+    var userWantsSidebarCollapsed: Bool {
+        UserDefaults.standard.bool(forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
     }
 
     func updateSnippetTextViewWrappingWidth() {
@@ -231,18 +402,33 @@ extension ViewController {
         permissionIconView.translatesAutoresizingMaskIntoConstraints = false
         permissionIconView.widthAnchor.constraint(equalToConstant: 16).isActive = true
 
-        permissionTitleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         permissionStatusLabel.font = .systemFont(ofSize: 13)
         permissionStatusLabel.textColor = .secondaryLabelColor
-        permissionStatusLabel.lineBreakMode = .byTruncatingTail
+        // Two lines rather than one truncated one. This sentence is the only
+        // explanation of why expansion is not working, and at a narrow window a
+        // single line cut it down to about three words.
+        permissionStatusLabel.lineBreakMode = .byWordWrapping
+        permissionStatusLabel.usesSingleLineMode = false
+        permissionStatusLabel.maximumNumberOfLines = 2
+        // This sentence set the whole window's minimum width — and it did it even
+        // with the banner hidden, because the banner is pinned to the root
+        // stack's width whether or not `detachesHiddenViews` has taken it out of
+        // the arrangement. At required resistance no window could be narrower
+        // than the sentence, which is wider than the width the sidebar is
+        // supposed to step aside at, so the rule would have been unreachable.
+        permissionStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refreshPermissions))
+        // No "Refresh": that button existed only because nothing else re-checked
+        // the grant, which made the user do the app's polling by hand. The app
+        // now re-checks whenever it comes forward, which is exactly the moment
+        // someone returns from System Settings. And a bare noun is not a button
+        // title — "Open Accessibility Settings" says what the click does.
         let requestButton = NSButton(title: "Request Permission", target: self, action: #selector(requestPermission))
-        let accessibilityButton = NSButton(title: "Accessibility", target: self, action: #selector(openAccessibilitySettings))
+        let accessibilityButton = NSButton(title: "Open Accessibility Settings", target: self, action: #selector(openAccessibilitySettings))
 
         permissionButtonsStack.orientation = .horizontal
         permissionButtonsStack.spacing = 8
-        [refreshButton, requestButton, accessibilityButton].forEach {
+        [requestButton, accessibilityButton].forEach {
             $0.controlSize = .small
             if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
                 $0.bezelStyle = .glass
@@ -252,7 +438,10 @@ extension ViewController {
             permissionButtonsStack.addArrangedSubview($0)
         }
 
-        let leadingStatusStack = NSStackView(views: [permissionIconView, permissionTitleLabel, permissionStatusLabel])
+        // Icon and sentence, no title. "Permissions Required" in bold alert
+        // colour was immediately followed by a sentence saying the same thing at
+        // greater length, and the triangle already carries the severity.
+        let leadingStatusStack = NSStackView(views: [permissionIconView, permissionStatusLabel])
         leadingStatusStack.orientation = .horizontal
         leadingStatusStack.spacing = 8
         leadingStatusStack.alignment = .centerY
@@ -313,6 +502,12 @@ extension ViewController {
         listEmptyStateView.isHidden = true
         listEmptyStateView.addArrangedSubview(listEmptyStateIconView)
         listEmptyStateView.addArrangedSubview(listEmptyStateLabel)
+        for button in makeListEmptyStateActionButtons() {
+            listEmptyStateView.addArrangedSubview(button)
+            // One column of matching buttons: the sidebar is 260pt at its
+            // narrowest, where "New from Clipboard" alone fills the row.
+            button.widthAnchor.constraint(equalTo: listEmptyStateView.widthAnchor).isActive = true
+        }
         listEmptyStateView.addArrangedSubview(listEmptyStateClearButton)
         listEmptyStateView.setCustomSpacing(12, after: listEmptyStateLabel)
 
@@ -324,6 +519,54 @@ extension ViewController {
             listEmptyStateView.leadingAnchor.constraint(greaterThanOrEqualTo: listContainer.leadingAnchor, constant: 12),
             listEmptyStateView.trailingAnchor.constraint(lessThanOrEqualTo: listContainer.trailingAnchor, constant: -12)
         ])
+    }
+
+    private func makeListEmptyStateActionButtons() -> [NSButton] {
+        [
+            makeListEmptyStateActionButton(
+                title: "New Snippet",
+                action: #selector(createSnippet(_:)),
+                tag: .newSnippet
+            ),
+            makeListEmptyStateActionButton(
+                title: "New from Clipboard",
+                action: #selector(createSnippetFromClipboard(_:)),
+                tag: .newFromClipboard
+            ),
+            // Import is the shortest path from "no snippets" to a full library,
+            // and it lived three levels deep in Menu ▸ More ▸ Import…
+            makeListEmptyStateActionButton(
+                title: "Import…",
+                action: #selector(runImport(_:)),
+                tag: .importSnippets
+            )
+        ]
+    }
+
+    private func makeListEmptyStateActionButton(
+        title: String,
+        action: Selector,
+        tag: ListEmptyStateAction
+    ) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.tag = tag.rawValue
+        button.controlSize = .small
+        if #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance {
+            button.bezelStyle = .glass
+        } else {
+            button.bezelStyle = .rounded
+        }
+        return button
+    }
+
+    /// Shows exactly `actions` in the empty state. The buttons are found by tag
+    /// rather than held: a hidden arranged subview is detached from the stack's
+    /// `subviews`, so `viewWithTag` would stop seeing one the moment it is hidden.
+    func showListEmptyStateActions(_ actions: Set<ListEmptyStateAction>) {
+        for view in listEmptyStateView.arrangedSubviews {
+            guard let action = ListEmptyStateAction(rawValue: view.tag) else { continue }
+            view.isHidden = !actions.contains(action)
+        }
     }
 
     @objc private func clearTagFiltersFromEmptyState() {
@@ -453,25 +696,19 @@ extension ViewController {
         contentView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = contentView
 
-        let stack = NSStackView()
+        let stack = editorStack
         stack.orientation = .vertical
         stack.spacing = 12
         stack.alignment = .leading
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        let nameLabel = NSTextField(labelWithString: "Name")
-        nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        nameLabel.textColor = .secondaryLabelColor
-        nameLabel.alignment = .left
-
         nameField.delegate = self
-        nameField.placeholderString = "Temporary Password"
+        // A demonstration rather than a sentence: with the field empty this
+        // greys out the exact title the sidebar row will use, which is the rule
+        // "first line is used if blank" shown instead of described.
+        // `updateNameFieldPlaceholder` keeps it in step with the content.
+        nameField.placeholderString = EditorCopy.namePlaceholderFallback
         nameField.controlSize = .large
-
-        let snippetLabel = NSTextField(labelWithString: "Snippet")
-        snippetLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        snippetLabel.textColor = .secondaryLabelColor
-        snippetLabel.alignment = .left
 
         let snippetContainer = NSView()
         snippetContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -486,6 +723,11 @@ extension ViewController {
         snippetScrollView.scrollerStyle = .overlay
 
         snippetTextView.delegate = self
+        // "…the text this snippet expands to" was the app's whole mechanic
+        // restated in its most prominent spot on every new snippet forever, and
+        // three wrapped lines of grey at a narrow width. The "Snippet" label
+        // beside the box already names the field.
+        snippetTextView.emptyStatePrompt = "Paste or type"
         snippetTextView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         snippetTextView.textColor = .textColor
         snippetTextView.drawsBackground = false
@@ -496,7 +738,12 @@ extension ViewController {
         snippetTextView.allowsUndo = true
         snippetTextView.isHorizontallyResizable = false
         snippetTextView.autoresizingMask = [.width]
-        snippetTextView.minSize = NSSize(width: 0, height: 220)
+        // Zero, not 220. `minSize` is NSTextView's own floor and Auto Layout
+        // cannot see it, so leaving it at 220 would not stop the box shrinking —
+        // it would only put a 220pt document inside an 84pt viewport the first
+        // time anything called `sizeToFit()`, i.e. an inner scroller over 136pt
+        // of nothing.
+        snippetTextView.minSize = NSSize(width: 0, height: 0)
         snippetTextView.isVerticallyResizable = true
         snippetTextView.textContainerInset = NSSize(width: 8, height: 8)
         snippetTextView.textContainer?.widthTracksTextView = true
@@ -505,7 +752,29 @@ extension ViewController {
 
         snippetScrollView.documentView = snippetTextView
         snippetContainer.addSubview(snippetScrollView)
-        snippetContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        // Two floors, not one. The hard floor is what the box may never go below
+        // at any window size; the preferred floor is what it asks for when there
+        // is room, and is the first thing in the whole editor that the layout
+        // gives up. A single required 220 is why Keyword sat on the window's
+        // bottom edge and Name, Tags and Enabled went under the fold: the box
+        // kept every point it had and the form's overflow went to the outer
+        // scroller instead.
+        snippetContainer.heightAnchor
+            .constraint(greaterThanOrEqualToConstant: EditorVerticalMetrics.contentBoxMinimumHeight)
+            .isActive = true
+
+        let preferredContentBoxHeight = snippetContainer.heightAnchor
+            .constraint(greaterThanOrEqualToConstant: EditorVerticalMetrics.contentBoxPreferredHeight)
+        preferredContentBoxHeight.priority = EditorVerticalMetrics.contentBoxPreferredPriority
+        preferredContentBoxHeight.isActive = true
+
+        // The box is both the grower and the yielder: it takes the slack in a
+        // tall window and gives it back first in a short one. It has no intrinsic
+        // size, so these two state the intent rather than carry it — the explicit
+        // constraints above and the viewport pull in `buildEditor` are the
+        // mechanism.
+        snippetContainer.setContentHuggingPriority(.init(1), for: .vertical)
+        snippetContainer.setContentCompressionResistancePriority(.init(1), for: .vertical)
 
         NSLayoutConstraint.activate([
             snippetScrollView.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
@@ -514,36 +783,26 @@ extension ViewController {
             snippetScrollView.bottomAnchor.constraint(equalTo: snippetContainer.bottomAnchor)
         ])
 
-        let placeholderLabel = NSTextField(labelWithString: "Dynamic placeholders: {clipboard}, {date}, {time}, {datetime}, {date:yyyy-MM-dd}")
-        placeholderLabel.font = .systemFont(ofSize: 12)
-        placeholderLabel.textColor = .secondaryLabelColor
-        placeholderLabel.alignment = .left
-        placeholderLabel.lineBreakMode = .byWordWrapping
-        placeholderLabel.maximumNumberOfLines = 2
-
-        let keywordLabel = NSTextField(labelWithString: "Keyword")
-        keywordLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        keywordLabel.textColor = .secondaryLabelColor
-        keywordLabel.alignment = .left
-
         keywordPrefixLabel.font = .monospacedSystemFont(ofSize: 16, weight: .medium)
         keywordPrefixLabel.textColor = .tertiaryLabelColor
         keywordPrefixLabel.setContentHuggingPriority(.required, for: .horizontal)
         keywordPrefixLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         keywordField.delegate = self
-        keywordField.placeholderString = "tp"
+        keywordField.placeholderString = "sig"
         keywordField.controlSize = .large
 
-        keywordWarningLabel.font = .systemFont(ofSize: 12)
-        keywordWarningLabel.textColor = ThemeManager.alertColor
-        keywordWarningLabel.alignment = .left
-        keywordWarningLabel.isHidden = true
+        // A keyword that cannot expand — empty, duplicated, or in a prefix
+        // collision — says so through the field's own tooltip rather than a line
+        // of prose under it. The sentence was permanent furniture for a state
+        // most snippets are never in, and reserving its row left a gap under
+        // every keyword that was perfectly fine.
 
-        let tagsLabel = NSTextField(labelWithString: "Tags")
-        tagsLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        tagsLabel.textColor = .secondaryLabelColor
-        tagsLabel.alignment = .left
+        // This row does come and go — it exists only
+        // while there is no keyword — so it collapses out of the stack rather
+        // than reserving a gap under every snippet that already works.
+        editorSuggestedKeywordsFlow.collapsedRowLimit = 1
+        editorSuggestedKeywordsFlow.isHidden = true
 
         tagsField.delegate = self
         tagsField.placeholderString = "work, email"
@@ -551,16 +810,15 @@ extension ViewController {
         tagsField.tokenizingCharacterSet = CharacterSet(charactersIn: ",")
         tagsField.completionDelay = 0.2
 
+        // Without a row limit the editor's chips cannot collapse, so eight
+        // suggestions wrap to four rows at the narrow end and push Enabled off
+        // screen on every new snippet. The filter bar has always had this.
+        editorSuggestedTagsFlow.collapsedRowLimit = 1
         editorSuggestedTagsFlow.isHidden = true
 
         enabledCheckbox.target = self
         enabledCheckbox.action = #selector(enabledStateChanged)
         enabledCheckbox.setContentHuggingPriority(.required, for: .horizontal)
-
-        let previewLabel = NSTextField(labelWithString: "Preview")
-        previewLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        previewLabel.textColor = .secondaryLabelColor
-        previewLabel.alignment = .left
 
         let previewContainer = NSView()
         previewContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -571,7 +829,10 @@ extension ViewController {
         previewValueField.maximumNumberOfLines = 8
         previewValueField.allowsDefaultTighteningForTruncation = false
         previewValueField.translatesAutoresizingMaskIntoConstraints = false
-        previewValueField.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        previewValueField.setContentCompressionResistancePriority(
+            EditorVerticalMetrics.previewKeepsItsLinesPriority,
+            for: .vertical
+        )
 
         previewContainer.addSubview(previewValueField)
 
@@ -582,42 +843,62 @@ extension ViewController {
             previewValueField.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor, constant: -8)
         ])
 
-        previewSeparator.boxType = .separator
-        previewSeparator.isHidden = true
-
-        previewSectionStack.orientation = .vertical
-        previewSectionStack.spacing = 8
-        previewSectionStack.alignment = .leading
         previewSectionStack.isHidden = true
-        previewSectionStack.addArrangedSubview(previewLabel)
-        previewSectionStack.addArrangedSubview(previewContainer)
-        previewContainer.widthAnchor.constraint(equalTo: previewSectionStack.widthAnchor).isActive = true
 
         let keywordRow = NSStackView(views: [keywordPrefixLabel, keywordField])
         keywordRow.orientation = .horizontal
         keywordRow.spacing = 2
         keywordRow.alignment = .firstBaseline
 
-        stack.addArrangedSubview(nameLabel)
-        stack.addArrangedSubview(nameField)
-        stack.addArrangedSubview(keywordLabel)
-        stack.addArrangedSubview(keywordRow)
-        stack.addArrangedSubview(keywordWarningLabel)
-        stack.addArrangedSubview(tagsLabel)
-        stack.addArrangedSubview(tagsField)
-        stack.addArrangedSubview(editorSuggestedTagsFlow)
-        stack.addArrangedSubview(enabledCheckbox)
-        stack.addArrangedSubview(snippetLabel)
-        stack.addArrangedSubview(snippetContainer)
-        stack.addArrangedSubview(placeholderLabel)
-        stack.addArrangedSubview(previewSeparator)
-        stack.addArrangedSubview(previewSectionStack)
+        // Content leads: it is the only field a snippet cannot do without, and
+        // the keyword follows because it is the only one that makes it fire.
+        // Name, tags and the enabled toggle are all optional, so they sink.
+        //
+        // Keyword, Name, Tags must stay in this order: `editorNeighbor` in
+        // ViewController+TextEditing.swift is a hand-wired tab loop that walks
+        // exactly this sequence.
+        let snippetSection = EditorFormSection(
+            title: "Snippet",
+            fields: [snippetContainer],
+            labelSpacing: 10
+        )
+        // Reuses the stack the controller already holds, so `updatePreview` goes
+        // on hiding one view and now collapses the label with it.
+        let previewSection = EditorFormSection(
+            title: "Preview",
+            fields: [previewContainer],
+            row: previewSectionStack
+        )
+        let keywordSection = EditorFormSection(
+            title: "Keyword",
+            fields: [keywordRow, editorSuggestedKeywordsFlow],
+            fieldSpacing: 6
+        )
+        let nameSection = EditorFormSection(title: "Name", fields: [nameField])
+        let tagsSection = EditorFormSection(
+            title: "Tags",
+            fields: [tagsField, editorSuggestedTagsFlow],
+            fieldSpacing: 6
+        )
+        // No label of its own — the checkbox states a property rather than
+        // filling a field, and its own title already says which.
+        let enabledSection = EditorFormSection(
+            title: nil,
+            fields: [enabledCheckbox],
+            pinsFieldWidths: false
+        )
+
+        editorSections = [
+            snippetSection, previewSection, keywordSection,
+            nameSection, tagsSection, enabledSection
+        ]
 
         contentView.addSubview(stack)
         container.addSubview(scrollView)
 
-        [nameField, keywordRow, keywordWarningLabel, tagsField, editorSuggestedTagsFlow, snippetContainer, placeholderLabel, previewSeparator, previewSectionStack].forEach {
-            $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        for section in editorSections {
+            stack.addArrangedSubview(section.row)
+            section.row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
 
         previewContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true
@@ -628,13 +909,29 @@ extension ViewController {
         )
         preferredEditorWidth.isActive = true
 
-        stack.setCustomSpacing(8, after: nameLabel)
-        stack.setCustomSpacing(8, after: keywordLabel)
-        stack.setCustomSpacing(4, after: keywordRow)
-        stack.setCustomSpacing(8, after: tagsLabel)
-        stack.setCustomSpacing(6, after: tagsField)
-        stack.setCustomSpacing(10, after: snippetLabel)
-        stack.setCustomSpacing(8, after: previewSeparator)
+        // The preview is a section that comes and goes, so it needs a wider gap
+        // below it than the sections that are always there — otherwise its
+        // arrival and departure shifts Keyword by the same amount as any other
+        // row and it reads as part of the same block.
+        stack.setCustomSpacing(16, after: previewSectionStack)
+
+        // The active half of the vertical fix, and the half that is not obvious.
+        // `contentView.height >= clipView.height` below only ever pushes the
+        // document *up* — it is what lets the box grow into a tall window, and it
+        // is also why lowering the box's floor on its own changes nothing at all:
+        // nothing in this layout asked the form to fit its viewport, so an
+        // optional floor is simply satisfied and the document grows instead.
+        // This is the opposite pull: prefer a form that fits. It outranks the
+        // box's preferred height, so the box compresses; every field's and
+        // label's compression resistance outranks it, so none of them ever does;
+        // and it is below `windowSizeStayPut`, so it can never resize the window
+        // to get its way. When the form genuinely will not fit with the box on
+        // its floor this constraint breaks — silently, which is what optional
+        // means — and the outer scroller takes over as it always did.
+        let editorFitsViewport = contentView.heightAnchor
+            .constraint(equalTo: scrollView.contentView.heightAnchor)
+        editorFitsViewport.priority = EditorVerticalMetrics.editorFitsViewportPriority
+        editorFitsViewport.isActive = true
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.leadingAnchor),
@@ -646,7 +943,17 @@ extension ViewController {
             contentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             contentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
             contentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
-            contentView.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor),
+            // Greater-than, not equal. Pinning the document view's bottom to the
+            // clip view's bottom forced them to the same height, so the editor
+            // could never be taller than its viewport and therefore never
+            // scrolled: measured at a 300pt window, the document, the clip and
+            // the scroll view all reported 546pt and the scroller stayed hidden,
+            // i.e. the bottom of the form was pushed off the window with nothing
+            // offering it back. As an inequality the document still fills a tall
+            // window — which is what lets the content box grow — and grows past a
+            // short one, where the scroller appears. Measured after: document 564
+            // against a 300pt clip, scrollable.
+            contentView.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
 
             stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: MainLayoutMetrics.editorHorizontalPadding),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -MainLayoutMetrics.editorHorizontalPadding),
@@ -668,7 +975,9 @@ extension ViewController {
 
         actionPanelView.translatesAutoresizingMaskIntoConstraints = false
 
-        let actionTitle = NSTextField(labelWithString: "Keyboard Shortcuts")
+        // Not "Keyboard Shortcuts": the first two rows are `\keyword` and `{`,
+        // which are typed syntax rather than keyboard shortcuts.
+        let actionTitle = NSTextField(labelWithString: "Shortcuts")
         actionTitle.font = .actionPanelRoundedSystemFont(ofSize: 18, weight: .semibold)
         actionTitle.alignment = .center
 

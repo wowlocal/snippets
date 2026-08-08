@@ -74,6 +74,7 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         let nextSelectionID = visibleSnippets[row].id
         let didChangeSelection = nextSelectionID != selectedSnippetID
+        let outgoingSnippetID = selectedSnippetID
         selectedSnippetID = nextSelectionID
 
         if didChangeSelection || !isEditingDetails {
@@ -81,6 +82,51 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
         }
 
         deleteButton.isEnabled = true
+
+        // Moving to another row is the editor's other real exit, and like Escape
+        // it commits nothing, so a ⌘N nobody typed into does not survive it.
+        if didChangeSelection {
+            discardBlankDraftAfterLeaving(outgoingSnippetID)
+        }
+    }
+
+    /// Text dropped anywhere on the list becomes a snippet. Registering `.string`
+    /// alone is what makes the list a target at all, and it costs nothing if the
+    /// gesture is never discovered — nothing else drags into this table.
+    func configureSnippetDropTarget() {
+        tableView.registerForDraggedTypes([.string])
+    }
+
+    func tableView(
+        _ tableView: NSTableView,
+        validateDrop info: NSDraggingInfo,
+        proposedRow row: Int,
+        proposedDropOperation dropOperation: NSTableView.DropOperation
+    ) -> NSDragOperation {
+        guard droppedSnippetContent(from: info) != nil else { return [] }
+
+        // Row -1 with `.on` targets the whole table: the drop creates a snippet
+        // rather than landing between two rows, and the list is sorted anyway, so
+        // an insertion point would promise an ordering the drop cannot honour.
+        tableView.setDropRow(-1, dropOperation: .on)
+        return .copy
+    }
+
+    func tableView(
+        _ tableView: NSTableView,
+        acceptDrop info: NSDraggingInfo,
+        row: Int,
+        dropOperation: NSTableView.DropOperation
+    ) -> Bool {
+        guard let content = droppedSnippetContent(from: info) else { return false }
+        createSnippet(seededContent: content, seededName: nil)
+        return true
+    }
+
+    private func droppedSnippetContent(from info: NSDraggingInfo) -> String? {
+        guard let content = info.draggingPasteboard.string(forType: .string),
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return content
     }
 
     func makeSnippetContextMenu(for row: Int) -> NSMenu? {

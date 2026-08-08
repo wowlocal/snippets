@@ -7,7 +7,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         if field == searchField {
             reloadVisibleSnippets(keepSelection: true)
             if selectedSnippetID == nil, let firstID = visibleSnippets.first?.id {
-                selectSnippet(id: firstID, focusEditorName: false)
+                selectSnippet(id: firstID, focus: nil)
             }
             updateSearchSuggestionOverlay()
             return
@@ -21,6 +21,29 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
     func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView, textView === snippetTextView else { return }
         updateSelectedSnippetFromEditor()
+    }
+
+    /// The placeholder vocabulary, offered where it is used. `{` in the content
+    /// editor calls `complete(nil)` and this answers it; `rangeForUserCompletion`
+    /// on the text view is what makes `charRange` start at the brace, so the
+    /// chosen token replaces it rather than landing beside it.
+    func textView(
+        _ textView: NSTextView,
+        completions words: [String],
+        forPartialWordRange charRange: NSRange,
+        indexOfSelectedItem index: UnsafeMutablePointer<Int>?
+    ) -> [String] {
+        guard textView === snippetTextView else { return words }
+
+        let text = textView.string as NSString
+        guard charRange.location + charRange.length <= text.length else { return words }
+        let partial = text.substring(with: charRange)
+        guard partial.hasPrefix("{") else { return words }
+
+        let matches = PlaceholderResolver.completionTokens.filter { $0.hasPrefix(partial) }
+        // Preselected, so Return takes the obvious one and Escape backs out.
+        index?.pointee = matches.isEmpty ? -1 : 0
+        return matches
     }
 
     func controlTextDidBeginEditing(_ obj: Notification) {
@@ -102,7 +125,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
 
     // MARK: - Editor key loop
 
-    /// Explicit tab order for the editor: Name → Keyword → Tags → Snippet, and
+    /// Explicit tab order for the editor: Snippet → Keyword → Name → Tags, and
     /// back again with Shift-Tab. AppKit's automatic key view loop is recomputed
     /// whenever the suggested-tag chips or the filter bar rebuild their
     /// subviews, which kept dropping the multi-line snippet view out of the
@@ -111,16 +134,19 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         guard let forward = tabDirection(for: commandSelector),
               let next = editorNeighbor(of: control, forward: forward) else { return false }
 
-        requestFirstResponder(next)
+        moveFocus(to: next)
         return true
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard textView === snippetTextView,
-              let forward = tabDirection(for: commandSelector) else { return false }
+              let forward = tabDirection(for: commandSelector),
+              let next = editorNeighbor(of: textView, forward: forward) else { return false }
 
         // ⌥⇥ still inserts a literal tab (insertTabIgnoringFieldEditor:).
-        requestFirstResponder(forward ? nameField : tagsField)
+        // Backwards this hop leaves the editor for the list, which is the same
+        // abandonment Escape is, so it goes through the same helper.
+        moveFocus(to: next)
         return true
     }
 
@@ -132,15 +158,21 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         }
     }
 
-    private func editorNeighbor(of control: NSControl, forward: Bool) -> NSResponder? {
-        if control === nameField {
-            return forward ? keywordField : snippetTextView
+    private func editorNeighbor(of responder: NSResponder, forward: Bool) -> NSResponder? {
+        if responder === snippetTextView {
+            // Shift-Tab out of the first field leaves the editor for the list,
+            // the same exit Escape takes. Without it the loop is closed and
+            // Escape is the only way out of it.
+            return forward ? keywordField : tableView
         }
-        if control === keywordField {
-            return forward ? tagsField : nameField
+        if responder === keywordField {
+            return forward ? nameField : snippetTextView
         }
-        if control === tagsField {
-            return forward ? snippetTextView : keywordField
+        if responder === nameField {
+            return forward ? tagsField : keywordField
+        }
+        if responder === tagsField {
+            return forward ? snippetTextView : nameField
         }
         return nil
     }

@@ -64,7 +64,7 @@ extension ViewController {
             } else if isSearchSuggestionOverlayVisible {
                 hideSearchSuggestionOverlay()
             } else {
-                requestFirstResponder(tableView)
+                moveFocus(to: tableView)
             }
             return nil
         }
@@ -85,7 +85,7 @@ extension ViewController {
         }
 
         if flags == [.command] && key == UInt16(kVK_ANSI_F) {
-            requestFirstResponder(searchField)
+            moveFocus(to: searchField)
             DispatchQueue.main.async { [weak self] in
                 self?.updateSearchSuggestionOverlay()
             }

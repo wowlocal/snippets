@@ -34,6 +34,23 @@ final class SnippetStore {
     private var editTransactionNeedsRestart = false
     private let maxUndoLevels = 50
 
+    /// A snippet `addSnippet` created with nothing in it, remembered so a second
+    /// ⌘N can reuse it and so leaving it can take it back out. Creation writes to
+    /// disk before the first keystroke — that is what makes the editor bind to a
+    /// real record at all — so removing it afterwards is the only way an
+    /// abandoned one stays out of snippets.json.
+    ///
+    /// The undo entry the creation pushed is recorded with it. Popping that
+    /// entry blind is not safe: `reloadFromDiskIfNeeded` clears the whole stack,
+    /// and anything the user did since pushed on top of it, so the discard pops
+    /// only while that exact entry is provably still the one on top.
+    private struct BlankDraft {
+        let id: UUID
+        let undoDepth: Int
+        let undoSnapshot: [Snippet]?
+    }
+    private var blankDraft: BlankDraft?
+
     enum ImportExportError: LocalizedError {
         case emptyImport
         case invalidFormat
@@ -89,12 +106,102 @@ final class SnippetStore {
         }
     }
 
-    func addSnippet(tags: [String] = []) -> Snippet {
+    /// `name` is set here rather than by a follow-up `update`: creation pushes
+    /// one undo entry, and a second call to name the new snippet would push
+    /// another, so one ⌘Z would clear the name and only a second would undo the
+    /// creation the user actually asked to take back.
+    func addSnippet(name: String = "", content: String = "", tags: [String] = []) -> Snippet {
         pushUndo()
-        let snippet = Snippet(name: "", keyword: "", content: "", tags: SnippetTagging.normalizedTags(tags))
+        let snippet = Snippet(name: name, keyword: "", content: content, tags: SnippetTagging.normalizedTags(tags))
         snippets.insert(snippet, at: 0)
+        // Only a snippet created with nothing in it is a draft. One seeded from
+        // the clipboard, a Service, a drop, a search query or a tag filter is
+        // already carrying what the user asked to save, and is never taken back.
+        blankDraft = snippet.isBlankDraft
+            ? BlankDraft(id: snippet.id, undoDepth: undoStack.count, undoSnapshot: undoStack.last)
+            : nil
         persist(immediately: true)
         return snippet
+    }
+
+    /// The open blank draft, for as long as it is still blank in every field the
+    /// user can type into.
+    ///
+    /// Recomputed on every read rather than invalidated on edit: "blank" is a
+    /// fact about the snippet, not a mode. A draft typed into and cleared again
+    /// is blank once more, and — the part that matters — nothing holding text
+    /// can ever be handed out here for discarding.
+    var blankDraftSnippet: Snippet? {
+        guard let blankDraft,
+              let snippet = snippet(id: blankDraft.id),
+              snippet.isBlankDraft else { return nil }
+        return snippet
+    }
+
+    /// Removes the blank draft and the traces that would let it come back: the
+    /// undo entry its creation pushed, every other entry still holding it, and an
+    /// open edit transaction whose baseline still contains it —
+    /// `commitEditTransaction` would push that baseline and one ⌘Z would
+    /// resurrect the ghost.
+    ///
+    /// It pushes no undo entry of its own. A row the user never typed into is
+    /// not a change worth being able to take back, and an entry for it would
+    /// restore exactly what this removes.
+    @discardableResult
+    func discardBlankDraft(id: UUID) -> Bool {
+        guard let draft = blankDraft, draft.id == id else { return false }
+        guard let index = snippets.firstIndex(where: { $0.id == id }),
+              snippets[index].isBlankDraft else {
+            blankDraft = nil
+            return false
+        }
+
+        blankDraft = nil
+        snippets.remove(at: index)
+
+        if undoStack.count == draft.undoDepth, undoStack.last == draft.undoSnapshot {
+            undoStack.removeLast()
+        }
+        // Declining that pop is not the end of it. The creation's entry is
+        // rarely the only one holding the draft by the time it is abandoned:
+        // typing into it and clearing it again closes an edit transaction whose
+        // baseline is a library that still contains it, and so does a single
+        // click on Enabled. A row nobody typed into must not be restorable at
+        // any depth, so it comes out of every level rather than only that one.
+        eraseFromHistory(id: id)
+        if editTransactionSnapshot?.contains(where: { $0.id == id }) == true {
+            editTransactionSnapshot = nil
+        }
+
+        persist(immediately: true)
+        return true
+    }
+
+    private func eraseFromHistory(id: UUID) {
+        for index in undoStack.indices {
+            undoStack[index].removeAll { $0.id == id }
+        }
+        for index in redoStack.indices {
+            redoStack[index].removeAll { $0.id == id }
+        }
+        undoStack = withoutDeadLevels(undoStack)
+        redoStack = withoutDeadLevels(redoStack)
+    }
+
+    /// `stack` with every level that erasing the draft turned into a copy of the
+    /// state it would be reached from removed. Restoring a state identical to
+    /// the current one moves nothing on screen while still announcing "Undid
+    /// last change.", so leaving those in place would make the user press ⌘Z
+    /// past one dead level per snapshot the draft appeared in before reaching
+    /// the change they meant to take back.
+    private func withoutDeadLevels(_ stack: [[Snippet]]) -> [[Snippet]] {
+        var kept: [[Snippet]] = []
+        var successor = snippets
+        for level in stack.reversed() where level != successor {
+            kept.append(level)
+            successor = level
+        }
+        return kept.reversed()
     }
 
     func update(_ snippet: Snippet) {
@@ -139,8 +246,13 @@ final class SnippetStore {
 
         let source = snippets[index]
         let shouldDisableDuplicate = source.isEnabled && !source.normalizedKeyword.isEmpty
+        // Derived from `name`, never from `displayName`: an unnamed snippet shows
+        // its first line of content, and freezing that into the stored name would
+        // stop the copy tracking its own content forever. An empty name stays
+        // empty for the same reason — " Copy" on its own is not a name.
+        let sourceName = source.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let duplicate = Snippet(
-            name: source.displayName + " Copy",
+            name: sourceName.isEmpty ? "" : sourceName + " Copy",
             keyword: source.normalizedKeyword,
             content: source.content,
             tags: source.tags,
@@ -343,6 +455,11 @@ final class SnippetStore {
 
     private func load() {
         guard FileManager.default.fileExists(atPath: saveURL.path) else {
+            // Seeding here is why the list's empty state carries no explanation
+            // of how expansion works: a genuinely new user always has this
+            // snippet, so that screen only ever appears to someone who deleted
+            // everything. Remove the seed and the teaching sentence has to come
+            // back with it.
             snippets = [Snippet.starterSnippet]
             persist()
             return
@@ -714,5 +831,18 @@ final class SnippetStore {
         } catch {
             NSLog("Failed to reload snippets: \(error.localizedDescription)")
         }
+    }
+}
+
+private extension Snippet {
+    /// Empty in all four fields the user types into. `isEnabled` and `isPinned`
+    /// are not consulted: neither is something anyone typed, and a new snippet
+    /// arrives enabled without being asked.
+    ///
+    /// Deliberately literal — a single stray space makes this false. Being wrong
+    /// here costs a blank row nobody clears up; being wrong the other way costs
+    /// something somebody wrote.
+    var isBlankDraft: Bool {
+        name.isEmpty && normalizedKeyword.isEmpty && content.isEmpty && tags.isEmpty
     }
 }

@@ -5,7 +5,7 @@ import Sparkle
 #endif
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     enum QuitBehaviorPreference: String, CaseIterable {
         case ask
         case hide
@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
     private weak var statusMenuOpenItem: NSMenuItem?
+    private weak var statusMenuClipboardItem: NSMenuItem?
     private var hotkeyPromotedFromAccessory = false
     private var shouldTerminateForReal = false
     #if !NO_SPARKLE
@@ -121,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         #endif
         setupStatusItem()
         setupGlobalHotkey()
+        setupServicesProvider()
         #if !NO_SPARKLE
         updaterController.updater.automaticallyDownloadsUpdates = true
         #endif
@@ -237,8 +239,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         true
     }
 
+    // Routed through `showMainWindow()` rather than a notification because
+    // `applicationShouldTerminateAfterLastWindowClosed` is false: with the window closed there is
+    // no ViewController listening, so ⌘N used to do nothing at all.
     @IBAction func newDocument(_ sender: Any?) {
-        NotificationCenter.default.post(name: .snippetsCreateNew, object: nil)
+        showMainWindow()?.createSnippet(sender)
+    }
+
+    @IBAction func newSnippetFromClipboard(_ sender: Any?) {
+        showMainWindow()?.createSnippetFromClipboard(sender)
+    }
+
+    /// The Help item used to call `showHelp:`, and this bundle has no
+    /// `CFBundleHelpBookName` and ships no help book, so the only thing it could
+    /// ever produce was the system "Help isn't available" alert. The ⌘K panel is
+    /// where this app's shortcuts are actually written down.
+    @IBAction func showSnippetsHelp(_ sender: Any?) {
+        showMainWindow()
+        NotificationCenter.default.post(name: .snippetsToggleActions, object: nil)
     }
 
     @IBAction func toggleLaunchAtLogin(_ sender: Any?) {
@@ -293,6 +311,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
             return true
         }
+        if menuItem.action == #selector(newSnippetFromClipboard(_:)) {
+            // Only the status-bar copy, whose entire title is a clipboard
+            // preview: with nothing to preview it has nothing to offer. The File
+            // item stays enabled so ⇧⌘N can say why nothing happened rather than
+            // going silently dead.
+            return menuItem !== statusMenuClipboardItem || ClipboardCapture.text != nil
+        }
         if menuItem.action == #selector(resetQuitBehaviorPreference(_:)) {
             let hasRemembered = hasRememberedQuitBehavior
             menuItem.isHidden = !hasRemembered
@@ -313,6 +338,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         #endif
         return true
+    }
+
+    // MARK: - Services
+
+    private func setupServicesProvider() {
+        NSApp.servicesProvider = self
+        // The Services cache is keyed off the bundle's own NSServices, and a
+        // build that has never lived in /Applications is not scanned on its own.
+        // This is what gives the entry a chance to appear without a login cycle.
+        NSUpdateDynamicServices()
+    }
+
+    /// Declared in every Info plist as `NSMessage = makeSnippetFromSelection`.
+    /// The selection arrives as content and not as a name: it is the text the
+    /// snippet has to expand to, and naming a snippet after its own body is what
+    /// `displayName`'s first-line fallback already does for free.
+    @objc func makeSnippetFromSelection(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString>
+    ) {
+        guard let selection = pboard.string(forType: .string),
+              !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            error.pointee = "Select some text to make a snippet from it." as NSString
+            return
+        }
+
+        showMainWindow()?.createSnippet(seededContent: selection, seededName: nil)
     }
 
     // MARK: - Status Bar Item
@@ -340,6 +393,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         LiquidGlassDesign.applyMenuSymbol("macwindow", to: openItem)
         // `setupGlobalHotkey()` runs next and fills in the ⌘\ hint.
         statusMenuOpenItem = openItem
+        let clipboardItem = NSMenuItem(
+            title: "",
+            action: #selector(newSnippetFromClipboard(_:)),
+            keyEquivalent: ""
+        )
+        clipboardItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("doc.on.clipboard", to: clipboardItem)
+        // `menuWillOpen` fills the title in: it carries a preview of what the
+        // clipboard holds right now, which is only knowable at open time.
+        statusMenuClipboardItem = clipboardItem
         let resetQuitBehaviorItem = NSMenuItem(
             title: "Reset Remembered Cmd+Q Choice",
             action: #selector(resetQuitBehaviorPreference(_:)),
@@ -351,11 +414,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         quitItem.target = self
         LiquidGlassDesign.applyMenuSymbol("power", to: quitItem)
 
+        menu.delegate = self
         menu.addItem(openItem)
+        menu.addItem(clipboardItem)
         menu.addItem(.separator())
         menu.addItem(resetQuitBehaviorItem)
         menu.addItem(quitItem)
+        refreshStatusMenuClipboardItem()
         statusItem.menu = menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        refreshStatusMenuClipboardItem()
+    }
+
+    /// The point of the item is that you can see what it would save before you
+    /// pick it — the menu bar is the one surface reachable while the text you
+    /// just copied is still on screen in another app.
+    private func refreshStatusMenuClipboardItem() {
+        guard let clipboardItem = statusMenuClipboardItem else { return }
+
+        guard let preview = ClipboardCapture.text.map(ClipboardCapture.menuPreview(of:)), !preview.isEmpty else {
+            clipboardItem.title = "New from Clipboard"
+            return
+        }
+
+        clipboardItem.title = "New from Clipboard — “\(preview)”"
     }
 
     // MARK: - Global Shortcut
@@ -538,9 +623,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         exportItem.target = self
         LiquidGlassDesign.applyMenuSymbol("square.and.arrow.up", to: exportItem)
 
-        let insertionIndex = fileMenu.items.firstIndex(where: { $0.isSeparatorItem }) ?? fileMenu.items.count
+        // Anchored on Close, and carrying its own separators. This used to point
+        // at the first separator in the menu, and when the dead document commands
+        // went so did both separators — the `?? count` fallback then appended
+        // Import and Export below Close, five items in one undifferentiated
+        // block. Close is an item this menu means to have; a separator is only
+        // ever a consequence of the items around it.
+        let closeIndex = fileMenu.items.firstIndex { $0.action == #selector(NSWindow.performClose(_:)) }
+        let insertionIndex = closeIndex ?? fileMenu.items.count
+        if closeIndex != nil {
+            fileMenu.insertItem(.separator(), at: insertionIndex)
+        }
         fileMenu.insertItem(exportItem, at: insertionIndex)
         fileMenu.insertItem(importItem, at: insertionIndex)
+        if insertionIndex > 0 {
+            fileMenu.insertItem(.separator(), at: insertionIndex)
+        }
     }
 
     @objc private func openFromStatusBar() {
@@ -711,18 +809,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         do {
             let snippet = try SnippetDeepLink.snippet(from: url)
 
+            if SnippetDeepLink.isCreationLink(url) {
+                createSnippetFromDeepLink(snippet, in: viewController)
+                return
+            }
+
             guard confirmImportOfSharedSnippet(snippet) else { return }
 
             let importedSnippet = try store.importSharedSnippet(snippet)
             if let viewController {
-                let hasActiveSearch = !viewController.searchField.stringValue
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .isEmpty
-                if hasActiveSearch {
-                    viewController.searchField.stringValue = ""
-                    viewController.reloadVisibleSnippets(keepSelection: true)
-                }
-                viewController.selectSnippet(id: importedSnippet.id, focusEditorName: false)
+                clearActiveSearch(in: viewController)
+                viewController.selectSnippet(id: importedSnippet.id, focus: nil)
                 viewController.importExportMessage = "Imported shared snippet \(importedSnippet.displayName)."
                 viewController.requestFirstResponder(viewController.tableView)
             }
@@ -733,6 +830,133 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 style: .warning
             )
         }
+    }
+
+    /// `snippets://new` adds a snippet. It never replaces one.
+    ///
+    /// The share host merges on keyword equality and rewrites the whole row it
+    /// lands on, which is right for a link this app wrote — that one carries a
+    /// complete record — and wrong for a link anybody can put on a web page,
+    /// where every field the URL omits arrives empty. Routed through that merge,
+    /// `?keyword=sig&content=…` took the name, the tags and the pin off whatever
+    /// snippet already answered to `\sig`, and switched it back on if the user
+    /// had deliberately switched it off. A host called "new" creates.
+    private func createSnippetFromDeepLink(_ snippet: Snippet, in viewController: ViewController?) {
+        guard confirmCreationOfLinkedSnippet(snippet) else { return }
+
+        // Before `addSnippet`, which tracks one blank draft at a time: an
+        // untouched ⌘N row still open here would lose its tracking and stay in
+        // the library forever. This is what `createSnippet` does with a seed.
+        if let draft = store.blankDraftSnippet {
+            store.discardBlankDraft(id: draft.id)
+        }
+
+        var created = store.addSnippet(name: snippet.name, content: snippet.content, tags: snippet.tags)
+        if !snippet.normalizedKeyword.isEmpty {
+            created.keyword = snippet.normalizedKeyword
+            // The keyword arrives in a second call because `addSnippet` does not
+            // take one, and `update` writes on the editor's typing debounce —
+            // which is wrong for a discrete action. Every other one is on disk
+            // before it returns, and so is this.
+            store.update(created)
+            store.flushPendingWrites()
+        }
+
+        guard let viewController else { return }
+        clearActiveSearch(in: viewController)
+        // Reloaded again even when there was no search to clear: `store.onChange`
+        // defers the list reload while the editor has focus, and the new row has
+        // to be in the table before the selection below can land on it.
+        viewController.reloadVisibleSnippets(keepSelection: true)
+        // The keyword lands focused because it is the field a hand-written link
+        // most often leaves out or collides with, and the status line under it is
+        // the one place that says whether this snippet will ever fire.
+        viewController.selectSnippet(id: created.id, focus: .keyword)
+        viewController.importExportMessage = "Created \(created.displayName) from a link."
+    }
+
+    /// A link that adds is still a link any web page can navigate to, and the
+    /// engine has no terminator, so a short enabled keyword arriving unannounced
+    /// fires by accident. The modal stays for the creation host too.
+    private func confirmCreationOfLinkedSnippet(_ snippet: Snippet) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Create Snippet From Link?"
+
+        if let notice = linkedSnippetKeywordNotice(snippet) {
+            alert.informativeText = """
+            \(sharedSnippetSummary(snippet))
+
+            \(notice.text)
+            """
+            alert.alertStyle = notice.isFailure ? .warning : .informational
+        } else {
+            alert.informativeText = sharedSnippetSummary(snippet)
+            alert.alertStyle = .informational
+        }
+
+        alert.addButton(withTitle: "Create Snippet")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// What this keyword will do to the library, decided with the `KeywordRelation`
+    /// the editor's status line and the keyword chips already share, so the alert
+    /// cannot promise something the line under the field then contradicts.
+    ///
+    /// A colliding keyword is a legal state and nothing here resolves it — silently
+    /// dropping or renaming it would be its own trap. It is said out loud instead,
+    /// and the snippet opens with the keyword field focused.
+    private func linkedSnippetKeywordNotice(_ snippet: Snippet) -> (text: String, isFailure: Bool)? {
+        let incomingKey = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
+        guard !incomingKey.isEmpty else {
+            return ("This link carries no keyword, so the new snippet will not expand until you give it one.", false)
+        }
+
+        let trigger = "\\\(snippet.normalizedKeyword)"
+        var duplicate: Snippet?
+        var blockedBy: Snippet?
+        var blocks: Snippet?
+        for other in store.enabledSnippetsSorted() {
+            switch KeywordRelation.between(incomingKey, SnippetTagging.filterKey(for: other.normalizedKeyword)) {
+            case .duplicate:
+                duplicate = duplicate ?? other
+            case .blockedByLonger:
+                blockedBy = blockedBy ?? other
+            case .blocksShorter:
+                blocks = blocks ?? other
+            case .unrelated:
+                break
+            }
+        }
+
+        if let duplicate {
+            return (
+                "\(trigger) is already used by \(duplicate.displayName) — create this and neither will expand. \(duplicate.displayName) is kept as it is; nothing is replaced.",
+                true
+            )
+        }
+        if let blockedBy {
+            return (
+                "\(trigger) won't auto-expand — \(blockedBy.displayName) uses the longer \\\(blockedBy.normalizedKeyword).",
+                true
+            )
+        }
+        if let blocks {
+            return ("This will stop \(blocks.displayName) (\\\(blocks.normalizedKeyword)) from auto-expanding.", true)
+        }
+        return nil
+    }
+
+    /// A snippet arriving from a link lands outside whatever the list is
+    /// filtered to, so the filter goes rather than the new row being invisible.
+    private func clearActiveSearch(in viewController: ViewController) {
+        let hasActiveSearch = !viewController.searchField.stringValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        guard hasActiveSearch else { return }
+
+        viewController.searchField.stringValue = ""
+        viewController.reloadVisibleSnippets(keepSelection: true)
     }
 
     private func confirmImportOfSharedSnippet(_ snippet: Snippet) -> Bool {

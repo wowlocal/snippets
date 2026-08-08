@@ -14,6 +14,26 @@ enum PlaceholderResolver {
 
     private static let tokenRegex = try? NSRegularExpression(pattern: "\\{([a-zA-Z0-9:_\\-]+)\\}")
 
+    /// What typing `{` in the content editor offers. Deliberately next door to
+    /// `isResolvableToken` below, which is the rule that decides whether any of
+    /// them actually resolve: kept apart, a menu could offer a token the
+    /// resolver would then ignore. `assertCompletionTokensResolve` is the check.
+    static let completionTokens = [
+        "{clipboard}",
+        "{date}",
+        "{time}",
+        "{datetime}",
+        "{date:yyyy-MM-dd}"
+    ]
+
+    /// True when every offered token is one the resolver will actually replace.
+    /// Exposed for the standalone test rather than for the app.
+    static func completionTokensAllResolve() -> Bool {
+        completionTokens.allSatisfy { token in
+            containsResolvablePlaceholder(in: token)
+        }
+    }
+
     static func resolve(template: String) -> String {
         resolve(template: template, mode: .expansion)
     }
