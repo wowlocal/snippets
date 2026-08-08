@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 struct SuggestionItem {
     let snippet: Snippet
@@ -77,6 +78,16 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private var accessibilityPrimedPIDs: Set<pid_t> = []
     private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
     private var selectionWasUserDriven = false
+
+    // The same bound the engine puts on its own messages, and for the same reason: this
+    // controller is reached synchronously from the event tap callout — `show(items:)` resolves
+    // the anchor, which reads Accessibility on the host — so an unbounded call here stalls the
+    // tap thread exactly as one in the engine would, and macOS disables a tap that stops
+    // answering. Every element this file hands to `AXUIElementCopyAttributeValue` or
+    // `AXUIElementSetAttributeValue` must come through `withBoundedMessagingTimeout`.
+    private let axMessagingTimeoutSeconds: Float = 0.4
+
+    private static let axLog = Logger(subsystem: "com.khm.snippets", category: "suggestion-anchor")
 
     private struct RectCandidate {
         let rect: NSRect
@@ -176,7 +187,24 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         // to the screen containing the mouse. The anchor is captured once per
         // suggestion session to prevent the panel from jumping as the caret moves.
         if anchorRect == nil {
-            anchorRect = caretScreenRect() ?? fallbackCaretRect()
+            // Timed because this is the one place the panel talks to a possibly-stalled host, and
+            // the cost is invisible from the outside: a slow answer and a fast one both just place
+            // the panel. `log stream --predicate 'subsystem == "com.khm.snippets"'` makes the
+            // bounded timeout observable, and says which path placed the panel when a host is slow.
+            let started = ContinuousClock.now
+            let fromCaret = caretScreenRect()
+            anchorRect = fromCaret ?? fallbackCaretRect()
+            let elapsed = ContinuousClock.now - started
+            let elapsedMS = Double(elapsed.components.seconds) * 1000
+                + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+            let host = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+            Self.axLog.info(
+                """
+                anchor host=\(host, privacy: .public) \
+                source=\(fromCaret == nil ? "fallback" : "caret", privacy: .public) \
+                ms=\(elapsedMS, format: .fixed(precision: 1), privacy: .public)
+                """
+            )
         }
 
         let visibleCount = min(count, maxVisible, maxVisibleRowsOnScreen)
@@ -600,8 +628,16 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return deepestFocusedElement(startingAt: focused, maxDepth: 4)
     }
 
+    /// Applies the panel's bounded messaging timeout to an element we are about to query, so a
+    /// stalled host process cannot hang the tap thread. Mirrors the engine's helper of the same
+    /// name; the two must not drift.
+    private func withBoundedMessagingTimeout(_ element: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(element, axMessagingTimeoutSeconds)
+        return element
+    }
+
     private func copyFocusedElement(from app: NSRunningApplication) -> AXUIElement? {
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(app.processIdentifier))
         var focusedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
               let focusedValue,
@@ -609,7 +645,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             return nil
         }
 
-        return (focusedValue as! AXUIElement)
+        return withBoundedMessagingTimeout(focusedValue as! AXUIElement)
     }
 
     private func deepestFocusedElement(startingAt root: AXUIElement, maxDepth: Int) -> AXUIElement {
@@ -623,7 +659,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
                 break
             }
 
-            let nested = nestedValue as! AXUIElement
+            let nested = withBoundedMessagingTimeout(nestedValue as! AXUIElement)
             if CFEqual(current, nested) {
                 break
             }
@@ -722,7 +758,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             return nil
         }
 
-        return (value as! AXUIElement)
+        return withBoundedMessagingTimeout(value as! AXUIElement)
     }
 
     private func rectArea(_ rect: NSRect) -> CGFloat {
@@ -741,7 +777,9 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             return
         }
 
-        let appElement = AXUIElementCreateApplication(pid)
+        // Bounded like every other message: these are writes into the host, and priming is the
+        // first thing a suggestion session does to an Electron app that may still be busy.
+        let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(pid))
 
         // Electron documents this explicit opt-in switch for third-party ATs.
         if force || !hasManualPriming {
