@@ -662,7 +662,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "snippets-ipad/Snippets-iPad.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "snippets-ipad/Info-iPad.plist";
@@ -671,7 +671,7 @@
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.3.67;
+				MARKETING_VERSION = 1.3.68;
 				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.debug;
 				PRODUCT_NAME = Snippets;
 				REGISTER_APP_GROUPS = YES;
@@ -698,7 +698,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "snippets-ipad/Snippets-iPad.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "snippets-ipad/Info-iPad.plist";
@@ -707,7 +707,7 @@
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.3.67;
+				MARKETING_VERSION = 1.3.68;
 				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets;
 				PRODUCT_NAME = Snippets;
 				REGISTER_APP_GROUPS = YES;
@@ -928,7 +928,7 @@
 				CODE_SIGN_ENTITLEMENTS = snippets/Snippets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -945,7 +945,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.5;
-				MARKETING_VERSION = 1.3.67;
+				MARKETING_VERSION = 1.3.68;
 				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.debug;
 				PRODUCT_NAME = "$(TARGET_NAME) Debug";
 				REGISTER_APP_GROUPS = YES;
@@ -966,7 +966,7 @@
 				CODE_SIGN_ENTITLEMENTS = snippets/Snippets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -983,7 +983,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.5;
-				MARKETING_VERSION = 1.3.67;
+				MARKETING_VERSION = 1.3.68;
 				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
