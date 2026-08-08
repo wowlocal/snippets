@@ -7,104 +7,207 @@ import Testing
 // document, and the import path is the only place tokens are written by a machine
 // rather than by a person. Every test here names the damage it prevents.
 
-/// 2026-02-15 12:00:00 UTC. Midday on purpose: these tests format this instant in the
-/// machine's own time zone, and midday is the only choice that stays on one calendar
-/// day from UTC-11 through UTC+12.
+/// 2026-02-15 12:00:00 UTC. Expected values are made with the same ambient calendar,
+/// time zone and formatter defaults as the resolver; the instant itself never moves.
 private let epoch = Date(timeIntervalSince1970: 1_771_156_800)
 
 private func expand(_ template: String, clipboard: String? = "CLIPBOARD") -> String {
     PlaceholderResolver.resolve(template: template, clipboard: { clipboard }, now: { epoch })
 }
 
-/// What a `DateFormatter` makes of `pattern` on this machine at `epoch`. Computed here
-/// rather than hard-coded so the assertions say "a formatted date" without pinning the
-/// suite to one locale or one time zone.
-private func formatted(_ pattern: String) -> String {
+private func formatted(
+    _ pattern: String,
+    at date: Date = epoch,
+    localeIdentifier: String? = nil
+) -> String {
     let formatter = DateFormatter()
+    if let localeIdentifier {
+        formatter.locale = Locale(identifier: localeIdentifier)
+    }
     formatter.dateFormat = pattern
-    return formatter.string(from: epoch)
+    return formatter.string(from: date)
+}
+
+private func styled(
+    dateStyle: DateFormatter.Style,
+    timeStyle: DateFormatter.Style,
+    at date: Date = epoch,
+    localeIdentifier: String? = nil
+) -> String {
+    let formatter = DateFormatter()
+    if let localeIdentifier {
+        formatter.locale = Locale(identifier: localeIdentifier)
+    }
+    formatter.dateStyle = dateStyle
+    formatter.timeStyle = timeStyle
+    return formatter.string(from: date)
+}
+
+private func shifted(
+    _ date: Date = epoch,
+    _ offsets: [(Calendar.Component, Int)],
+    localeIdentifier: String? = nil
+) -> Date {
+    var calendar = Calendar.current
+    if let localeIdentifier {
+        calendar.locale = Locale(identifier: localeIdentifier)
+    }
+    return offsets.reduce(date) { partial, offset in
+        calendar.date(byAdding: offset.0, value: offset.1, to: partial)!
+    }
 }
 
 @Suite("Placeholder resolver")
 struct PlaceholderResolverTests {
 
-    // MARK: - The Raycast round trip
+    // MARK: - Legacy and current Raycast round trips
 
-    /// **The bug**, and it was silent data loss into the user's own documents.
-    ///
-    /// The importer rewrote `{date "…"}` into `{date:…}` accepting any characters
-    /// between the quotes, while `tokenRegex` admitted only `[a-zA-Z0-9:_-]`. Every
-    /// Raycast format containing a space, a comma, a slash or a period — `MMM d, yyyy`
-    /// above all — arrived as a token the resolver did not recognise, and unrecognised
-    /// tokens pass through *by design*. An imported library therefore typed the literal
-    /// text `{date:MMM d, yyyy}` into whatever the user was writing, every time, with
-    /// nothing anywhere saying so.
-    ///
-    /// Both halves are asserted: what the importer writes, and that the resolver reads
-    /// exactly that back. Pinning only one end is how this shipped.
-    @Test func everyRaycastDateFormatTheImporterRewritesAlsoExpands() {
+    /// Legacy Raycast exports used `{date "…"}`. Canonicalize all three temporal kinds to
+    /// Raycast's current explicit quoted grammar, then prove the resolver reads back every
+    /// byte the importer wrote. A punctuation-rich format never enters the ambiguous
+    /// compact `{date:…}` grammar.
+    @Test func legacyRaycastFormatsCanonicalizeToResolvableCurrentTokens() {
         let cases = [
-            (raycast: #"{date "MMM d, yyyy"}"#, token: "{date:MMM d, yyyy}", pattern: "MMM d, yyyy"),
-            (raycast: #"{date "yyyy/MM/dd"}"#,  token: "{date:yyyy/MM/dd}",  pattern: "yyyy/MM/dd"),
-            (raycast: #"{date "yyyy-MM-dd"}"#,  token: "{date:yyyy-MM-dd}",  pattern: "yyyy-MM-dd"),
-            (raycast: #"{date "HH:mm"}"#,       token: "{date:HH:mm}",       pattern: "HH:mm"),
+            (
+                legacy: #"{date "MMM d, yyyy"}"#,
+                token: #"{date format="MMM d, yyyy"}"#,
+                pattern: "MMM d, yyyy"
+            ),
+            (
+                legacy: #"{time "HH:mm:ss.SSS"}"#,
+                token: #"{time format="HH:mm:ss.SSS"}"#,
+                pattern: "HH:mm:ss.SSS"
+            ),
+            (
+                legacy: #"{datetime "yyyy-MM-dd'T'HH:mm:ssZ"}"#,
+                token: #"{datetime format="yyyy-MM-dd'T'HH:mm:ssZ"}"#,
+                pattern: "yyyy-MM-dd'T'HH:mm:ssZ"
+            ),
+            (
+                legacy: #"{date "yyyy年MM月dd日"}"#,
+                token: #"{date format="yyyy年MM月dd日"}"#,
+                pattern: "yyyy年MM月dd日"
+            ),
         ]
 
         for testCase in cases {
-            #expect(RaycastPlaceholders.converted(testCase.raycast) == testCase.token,
-                    "the importer rewrites \(testCase.raycast)")
-            #expect(PlaceholderResolver.isResolvablePlaceholder(testCase.token),
-                    "the resolver reads back what the importer wrote for \(testCase.raycast)")
-            #expect(expand(testCase.token) == formatted(testCase.pattern),
-                    "\(testCase.token) expands to a formatted date")
-            #expect(!expand(testCase.token).contains("{"),
-                    "no brace from \(testCase.raycast) may reach the document")
+            let converted = RaycastPlaceholders.converted(testCase.legacy)
+            #expect(converted == testCase.token)
+            #expect(PlaceholderResolver.isResolvablePlaceholder(converted))
+            #expect(expand(converted) == formatted(testCase.pattern))
+            #expect(!expand(converted).contains("{"))
         }
     }
 
-    /// The invariant that outlives the four cases above: whatever the importer emits,
-    /// the resolver reads. A format the grammar does not admit must come out in the
-    /// Raycast spelling, unconverted — never as a native-looking token that is dead.
-    @Test func theImporterNeverWritesATokenTheResolverCannotReadBack() {
-        let exotic = [
-            #"{date "MMM d, yyyy"}"#,
-            #"{date "MMMM d, yyyy 'at' h:mm a"}"#,   // ICU quoted literal, not admitted
-            #"{date "{yyyy}"}"#,                      // a format carrying its own braces
-            #"{date "x}{clipboard"}"#,                // a format trying to smuggle a second token
-            #"{date "yyyy年MM月dd日"}"#,
-            #"{date "yyyy/MM/dd"} and {date "HH:mm"}"#,
+    /// These examples use the current syntax documented by Raycast. They need no
+    /// import rewrite: preserving them byte for byte also means a future modifier is
+    /// never accidentally stripped by the compatibility converter.
+    @Test func currentRaycastFormatsPassThroughAndExpand() {
+        let cases = [
+            (#"{date format="EEEE, MMM d, yyyy"}"#, "EEEE, MMM d, yyyy"),
+            (#"{date format="MM/dd/yyyy"}"#, "MM/dd/yyyy"),
+            (#"{time format="HH:mm:ss.SSS"}"#, "HH:mm:ss.SSS"),
+            (#"{datetime format="yyyy-MM-dd'T'HH:mm:ssZ"}"#, "yyyy-MM-dd'T'HH:mm:ssZ"),
+            (#"{date format="h:mm 'on the eve of' MMMM d"}"#, "h:mm 'on the eve of' MMMM d"),
         ]
 
-        for source in exotic {
-            let converted = RaycastPlaceholders.converted(source)
-            let rendered = expand(converted)
-            #expect(
-                converted == source || !rendered.contains("{date:"),
-                "\(source) was rewritten into a token the resolver leaves in the document"
-            )
+        for (source, pattern) in cases {
+            #expect(RaycastPlaceholders.converted(source) == source)
+            #expect(PlaceholderResolver.isResolvablePlaceholder(source))
+            #expect(expand(source) == formatted(pattern))
         }
     }
 
-    @Test func aRaycastFormatTheGrammarRejectsIsLeftInTheRaycastSpelling() {
-        let source = #"{date "MMMM d, yyyy 'at' h:mm a"}"#
+    @Test func offsetsUseTheInjectedInstantAndCalendar() {
+        let formattedSource = #"{date format="yyyy-MM-dd HH:mm" offset="+3M -5d +2h +30m"}"#
+        let formattedDate = shifted(epoch, [(.month, 3), (.day, -5), (.hour, 2), (.minute, 30)])
+        #expect(expand(formattedSource) == formatted("yyyy-MM-dd HH:mm", at: formattedDate))
+
+        let unquotedSource = "{time offset=+1h}"
+        let oneHourLater = shifted(epoch, [(.hour, 1)])
+        #expect(
+            expand(unquotedSource)
+                == styled(dateStyle: .none, timeStyle: .medium, at: oneHourLater)
+        )
+
+        let attributesInEitherOrder = #"{date offset="+1d" format="yyyy-MM-dd"}"#
+        #expect(
+            expand(attributesInEitherOrder)
+                == formatted("yyyy-MM-dd", at: shifted(epoch, [(.day, 1)]))
+        )
+    }
+
+    @Test func localeUsesLocalizedDefaultStyleAndCombinesWithOffset() {
+        let french = #"{date locale="fr-FR" offset="+1d"}"#
+        let tomorrow = shifted(epoch, [(.day, 1)], localeIdentifier: "fr-FR")
+        #expect(
+            expand(french)
+                == styled(
+                    dateStyle: .medium,
+                    timeStyle: .none,
+                    at: tomorrow,
+                    localeIdentifier: "fr-FR"
+                )
+        )
+
+        let twentyFourHour = #"{time locale="en-US-u-hc-h23"}"#
+        #expect(
+            expand(twentyFourHour)
+                == styled(
+                    dateStyle: .none,
+                    timeStyle: .medium,
+                    localeIdentifier: "en-US-u-hc-h23"
+                )
+        )
+    }
+
+    @Test func severalLegacyRaycastTokensAreAllCanonicalized() {
+        let source = #"On {date "MMM d, yyyy"} at {time "HH:mm"} ({datetime "yyyy/MM/dd HH:mm"})"#
+        let converted = RaycastPlaceholders.converted(source)
+        #expect(
+            converted
+                == #"On {date format="MMM d, yyyy"} at {time format="HH:mm"} ({datetime format="yyyy/MM/dd HH:mm"})"#
+        )
+        #expect(
+            expand(converted)
+                == "On \(formatted("MMM d, yyyy")) at \(formatted("HH:mm")) (\(formatted("yyyy/MM/dd HH:mm")))"
+        )
+    }
+
+    /// A compatibility rewrite is allowed only when its entire output is live. Inputs
+    /// that carry braces, an unterminated ICU literal, or a quote boundary stay in the
+    /// visibly foreign legacy spelling instead of becoming dead native-looking tokens.
+    @Test(arguments: [
+        #"{date "{yyyy}"}"#,
+        #"{date "x}{clipboard"}"#,
+        #"{date "yyyy-MM-dd'T"}"#,
+        #"{date "unterminated}"#,
+    ])
+    func importerNeverManufacturesAnInertToken(source: String) {
         #expect(RaycastPlaceholders.converted(source) == source)
-        #expect(expand(source) == source, "and passes through the resolver untouched")
+        #expect(!PlaceholderResolver.isResolvablePlaceholder(source))
     }
 
-    @Test func severalRaycastTokensInOneSnippetAreAllConverted() {
-        let source = #"Dear X, on {date "MMM d, yyyy"} at {date "HH:mm"} — regards"#
-        #expect(RaycastPlaceholders.converted(source)
-                == "Dear X, on {date:MMM d, yyyy} at {date:HH:mm} — regards")
+    // MARK: - Negative controls: explicit syntax must not eat ordinary code
+
+    /// This is the compatibility regression a widened date character class caused.
+    /// Compact JS/object literals and path-like values were matched as DateFormatter
+    /// patterns and replaced with arbitrary date text. Only an explicit quoted
+    /// `format=` value may carry commas, spaces, slashes or periods now.
+    @Test(arguments: [
+        "{date:value,time:value}",
+        "{date:value, time:value}",
+        "const metadata={date:value,time:value}",
+        "{date:path/to.file}",
+        "{time:host/path.txt}",
+        "{datetime:value,date:value}",
+    ])
+    func compactCodeAndPathsPassThroughByteForByte(source: String) {
+        #expect(expand(source) == source)
+        #expect(!PlaceholderResolver.containsResolvablePlaceholder(in: source))
+        #expect(!PlaceholderResolver.isResolvablePlaceholder(source))
     }
 
-    // MARK: - Negative controls: the widened alphabet must not eat anything new
-
-    /// The other half of the fix, and the reason `tokenRegex` is two alternatives
-    /// rather than one widened character class. People keep JSON, CSS and Swift in
-    /// snippets. `{date: value}` is an object literal, not a token, and the resolver
-    /// has always left it alone — a naive widening that admitted a space anywhere would
-    /// have started feeding it to `DateFormatter`, where `d`, `a`, `t` and `e` are all
-    /// pattern letters. That is the same bug again, pointing the other way.
     @Test(arguments: [
         "{date: value}",
         "{date: 1}",
@@ -124,57 +227,67 @@ struct PlaceholderResolverTests {
         #expect(!PlaceholderResolver.isResolvablePlaceholder(source))
     }
 
-    /// `{date:}` has its own line in the resolver — an empty format is left untouched,
-    /// "consistent with how unknown tokens behave" — and the widened alternative must
-    /// not have quietly started matching it.
+    @Test(arguments: [
+        #"{date format="yyyy-MM-dd" locale="fr-FR"}"#,
+        "{date format=yyyy-MM-dd}",
+        "{date locale=fr-FR}",
+        #"{date locale="en_US"}"#,
+        #"{date locale="zz-ZZ"}"#,
+        #"{date offset="+ 2d"}"#,
+        #"{date offset="+1w"}"#,
+        #"{date offset="+100001d"}"#,
+        #"{date offset="+1d" offset="+2d"}"#,
+        #"{date format="yyyy-MM-dd" unknown="x"}"#,
+        #"{date format="yyyy-MM-dd'T"}"#,
+        #"{date format=""}"#,
+    ])
+    func invalidOrAmbiguousModifiersStayVisible(source: String) {
+        #expect(expand(source) == source)
+        #expect(!PlaceholderResolver.containsResolvablePlaceholder(in: source))
+        #expect(!PlaceholderResolver.isResolvablePlaceholder(source))
+    }
+
     @Test func anEmptyDateFormatIsStillNotResolvable() {
         #expect(!PlaceholderResolver.containsResolvablePlaceholder(in: "{date:}"))
         #expect(expand("{date:}") == "{date:}")
     }
 
-    /// A token still cannot span from one brace pair into the next: neither alternative
-    /// admits a brace, which is what stops the newly legal space from swallowing the
-    /// text between two unrelated tokens.
     @Test func aTokenCannotSpanFromOneBracePairIntoTheNext() {
-        let rendered = expand("a {date:MMM d, yyyy} b {clipboard} c")
+        let rendered = expand(#"a {date format="MMM d, yyyy"} b {clipboard} c"#)
         #expect(rendered == "a \(formatted("MMM d, yyyy")) b CLIPBOARD c")
         #expect(expand("{a} and {b}") == "{a} and {b}")
     }
 
-    // MARK: - The unchanged vocabulary
+    // MARK: - The unchanged native vocabulary
 
-    @Test func theBareTokensBehaveExactlyAsBefore() {
+    @Test func bareAndCompactNativeTokensBehaveExactlyAsBefore() {
         #expect(expand("{clipboard}") == "CLIPBOARD")
         #expect(expand("{clipboard}", clipboard: nil) == "")
         #expect(expand("{date:yyyy-MM-dd}") == formatted("yyyy-MM-dd"))
-        #expect(expand("TP-{date:yyyyMMdd}-{clipboard}")
-                == "TP-\(formatted("yyyyMMdd"))-CLIPBOARD")
+        #expect(
+            expand("TP-{date:yyyyMMdd}-{clipboard}")
+                == "TP-\(formatted("yyyyMMdd"))-CLIPBOARD"
+        )
         for bare in ["{date}", "{time}", "{datetime}"] {
             #expect(!expand(bare).contains("{"), "\(bare) is replaced")
         }
     }
 
-    /// Migrated from the standalone `Tests/PlaceholderResolverTests.swift`. The content
-    /// editor's `{` completion and the resolver read from the same place precisely so a
-    /// menu can never offer a token the resolver would leave sitting in the text. If
-    /// someone adds a token to the list without teaching the resolver about it, this is
-    /// what says so.
     @Test func theCompletionMenuOnlyOffersTokensTheResolverReplaces() {
         #expect(PlaceholderResolver.completionTokensAllResolve())
         #expect(!PlaceholderResolver.completionTokens.isEmpty)
         for token in PlaceholderResolver.completionTokens {
-            #expect(token.hasPrefix("{") && token.hasSuffix("}"),
-                    "\(token) is a complete brace pair, because completion replaces the brace typed")
+            #expect(token.hasPrefix("{") && token.hasSuffix("}"))
             #expect(PlaceholderResolver.isResolvablePlaceholder(token))
         }
-        #expect(PlaceholderResolver.completionTokens.filter { $0.hasPrefix("{da") }
-                == ["{date}", "{datetime}", "{date:yyyy-MM-dd}"])
+        #expect(
+            PlaceholderResolver.completionTokens.filter { $0.hasPrefix("{da") }
+                == ["{date}", "{datetime}", "{date:yyyy-MM-dd}"]
+        )
     }
 
-    // MARK: - Injection
+    // MARK: - Dependency injection and previews
 
-    /// The point of the closure: nothing in `Core/` may touch `NSPasteboard`. A template
-    /// with no `{clipboard}` in it must not even ask.
     @Test func theClipboardIsOnlyReadWhenATemplateActuallyAsksForIt() {
         final class Counter: @unchecked Sendable { var reads = 0 }
         let counter = Counter()
@@ -187,14 +300,28 @@ struct PlaceholderResolverTests {
         #expect(counter.reads == 1)
     }
 
-    /// One resolve samples one instant. Four separate `Date()` calls used to mean a
-    /// template naming both the date and the time could straddle midnight, or a second
-    /// boundary, and print two moments that never coexisted.
-    @Test func theSameInputsAlwaysProduceTheSameOutput() {
-        let template = "{date:HH:mm:ss} {time:HH:mm:ss} {date:yyyy-MM-dd}"
-        let once = expand(template)
-        #expect(once == expand(template))
-        #expect(once == "\(formatted("HH:mm:ss")) \(formatted("HH:mm:ss")) \(formatted("yyyy-MM-dd"))")
+    /// Offset and formatting work from the single injected sample too; no modifier is
+    /// allowed to call `Date()` independently and straddle a time boundary.
+    @Test func oneResolutionSamplesTheClockExactlyOnce() {
+        final class Counter: @unchecked Sendable { var reads = 0 }
+        let counter = Counter()
+        let rendered = PlaceholderResolver.resolve(
+            template: #"{date format="HH:mm:ss"} {time offset=+1h} {date:yyyy-MM-dd}"#,
+            clipboard: { nil },
+            now: { counter.reads += 1; return epoch }
+        )
+
+        #expect(counter.reads == 1)
+        #expect(
+            rendered
+                == "\(formatted("HH:mm:ss")) "
+                + styled(
+                    dateStyle: .none,
+                    timeStyle: .medium,
+                    at: shifted(epoch, [(.hour, 1)])
+                )
+                + " \(formatted("yyyy-MM-dd"))"
+        )
     }
 
     @Test func theClipboardPreviewIsStillTruncated() {
