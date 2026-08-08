@@ -6,7 +6,7 @@ import Foundation
 /// relation runs one way, so its two ends are two different failures on two
 /// different snippets — and anything that tests only one end protects the
 /// keyword being typed while silently killing the one already in the library.
-enum KeywordRelation: Equatable {
+nonisolated enum KeywordRelation: Equatable {
     case unrelated
     case duplicate
     /// `other` extends this keyword, so this one never auto-expands.
@@ -27,7 +27,7 @@ enum KeywordRelation: Equatable {
 
 /// The keywords a human might plausibly have typed for a snippet, derived from
 /// what the snippet already says about itself.
-enum KeywordSuggestions {
+nonisolated enum KeywordSuggestions {
     /// Longer than this and a word is abbreviated instead of offered whole:
     /// "email" is already a keyword, "signature" is a word you shorten before
     /// you type it twenty times a day.

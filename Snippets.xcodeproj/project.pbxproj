@@ -55,7 +55,7 @@
 		27C110012F53000000000001 /* snippets-cli */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "snippets-cli"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110022F53000000000002 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		27C110032F53000000000003 /* Snippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Snippet.swift; path = ../snippets/Core/Snippet.swift; sourceTree = "<group>"; };
-		27C110042F53000000000004 /* FuzzyMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FuzzyMatch.swift; path = ../snippets/FuzzyMatch.swift; sourceTree = "<group>"; };
+		27C110042F53000000000004 /* FuzzyMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FuzzyMatch.swift; path = ../snippets/Core/FuzzyMatch.swift; sourceTree = "<group>"; };
 		27C121012F54000000000101 /* LibraryLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryLock.swift; path = ../snippets/Core/LibraryLock.swift; sourceTree = "<group>"; };
 		27C121022F54000000000102 /* AtomicFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AtomicFileWriter.swift; path = ../snippets/Core/AtomicFileWriter.swift; sourceTree = "<group>"; };
 		27C121032F54000000000103 /* SnippetLibraryCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetLibraryCodec.swift; path = ../snippets/Core/SnippetLibraryCodec.swift; sourceTree = "<group>"; };

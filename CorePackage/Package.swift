@@ -3,8 +3,8 @@ import PackageDescription
 
 // TEST-ONLY OVERLAY over `snippets/Core/`. Neither the Snippets app target nor the
 // snippets-cli target depends on this package; it compiles the very same files the
-// Xcode targets compile directly, so `swift test` can exercise the pure logic with
-// no GUI, no signed bundle, and no keychain.
+// Xcode targets compile directly, so `swift test` can exercise both the pure logic and
+// the small AppKit pasteboard boundary with no GUI app, signed bundle, or keychain.
 //
 //   swift test --package-path CorePackage
 //
@@ -36,9 +36,25 @@ let package = Package(
     ],
     targets: [
         .target(name: "SnippetsCore", swiftSettings: [.swiftLanguageMode(.v5)]),
+        // AppKit stays out of SnippetsCore's Foundation-only boundary. This small sibling
+        // target exists so the shipping pasteboard lease runs under the normal test command.
+        .target(name: "SnippetsPasteboard", swiftSettings: [.swiftLanguageMode(.v5)]),
+        // The event-tap AX budget is another AppKit boundary that must be exercised without
+        // launching a signed app or requiring Accessibility permission.
+        .target(name: "SnippetsAX", swiftSettings: [.swiftLanguageMode(.v5)]),
         .testTarget(
             name: "SnippetsCoreTests",
             dependencies: ["SnippetsCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "SnippetsPasteboardTests",
+            dependencies: ["SnippetsPasteboard"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "SnippetsAXTests",
+            dependencies: ["SnippetsAX"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

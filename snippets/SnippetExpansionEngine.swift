@@ -50,6 +50,17 @@ final class SnippetExpansionEngine {
     /// the text before it is discarded rather than applied to whatever is there now.
     private var injectionContextGeneration: UInt = 0
     private var activePasteboardLease: TemporaryPasteboardLease?
+    /// The lease currently being consumed by a posted paste. It must not be restored merely
+    /// because Quit, sleep, or another command arrived while the host was still accepting Cmd+V.
+    private var pasteboardInjectionLease: TemporaryPasteboardLease?
+    private var pasteboardRestoreRetryWorkItem: DispatchWorkItem?
+    private var pasteboardRestoreRetryRoundsRemaining = 0
+    private var pasteboardRestoreScheduleGeneration: UInt = 0
+    private var pasteboardRecoveryCompletion: ((Bool) -> Void)?
+    /// Raised before queued work is canceled and kept raised until AppKit terminates or explicitly
+    /// cancels Quit. It closes every route that could acquire a new lease after termination was
+    /// approved.
+    private var isPreparingForTermination = false
     private var suggestionSecureInputWatchdog: Timer?
 
     // Suggestion overlay state
@@ -96,10 +107,10 @@ final class SnippetExpansionEngine {
     private let injectedKeyDelay: Duration = .milliseconds(12)
     private let prePasteDelayAfterDelete: Duration = .milliseconds(20)
     private let pasteboardWriteSettleDelay: Duration = .milliseconds(12)
-    // AX calls into a beachballing host block for ~6s by default, which is
-    // long enough for macOS to disable our event tap. Bound every AX message
-    // we send so the tap callback can always return quickly.
-    private let axMessagingTimeoutSeconds: Float = 0.4
+    // AX calls into a beachballing host block for ~6s by default. Every exact object gets this
+    // per-message bound; suggestion activation additionally shares one `AXMessagingBudget` across
+    // its whole engine-to-panel chain so several bounded messages cannot accumulate into seconds.
+    private let axMessagingTimeoutSeconds = AXMessagingBudget.interactiveTimeoutSeconds
     // A slow answer is worthless in a progress probe, and paying the full timeout on every poll is
     // exactly what gets the tap disabled.
     private let confirmationAXMessagingTimeoutSeconds: Float = 0.1
@@ -131,6 +142,15 @@ final class SnippetExpansionEngine {
 
         var authenticatesSecureSnippet: Bool { self == .authenticatedSecure }
         var concealsPasteboard: Bool { self == .authenticatedSecure }
+    }
+
+    /// Posting the paste and returning the clipboard are separate observable outcomes. Once the
+    /// host has accepted Cmd+V, a failed handback must not turn a real insertion into a failure —
+    /// but it must not be flattened into ordinary success either.
+    private enum EventReplacementOutcome {
+        case failed
+        case inserted
+        case insertedWithPasteboardRecoveryPending
     }
 
     private enum FocusedTriggerContextRead {
@@ -307,10 +327,19 @@ final class SnippetExpansionEngine {
     }
 
     private func restartEventMonitors() {
+        // Permission changes are irrelevant once Quit has begun. More importantly, restarting here
+        // must neither invalidate an in-flight paste nor resolve a recovery lease without answering
+        // AppKit's outstanding `.terminateLater` request.
+        if isPreparingForTermination {
+            if finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) {
+                continueTerminationPreparationIfNeeded()
+            }
+            return
+        }
         injectionContextGeneration &+= 1
         injectionQueue.cancelAll()
         stopSuggestionSecureInputWatchdog()
-        finishPendingPasteboardOwnership()
+        finishPendingPasteboardOwnership(schedulingRetryOnFailure: true)
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             if let source = runLoopSource {
@@ -377,9 +406,13 @@ final class SnippetExpansionEngine {
 
 
     func copySnippetToClipboard(_ snippet: Snippet) {
+        guard !isPreparingForTermination else { return }
         // An explicit copy is the user taking the clipboard back; hand it over before reading
         // `{clipboard}`, or the snippet would resolve against a snippet we are still holding.
-        finishPendingPasteboardOwnership()
+        guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
+            statusText = "Still restoring your previous clipboard. Try Copy again in a moment."
+            return
+        }
         let rendered = PlaceholderResolver.resolve(template: snippet.content)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(rendered, forType: .string)
@@ -390,7 +423,11 @@ final class SnippetExpansionEngine {
     }
 
     func pasteSnippetIntoFrontmostApp(_ snippet: Snippet) {
-        finishPendingPasteboardOwnership()
+        guard !isPreparingForTermination else { return }
+        guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
+            statusText = "Still restoring your previous clipboard. Try Paste again in a moment."
+            return
+        }
         let rendered = PlaceholderResolver.resolve(template: snippet.content)
 
         if frontmostProcessIsThisApp() {
@@ -406,37 +443,96 @@ final class SnippetExpansionEngine {
             guard !Task.isCancelled else { return }
             await self.settle(for: .milliseconds(140))
             // Read after hiding: hiding ourselves activates another app, which bumps the generation.
-            let delivered = await self.replaceTypedText(
+            let outcome = await self.replaceTypedText(
                 characterCount: 0,
                 with: rendered,
                 generation: self.injectionContextGeneration,
                 targetPID: nil
             )
-            guard delivered else {
+            switch outcome {
+            case .failed:
                 self.statusText = "Could not paste \(snippet.displayName)."
-                return
+            case .inserted:
+                self.usage.record(.pasteFromApp, snippetID: snippet.id)
+                self.lastExpansionName = snippet.displayName
+                self.statusText = "Pasted \(snippet.displayName)."
+            case .insertedWithPasteboardRecoveryPending:
+                self.usage.record(.pasteFromApp, snippetID: snippet.id)
+                self.lastExpansionName = snippet.displayName
+                self.statusText = "Pasted \(snippet.displayName); restoring your previous clipboard is still pending."
             }
-            self.usage.record(.pasteFromApp, snippetID: snippet.id)
-            self.lastExpansionName = snippet.displayName
-            self.statusText = "Pasted \(snippet.displayName)."
         }
     }
 
-    /// Synchronous on purpose: `applicationWillTerminate` cannot await, and leaving the process with
-    /// a snippet still sitting in the user's clipboard is exactly what the lease exists to prevent.
-    func prepareForTermination() {
-        injectionContextGeneration &+= 1
+    /// Starts termination cleanup. `true` means the clipboard is already safe and termination can
+    /// proceed. `false` means the caller must return `.terminateLater`; `onRecoveryComplete` then
+    /// answers whether termination may continue after bounded delayed retries.
+    @discardableResult
+    func prepareForTermination(onRecoveryComplete: ((Bool) -> Void)? = nil) -> Bool {
+        if isPreparingForTermination {
+            return activePasteboardLease == nil
+                && pasteboardInjectionLease == nil
+                && pasteboardRecoveryCompletion == nil
+        }
+        isPreparingForTermination = true
+        // A pasteboard injection that already borrowed the clipboard is a bounded critical
+        // section: changing its generation here could stop it after only part of the trigger was
+        // deleted. Queued/not-yet-started work is still invalidated below.
+        if pasteboardInjectionLease == nil {
+            injectionContextGeneration &+= 1
+        }
         injectionQueue.cancelAll()
-        finishPendingPasteboardOwnership()
+        pasteboardRestoreRetryWorkItem?.cancel()
+        pasteboardRestoreRetryWorkItem = nil
+        pasteboardRestoreScheduleGeneration &+= 1
+        pasteboardRestoreRetryRoundsRemaining = max(pasteboardRestoreRetryRoundsRemaining, 3)
+
+        // Cancellation deliberately does not interrupt the timing waits after trigger deletion.
+        // Restoring this lease now could make the already-posted Cmd+V consume the user's old
+        // clipboard instead of the snippet. The injection's defer advances termination once the
+        // host has had its bounded confirmation window.
+        guard pasteboardInjectionLease == nil else {
+            pasteboardRecoveryCompletion = onRecoveryComplete
+            return false
+        }
+        guard !finishPendingPasteboardOwnership() else { return true }
+        pasteboardRecoveryCompletion = onRecoveryComplete
+        if schedulePasteboardRestoreRetryIfNeeded() { return false }
+
+        // The pasteboard is process-global and can change between the failed restore and the retry
+        // scheduling check. A newer user copy is safe, not an exhausted recovery attempt.
+        if finishPendingPasteboardOwnership() {
+            pasteboardRecoveryCompletion = nil
+            return true
+        }
+        completePasteboardRecovery(success: false)
+        return false
+    }
+
+    /// AppKit calls this only after a `.terminateLater` decision is answered with `false`.
+    /// Reopen the engine then; until that explicit cancellation, no event or command may create a
+    /// fresh clipboard lease behind the termination reply.
+    func cancelTerminationPreparation() {
+        guard isPreparingForTermination else { return }
+        isPreparingForTermination = false
+        pasteboardRecoveryCompletion = nil
+        pasteboardRestoreRetryRoundsRemaining = max(pasteboardRestoreRetryRoundsRemaining, 3)
+        _ = schedulePasteboardRestoreRetryIfNeeded()
     }
 
     func releaseBorrowedPasteboard() {
-        finishPendingPasteboardOwnership()
+        if finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) {
+            continueTerminationPreparationIfNeeded()
+        }
     }
 
     /// Returns `true` if the event was consumed and should be suppressed.
     @discardableResult
     private func handle(event: NSEvent, eventUserData: Int64?) -> Bool {
+        // Keep observing real input while an already-started paste drains: it still needs normal
+        // generation invalidation if the user changes the host text. With no such critical
+        // section, Quit gates the event path completely.
+        guard !isPreparingForTermination || pasteboardInjectionLease != nil else { return false }
         let origin = SnippetSyntheticEvent.origin(eventUserData: eventUserData)
         let isAuthenticatingSecureSuggestion = secureSuggestionAuthenticationTargetPID != nil
         switch SnippetInjectionGate.inputDisposition(
@@ -494,10 +590,15 @@ final class SnippetExpansionEngine {
         typedBuffer.append(character)
         trimBufferIfNeeded()
 
-        // Activate suggestion mode on backslash, only if a text field is focused
-        if character == "\\" && focusedElementIsTextInput() {
-            activateSuggestions()
-            return false
+        // Activate suggestion mode on backslash, only if a text field is focused. The same
+        // aggregate budget and exact focused object continue into panel anchoring: reacquiring
+        // either here would turn a 0.4s safety bound into a chain of individually bounded calls.
+        if character == "\\" {
+            let axBudget = AXMessagingBudget()
+            if let focusedElement = focusedTextInputElement(using: axBudget) {
+                activateSuggestions(anchorFocusedElement: focusedElement, axBudget: axBudget)
+                return false
+            }
         }
 
         // Fallback path for apps where focused text input detection fails
@@ -512,7 +613,10 @@ final class SnippetExpansionEngine {
 
     // MARK: - Suggestion Mode
 
-    private func activateSuggestions() {
+    private func activateSuggestions(
+        anchorFocusedElement: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) {
         suggestionActive = true
         suggestionQuery = ""
         suggestionDeleteCount = 1
@@ -528,7 +632,10 @@ final class SnippetExpansionEngine {
             self?.dismissSuggestions()
         }
 
-        updateSuggestionResults()
+        updateSuggestionResults(
+            anchorFocusedElement: anchorFocusedElement,
+            axBudget: axBudget
+        )
         scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: false)
         startSuggestionSecureInputWatchdog()
     }
@@ -1245,7 +1352,10 @@ final class SnippetExpansionEngine {
         return query
     }
 
-    private func updateSuggestionResults() {
+    private func updateSuggestionResults(
+        anchorFocusedElement: AXUIElement? = nil,
+        axBudget: AXMessagingBudget? = nil
+    ) {
         let snippets = enabledSnippetsForSuggestionDisplay()
         let displayOrder = Dictionary(
             uniqueKeysWithValues: snippets.enumerated().map { ($0.element.id, $0.offset) }
@@ -1314,7 +1424,11 @@ final class SnippetExpansionEngine {
         if scored.isEmpty {
             suggestionPanel.hide()
         } else {
-            suggestionPanel.show(items: Array(scored))
+            suggestionPanel.show(
+                items: Array(scored),
+                anchorFocusedElement: anchorFocusedElement,
+                axBudget: axBudget
+            )
         }
     }
 
@@ -1425,6 +1539,10 @@ final class SnippetExpansionEngine {
         expectedTargetPID: pid_t? = nil,
         securePlaintext: SecurePlaintextLease? = nil
     ) {
+        guard !isPreparingForTermination else {
+            securePlaintext?.wipe()
+            return
+        }
         // Consumed on every attempt, recorded only on the ones that commit.
         let bindingQuery = consumePendingSelectionMemoryQuery()
         let isSecureSnippet = store.isSecure(snippet.id)
@@ -1510,7 +1628,10 @@ final class SnippetExpansionEngine {
             return
         }
         // `{clipboard}` has to see the user's clipboard, never a snippet we are still holding.
-        finishPendingPasteboardOwnership()
+        guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
+            statusText = "Skipped \(snippet.displayName): your previous clipboard is still being restored."
+            return
+        }
 
         var resolvedText: String
         if let securePlaintext {
@@ -1559,20 +1680,25 @@ final class SnippetExpansionEngine {
         }
 
         let deleteCount = adjustedDeleteCountForActiveSelection(baseDeleteCount: deletion.characterCount)
-        guard await replaceTypedText(
+        let eventOutcome = await replaceTypedText(
             characterCount: deleteCount,
             with: resolvedText,
             generation: generation,
             targetPID: targetPID,
             isConcealed: authorization.concealsPasteboard,
             expectedFocusedElement: secureFocusTarget?.element
-        ) else {
+        )
+        switch eventOutcome {
+        case .failed:
             if authorization.authenticatesSecureSnippet {
                 statusText = "Authentication succeeded, but Snippets could not insert \(snippet.displayName)."
             }
-            return
+        case .inserted:
+            recordExpansion(of: snippet, bindingQuery: bindingQuery)
+        case .insertedWithPasteboardRecoveryPending:
+            recordExpansion(of: snippet, bindingQuery: bindingQuery)
+            statusText = "Expanded \(snippet.displayName); restoring your previous clipboard is still pending."
         }
-        recordExpansion(of: snippet, bindingQuery: bindingQuery)
     }
 
     /// Materializes secure bytes only for placeholder resolution, then zeroes the
@@ -1595,11 +1721,24 @@ final class SnippetExpansionEngine {
         statusText = "Expanded \(snippet.displayName)."
     }
 
-    private func injectionIsAllowed(generation: UInt, targetPID: pid_t?) -> Bool {
-        injectionBlockDescription(generation: generation, targetPID: targetPID) == nil
+    private func injectionIsAllowed(
+        generation: UInt,
+        targetPID: pid_t?,
+        allowingTerminationDrain: Bool = false
+    ) -> Bool {
+        injectionBlockDescription(
+            generation: generation,
+            targetPID: targetPID,
+            allowingTerminationDrain: allowingTerminationDrain
+        ) == nil
     }
 
-    private func injectionBlockDescription(generation: UInt, targetPID: pid_t?) -> String? {
+    private func injectionBlockDescription(
+        generation: UInt,
+        targetPID: pid_t?,
+        allowingTerminationDrain: Bool = false
+    ) -> String? {
+        if isPreparingForTermination, !allowingTerminationDrain { return "the app is quitting" }
         if generation != injectionContextGeneration { return "the input context changed before insertion" }
         if !listening { return "global expansion stopped before insertion" }
         if secureEventInputEnabled { return "macOS still had secure keyboard entry enabled" }
@@ -1856,7 +1995,8 @@ final class SnippetExpansionEngine {
 
     // MARK: - Event fallback
 
-    /// Returns `true` once the paste has been posted; only then may the caller record a use.
+    /// Distinguishes insertion from clipboard handback. Only an inserted outcome may be recorded,
+    /// and a pending handback remains visible while delayed recovery continues.
     private func replaceTypedText(
         characterCount: Int,
         with replacement: String,
@@ -1864,24 +2004,42 @@ final class SnippetExpansionEngine {
         targetPID: pid_t?,
         isConcealed: Bool = false,
         expectedFocusedElement: AXUIElement? = nil
-    ) async -> Bool {
+    ) async -> EventReplacementOutcome {
         guard injectionIsAllowed(generation: generation, targetPID: targetPID),
               expectedFocusedElement.map(currentFocusMatches) ?? true
-        else { return false }
+        else { return .failed }
         // Borrowed before a single character is deleted: a pasteboard we cannot borrow safely must
         // cost the user nothing, and once the trigger is gone "nothing" is no longer on the table.
         guard beginPasteboardLease(placing: replacement, isConcealed: isConcealed) else {
-            return false
+            return .failed
+        }
+        guard let lease = activePasteboardLease, lease.isOwned else {
+            finishPendingPasteboardOwnership()
+            return .failed
+        }
+        pasteboardInjectionLease = lease
+        defer {
+            if pasteboardInjectionLease === lease {
+                pasteboardInjectionLease = nil
+            }
+            continueTerminationPreparationIfNeeded()
         }
 
         // Delete trigger text one character at a time with a small delay to avoid
         // dropped synthetic key events in some host apps.
         for index in 0..<characterCount {
-            guard injectionIsAllowed(generation: generation, targetPID: targetPID),
+            guard injectionIsAllowed(
+                generation: generation,
+                targetPID: targetPID,
+                allowingTerminationDrain: true
+            ),
                   expectedFocusedElement.map(currentFocusMatches) ?? true
             else {
-                finishPendingPasteboardOwnership()
-                return false
+                finishPendingPasteboardOwnership(
+                    schedulingRetryOnFailure: true,
+                    finishingInFlightLease: lease
+                )
+                return .failed
             }
             postKeyStroke(keyCode: UInt16(kVK_Delete))
             if index < characterCount - 1 {
@@ -1895,13 +2053,16 @@ final class SnippetExpansionEngine {
         await settle(for: prePasteDelayAfterDelete)
         await settle(for: pasteboardWriteSettleDelay)
 
-        guard let lease = activePasteboardLease, lease.isOwned else {
-            finishPendingPasteboardOwnership()
-            return false
+        guard activePasteboardLease === lease, lease.isOwned else {
+            finishPendingPasteboardOwnership(finishingInFlightLease: lease)
+            return .failed
         }
         guard expectedFocusedElement.map(currentFocusMatches) ?? true else {
-            finishPendingPasteboardOwnership()
-            return false
+            finishPendingPasteboardOwnership(
+                schedulingRetryOnFailure: true,
+                finishingInFlightLease: lease
+            )
+            return .failed
         }
         let baseline = focusedCaretFingerprint()
         postPasteShortcut()
@@ -1911,8 +2072,12 @@ final class SnippetExpansionEngine {
             lease: lease,
             targetPID: targetPID
         )
-        finishPendingPasteboardOwnership()
-        return true
+        return finishPendingPasteboardOwnership(
+            schedulingRetryOnFailure: true,
+            finishingInFlightLease: lease
+        )
+            ? .inserted
+            : .insertedWithPasteboardRecoveryPending
     }
 
     /// Holds the borrowed pasteboard until there is evidence the host applied the paste. A fixed
@@ -1990,29 +2155,162 @@ final class SnippetExpansionEngine {
     }
 
     private func beginPasteboardLease(placing text: String, isConcealed: Bool = false) -> Bool {
+        guard !isPreparingForTermination, pasteboardInjectionLease == nil else { return false }
         // A previous lease still held would become this one's "original", losing the user's
         // clipboard for good.
-        guard finishPendingPasteboardOwnership() else { return false }
-        guard let lease = TemporaryPasteboardLease.begin(
+        guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else { return false }
+        let acquisition = TemporaryPasteboardLease.begin(
             text: text,
             pasteboard: NSPasteboard.general,
             isConcealed: isConcealed
-        ) else { return false }
-        activePasteboardLease = lease
+        )
+        let lease: TemporaryPasteboardLease
+        switch acquisition {
+        case .acquired(let acquired):
+            lease = acquired
+        case .refused:
+            return false
+        case .recoveryPending(let pending):
+            installPasteboardLease(pending)
+            schedulePasteboardRestoreRetryIfNeeded()
+            statusText = "Could not borrow the clipboard; restoring its previous contents is pending."
+            return false
+        }
+        installPasteboardLease(lease)
         return true
     }
 
+    private func installPasteboardLease(_ lease: TemporaryPasteboardLease) {
+        pasteboardRestoreRetryWorkItem?.cancel()
+        pasteboardRestoreRetryWorkItem = nil
+        pasteboardRestoreScheduleGeneration &+= 1
+        pasteboardRestoreRetryRoundsRemaining = 3
+        activePasteboardLease = lease
+    }
+
     @discardableResult
-    private func finishPendingPasteboardOwnership() -> Bool {
+    private func finishPendingPasteboardOwnership(
+        schedulingRetryOnFailure: Bool = false,
+        finishingInFlightLease: TemporaryPasteboardLease? = nil
+    ) -> Bool {
         guard let lease = activePasteboardLease else { return true }
-        for _ in 0..<3 {
-            guard lease.isOwned else { break }
-            if case .failed = lease.restoreIfOwned() { continue }
-            break
+        // Only the injection that owns this exact lease may hand it back before its paste
+        // confirmation finishes. External cleanup must wait, or a slow host can paste the restored
+        // user clipboard instead of the snippet whose Cmd+V was already posted.
+        if pasteboardInjectionLease === lease, finishingInFlightLease !== lease {
+            return false
         }
-        guard !lease.isOwned else { return false }
+        let restoredOrSuperseded = lease.restoreWithRetries()
+        // A lease that is still owned here could not hand the clipboard back — as opposed to
+        // having lost it to a newer copy, which finishes it. Reporting success would mean
+        // telling `beginPasteboardLease` it may take a clipboard we are still holding, and
+        // taking a second lease over our own snippet text loses the user's data for good.
+        guard restoredOrSuperseded else {
+            if schedulingRetryOnFailure {
+                schedulePasteboardRestoreRetryIfNeeded()
+            }
+            return false
+        }
         activePasteboardLease = nil
+        pasteboardRestoreRetryWorkItem?.cancel()
+        pasteboardRestoreRetryWorkItem = nil
+        pasteboardRestoreScheduleGeneration &+= 1
+        pasteboardRestoreRetryRoundsRemaining = 0
+        if statusReportsPendingPasteboardRecovery(statusText) {
+            // This covers both a successful restore and a newer copy superseding our lease.
+            statusText = "Your clipboard is ready."
+        }
         return true
+    }
+
+    /// A short delayed retry covers transient pasteboard-server failures without blocking the main
+    /// thread or silently starting a second lease. The rounds are bounded; after they are exhausted,
+    /// later user actions still retry synchronously and remain blocked until the debt is resolved or
+    /// a newer user copy supersedes it.
+    @discardableResult
+    private func schedulePasteboardRestoreRetryIfNeeded() -> Bool {
+        guard let scheduledLease = activePasteboardLease,
+              scheduledLease.isOwned,
+              pasteboardRestoreRetryWorkItem == nil,
+              pasteboardRestoreRetryRoundsRemaining > 0
+        else { return false }
+
+        pasteboardRestoreRetryRoundsRemaining -= 1
+        let scheduledGeneration = pasteboardRestoreScheduleGeneration
+        let workItem = DispatchWorkItem { [weak self, weak scheduledLease] in
+            MainActor.assumeIsolated {
+                // `DispatchWorkItem.cancel()` is cooperative: a canceled block may still reach the
+                // queue. Never let an old retry clear or restore a newer lease created meanwhile.
+                guard let self, let scheduledLease,
+                      self.activePasteboardLease === scheduledLease,
+                      self.pasteboardRestoreScheduleGeneration == scheduledGeneration
+                else { return }
+                self.pasteboardRestoreRetryWorkItem = nil
+                if self.finishPendingPasteboardOwnership() {
+                    self.continueTerminationPreparationIfNeeded()
+                    return
+                }
+                if self.schedulePasteboardRestoreRetryIfNeeded() { return }
+
+                // A user copy can supersede the lease after the failed write above but before the
+                // scheduling guard reads `isOwned`. Check once more before calling it failure.
+                if self.finishPendingPasteboardOwnership() {
+                    self.continueTerminationPreparationIfNeeded()
+                    return
+                }
+                if self.pasteboardRecoveryCompletion != nil {
+                    self.statusText = "Could not restore your previous clipboard, so Quit was canceled."
+                }
+                self.completePasteboardRecovery(success: false)
+            }
+        }
+        pasteboardRestoreRetryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: workItem)
+        return true
+    }
+
+    private func statusReportsPendingPasteboardRecovery(_ status: String) -> Bool {
+        status.localizedCaseInsensitiveContains("restoring your previous clipboard")
+            || status.localizedCaseInsensitiveContains("previous clipboard is still being restored")
+            || status.localizedCaseInsensitiveContains("restoring its previous contents")
+    }
+
+    /// Called after the paste-confirmation critical section or a delayed handback finishes. A quit
+    /// decision is never delivered while the lease is still consumable by an in-flight Cmd+V.
+    private func continueTerminationPreparationIfNeeded() {
+        guard isPreparingForTermination,
+              pasteboardInjectionLease == nil,
+              pasteboardRecoveryCompletion != nil
+        else { return }
+        // The in-flight injection may already have scheduled the first delayed handback after its
+        // own bounded immediate attempts. Do not duplicate those writes synchronously here.
+        if pasteboardRestoreRetryWorkItem != nil { return }
+
+        if finishPendingPasteboardOwnership() {
+            completePasteboardRecovery(success: true)
+            return
+        }
+        if schedulePasteboardRestoreRetryIfNeeded() { return }
+
+        // As in `prepareForTermination`, distinguish a last-moment superseding user copy from
+        // actual retry exhaustion.
+        if finishPendingPasteboardOwnership() {
+            completePasteboardRecovery(success: true)
+        } else {
+            statusText = "Could not restore your previous clipboard, so Quit was canceled."
+            completePasteboardRecovery(success: false)
+        }
+    }
+
+    private func completePasteboardRecovery(success: Bool) {
+        guard let completion = pasteboardRecoveryCompletion else { return }
+        pasteboardRecoveryCompletion = nil
+        // `applicationShouldTerminate` must return `.terminateLater` before AppKit receives its
+        // answer. Always crossing one main-queue turn makes that ordering structural, including
+        // last-moment pasteboard supersession.
+        DispatchQueue.main.async {
+            completion(success)
+        }
     }
 
     private func focusedCaretFingerprint() -> PasteCaretFingerprint? {
@@ -2086,23 +2384,23 @@ final class SnippetExpansionEngine {
         NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
     }
 
-    private func focusedElementIsTextInput() -> Bool {
-        guard let focused = frontmostFocusedElement() else { return false }
+    private func focusedTextInputElement(using axBudget: AXMessagingBudget) -> AXUIElement? {
+        guard let focused = frontmostFocusedElement(axBudget: axBudget) else { return nil }
 
-        if elementAcceptsTextInput(focused) {
-            return true
+        if elementAcceptsTextInput(focused, axBudget: axBudget) {
+            return focused
         }
 
         var current = focused
         for _ in 0..<4 {
-            guard let parent = parentElement(of: current) else { break }
-            if elementAcceptsTextInput(parent) {
-                return true
+            guard let parent = parentElement(of: current, axBudget: axBudget) else { break }
+            if elementAcceptsTextInput(parent, axBudget: axBudget) {
+                return focused
             }
             current = parent
         }
 
-        return false
+        return nil
     }
 
     private func focusedTextInputHasSelectedText() -> Bool {
@@ -2247,20 +2545,23 @@ final class SnippetExpansionEngine {
         return .none
     }
 
-    private func frontmostFocusedElement() -> AXUIElement? {
+    private func frontmostFocusedElement(axBudget: AXMessagingBudget? = nil) -> AXUIElement? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        primeAccessibilityIfNeeded(for: app)
+        primeAccessibilityIfNeeded(for: app, axBudget: axBudget)
+        if let axBudget, !axBudget.canContinue { return nil }
 
-        if let focused = copyFocusedElement(from: app) {
-            return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+        if let focused = copyFocusedElement(from: app, axBudget: axBudget) {
+            return deepestFocusedElement(startingAt: focused, maxDepth: 4, axBudget: axBudget)
         }
+        if let axBudget, !axBudget.canContinue { return nil }
 
         // Retry once after forcing manual accessibility attributes for Chromium/Electron.
-        primeAccessibilityIfNeeded(for: app, force: true)
-        guard let focused = copyFocusedElement(from: app) else {
+        primeAccessibilityIfNeeded(for: app, force: true, axBudget: axBudget)
+        if let axBudget, !axBudget.canContinue { return nil }
+        guard let focused = copyFocusedElement(from: app, axBudget: axBudget) else {
             return nil
         }
-        return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+        return deepestFocusedElement(startingAt: focused, maxDepth: 4, axBudget: axBudget)
     }
 
     private func captureSecureExpansionFocusTarget(targetPID: pid_t?) -> SecureExpansionFocusTarget? {
@@ -2360,30 +2661,73 @@ final class SnippetExpansionEngine {
         return element
     }
 
-    private func copyFocusedElement(from app: NSRunningApplication) -> AXUIElement? {
-        let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(app.processIdentifier))
+    private func withBoundedMessagingTimeout(
+        _ element: AXUIElement,
+        axBudget: AXMessagingBudget?
+    ) -> AXUIElement? {
+        guard let axBudget else { return withBoundedMessagingTimeout(element) }
+        return axBudget.bind(element) ? element : nil
+    }
+
+    private func copyAttributeValue(
+        of element: AXUIElement,
+        attribute: CFString,
+        into value: inout CFTypeRef?,
+        axBudget: AXMessagingBudget?
+    ) -> AXError {
+        if let axBudget {
+            return axBudget.copyAttributeValue(of: element, attribute: attribute, into: &value)
+        }
+        return AXUIElementCopyAttributeValue(element, attribute, &value)
+    }
+
+    private func copyFocusedElement(
+        from app: NSRunningApplication,
+        axBudget: AXMessagingBudget? = nil
+    ) -> AXUIElement? {
+        guard let appElement = withBoundedMessagingTimeout(
+            AXUIElementCreateApplication(app.processIdentifier),
+            axBudget: axBudget
+        ) else { return nil }
         var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+        guard copyAttributeValue(
+            of: appElement,
+            attribute: kAXFocusedUIElementAttribute as CFString,
+            into: &focusedValue,
+            axBudget: axBudget
+        ) == .success,
               let focusedValue,
               CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
             return nil
         }
 
-        return withBoundedMessagingTimeout(focusedValue as! AXUIElement)
+        return withBoundedMessagingTimeout(focusedValue as! AXUIElement, axBudget: axBudget)
     }
 
-    private func deepestFocusedElement(startingAt root: AXUIElement, maxDepth: Int) -> AXUIElement {
+    private func deepestFocusedElement(
+        startingAt root: AXUIElement,
+        maxDepth: Int,
+        axBudget: AXMessagingBudget? = nil
+    ) -> AXUIElement? {
         var current = root
 
         for _ in 0..<maxDepth {
             var nestedValue: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(current, kAXFocusedUIElementAttribute as CFString, &nestedValue) == .success,
+            guard copyAttributeValue(
+                of: current,
+                attribute: kAXFocusedUIElementAttribute as CFString,
+                into: &nestedValue,
+                axBudget: axBudget
+            ) == .success,
                   let nestedValue,
                   CFGetTypeID(nestedValue) == AXUIElementGetTypeID() else {
                 break
             }
 
-            let nested = withBoundedMessagingTimeout(nestedValue as! AXUIElement)
+            guard let nested = withBoundedMessagingTimeout(
+                nestedValue as! AXUIElement,
+                axBudget: axBudget
+            ) else { return nil }
             if CFEqual(current, nested) {
                 break
             }
@@ -2391,12 +2735,24 @@ final class SnippetExpansionEngine {
             current = nested
         }
 
+        if let axBudget, !axBudget.canContinue { return nil }
         return current
     }
 
-    private func elementAcceptsTextInput(_ element: AXUIElement) -> Bool {
-        let role = stringAttribute(of: element, attribute: kAXRoleAttribute as CFString) ?? ""
-        let subrole = stringAttribute(of: element, attribute: kAXSubroleAttribute as CFString) ?? ""
+    private func elementAcceptsTextInput(
+        _ element: AXUIElement,
+        axBudget: AXMessagingBudget? = nil
+    ) -> Bool {
+        let role = stringAttribute(
+            of: element,
+            attribute: kAXRoleAttribute as CFString,
+            axBudget: axBudget
+        ) ?? ""
+        let subrole = stringAttribute(
+            of: element,
+            attribute: kAXSubroleAttribute as CFString,
+            axBudget: axBudget
+        ) ?? ""
 
         if role == (kAXTextFieldRole as String) ||
             role == (kAXTextAreaRole as String) ||
@@ -2405,30 +2761,56 @@ final class SnippetExpansionEngine {
             return true
         }
 
-        if boolAttribute(of: element, attribute: "AXEditable" as CFString) == true {
+        if boolAttribute(
+            of: element,
+            attribute: "AXEditable" as CFString,
+            axBudget: axBudget
+        ) == true {
             return true
         }
 
         // Chromium/Electron text controls often expose text-range attributes
         // even when the role isn't one of the standard text roles.
-        if hasAttribute(kAXSelectedTextRangeAttribute as CFString, on: element) {
+        if hasAttribute(
+            kAXSelectedTextRangeAttribute as CFString,
+            on: element,
+            axBudget: axBudget
+        ) {
             return true
         }
 
         return false
     }
 
-    private func stringAttribute(of element: AXUIElement, attribute: CFString) -> String? {
+    private func stringAttribute(
+        of element: AXUIElement,
+        attribute: CFString,
+        axBudget: AXMessagingBudget? = nil
+    ) -> String? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+        guard copyAttributeValue(
+            of: element,
+            attribute: attribute,
+            into: &value,
+            axBudget: axBudget
+        ) == .success else {
             return nil
         }
         return value as? String
     }
 
-    private func boolAttribute(of element: AXUIElement, attribute: CFString) -> Bool? {
+    private func boolAttribute(
+        of element: AXUIElement,
+        attribute: CFString,
+        axBudget: AXMessagingBudget? = nil
+    ) -> Bool? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+        guard copyAttributeValue(
+            of: element,
+            attribute: attribute,
+            into: &value,
+            axBudget: axBudget
+        ) == .success else {
             return nil
         }
         return value as? Bool
@@ -2460,9 +2842,19 @@ final class SnippetExpansionEngine {
         return max(0, range.length)
     }
 
-    private func hasAttribute(_ attribute: CFString, on element: AXUIElement) -> Bool {
+    private func hasAttribute(
+        _ attribute: CFString,
+        on element: AXUIElement,
+        axBudget: AXMessagingBudget? = nil
+    ) -> Bool {
         var attributesValue: CFArray?
-        guard AXUIElementCopyAttributeNames(element, &attributesValue) == .success,
+        let result: AXError
+        if let axBudget {
+            result = axBudget.copyAttributeNames(of: element, into: &attributesValue)
+        } else {
+            result = AXUIElementCopyAttributeNames(element, &attributesValue)
+        }
+        guard result == .success,
               let attributesValue,
               let attributes = attributesValue as? [String] else {
             return false
@@ -2471,18 +2863,30 @@ final class SnippetExpansionEngine {
         return attributes.contains(attribute as String)
     }
 
-    private func parentElement(of element: AXUIElement) -> AXUIElement? {
+    private func parentElement(
+        of element: AXUIElement,
+        axBudget: AXMessagingBudget? = nil
+    ) -> AXUIElement? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &value) == .success,
+        guard copyAttributeValue(
+            of: element,
+            attribute: kAXParentAttribute as CFString,
+            into: &value,
+            axBudget: axBudget
+        ) == .success,
               let value,
               CFGetTypeID(value) == AXUIElementGetTypeID() else {
             return nil
         }
 
-        return withBoundedMessagingTimeout(value as! AXUIElement)
+        return withBoundedMessagingTimeout(value as! AXUIElement, axBudget: axBudget)
     }
 
-    private func primeAccessibilityIfNeeded(for app: NSRunningApplication, force: Bool = false) {
+    private func primeAccessibilityIfNeeded(
+        for app: NSRunningApplication,
+        force: Bool = false,
+        axBudget: AXMessagingBudget? = nil
+    ) {
         guard accessibilityGranted else { return }
         let pid = app.processIdentifier
         guard pid != ProcessInfo.processInfo.processIdentifier else { return }
@@ -2495,20 +2899,49 @@ final class SnippetExpansionEngine {
             return
         }
 
-        let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(pid))
+        guard let appElement = withBoundedMessagingTimeout(
+            AXUIElementCreateApplication(pid),
+            axBudget: axBudget
+        ) else { return }
 
         // Electron documents this explicit opt-in switch for third-party ATs.
         if force || !hasManualPriming {
-            _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            accessibilityPrimedPIDs.insert(pid)
+            let result = setAttributeValue(
+                of: appElement,
+                attribute: "AXManualAccessibility" as CFString,
+                value: kCFBooleanTrue,
+                axBudget: axBudget
+            )
+            if AXMessagingBudget.primingResultIsCacheable(result) {
+                accessibilityPrimedPIDs.insert(pid)
+            }
         }
 
         // Chromium apps may require this to expose complete accessibility data
         // for non-VoiceOver assistive tools.
         if shouldSetEnhancedUI && (force || !hasEnhancedPriming) {
-            _ = AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
-            enhancedAccessibilityPrimedPIDs.insert(pid)
+            let result = setAttributeValue(
+                of: appElement,
+                attribute: "AXEnhancedUserInterface" as CFString,
+                value: kCFBooleanTrue,
+                axBudget: axBudget
+            )
+            if AXMessagingBudget.primingResultIsCacheable(result) {
+                enhancedAccessibilityPrimedPIDs.insert(pid)
+            }
         }
+    }
+
+    private func setAttributeValue(
+        of element: AXUIElement,
+        attribute: CFString,
+        value: CFTypeRef,
+        axBudget: AXMessagingBudget?
+    ) -> AXError {
+        if let axBudget {
+            return axBudget.setAttributeValue(of: element, attribute: attribute, value: value)
+        }
+        return AXUIElementSetAttributeValue(element, attribute, value)
     }
 
     private func isChromiumFamily(bundleIdentifier: String?) -> Bool {

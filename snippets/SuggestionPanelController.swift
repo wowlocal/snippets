@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 struct SuggestionItem {
     let snippet: Snippet
@@ -48,7 +49,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private let horizontalCellPadding: CGFloat = 28
 
     private var maxVisibleRowsOnScreen: Int {
-        let anchorPoint = anchorRect.map { NSPoint(x: $0.midX, y: $0.midY) }
+        let anchorPoint = anchor?.screenPoint
         let screen = (anchorPoint.flatMap { screenContaining(point: $0) })
             ?? screenContaining(point: NSEvent.mouseLocation)
             ?? NSScreen.main
@@ -73,10 +74,38 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     var hasSelectableItems: Bool { !items.isEmpty }
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
-    private var anchorRect: NSRect?
+    private var anchor: PanelAnchor?
     private var accessibilityPrimedPIDs: Set<pid_t> = []
     private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
     private var selectionWasUserDriven = false
+
+    private static let axLog = Logger(subsystem: "com.khm.snippets", category: "suggestion-anchor")
+
+    private enum AnchorSource: String {
+        case caret
+        case focusedElement = "focused-element"
+        case mouse
+    }
+
+    private enum PanelAnchor {
+        case rect(NSRect)
+        case mouse(NSPoint)
+
+        var screenPoint: NSPoint {
+            switch self {
+            case .rect(let rect):
+                return NSPoint(x: rect.midX, y: rect.midY)
+            case .mouse(let point):
+                return point
+            }
+        }
+    }
+
+    private struct AnchorResolution {
+        let anchor: PanelAnchor
+        let source: AnchorSource
+        let reason: String
+    }
 
     private struct RectCandidate {
         let rect: NSRect
@@ -163,7 +192,11 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     var isVisible: Bool { panel.isVisible }
 
-    func show(items: [SuggestionItem]) {
+    func show(
+        items: [SuggestionItem],
+        anchorFocusedElement: AXUIElement? = nil,
+        axBudget: AXMessagingBudget? = nil
+    ) {
         let previouslySelectedSnippetID = selectionWasUserDriven ? selectedSnippet()?.id : nil
         self.items = items
         tableView.reloadData()
@@ -175,8 +208,30 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         // so screen metrics come from the caret's screen rather than falling back
         // to the screen containing the mouse. The anchor is captured once per
         // suggestion session to prevent the panel from jumping as the caret moves.
-        if anchorRect == nil {
-            anchorRect = caretScreenRect() ?? fallbackCaretRect()
+        if anchor == nil {
+            // Timed because this is the one place the panel talks to a possibly-stalled host, and
+            // the cost is invisible from the outside: a slow answer and a fast one both just place
+            // the panel. `log stream --predicate 'subsystem == "com.khm.snippets"'` makes the
+            // bounded timeout observable, and says which path placed the panel when a host is slow.
+            let host = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+            let budget = axBudget ?? AXMessagingBudget()
+            let resolution = resolveAnchor(
+                focusedElement: anchorFocusedElement,
+                axBudget: budget
+            )
+            anchor = resolution.anchor
+            // For the normal activation path this starts in the engine, before text-input
+            // detection. Reporting only the panel slice would hide the very cumulative stall the
+            // shared deadline prevents.
+            let elapsedMS = budget.elapsedMilliseconds
+            Self.axLog.info(
+                """
+                anchor host=\(host, privacy: .public) \
+                source=\(resolution.source.rawValue, privacy: .public) \
+                reason=\(resolution.reason, privacy: .public) \
+                ms=\(elapsedMS, format: .fixed(precision: 1), privacy: .public)
+                """
+            )
         }
 
         let visibleCount = min(count, maxVisible, maxVisibleRowsOnScreen)
@@ -244,7 +299,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     /// Fully end the suggestion session — clears anchor so next activation repositions.
     func dismiss() {
         hide()
-        anchorRect = nil
+        anchor = nil
     }
 
     func moveSelectionUp() {
@@ -321,42 +376,103 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     // MARK: - Positioning
 
     private func positionPanelAtAnchor() {
-        guard let rect = anchorRect else {
-            // Last resort: use mouse position
-            var origin = mousePosition()
+        guard let anchor else { return }
+
+        switch anchor {
+        case .mouse(let point):
+            // Captured once with the rest of the anchor, so filtering the list cannot make a
+            // mouse fallback jump around after the user moves the pointer.
+            var origin = point
             origin.y -= panel.frame.height + 4
             if let screen = screenContaining(point: origin) ?? NSScreen.main {
                 origin = clampedPanelOrigin(origin, in: screen.visibleFrame)
             }
             panel.setFrameOrigin(origin)
-            return
-        }
+        case .rect(let rect):
+            // In AppKit coords: rect.origin is bottom-left, rect.maxY is top.
+            // Place panel below the caret line (below rect.origin.y).
+            var origin = NSPoint(x: rect.origin.x, y: rect.origin.y - panel.frame.height - 4)
 
-        // In AppKit coords: rect.origin is bottom-left, rect.maxY is top.
-        // Place panel below the caret line (below rect.origin.y).
-        var origin = NSPoint(x: rect.origin.x, y: rect.origin.y - panel.frame.height - 4)
-
-        // Keep on screen.
-        if let screen = screenContaining(point: NSPoint(x: rect.midX, y: rect.midY))
-            ?? screenIntersecting(rect)
-            ?? NSScreen.main {
-            let visible = screen.visibleFrame
-            if origin.y < visible.minY {
-                // Show above caret instead
-                origin.y = rect.maxY + 4
+            // Keep on screen.
+            if let screen = screenContaining(point: NSPoint(x: rect.midX, y: rect.midY))
+                ?? screenIntersecting(rect)
+                ?? NSScreen.main {
+                let visible = screen.visibleFrame
+                if origin.y < visible.minY {
+                    // Show above caret instead
+                    origin.y = rect.maxY + 4
+                }
+                origin = clampedPanelOrigin(origin, in: visible)
             }
-            origin = clampedPanelOrigin(origin, in: visible)
+
+            panel.setFrameOrigin(origin)
+        }
+    }
+
+    private func resolveAnchor(
+        focusedElement suppliedFocusedElement: AXUIElement?,
+        axBudget: AXMessagingBudget
+    ) -> AnchorResolution {
+        let focused: AXUIElement
+        if let suppliedFocusedElement {
+            focused = suppliedFocusedElement
+        } else if let acquired = frontmostFocusedElement(axBudget: axBudget) {
+            focused = acquired
+        } else {
+            return AnchorResolution(
+                anchor: .mouse(mousePosition()),
+                source: .mouse,
+                reason: axBudget.stopReason?.telemetryValue ?? "focus-unavailable"
+            )
         }
 
-        panel.setFrameOrigin(origin)
+        if let caretRect = caretScreenRect(of: focused, axBudget: axBudget) {
+            return AnchorResolution(
+                anchor: .rect(caretRect),
+                source: .caret,
+                reason: axBudget.stopReason?.telemetryValue ?? "none"
+            )
+        }
+
+        // `.cannotComplete` or an exhausted wall-clock budget is terminal for this callback.
+        // An AX-based fallback after it would just start another individually bounded wait.
+        guard axBudget.canContinue else {
+            return AnchorResolution(
+                anchor: .mouse(mousePosition()),
+                source: .mouse,
+                reason: axBudget.stopReason?.telemetryValue ?? "deadline"
+            )
+        }
+
+        // Reuse the exact focused object the engine already proved was a text input. Reacquiring
+        // focus here used to repeat priming, traversal, and their timeouts on the same tap callback.
+        if let elementRect = elementScreenRect(of: focused, axBudget: axBudget) {
+            return AnchorResolution(
+                anchor: .rect(elementRect),
+                source: .focusedElement,
+                reason: axBudget.stopReason?.telemetryValue ?? "range-unavailable"
+            )
+        }
+
+        return AnchorResolution(
+            anchor: .mouse(mousePosition()),
+            source: .mouse,
+            reason: axBudget.stopReason?.telemetryValue ?? "element-unavailable"
+        )
     }
 
     /// Try to get precise caret rect using AXBoundsForRange.
-    private func caretScreenRect() -> NSRect? {
-        guard let focused = frontmostFocusedElement() else { return nil }
+    private func caretScreenRect(
+        of focused: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> NSRect? {
 
         var rangeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success else {
+        guard axBudget.copyAttributeValue(
+            of: focused,
+            attribute: kAXSelectedTextRangeAttribute as CFString,
+            into: &rangeValue
+        ) == .success else {
             return nil
         }
 
@@ -368,8 +484,12 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
 
         // Try the selected range first
-        if let rect = boundsForRange(of: focused, range: rangeValue) {
-            return normalizedAnchorRect(for: rect, focusedElement: focused)
+        if let rect = boundsForRange(of: focused, range: rangeValue, axBudget: axBudget) {
+            return normalizedAnchorRect(
+                for: rect,
+                focusedElement: focused,
+                axBudget: axBudget
+            )
         }
 
         // Zero-length selection may fail in some apps (Safari, etc.)
@@ -378,8 +498,16 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             var altRange = CFRange(location: cfRange.location - 1, length: 1)
             if let altRangeValue = AXValueCreate(.cfRange, &altRange) {
                 // This gives us the rect of the character just before the cursor
-                if let rect = boundsForRange(of: focused, range: altRangeValue as CFTypeRef) {
-                    return normalizedAnchorRect(for: rect, focusedElement: focused)
+                if let rect = boundsForRange(
+                    of: focused,
+                    range: altRangeValue as CFTypeRef,
+                    axBudget: axBudget
+                ) {
+                    return normalizedAnchorRect(
+                        for: rect,
+                        focusedElement: focused,
+                        axBudget: axBudget
+                    )
                 }
             }
         }
@@ -389,12 +517,24 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     /// Some native single-line fields report a caret line rect that sits inside the control.
     /// Keep caret X, but anchor vertically to the control's bottom so the panel appears below it.
-    private func normalizedAnchorRect(for caretRect: NSRect, focusedElement: AXUIElement) -> NSRect {
-        guard let role = stringAttribute(of: focusedElement, attribute: kAXRoleAttribute as CFString) else {
+    private func normalizedAnchorRect(
+        for caretRect: NSRect,
+        focusedElement: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> NSRect {
+        guard let role = stringAttribute(
+            of: focusedElement,
+            attribute: kAXRoleAttribute as CFString,
+            axBudget: axBudget
+        ) else {
             return caretRect
         }
 
-        guard let controlRect = preferredControlRect(for: focusedElement, caretRect: caretRect) ?? elementScreenRect(of: focusedElement) else {
+        guard let controlRect = preferredControlRect(
+            for: focusedElement,
+            caretRect: caretRect,
+            axBudget: axBudget
+        ) ?? elementScreenRect(of: focusedElement, axBudget: axBudget) else {
             return caretRect
         }
 
@@ -415,10 +555,19 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return adjusted
     }
 
-    private func boundsForRange(of element: AXUIElement, range: CFTypeRef) -> NSRect? {
+    private func boundsForRange(
+        of element: AXUIElement,
+        range: CFTypeRef,
+        axBudget: AXMessagingBudget
+    ) -> NSRect? {
         var bounds = CGRect.zero
         var boundsValue: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, range, &boundsValue) == .success else {
+        guard axBudget.copyParameterizedAttributeValue(
+            of: element,
+            attribute: kAXBoundsForRangeParameterizedAttribute as CFString,
+            parameter: range,
+            into: &boundsValue
+        ) == .success else {
             return nil
         }
 
@@ -433,13 +582,6 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         if bounds.height < 14 { bounds.size.height = 14 }
 
         return axRectToAppKit(bounds)
-    }
-
-    /// Fallback: use the focused element's own position/size (works in Chrome omnibox, etc.)
-    private func fallbackCaretRect() -> NSRect? {
-        guard let focused = frontmostFocusedElement() else { return nil }
-
-        return elementScreenRect(of: focused)
     }
 
     /// Convert an AX rectangle (top-left origin) to an AppKit rect (bottom-left origin).
@@ -584,46 +726,75 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         NSEvent.mouseLocation
     }
 
-    private func frontmostFocusedElement() -> AXUIElement? {
+    private func frontmostFocusedElement(axBudget: AXMessagingBudget) -> AXUIElement? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        primeAccessibilityIfNeeded(for: app)
+        primeAccessibilityIfNeeded(for: app, axBudget: axBudget)
+        guard axBudget.canContinue else { return nil }
 
-        if let focused = copyFocusedElement(from: app) {
-            return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+        if let focused = copyFocusedElement(from: app, axBudget: axBudget) {
+            return deepestFocusedElement(
+                startingAt: focused,
+                maxDepth: 4,
+                axBudget: axBudget
+            )
         }
+        guard axBudget.canContinue else { return nil }
 
         // Retry once after forcing manual accessibility attributes for Chromium/Electron.
-        primeAccessibilityIfNeeded(for: app, force: true)
-        guard let focused = copyFocusedElement(from: app) else {
+        primeAccessibilityIfNeeded(for: app, force: true, axBudget: axBudget)
+        guard axBudget.canContinue,
+              let focused = copyFocusedElement(from: app, axBudget: axBudget) else {
             return nil
         }
-        return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+        return deepestFocusedElement(
+            startingAt: focused,
+            maxDepth: 4,
+            axBudget: axBudget
+        )
     }
 
-    private func copyFocusedElement(from app: NSRunningApplication) -> AXUIElement? {
+    private func copyFocusedElement(
+        from app: NSRunningApplication,
+        axBudget: AXMessagingBudget
+    ) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard axBudget.bind(appElement) else { return nil }
         var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
+        guard axBudget.copyAttributeValue(
+            of: appElement,
+            attribute: kAXFocusedUIElementAttribute as CFString,
+            into: &focusedValue
+        ) == .success,
               let focusedValue,
               CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
             return nil
         }
 
-        return (focusedValue as! AXUIElement)
+        let focused = focusedValue as! AXUIElement
+        return axBudget.bind(focused) ? focused : nil
     }
 
-    private func deepestFocusedElement(startingAt root: AXUIElement, maxDepth: Int) -> AXUIElement {
+    private func deepestFocusedElement(
+        startingAt root: AXUIElement,
+        maxDepth: Int,
+        axBudget: AXMessagingBudget
+    ) -> AXUIElement? {
         var current = root
 
         for _ in 0..<maxDepth {
             var nestedValue: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(current, kAXFocusedUIElementAttribute as CFString, &nestedValue) == .success,
+            guard axBudget.copyAttributeValue(
+                of: current,
+                attribute: kAXFocusedUIElementAttribute as CFString,
+                into: &nestedValue
+            ) == .success,
                   let nestedValue,
                   CFGetTypeID(nestedValue) == AXUIElementGetTypeID() else {
                 break
             }
 
             let nested = nestedValue as! AXUIElement
+            guard axBudget.bind(nested) else { return nil }
             if CFEqual(current, nested) {
                 break
             }
@@ -631,12 +802,20 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             current = nested
         }
 
-        return current
+        return axBudget.canContinue ? current : nil
     }
 
-    private func stringAttribute(of element: AXUIElement, attribute: CFString) -> String? {
+    private func stringAttribute(
+        of element: AXUIElement,
+        attribute: CFString,
+        axBudget: AXMessagingBudget
+    ) -> String? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+        guard axBudget.copyAttributeValue(
+            of: element,
+            attribute: attribute,
+            into: &value
+        ) == .success else {
             return nil
         }
         return value as? String
@@ -658,14 +837,25 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
     }
 
-    private func elementScreenRect(of element: AXUIElement) -> NSRect? {
+    private func elementScreenRect(
+        of element: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> NSRect? {
         var posValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success else {
+        guard axBudget.copyAttributeValue(
+            of: element,
+            attribute: kAXPositionAttribute as CFString,
+            into: &posValue
+        ) == .success else {
             return nil
         }
 
         var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success else {
+        guard axBudget.copyAttributeValue(
+            of: element,
+            attribute: kAXSizeAttribute as CFString,
+            into: &sizeValue
+        ) == .success else {
             return nil
         }
 
@@ -681,9 +871,17 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     /// Walk up AX parents and pick the smallest plausible input control that still contains the caret.
     /// This avoids anchoring to Safari's inner text node, which can place the panel over typed text.
-    private func preferredControlRect(for focusedElement: AXUIElement, caretRect: NSRect) -> NSRect? {
-        let candidates = inputHierarchy(startingAt: focusedElement, maxDepth: 6).compactMap { element -> NSRect? in
-            guard let rect = elementScreenRect(of: element) else { return nil }
+    private func preferredControlRect(
+        for focusedElement: AXUIElement,
+        caretRect: NSRect,
+        axBudget: AXMessagingBudget
+    ) -> NSRect? {
+        let candidates = inputHierarchy(
+            startingAt: focusedElement,
+            maxDepth: 6,
+            axBudget: axBudget
+        ).compactMap { element -> NSRect? in
+            guard let rect = elementScreenRect(of: element, axBudget: axBudget) else { return nil }
             guard rect.width >= 40, rect.height >= 16, rect.height <= 90 else { return nil }
             guard rect.insetBy(dx: -2, dy: -2).intersects(caretRect) else { return nil }
             return rect
@@ -701,12 +899,16 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return candidates.min(by: { rectArea($0) < rectArea($1) })
     }
 
-    private func inputHierarchy(startingAt element: AXUIElement, maxDepth: Int) -> [AXUIElement] {
+    private func inputHierarchy(
+        startingAt element: AXUIElement,
+        maxDepth: Int,
+        axBudget: AXMessagingBudget
+    ) -> [AXUIElement] {
         var elements: [AXUIElement] = [element]
         var current = element
 
         for _ in 0..<maxDepth {
-            guard let parent = parentElement(of: current) else { break }
+            guard let parent = parentElement(of: current, axBudget: axBudget) else { break }
             elements.append(parent)
             current = parent
         }
@@ -714,22 +916,34 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return elements
     }
 
-    private func parentElement(of element: AXUIElement) -> AXUIElement? {
+    private func parentElement(
+        of element: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> AXUIElement? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &value) == .success,
+        guard axBudget.copyAttributeValue(
+            of: element,
+            attribute: kAXParentAttribute as CFString,
+            into: &value
+        ) == .success,
               let value,
               CFGetTypeID(value) == AXUIElementGetTypeID() else {
             return nil
         }
 
-        return (value as! AXUIElement)
+        let parent = value as! AXUIElement
+        return axBudget.bind(parent) ? parent : nil
     }
 
     private func rectArea(_ rect: NSRect) -> CGFloat {
         rect.width * rect.height
     }
 
-    private func primeAccessibilityIfNeeded(for app: NSRunningApplication, force: Bool = false) {
+    private func primeAccessibilityIfNeeded(
+        for app: NSRunningApplication,
+        force: Bool = false,
+        axBudget: AXMessagingBudget
+    ) {
         let pid = app.processIdentifier
         guard pid != ProcessInfo.processInfo.processIdentifier else { return }
 
@@ -742,18 +956,31 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         }
 
         let appElement = AXUIElementCreateApplication(pid)
+        guard axBudget.bind(appElement) else { return }
 
         // Electron documents this explicit opt-in switch for third-party ATs.
         if force || !hasManualPriming {
-            _ = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            accessibilityPrimedPIDs.insert(pid)
+            let result = axBudget.setAttributeValue(
+                of: appElement,
+                attribute: "AXManualAccessibility" as CFString,
+                value: kCFBooleanTrue
+            )
+            if AXMessagingBudget.primingResultIsCacheable(result) {
+                accessibilityPrimedPIDs.insert(pid)
+            }
         }
 
         // Chromium apps may require this to expose complete accessibility data
         // for non-VoiceOver assistive tools.
         if shouldSetEnhancedUI && (force || !hasEnhancedPriming) {
-            _ = AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
-            enhancedAccessibilityPrimedPIDs.insert(pid)
+            let result = axBudget.setAttributeValue(
+                of: appElement,
+                attribute: "AXEnhancedUserInterface" as CFString,
+                value: kCFBooleanTrue
+            )
+            if AXMessagingBudget.primingResultIsCacheable(result) {
+                enhancedAccessibilityPrimedPIDs.insert(pid)
+            }
         }
     }
 
