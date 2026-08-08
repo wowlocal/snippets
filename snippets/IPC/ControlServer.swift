@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import QuartzCore
 import Security
 
 /// The CLI consent prompt is intentionally not an `NSAlert`. On macOS 26 an alert with
@@ -9,6 +10,97 @@ import Security
 private final class RevealConsentWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+/// Draws the shape the window server cannot: a persistent rounded rim and a rounded
+/// shadow around a transparent, borderless window. The inactive state is deliberately
+/// a little more opaque and more strongly outlined so the prompt stays distinct from a
+/// dark terminal after the user clicks away from it.
+private final class RevealConsentChromeView: NSView {
+    private let chromeCornerRadius: CGFloat
+
+    init(cornerRadius: CGFloat) {
+        chromeCornerRadius = cornerRadius
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = cornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = false
+        layer?.borderWidth = 1
+        layer?.shadowColor = NSColor.black.cgColor
+        updateChrome()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(
+            self, name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.removeObserver(
+            self, name: NSWindow.didResignKeyNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowKeyStateChanged),
+                name: NSWindow.didBecomeKeyNotification,
+                object: window)
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowKeyStateChanged),
+                name: NSWindow.didResignKeyNotification,
+                object: window)
+        }
+        updateChrome()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateChrome()
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.shadowPath = CGPath(
+            roundedRect: bounds,
+            cornerWidth: chromeCornerRadius,
+            cornerHeight: chromeCornerRadius,
+            transform: nil)
+    }
+
+    @objc private func windowKeyStateChanged(_ notification: Notification) {
+        updateChrome()
+    }
+
+    private func updateChrome() {
+        guard let layer else { return }
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let isInactive = window?.isKeyWindow == false
+
+        if isDark {
+            layer.backgroundColor = NSColor(
+                white: 0.08, alpha: isInactive ? 0.72 : 0.52).cgColor
+            layer.borderColor = NSColor(
+                white: 1, alpha: isInactive ? 0.28 : 0.20).cgColor
+        } else {
+            layer.backgroundColor = NSColor(
+                white: 1, alpha: isInactive ? 0.78 : 0.62).cgColor
+            layer.borderColor = NSColor(
+                white: 0, alpha: isInactive ? 0.24 : 0.16).cgColor
+        }
+
+        layer.shadowOpacity = isInactive ? 0.46 : 0.36
+        layer.shadowRadius = 14
+        layer.shadowOffset = NSSize(width: 0, height: -4)
+    }
 }
 
 /// Answers `snippets-cli` over a local socket, and brokers access to secrets.
@@ -242,8 +334,12 @@ final class ControlServer: NSObject {
                 "too many reveal requests in the last minute; approve them one at a time from the app")
         }
 
+        let previouslyFrontmostApplication = NSWorkspace.shared.frontmostApplication
         revealInFlight = true
-        defer { revealInFlight = false }
+        defer {
+            revealInFlight = false
+            restoreForegroundApplication(previouslyFrontmostApplication)
+        }
 
         switch await confirm(shell: shell, invocation: invocation, peer: peer) {
         case .denied:
@@ -285,7 +381,19 @@ final class ControlServer: NSObject {
         return true
     }
 
-    /// A modeless consent panel which names the caller. `runModal` is forbidden here:
+    /// Once consent/authentication is over, return focus to the application the user
+    /// invoked the CLI from. Do not steal it back if they deliberately switched to some
+    /// third application while the prompt was waiting.
+    private func restoreForegroundApplication(_ application: NSRunningApplication?) {
+        guard NSApp.isActive,
+              let application,
+              !application.isTerminated,
+              application.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        else { return }
+        _ = application.activate()
+    }
+
+    /// A modeless consent window which names the caller. `runModal` is forbidden here:
     /// it would occupy the app's only server queue until somebody clicked, wedging even
     /// unrelated `ping` and `status` requests. The continuation suspends only this
     /// reveal task, and the bounded timer turns silence into the documented denial.
@@ -294,8 +402,6 @@ final class ControlServer: NSObject {
         invocation: String?,
         peer: PeerIdentity
     ) async -> RevealConsent {
-        NSApp.activate(ignoringOtherApps: true)
-
         return await withCheckedContinuation { continuation in
             let window = makeRevealConsentWindow(
                 shell: shell, invocation: invocation, peer: peer)
@@ -313,7 +419,13 @@ final class ControlServer: NSObject {
             }
 
             window.center()
-            window.makeKeyAndOrderFront(nil)
+            // Make the prompt visible before activating Snippets. AppKit's reopen
+            // callback otherwise observes zero visible windows and opens the main
+            // library window; once this window is already ordered, activation raises
+            // only the consent UI.
+            window.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKey()
         }
     }
 
@@ -322,7 +434,11 @@ final class ControlServer: NSObject {
         invocation: String?,
         peer: PeerIdentity
     ) -> NSWindow {
-        let windowSize = NSSize(width: 480, height: 320)
+        let surfaceSize = NSSize(width: 480, height: 320)
+        let shadowInset: CGFloat = 18
+        let windowSize = NSSize(
+            width: surfaceSize.width + shadowInset * 2,
+            height: surfaceSize.height + shadowInset * 2)
         let window = RevealConsentWindow(
             contentRect: NSRect(origin: .zero, size: windowSize),
             styleMask: [.borderless],
@@ -518,13 +634,25 @@ final class ControlServer: NSObject {
             containing: body,
             cornerRadius: 22,
             fallbackMaterial: .popover)
-        guard let windowContent = window.contentView else { return window }
-        windowContent.addSubview(surface)
+        let chrome = RevealConsentChromeView(cornerRadius: 22)
+        chrome.addSubview(surface)
         NSLayoutConstraint.activate([
-            surface.leadingAnchor.constraint(equalTo: windowContent.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: windowContent.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: windowContent.topAnchor),
-            surface.bottomAnchor.constraint(equalTo: windowContent.bottomAnchor)
+            surface.leadingAnchor.constraint(equalTo: chrome.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: chrome.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: chrome.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: chrome.bottomAnchor)
+        ])
+        guard let windowContent = window.contentView else { return window }
+        windowContent.addSubview(chrome)
+        NSLayoutConstraint.activate([
+            chrome.leadingAnchor.constraint(
+                equalTo: windowContent.leadingAnchor, constant: shadowInset),
+            chrome.trailingAnchor.constraint(
+                equalTo: windowContent.trailingAnchor, constant: -shadowInset),
+            chrome.topAnchor.constraint(
+                equalTo: windowContent.topAnchor, constant: shadowInset),
+            chrome.bottomAnchor.constraint(
+                equalTo: windowContent.bottomAnchor, constant: -shadowInset)
         ])
         window.initialFirstResponder = denyButton
         return window
