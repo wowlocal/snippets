@@ -147,6 +147,7 @@ private func cmdTags() {
 private func cmdSearch(query: String, enabledOnly: Bool, tagFilters: [String]) {
     struct SearchResult: Encodable {
         let score: Int
+        let secure: Bool
         let snippet: Snippet
     }
 
@@ -169,14 +170,22 @@ private func cmdSearch(query: String, enabledOnly: Bool, tagFilters: [String]) {
         return max(1, query.count)
     }
 
-    var snippets = loadSnippets()
+    // Match the app, `list`, and `tags`: secure metadata is searchable even while the
+    // app is closed. A shell's content is structurally empty, so secure records can
+    // match only their name, keyword, or tags — this path never decrypts anything.
+    let shells = secureShells()
+    let secureIDs = Set(shells.map(\.id))
+    var snippets = loadSnippets() + shells
     if enabledOnly { snippets = snippets.filter(\.isEnabled) }
     snippets = filterByTags(snippets, tagFilters: tagFilters)
 
     let results = snippets
         .compactMap { snippet -> SearchResult? in
             guard let score = searchScore(for: snippet, query: query) else { return nil }
-            return SearchResult(score: score, snippet: snippet)
+            return SearchResult(
+                score: score,
+                secure: secureIDs.contains(snippet.id),
+                snippet: snippet)
         }
         .sorted { $0.score > $1.score }
 
@@ -496,6 +505,7 @@ private func usage() -> Never {
         --tag <tag>                  Show only snippets with this tag (repeatable; AND)
 
       search <query>                 Search snippets by name, keyword, content, and tags
+                                     Secure snippets search metadata only, never content.
         --enabled                    Search only enabled snippets
         --tag <tag>                  Search only snippets with this tag (repeatable; AND)
 
