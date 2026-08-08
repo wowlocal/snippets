@@ -79,6 +79,28 @@ final class SnippetStore {
     /// is looking at stale state without diffing the whole array.
     private(set) var librarySeq: UInt64 = 0
 
+    /// How well the last write went, beyond "it landed".
+    ///
+    /// Exists because both degraded modes were previously invisible: they were
+    /// `NSLog`ged and nothing read them, so a user whose filesystem cannot lock would
+    /// sit in a permanently lossy configuration with no signal at all. `.unlocked` in
+    /// particular is not transient — it is every write, forever, for that user.
+    ///
+    /// The settings pane is not built yet, so nothing renders this today; the CLI
+    /// warns on stderr in the meantime. Keeping the state here rather than only in the
+    /// log is what makes surfacing it a UI change rather than an archaeology exercise.
+    enum WriteHealth: Equatable {
+        case healthy
+        /// A peer wrote inside our critical section — the lock is not holding.
+        case contended(attempts: Int)
+        /// Neither `flock` nor the `link(2)` sentinel was available.
+        case unlocked
+
+        var isDegraded: Bool { self != .healthy }
+    }
+
+    private(set) var writeHealth: WriteHealth = .healthy
+
     private var undoStack: [[Snippet]] = []
     private var redoStack: [[Snippet]] = []
     private var editTransactionSnapshot: [Snippet]?
@@ -708,11 +730,16 @@ final class SnippetStore {
             }
             rememberDiskBytes(outcome.data)
 
-            if outcome.attempts > 1 {
-                // Only reachable if the cross-process lock was bypassed — most likely
-                // the lock file was replaced underneath us. The data is fine (that is
-                // what the retry is for), but the lock is not doing its job.
-                NSLog("Snippets: library write needed \(outcome.attempts) attempts; the advisory lock is not holding.")
+            let health: WriteHealth =
+                outcome.wroteWithoutLock ? .unlocked
+                : outcome.attempts > 1 ? .contended(attempts: outcome.attempts)
+                : .healthy
+            if health != writeHealth {
+                writeHealth = health
+                if health.isDegraded {
+                    NSLog("Snippets: degraded library write — \(health).")
+                }
+                syncDelegate?.libraryDidChange(.local)
             }
 
             if outcome.foldedInForeignWrite {
@@ -720,9 +747,7 @@ final class SnippetStore {
                 // told, or it keeps rendering a library that no longer exists.
                 notifyChanged(.external)
             }
-            if outcome.wroteWithoutLock {
-                NSLog("Snippets: wrote the library without an advisory lock; this filesystem does not support flock.")
-            }
+
         } catch {
             // NEVER return silently here, for ANY error. `persist()` has already
             // cleared `persistWorkItem`, so nothing else would reschedule this write —

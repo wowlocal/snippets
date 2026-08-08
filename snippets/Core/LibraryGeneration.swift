@@ -147,17 +147,33 @@ nonisolated enum LibraryWriter {
         transform: (Snapshot) throws -> [Snippet]
     ) throws -> Outcome {
         var lock: LibraryLock?
+        var sentinel: SentinelLock.Handle?
         var wroteWithoutLock = false
         do {
             lock = try LibraryLock.acquire(at: lockURL, timeout: lockTimeout)
         } catch let failure as LibraryLock.Failure {
             guard !LibraryLockPolicy.isFatal(failure) else { throw Failure.busy }
-            // The filesystem does not support advisory locking (some network-mounted
-            // home directories). Refusing to write would brick the app for those
-            // users; proceeding leaves the generation check as the safety net.
-            wroteWithoutLock = true
+
+            // `flock` is not implemented here — some network-mounted home directories.
+            // Fall back to a `link(2)` sentinel, which IS atomic on those filesystems.
+            //
+            // Proceeding unlocked was the previous behaviour and it was wrong: the
+            // compare-and-swap below cannot close an optimistic read-modify-write on
+            // its own, and measured with no lock at all only 42–44 of 61 concurrent
+            // writes survive. Unlike a contended lock, that condition is not transient
+            // — it is every write, forever, for that user.
+            do {
+                sentinel = try SentinelLock.acquire(
+                    sentinelURL: lockURL.appendingPathExtension("sentinel"),
+                    timeout: lockTimeout)
+            } catch {
+                // Even the sentinel failed — a read-only directory, most likely. Write
+                // anyway rather than refusing: the CAS still recovers most collisions,
+                // and a library that cannot be saved at all is the worse outcome.
+                wroteWithoutLock = true
+            }
         }
-        defer { lock?.release() }
+        defer { lock?.release(); sentinel?.release() }
 
         // COMPARE-AND-SWAP, and it has to be real rather than advisory.
         //
@@ -170,11 +186,17 @@ nonisolated enum LibraryWriter {
         // pass. Measured with the lock file being deleted underneath 60 writers:
         // 31/61 records survived with no revalidation, 54/61 with it.
         //
-        // So correctness does not rest on the lock at all. Every attempt re-reads
-        // immediately before writing and again immediately after, and retries the whole
-        // transform if the bytes moved either time. A writer keeps going until it has
-        // confirmed its own result is what is on disk, which converges whether the lock
-        // worked, was bypassed, or does not exist on this filesystem.
+        // So every attempt also re-reads immediately before writing and again
+        // immediately after, and retries the whole transform if the bytes moved either
+        // time. That is what makes the lock-replacement case recoverable.
+        //
+        // It is NOT a substitute for a lock, and an earlier version of this comment
+        // wrongly claimed it was. An optimistic read-modify-write has an irreducible
+        // window: A confirms its own bytes, then B — whose recheck predates A's rename
+        // — writes and confirms its own. Both report success and A's record is gone.
+        // More re-reads move that window, they do not remove it. Measured with no lock
+        // at all: 42–44 of 61. Hence the `link(2)` sentinel above for the filesystems
+        // where `flock` is unavailable.
         var attempt = 0
         while true {
             attempt += 1

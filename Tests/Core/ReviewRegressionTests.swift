@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 @testable import SnippetsCore
 
@@ -242,5 +243,61 @@ struct ReviewRegressionTests {
         let onDisk = try LibraryWriter.read(from: library).snippets
         let final = Set(onDisk.map(\.name))
         #expect(final == ["mine", "theirs"], "neither writer's record may be lost")
+    }
+}
+
+/// Pins the one invariant that is currently only enforced by a comment.
+///
+/// The crypto scope is inside the AAD of every secure record, so if it is ever sourced
+/// from `Sync/state.json` — which `SyncStateFile.load` deliberately *regenerates*
+/// whenever it is missing or unreadable, because it holds no user data — then losing
+/// that file silently destroys every secret. The rule is "the value that unlocks a file
+/// lives in that file", and the scope is `VaultDocument.kid`.
+///
+/// Documentation alone would not survive the sync engine being written by someone in a
+/// hurry, so this asserts the property directly: a vault must open with no sync state
+/// present at all.
+@Suite("Vault independence from sync state")
+struct VaultScopeIndependenceTests {
+
+    @Test func aVaultOpensWithNoSyncStateOnDiskAtAll() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scope-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let libraryKey = SymmetricKey(size: .bits256)
+        let kid = "k-\(UUID().uuidString.prefix(8))"
+        let salt = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        let keyring = SnippetCrypto.Keyring(libraryKey: libraryKey, salt: salt)
+
+        let recordID = UUID()
+        // The scope comes from the vault's own `kid` — never from SyncState.
+        let context = SnippetCrypto.RecordContext(scopeID: kid, recordID: recordID)
+        let sealed = try SnippetCrypto.seal(Data("hunter2".utf8), for: context, keyring: keyring)
+
+        // Now destroy every trace of sync bookkeeping, as a lost or corrupt
+        // Sync/state.json would.
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("Sync"))
+        #expect(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("Sync/state.json").path) == false)
+
+        // A fresh SyncState mints a brand-new scopeID. If the crypto had been bound to
+        // it, this is exactly where every secret would become unopenable.
+        let regenerated = SyncState.fresh()
+        #expect(regenerated.scopeID != kid, "a fresh sync state invents a new scope, as designed")
+
+        let opened = try SnippetCrypto.open(
+            sealed, for: SnippetCrypto.RecordContext(scopeID: kid, recordID: recordID), keyring: keyring)
+        #expect(String(decoding: opened, as: UTF8.self) == "hunter2")
+
+        // And the negative: the regenerated scope must NOT open it, which is what makes
+        // sourcing the scope from SyncState catastrophic rather than merely untidy.
+        #expect(throws: (any Error).self) {
+            try SnippetCrypto.open(
+                sealed,
+                for: SnippetCrypto.RecordContext(scopeID: regenerated.scopeID, recordID: recordID),
+                keyring: keyring)
+        }
     }
 }

@@ -48,6 +48,17 @@ private func withLockedLibrary(_ mutate: ([Snippet]) -> [Snippet]) -> [Snippet] 
             expectedDigest: nil
         ) { onDisk in mutate(onDisk.snippets) }
 
+        // Surface a degraded write. Silence here is how a user on a network-mounted
+        // home stayed in permanent no-lock mode without ever being told: `attempts > 1`
+        // means a peer got inside our critical section, and `wroteWithoutLock` means
+        // neither `flock` nor the sentinel was available. stderr, not stdout, so
+        // scripts parsing the JSON receipt are unaffected.
+        if outcome.wroteWithoutLock {
+            fputs("warning: wrote without a lock — this filesystem supports neither flock nor link-based locking; concurrent writes may be lost\n", stderr)
+        } else if outcome.attempts > 1 {
+            fputs("warning: needed \(outcome.attempts) attempts; another process is writing the library concurrently\n", stderr)
+        }
+
         DistributedNotificationCenter.default().postNotificationName(
             SnippetStorageSync.distributedChangeNotification,
             object: saveURL.path,

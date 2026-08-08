@@ -92,6 +92,14 @@ nonisolated final class LibraryLock {
         // O_CREAT, never O_TRUNC: the file's *contents* are irrelevant and must never
         // be disturbed, because truncating it would not affect the lock but would
         // needlessly touch the directory the app's folder monitor watches.
+        // Test seam. There is no way to make a real filesystem stop implementing
+        // `flock` on demand, and the fallback below is the path taken by a user
+        // population we cannot otherwise reproduce, so it has to be reachable
+        // deliberately. Unset in every shipping configuration.
+        if ProcessInfo.processInfo.environment["SNIPPETS_DISABLE_FLOCK"] == "1" {
+            throw Failure.cannotOpen(path: path, errno: ENOTSUP)
+        }
+
         var descriptor = open(path, O_RDONLY | O_CREAT | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else {
             throw Failure.cannotOpen(path: path, errno: errno)
@@ -194,6 +202,144 @@ extension LibraryLock {
         let lock = try acquire(at: url, timeout: timeout)
         defer { lock.release() }
         return try body()
+    }
+}
+
+/// Mutual exclusion for filesystems where `flock(2)` is not implemented.
+///
+/// ## Why this exists
+///
+/// `LibraryWriter`'s compare-and-swap was documented as converging "whether the lock
+/// worked, was bypassed, or does not exist on this filesystem". The third claim was
+/// false. Measured with 60 concurrent writers and no lock at all, only 42–44 of 61
+/// records survive — every loss silent, every writer exiting 0.
+///
+/// The reason is structural, and no amount of extra re-reading fixes it: an optimistic
+/// read-modify-write has an irreducible window. A confirms its own bytes, then B —
+/// whose recheck predates A's rename — writes and also confirms its own. Both report
+/// success; A's record is gone. More reads move the window, they do not remove it.
+///
+/// So the no-`flock` path needs a real atomic primitive underneath the CAS, not a
+/// better CAS. That population is not hypothetical: `LibraryLockPolicy.isFatal`
+/// returns false for `.cannotOpen` specifically so a network-mounted home directory
+/// does not brick the app, and those are exactly the filesystems where `flock` is
+/// missing. Without this they would have taken ~30% silent loss, permanently.
+///
+/// ## How it works
+///
+/// `link(2)` is the classic primitive here, and it is chosen over `O_CREAT|O_EXCL`
+/// because it is atomic on network filesystems where `O_EXCL` historically is not:
+/// create a uniquely-named file, then hard-link it to the well-known lock path. The
+/// link succeeds for exactly one process. The `st_nlink == 2` re-check afterwards
+/// covers the classic NFS case where the link in fact succeeded but the reply was lost
+/// and `link` reported an error anyway.
+///
+/// A sentinel can outlive its owner, so it carries the owner's identity and is stolen
+/// when that owner is provably gone — otherwise one crash would make the library
+/// permanently unwritable, which is worse than the race being fixed.
+nonisolated enum SentinelLock {
+
+    /// How long a sentinel from an unreachable owner may sit before it is stolen.
+    ///
+    /// Only used when liveness cannot be established directly — a sentinel from
+    /// another host, or one whose owner field is unreadable. A same-host owner is
+    /// checked with `kill(pid, 0)`, which is exact and immediate.
+    static let staleAfter: TimeInterval = 30
+
+    final class Handle {
+        private let sentinelPath: String
+        private let uniquePath: String
+        private var released = false
+
+        init(sentinelPath: String, uniquePath: String) {
+            self.sentinelPath = sentinelPath
+            self.uniquePath = uniquePath
+        }
+
+        func release() {
+            guard !released else { return }
+            released = true
+            unlink(sentinelPath)
+            unlink(uniquePath)
+        }
+
+        deinit { release() }
+    }
+
+    static func acquire(sentinelURL: URL, timeout: TimeInterval) throws -> Handle {
+        let sentinelPath = sentinelURL.path
+        let directory = sentinelURL.deletingLastPathComponent()
+        let uniquePath = directory
+            .appendingPathComponent(
+                ".lock-\(ProcessInfo.processInfo.processIdentifier)-\(UInt32.random(in: 0...UInt32.max))",
+                isDirectory: false)
+            .path
+
+        // The owner record, so a survivor can tell a live holder from a corpse.
+        let owner = "\(ProcessInfo.processInfo.hostName)\n\(getpid())\n"
+        let unique = open(uniquePath, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard unique >= 0 else {
+            throw LibraryLock.Failure.cannotOpen(path: uniquePath, errno: errno)
+        }
+        _ = owner.withCString { write(unique, $0, strlen($0)) }
+        close(unique)
+
+        var succeeded = false
+        defer { if !succeeded { unlink(uniquePath) } }
+
+        let deadline = Date().addingTimeInterval(max(timeout, 0))
+        while true {
+            if link(uniquePath, sentinelPath) == 0 || linkLanded(uniquePath) {
+                succeeded = true
+                return Handle(sentinelPath: sentinelPath, uniquePath: uniquePath)
+            }
+
+            if stealIfAbandoned(sentinelPath) { continue }
+
+            guard Date() < deadline else {
+                throw LibraryLock.Failure.timedOut(path: sentinelPath, seconds: timeout)
+            }
+            Thread.sleep(forTimeInterval: 0.005 + Double.random(in: 0...0.003))
+        }
+    }
+
+    /// Whether our unique file now has two names, meaning the `link` actually
+    /// succeeded even though it reported failure. This is the documented NFS
+    /// behaviour, and skipping the check turns a held lock into a spin.
+    private static func linkLanded(_ uniquePath: String) -> Bool {
+        var info = stat()
+        guard stat(uniquePath, &info) == 0 else { return false }
+        return info.st_nlink == 2
+    }
+
+    /// Removes a sentinel whose owner is provably gone. Returns whether it did.
+    ///
+    /// Conservative on purpose: an unreadable or foreign sentinel is only stolen once
+    /// it is older than `staleAfter`. Stealing a live lock reintroduces exactly the
+    /// race this type exists to prevent, so "leave it alone" is always the safer error.
+    private static func stealIfAbandoned(_ sentinelPath: String) -> Bool {
+        var info = stat()
+        guard stat(sentinelPath, &info) == 0 else { return false }
+
+        let contents = (try? String(contentsOfFile: sentinelPath, encoding: .utf8)) ?? ""
+        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+        let age = Date().timeIntervalSince1970 - Double(info.st_mtimespec.tv_sec)
+
+        if lines.count >= 2,
+           String(lines[0]) == ProcessInfo.processInfo.hostName,
+           let pid = pid_t(lines[1]) {
+            // Same host: liveness is knowable exactly. ESRCH means the process is gone;
+            // EPERM means it exists but belongs to someone else, so it is alive.
+            if kill(pid, 0) != 0 && errno == ESRCH {
+                unlink(sentinelPath)
+                return true
+            }
+            return false
+        }
+
+        guard age > staleAfter else { return false }
+        unlink(sentinelPath)
+        return true
     }
 }
 

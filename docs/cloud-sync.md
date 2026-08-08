@@ -57,21 +57,45 @@ lock, and three-way merges when the bytes moved.
 
 The lock alone is still not sufficient, because it can be defeated from outside: `flock` binds to
 an inode, so replacing the lock file — a folder restore, a file-syncing tool, a cleanup script —
-leaves peers holding locks on different inodes, both believing they are serialized. Correctness
-therefore does not rest on the lock at all. Every write re-reads immediately before writing and
-confirms immediately after, and retries the whole transform if the bytes moved either time.
-Measured with the lock file deleted every 5 ms underneath 60 concurrent writers: **31/61** records
-survived with neither guard, **54/61** with inode revalidation alone, **61/61** with the
-compare-and-swap. `Tests/concurrency-harness.sh` reproduces all of it.
+leaves peers holding locks on different inodes, both believing they are serialized. So every write
+also re-reads immediately before writing and confirms immediately after, retrying the whole
+transform if the bytes moved either time.
+
+Measured over 60 concurrent writers, three runs each:
+
+| Configuration | Records kept |
+|---|---|
+| Unlocked read-modify-write (the old behaviour) | 9–18 / 60 |
+| Lock file replaced **once** mid-run — the realistic vector | **61 / 61**, three for three |
+| Lock file replaced every 5 ms — stress, not a real event | 57–60 / 61 |
+| `flock` unavailable, compare-and-swap only | 42–44 / 61 |
+| `flock` unavailable, `link(2)` sentinel | **60 / 60**, three for three |
+
+**The compare-and-swap is not a substitute for a lock.** An earlier version of this design claimed
+it converged even with no lock at all; the fourth row is what that actually costs. The reason is
+structural and no amount of extra re-reading fixes it: A confirms its own bytes, then B — whose
+recheck predates A's rename — writes and confirms its own. Both report success and A's record is
+gone. More reads move that window; they do not remove it.
+
+That matters because the no-`flock` population is supported on purpose — `LibraryLockPolicy.isFatal`
+returns false so a network-mounted home directory does not brick the app — and unlike a contended
+lock, the condition is not transient. It is every write, forever, for that user. Hence the `link(2)`
+sentinel, which is atomic on exactly the filesystems where `flock` is not. `link` is chosen over
+`O_CREAT|O_EXCL` because `O_EXCL` is historically unreliable over NFS.
+
+`Tests/concurrency-harness.sh` reproduces every row. Its gate is a threshold rather than equality,
+because the 5 ms churn case is inherently racy and a perfect-score gate fails intermittently on a
+healthy tree.
 
 The lock lives on its own zero-byte file rather than on `snippets.json`, because an atomic write
 renames the data file's inode away and peers would end up locking different inodes — measurably
 the same as no lock at all.
 
-`flock` failing because the filesystem does not implement it (some network-mounted home
-directories) is **not** fatal: the write proceeds and the compare-and-swap above provides
-correctness on its own. A *timeout* is different — it means a peer genuinely holds the lock — so
-the caller backs off and retries rather than writing.
+`flock` failing because the filesystem does not implement it falls back to the sentinel rather
+than to writing unlocked. A *timeout* is different — it means a peer genuinely holds the lock — so
+the caller backs off and retries rather than writing. Both degraded modes are now observable
+(`SnippetStore.writeHealth`, and a stderr warning from the CLI) rather than only logged; a user
+stuck in permanent no-lock mode previously got no signal whatsoever.
 
 ---
 
