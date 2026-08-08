@@ -15,15 +15,17 @@ required not to break.
 | Phase | State |
 |---|---|
 | 1. Cross-process locking + three-way merge | **Shipped.** No network, no crypto, no format change. |
-| 2. Wire record model, transport protocol, fake transport | Types exist and are tested in isolation. **Nothing calls them yet** — no `VaultRecord` ↔ `SyncEnvelope` bridge, no engine. |
+| 2. Wire record model, transport protocol, fake transport | Done and exercised by the engine. |
 | 3. Secure snippets | Complete and usable: create, reveal, edit, make ordinary, Settings pane. **Not yet exercised against a signed build** — see below. |
-| 4. Sync engine driven by the fake | Not started. |
+| 4. Sync engine driven by the fake | Done. Push/fetch/merge loop, backoff, halting, deletion guard, quarantine — all proven against `InMemoryTransport` with fault injection. **Not wired into the app**: nothing constructs one, because there is no backend to point it at. |
 | 5. First real backend | Deliberately deferred — see §9. |
 | 6. Second backend, conflict UI | Not started. |
 | 7. Hosted server tier | Optional; not started. |
 | 8. iOS app | Deferred by decision. `snippets/Core/` is already platform-agnostic for it. |
 
-Phases 1 and 3 are wired into the running app. Phase 2 is a tested library with no callers yet.
+Phases 1 and 3 are wired into the running app. Phases 2 and 4 are tested libraries that nothing
+constructs yet, because there is no backend for them to talk to — that is Phase 5, and it is the
+next thing that needs a decision rather than code.
 
 **The one thing not verified**: no Keychain read or write has ever been executed. Every test uses
 `InMemorySecretStore`, because `swift test` runs unsigned and the real keychain returns
@@ -334,6 +336,25 @@ designed to regenerate itself whenever it cannot be read, because it holds no us
 binding ciphertext to a value stored there would destroy every secure snippet the first time it
 went missing. The scope is `VaultDocument.kid`, which lives in the same file as the records it
 protects. The rule generalises: the value that unlocks a file belongs in that file.
+
+### The loop
+
+`SyncEngine` runs one round: push, then fetch, then apply. **Push first** — fetching and applying
+first would rewrite local records before this device's own changes had left it, and a crash in
+between loses them with nothing to recover from. The worst case of pushing first is a duplicate
+round.
+
+A record is recorded in the base only once the backend has *accepted* it. Recording it at submit
+time would make the next diff skip it, and a rejected record would never be pushed again.
+
+Two bugs the fake caught that a real backend would have taught us slowly and expensively:
+
+- **A submit's cursor must not become the fetch position.** A cursor is a place in the change feed,
+  and the one a submit returns points after our own writes — which is also after everything the
+  backend already held and we had not fetched. Adopting it silently skipped remote records
+  entirely.
+- **An expired token is not a halt.** Treating a non-retryable rejection uniformly put a sticky,
+  scary error in front of someone who just needed to sign in again.
 
 `SyncTransport` is the seam. CloudKit and an object-storage backend are two implementations of it,
 and `InMemoryTransport` — with fault injection for rejection, latency, partial batches, cursor
