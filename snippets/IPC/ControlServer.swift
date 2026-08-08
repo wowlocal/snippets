@@ -427,9 +427,22 @@ nonisolated struct PeerIdentity: Sendable {
     private static func name(forPID pid: Int32) -> String {
         var parent = pid
         for _ in 0..<4 {
-            if let app = NSRunningApplication(processIdentifier: parent),
-               let name = app.localizedName {
-                return pid == parent ? name : "\(name) (pid \(pid))"
+            if let app = NSRunningApplication(processIdentifier: parent) {
+                // `localizedName` is CFBundleName from that process's OWN Info.plist, so
+                // anything this user can launch may call itself "Snippets" or
+                // "1Password" — and a forged name reads as MORE trustworthy than the
+                // honest "a command-line program (pid N)". This string is shown in the
+                // consent alert, written to the audit log, and rendered inside the system
+                // Touch ID sheet, which users trust more than our own UI. Since the
+                // prompt naming the requester IS the control, the name has to carry
+                // something unforgeable: the path, which cannot be moved into /System or
+                // /Applications. Checking the ancestor's signature is not a substitute —
+                // a notarized app can still claim any CFBundleName it likes.
+                let claimed = app.localizedName ?? "an application"
+                guard let path = (app.bundleURL ?? app.executableURL)?.path else { break }
+                return pid == parent
+                    ? "\(claimed) — \(path)"
+                    : "\(claimed) — \(path), which started pid \(pid)"
             }
             guard let next = parentPID(of: parent), next > 1 else { break }
             parent = next

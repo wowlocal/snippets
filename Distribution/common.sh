@@ -147,7 +147,10 @@ function export_app() {
     local app_path="$2"
 
     mkdir -p exported-apps
-    rm -rf exported-apps/*.app
+    # `find -delete` rather than a glob: an unmatched `exported-apps/*.app` is passed
+    # through literally by bash and is a hard error in zsh, and a stale .app left here is
+    # what `move_exported_app` would pick up instead of the one just built.
+    find exported-apps -maxdepth 1 -name "*.app" -type d -exec rm -rf {} +
     if ! xcodebuild -exportArchive \
         -archivePath "$archive_path" \
         -exportOptionsPlist "ExportOptions.plist" \

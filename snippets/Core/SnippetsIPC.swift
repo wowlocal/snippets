@@ -34,7 +34,13 @@ nonisolated enum SnippetsIPC {
     /// The CLI's receive timeout must be longer than this or it will give up before the
     /// app can send the documented `.denied` response.
     static let revealConsentTimeout: TimeInterval = 30
-    static let revealSocketTimeout: TimeInterval = revealConsentTimeout + 10
+    /// Must cover the consent prompt **and** the Touch ID sheet that follows it, which
+    /// LocalAuthentication does not bound. The old `consent + 10` budgeted for neither:
+    /// approve at 29s, fumble the sensor for 12s, and the CLI abandoned a request the
+    /// user had already approved.
+    static let revealAuthenticationTimeout: TimeInterval = 60
+    static let revealSocketTimeout: TimeInterval =
+        revealConsentTimeout + revealAuthenticationTimeout + 10
 
     // MARK: - Wire types
     //
@@ -242,7 +248,19 @@ nonisolated enum UnixSocket {
             var offset = 0
             guard let base = raw.baseAddress else { return }
             while offset < raw.count {
-                let written = write(descriptor, base.advanced(by: offset), raw.count - offset)
+                // `send` with MSG_NOSIGNAL, not `write`: a peer that connects and hangs
+                // up leaves this writing to a closed socket, and the default SIGPIPE
+                // disposition kills the process. Nothing in the app installs a handler —
+                // Sparkle's SIG_IGN lives in its updater helper, not the host — so any
+                // same-uid process could terminate Snippets on demand, taking the queued
+                // secure edit, the pasteboard restore and the pending library write with
+                // it. The honest version of the same bug is a slow Touch ID: the CLI's
+                // read deadline expires, it closes, and the app dies answering it.
+                //
+                // SO_NOSIGPIPE is not a substitute — once the peer has hung up, setting
+                // it returns EINVAL and the write still kills you, and the attacker
+                // chooses that ordering.
+                let written = Darwin.send(descriptor, base.advanced(by: offset), raw.count - offset, MSG_NOSIGNAL)
                 if written < 0 {
                     if errno == EINTR { continue }
                     throw Failure.io(errno: errno)

@@ -709,7 +709,12 @@ extension ViewController {
 
         let candidates = KeywordSuggestions.candidates(
             name: snippet.name,
-            contentFirstLine: snippet.contentFirstLine
+            // Never from a secure record's body. The chips are prefixes of the first
+            // word — content beginning "hunter2" renders a clickable \\hun — and
+            // clicking one writes it into `VaultRecord.keyword`, which is cleartext on
+            // disk and travels in the clear inside a sync envelope. Property 5 licenses
+            // metadata the user chose, not metadata derived from the secret.
+            contentFirstLine: store.isSecure(snippet.id) ? "" : snippet.contentFirstLine
         )
         // The snippet being edited has no keyword of its own here, so it cannot
         // be the collision it is measured against. Three candidates are a

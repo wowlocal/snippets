@@ -12,11 +12,24 @@ import CryptoKit
 /// ## What this defends, and what it does not
 ///
 /// **Defended.** The sync backend operator sees only ciphertext, and so does Apple if
-/// the backend is CloudKit. A stolen powered-off Mac, a Time Machine copy of
-/// `Vault/vault.json`, and a Migration Assistant transfer all yield ciphertext,
-/// because the library key is never written to disk in the clear — it lives wrapped
-/// under a passphrase (`PassphraseKDF`) or a recovery key (`RecoveryKey`), and
-/// unwrapped only into memory.
+/// the backend is CloudKit. A copy of `Vault/vault.json` **on its own** — a Time Machine
+/// copy of the support directory, a stolen powered-off Mac — yields ciphertext, because
+/// `K_lib` is not in that file. Its primary home is the Keychain
+/// (`KeychainSecretStore`); the wraps in the document are escape hatches under a
+/// recovery key, unwrapped only into memory.
+///
+/// **Not defended: anything that carries the Keychain along with the file.** Migration
+/// Assistant and a whole-volume restore move `~/Library/Keychains` next to
+/// `Vault/vault.json`, so the vault opens on the destination Mac for whoever can log in
+/// there; on the synchronizable tier iCloud Keychain does the same, deliberately.
+/// `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` does not prevent this — on the
+/// file-based login keychain that attribute is inert, and what keeps the item local is
+/// only that the login keychain does not sync.
+///
+/// This paragraph used to claim the opposite, and said the key lived wrapped under a
+/// passphrase. That was written before the vault moved to the Keychain and no shipping
+/// path writes a passphrase wrap any more; it is the comment a future reader would have
+/// reasoned from.
 ///
 /// **Not defended.** Someone sitting at the unlocked Mac with the vault unlocked.
 /// Any process running as the same user: this app is not sandboxed, so a peer process

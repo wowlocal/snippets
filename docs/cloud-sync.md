@@ -347,6 +347,15 @@ at `reveal` rather than saying "not found", which would send someone off to recr
 secret they already have. `list` includes secure snippets as content-free shells, so
 their keywords cannot be accidentally reused.
 
+**Verification is one-directional today.** The app checks who is calling it; the CLI does
+not check who answered. A same-uid process can unlink the socket and rebind it, then return
+a string of its own choosing to `snippets-cli reveal` — the CLI prints it and exits 0. No
+secret is disclosed (the attacker supplies a value, never obtains one), and the same
+attacker has cheaper routes to the identical outcome: `SNIPPETS_SUPPORT_DIR` is honoured at
+runtime, and `/usr/local/bin/snippets-cli` is an unprivileged symlink when that directory is
+user-writable. Worth knowing before anyone pipes `$(snippets-cli reveal …)` into something
+that matters.
+
 The server checks the caller's audit token (`LOCAL_PEERTOKEN`, not `LOCAL_PEERPID` — pids
 are reused) and its code signature against the team identifier. **That proves which
 binary is calling and nothing about who told it to.** Any script running as this user can
