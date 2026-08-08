@@ -70,6 +70,7 @@ Detailed deep dive:
 
 - `docs/text-input-detection.md` explains cross-app text-input detection, Chromium/Electron workarounds, monitor quirks, and troubleshooting.
 - `docs/frecency-ranking.md` specifies usage-based ranking: the decay math, where usage sits in the precedence chain, the merge rules, and the privacy boundary.
+- `docs/cloud-sync.md` covers multi-writer safety and the sync/secure-snippet design: the three-way merge, why `snippets.json` is frozen, the vault's key hierarchy and threat model, and what still has to be verified before a backend can ship.
 
 Global expansion pipeline:
 
