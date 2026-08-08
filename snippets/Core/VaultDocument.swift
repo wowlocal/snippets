@@ -524,8 +524,12 @@ nonisolated extension VaultDocument: Codable {
         kid = try container.decode(String.self, forKey: AnyCodingKey("kid"))
         vaultSalt = try container.decode(String.self, forKey: AnyCodingKey("vaultSalt"))
         kdf = try container.decode(VaultKDFParameters.self, forKey: AnyCodingKey("kdf"))
-        wrapPass = try container.decode(String.self, forKey: AnyCodingKey("wrapPass"))
-        wrapRecovery = try container.decode(String.self, forKey: AnyCodingKey("wrapRecovery"))
+        // All three wraps are optional and independently absent: the vault key lives in
+        // the Keychain, and a Keychain-only vault — the default — has none of them.
+        // `decodeIfPresent` covers both a missing key and an explicit null, which
+        // matters because the encoder writes explicit nulls (see `wrapCLI`).
+        wrapPass = try container.decodeIfPresent(String.self, forKey: AnyCodingKey("wrapPass"))
+        wrapRecovery = try container.decodeIfPresent(String.self, forKey: AnyCodingKey("wrapRecovery"))
         // Present-and-null and absent both mean "no CLI wrap".
         wrapCLI = try container.decodeIfPresent(String.self, forKey: AnyCodingKey("wrapCLI"))
         records = try container.decode([VaultRecord].self, forKey: AnyCodingKey("records"))
@@ -902,6 +906,92 @@ nonisolated enum VaultFile {
     /// overwrite a newer vault" is the single rule this format exists to enforce, and
     /// leaving it to every call site to remember is how it eventually is not
     /// remembered.
+    /// Locked read-modify-write of the vault.
+    ///
+    /// **Use this, not `write`, for anything that changes an existing vault.** A
+    /// whole-document overwrite from a stale copy is the same defect the library write
+    /// path was built to remove — and it is worse here, because `vault.json` is the one
+    /// file with no undo stack, no plaintext duplicate, and nothing to reconstruct from.
+    /// Losing a record here loses a secret outright.
+    ///
+    /// The lock is the LIBRARY lock, deliberately. Marking a snippet secure moves it
+    /// between `snippets.json` and `vault.json`, so a vault writer holding a separate
+    /// lock could interleave with a promotion and leave the record in both files or in
+    /// neither. One lock over both files makes that impossible.
+    ///
+    /// `transform` may run more than once and must be free of side effects.
+    @discardableResult
+    static func update(
+        at url: URL = SnippetStorageLocations.vaultFileURL,
+        lockURL: URL = SnippetStorageLocations.libraryLockFileURL,
+        temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
+        lockTimeout: TimeInterval,
+        transform: (VaultDocument?) throws -> VaultDocument
+    ) throws -> VaultDocument {
+        let held: FileGuard.Held
+        do {
+            held = try FileGuard.acquire(at: lockURL, timeout: lockTimeout)
+        } catch {
+            throw VaultFileError.writeFailed("another process is writing the vault; try again")
+        }
+        defer { held.release() }
+
+        for _ in 0..<8 {
+            // Read INSIDE the lock. A caller's copy from a moment ago may already be
+            // stale, and overwriting a record someone else just added is exactly the
+            // loss this exists to prevent.
+            let bytesAtRead = try? Data(contentsOf: url)
+            let before = try currentDocument(at: url)
+            let updated = try transform(before)
+            let data = try encode(updated)
+
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+            // Same compare-and-swap as the library write, for the same reason: the lock
+            // can be defeated from outside, and unlike the library there is no second
+            // copy of this data anywhere. Compare against the bytes this attempt READ —
+            // comparing the file to itself is always true and checks nothing.
+            guard (try? Data(contentsOf: url)) == bytesAtRead else { continue }
+
+            do {
+                try AtomicFileWriter.write(data, to: url, temporaryDirectory: temporaryDirectory)
+            } catch {
+                throw VaultFileError.writeFailed("could not save the vault: \(error)")
+            }
+
+            // And confirm ours is what survived, so a peer that raced us is folded in
+            // on the next attempt rather than clobbered.
+            guard (try? Data(contentsOf: url)) == data else { continue }
+            return updated
+        }
+        throw VaultFileError.writeFailed("the vault changed under every write attempt; try again")
+    }
+
+    /// The vault as it is on disk right now, or `nil` if there is not one yet.
+    ///
+    /// Throws rather than returning `nil` when a vault exists but cannot be read —
+    /// treating an unreadable vault as "no vault" would let a caller write a fresh
+    /// empty one straight over the user's secrets.
+    private static func currentDocument(at url: URL) throws -> VaultDocument? {
+        switch load(from: url) {
+        case .loaded(let document): return document
+        case .missing: return nil
+        case .tooNew(let version):
+            throw VaultFileError.writeRefused(
+                "vault is schemaVersion \(version); this build understands \(VaultDocument.currentSchemaVersion)")
+        case .unreadable(let error):
+            throw VaultFileError.writeRefused("refusing to overwrite an unreadable vault: \(error)")
+        case .corrupt(let error):
+            // Corrupt is NOT "no vault". Writing a fresh document over it would destroy
+            // secrets that a quarantined copy might still recover. The caller must
+            // quarantine deliberately first.
+            throw VaultFileError.writeRefused("refusing to overwrite a corrupt vault: \(error)")
+        }
+    }
+
+    /// Unlocked whole-document write. Only safe for creating a vault that does not yet
+    /// exist, or in tests. Everything else must go through `update`.
     static func write(
         _ document: VaultDocument,
         to url: URL = SnippetStorageLocations.vaultFileURL,

@@ -146,34 +146,16 @@ nonisolated enum LibraryWriter {
         expectedDigest: String?,
         transform: (Snapshot) throws -> [Snippet]
     ) throws -> Outcome {
-        var lock: LibraryLock?
-        var sentinel: SentinelLock.Handle?
-        var wroteWithoutLock = false
+        let guardHeld: FileGuard.Held
         do {
-            lock = try LibraryLock.acquire(at: lockURL, timeout: lockTimeout)
-        } catch let failure as LibraryLock.Failure {
-            guard !LibraryLockPolicy.isFatal(failure) else { throw Failure.busy }
-
-            // `flock` is not implemented here — some network-mounted home directories.
-            // Fall back to a `link(2)` sentinel, which IS atomic on those filesystems.
-            //
-            // Proceeding unlocked was the previous behaviour and it was wrong: the
-            // compare-and-swap below cannot close an optimistic read-modify-write on
-            // its own, and measured with no lock at all only 42–44 of 61 concurrent
-            // writes survive. Unlike a contended lock, that condition is not transient
-            // — it is every write, forever, for that user.
-            do {
-                sentinel = try SentinelLock.acquire(
-                    sentinelURL: lockURL.appendingPathExtension("sentinel"),
-                    timeout: lockTimeout)
-            } catch {
-                // Even the sentinel failed — a read-only directory, most likely. Write
-                // anyway rather than refusing: the CAS still recovers most collisions,
-                // and a library that cannot be saved at all is the worse outcome.
-                wroteWithoutLock = true
-            }
+            guardHeld = try FileGuard.acquire(at: lockURL, timeout: lockTimeout)
+        } catch {
+            // A timeout means a peer genuinely holds the lock. The caller must retry;
+            // it must never drop the pending write.
+            throw Failure.busy
         }
-        defer { lock?.release(); sentinel?.release() }
+        let wroteWithoutLock = guardHeld.isUnlocked
+        defer { guardHeld.release() }
 
         // COMPARE-AND-SWAP, and it has to be real rather than advisory.
         //

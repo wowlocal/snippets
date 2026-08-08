@@ -301,3 +301,95 @@ struct VaultScopeIndependenceTests {
         }
     }
 }
+
+/// The vault write path must not lose a record to a concurrent writer.
+///
+/// `VaultFile.write` was an unlocked whole-document overwrite — the same defect the
+/// library write path was built to remove, in the one file where it matters most:
+/// `vault.json` has no undo stack, no plaintext duplicate, and nothing to reconstruct
+/// from. A lost record there is a lost secret.
+@Suite("Vault write safety")
+struct VaultWriteSafetyTests {
+
+    private func scratch() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vaultwrite-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func emptyVault(kid: String = "k-test") -> VaultDocument {
+        VaultDocument(
+            kid: kid,
+            vaultSalt: "AAAAAAAAAAAAAAAAAAAAAA",
+            kdf: VaultKDFParameters(alg: PassphraseKDF.algorithm, iterations: 600_000, saltP: "AAAAAAAAAAAAAAAAAAAAAA"))
+    }
+
+    private func record(_ name: String) -> VaultRecord {
+        VaultRecord(
+            id: UUID(), name: name, keyword: name, tags: [], isEnabled: true, isPinned: false,
+            createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 1),
+            hlc: HLC(wallMs: 1, counter: 0, device: "aaaaaaa1"),
+            contentHash: "00", sealed: "v1.AAAA.AAAA")
+    }
+
+    /// A writer working from a stale copy must fold in what landed meanwhile, not
+    /// overwrite it. This is the interleaving that silently drops a secret.
+    @Test func aVaultWriteFoldsInARecordThatLandedAfterTheCallerRead() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("vault.json")
+        try VaultFile.write(emptyVault(), to: url, temporaryDirectory: dir)
+
+        // Someone else adds a record between our read and our write.
+        var injected = false
+        let result = try VaultFile.update(
+            at: url, lockURL: dir.appendingPathComponent("lock"),
+            temporaryDirectory: dir, lockTimeout: 2
+        ) { current in
+            if !injected {
+                injected = true
+                var theirs = current ?? self.emptyVault()
+                theirs.records.append(self.record("theirs"))
+                try? VaultFile.write(theirs, to: url, temporaryDirectory: dir)
+            }
+            var mine = current ?? self.emptyVault()
+            mine.records.append(self.record("mine"))
+            return mine
+        }
+
+        // `update` re-reads inside the lock, so the second attempt sees "theirs".
+        let names = Set(result.records.map(\.name))
+        #expect(names.contains("mine"))
+        #expect(names.contains("theirs"), "the concurrent record must not be overwritten")
+
+        let reloaded = try #require(VaultFile.load(from: url).value)
+        #expect(Set(reloaded.records.map(\.name)) == names)
+    }
+
+    /// An unreadable or corrupt vault must never be replaced by a fresh empty one.
+    /// "I could not read it" and "there isn't one" are the same value and opposite
+    /// facts — the same distinction the library path needed for a vanished file.
+    @Test func updateRefusesToOverwriteAVaultItCannotRead() throws {
+        let dir = try scratch()
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: dir.appendingPathComponent("vault.json").path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let url = dir.appendingPathComponent("vault.json")
+        try VaultFile.write(emptyVault(), to: url, temporaryDirectory: dir)
+        try "not json at all".write(to: url, atomically: true, encoding: .utf8)
+
+        #expect(throws: (any Error).self) {
+            try VaultFile.update(
+                at: url, lockURL: dir.appendingPathComponent("lock"),
+                temporaryDirectory: dir, lockTimeout: 1
+            ) { _ in self.emptyVault() }
+        }
+
+        // The damaged bytes are still there for a quarantine pass to rescue.
+        #expect(try String(contentsOf: url, encoding: .utf8) == "not json at all")
+    }
+}

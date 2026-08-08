@@ -343,6 +343,56 @@ nonisolated enum SentinelLock {
     }
 }
 
+/// Takes the best mutual exclusion this filesystem can provide, and says which it got.
+///
+/// Both `snippets.json` and `Vault/vault.json` go through this, holding the SAME lock.
+/// That is deliberate rather than lazy: marking a snippet secure moves it between the
+/// two files, so a writer that held only one of them could interleave with a promotion
+/// and leave the record in both places or neither. One lock over both files makes that
+/// impossible by construction.
+nonisolated enum FileGuard {
+
+    enum Held {
+        case flock(LibraryLock)
+        case sentinel(SentinelLock.Handle)
+        /// Neither was available — a read-only directory, most likely. The caller
+        /// writes anyway, because a library that cannot be saved at all is worse, but
+        /// it must report the degradation rather than swallow it.
+        case none
+
+        var isUnlocked: Bool { if case .none = self { return true }; return false }
+
+        func release() {
+            switch self {
+            case .flock(let lock): lock.release()
+            case .sentinel(let handle): handle.release()
+            case .none: break
+            }
+        }
+    }
+
+    /// - Throws: `LibraryLock.Failure.timedOut` when a peer genuinely holds the lock.
+    ///   That is the one case the caller must not write through.
+    static func acquire(at lockURL: URL, timeout: TimeInterval) throws -> Held {
+        do {
+            return .flock(try LibraryLock.acquire(at: lockURL, timeout: timeout))
+        } catch let failure as LibraryLock.Failure {
+            guard !LibraryLockPolicy.isFatal(failure) else { throw failure }
+        }
+
+        // `flock` is unimplemented here — some network-mounted home directories. The
+        // `link(2)` sentinel IS atomic on those, and without it this path takes roughly
+        // 30% silent write loss on every write, permanently.
+        do {
+            return .sentinel(try SentinelLock.acquire(
+                sentinelURL: lockURL.appendingPathExtension("sentinel"), timeout: timeout))
+        } catch let failure as LibraryLock.Failure {
+            if case .timedOut = failure { throw failure }
+            return .none
+        }
+    }
+}
+
 nonisolated enum LibraryLockPolicy {
     /// Whether a failure to lock should stop the write.
     ///
