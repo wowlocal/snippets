@@ -149,9 +149,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     /// and no lock held across the `await`: the cheap wrong thing is genuinely harmless
     /// and the expensive right thing could deadlock.
     private func ensureZone() async throws {
-        lock.lock()
-        let alreadyDone = hasEnsuredZone
-        lock.unlock()
+        let alreadyDone = lock.withLock { hasEnsuredZone }
         if alreadyDone { return }
 
         do {
@@ -161,15 +159,11 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             throw CloudKitErrorMapping.failure(for: error)
         }
 
-        lock.lock()
-        hasEnsuredZone = true
-        lock.unlock()
+        lock.withLock { hasEnsuredZone = true }
     }
 
     private func forgetZone() {
-        lock.lock()
-        hasEnsuredZone = false
-        lock.unlock()
+        lock.withLock { hasEnsuredZone = false }
     }
 
     // MARK: - Fetch
@@ -421,6 +415,6 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     }
 
     private func describe(_ error: any Error) -> String {
-        (error as? any CustomStringConvertible)?.description ?? "\(error)"
+        String(describing: error)
     }
 }

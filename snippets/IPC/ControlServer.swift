@@ -2,10 +2,19 @@ import AppKit
 import Darwin
 import Security
 
+/// The CLI consent prompt is intentionally not an `NSAlert`. On macOS 26 an alert with
+/// a long, security-relevant caller path is reformatted into an oversized title, clipped
+/// copy, and empty-looking button rows. A small owned window gives each piece of identity
+/// a stable place while retaining normal keyboard and VoiceOver behaviour.
+private final class RevealConsentWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 /// Answers `snippets-cli` over a local socket, and brokers access to secrets.
 ///
 /// The CLI cannot decrypt anything: the vault key is only ever in this process. So
-/// `reveal` is a *request*, and what satisfies it is a human clicking Allow in a prompt
+/// `reveal` is a *request*, and what satisfies it is a human clicking Reveal in a prompt
 /// that names the program asking.
 ///
 /// ## The honest security model
@@ -54,7 +63,7 @@ final class ControlServer: NSObject {
     }
 
     private struct ActiveRevealPrompt {
-        let alert: NSAlert
+        let window: NSWindow
         let continuation: CheckedContinuation<RevealConsent, Never>
         var timeoutTask: Task<Void, Never>?
     }
@@ -192,7 +201,10 @@ final class ControlServer: NSObject {
                 unlocked: session.state.isUnlocked)
 
         case SnippetsIPC.Command.reveal:
-            return await reveal(keyword: request.keyword ?? "", peer: peer)
+            return await reveal(
+                keyword: request.keyword ?? "",
+                invocation: request.invocation,
+                peer: peer)
 
         default:
             return .failure(.unsupported, "unknown command \"\(request.command)\"")
@@ -201,7 +213,11 @@ final class ControlServer: NSObject {
 
     // MARK: - Reveal
 
-    private func reveal(keyword: String, peer: PeerIdentity) async -> SnippetsIPC.Response {
+    private func reveal(
+        keyword: String,
+        invocation: String?,
+        peer: PeerIdentity
+    ) async -> SnippetsIPC.Response {
         let lookup = Snippet.sanitizedKeyword(keyword)
         guard !lookup.isEmpty else { return .failure(.notFound, "no keyword given") }
 
@@ -229,7 +245,7 @@ final class ControlServer: NSObject {
         revealInFlight = true
         defer { revealInFlight = false }
 
-        switch await confirm(shell: shell, peer: peer) {
+        switch await confirm(shell: shell, invocation: invocation, peer: peer) {
         case .denied:
             record(audit: "denied", keyword: lookup, peer: peer)
             return .failure(.denied, "the request was not approved")
@@ -249,7 +265,7 @@ final class ControlServer: NSObject {
             // are there. The side effect is deliberate — a remote reveal ends any in-app
             // unlock window, because the requester is provably not the person typing.
             let content = try await session.withOneUseAuthentication(
-                reason: "Reveal “\(shell.displayName)” for \(peer.displayName)"
+                reason: "Reveal “\(shell.displayName)” for \(peer.applicationName)"
             ) { try secureStore.content(for: shell.id) }
             record(audit: "revealed", keyword: lookup, peer: peer)
             return SnippetsIPC.Response(status: .ok, content: content)
@@ -273,39 +289,19 @@ final class ControlServer: NSObject {
     /// it would occupy the app's only server queue until somebody clicked, wedging even
     /// unrelated `ping` and `status` requests. The continuation suspends only this
     /// reveal task, and the bounded timer turns silence into the documented denial.
-    private func confirm(shell: Snippet, peer: PeerIdentity) async -> RevealConsent {
+    private func confirm(
+        shell: Snippet,
+        invocation: String?,
+        peer: PeerIdentity
+    ) async -> RevealConsent {
         NSApp.activate(ignoringOtherApps: true)
 
         return await withCheckedContinuation { continuation in
-            let alert = NSAlert()
-            alert.alertStyle = .critical
-            alert.messageText = "Reveal “\(shell.displayName)” to \(peer.displayName)?"
-            alert.informativeText =
-                "\(peer.displayName) is asking Snippets for the text of a secure snippet.\n\n"
-                + "If you did not just run a command that would need it, deny this.\n\n"
-                + "The text will be printed to that program's output, where it may be logged "
-                + "or saved in shell history."
-
-            let revealButton = alert.addButton(withTitle: "Reveal")
-            revealButton.target = self
-            revealButton.action = #selector(approveRevealPrompt(_:))
-            revealButton.keyEquivalent = ""
-
-            let denyButton = alert.addButton(withTitle: "Deny")
-            denyButton.target = self
-            denyButton.action = #selector(denyRevealPrompt(_:))
-            // Deny is the default, so a stray Return key is the safe answer.
-            denyButton.keyEquivalent = "\r"
-
-            let window = alert.window
-            window.level = .modalPanel
-            window.collectionBehavior.insert(.moveToActiveSpace)
-            window.standardWindowButton(.closeButton)?.isEnabled = false
-            window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
-            window.standardWindowButton(.zoomButton)?.isEnabled = false
+            let window = makeRevealConsentWindow(
+                shell: shell, invocation: invocation, peer: peer)
 
             activeRevealPrompt = ActiveRevealPrompt(
-                alert: alert, continuation: continuation, timeoutTask: nil)
+                window: window, continuation: continuation, timeoutTask: nil)
             activeRevealPrompt?.timeoutTask = Task { @MainActor [weak self] in
                 do {
                     try await Task.sleep(
@@ -318,8 +314,245 @@ final class ControlServer: NSObject {
 
             window.center()
             window.makeKeyAndOrderFront(nil)
-            window.initialFirstResponder = denyButton
         }
+    }
+
+    private func makeRevealConsentWindow(
+        shell: Snippet,
+        invocation: String?,
+        peer: PeerIdentity
+    ) -> NSWindow {
+        let windowSize = NSSize(width: 480, height: 320)
+        let window = RevealConsentWindow(
+            contentRect: NSRect(origin: .zero, size: windowSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true)
+        window.title = "Reveal secure snippet?"
+        window.level = .modalPanel
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        // The window server shadows the rectangular backing window, not the rounded
+        // glass surface. That leaves a visible square outline at the corners whenever
+        // this window is key; the glass surface supplies its own rim, so disable it.
+        window.hasShadow = false
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.animationBehavior = .utilityWindow
+
+        let title = makePromptLabel(
+            "Reveal secure snippet?", font: .systemFont(ofSize: 20, weight: .semibold))
+        let subtitle = makePromptLabel(
+            "Requested by \(peer.applicationName)",
+            font: .systemFont(ofSize: 13, weight: .regular),
+            color: .secondaryLabelColor)
+        subtitle.lineBreakMode = .byTruncatingTail
+        subtitle.toolTip = peer.displayName
+
+        let titleStack = NSStackView(views: [title, subtitle])
+        titleStack.orientation = .vertical
+        titleStack.alignment = .leading
+        titleStack.spacing = 3
+
+        let shield = NSImageView(image: LiquidGlassDesign.symbol(
+            "lock.shield.fill", pointSize: 27, weight: .medium) ?? NSImage())
+        shield.translatesAutoresizingMaskIntoConstraints = false
+        shield.contentTintColor = .systemOrange
+        shield.setAccessibilityElement(false)
+
+        let header = NSStackView(views: [shield, titleStack])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 13
+        NSLayoutConstraint.activate([
+            shield.widthAnchor.constraint(equalToConstant: 38),
+            shield.heightAnchor.constraint(equalToConstant: 38)
+        ])
+
+        let snippetCard = NSView()
+        snippetCard.translatesAutoresizingMaskIntoConstraints = false
+        LiquidGlassDesign.configureRoundedLayer(
+            snippetCard,
+            cornerRadius: LiquidGlassDesign.Metrics.contentCornerRadius,
+            borderColor: NSColor.separatorColor.withAlphaComponent(0.18),
+            backgroundColor: NSColor.controlBackgroundColor.withAlphaComponent(0.52))
+
+        let cardCaption = makePromptLabel(
+            "SECURE SNIPPET", font: .systemFont(ofSize: 10, weight: .semibold),
+            color: .secondaryLabelColor)
+        let snippetName = makePromptLabel(
+            shell.displayName, font: .systemFont(ofSize: 14, weight: .medium))
+        snippetName.lineBreakMode = .byTruncatingTail
+        snippetName.toolTip = shell.displayName
+
+        let safeInvocation = promptSingleLine(
+            invocation, fallback: "snippets-cli reveal \(shell.normalizedKeyword)")
+        let command = makePromptLabel(
+            safeInvocation,
+            font: .monospacedSystemFont(ofSize: 11.5, weight: .regular),
+            color: .secondaryLabelColor)
+        command.lineBreakMode = .byTruncatingMiddle
+        command.toolTip = safeInvocation
+
+        let snippetText = NSStackView(views: [cardCaption, snippetName, command])
+        snippetText.translatesAutoresizingMaskIntoConstraints = false
+        snippetText.orientation = .vertical
+        snippetText.alignment = .leading
+        snippetText.spacing = 3
+        snippetCard.addSubview(snippetText)
+        NSLayoutConstraint.activate([
+            snippetText.leadingAnchor.constraint(equalTo: snippetCard.leadingAnchor, constant: 14),
+            snippetText.trailingAnchor.constraint(equalTo: snippetCard.trailingAnchor, constant: -14),
+            snippetText.centerYAnchor.constraint(equalTo: snippetCard.centerYAnchor),
+            snippetCard.heightAnchor.constraint(equalToConstant: 76)
+        ])
+
+        let callerIcon: NSImage
+        if let path = peer.applicationPath {
+            callerIcon = NSWorkspace.shared.icon(forFile: path)
+        } else {
+            callerIcon = LiquidGlassDesign.symbol(
+                "terminal", pointSize: 18, weight: .regular) ?? NSImage()
+        }
+        let callerImage = NSImageView(image: callerIcon)
+        callerImage.translatesAutoresizingMaskIntoConstraints = false
+        callerImage.imageScaling = .scaleProportionallyUpOrDown
+        callerImage.setAccessibilityElement(false)
+
+        let callerCaption = makePromptLabel(
+            "CALLER", font: .systemFont(ofSize: 10, weight: .semibold),
+            color: .secondaryLabelColor)
+        let callerPath = promptSingleLine(
+            peer.applicationPath, fallback: "Process \(peer.pid)")
+        let callerLocation = makePromptLabel(
+            callerPath, font: .systemFont(ofSize: 12, weight: .regular),
+            color: .secondaryLabelColor)
+        callerLocation.lineBreakMode = .byTruncatingMiddle
+        callerLocation.toolTip = callerPath
+        let callerText = NSStackView(views: [callerCaption, callerLocation])
+        callerText.orientation = .vertical
+        callerText.alignment = .leading
+        callerText.spacing = 2
+
+        let caller = NSStackView(views: [callerImage, callerText])
+        caller.orientation = .horizontal
+        caller.alignment = .centerY
+        caller.spacing = 10
+        NSLayoutConstraint.activate([
+            callerImage.widthAnchor.constraint(equalToConstant: 28),
+            callerImage.heightAnchor.constraint(equalToConstant: 28)
+        ])
+
+        let warningIcon = NSImageView(image: LiquidGlassDesign.symbol(
+            "exclamationmark.triangle.fill", pointSize: 15, weight: .medium) ?? NSImage())
+        warningIcon.translatesAutoresizingMaskIntoConstraints = false
+        warningIcon.contentTintColor = .systemOrange
+        warningIcon.setAccessibilityElement(false)
+        let warningText = makePromptLabel(
+            "The command will receive the plaintext. Touch ID or your Mac password is required next; logs or other tools may capture the result.",
+            font: .systemFont(ofSize: 12, weight: .regular),
+            color: .secondaryLabelColor,
+            wrapping: true)
+        let warning = NSStackView(views: [warningIcon, warningText])
+        warning.orientation = .horizontal
+        warning.alignment = .top
+        warning.spacing = 9
+        NSLayoutConstraint.activate([
+            warningIcon.widthAnchor.constraint(equalToConstant: 18),
+            warningIcon.heightAnchor.constraint(equalToConstant: 18)
+        ])
+
+        let denyButton = NSButton(
+            title: "Deny", target: self, action: #selector(denyRevealPrompt(_:)))
+        LiquidGlassDesign.configureActionButton(denyButton, symbolName: "xmark")
+        denyButton.keyEquivalent = "\u{1b}"
+        denyButton.toolTip = "Deny the request (Escape)"
+
+        let revealButton = NSButton(
+            title: "Reveal", target: self, action: #selector(approveRevealPrompt(_:)))
+        LiquidGlassDesign.configureActionButton(revealButton, symbolName: "lock.open.fill")
+        // Deliberately no Return equivalent: disclosure always requires selecting the
+        // affirmative control, while Escape remains a quick safe answer.
+        revealButton.keyEquivalent = ""
+        revealButton.toolTip = "Approve, then authenticate"
+        if #available(macOS 26.0, *) {
+            revealButton.tintProminence = .primary
+            denyButton.tintProminence = .secondary
+        } else {
+            revealButton.bezelColor = .controlAccentColor
+        }
+        NSLayoutConstraint.activate([
+            denyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
+            revealButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 110),
+            denyButton.heightAnchor.constraint(equalToConstant: 32),
+            revealButton.heightAnchor.constraint(equalToConstant: 32)
+        ])
+        let actions = NSStackView(views: [NSView(), denyButton, revealButton])
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 8
+
+        let stack = NSStackView(views: [header, snippetCard, caller, warning, actions])
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 16
+
+        let body = NSView()
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: body.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: body.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: body.topAnchor, constant: 22),
+            stack.bottomAnchor.constraint(equalTo: body.bottomAnchor, constant: -22),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            snippetCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            caller.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            warning.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            actions.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+
+        let surface = LiquidGlassDesign.makeFloatingPanelSurface(
+            containing: body,
+            cornerRadius: 22,
+            fallbackMaterial: .popover)
+        guard let windowContent = window.contentView else { return window }
+        windowContent.addSubview(surface)
+        NSLayoutConstraint.activate([
+            surface.leadingAnchor.constraint(equalTo: windowContent.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: windowContent.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: windowContent.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: windowContent.bottomAnchor)
+        ])
+        window.initialFirstResponder = denyButton
+        return window
+    }
+
+    private func makePromptLabel(
+        _ text: String,
+        font: NSFont,
+        color: NSColor = .labelColor,
+        wrapping: Bool = false
+    ) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = font
+        label.textColor = color
+        label.maximumNumberOfLines = wrapping ? 3 : 1
+        label.lineBreakMode = wrapping ? .byWordWrapping : .byClipping
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return label
+    }
+
+    private func promptSingleLine(_ text: String?, fallback: String) -> String {
+        let collapsed = (text ?? fallback)
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = collapsed.isEmpty ? fallback : collapsed
+        return value.count > 300 ? String(value.prefix(299)) + "…" : value
     }
 
     @objc private func approveRevealPrompt(_ sender: Any?) {
@@ -334,7 +567,7 @@ final class ControlServer: NSObject {
         guard let prompt = activeRevealPrompt else { return }
         activeRevealPrompt = nil
         prompt.timeoutTask?.cancel()
-        prompt.alert.window.orderOut(nil)
+        prompt.window.orderOut(nil)
         prompt.continuation.resume(returning: result)
     }
 
@@ -371,6 +604,12 @@ final class ControlServer: NSObject {
 nonisolated struct PeerIdentity: Sendable {
     let pid: Int32
     let isTrusted: Bool
+    /// Short, human-facing name used where the verified path has its own UI row.
+    let applicationName: String
+    /// The application bundle or executable path. This is the unforgeable part of the
+    /// displayed identity; `applicationName` alone is merely Info.plist text.
+    let applicationPath: String?
+    /// Full identity retained for audit records and diagnostic text.
     let displayName: String
 
     init(descriptor: Int32) {
@@ -392,6 +631,8 @@ nonisolated struct PeerIdentity: Sendable {
 
         guard gotToken else {
             self.isTrusted = false
+            self.applicationName = "Unidentified program"
+            self.applicationPath = nil
             self.displayName = "an unidentified program"
             return
         }
@@ -402,6 +643,8 @@ nonisolated struct PeerIdentity: Sendable {
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
               let code else {
             self.isTrusted = false
+            self.applicationName = "Unidentified program"
+            self.applicationPath = nil
             self.displayName = "an unidentified program (pid \(reportedPID))"
             return
         }
@@ -418,13 +661,18 @@ nonisolated struct PeerIdentity: Sendable {
             self.isTrusted = false
         }
 
-        self.displayName = PeerIdentity.name(forPID: reportedPID)
+        let identity = PeerIdentity.identity(forPID: reportedPID)
+        self.applicationName = identity.applicationName
+        self.applicationPath = identity.applicationPath
+        self.displayName = identity.displayName
     }
 
     /// A name the user can recognise, which usually means the *terminal* they typed
     /// into rather than `snippets-cli` itself — the CLI is what the shell ran, but the
     /// shell is what the person is looking at.
-    private static func name(forPID pid: Int32) -> String {
+    private static func identity(
+        forPID pid: Int32
+    ) -> (applicationName: String, applicationPath: String?, displayName: String) {
         var parent = pid
         for _ in 0..<4 {
             if let app = NSRunningApplication(processIdentifier: parent) {
@@ -432,22 +680,32 @@ nonisolated struct PeerIdentity: Sendable {
                 // anything this user can launch may call itself "Snippets" or
                 // "1Password" — and a forged name reads as MORE trustworthy than the
                 // honest "a command-line program (pid N)". This string is shown in the
-                // consent alert, written to the audit log, and rendered inside the system
-                // Touch ID sheet, which users trust more than our own UI. Since the
-                // prompt naming the requester IS the control, the name has to carry
+                // consent panel and written to the audit log. Since the prompt naming
+                // the requester IS the control, the name has to be shown alongside
                 // something unforgeable: the path, which cannot be moved into /System or
                 // /Applications. Checking the ancestor's signature is not a substitute —
                 // a notarized app can still claim any CFBundleName it likes.
-                let claimed = app.localizedName ?? "an application"
+                let claimed = singleLineName(app.localizedName ?? "an application")
                 guard let path = (app.bundleURL ?? app.executableURL)?.path else { break }
-                return pid == parent
+                let displayName = pid == parent
                     ? "\(claimed) — \(path)"
                     : "\(claimed) — \(path), which started pid \(pid)"
+                return (claimed, path, displayName)
             }
             guard let next = parentPID(of: parent), next > 1 else { break }
             parent = next
         }
-        return "a command-line program (pid \(pid))"
+        let name = "Command-line program"
+        return (name, nil, "a command-line program (pid \(pid))")
+    }
+
+    private static func singleLineName(_ name: String) -> String {
+        let collapsed = name
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = collapsed.isEmpty ? "an application" : collapsed
+        return value.count > 80 ? String(value.prefix(79)) + "…" : value
     }
 
     private static func parentPID(of pid: Int32) -> Int32? {

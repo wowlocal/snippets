@@ -91,7 +91,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         if secureStore.isUnreadable {
             throw SyncEngineFailure(
                 reason: .vaultUnreadable,
-                detail: "the secure vault on this Mac could not be read, so its snippets "
+                detail: "the secure vault on this device could not be read, so its snippets "
                     + "cannot be synced without appearing to have been deleted")
         }
 
@@ -107,7 +107,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         guard orphaned == 0 else {
             throw SyncEngineFailure(
                 reason: .vaultUnreadable,
-                detail: "\(orphaned) secure snippet(s) have been synced from this Mac but "
+                detail: "\(orphaned) secure snippet(s) have been synced from this device but "
                     + "its vault file is missing, so syncing now would delete them everywhere")
         }
     }

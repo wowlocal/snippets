@@ -76,9 +76,9 @@ nonisolated struct SyncState: Codable, Equatable {
                     + "Production, the account is out of space, or one snippet is too "
                     + "large. None of them is fixed by waiting."
             case .massDeletion:
-                return "Check another Mac still has your snippets before resuming."
+                return "Check another device still has your snippets before resuming."
             case .schemaTooNew:
-                return "Update Snippets on this Mac."
+                return "Update Snippets on this device."
             case .manifestIntegrityFailed, .localLibraryQuarantined, .vaultUnreadable:
                 return nil
             }

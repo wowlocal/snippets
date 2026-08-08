@@ -48,12 +48,12 @@ final class SecureSnippetStore: SecureSnippetProviding {
             case .invalidUTF8: return "the secure snippet is not valid UTF-8"
             case .transaction(let detail): return detail
             case .sharedVaultKeyMissing:
-                return "your other Mac's secure-snippets key has not reached this one yet. "
-                    + "Check that iCloud Keychain is on in System Settings, or restore the "
+                return "your other device's secure-snippets key has not reached this one yet. "
+                    + "Check that iCloud Keychain is on in Settings, or restore the "
                     + "key with your recovery key under Secure Snippets."
             case .forgetRequiresSyncOff:
-                return "Turn off iCloud Sync first. Then Snippets can remove this Mac's "
-                    + "vault without deleting the shared key or affecting your other Macs."
+                return "Turn off iCloud Sync first. Then Snippets can remove this device's "
+                    + "vault without deleting the shared key or affecting your other devices."
             case .forgetWaitForSync:
                 return "iCloud Sync is still finishing a round. Wait a moment and try again."
             }

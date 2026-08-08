@@ -1,6 +1,11 @@
-import AppKit
 import CryptoKit
+import Foundation
 import LocalAuthentication
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 /// Owns "is the vault open right now", and the library key while it is.
 ///
@@ -42,7 +47,7 @@ final class VaultSession {
         var description: String {
             switch self {
             case .locked: return "the vault is locked"
-            case .noKey: return "no vault key is available on this Mac"
+            case .noKey: return "no vault key is available on this device"
             case .authentication(let detail): return detail
             case .keychain(let detail): return detail
             }
@@ -301,6 +306,7 @@ final class VaultSession {
     /// documentation: this app is backgrounded precisely when a secure snippet is being
     /// used, so resign-active would lock the vault at the only moment it matters.
     private func observeSystemLockEvents() {
+        #if os(macOS)
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             workspace.addObserver(
@@ -320,6 +326,15 @@ final class VaultSession {
                 MainActor.assumeIsolated { self?.lock() }
             }
         }
+        #elseif os(iOS)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.lock() }
+        }
+        #endif
     }
 }
 

@@ -442,7 +442,7 @@ final class SyncCoordinator {
     var statusDescription: String {
         switch readiness {
         case .off:
-            return "Off. Your snippets stay on this Mac."
+            return "Off. Your snippets stay on this device."
         case .cannotStart(let detail):
             return "Cannot start: \(detail)"
         case .ready:

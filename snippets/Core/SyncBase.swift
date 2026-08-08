@@ -83,7 +83,7 @@ nonisolated struct SyncBase: Equatable {
 /// because those exact bytes are what gets hashed and sealed, and a synthesized encoder
 /// would be free to reorder keys. Storing each envelope as its canonical bytes keeps one
 /// definition of "what an envelope looks like" instead of two that can drift.
-extension SyncBase: Codable {
+nonisolated extension SyncBase: Codable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, envelopes, cursor
     }

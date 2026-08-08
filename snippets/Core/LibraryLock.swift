@@ -258,6 +258,7 @@ nonisolated enum SentinelLock {
     /// `PROC_PIDTBSDINFO` is available for same-user peers even when their executable
     /// has already changed on disk, which is exactly the identity needed by a lock.
     static func processGeneration(for pid: pid_t) -> ProcessGeneration? {
+        #if os(macOS)
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else {
@@ -266,6 +267,12 @@ nonisolated enum SentinelLock {
         return ProcessGeneration(
             seconds: UInt64(info.pbi_start_tvsec),
             microseconds: UInt64(info.pbi_start_tvusec))
+        #else
+        // `proc_pidinfo` is not public API on iOS. The iPad app is a single process,
+        // so the fallback sentinel still has PID liveness plus its conservative age
+        // threshold; only the macOS app/CLI pair needs generation-level disambiguation.
+        return nil
+        #endif
     }
 
     final class Handle {
