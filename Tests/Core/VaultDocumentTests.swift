@@ -237,6 +237,40 @@ private struct BagRandom {
         #expect(try VaultFile.decode(bytes).wrapCLI == nil)
     }
 
+    @Test func aStaleSharedIdentityCannotEraseRecoveryMetadata() throws {
+        var existing = document(
+            wrapCLI: "v1.k-7f3a91c0.cli.existing.wrap",
+            x: ["future": .string("published"), "conflict": .string("existing")],
+            records: [])
+        existing.wrapRecovery = "v1.k-7f3a91c0.recovery.existing.wrap"
+        existing.wrapPass = nil
+
+        var stale = existing
+        stale.wrapRecovery = nil
+        stale.wrapCLI = nil
+        stale.wrapPass = "must-not-enter-icloud"
+        stale.x = ["conflict": .string("stale"), "added": .string("candidate")]
+
+        let merged = try #require(VaultDocument.mergingSharedIdentity(
+            existing: existing, candidate: stale))
+        #expect(merged.wrapRecovery == existing.wrapRecovery)
+        #expect(merged.wrapCLI == existing.wrapCLI)
+        #expect(merged.wrapPass == nil)
+        #expect(merged.x["conflict"] == .string("existing"))
+        #expect(merged.x["future"] == .string("published"))
+        #expect(merged.x["added"] == .string("candidate"))
+        #expect(merged.records.isEmpty)
+    }
+
+    @Test func aSharedIdentityCannotChangeImmutableCryptoParameters() {
+        let existing = document(records: [])
+        var rival = existing
+        rival.vaultSalt = "AAAAAAAAAAAAAAAAAAAAAA"
+
+        #expect(VaultDocument.mergingSharedIdentity(
+            existing: existing, candidate: rival) == nil)
+    }
+
     @Test func timestampsKeepMillisecondResolution() throws {
         // Milliseconds, not seconds: `HLC.wallMs` is in milliseconds and `updatedAt`
         // feeds it, so truncating here would manufacture merge ties the writer never

@@ -195,7 +195,8 @@ struct SyncLibraryProjectionTests {
     @Test func mergingCarriesTheVaultHMACFromTheSelectedBodyNotTheOverallClockWinner() throws {
         let id = UUID()
         func envelope(
-            name: String, body: String, hash: String, wall: UInt64, device: String
+            name: String, body: String, hash: String, kid: String,
+            wall: UInt64, device: String
         ) -> SyncEnvelope {
             SyncEnvelope(
                 id: id,
@@ -208,24 +209,29 @@ struct SyncLibraryProjectionTests {
                     isEnabled: true, isPinned: false,
                     createdAt: Date(timeIntervalSince1970: 1),
                     updatedAt: Date(timeIntervalSince1970: TimeInterval(wall))),
-                x: [SyncEnvelope.vaultContentHashExtensionKey: .string(hash)])
+                x: [
+                    SyncEnvelope.vaultContentHashExtensionKey: .string(hash),
+                    SyncEnvelope.vaultKeyIDExtensionKey: .string(kid),
+                ])
         }
 
         let ancestor = envelope(
-            name: "before", body: "sealed-base", hash: "hash-base",
+            name: "before", body: "sealed-base", hash: "hash-base", kid: "k-local",
             wall: 1, device: remoteDevice)
         // Local wins the whole-record clock due to a rename, but its body did not move.
         let local = envelope(
-            name: "renamed", body: "sealed-base", hash: "hash-base",
+            name: "renamed", body: "sealed-base", hash: "hash-base", kid: "k-local",
             wall: 30, device: localDevice)
         let remote = envelope(
-            name: "before", body: "sealed-remote", hash: "hash-remote",
+            name: "before", body: "sealed-remote", hash: "hash-remote", kid: "k-remote",
             wall: 20, device: remoteDevice)
 
         let merged = try #require(SyncMerge.mergeEnvelope(
             base: ancestor, local: local, remote: remote))
         #expect(merged.fields?.content == Data("sealed-remote".utf8))
         #expect(merged.x[SyncEnvelope.vaultContentHashExtensionKey]?.text == "hash-remote")
+        #expect(merged.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == "k-remote",
+                "the vault scope must follow the selected ciphertext, not the HLC winner")
         #expect(merged.fields?.name == "renamed")
     }
 
@@ -233,11 +239,14 @@ struct SyncLibraryProjectionTests {
         let id = UUID()
         func envelope(
             secure: Bool, body: String, wall: UInt64,
-            hash: String? = nil
+            hash: String? = nil, kid: String? = nil
         ) -> SyncEnvelope {
             var extensions: [String: CanonicalJSON.Value] = [:]
             if let hash {
                 extensions[SyncEnvelope.vaultContentHashExtensionKey] = .string(hash)
+            }
+            if let kid {
+                extensions[SyncEnvelope.vaultKeyIDExtensionKey] = .string(kid)
             }
             return SyncEnvelope(
                 id: id,
@@ -255,12 +264,14 @@ struct SyncLibraryProjectionTests {
 
         let originalPlain = envelope(secure: false, body: "plaintext", wall: 1)
         let promoted = envelope(
-            secure: true, body: "v1.nonce.ciphertext", wall: 2, hash: "keyed-hash")
+            secure: true, body: "v1.nonce.ciphertext", wall: 2,
+            hash: "keyed-hash", kid: "k-shared")
         let mergedPromotion = try #require(SyncMerge.mergeEnvelope(
             base: originalPlain, local: originalPlain, remote: promoted))
         #expect(mergedPromotion.secure)
         #expect(mergedPromotion.fields?.content == Data("v1.nonce.ciphertext".utf8))
         #expect(mergedPromotion.x[SyncEnvelope.vaultContentHashExtensionKey]?.text == "keyed-hash")
+        #expect(mergedPromotion.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == "k-shared")
 
         let secureBase = promoted
         let demoted = envelope(secure: false, body: "plaintext", wall: 3)
@@ -269,6 +280,7 @@ struct SyncLibraryProjectionTests {
         #expect(!mergedDemotion.secure)
         #expect(mergedDemotion.fields?.content == Data("plaintext".utf8))
         #expect(mergedDemotion.x[SyncEnvelope.vaultContentHashExtensionKey] == nil)
+        #expect(mergedDemotion.x[SyncEnvelope.vaultKeyIDExtensionKey] == nil)
     }
 
     @Test func anEqualLegacySecureBodyAcceptsAKeyedHashBackfill() throws {

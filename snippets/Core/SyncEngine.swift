@@ -36,7 +36,11 @@ nonisolated struct ApplyOutcome: Equatable {
 @MainActor
 protocol SyncLibraryAccess: AnyObject {
     /// Everything syncable, plaintext and secure, as envelopes ready to seal.
-    func currentEnvelopes() throws -> [UUID: SyncEnvelope]
+    ///
+    /// The engine passes its live ancestor rather than asking the library to re-read
+    /// `base.json`. A failed derived-state write must not make the projection forget
+    /// secure records the running engine already knows the backend accepted.
+    func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope]
     /// Applies merged remote state, reporting what changed and what had to wait.
     func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome
     /// Live ids, for the deletion guard.
@@ -156,6 +160,11 @@ final class SyncEngine {
             } else {
                 transition(to: .idle(lastSync: now()))
             }
+        } catch is CancellationError {
+            // `SyncCoordinator.stop()` cancels and then waits for this round to drain
+            // before a destructive local vault removal is allowed. Cancellation is a
+            // lifecycle event, not an offline failure and never a reason to back off.
+            transition(to: .disabled)
         } catch let failure as SyncTransportFailure {
             handle(failure)
         } catch let failure as SyncEngineFailure {
@@ -171,19 +180,22 @@ final class SyncEngine {
     ///   completed, everything applicable was applied — so it must not back off or count
     ///   against `consecutiveFailures`; it simply did not finish arriving.
     private func performRound() async throws -> Int? {
+        try Task.checkCancellation()
         // PUSH FIRST, deliberately.
         //
         // Fetching first and applying would rewrite local records before this device's
         // own changes have left it — and if the process dies between the two, those
         // changes are gone with nothing to recover them from. Pushing first means the
         // worst case is a duplicate round, not a lost edit.
-        let current = try library.currentEnvelopes()
+        let current = try library.currentEnvelopes(agreedBase: base)
         let pending = base.pendingChanges(from: current)
 
         if !pending.isEmpty {
             guard transport.supportsPush else { throw SyncTransportFailure.pushUnsupported }
             let records = try pending.map { try WireCodec.seal($0, using: sealer) }
+            try Task.checkCancellation()
             let submission = try await transport.submit(records, at: base.cursor)
+            try Task.checkCancellation()
 
             // Matched by id, never by position.
             //
@@ -241,6 +253,7 @@ final class SyncEngine {
             // backend already held and we had not fetched yet. Adopting it silently skips
             // all of that: seed a record remotely, push a local one, and the remote record
             // is never seen. Only a fetch may advance the fetch position.
+            try Task.checkCancellation()
             try persistBase()
         }
 
@@ -250,7 +263,9 @@ final class SyncEngine {
         var isFullResync = false
 
         while true {
+            try Task.checkCancellation()
             let fetch = try await transport.fetchChanges(since: cursor)
+            try Task.checkCancellation()
             isFullResync = isFullResync || fetch.isFullResync
             for record in fetch.records {
                 do {
@@ -267,6 +282,7 @@ final class SyncEngine {
         }
 
         guard !incoming.isEmpty || isFullResync else {
+            try Task.checkCancellation()
             base.cursor = cursor
             try persistBase()
             return nil
@@ -276,7 +292,7 @@ final class SyncEngine {
         // would actually be applied rather than what arrived. A remote tombstone that
         // loses to a local edit is not a deletion, and counting it as one would trip the
         // breaker on a library that was never in danger.
-        let localNow = try library.currentEnvelopes()
+        let localNow = try library.currentEnvelopes(agreedBase: base)
         var merged: [SyncEnvelope] = []
         for envelope in incoming {
             guard let resolved = SyncMerge.mergeEnvelope(
@@ -294,6 +310,7 @@ final class SyncEngine {
             throw SyncEngineFailure(reason: .massDeletion, detail: refusal.description)
         }
 
+        try Task.checkCancellation()
         let outcome = try library.applyRemote(merged)
         let deferred = Set(outcome.deferredIDs)
 
@@ -306,6 +323,7 @@ final class SyncEngine {
         // looking like it deleted a record it never received, and holding the cursor is
         // what makes the backend offer it again. Everything that *did* apply is recorded
         // normally, so the re-fetch re-applies it as a no-op rather than as churn.
+        try Task.checkCancellation()
         for envelope in incoming where !deferred.contains(envelope.id) {
             base.record(envelope)
         }

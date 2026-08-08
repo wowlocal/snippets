@@ -116,19 +116,30 @@ final class VaultIdentityStore {
         // which is sub-millisecond and not on any hot path. Correctness is worth more
         // than that here, and a cache that can be invalidated by another machine is not a
         // cache this type can hold.
+        var valueToPublish = identity
         if let existing = published() {
             guard existing.kid == identity.kid else {
                 NSLog("Snippets: not publishing vault \(identity.kid); "
                       + "\(existing.kid) already holds the shared identity.")
                 return false
             }
-            // Wraps change when a recovery key is added later. Everything else about an
-            // identity is fixed at creation, so an equal document means nothing to do.
-            if existing == identity { return true }
+            guard let merged = VaultDocument.mergingSharedIdentity(
+                existing: existing, candidate: identity)
+            else {
+                // A same-`kid` document with a different salt or KDF is corrupt or from
+                // an incompatible writer. Overwriting either direction would advertise
+                // wraps and records under an identity they cannot open.
+                NSLog("Snippets: not publishing vault \(identity.kid); its shared "
+                      + "identity disagrees on immutable crypto parameters.")
+                return false
+            }
+            if existing == merged { return true }
+            valueToPublish = merged
         }
 
         do {
-            try keychain.storeItem(try VaultFile.encode(identity), account: Self.account)
+            try keychain.storeItem(
+                try VaultFile.encode(valueToPublish), account: Self.account)
             return true
         } catch {
             NSLog("Snippets: the vault identity could not be published (\(error)).")

@@ -22,8 +22,11 @@ struct SyncEngineTests {
         var applied: [[SyncEnvelope]] = []
         var throwOnRead: (any Error)?
 
-        func currentEnvelopes() throws -> [UUID: SyncEnvelope] {
+        private(set) var lastAgreedBase = SyncBase()
+
+        func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {
             if let throwOnRead { throw throwOnRead }
+            lastAgreedBase = agreedBase
             return envelopes
         }
 
@@ -107,6 +110,48 @@ struct SyncEngineTests {
         // makes two devices trade writes forever and burns backend quota doing nothing.
         _ = await h.engine.sync()
         #expect(await h.transport.submittedBatches.count == 1, "an unchanged library must not be pushed again")
+        #expect(h.library.lastAgreedBase.envelope(id) != nil,
+                "projection must receive the engine's live ancestor, not re-read a stale file")
+    }
+
+    @Test func cancellationAfterBackendAcceptanceDoesNotBlessTheWriteLocally() async throws {
+        let entered = AsyncStream<Void>.makeStream()
+        let released = AsyncStream<Void>.makeStream()
+        let transport = InMemoryTransport(sleeper: { _ in
+            entered.continuation.yield()
+            var iterator = released.stream.makeAsyncIterator()
+            _ = await iterator.next()
+            // Intentionally ignore cancellation. CloudKit may finish an operation that
+            // was already in flight; the engine's post-await barrier must still hold.
+        })
+        transport.configure { $0.latency = .seconds(1) }
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("engine-cancel-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let library = FakeLibrary()
+        let id = UUID()
+        library.envelopes[id] = envelope(id, name: "accepted while stopping")
+        let sealer = SnippetCryptoSealer(
+            keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test")
+        let engine = SyncEngine(
+            transport: transport, library: library, sealer: sealer, device: "aaaaaaa1",
+            baseURL: dir.appendingPathComponent("base.json"), temporaryDirectory: dir)
+
+        var enteredIterator = entered.stream.makeAsyncIterator()
+        let round = Task { await engine.sync() }
+        _ = await enteredIterator.next()
+        round.cancel()
+        released.continuation.yield()
+        _ = await round.value
+
+        #expect(transport.snapshot.count == 1,
+                "the simulated backend deliberately completed the cancelled submit")
+        #expect(engine.agreedBase.envelope(id) == nil,
+                "a cancelled round must not record a backend write as locally agreed")
+        #expect(engine.state == .disabled)
     }
 
     @Test func remoteChangesAreApplied() async throws {

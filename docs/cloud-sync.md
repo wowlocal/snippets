@@ -446,13 +446,16 @@ is what decides whether this Mac has a vault at all — and fetching it would ne
 a vault. It also adds no schema, no entitlement, and is end-to-end encrypted between the user's
 devices rather than merely encrypted to Apple.
 
-Three rules keep it safe:
+Four rules keep it safe:
 
 - **First publisher wins.** A published identity is never overwritten with a different `kid`. Two
   Macs that each minted a vault before this existed keep whichever published first, and the loser's
   local vault is left completely alone — its records are the only copy of secrets that exist
   nowhere else, and re-pointing it at a key it was not encrypted under would destroy them. Reported,
   not repaired; the recovery key is the way out.
+- **Same-vault updates are monotonic.** A stale Mac may add a recovery/CLI wrap or an unknown
+  extension that is absent, but it cannot erase a non-null wrap or overwrite an extension already
+  published. The `kid`, salt and KDF parameters must match exactly; a disagreement is refused.
 - **`reload` adopts only when sync is on**, because adoption writes a file and a Mac that merely
   shares an iCloud account should not spontaneously grow a vault. An explicit "make this secure"
   adopts regardless: the user is asking for a vault, and the right one to give them is the one they
@@ -471,7 +474,9 @@ so two processes on one Mac cannot mint two wire keys. Two *Macs* that both mint
 Keychain has propagated either can — which needs a user enabling sync on two Macs within about a
 minute, ever, and only the first time. iCloud Keychain converges on one; `SyncCoordinator` notices
 the stored key no longer matches the one its engine holds, rebuilds on the winner, and discards the
-agreed base so every local record is offered again under that key. Stale losing-key records still
+agreed base so every local record is offered again under that key. The projection sidecar is kept:
+its HLC/origin and unknown extension fields are independent of the wire key, and deleting it would
+strip forward-compatible metadata on the replacement upload. Stale losing-key records still
 need the planned zone wipe, but they no longer suppress readable replacements.
 
 ### The loop
@@ -490,6 +495,26 @@ there and reuses the exact envelope while all persisted fields still match. It i
 if it is missing or unreadable, `base.json` is the fallback and the cost is at most a conservative
 re-push, not lost user data. This is what makes apply → export a fixed point instead of relabelling
 every remote record as a new local edit on the next round.
+
+Secure envelopes carry the originating vault's `kid` in that encrypted extension bag. The sealed
+body is AEAD-bound to the same value but does not reveal it, so the stamp lets a receiver defer a
+record from a rival vault before filing ciphertext it can never open. On merge, both the `kid` and
+the keyed content hash follow the selected ciphertext rather than the whole-record HLC winner; a
+plaintext result clears both. A scoped tombstone from a rival vault is deferred too and cannot
+delete a plaintext record that merely shares its UUID.
+
+Deferral is per record. Plaintext records in the same fetched page still apply, while the cursor is
+held so the unfileable secure record is offered again without backoff. Conversely, an unreadable or
+unexpectedly missing local vault fails closed before projection: it must never appear as an empty
+vault and manufacture tombstones. The engine passes its live in-memory base into that check, because
+a failed `base.json` write cannot hide records the running process knows were accepted.
+
+Turning sync off cancels and drains the retained round task before local vault removal is allowed.
+Cancellation checks bracket every awaited backend operation, so a CloudKit request that finishes
+after cancellation cannot rewrite local derived state or begin an apply. A synchronizable vault key
+is not evidence that its records ever uploaded; the removal confirmation therefore warns that a
+record which exists only on this Mac is permanently lost and promises restoration only for records
+the backend actually received.
 
 Two bugs the fake caught that a real backend would have taught us slowly and expensively:
 

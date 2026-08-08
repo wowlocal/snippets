@@ -326,6 +326,35 @@ nonisolated struct VaultDocument: Equatable {
         records.map(\.shell)
     }
 
+    /// Monotonically combines two records for the synchronizable identity slot.
+    ///
+    /// The slot has no revision clock, and every Mac opportunistically republishes on
+    /// reload. Last-writer-wins would therefore let an older copy with no recovery wrap
+    /// erase one another Mac just added. Immutable identity fields must match; optional
+    /// escape hatches and unknown extensions only move from absent to present. Existing
+    /// values win conflicts because they are already the account-wide published truth.
+    static func mergingSharedIdentity(
+        existing: VaultDocument, candidate: VaultDocument
+    ) -> VaultDocument? {
+        guard existing.schemaVersion == candidate.schemaVersion,
+              existing.kid == candidate.kid,
+              existing.vaultSalt == candidate.vaultSalt,
+              existing.kdf == candidate.kdf
+        else { return nil }
+
+        var merged = existing
+        merged.records = []
+        // A passphrase wrap exists specifically outside the iCloud account and must
+        // never enter its synchronizable identity item, even if an older writer did so.
+        merged.wrapPass = nil
+        if merged.wrapRecovery == nil { merged.wrapRecovery = candidate.wrapRecovery }
+        if merged.wrapCLI == nil { merged.wrapCLI = candidate.wrapCLI }
+        for (key, value) in candidate.x where merged.x[key] == nil {
+            merged.x[key] = value
+        }
+        return merged
+    }
+
     /// `vaultSalt` as bytes, or `nil` if the field is not base64url.
     ///
     /// `nil` rather than an empty `Data` so a caller cannot `?? Data()` their way into

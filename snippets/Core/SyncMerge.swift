@@ -555,15 +555,17 @@ nonisolated extension SyncMerge {
                     localWins ? mine : theirs
                 }
                 if local.secure {
-                    // Same sealed body means either keyed hash describes the same
-                    // plaintext. Prefer the clock winner's value, but let a newer peer
-                    // backfill a legacy envelope that did not carry one at all.
-                    mergedX[SyncEnvelope.vaultContentHashExtensionKey] =
-                        winner.x[SyncEnvelope.vaultContentHashExtensionKey]
-                        ?? (localWins ? remote.x : local.x)[
-                            SyncEnvelope.vaultContentHashExtensionKey]
+                    // Both pieces describe the selected sealed body: its keyed hash and
+                    // the vault scope bound into its AAD. Prefer the clock winner, while
+                    // allowing the other peer to backfill a legacy missing extension.
+                    let otherX = localWins ? remote.x : local.x
+                    for key in [SyncEnvelope.vaultContentHashExtensionKey,
+                                SyncEnvelope.vaultKeyIDExtensionKey] {
+                        mergedX[key] = winner.x[key] ?? otherX[key]
+                    }
                 } else {
                     mergedX[SyncEnvelope.vaultContentHashExtensionKey] = nil
+                    mergedX[SyncEnvelope.vaultKeyIDExtensionKey] = nil
                 }
                 return SyncEnvelope(
                     id: winner.id, hlc: winner.hlc, origin: winner.origin,
@@ -650,14 +652,17 @@ nonisolated extension SyncMerge {
                 localWins ? mine : theirs
             }
             if mergedSecure {
-                // This extension is the vault HMAC for the selected sealed body. It
-                // must follow the content winner, which can differ from the overall
-                // HLC winner when only one side changed the body from the ancestor.
+                // Both extensions belong to the selected sealed body, not to the
+                // whole-record HLC winner. The body winner can differ when one peer only
+                // renamed the snippet while the other changed its secret.
+                let contentX = contentCameFromLocal ? local.x : remote.x
                 mergedX[SyncEnvelope.vaultContentHashExtensionKey] =
-                    (contentCameFromLocal ? local.x : remote.x)[
-                        SyncEnvelope.vaultContentHashExtensionKey]
+                    contentX[SyncEnvelope.vaultContentHashExtensionKey]
+                mergedX[SyncEnvelope.vaultKeyIDExtensionKey] =
+                    contentX[SyncEnvelope.vaultKeyIDExtensionKey]
             } else {
                 mergedX[SyncEnvelope.vaultContentHashExtensionKey] = nil
+                mergedX[SyncEnvelope.vaultKeyIDExtensionKey] = nil
             }
             return SyncEnvelope(
                 id: local.id,

@@ -35,6 +35,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         case transaction(String)
         case sharedVaultKeyMissing
         case forgetRequiresSyncOff
+        case forgetWaitForSync
 
         var description: String {
             switch self {
@@ -53,6 +54,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
             case .forgetRequiresSyncOff:
                 return "Turn off iCloud Sync first. Then Snippets can remove this Mac's "
                     + "vault without deleting the shared key or affecting your other Macs."
+            case .forgetWaitForSync:
+                return "iCloud Sync is still finishing a round. Wait a moment and try again."
             }
         }
     }
@@ -163,7 +166,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// fail or its slot can be temporarily missing while `K_lib` is still a
     /// synchronizable item whose deletion propagates account-wide. Destructive behavior
     /// must over-report sharing, never infer "local" from a failed identity lookup.
-    var isVaultShared: Bool { keychain.tier.syncsBetweenDevices }
+    var usesSynchronizableVaultKey: Bool { keychain.tier.syncsBetweenDevices }
 
     func isSecure(_ id: UUID) -> Bool { document?.record(id) != nil }
 
@@ -546,13 +549,13 @@ final class SecureSnippetStore: SecureSnippetProviding {
     ///
     /// A device-only vault also loses its device-only key and identity. A synchronizable
     /// vault deliberately keeps both: deleting either Keychain item would propagate to
-    /// every Mac, turning a local removal into fleet-wide key destruction. With sync off,
-    /// keeping them is inert; explicitly setting up Secure Snippets again or re-enabling
-    /// sync adopts the shared identity and restores the records.
+    /// every Mac, turning a local removal into fleet-wide key destruction. This operation
+    /// cannot prove another ciphertext copy exists; the confirmation must say so rather
+    /// than treating a synchronizable key as evidence that the records finished uploading.
     ///
     /// For a device-only vault the key goes last. If that fails, the exact locked
     /// document is restored so the operation remains retryable.
-    func forgetEverything() throws {
+    func forgetEverything(syncIsQuiescent: Bool) throws {
         guard !isUnreadable else {
             throw Failure.vaultUnreadable("the vault could not be read; refusing to remove it")
         }
@@ -563,6 +566,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         guard !SyncCoordinator.isEnabled else {
             throw Failure.forgetRequiresSyncOff
         }
+        guard syncIsQuiescent else { throw Failure.forgetWaitForSync }
 
         // A synchronizable item has no honest "delete only here" operation. Preserve the
         // shared key and identity, regardless of whether the identity lookup currently
@@ -634,17 +638,30 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // rejoin the same vault later instead of minting a rival one.
         if !preserveSharedKey { identityStore.forget() }
 
-        // The agreed base still lists every secure record this Mac ever synced, and with
-        // the vault gone `SnippetLibraryBridge` would read that as "the vault file went
-        // missing" and halt the moment sync is turned back on. It is derived state —
-        // losing it costs one reconcile and can never lose a snippet — so discarding it
-        // is both safe and the only honest option: this Mac has no opinion about those
-        // records any more.
-        for url in [syncBaseURL, syncMetadataURL] {
+        // The agreed base still lists every secure record this Mac ever synced. Clear it
+        // so a later opt-in reconciles from the backend rather than manufacturing local
+        // tombstones for the removed vault.
+        do {
+            try AtomicFileWriter.removeDurablyIfPresent(syncBaseURL)
+        } catch {
+            // Safe failure: the bridge receives this exact ancestor from the engine and
+            // refuses to project a missing vault as deletions.
+            NSLog("Snippets: could not clear \(syncBaseURL.lastPathComponent) after forgetting the vault (\(error)).")
+        }
+
+        // The projection sidecar is key-independent and carries unknown extension fields
+        // for ordinary snippets. Deleting the whole file would strip forward-compatible
+        // metadata on the next upload, so remove only entries owned by the deleted vault.
+        if case .loaded(var metadata) = SyncBaseFile.load(from: syncMetadataURL) {
+            metadata.envelopes = metadata.envelopes.filter { !$0.value.secure }
+            metadata.cursor = nil
             do {
-                try AtomicFileWriter.removeDurablyIfPresent(url)
+                try SyncBaseFile.write(
+                    metadata, to: syncMetadataURL, temporaryDirectory: temporaryDirectory)
             } catch {
-                NSLog("Snippets: could not clear \(url.lastPathComponent) after forgetting the vault (\(error)).")
+                // Leaving secure entries is fail-closed: the next bridge projection sees
+                // them and halts rather than emitting tombstones.
+                NSLog("Snippets: could not prune secure projection metadata after forgetting the vault (\(error)).")
             }
         }
 

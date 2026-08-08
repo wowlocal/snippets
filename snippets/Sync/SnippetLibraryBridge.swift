@@ -23,7 +23,6 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     private let store: SnippetStore
     private let secureStore: SecureSnippetStore
     private let lockTimeout: TimeInterval
-    private let baseURL: URL
     private let metadataURL: URL
     private let temporaryDirectory: URL
     private var metadataCache: SyncBase?
@@ -38,37 +37,27 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         store: SnippetStore,
         secureStore: SecureSnippetStore,
         lockTimeout: TimeInterval = 2.0,
-        baseURL: URL = SnippetStorageLocations.syncBaseFileURL,
         metadataURL: URL = SnippetStorageLocations.syncLibraryMetadataFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL
     ) {
         self.store = store
         self.secureStore = secureStore
         self.lockTimeout = lockTimeout
-        self.baseURL = baseURL
         self.metadataURL = metadataURL
         self.temporaryDirectory = temporaryDirectory
     }
 
     // MARK: - Reading
 
-    func currentEnvelopes() throws -> [UUID: SyncEnvelope] {
-        let agreedBase: SyncBase
-        if case .loaded(let loaded) = SyncBaseFile.load(from: baseURL) {
-            agreedBase = loaded
-        } else {
-            // The base is derived state. Losing it costs one full reconcile; it must
-            // never make the user's library unreadable or stop local edits syncing.
-            agreedBase = SyncBase()
-        }
-
-        try refuseToSpeakForAnUnreadableVault(against: agreedBase)
+    func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {
+        let metadata = loadMetadata(fallingBackTo: agreedBase)
+        try refuseToSpeakForAnUnreadableVault(against: agreedBase, metadata: metadata)
 
         let envelopes = SyncLibraryProjection.currentEnvelopes(
             snippets: store.snippets,
             records: secureStore.document?.records ?? [],
             deviceID: store.deviceID,
-            metadata: loadMetadata(fallingBackTo: agreedBase),
+            metadata: metadata,
             agreedBase: agreedBase,
             vaultKID: secureStore.document?.kid)
         persistMetadata(envelopes)
@@ -95,7 +84,9 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     ///
     /// Both halts are sticky, and re-checked on every round, so "Resume After Review" on a
     /// vault that is still unreadable stops again instead of pushing.
-    private func refuseToSpeakForAnUnreadableVault(against base: SyncBase) throws {
+    private func refuseToSpeakForAnUnreadableVault(
+        against base: SyncBase, metadata: SyncBase
+    ) throws {
         if secureStore.isUnreadable {
             throw SyncEngineFailure(
                 reason: .vaultUnreadable,
@@ -107,7 +98,11 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         // user deliberately forgot — `forgetEverything` clears these entries itself, so
         // reaching here means the file went away underneath us instead.
         guard secureStore.document == nil else { return }
-        let orphaned = base.envelopes.values.filter { $0.secure && !$0.deleted }.count
+        let baseIDs = base.envelopes.values
+            .filter { $0.secure && !$0.deleted }.map(\.id)
+        let metadataIDs = metadata.envelopes.values
+            .filter { $0.secure && !$0.deleted }.map(\.id)
+        let orphaned = Set(baseIDs).union(metadataIDs).count
         guard orphaned == 0 else {
             throw SyncEngineFailure(
                 reason: .vaultUnreadable,
@@ -175,13 +170,12 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 // the earlier deletion branch and could erase a local record with the
                 // same UUID despite being authenticated for a different vault. Legitimate
                 // secure tombstones retain the `vaultKID` extension from their live
-                // envelope. A tombstone may still delete a plaintext copy of the same
-                // logical snippet after a concurrent demotion; the unrelated local vault
-                // matters only when the incoming record is live or the local copy is in
-                // that vault.
+                // envelope. A legitimate demotion and its later tombstone carry this
+                // vault's `kid`; a rival scope may not delete even a plaintext copy that
+                // happens to share the UUID.
                 let arrivingKID = envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text
                 if envelope.secure, let arrivingKID, let localKID = contents.vault?.kid,
-                   arrivingKID != localKID, !envelope.deleted || wasSecure {
+                   arrivingKID != localKID {
                     deferred.append(envelope.id)
                     continue
                 }
@@ -301,5 +295,18 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
             // cause one conservative re-push after restart but cannot lose a snippet.
             NSLog("Snippets: could not write sync library metadata: \(error)")
         }
+    }
+
+    /// Drops only the vault-owned portion of the in-process projection sidecar after a
+    /// deliberate local vault removal. `SecureSnippetStore` prunes the file durably, but
+    /// this bridge may have cached its old contents; without the matching memory update,
+    /// re-enabling sync in the same process would still fail closed on those stale secure
+    /// entries. Plaintext and unknown extension metadata remains intact.
+    func forgetSecureProjectionMetadata() {
+        let current = loadMetadata(fallingBackTo: SyncBase())
+        let retained = current.envelopes.values.filter { !$0.secure }
+        persistMetadata(retained.reduce(into: [:]) { result, envelope in
+            result[envelope.id] = envelope
+        })
     }
 }

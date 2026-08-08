@@ -1194,27 +1194,42 @@ private final class VaultSettingsViewController: NSViewController {
             return
         }
 
+        // Turning the checkbox off cancels the active CloudKit task, but cancellation
+        // across an awaited backend call is not instantaneous. Do not delete beneath the
+        // old engine until it has returned and can no longer write a base or tombstones.
+        guard app.syncCoordinator.isQuiescent else {
+            let alert = NSAlert()
+            alert.messageText = "iCloud Sync is still stopping"
+            alert.informativeText = "Wait a moment for the current sync round to finish, then try again."
+            alert.runModal()
+            return
+        }
+
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = app.secureStore.isVaultShared
+        alert.messageText = app.secureStore.usesSynchronizableVaultKey
             ? "Remove \(count) secure snippet(s) from this Mac?"
             : "Permanently delete \(count) secure snippet(s)?"
         // A synchronizable Keychain item cannot be deleted locally: its deletion would
         // reach every Mac. The store therefore preserves the shared key and identity and
         // removes only this Mac's vault. Device-only builds keep the original permanent
         // deletion semantics.
-        alert.informativeText = app.secureStore.isVaultShared
-            ? "This removes the encrypted snippets from this Mac only. Their shared key "
-                + "and copies on your other Macs stay intact. Re-enabling iCloud Sync "
-                + "will bring them back to this Mac."
+        alert.informativeText = app.secureStore.usesSynchronizableVaultKey
+            ? "This permanently removes this Mac's encrypted copies while preserving the "
+                + "shared key. Snippets cannot tell whether these records finished syncing "
+                + "or another Mac has a copy. Anything that exists only on this Mac will be "
+                + "lost; re-enabling iCloud Sync can restore only records already uploaded. "
+                + "There is no local undo."
             : "This deletes the encrypted snippets and the key that opens them. "
                 + "There is no undo, and no export or backup of this app contains their text."
-        alert.addButton(withTitle: app.secureStore.isVaultShared ? "Remove" : "Delete")
+        alert.addButton(withTitle: app.secureStore.usesSynchronizableVaultKey ? "Remove" : "Delete")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         do {
-            try app.secureStore.forgetEverything()
+            try app.secureStore.forgetEverything(
+                syncIsQuiescent: app.syncCoordinator.isQuiescent)
+            app.syncLibrary.forgetSecureProjectionMetadata()
         } catch {
             showVaultError(error)
         }

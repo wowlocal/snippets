@@ -76,13 +76,17 @@ final class SyncCoordinator {
     private var pollTimer: Timer?
     private var startRetryTimer: Timer?
     private var eventTask: Task<Void, Never>?
+    /// Retained until the round has actually returned. Cancellation is advisory across
+    /// an awaited CloudKit call, so `engine == nil` is not proof that sync is quiescent.
+    private var roundTask: Task<Void, Never>?
+    /// Invalidates state callbacks and completions from engines stopped earlier.
+    private var lifecycleGeneration: UInt64 = 0
 
     /// `SyncEngine.sync()` returns early when a round is already in flight, which
     /// *discards* the request rather than queueing it. For a poll timer that is harmless
     /// — the next tick retries — but for a user pressing "Sync Now" or a push hint
     /// arriving mid-round it would look like the button did nothing. So a dropped request
     /// is remembered and replayed once the round finishes.
-    private var isRoundInFlight = false
     private var wantsAnotherRound = false
 
     /// The wire key bytes the running engine was built with, and why `readiness` can be
@@ -112,6 +116,10 @@ final class SyncCoordinator {
         if let startFailure { return .cannotStart(startFailure) }
         return .ready
     }
+
+    /// Destructive local maintenance may proceed only after an old round has returned,
+    /// not merely after the checkbox was switched off.
+    var isQuiescent: Bool { roundTask == nil }
 
     /// Turns sync on or off and acts on it immediately.
     ///
@@ -163,8 +171,12 @@ final class SyncCoordinator {
         let transport = CloudKitTransport()
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: device)
+        let generation = lifecycleGeneration
         engine.onStateChange = { [weak self] state in
-            MainActor.assumeIsolated { self?.publish(state) }
+            MainActor.assumeIsolated {
+                guard let self, self.lifecycleGeneration == generation else { return }
+                self.publish(state)
+            }
         }
 
         self.transport = transport
@@ -202,16 +214,20 @@ final class SyncCoordinator {
     }
 
     func stop() {
+        lifecycleGeneration &+= 1
         startRetryTimer?.invalidate()
         startRetryTimer = nil
         pollTimer?.invalidate()
         pollTimer = nil
         eventTask?.cancel()
         eventTask = nil
+        // Do not clear `roundTask` here. A CloudKit operation may take time to observe
+        // cancellation, and local vault removal must wait until it has returned and the
+        // engine's cancellation barriers have prevented further mutations.
+        roundTask?.cancel()
         engine = nil
         transport = nil
         activeKeyMaterial = nil
-        isRoundInFlight = false
         wantsAnotherRound = false
         publish(.disabled)
     }
@@ -241,20 +257,17 @@ final class SyncCoordinator {
         if restartIfWireKeyChanged() { return }
 
         guard let engine else { return }
-        if isRoundInFlight {
+        if roundTask != nil {
             wantsAnotherRound = true
             return
         }
-        isRoundInFlight = true
-        Task { @MainActor [weak self] in
+        let generation = lifecycleGeneration
+        let task = Task { @MainActor [weak self] in
             _ = await engine.sync()
             guard let self else { return }
-            self.isRoundInFlight = false
-            if self.wantsAnotherRound {
-                self.wantsAnotherRound = false
-                self.syncNow()
-            }
+            self.finishRound(generation: generation)
         }
+        roundTask = task
     }
 
     /// The only way out of a halt, and it goes through the engine's deliberately
@@ -307,13 +320,13 @@ final class SyncCoordinator {
             NSLog("Snippets: the iCloud sync key changed; discarding the agreed base so "
                   + "every snippet is re-uploaded under the new one.")
         }
-        for url in [SnippetStorageLocations.syncBaseFileURL,
-                    SnippetStorageLocations.syncLibraryMetadataFileURL] {
-            try AtomicFileWriter.removeDurablyIfPresent(url)
-        }
-        // Record the winner only after both stale files are durably absent. If either
-        // removal fails, the next start must retry rather than treating a stale base as
-        // belonging to this key for the rest of the install.
+        // Only the agreed ancestor belongs to the old wire key. The projection sidecar
+        // contains forward-compatible `x` fields and local HLC/origin metadata; deleting
+        // it would make the next upload strip fields this build does not understand.
+        try AtomicFileWriter.removeDurablyIfPresent(
+            SnippetStorageLocations.syncBaseFileURL)
+        // Record the winner only after the stale base is durably absent. If removal
+        // fails, the next start retries rather than blessing a base sealed by another key.
         defaults.set(fingerprint, forKey: Self.wireKeyFingerprintDefaultsKey)
     }
 
@@ -335,13 +348,26 @@ final class SyncCoordinator {
     /// must not then run a second round.
     @discardableResult
     private func restartIfWireKeyChanged() -> Bool {
-        guard engine != nil, !isRoundInFlight, let activeKeyMaterial else { return false }
+        guard engine != nil, roundTask == nil, let activeKeyMaterial else { return false }
         guard let current = try? keys.material(), current != activeKeyMaterial else { return false }
 
         NSLog("Snippets: the iCloud sync key changed; restarting under the shared one.")
         stop()
         start()
         return true
+    }
+
+    private func finishRound(generation: UInt64) {
+        roundTask = nil
+        let replay = wantsAnotherRound || generation != lifecycleGeneration
+        wantsAnotherRound = false
+        guard replay, Self.isEnabled, engine != nil else {
+            // A stopped coordinator still needs Settings to learn that it is now safe to
+            // perform local maintenance.
+            if !Self.isEnabled { publish(.disabled) }
+            return
+        }
+        syncNow()
     }
 
     private func startPolling(every interval: TimeInterval) {
