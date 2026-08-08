@@ -784,7 +784,8 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
     /// text, so a Mac with a *different* vault would happily file the record, show its
     /// name and keyword in the list, and fail every reveal for ever after with no
     /// explanation. Carrying the scope in the clear-to-us-but-encrypted-to-the-backend
-    /// bag is what lets the import compare before writing.
+    /// bag is what lets the import compare before writing and halt on a permanent rival
+    /// identity instead of polling the same unopenable record forever.
     ///
     /// Absent on records written before this existed. Absent means "assume it matches",
     /// which is what the old code did unconditionally — no worse than before, and it

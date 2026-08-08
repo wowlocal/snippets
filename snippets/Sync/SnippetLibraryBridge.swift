@@ -31,6 +31,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         var changedIDs: [UUID]
         var appliedEnvelopes: [SyncEnvelope]
         var deferredIDs: [UUID] = []
+        var incompatibleVaultIDs: [UUID] = []
     }
 
     init(
@@ -115,6 +116,42 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         Set(store.snippets.map(\.id)).union(secureStore.shells.map(\.id))
     }
 
+    /// Partitions remote state before the engine evaluates its deletion guard.
+    ///
+    /// A missing vault is expected to heal when its synchronizable identity arrives, so
+    /// live secure records wait. A different `kid` cannot heal by waiting: the ciphertext
+    /// is permanently bound to another AAD scope, so those ids are reported separately
+    /// and the engine applies the rest of the batch before entering a sticky halt.
+    func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification {
+        if secureStore.document == nil,
+           envelopes.contains(where: { $0.secure && !$0.deleted }) {
+            secureStore.joinSharedVaultIfAvailable()
+        }
+
+        let localKID = secureStore.document?.kid
+        var applicable: [SyncEnvelope] = []
+        var deferred: [UUID] = []
+        var incompatible: [UUID] = []
+
+        for envelope in envelopes {
+            guard envelope.secure else {
+                applicable.append(envelope)
+                continue
+            }
+            if let arrivingKID = envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text,
+               let localKID, arrivingKID != localKID {
+                incompatible.append(envelope.id)
+            } else if !envelope.deleted, localKID == nil {
+                deferred.append(envelope.id)
+            } else {
+                applicable.append(envelope)
+            }
+        }
+        return RemoteClassification(
+            applicable: applicable, deferredIDs: deferred,
+            incompatibleVaultIDs: incompatible)
+    }
+
     // MARK: - Applying
 
     /// Writes merged remote state into whichever store owns each record.
@@ -133,9 +170,9 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     /// permanently, retried every two minutes for ever. Ordinary snippets edited on
     /// another Mac simply never arrived, while the pane talked about vault keys.
     ///
-    /// So they are deferred instead: excluded from this transaction, reported to the
-    /// engine, left out of the base, and re-offered by holding the cursor. Everything else
-    /// in the batch applies normally.
+    /// A missing-vault record is deferred and retried without backoff. A rival-vault
+    /// record is classified as incompatible: everything else in the batch applies, then
+    /// the engine halts instead of holding one cursor and re-fetching it forever.
     func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome {
         guard !envelopes.isEmpty else { return ApplyOutcome() }
 
@@ -160,6 +197,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
             var changed: [UUID] = []
             var applied: [SyncEnvelope] = []
             var deferred: [UUID] = []
+            var incompatible: [UUID] = []
 
             for envelope in envelopes {
                 let wasPlain = contents.snippets.contains { $0.id == envelope.id }
@@ -176,7 +214,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 let arrivingKID = envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text
                 if envelope.secure, let arrivingKID, let localKID = contents.vault?.kid,
                    arrivingKID != localKID {
-                    deferred.append(envelope.id)
+                    incompatible.append(envelope.id)
                     continue
                 }
 
@@ -245,7 +283,8 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 applied.append(envelope)
             }
             return ApplyResult(
-                changedIDs: changed, appliedEnvelopes: applied, deferredIDs: deferred)
+                changedIDs: changed, appliedEnvelopes: applied, deferredIDs: deferred,
+                incompatibleVaultIDs: incompatible)
         }
 
         var metadata = loadMetadata(fallingBackTo: SyncBase())
@@ -264,7 +303,9 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         store.reloadAfterExternalWrite()
         secureStore.reload()
         return ApplyOutcome(
-            changedIDs: outcome.value.changedIDs, deferredIDs: outcome.value.deferredIDs)
+            changedIDs: outcome.value.changedIDs,
+            deferredIDs: outcome.value.deferredIDs,
+            incompatibleVaultIDs: outcome.value.incompatibleVaultIDs)
     }
 
     // MARK: - Frozen-file metadata

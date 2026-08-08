@@ -6,10 +6,9 @@ import Foundation
 ///
 /// `deferredIDs` exists because "this Mac cannot file this record *yet*" is a real state
 /// and used to be expressed by throwing, which took the whole round down with it. A secure
-/// record arriving at a Mac whose vault has not appeared — or whose vault is a different
-/// one — is not an error in the batch; it is one record that has to wait. Every other
-/// envelope in the same batch is perfectly applicable, and the plaintext ones have nothing
-/// to do with vaults at all.
+/// record arriving before its vault has appeared is one record that has to wait. A record
+/// from a *different* vault is permanent and is reported separately so the engine can halt
+/// instead of polling the same cursor forever.
 ///
 /// `nonisolated` like the rest of the wire model: the app target compiles this file with
 /// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, and a value the fake library constructs
@@ -19,11 +18,25 @@ nonisolated struct ApplyOutcome: Equatable {
     var changedIDs: [UUID]
     /// Ids that could not be filed and must be offered again on a later round.
     var deferredIDs: [UUID]
+    /// Ids whose ciphertext is bound to a different vault and cannot become applicable
+    /// without the user resolving the vault identity conflict.
+    var incompatibleVaultIDs: [UUID]
 
-    init(changedIDs: [UUID] = [], deferredIDs: [UUID] = []) {
+    init(
+        changedIDs: [UUID] = [], deferredIDs: [UUID] = [],
+        incompatibleVaultIDs: [UUID] = []
+    ) {
         self.changedIDs = changedIDs
         self.deferredIDs = deferredIDs
+        self.incompatibleVaultIDs = incompatibleVaultIDs
     }
+}
+
+/// A preflight partition used by the deletion guard and the apply transaction.
+nonisolated struct RemoteClassification: Equatable {
+    var applicable: [SyncEnvelope]
+    var deferredIDs: [UUID]
+    var incompatibleVaultIDs: [UUID]
 }
 
 /// What the engine reads and writes. The engine never touches a file itself.
@@ -41,6 +54,9 @@ protocol SyncLibraryAccess: AnyObject {
     /// `base.json`. A failed derived-state write must not make the projection forget
     /// secure records the running engine already knows the backend accepted.
     func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope]
+    /// Partitions records before the deletion guard. A deletion the library cannot file
+    /// must not count toward a mass-deletion halt, and must not be passed to `applyRemote`.
+    func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification
     /// Applies merged remote state, reporting what changed and what had to wait.
     func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome
     /// Live ids, for the deletion guard.
@@ -303,35 +319,50 @@ final class SyncEngine {
             merged.append(resolved)
         }
 
+        // Classify before the circuit breaker: a rival-vault tombstone is not a deletion
+        // this library can apply and must not trip a sticky mass-deletion halt.
+        let classification = library.classifyRemote(merged)
+
         // The circuit breaker.
         let live = library.liveIDs()
-        let decision = DeletionGuard.evaluate(live: live, incoming: merged)
+        let decision = DeletionGuard.evaluate(live: live, incoming: classification.applicable)
         if case .refuse(let refusal) = decision {
             throw SyncEngineFailure(reason: .massDeletion, detail: refusal.description)
         }
 
         try Task.checkCancellation()
-        let outcome = try library.applyRemote(merged)
-        let deferred = Set(outcome.deferredIDs)
+        let outcome = try library.applyRemote(classification.applicable)
+        let deferred = Set(classification.deferredIDs).union(outcome.deferredIDs)
+        let incompatible = Set(classification.incompatibleVaultIDs)
+            .union(outcome.incompatibleVaultIDs)
+        let unapplied = deferred.union(incompatible)
 
         // The base records what the BACKEND said, not what we merged to. Recording the
         // merged value would make the next diff believe the backend has already seen our
         // side of the merge, and our half would never be pushed.
         //
-        // A deferred record is recorded neither in the base nor by advancing the cursor.
+        // An unapplied record is recorded neither in the base nor by advancing the cursor.
         // Both halves matter: leaving it out of the base keeps the local library from
-        // looking like it deleted a record it never received, and holding the cursor is
-        // what makes the backend offer it again. Everything that *did* apply is recorded
-        // normally, so the re-fetch re-applies it as a no-op rather than as churn.
+        // looking like it deleted a record it never received, and holding the cursor keeps
+        // it available after either a temporary deferral or a resolved incompatible-vault
+        // halt. Everything that *did* apply is recorded normally, so a later re-fetch
+        // re-applies it as a no-op rather than as churn.
         try Task.checkCancellation()
-        for envelope in incoming where !deferred.contains(envelope.id) {
+        for envelope in incoming where !unapplied.contains(envelope.id) {
             base.record(envelope)
         }
-        if deferred.isEmpty {
+        if unapplied.isEmpty {
             base.cursor = cursor
         }
         try persistBase()
-        return deferred.isEmpty ? nil : outcome.deferredIDs.count
+        if !incompatible.isEmpty {
+            throw SyncEngineFailure(
+                reason: .vaultUnreadable,
+                detail: "\(incompatible.count) secure snippet(s) belong to a different "
+                    + "vault identity. Their ciphertext cannot be opened by this Mac; "
+                    + "sync stopped instead of repeatedly fetching the same records.")
+        }
+        return deferred.isEmpty ? nil : deferred.count
     }
 
     // MARK: - Failure handling

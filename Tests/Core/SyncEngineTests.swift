@@ -30,10 +30,29 @@ struct SyncEngineTests {
             return envelopes
         }
 
-        /// Ids this fake refuses to file, standing in for a secure record whose vault is
-        /// missing or is a different one. The real bridge defers those rather than
-        /// throwing, and the engine has to hold the cursor for them.
+        /// Ids this fake temporarily refuses to file, standing in for a secure record whose
+        /// vault has not arrived yet. A different vault uses `incompatibleIDs` below and
+        /// produces a sticky halt after compatible records apply.
         var deferIDs: Set<UUID> = []
+        var incompatibleIDs: Set<UUID> = []
+
+        func classifyRemote(_ incoming: [SyncEnvelope]) -> RemoteClassification {
+            var applicable: [SyncEnvelope] = []
+            var deferred: [UUID] = []
+            var incompatible: [UUID] = []
+            for envelope in incoming {
+                if deferIDs.contains(envelope.id) {
+                    deferred.append(envelope.id)
+                } else if incompatibleIDs.contains(envelope.id) {
+                    incompatible.append(envelope.id)
+                } else {
+                    applicable.append(envelope)
+                }
+            }
+            return RemoteClassification(
+                applicable: applicable, deferredIDs: deferred,
+                incompatibleVaultIDs: incompatible)
+        }
 
         func applyRemote(_ incoming: [SyncEnvelope]) throws -> ApplyOutcome {
             applied.append(incoming)
@@ -452,6 +471,47 @@ struct SyncEngineTests {
         #expect(h.library.envelopes[secureID] != nil)
         #expect(h.engine.agreedBase.envelope(secureID) != nil)
         #expect(h.engine.agreedBase.cursor != nil)
+    }
+
+    @Test func rivalVaultTombstonesDoNotTripDeletionGuardOrPollForever() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        // Establish six live agreed records: enough that deleting all of them would trip
+        // the floor-based mass-deletion guard.
+        let localIDs = (0..<6).map { _ in UUID() }
+        for (index, id) in localIDs.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "local-\(index)")
+        }
+        _ = await h.engine.sync()
+
+        h.library.incompatibleIDs = Set(localIDs)
+        let plainID = UUID()
+        var remote: [WireRecord] = try localIDs.map { id in
+            try WireCodec.seal(
+                envelope(id, name: "rival", ms: 9_000, secure: true, deleted: true),
+                using: h.sealer)
+        }
+        remote.append(try WireCodec.seal(
+            envelope(plainID, name: "still applicable", ms: 9_001), using: h.sealer))
+        h.transport.seed(remote)
+
+        let state = await h.engine.sync()
+        guard case .halted(let reason, let detail) = state else {
+            Issue.record("expected rival vault halt, got \(state)")
+            return
+        }
+        #expect(reason == .vaultUnreadable)
+        #expect(detail.contains("different vault identity"))
+        #expect(localIDs.allSatisfy { h.library.envelopes[$0] != nil },
+                "rival tombstones must not delete or trip the mass-deletion guard")
+        #expect(h.library.envelopes[plainID] != nil,
+                "applicable plaintext in the same batch must land before the halt")
+
+        let fetchesAtHalt = h.transport.fetchAttempts
+        _ = await h.engine.sync()
+        #expect(h.transport.fetchAttempts == fetchesAtHalt,
+                "a permanent vault mismatch must halt, not re-fetch one cursor forever")
     }
 
     @Test func anInvalidatedCursorTriggersAFullResyncRatherThanSilentDivergence() async throws {

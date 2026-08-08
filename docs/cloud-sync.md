@@ -497,17 +497,20 @@ re-push, not lost user data. This is what makes apply → export a fixed point i
 every remote record as a new local edit on the next round.
 
 Secure envelopes carry the originating vault's `kid` in that encrypted extension bag. The sealed
-body is AEAD-bound to the same value but does not reveal it, so the stamp lets a receiver defer a
+body is AEAD-bound to the same value but does not reveal it, so the stamp lets a receiver reject a
 record from a rival vault before filing ciphertext it can never open. On merge, both the `kid` and
 the keyed content hash follow the selected ciphertext rather than the whole-record HLC winner; a
-plaintext result clears both. A scoped tombstone from a rival vault is deferred too and cannot
-delete a plaintext record that merely shares its UUID.
+plaintext result clears both. A scoped tombstone from a rival vault is classified as incompatible
+and cannot delete a plaintext record that merely shares its UUID.
 
-Deferral is per record. Plaintext records in the same fetched page still apply, while the cursor is
-held so the unfileable secure record is offered again without backoff. Conversely, an unreadable or
-unexpectedly missing local vault fails closed before projection: it must never appear as an empty
-vault and manufacture tombstones. The engine passes its live in-memory base into that check, because
-a failed `base.json` write cannot hide records the running process knows were accepted.
+Deferral is per record when the vault has not arrived yet. Plaintext records in the same fetched
+page still apply, while the cursor is held so that temporarily unfileable record is offered again
+without backoff. A *different* `kid` cannot heal by waiting: the engine excludes its tombstones from
+the deletion guard, applies the compatible records in the batch, then enters a sticky vault halt
+instead of polling one cursor forever. Conversely, an unreadable or unexpectedly missing local
+vault fails closed before projection: it must never appear as an empty vault and manufacture
+tombstones. The engine passes its live in-memory base into that check, because a failed `base.json`
+write cannot hide records the running process knows were accepted.
 
 Turning sync off cancels and drains the retained round task before local vault removal is allowed.
 Cancellation checks bracket every awaited backend operation, so a CloudKit request that finishes
