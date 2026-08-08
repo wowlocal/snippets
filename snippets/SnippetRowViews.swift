@@ -4,10 +4,8 @@ import AppKit
 /// used to draw them with a copy of this class that only knew two.
 final class DotView: NSView {
     /// A ring rather than a second fill colour, because the dot has to carry three
-    /// states and colour alone cannot: the pale theme collapses `snippetDotColor`,
-    /// `pinColor` and `alertColor` all onto `.secondaryLabelColor`, which is also
-    /// the disabled fill. Shape survives that, survives dark mode, and survives
-    /// colour blindness.
+    /// states and colour alone cannot. Shape survives dark mode and colour
+    /// blindness.
     enum Style {
         case filled
         case ring
@@ -75,7 +73,7 @@ struct SnippetRowStatus {
 
     var dotColor: NSColor {
         guard isEnabled else { return .secondaryLabelColor }
-        return hasKeyword ? ThemeManager.snippetDotColor : ThemeManager.alertColor
+        return hasKeyword ? .systemGreen : .systemOrange
     }
 
     var nameColor: NSColor { isEnabled ? .labelColor : .secondaryLabelColor }
@@ -84,7 +82,7 @@ struct SnippetRowStatus {
     /// keeps the muted colour because "off" is the failure that applies there.
     var keywordColor: NSColor {
         guard isEnabled else { return .tertiaryLabelColor }
-        return hasKeyword ? .secondaryLabelColor : ThemeManager.alertColor
+        return hasKeyword ? .secondaryLabelColor : .systemOrange
     }
 
     var previewColor: NSColor { isEnabled ? .secondaryLabelColor : .tertiaryLabelColor }
@@ -217,7 +215,7 @@ final class SnippetRowCellView: NSTableCellView {
         if snippet.isPinned {
             dotView.isHidden = true
             pinView.isHidden = false
-            pinView.contentTintColor = ThemeManager.pinColor
+            pinView.contentTintColor = .systemYellow
         } else {
             dotView.isHidden = false
             pinView.isHidden = true

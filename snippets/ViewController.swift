@@ -235,12 +235,6 @@ final class ViewController: NSViewController {
             name: .snippetsToggleActions,
             object: nil
         )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handlePaleThemeChanged),
-            name: .snippetsPaleThemeChanged,
-            object: nil
-        )
         // Quitting does not have to close the window, so `viewWillDisappear` is
         // not guaranteed to run: ⌘N, type nothing, ⌘Q has to leave snippets.json
         // as it was, and this is the last point at which that is still possible.
@@ -642,23 +636,4 @@ final class ViewController: NSViewController {
             || message.hasPrefix("Expanded ")
     }
 
-    @objc private func handlePaleThemeChanged() {
-        applyThemeColors()
-        tableView.reloadData()
-    }
-
-    func applyThemeColors() {
-        ThemeManager.applyToggleAppearance(to: enabledCheckbox)
-        // The status line is alert-coloured only when it is reporting a failure,
-        // so repainting it wholesale here made a neutral or valid sentence read
-        // as an alarm until the next keystroke fixed it.
-        updateKeywordStatus(for: editingSnippet)
-        updatePermissionBanner()
-
-        if let window = view.window, hasConfiguredMainWindowToolbar {
-            hasConfiguredMainWindowToolbar = false
-            window.toolbar = nil
-            configureMainWindowChrome(window)
-        }
-    }
 }

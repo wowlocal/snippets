@@ -112,14 +112,6 @@ final class SnippetEditorViewController: UIViewController {
         commitPlainEditTransaction()
     }
 
-    func applyTheme() {
-        view.tintColor = AppTheme.tint
-        suggestionsStack.arrangedSubviews.compactMap { $0 as? UIButton }.forEach {
-            $0.configuration?.baseForegroundColor = AppTheme.tint
-            $0.configuration?.baseBackgroundColor = AppTheme.tint.withAlphaComponent(0.12)
-        }
-    }
-
     private func configureForm() {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.keyboardDismissMode = .interactive

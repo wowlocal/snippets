@@ -99,12 +99,6 @@ final class SnippetListViewController: UIViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
     }
 
-    func applyTheme() {
-        view.tintColor = AppTheme.tint
-        rebuildTagButtons()
-        tableView.reloadData()
-    }
-
     private func configureSearch() {
         searchController.searchResultsUpdater = self
         searchController.obscuresBackgroundDuringPresentation = false

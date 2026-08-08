@@ -23,8 +23,7 @@ enum MatchHighlightStyle: String, CaseIterable {
     ///
     /// The contrast then comes from two tones AppKit already guarantees against
     /// whatever the glass is sitting on — 10.5:1 in dark, 13.7:1 in light, in
-    /// every row state, on every accent colour, and with nothing to special-case
-    /// for the pale theme.
+    /// every row state and on every accent colour.
     case emphasis
 
     /// The accent hue, re-rendered per appearance until it clears 4.5:1 against
@@ -143,11 +142,6 @@ enum MatchHighlightPalette {
 
     static func washColor(for style: MatchHighlightStyle) -> NSColor? {
         guard style == .wash else { return nil }
-        // The pale theme exists to take the accent out of the interface, the way
-        // `snippetDotColor` and `pinColor` already do.
-        if ThemeManager.isPaleTheme {
-            return NSColor.secondaryLabelColor.withAlphaComponent(0.20)
-        }
         return NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             return NSColor.controlAccentColor.withAlphaComponent(washAlpha(isDark: isDark))
@@ -156,7 +150,6 @@ enum MatchHighlightPalette {
 
     /// The accent, pushed along one axis until it clears the target ratio.
     private static var tintColor: NSColor {
-        if ThemeManager.isPaleTheme { return .labelColor }
         return NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let backdrop = referenceRowLevel(isDark: isDark)
@@ -176,7 +169,6 @@ enum MatchHighlightPalette {
     /// picking on a single mid sample is what puts white text on a pale periwinkle
     /// pill in light mode.
     private static var washTextColor: NSColor {
-        if ThemeManager.isPaleTheme { return .labelColor }
         return NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let accent = resolvedAccent(in: appearance)

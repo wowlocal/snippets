@@ -774,8 +774,8 @@ final class SnippetUsageStore {
 
     /// ОБА переключателя по умолчанию ВКЛЮЧЕНЫ. Регистрации дефолтов в
     /// проекте нет, а UserDefaults.standard.bool(forKey:) на отсутствующем
-    /// ключе возвращает false (образец ThemeManager.swift:7). Поэтому —
-    /// образец GlobalHotkeyManager.swift:35-41: отсутствие ключа значит
+    /// ключе возвращает false. Поэтому — образец
+    /// GlobalHotkeyManager.swift:35-41: отсутствие ключа значит
     /// «пользователь не выбирал», а не «выключено».
     static func flag(_ key: String, default fallback: Bool) -> Bool {
         guard let stored = UserDefaults.standard.object(forKey: key) as? Bool else { return fallback }
@@ -1176,7 +1176,7 @@ static func sanitized(_ doc: SnippetUsageDocument) -> SnippetUsageDocument {
 * короткое замыкание `updateTagChips` по `renderedTagState` (`SnippetRowViews.swift:140-141`) не при чём;
 * новых `NSView` нет, значит нет и нового долга по доступности.
 
-**Бейдж «часто используется» в строке основного списка отклонён**: основной список в v1 **не** ранжируется по frecency, поэтому бейдж рекламировал бы порядок, которого нет — это активно вводит в заблуждение. В ячейке панели он потребовал бы пересмотра ширинной математики `shouldWrapName` на самом latency-критичном пути. (Если бейдж когда-нибудь появится — место известно: `bottomRow` перед `tagChipsStack`, `SnippetRowViews.swift:76-79`, где спейсер с hugging priority 1 уже поглощает слабину (`:73-74`), а высота строки фиксирована 58 пт (`ViewController+BuildUI.swift:361`); стиль — `.muted` из `TagChipView` (`TagViews.swift:75, 185-187`), цвет — через новый аксессор `ThemeManager`, доступность — по образцу `TagViews.swift:146-149`.)
+**Бейдж «часто используется» в строке основного списка отклонён**: основной список в v1 **не** ранжируется по frecency, поэтому бейдж рекламировал бы порядок, которого нет — это активно вводит в заблуждение. В ячейке панели он потребовал бы пересмотра ширинной математики `shouldWrapName` на самом latency-критичном пути. (Если бейдж когда-нибудь появится — место известно: `bottomRow` перед `tagChipsStack`, `SnippetRowViews.swift:76-79`, где спейсер с hugging priority 1 уже поглощает слабину (`:73-74`), а высота строки фиксирована 58 пт (`ViewController+BuildUI.swift:361`); стиль — `.muted` из `TagChipView` (`TagViews.swift:75, 185-187`), цвет — `.secondaryLabelColor`, доступность — по образцу `TagViews.swift:146-149`.)
 
 ### 7.2 Как сосуществуют pin и frecency
 
@@ -1194,9 +1194,9 @@ static func sanitized(_ doc: SnippetUsageDocument) -> SnippetUsageDocument {
 
 ### 7.3 Настройки → General, новая секция
 
-Вставляется между секцией Pale Theme (`SettingsWindowController.swift:153-164`) и секцией CLI (`:166-`), по шаблону Pale Theme.
+Вставляется после настройки подсветки совпадений и перед секцией CLI.
 
-**Свойства** (рядом с `paleThemeCheckbox`, `:94`):
+**Свойства** (рядом с остальными контролами General):
 
 ```swift
 private let frecencyCheckbox = NSButton(
@@ -1208,7 +1208,7 @@ private let frecencyStatusLabel = NSTextField(wrappingLabelWithString: "")
 private let resetUsageButton = NSButton(title: "Reset Usage Data", target: nil, action: nil)
 ```
 
-**Сборка** в `loadView()` (`:102`), сразу после блока Pale Theme (`:164`):
+**Сборка** в `loadView()`, сразу после блока подсветки совпадений:
 
 ```swift
 let frecencySeparator = NSBox()
@@ -1240,12 +1240,11 @@ resetUsageRow.orientation = .horizontal
 resetUsageRow.alignment = .centerY
 ```
 
-**Четыре обязательных места** (пропуск любого — тихий баг):
+**Три обязательных места** (пропуск любого — тихий баг):
 
-1. блок `stack.addArrangedSubview` (`:182-197`) — добавить `frecencySeparator`, `frecencyIntroLabel`, `frecencyRow`, `selectionMemoryRow`, `frecencyStatusLabel`, `resetUsageRow` **после** `paleThemeRow` (`:193`) и **до** `cliSeparator` (`:194`);
-2. блок ширин (`:199-208`) — `frecencySeparator`, `frecencyIntroLabel`, `frecencyStatusLabel` пристегнуть `widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true`. Строки с чекбоксами не пристёгиваются — как `paleThemeRow`. **Пропуск ширины схлопывает вид без единого предупреждения.**
-3. `reloadFromStorage()` (`:242-258`) — вызвать `applyFrecencyControls()`; панели ничего не кешируют, состояние надо перечитать, иначе при повторном открытии окна оно устареет;
-4. **`applyThemeColors()` (`:406-410`)** — добавить `ThemeManager.applyToggleAppearance(to: frecencyCheckbox)` и `(to: selectionMemoryCheckbox)` рядом с `:408-409`. Без этого новые чекбоксы не приглушаются в Pale Theme и не реагируют на нотификацию смены темы. Это четвёртое место, и его легче всего пропустить: оно вне `loadView()`.
+1. блок `stack.addArrangedSubview` — добавить `frecencySeparator`, `frecencyIntroLabel`, `frecencyRow`, `selectionMemoryRow`, `frecencyStatusLabel`, `resetUsageRow` **после** `matchHighlightSummaryLabel` и **до** `cliSeparator`;
+2. блок ширин — `frecencySeparator`, `frecencyIntroLabel`, `frecencyStatusLabel` пристегнуть `widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true`. Строки с чекбоксами не пристёгиваются. **Пропуск ширины схлопывает вид без единого предупреждения.**
+3. `reloadFromStorage()` — вызвать `applyFrecencyControls()`; панели ничего не кешируют, состояние надо перечитать, иначе при повторном открытии окна оно устареет.
 
 **Перечитывание состояния:**
 
@@ -1258,9 +1257,6 @@ private func applyFrecencyControls() {
     selectionMemoryCheckbox.state = store.isSelectionMemoryEnabled ? .on : .off
     // Память выбора — уточнение ранжирования; без ранжирования она бессмысленна.
     selectionMemoryCheckbox.isEnabled = store.isRankingEnabled && !store.isReadOnly
-    ThemeManager.applyToggleAppearance(to: frecencyCheckbox)
-    ThemeManager.applyToggleAppearance(to: selectionMemoryCheckbox)
-
     let tracked = store.trackedSnippetCount
     if store.isReadOnly {
         frecencyStatusLabel.stringValue = "Usage data was written by a newer version of Snippets. Ranking is paused and nothing is being saved."
@@ -1310,7 +1306,7 @@ private func applyFrecencyControls() {
 
 Текст `informativeText` намеренно говорит, **к какому** порядку происходит откат («pinned, then newest first» — потому что `addSnippet` вставляет в индекс 0, `SnippetStore.swift:97`): это учит модели ранжирования в момент, когда пользователь на неё смотрит.
 
-Значение по умолчанию для обоих чекбоксов — **ВКЛ**, и оно реализуется через `SnippetUsageStore.flag(_:default:)` по образцу `GlobalHotkeyManager.swift:35-41`, а **не** через `UserDefaults.standard.bool(forKey:)` (`ThemeManager.swift:7`), который на отсутствующем ключе вернул бы `false` и тихо выключил бы фичу для всех. Выключенное состояние доказуемо равно сегодняшнему (§4.6), поэтому чекбокс — настоящий откат в один клик, а не полумера.
+Значение по умолчанию для обоих чекбоксов — **ВКЛ**, и оно реализуется через `SnippetUsageStore.flag(_:default:)` по образцу `GlobalHotkeyManager.swift:35-41`, а **не** через `UserDefaults.standard.bool(forKey:)`, который на отсутствующем ключе вернул бы `false` и тихо выключил бы фичу для всех. Выключенное состояние доказуемо равно сегодняшнему (§4.6), поэтому чекбокс — настоящий откат в один клик, а не полумера.
 
 ### 7.4 Контекстное меню строки — точечный выход
 
@@ -1457,7 +1453,7 @@ lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStor
 
 ### PR 3 — selection memory ← **решение автора: отгружать или остановиться на PR 2**
 
-**Файлы:** `snippets/SnippetFrecency.swift` (`bindingKey`, `bindingWeightCap`, `bindingRecoveryCorrections`), `snippets/SnippetUsageDocument.swift` (таблица `bindings` и маркер `bc` уже в схеме v1 — заполнять), `snippets/SnippetUsageStore.swift` (`bindingQuery` в `record`, насыщение, `forgetAllBindings`), `snippets/SnippetExpansionEngine.swift` (`pendingSelectionMemoryQuery`: `:33`, `:353`, `:426`, **`:436`**, `:469-474`, `:1000`; `bindingWeight` в `:822-841`), `snippets/SettingsWindowController.swift` (второй чекбокс: свойство, `.target`/`.action`, `selectionMemoryRow` в `addArrangedSubview`, состояние в `applyFrecencyControls()`, `applyThemeColors()`), `Tests/SnippetSelectionMemoryTests.swift`.
+**Файлы:** `snippets/SnippetFrecency.swift` (`bindingKey`, `bindingWeightCap`, `bindingRecoveryCorrections`), `snippets/SnippetUsageDocument.swift` (таблица `bindings` и маркер `bc` уже в схеме v1 — заполнять), `snippets/SnippetUsageStore.swift` (`bindingQuery` в `record`, насыщение, `forgetAllBindings`), `snippets/SnippetExpansionEngine.swift` (`pendingSelectionMemoryQuery`: `:33`, `:353`, `:426`, **`:436`**, `:469-474`, `:1000`; `bindingWeight` в `:822-841`), `snippets/SettingsWindowController.swift` (второй чекбокс: свойство, `.target`/`.action`, `selectionMemoryRow` в `addArrangedSubview`, состояние в `applyFrecencyControls()`), `Tests/SnippetSelectionMemoryTests.swift`.
 **Размер:** ~200 строк.
 
 Схема v1 уже содержит ключи `b` и `bc`, поэтому PR 3 не меняет версию формата.

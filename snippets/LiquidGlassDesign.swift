@@ -40,16 +40,6 @@ enum LiquidGlassDesign {
         Metrics.panelCornerRadius
     }
 
-    static var primaryTintColor: NSColor? {
-        ThemeManager.isPaleTheme ? nil : .controlAccentColor
-    }
-
-    static var subtleTintColor: NSColor? {
-        ThemeManager.isPaleTheme
-            ? NSColor.secondaryLabelColor.withAlphaComponent(0.14)
-            : NSColor.controlAccentColor.withAlphaComponent(0.18)
-    }
-
     static var rowHighlightCornerRadius: CGFloat {
         Metrics.rowCornerRadius
     }
@@ -117,7 +107,7 @@ enum LiquidGlassDesign {
         containing content: NSView,
         cornerRadius: CGFloat = Metrics.panelCornerRadius,
         fallbackMaterial: NSVisualEffectView.Material = .popover,
-        tintColor: NSColor? = subtleTintColor,
+        tintColor: NSColor? = NSColor.controlAccentColor.withAlphaComponent(0.18),
         clearGlass: Bool = false
     ) -> NSView {
         if #available(macOS 26.0, *), !forcesLegacyAppearance {
@@ -297,7 +287,7 @@ enum LiquidGlassDesign {
 
         if #available(macOS 26.0, *), !forcesLegacyAppearance {
             item.style = .prominent
-            item.backgroundTintColor = primaryTintColor
+            item.backgroundTintColor = .controlAccentColor
         }
     }
 

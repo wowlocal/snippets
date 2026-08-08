@@ -62,12 +62,6 @@ final class MainSplitViewController: UISplitViewController {
             self.libraryChanged(source: source)
         }
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(themeChanged),
-            name: AppTheme.changed,
-            object: nil
-        )
     }
 
     required init?(coder: NSCoder) {
@@ -296,12 +290,6 @@ final class MainSplitViewController: UISplitViewController {
     func showError(title: String, error: Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
         showMessage(title: title, message: message)
-    }
-
-    @objc private func themeChanged() {
-        view.window?.tintColor = AppTheme.tint
-        listController.applyTheme()
-        editorController.applyTheme()
     }
 
     @objc private func newSnippetCommand() { createSnippet() }

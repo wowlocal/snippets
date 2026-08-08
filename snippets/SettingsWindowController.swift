@@ -98,7 +98,6 @@ private final class GeneralSettingsViewController: NSViewController {
         action: nil
     )
     private let globalHotkeyStatusLabel = NSTextField(wrappingLabelWithString: "")
-    private let paleThemeCheckbox = NSButton(checkboxWithTitle: "Pale Theme", target: nil, action: nil)
     private let matchHighlightPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let matchHighlightSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let frecencyCheckbox = NSButton(
@@ -170,19 +169,6 @@ private final class GeneralSettingsViewController: NSViewController {
 
         globalHotkeyStatusLabel.font = .systemFont(ofSize: 12)
         globalHotkeyStatusLabel.textColor = .secondaryLabelColor
-
-        let themeSeparator = NSBox()
-        themeSeparator.boxType = .separator
-
-        let themeIntroLabel = makeSecondaryLabel("Reduce accent colors throughout the interface for a quieter, more muted look.")
-
-        paleThemeCheckbox.target = self
-        paleThemeCheckbox.action = #selector(handlePaleThemeChanged(_:))
-        paleThemeCheckbox.state = ThemeManager.isPaleTheme ? .on : .off
-
-        let paleThemeRow = NSStackView(views: [paleThemeCheckbox, NSView()])
-        paleThemeRow.orientation = .horizontal
-        paleThemeRow.alignment = .centerY
 
         let matchHighlightIntroLabel = makeSecondaryLabel("Choose how the panel that appears after you type \u{201C}\\\u{201D} marks the letters your query matched. The next panel picks up the change \u{2014} no need to restart.")
 
@@ -260,9 +246,6 @@ private final class GeneralSettingsViewController: NSViewController {
         stack.addArrangedSubview(hotkeyIntroLabel)
         stack.addArrangedSubview(globalHotkeyRow)
         stack.addArrangedSubview(globalHotkeyStatusLabel)
-        stack.addArrangedSubview(themeSeparator)
-        stack.addArrangedSubview(themeIntroLabel)
-        stack.addArrangedSubview(paleThemeRow)
         stack.addArrangedSubview(matchHighlightIntroLabel)
         stack.addArrangedSubview(matchHighlightRow)
         stack.addArrangedSubview(matchHighlightSummaryLabel)
@@ -283,8 +266,6 @@ private final class GeneralSettingsViewController: NSViewController {
         hotkeySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         hotkeyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         globalHotkeyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        themeSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        themeIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         matchHighlightIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         matchHighlightRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         matchHighlightSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -308,12 +289,6 @@ private final class GeneralSettingsViewController: NSViewController {
             self,
             selector: #selector(handleExternalQuitBehaviorChange),
             name: .snippetsQuitBehaviorChanged,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleExternalPaleThemeChange),
-            name: .snippetsPaleThemeChanged,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -344,7 +319,6 @@ private final class GeneralSettingsViewController: NSViewController {
         applyMatchHighlightControls()
         updateGlobalHotkeyControls()
         applyFrecencyControls()
-        applyThemeColors()
         updateCLIStatus()
     }
 
@@ -355,8 +329,6 @@ private final class GeneralSettingsViewController: NSViewController {
         manager.syncRegistration()
 
         globalHotkeyCheckbox.state = manager.isEnabled ? .on : .off
-        ThemeManager.applyToggleAppearance(to: globalHotkeyCheckbox)
-
         if !manager.isEnabled {
             globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) is off. Open Snippets from the Dock or the menu bar item."
         } else if manager.registrationFailed {
@@ -477,14 +449,6 @@ private final class GeneralSettingsViewController: NSViewController {
         reloadFromStorage()
     }
 
-    @objc private func handleExternalPaleThemeChange() {
-        applyThemeColors()
-    }
-
-    @objc private func handlePaleThemeChanged(_ sender: NSButton) {
-        ThemeManager.isPaleTheme = sender.state == .on
-    }
-
     @objc private func handleExternalGlobalHotkeyChange() {
         updateGlobalHotkeyControls()
     }
@@ -492,14 +456,6 @@ private final class GeneralSettingsViewController: NSViewController {
     @objc private func handleGlobalHotkeyChanged(_ sender: NSButton) {
         GlobalHotkeyManager.shared.isEnabled = sender.state == .on
         updateGlobalHotkeyControls()
-    }
-
-    private func applyThemeColors() {
-        paleThemeCheckbox.state = ThemeManager.isPaleTheme ? .on : .off
-        ThemeManager.applyToggleAppearance(to: paleThemeCheckbox)
-        ThemeManager.applyToggleAppearance(to: globalHotkeyCheckbox)
-        ThemeManager.applyToggleAppearance(to: frecencyCheckbox)
-        ThemeManager.applyToggleAppearance(to: selectionMemoryCheckbox)
     }
 
     private func applyFrecencyControls() {
@@ -510,9 +466,6 @@ private final class GeneralSettingsViewController: NSViewController {
         // Selection memory refines the ranking; without ranking it has nothing
         // to refine.
         selectionMemoryCheckbox.isEnabled = usageStore.isRankingEnabled && !usageStore.isReadOnly
-        ThemeManager.applyToggleAppearance(to: frecencyCheckbox)
-        ThemeManager.applyToggleAppearance(to: selectionMemoryCheckbox)
-
         let tracked = usageStore.trackedSnippetCount
         if usageStore.isReadOnly {
             frecencyStatusLabel.stringValue = "Usage data was written by a newer version of Snippets. Ranking is paused and nothing is being saved."

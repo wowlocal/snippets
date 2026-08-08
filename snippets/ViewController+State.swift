@@ -17,7 +17,7 @@ extension ViewController {
             permissionBannerContainer.isHidden = false
             permissionBannerDivider.isHidden = false
             permissionIconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
-            permissionIconView.contentTintColor = ThemeManager.alertColor
+            permissionIconView.contentTintColor = .systemOrange
             permissionIconView.setAccessibilityLabel("Permissions required")
             permissionButtonsStack.isHidden = false
             permissionStatusLabel.stringValue = engine.statusText

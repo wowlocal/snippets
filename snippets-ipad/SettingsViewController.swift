@@ -4,13 +4,11 @@ final class SettingsViewController: UITableViewController {
     private enum Section: Int, CaseIterable {
         case sync
         case security
-        case appearance
 
         var title: String {
             switch self {
             case .sync: "iCloud Sync"
             case .security: "Secure Snippets"
-            case .appearance: "Appearance"
             }
         }
     }
@@ -25,7 +23,6 @@ final class SettingsViewController: UITableViewController {
         case addRecovery
         case restoreRecovery
         case forgetVault
-        case paleTheme
     }
 
     private let environment: AppEnvironment
@@ -134,18 +131,6 @@ final class SettingsViewController: UITableViewController {
                 : "This also removes the device-only vault key."
             cell.textLabel?.textColor = .systemRed
             cell.imageView?.image = UIImage(systemName: "trash")
-        case .paleTheme:
-            cell.textLabel?.text = "Pale theme"
-            cell.detailTextLabel?.text = "Use neutral state and accent colors."
-            let control = UISwitch()
-            control.isOn = AppTheme.isPale
-            control.accessibilityIdentifier = "pale-theme"
-            control.addAction(UIAction { [weak control] _ in
-                guard let control else { return }
-                AppTheme.isPale = control.isOn
-            }, for: .valueChanged)
-            cell.accessoryView = control
-            cell.selectionStyle = .none
         }
         return cell
     }
@@ -187,8 +172,6 @@ final class SettingsViewController: UITableViewController {
                 rows.append(.forgetVault)
             }
             return rows
-        case .appearance:
-            return [.paleTheme]
         }
     }
 
