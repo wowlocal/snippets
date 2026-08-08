@@ -7,4 +7,5 @@ extension Notification.Name {
     static let snippetsQuitBehaviorChanged = Notification.Name("snippets.quitBehaviorChanged")
     static let snippetsPaleThemeChanged = Notification.Name("snippets.paleThemeChanged")
     static let snippetsGlobalHotkeyChanged = Notification.Name("snippets.globalHotkeyChanged")
+    static let snippetsMatchHighlightStyleChanged = Notification.Name("snippets.matchHighlightStyleChanged")
 }

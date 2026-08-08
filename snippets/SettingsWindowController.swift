@@ -92,6 +92,8 @@ private final class GeneralSettingsViewController: NSViewController {
     )
     private let globalHotkeyStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let paleThemeCheckbox = NSButton(checkboxWithTitle: "Pale Theme", target: nil, action: nil)
+    private let matchHighlightPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let matchHighlightSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let frecencyCheckbox = NSButton(
         checkboxWithTitle: "Rank suggestions by how often I use them",
         target: nil,
@@ -175,6 +177,27 @@ private final class GeneralSettingsViewController: NSViewController {
         paleThemeRow.orientation = .horizontal
         paleThemeRow.alignment = .centerY
 
+        let matchHighlightIntroLabel = makeSecondaryLabel("Choose how the panel that appears after you type \u{201C}\\\u{201D} marks the letters your query matched. The next panel picks up the change \u{2014} no need to restart.")
+
+        let matchHighlightLabel = NSTextField(labelWithString: "Matched letters:")
+        matchHighlightLabel.textColor = .secondaryLabelColor
+        matchHighlightLabel.font = .systemFont(ofSize: 13)
+        matchHighlightLabel.alignment = .right
+        matchHighlightLabel.setContentHuggingPriority(.required, for: .horizontal)
+        matchHighlightLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
+
+        matchHighlightPopup.target = self
+        matchHighlightPopup.action = #selector(handleMatchHighlightChanged(_:))
+        matchHighlightPopup.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        let matchHighlightRow = NSStackView(views: [matchHighlightLabel, matchHighlightPopup, NSView()])
+        matchHighlightRow.orientation = .horizontal
+        matchHighlightRow.alignment = .centerY
+        matchHighlightRow.spacing = 12
+
+        matchHighlightSummaryLabel.font = .systemFont(ofSize: 12)
+        matchHighlightSummaryLabel.textColor = .secondaryLabelColor
+
         let frecencySeparator = NSBox()
         frecencySeparator.boxType = .separator
 
@@ -233,6 +256,9 @@ private final class GeneralSettingsViewController: NSViewController {
         stack.addArrangedSubview(themeSeparator)
         stack.addArrangedSubview(themeIntroLabel)
         stack.addArrangedSubview(paleThemeRow)
+        stack.addArrangedSubview(matchHighlightIntroLabel)
+        stack.addArrangedSubview(matchHighlightRow)
+        stack.addArrangedSubview(matchHighlightSummaryLabel)
         stack.addArrangedSubview(frecencySeparator)
         stack.addArrangedSubview(frecencyIntroLabel)
         stack.addArrangedSubview(frecencyRow)
@@ -251,6 +277,10 @@ private final class GeneralSettingsViewController: NSViewController {
         hotkeyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         globalHotkeyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         themeSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        themeIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        matchHighlightIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        matchHighlightRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        matchHighlightSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         frecencySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         frecencyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         frecencyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -259,6 +289,7 @@ private final class GeneralSettingsViewController: NSViewController {
         cliStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         configureQuitBehaviorPopup()
+        configureMatchHighlightPopup()
         reloadFromStorage()
     }
 
@@ -303,6 +334,7 @@ private final class GeneralSettingsViewController: NSViewController {
         }
 
         resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
+        applyMatchHighlightControls()
         updateGlobalHotkeyControls()
         applyFrecencyControls()
         applyThemeColors()
@@ -520,6 +552,35 @@ private final class GeneralSettingsViewController: NSViewController {
         usageStore.eraseAll()
         applyFrecencyControls()
         frecencyStatusLabel.stringValue = "Usage data reset."
+    }
+
+    private func configureMatchHighlightPopup() {
+        matchHighlightPopup.removeAllItems()
+
+        for style in MatchHighlightStyle.allCases {
+            matchHighlightPopup.addItem(withTitle: style.menuTitle)
+            matchHighlightPopup.lastItem?.representedObject = style.rawValue
+        }
+    }
+
+    private func applyMatchHighlightControls() {
+        let style = MatchHighlightPreference.style
+
+        for item in matchHighlightPopup.itemArray where (item.representedObject as? String) == style.rawValue {
+            matchHighlightPopup.select(item)
+            break
+        }
+
+        matchHighlightSummaryLabel.stringValue = style.summary
+    }
+
+    @objc private func handleMatchHighlightChanged(_ sender: NSPopUpButton) {
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let style = MatchHighlightStyle(rawValue: rawValue)
+        else { return }
+
+        MatchHighlightPreference.style = style
+        applyMatchHighlightControls()
     }
 
     private func configureQuitBehaviorPopup() {
