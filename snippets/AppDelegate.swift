@@ -55,6 +55,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Answers `snippets-cli`. Started unconditionally: `status` has to work whether or
     /// not a vault exists, and the socket is how the CLI discovers the app is running.
     private lazy var controlServer = ControlServer(session: vaultSession, secureStore: secureStore)
+
+    /// Presents both stores to the sync engine as one library.
+    ///
+    /// Constructed eagerly, unlike the engine: it is cheap, it holds no resources, and
+    /// having it here means the translation between the stores and the wire format is
+    /// exercised by the app's own object graph rather than only by tests.
+    lazy var syncLibrary = SnippetLibraryBridge(store: store, secureStore: secureStore)
+
+    /// `nil` until a backend is configured, which is the shipped state.
+    ///
+    /// The engine is deliberately not constructed with a placeholder transport. A
+    /// SyncEngine that exists but talks to nothing would still run its loop, write a
+    /// base file, and report states — all describing a synchronisation that is not
+    /// happening. Absent is the honest representation of "sync is off", and it is what
+    /// `SyncState.Backend.none` means.
+    private(set) var syncEngine: SyncEngine?
+
+    /// Builds the engine for a chosen backend. Nothing calls this yet: no transport
+    /// ships, by decision — see docs/cloud-sync.md.
+    func startSync(with transport: any SyncTransport, sealer: any SyncBlobSealing) {
+        let engine = SyncEngine(
+            transport: transport, library: syncLibrary, sealer: sealer, device: store.deviceID)
+        engine.onStateChange = { state in
+            NSLog("Snippets: sync state \(state)")
+        }
+        syncEngine = engine
+    }
     lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStore)
     private lazy var settingsWindowController = SettingsWindowController()
     #if !NO_SPARKLE

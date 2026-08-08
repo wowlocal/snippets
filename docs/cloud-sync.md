@@ -17,15 +17,26 @@ required not to break.
 | 1. Cross-process locking + three-way merge | **Shipped.** No network, no crypto, no format change. |
 | 2. Wire record model, transport protocol, fake transport | Done and exercised by the engine. |
 | 3. Secure snippets | Complete and usable: create, reveal, edit, make ordinary, Settings pane. **Not yet exercised against a signed build** — see below. |
-| 4. Sync engine driven by the fake | Done. Push/fetch/merge loop, backoff, halting, deletion guard, quarantine — all proven against `InMemoryTransport` with fault injection. **Not wired into the app**: nothing constructs one, because there is no backend to point it at. |
+| 4. Sync engine driven by the fake | Done, including the bridge from the two stores to the wire format. `AppDelegate.startSync(with:sealer:)` builds an engine; nothing calls it, because no transport ships. |
 | 5. First real backend | Deliberately deferred — see §9. |
 | 6. Second backend, conflict UI | Not started. |
 | 7. Hosted server tier | Optional; not started. |
 | 8. iOS app | Deferred by decision. `snippets/Core/` is already platform-agnostic for it. |
 
-Phases 1 and 3 are wired into the running app. Phases 2 and 4 are tested libraries that nothing
-constructs yet, because there is no backend for them to talk to — that is Phase 5, and it is the
-next thing that needs a decision rather than code.
+Phases 1–4 are complete. Phase 5 is the next thing, and it is a decision rather than code: pick a
+backend, write one `SyncTransport` conformance, and call `startSync`.
+
+**Deliberately no placeholder transport.** An engine that exists but talks to nothing would still
+run its loop, write a base file, and report states — all describing a synchronisation that is not
+happening. `syncEngine == nil` is the honest representation of "sync is off".
+
+### What has run against reality, and what has not
+
+| | |
+|---|---|
+| Verified at runtime | The concurrency harness (`Tests/concurrency-harness.sh`), the Keychain store/load/replace/delete path (`Tests/Harnesses/KeychainSelfTest.swift`), the CLI control socket including a refused unsigned peer, and a clean app launch. |
+| Proven only against a fake | The whole sync loop. That is the point of Phase 4 — the wire format cannot change after a second device speaks it, so it had to be settled while it was still free to be wrong. |
+| **Never executed** | The biometry-gated Keychain item, the data-protection tier (needs an entitlement this build does not carry), and the *approved* CLI reveal. All three need a human at a signed, stapled build. |
 
 **The one thing not verified**: no Keychain read or write has ever been executed. Every test uses
 `InMemorySecretStore`, because `swift test` runs unsigned and the real keychain returns

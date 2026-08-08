@@ -830,6 +830,17 @@ final class SnippetStore {
         if lockFailureCount >= 2 { syncDelegate?.libraryDidChange(.local) }
     }
 
+    /// Re-reads after something else wrote the library through a route that bypasses
+    /// this store's own write path — currently only `SnippetLibraryBridge`, applying a
+    /// remote change under `LibraryTransaction`.
+    ///
+    /// Distinct from the folder monitor, which is debounced and may not have fired yet:
+    /// the caller knows for a fact the bytes changed, so waiting for a notification
+    /// would leave the UI showing state that is already gone.
+    func reloadAfterExternalWrite() {
+        reloadFromDiskIfNeeded()
+    }
+
     private func rememberDiskBytes(_ data: Data) {
         lastKnownDiskData = data
         lastKnownDigest = SnippetLibraryCodec.digest(of: data)

@@ -203,14 +203,32 @@ final class SyncEngine {
             return
         }
 
-        // The circuit breaker, before anything is applied.
+        // Three-way merge against the base BEFORE the guard, so the guard judges what
+        // would actually be applied rather than what arrived. A remote tombstone that
+        // loses to a local edit is not a deletion, and counting it as one would trip the
+        // breaker on a library that was never in danger.
+        let localNow = try library.currentEnvelopes()
+        var merged: [SyncEnvelope] = []
+        for envelope in incoming {
+            guard let resolved = SyncMerge.mergeEnvelope(
+                base: base.envelope(envelope.id),
+                local: localNow[envelope.id],
+                remote: envelope
+            ) else { continue }
+            merged.append(resolved)
+        }
+
+        // The circuit breaker.
         let live = library.liveIDs()
-        let decision = DeletionGuard.evaluate(live: live, incoming: incoming)
+        let decision = DeletionGuard.evaluate(live: live, incoming: merged)
         if case .refuse(let refusal) = decision {
             throw SyncEngineFailure(reason: .massDeletion, detail: refusal.description)
         }
 
-        _ = try library.applyRemote(incoming)
+        _ = try library.applyRemote(merged)
+        // The base records what the BACKEND said, not what we merged to. Recording the
+        // merged value would make the next diff believe the backend has already seen our
+        // side of the merge, and our half would never be pushed.
         for envelope in incoming { base.record(envelope) }
         base.cursor = cursor
         try persistBase()

@@ -495,3 +495,108 @@ nonisolated enum SyncMerge {
         return disabled
     }
 }
+
+// MARK: - Merging across devices
+
+nonisolated extension SyncMerge {
+
+    /// Three-way merge of one record as it travels between devices.
+    ///
+    /// The same rules as `mergeRecord`, restated over envelopes so a cross-device merge
+    /// is not weaker than a local one. Whole-record last-writer-wins would have been far
+    /// less code and would lose a field every time two devices touch the same snippet —
+    /// rename it on the Mac, edit its body on the iPhone, and one change evaporates.
+    ///
+    /// Content is compared by `contentHash` rather than by bytes, which is what lets a
+    /// **locked** vault take part: the hash is keyed and travels in the envelope, so a
+    /// device that cannot decrypt a secure record can still tell whether it changed. It
+    /// also stops a fresh AES-GCM nonce — different bytes, identical plaintext — from
+    /// looking like an edit and starting a ping-pong.
+    static func mergeEnvelope(
+        base: SyncEnvelope?, local: SyncEnvelope?, remote: SyncEnvelope?
+    ) -> SyncEnvelope? {
+        switch (local, remote) {
+        case (nil, nil):
+            return nil
+
+        // Absence is never a delete without an ancestor to prove it, exactly as locally.
+        case (nil, .some(let remote)):
+            return remote
+        case (.some(let local), nil):
+            return local
+
+        case (.some(let local), .some(let remote)):
+            // An explicit tombstone on one side loses to a real edit on the other: a
+            // deletion is trivially repeatable, an edit that a delete swallowed is gone.
+            if local.deleted && remote.deleted { return local.hlc > remote.hlc ? local : remote }
+            if local.deleted { return changed(remote, since: base) ? remote : local }
+            if remote.deleted { return changed(local, since: base) ? local : remote }
+
+            guard let localFields = local.fields, let remoteFields = remote.fields else {
+                return local.hlc > remote.hlc ? local : remote
+            }
+            if localFields == remoteFields { return local.hlc >= remote.hlc ? local : remote }
+
+            // Symmetric, so both devices pick the same winner from mirrored inputs. The
+            // HLC already carries a device tiebreak, so unlike the local merge there is
+            // no need to hash payloads here.
+            let localWins = local.hlc > remote.hlc
+            let baseFields = base?.fields
+
+            var merged = SyncEnvelope.Fields(
+                name: mergeScalar(baseFields?.name, localFields.name, remoteFields.name, localWins: localWins),
+                keyword: mergeScalar(baseFields?.keyword, localFields.keyword, remoteFields.keyword, localWins: localWins),
+                content: localFields.content,
+                tags: mergeTags(baseFields?.tags, localFields.tags, remoteFields.tags, localWins: localWins),
+                isEnabled: mergeScalar(baseFields?.isEnabled, localFields.isEnabled, remoteFields.isEnabled, localWins: localWins),
+                isPinned: mergeScalar(baseFields?.isPinned, localFields.isPinned, remoteFields.isPinned, localWins: localWins),
+                createdAt: min(localFields.createdAt, remoteFields.createdAt),
+                updatedAt: max(localFields.updatedAt, remoteFields.updatedAt))
+
+            // Content resolves on the keyed hash, so this branch is identical whether or
+            // not the vault happens to be unlocked.
+            let localKey = local.contentHash ?? sha256_128(String(decoding: localFields.content, as: UTF8.self))
+            let remoteKey = remote.contentHash ?? sha256_128(String(decoding: remoteFields.content, as: UTF8.self))
+            let baseKey = base.flatMap { envelope in
+                envelope.contentHash
+                    ?? envelope.fields.map { sha256_128(String(decoding: $0.content, as: UTF8.self)) }
+            }
+
+            if localKey == remoteKey || baseKey == remoteKey {
+                merged.content = localFields.content
+            } else if baseKey == localKey {
+                merged.content = remoteFields.content
+            } else {
+                // Both sides genuinely changed the body. Unlike the local merge there is
+                // no conflict copy here: minting one would require sealing a new record,
+                // which needs the vault key — and this path has to work while locked.
+                // The loser is preserved by the OTHER device, which does hold its own
+                // copy and will push it back as an ordinary edit if the user keeps it.
+                merged.content = localWins ? localFields.content : remoteFields.content
+            }
+
+            let winner = localWins ? local : remote
+            return SyncEnvelope(
+                id: local.id,
+                hlc: max(local.hlc, remote.hlc),
+                origin: winner.origin,
+                // Once secure, always secure. Demotion is an explicit user action on one
+                // device, never something a merge infers.
+                secure: local.secure || remote.secure,
+                deleted: false,
+                fields: merged,
+                x: local.x.merging(remote.x) { mine, theirs in localWins ? mine : theirs })
+        }
+    }
+
+    /// Whether a side moved away from the ancestor. With no ancestor, anything present
+    /// counts as a change — the conservative direction, since it keeps data.
+    private static func changed(_ envelope: SyncEnvelope, since base: SyncEnvelope?) -> Bool {
+        guard let base else { return true }
+        return (try? base.envelopeHash()) != (try? envelope.envelopeHash())
+    }
+
+    private static func sha256_128(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+}
