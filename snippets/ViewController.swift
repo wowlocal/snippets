@@ -150,18 +150,10 @@ final class ViewController: NSViewController {
     /// immediately hide it again. Stands the rule down until the window is back
     /// in the wide regime, where automatic behaviour is unsurprising again.
     var isAutomaticSidebarCollapseSuppressed = false
-    /// True for the duration of an automatic collapse or expand, including its
-    /// animation, so `handleMainSplitViewDidResize` can tell the app's own doing
-    /// from the user's and persist only theirs.
+    /// True while an automatic collapse or expand is being laid out, so
+    /// `handleMainSplitViewDidResize` can tell the app's own doing from the
+    /// user's and persist only theirs.
     var isApplyingAutomaticSidebarCollapse = false
-    /// Where an in-flight automatic transition is heading. `isCollapsed` still
-    /// reads the old value mid-animation, so this is what a reversal compares
-    /// against.
-    var sidebarTransitionTarget: Bool?
-    /// Bumped per automatic transition so a completion handler that has been
-    /// overtaken can tell, and decline to apply its stale end state.
-    var sidebarTransitionGeneration = 0
-    var isWindowInLiveResize = false
 
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSView()
@@ -270,11 +262,9 @@ final class ViewController: NSViewController {
 
             observeWindowResizeForAdaptiveSidebar(window)
             // Once, here, after the autosaved frame has been restored above — the
-            // width rule has to see the window the user actually gets. Never
-            // animated: the sidebar must already be in the right state the first
-            // time the window is drawn.
+            // width rule has to see the window the user actually gets.
             view.layoutSubtreeIfNeeded()
-            evaluateAutomaticSidebarCollapse(animated: false)
+            evaluateAutomaticSidebarCollapse()
         }
 
         installKeyboardMonitorIfNeeded()
