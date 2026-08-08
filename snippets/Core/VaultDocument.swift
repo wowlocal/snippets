@@ -252,8 +252,9 @@ nonisolated struct VaultDocument: Equatable {
     //
     // The primary home of `K_lib` is the KEYCHAIN, not this file. Nothing here is
     // required to open a vault on the machine that created it: `KeychainSecretStore`
-    // holds the key under `kid`, unlocked by Touch ID, and — where the entitlement
-    // allows it — synced to the user's other devices by iCloud Keychain.
+    // holds the key under `kid`; the app gates reads with device-owner authentication
+    // and — where the entitlement allows it — iCloud Keychain syncs it to the user's
+    // other devices.
     //
     // That is a deliberate trade, and it should be stated rather than implied: the
     // guarantee now rests on Apple's iCloud Keychain rather than on something only the
@@ -262,8 +263,9 @@ nonisolated struct VaultDocument: Equatable {
     // forget, no prompt on every new device, and no permanently unrecoverable vault —
     // which for a text expander is the right side of that trade.
     //
-    // The wraps below are therefore ESCAPE HATCHES, all optional. A vault with none of
-    // them is valid and is the common case.
+    // The wraps below are therefore ESCAPE HATCHES. The format permits all of them to
+    // be absent for compatibility, but current vault creation always offers a printable
+    // recovery key and commits its wrap only after the user confirms it was saved.
 
     /// The library key sealed under a key derived from a user passphrase.
     ///
@@ -279,15 +281,14 @@ nonisolated struct VaultDocument: Equatable {
     /// mandatory, because a key the user threw away should not make the vault refuse to
     /// open on the machine that still has it in the Keychain.
     var wrapRecovery: String?
-    /// The library key sealed under a 32-byte secret held in the login keychain, so
-    /// `snippets-cli reveal` can work with no human present.
+    /// Reserved format for the library key sealed under a separate 32-byte secret.
     ///
-    /// `nil` unless the user opts in, and the opt-in is a real downgrade: it converts
-    /// "an attacker needs the passphrase" into "an attacker needs code execution as
-    /// this user", which the threat model above already concedes to them. Encoded as
-    /// an explicit `null` rather than omitted — a key that simply vanishes looks
-    /// exactly like an older build stripping it, and this format's whole premise is
-    /// that you can tell those two cases apart.
+    /// No shipping path creates or consumes it: CLI reveal is deliberately brokered
+    /// by the app and requires human approval. It remains in schema 1 because removing
+    /// a frozen document key would itself be a format change. Encoded as an explicit
+    /// `null` rather than omitted — a value that simply vanishes looks exactly like an
+    /// older build stripping it, and this format's whole premise is that those cases
+    /// remain distinguishable.
     var wrapCLI: String?
     /// Unknown document-level keys, preserved verbatim. See `JSONValue`.
     var x: [String: JSONValue]
@@ -943,6 +944,15 @@ nonisolated enum VaultFile {
             let bytesAtRead = try? Data(contentsOf: url)
             let before = try currentDocument(at: url)
             let updated = try transform(before)
+            // The input was checked by `currentDocument`, but the transform can mint
+            // a document of its own. Apply the same structural guard as `write` after
+            // the transform so an older build cannot create or overwrite a vault in a
+            // schema it does not understand.
+            guard updated.schemaVersion <= VaultDocument.currentSchemaVersion else {
+                throw VaultFileError.writeRefused(
+                    "refusing to write vault schemaVersion \(updated.schemaVersion); "
+                    + "this build understands \(VaultDocument.currentSchemaVersion)")
+            }
             let data = try encode(updated)
 
             try? FileManager.default.createDirectory(

@@ -927,7 +927,7 @@ private final class VaultSettingsViewController: NSViewController {
         // there is the reason people put things in a text expander that should not be in
         // one.
         let intro = makeSecondaryLabel(
-            "A secure snippet's text is encrypted on disk and unlocked with Touch ID. "
+            "A secure snippet's text is encrypted on disk and unlocked with Touch ID or your login password. "
             + "Its name, keyword and tags are not encrypted \u{2014} Snippets has to recognise the keyword "
             + "while the vault is locked, so anyone with access to this Mac's files can see that a "
             + "secure snippet exists and what it is called, just not what it contains.")
@@ -986,38 +986,47 @@ private final class VaultSettingsViewController: NSViewController {
         let secure = app.secureStore
         let session = app.vaultSession
 
-        switch session.state {
-        case .noKey where secure.isEmpty:
-            statusLabel.stringValue = "Not set up on this Mac."
-            primaryButton.title = "Set Up Secure Snippets"
-            primaryButton.isHidden = false
-            lockButton.isHidden = true
-        case .noKey:
-            // Records exist but the key does not — a restored file, or a keychain the
-            // user cleared. Say so precisely; "locked" would be a lie that leads to a
-            // Touch ID prompt that can never succeed.
+        if secure.isUnreadable {
             statusLabel.stringValue =
-                "\(secure.count) secure snippet(s) are here, but the key for them is not on this Mac. "
-                + "They cannot be read until the key is restored."
+                "The secure vault exists but this build cannot read it. It has been left untouched."
             primaryButton.isHidden = true
             lockButton.isHidden = true
-        case .locked:
-            statusLabel.stringValue = "\(secure.count) secure snippet(s). Locked."
-            primaryButton.title = "Unlock"
-            primaryButton.isHidden = false
-            lockButton.isHidden = true
-        case .unlocked(let until):
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            statusLabel.stringValue =
-                "\(secure.count) secure snippet(s). Unlocked until \(formatter.string(from: until))."
-            primaryButton.isHidden = true
-            lockButton.isHidden = false
+        } else {
+            switch session.state {
+            case .noKey where !secure.hasVault:
+                statusLabel.stringValue = "Not set up on this Mac."
+                primaryButton.title = "Set Up Secure Snippets"
+                primaryButton.isHidden = false
+                lockButton.isHidden = true
+            case .noKey:
+                // Records exist but the key does not — a restored file, or a keychain the
+                // user cleared. Say so precisely; "locked" would be a lie that leads to a
+                // Touch ID prompt that can never succeed.
+                statusLabel.stringValue =
+                    "\(secure.count) secure snippet(s) are here, but the key for them is not on this Mac. "
+                    + "They cannot be read until the key is restored."
+                primaryButton.title = "Restore with Recovery Key"
+                primaryButton.isHidden = !secure.hasRecoveryKey
+                lockButton.isHidden = true
+            case .locked:
+                statusLabel.stringValue = "\(secure.count) secure snippet(s). Locked."
+                primaryButton.title = secure.hasRecoveryKey ? "Unlock" : "Unlock & Set Up Recovery"
+                primaryButton.isHidden = false
+                lockButton.isHidden = true
+            case .unlocked(let until):
+                let formatter = DateFormatter()
+                formatter.timeStyle = .short
+                statusLabel.stringValue =
+                    "\(secure.count) secure snippet(s). Unlocked until \(formatter.string(from: until))."
+                primaryButton.title = "Set Up Recovery Key"
+                primaryButton.isHidden = secure.hasRecoveryKey
+                lockButton.isHidden = false
+            }
         }
 
         tierLabel.stringValue = session.keychainStatusDescription
         tierLabel.textColor = session.syncsBetweenDevices ? .secondaryLabelColor : .tertiaryLabelColor
-        resetButton.isHidden = secure.isEmpty && session.state == .noKey
+        resetButton.isHidden = secure.isUnreadable || !secure.hasVault
 
         // The degraded-write signal the review asked for. Previously this was NSLogged
         // and nothing read it, so a user whose filesystem cannot lock sat in a
@@ -1043,15 +1052,59 @@ private final class VaultSettingsViewController: NSViewController {
 
     @objc private func primaryAction() {
         guard let app = NSApp.delegate as? AppDelegate else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await performPrimaryAction(app)
+        }
+    }
+
+    private func performPrimaryAction(_ app: AppDelegate) async {
         do {
-            if case .noKey = app.vaultSession.state, app.secureStore.isEmpty {
-                try app.secureStore.createVaultIfNeeded()
+            switch app.vaultSession.state {
+            case .noKey where !app.secureStore.hasVault:
+                try app.secureStore.createVaultIfNeeded(
+                    confirmRecoveryKey: presentRecoveryKeyForSaving)
+                try await app.vaultSession.unlock(reason: "Unlock your secure snippets")
+
+            case .noKey:
+                guard let recoveryKey = requestRecoveryKey() else { return }
+                try app.secureStore.restoreKey(fromRecoveryKey: recoveryKey)
+                try await app.vaultSession.unlock(reason: "Restore your secure snippets")
+
+            case .locked:
+                try await app.vaultSession.unlock(reason: "Unlock your secure snippets")
+                if !app.secureStore.hasRecoveryKey {
+                    _ = try app.secureStore.addRecoveryKeyIfNeeded(
+                        confirmRecoveryKey: presentRecoveryKeyForSaving)
+                }
+
+            case .unlocked:
+                _ = try app.secureStore.addRecoveryKeyIfNeeded(
+                    confirmRecoveryKey: presentRecoveryKeyForSaving)
             }
-            try app.vaultSession.unlock(reason: "Unlock your secure snippets")
+        } catch SecureSnippetStore.Failure.setupCancelled {
+            // Setup never committed, so cancellation needs no warning.
         } catch {
             showVaultError(error)
         }
         reloadFromStorage()
+    }
+
+    private func requestRecoveryKey() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Restore secure snippets"
+        alert.informativeText = "Enter the recovery key you saved when this vault was created."
+
+        let field = NSTextField(string: "")
+        field.placeholderString = "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXX"
+        field.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        field.frame = NSRect(x: 0, y: 0, width: 430, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
     }
 
     @objc private func lockNow() {

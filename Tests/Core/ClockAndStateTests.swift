@@ -242,14 +242,17 @@ struct ClockAndStateTests {
                 == HLC(wallMs: 0, counter: 0, device: HLC.foreignDevice))
         }
 
-        /// Parsing canonicalizes, so the byte-wise order survives a file that was
-        /// hand-edited with uppercase hex.
-        @Test func aParsedClockIsCanonicalizedToLowercase() throws {
-            let parsed = try #require(HLC(parsing: "0000018FE1A2-00FF-AbCdEf01"))
-            #expect(parsed.wallMs == 0x0000_018F_E1A2)
-            #expect(parsed.counter == 0x00FF)
-            #expect(parsed.device == "abcdef01")
-            #expect(parsed.string == "0000018fe1a2-00ff-abcdef01")
+        /// The HLC spelling is part of an envelope's hash. Accepting uppercase and
+        /// silently lowercasing it would verify different bytes from those received.
+        @Test func noncanonicalClockSpellingsAreRejectedRatherThanNormalized() throws {
+            #expect(HLC(parsing: "0000018FE1A2-00FF-AbCdEf01") == nil)
+            #expect(HLC(parsing: "0000018fe1a2-00ff-abcdef01")?.string
+                == "0000018fe1a2-00ff-abcdef01")
+
+            #expect(HLC.isCanonicalDeviceID("abcdef01"))
+            #expect(!HLC.isCanonicalDeviceID("ABCDEF01"))
+            #expect(!HLC.isCanonicalDeviceID("abcdef0"))
+            #expect(!HLC.isCanonicalDeviceID("１２３４５６７８"))
         }
 
         /// The rule that makes an exact-millisecond tie go to the in-app edit:
@@ -798,6 +801,7 @@ struct ClockAndStateTests {
             ("Usage/usage.json", SnippetStorageLocations.usageFileURL),
             ("Sync/state.json", SnippetStorageLocations.syncStateFileURL),
             ("Sync/base.json", SnippetStorageLocations.syncBaseFileURL),
+            ("Sync/library-metadata.json", SnippetStorageLocations.syncLibraryMetadataFileURL),
             ("Sync/tombstones.json", SnippetStorageLocations.tombstonesFileURL),
             ("Sync/library.lock", SnippetStorageLocations.libraryLockFileURL),
             ("Vault/vault.json", SnippetStorageLocations.vaultFileURL),

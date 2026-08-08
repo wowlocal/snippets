@@ -243,8 +243,30 @@ nonisolated enum SentinelLock {
     ///
     /// Only used when liveness cannot be established directly — a sentinel from
     /// another host, or one whose owner field is unreadable. A same-host owner is
-    /// checked with `kill(pid, 0)`, which is exact and immediate.
+    /// checked by PID *and process start generation*: a PID alone can be reused after
+    /// its original process exits.
     static let staleAfter: TimeInterval = 30
+
+    /// The kernel-assigned incarnation of a PID. PIDs are a small, reused namespace;
+    /// process start time is what distinguishes today's pid 4711 from yesterday's.
+    struct ProcessGeneration: Equatable {
+        let seconds: UInt64
+        let microseconds: UInt64
+    }
+
+    /// Reads a process start generation without opening or signalling the process.
+    /// `PROC_PIDTBSDINFO` is available for same-user peers even when their executable
+    /// has already changed on disk, which is exactly the identity needed by a lock.
+    static func processGeneration(for pid: pid_t) -> ProcessGeneration? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else {
+            return nil
+        }
+        return ProcessGeneration(
+            seconds: UInt64(info.pbi_start_tvsec),
+            microseconds: UInt64(info.pbi_start_tvusec))
+    }
 
     final class Handle {
         private let sentinelPath: String
@@ -275,8 +297,19 @@ nonisolated enum SentinelLock {
                 isDirectory: false)
             .path
 
-        // The owner record, so a survivor can tell a live holder from a corpse.
-        let owner = "\(ProcessInfo.processInfo.hostName)\n\(getpid())\n"
+        // The owner record, so a survivor can tell a live holder from a corpse — and
+        // from a later process to which the kernel happened to give the same PID.
+        // Keep the first two lines compatible with sentinels written by older builds.
+        let owner: String
+        if let generation = processGeneration(for: getpid()) {
+            owner = "\(ProcessInfo.processInfo.hostName)\n\(getpid())\n"
+                + "\(generation.seconds)\n\(generation.microseconds)\n"
+        } else {
+            // Failure for our own PID is not expected, but a two-line record retains
+            // the old conservative liveness behaviour rather than making the lock
+            // unavailable altogether.
+            owner = "\(ProcessInfo.processInfo.hostName)\n\(getpid())\n"
+        }
         let unique = open(uniquePath, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
         guard unique >= 0 else {
             throw LibraryLock.Failure.cannotOpen(path: uniquePath, errno: errno)
@@ -327,14 +360,34 @@ nonisolated enum SentinelLock {
 
         if lines.count >= 2,
            String(lines[0]) == ProcessInfo.processInfo.hostName,
-           let pid = pid_t(lines[1]) {
-            // Same host: liveness is knowable exactly. ESRCH means the process is gone;
-            // EPERM means it exists but belongs to someone else, so it is alive.
-            if kill(pid, 0) != 0 && errno == ESRCH {
+           let pid = pid_t(lines[1]), pid > 0 {
+            // Same host: ESRCH means the process is gone; EPERM means it exists but
+            // belongs to someone else, so it is alive.
+            let liveness = kill(pid, 0)
+            let livenessError = errno
+            if liveness != 0 && livenessError == ESRCH {
                 unlink(sentinelPath)
                 return true
             }
-            return false
+
+            // A live PID is not necessarily the owner: after a crash the kernel may
+            // reuse it. New sentinels pin the process start generation, so an exact
+            // match remains authoritative regardless of age and a mismatch is stolen
+            // immediately. Legacy or unreadable generations fall through to the age
+            // check below; otherwise a two-line sentinel plus PID reuse can deadlock
+            // every writer on this filesystem forever.
+            if liveness == 0 || livenessError == EPERM {
+                if lines.count >= 4,
+                   let seconds = UInt64(lines[2]),
+                   let microseconds = UInt64(lines[3]),
+                   let current = processGeneration(for: pid) {
+                    if current == ProcessGeneration(seconds: seconds, microseconds: microseconds) {
+                        return false
+                    }
+                    unlink(sentinelPath)
+                    return true
+                }
+            }
         }
 
         guard age > staleAfter else { return false }

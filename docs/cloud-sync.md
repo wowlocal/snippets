@@ -16,7 +16,7 @@ required not to break.
 |---|---|
 | 1. Cross-process locking + three-way merge | **Shipped.** No network, no crypto, no format change. |
 | 2. Wire record model, transport protocol, fake transport | Done and exercised by the engine. |
-| 3. Secure snippets | Complete and usable: create, reveal, edit, make ordinary, Settings pane. **Not yet exercised against a signed build** — see below. |
+| 3. Secure snippets | Implemented: create, reveal, edit, make ordinary, recovery-key setup/restore, Settings pane. The interactive release check is still open — see below. |
 | 4. Sync engine driven by the fake | Done, including the bridge from the two stores to the wire format. `AppDelegate.startSync(with:sealer:)` builds an engine; nothing calls it, because no transport ships. |
 | 5. First real backend | Deliberately deferred — see §9. |
 | 6. Second backend, conflict UI | Not started. |
@@ -34,15 +34,17 @@ happening. `syncEngine == nil` is the honest representation of "sync is off".
 
 | | |
 |---|---|
-| Verified at runtime | The concurrency harness (`Tests/concurrency-harness.sh`), the Keychain store/load/replace/delete path (`Tests/Harnesses/KeychainSelfTest.swift`), the CLI control socket including a refused unsigned peer, and a clean app launch. |
+| Verified at runtime | The concurrency harness (`Tests/concurrency-harness.sh`), the entitlement-free Keychain store/load/replace/delete path (`Tests/Harnesses/KeychainSelfTest.swift`), the CLI control socket including a refused unsigned peer, and a clean app launch. |
 | Proven only against a fake | The whole sync loop. That is the point of Phase 4 — the wire format cannot change after a second device speaks it, so it had to be settled while it was still free to be wrong. |
-| **Never executed** | The biometry-gated Keychain item, the data-protection tier (needs an entitlement this build does not carry), and the *approved* CLI reveal. All three need a human at a signed, stapled build. |
+| **Not automated** | The interactive LocalAuthentication prompt, the data-protection tier (which needs a provisioned entitlement), and an *approved* CLI reveal. All three need a human at a signed, stapled build. |
 
-**The one thing not verified**: no Keychain read or write has ever been executed. Every test uses
-`InMemorySecretStore`, because `swift test` runs unsigned and the real keychain returns
-`errSecMissingEntitlement`, and exercising it by hand raises a Touch ID prompt. Creating a vault,
-unlocking, and surviving a Sparkle update are the manual checks that have to happen on a stapled
-build before this ships — that is Phase 0a, and it is still open.
+The old design attached biometric `SecAccessControl` directly to the item. That silently selected
+the data-protection keychain and failed with `errSecMissingEntitlement` in today's build; the same
+attribute is also invalid on a synchronizable item. The item now uses the selected tier's ordinary
+accessibility and `VaultSession` runs `deviceOwnerAuthentication` explicitly before reading it.
+The entitlement-free item operations have therefore run for real. Creating a vault, approving an
+unlock and reveal, and surviving a Sparkle update are still manual release checks on the exact
+signed, stapled artifact.
 
 Phase 1 was worth shipping on its own and does not depend on anything after it.
 
@@ -85,7 +87,7 @@ Measured over 60 concurrent writers, three runs each:
 |---|---|
 | Unlocked read-modify-write (the old behaviour) | 9–18 / 60 |
 | Lock file replaced **once** mid-run — the realistic vector | **61 / 61**, three for three |
-| Lock file replaced every 5 ms — stress, not a real event | 57–60 / 61 |
+| Lock file replaced every 5 ms — stress, not a real event | 53–60 / 61 |
 | `flock` unavailable, compare-and-swap only | 42–44 / 61 |
 | `flock` unavailable, `link(2)` sentinel | **60 / 60**, three for three |
 
@@ -114,6 +116,11 @@ than to writing unlocked. A *timeout* is different — it means a peer genuinely
 the caller backs off and retries rather than writing. Both degraded modes are now observable
 (`SnippetStore.writeHealth`, and a stderr warning from the CLI) rather than only logged; a user
 stuck in permanent no-lock mode previously got no signal whatsoever.
+
+The sentinel owner is host + pid + process start generation, not pid alone. A live process that
+has reused a crashed owner's pid therefore cannot hold the old lock forever. Two-line sentinels
+from older builds cannot prove that identity; they are treated conservatively while fresh, then
+become stealable after the same 30-second stale threshold used for foreign or unreadable owners.
 
 ---
 
@@ -211,7 +218,8 @@ monitor on every sync tick and collapse the editor's write debounce.
 ├── snippets.json          FROZEN. Nine keys. Plaintext snippets only.
 ├── Usage/usage.json       UNCHANGED. Never syncs. See §7.
 ├── Vault/vault.json       Secure snippets: metadata plaintext, content sealed.
-├── Sync/                  state.json, base.json, tombstones.json, library.lock, Quarantine/
+├── Sync/                  state.json, base.json, library-metadata.json, tombstones.json,
+│                          library.lock, Quarantine/
 ├── Backups/               pre-sync-<iso>.json and rolling pre-merge snapshots
 └── Tmp/                   mkstemp staging, so an atomic write is ONE monitor event
 ```
@@ -228,12 +236,14 @@ at all, so it can never type ciphertext into a chat window, and `exportSnippets(
 ### Keys
 
 > **Decided 2026-08-08:** the vault key lives in the **Keychain**, with no mandatory passphrase.
-> `K_lib` is stored with `kSecAttrSynchronizable` so iCloud Keychain carries it between devices,
-> and unlocks with Touch ID. Say the consequence plainly rather than burying it: the guarantee now
+> `K_lib` is stored with `kSecAttrSynchronizable` when the entitlement is present so iCloud
+> Keychain carries it between devices. The app separately requires Touch ID or the login password
+> before reading it. Say the consequence plainly rather than burying it: the guarantee now
 > rests on Apple's iCloud Keychain rather than on something only the user knows, so an attacker who
 > compromises the iCloud account *and* passes its device-approval step reaches the secrets. The
-> passphrase path below is retained only for the printable recovery key and for
-> passphrase-protected export — it is not on the primary path.
+> passphrase implementation below is retained for a future passphrase-protected export — it is
+> not on the primary path. Vault creation instead makes a printable recovery key and stores an
+> authenticated recovery wrap only after the user confirms that they saved it.
 >
 > Note also that `kSecAttrSynchronizable` requires the *data-protection* keychain, which requires
 > `keychain-access-groups` + an embedded provisioning profile + Keychain Sharing on the App ID.
@@ -243,8 +253,15 @@ at all, so it can never type ciphertext into a chat window, and `exportSnippets(
 > `KeychainSecretStore` picks between the two at runtime by reading the running binary's own
 > entitlements (`SecCodeCopySelf`), not from a build flag — a flag would be wrong in both
 > directions. The same binary therefore does the local tier today and the synchronizable tier the
-> moment the entitlement appears, with no code change and no migration beyond re-storing one key.
-> Verified: today's build carries no `keychain-access-groups`, and detection selects the local tier.
+> moment the entitlement appears. On first read after that upgrade it copies and verifies the old
+> login-keychain item in the new tier before using it; the legacy copy remains as rollback safety.
+> Verified: when `keychain-access-groups` and the application identifier are absent, detection selects the local tier.
+>
+> Biometry is deliberately **not** a Keychain item attribute. On macOS, adding
+> `SecAccessControl` routes this generic-password item to the data-protection keychain even in the
+> local tier, producing `-34018`, and synchronizable items reject it. `VaultSession` evaluates
+> `deviceOwnerAuthentication` and only then reads the ordinary item. This keeps one compatible
+> storage representation in both tiers while retaining an explicit human-presence gate in the app.
 
 A random 256-bit library key `K_lib` is the root and is never used to encrypt anything directly.
 Per-purpose subkeys come from HKDF-SHA256:
@@ -252,11 +269,12 @@ Per-purpose subkeys come from HKDF-SHA256:
 - `K_rec(id)` — per record, so a 96-bit GCM nonce cannot collide across the library.
 - `K_hash` — for the keyed content hash.
 
-`K_lib` itself is wrapped under a passphrase (PBKDF2-HMAC-SHA512, 600 000 iterations, pinned and
-recorded in the file so a future Argon2id is purely additive) and, separately, under a printable
-recovery key. Apple ships no memory-hard KDF; vendoring one into a target set that includes a bare
-Mach-O CLI and standalone `swiftc` tests costs three bridging setups, so the `alg` field carries
-the upgrade path instead.
+`K_lib` is also wrapped under a printable 128-bit recovery key at vault creation. That wrap is the
+way back when a migration or entitlement change loses the Keychain item: Settings accepts the
+printed key, authenticates the wrap against this vault's `kid`, and restores the item. Older vaults
+without a wrap are offered one whenever they are unlocked. The implemented passphrase format uses
+PBKDF2-HMAC-SHA512 with 600 000 pinned iterations, but no current UI creates a passphrase wrap;
+its `alg` field preserves the future upgrade path to Argon2id or passphrase-protected export.
 
 Every AEAD operation binds an AAD covering version, scope, record id, and the deleted flag, so a
 ciphertext cannot be replayed under another record's identity. There is deliberately no
@@ -265,10 +283,16 @@ nothing.
 
 ### The content hash is keyed
 
-`contentHash` is `HMAC-SHA256(K_hash, plaintext)` truncated, **not** a bare SHA-256. `vault.json`
-is plaintext on an unsandboxed disk, and an unkeyed hash of a six-digit code or `hunter2` is
-recoverable offline in seconds. The hash exists so a **locked** vault can still take part in a
-merge, and so a fresh GCM nonce does not look like an edit.
+`VaultRecord.contentHash` is `HMAC-SHA256(K_hash, plaintext)` truncated, **not** a bare SHA-256.
+`vault.json` is plaintext on an unsandboxed disk, and an unkeyed hash of a six-digit code or
+`hunter2` is recoverable offline in seconds. The hash exists so a **locked** vault can still take
+part in a merge, and so a fresh GCM nonce does not look like an edit.
+
+The wire envelope's top-level `contentHash` has a different job: it is the SHA-256 of the body
+bytes in `fields`, which for a secure record are already the stable sealed value. The vault HMAC
+travels separately as `x.vaultContentHash`, inside the encrypted blob. On import only that keyed
+value may populate `VaultRecord.contentHash`; writing the envelope digest there would replace a
+plaintext HMAC with a hash of ciphertext and break locked merge comparisons.
 
 ### What is deliberately not protected
 
@@ -300,7 +324,7 @@ keystroke trigger" true, rather than a policy a later refactor can quietly drop.
 | Auto-expansion from the keystroke buffer | Secure records are absent from `enabledSnippetsSorted()`. |
 | Clipboard managers | Secure expansion prefers the Accessibility write path, which never touches the pasteboard. Where the pasteboard is unavoidable, `TemporaryPasteboardLease(isConcealed:)` sets `org.nspasteboard.ConcealedType` and `TransientType` — a **courtesy, not a control**: there is no AppKit constant, managers honour it only by convention, and anything that ignores it still sees the text. |
 | The snippet list | A secure row renders `••••••••`; it carries a shell with `content == ""`, so there is nothing to render even if the view forgot. |
-| Two-file moves | `LibraryTransaction` — one lock over both files, vault written first, crash marker. An interrupted move duplicates, never disappears. |
+| Two-file moves | `LibraryTransaction` — one lock over both files, destination written before source removal, crash marker. A mixed-direction sync batch first writes an intentional duplicate state. An interruption duplicates, never disappears. |
 
 ### The CLI can ask for a secret; it cannot take one
 
@@ -317,7 +341,9 @@ binary is calling and nothing about who told it to.** Any script running as this
 execute the genuine CLI; that is what "running as the user" means. The signature check
 stops a *different* program impersonating ours, and the human prompt is the actual
 control — which is why it is not suppressible, names the process, and is rate-limited to
-five per minute. A prompt that appears often enough is a prompt people dismiss unread.
+five per minute. Consent has a 30-second deadline; prompt work is dispatched off the socket's
+serial accept queue, so one unanswered request cannot wedge every other CLI command. A prompt that
+appears often enough is a prompt people dismiss unread.
 
 Verified end to end: the signed CLI is answered, an unsigned client gets `refused`, the
 socket is removed on quit, and `reveal` on an unknown keyword returns exit 6 without ever
@@ -357,6 +383,13 @@ round.
 
 A record is recorded in the base only once the backend has *accepted* it. Recording it at submit
 time would make the next diff skip it, and a rejected record would never be pushed again.
+
+`Sync/library-metadata.json` is the local projection sidecar. The frozen `snippets.json` format
+cannot hold an HLC, origin, or forward-compatible wire extensions, so the bridge retains those
+there and reuses the exact envelope while all persisted fields still match. It is derived state:
+if it is missing or unreadable, `base.json` is the fallback and the cost is at most a conservative
+re-push, not lost user data. This is what makes apply → export a fixed point instead of relabelling
+every remote record as a new local edit on the next round.
 
 Two bugs the fake caught that a real backend would have taught us slowly and expensively:
 
@@ -413,7 +446,7 @@ Still unverified, each with a fallback:
 |---|---|
 | `CKSyncEngine` specifically in a non-sandboxed Developer ID build (no shipping exemplar found) | Hand-roll `CKFetchRecordZoneChangesOperation`/`CKModifyRecordsOperation` behind the same protocol, or ship object storage first |
 | Push delivery to such an app | Polling; `supportsPush` is already on the protocol |
-| Data-protection Keychain + access group after a Sparkle update, on a stapled build | Passphrase-only vault, no Keychain, no biometrics, no entitlements, no embedded profile |
+| Data-protection Keychain + access group after a Sparkle update, on a stapled build | Keep the entitlement-free login-keychain tier; recovery keys make a missing item recoverable |
 
 **Requires the maintainer's Apple Developer account**: enabling iCloud and Keychain Sharing on the
 App IDs, and creating the container. Until then the CloudKit backend cannot be built, so the code

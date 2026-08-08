@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 /// Holds the vault's library key in the macOS Keychain.
@@ -12,8 +11,8 @@ import Security
 /// macOS has two keychains, and only one of them is free:
 ///
 /// - **The file-based login keychain** needs no entitlement at all. A non-sandboxed
-///   Developer ID app can simply use it. The key is protected by the login keychain
-///   and, with an access control, by Touch ID — but it never leaves this Mac.
+///   Developer ID app can simply use it. The key is protected by the login keychain,
+///   but it never leaves this Mac.
 /// - **The data-protection keychain** is the only one that supports
 ///   `kSecAttrSynchronizable`, which is what makes iCloud Keychain carry the key to a
 ///   user's other Macs and to a future iPhone. It requires an `application-identifier`,
@@ -25,6 +24,12 @@ import Security
 /// synchronizable tier the moment the entitlement appears, with no code change and no
 /// migration beyond re-storing one key. Secure snippets work fully in both; only
 /// *syncing* them needs the second.
+///
+/// Touch ID is deliberately not an item attribute. `SecAccessControl` routes a generic
+/// password through the data-protection keychain even when the query otherwise names
+/// the login keychain, which makes the entitlement-free tier fail with
+/// `errSecMissingEntitlement`. It is also incompatible with a synchronizable item. The
+/// vault session evaluates the human-presence policy before asking this type for bytes.
 @MainActor
 final class KeychainSecretStore {
 
@@ -44,6 +49,7 @@ final class KeychainSecretStore {
     enum Failure: Error, CustomStringConvertible {
         case unavailable(OSStatus)
         case notFound
+        case invalidKeyLength(Int)
         case authenticationFailed
         case userCancelled
 
@@ -53,6 +59,8 @@ final class KeychainSecretStore {
                 let detail = SecCopyErrorMessageString(status, nil) as String? ?? "\(status)"
                 return "the keychain refused the request: \(detail) (\(status))"
             case .notFound: return "no vault key is stored on this Mac"
+            case .invalidKeyLength(let count):
+                return "the stored vault key must be 32 bytes; found \(count)"
             case .authenticationFailed: return "authentication failed"
             case .userCancelled: return "authentication was cancelled"
             }
@@ -75,8 +83,11 @@ final class KeychainSecretStore {
     /// build made before the portal work would keep claiming the local tier long after
     /// the entitlement arrived. `SecCodeCopySelf` asks the only authority that matters.
     static func detectTier() -> Tier {
-        guard let groups = selfEntitlement(forKey: "keychain-access-groups") as? [String],
-              let group = groups.first(where: { !$0.hasSuffix(".*") }) ?? groups.first
+        guard let applicationIdentifier = selfEntitlement(
+                  forKey: "com.apple.application-identifier") as? String,
+              !applicationIdentifier.isEmpty,
+              let groups = selfEntitlement(forKey: "keychain-access-groups") as? [String],
+              let group = groups.first(where: { !$0.isEmpty && !$0.contains("*") })
         else { return .deviceOnly }
         return .synchronizable(accessGroup: group)
     }
@@ -101,65 +112,60 @@ final class KeychainSecretStore {
 
     // MARK: - Storing and reading the key
 
-    /// Writes the library key, replacing any existing one for `keyID`.
-    ///
-    /// - Parameter requireBiometry: when true the item carries an access control, so
-    ///   reading it prompts for Touch ID or the login password. When false the item is
-    ///   readable whenever the keychain is unlocked — which is what the *keyword
-    ///   matcher* needs, since it must run with the app in the background.
-    func store(_ key: Data, keyID: String, requireBiometry: Bool) throws {
-        var attributes = baseQuery(keyID: keyID)
-        attributes[kSecValueData as String] = key
+    /// Writes the library key without a delete-first window. If replacement fails, the
+    /// previous value is still present and the vault remains openable.
+    func store(_ key: Data, keyID: String) throws {
+        guard key.count == 32 else { throw Failure.invalidKeyLength(key.count) }
+        let query = baseQuery(keyID: keyID)
+        let values: [String: Any] = [
+            kSecValueData as String: key,
+            kSecAttrAccessible as String: accessibility,
+        ]
 
-        if requireBiometry {
-            var error: Unmanaged<CFError>?
-            // `.userPresence` rather than `.biometryCurrentSet`: the latter invalidates
-            // the item whenever the user adds or removes a fingerprint, which silently
-            // destroys the only local copy of the key. Enrolling a finger must not
-            // erase someone's secrets.
-            guard let access = SecAccessControlCreateWithFlags(
-                nil,
-                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                .userPresence,
-                &error
-            ) else {
-                throw Failure.unavailable(errSecParam)
-            }
-            attributes[kSecAttrAccessControl as String] = access
-        } else {
-            attributes[kSecAttrAccessible as String] = accessibility
+        let update = SecItemUpdate(query as CFDictionary, values as CFDictionary)
+        switch update {
+        case errSecSuccess:
+            return
+        case errSecItemNotFound:
+            var attributes = query
+            for (name, value) in values { attributes[name] = value }
+            let add = SecItemAdd(attributes as CFDictionary, nil)
+            guard add == errSecSuccess else { throw Failure.unavailable(add) }
+        default:
+            throw Failure.unavailable(update)
         }
-
-        SecItemDelete(baseQuery(keyID: keyID) as CFDictionary)
-        let status = SecItemAdd(attributes as CFDictionary, nil)
-        guard status == errSecSuccess else { throw Failure.unavailable(status) }
     }
 
-    /// Reads the library key, prompting for Touch ID if the item requires it.
-    ///
-    /// - Parameter context: pass a reused `LAContext` to honour an unlock session
-    ///   rather than prompting on every read. `VaultSession` owns that policy.
-    func loadKey(keyID: String, reason: String, context: LAContext? = nil) throws -> Data {
-        var query = baseQuery(keyID: keyID)
+    /// Reads the library key after `VaultSession` has authenticated the user. If this
+    /// build newly gained the sync entitlement, an existing device-only item is copied
+    /// into the new tier and verified before use.
+    func loadKey(keyID: String) throws -> Data {
+        if let current = try copyKey(matching: baseQuery(keyID: keyID)) { return current }
+
+        if case .synchronizable = tier,
+           let legacy = try copyKey(matching: deviceOnlyQuery(keyID: keyID)) {
+            try store(legacy, keyID: keyID)
+            guard let migrated = try copyKey(matching: baseQuery(keyID: keyID)), migrated == legacy else {
+                throw Failure.unavailable(errSecNotAvailable)
+            }
+            return migrated
+        }
+        throw Failure.notFound
+    }
+
+    private func copyKey(matching base: [String: Any]) throws -> Data? {
+        var query = base
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        // The prompt text travels on the LAContext, not as `kSecUseOperationPrompt`,
-        // which has been deprecated since macOS 11. Reusing the caller's context is
-        // also what lets an unlock session suppress repeat prompts — passing a fresh
-        // context here would silently defeat `VaultSession`'s reuse window.
-        let authenticationContext = context ?? LAContext()
-        authenticationContext.localizedReason = reason
-        query[kSecUseAuthenticationContext as String] = authenticationContext
-
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         switch status {
         case errSecSuccess:
             guard let data = item as? Data else { throw Failure.unavailable(status) }
+            guard data.count == 32 else { throw Failure.invalidKeyLength(data.count) }
             return data
         case errSecItemNotFound:
-            throw Failure.notFound
+            return nil
         case errSecUserCanceled:
             throw Failure.userCancelled
         case errSecAuthFailed:
@@ -169,22 +175,42 @@ final class KeychainSecretStore {
         }
     }
 
-    /// Whether a key exists, without reading it and therefore without prompting.
-    ///
-    /// `kSecReturnData: false` is load-bearing: asking for the bytes would raise a
-    /// Touch ID sheet, and this is called to decide whether to show UI at all.
+    /// Whether a key exists, without reading its bytes. The legacy-tier fallback keeps
+    /// an entitlement upgrade from making an existing vault look keyless.
     func hasKey(keyID: String) -> Bool {
-        var query = baseQuery(keyID: keyID)
-        query[kSecReturnData as String] = false
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+        if contains(baseQuery(keyID: keyID)) { return true }
+        if case .synchronizable = tier { return contains(deviceOnlyQuery(keyID: keyID)) }
+        return false
     }
 
     /// Removes the key. The vault's ciphertext is untouched and stays openable with a
     /// recovery key or passphrase if the user set either up.
     func deleteKey(keyID: String) throws {
-        let status = SecItemDelete(baseQuery(keyID: keyID) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
+        if case .synchronizable = tier {
+            let primary = baseQuery(keyID: keyID)
+            let legacy = deviceOnlyQuery(keyID: keyID)
+
+            // Before deleting the fallback, prove whether the preferred copy exists.
+            // An entitlement may appear before the first unlock has migrated the key;
+            // in that state the fallback is the only copy and a failing DP-keychain
+            // delete must not strand restored ciphertext without a key.
+            let primaryExists = try itemExists(primary)
+            if primaryExists {
+                // Delete the fallback first and the preferred sync copy last. If
+                // either operation throws, at least one usable copy remains.
+                try deleteItem(legacy)
+                try deleteItem(primary)
+            } else {
+                try deleteItem(legacy)
+            }
+        } else {
+            try deleteItem(baseQuery(keyID: keyID))
+        }
+    }
+
+    private func deleteItem(_ query: [String: Any]) throws {
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess, status != errSecItemNotFound {
             throw Failure.unavailable(status)
         }
     }
@@ -201,17 +227,12 @@ final class KeychainSecretStore {
     }
 
     private func baseQuery(keyID: String) -> [String: Any] {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: keyID,
-        ]
+        var query = deviceOnlyQuery(keyID: keyID)
 
         switch tier {
         case .deviceOnly:
             // Deliberately NOT the data-protection keychain: without an
-            // application-identifier it returns errSecMissingEntitlement (-34018) for
-            // every operation, which is the failure this tier exists to avoid.
+            // application-identifier it returns errSecMissingEntitlement (-34018).
             break
         case .synchronizable(let accessGroup):
             query[kSecUseDataProtectionKeychain as String] = true
@@ -219,6 +240,30 @@ final class KeychainSecretStore {
             query[kSecAttrSynchronizable as String] = true
         }
         return query
+    }
+
+    private func deviceOnlyQuery(keyID: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: keyID,
+        ]
+    }
+
+    private func contains(_ base: [String: Any]) -> Bool {
+        (try? itemExists(base)) == true
+    }
+
+    private func itemExists(_ base: [String: Any]) throws -> Bool {
+        var query = base
+        query[kSecReturnData as String] = false
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        switch status {
+        case errSecSuccess: return true
+        case errSecItemNotFound: return false
+        default: throw Failure.unavailable(status)
+        }
     }
 }
 

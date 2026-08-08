@@ -4,9 +4,9 @@ import Testing
 
 /// The two-file critical section that promoting and demoting a secure snippet runs in.
 ///
-/// Everything here is about the window between two `rename(2)` calls. Two files cannot
-/// be swapped atomically with respect to a crash, so the guarantee is narrower and has
-/// to be exact: **an interrupted move leaves the record in both files, never in
+/// Everything here is about the window between durable `rename(2)` calls. Two files
+/// cannot be swapped atomically with respect to a crash, so the guarantee is narrower
+/// and has to be exact: **an interrupted move leaves the record in both files, never in
 /// neither.** A duplicate is repairable at next launch; a disappearance is a secret
 /// gone. Each test below pins one half of that.
 @Suite("Library transaction")
@@ -126,18 +126,157 @@ struct LibraryTransactionTests {
         #expect(LibraryTransaction.pendingMarker(stateURL: f.state) == .promoting(id))
     }
 
+    /// The demote-side mirror of the promotion contract. Its destination is the
+    /// plaintext library, so that write must land before the vault source is removed.
+    /// Refusing the destination must leave the original ciphertext untouched and must
+    /// not publish a marker for a move that never started.
+    @Test func whenTheDemoteDestinationWriteFailsTheVaultSourceAndNoMarkerRemain() throws {
+        let f = try fixture()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.dir.path)
+            try? FileManager.default.removeItem(at: f.dir)
+        }
+        let id = UUID()
+        var originalVault = vaultDocument()
+        originalVault.records.append(record(id, name: "a"))
+        try VaultFile.write(originalVault, to: f.vault, temporaryDirectory: f.dir)
+        try SyncStateFile.write(.fresh(), to: f.state, temporaryDirectory: f.dir)
+
+        let readOnly = f.dir.appendingPathComponent("ro-library", isDirectory: true)
+        try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: true)
+        let blockedLibrary = readOnly.appendingPathComponent("snippets.json")
+        try SnippetLibraryCodec.encode([]).write(to: blockedLibrary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: readOnly.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: readOnly.path) }
+
+        try #require(getuid() != 0, "meaningless as root")
+
+        #expect(throws: (any Error).self) {
+            try LibraryTransaction.perform(
+                libraryURL: blockedLibrary, vaultURL: f.vault, stateURL: f.state,
+                lockURL: f.lock, temporaryDirectory: f.dir, lockTimeout: 2
+            ) { contents in
+                var vault = try #require(contents.vault)
+                vault.records.removeAll { $0.id == id }
+                contents.vault = vault
+                contents.snippets.append(self.snippet("a", id: id))
+                contents.marker = .demoting(id)
+            }
+        }
+
+        #expect(try LibraryWriter.read(from: blockedLibrary).snippets.isEmpty,
+                "a refused destination must remain unchanged")
+        #expect(VaultFile.load(from: f.vault).value?.records.map(\.id) == [id],
+                "the source must not be removed until its destination exists")
+        #expect(LibraryTransaction.pendingMarker(stateURL: f.state) == .none,
+                "a marker is published only after the destination write lands")
+    }
+
+    /// Once the plaintext destination has landed, failure to remove the vault source
+    /// must leave a duplicate and the demotion marker. This on-disk state is equivalent
+    /// to an interruption between the two writes and is exactly what reconcile repairs.
+    @Test func whenTheDemoteVaultWriteFailsBothCopiesAndTheMarkerRemain() throws {
+        let f = try fixture()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.dir.path)
+            try? FileManager.default.removeItem(at: f.dir)
+        }
+        let id = UUID()
+        try SnippetLibraryCodec.encode([]).write(to: f.library)
+        try SyncStateFile.write(.fresh(), to: f.state, temporaryDirectory: f.dir)
+
+        let readOnly = f.dir.appendingPathComponent("ro-vault", isDirectory: true)
+        try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: true)
+        let blockedVault = readOnly.appendingPathComponent("vault.json")
+        var originalVault = vaultDocument()
+        originalVault.records.append(record(id, name: "a"))
+        try VaultFile.write(originalVault, to: blockedVault, temporaryDirectory: f.dir)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: readOnly.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: readOnly.path) }
+
+        try #require(getuid() != 0, "meaningless as root")
+
+        #expect(throws: (any Error).self) {
+            try LibraryTransaction.perform(
+                libraryURL: f.library, vaultURL: blockedVault, stateURL: f.state,
+                lockURL: f.lock, temporaryDirectory: f.dir, lockTimeout: 2
+            ) { contents in
+                var vault = try #require(contents.vault)
+                vault.records.removeAll { $0.id == id }
+                contents.vault = vault
+                contents.snippets.append(self.snippet("a", id: id))
+                contents.marker = .demoting(id)
+            }
+        }
+
+        #expect(try LibraryWriter.read(from: f.library).snippets.map(\.id) == [id],
+                "the plaintext destination must land before vault removal is attempted")
+        #expect(VaultFile.load(from: blockedVault).value?.records.map(\.id) == [id],
+                "a failed source removal leaves the old ciphertext copy")
+        #expect(LibraryTransaction.pendingMarker(stateURL: f.state) == .demoting(id),
+                "reconcile must be told to prefer the new plaintext copy")
+    }
+
+    /// A sync apply can move different records in opposite directions in one locked
+    /// batch. Neither two-file ordering is safe for that shape, so the transaction first
+    /// writes a library containing both the demotion destination and the promotion
+    /// source. A failed vault write must therefore still leave both records recoverable.
+    @Test func aMixedDirectionBatchStagesDuplicatesBeforeChangingTheVault() throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.dir) }
+        let promotingID = UUID()
+        let demotingID = UUID()
+        try SnippetLibraryCodec.encode([snippet("promoting", id: promotingID)]).write(to: f.library)
+        try SyncStateFile.write(.fresh(), to: f.state, temporaryDirectory: f.dir)
+
+        let readOnly = f.dir.appendingPathComponent("ro-mixed-vault", isDirectory: true)
+        try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: true)
+        let blockedVault = readOnly.appendingPathComponent("vault.json")
+        var originalVault = vaultDocument()
+        originalVault.records.append(record(demotingID, name: "demoting"))
+        try VaultFile.write(originalVault, to: blockedVault, temporaryDirectory: f.dir)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: readOnly.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: readOnly.path) }
+
+        try #require(getuid() != 0, "meaningless as root")
+
+        #expect(throws: (any Error).self) {
+            try LibraryTransaction.perform(
+                libraryURL: f.library, vaultURL: blockedVault, stateURL: f.state,
+                lockURL: f.lock, temporaryDirectory: f.dir, lockTimeout: 2
+            ) { contents in
+                var vault = try #require(contents.vault)
+                vault.records.removeAll { $0.id == demotingID }
+                vault.records.append(self.record(promotingID, name: "promoting"))
+                contents.vault = vault
+                contents.snippets = [self.snippet("demoting", id: demotingID)]
+            }
+        }
+
+        let libraryIDs = Set(try LibraryWriter.read(from: f.library).snippets.map(\.id))
+        #expect(libraryIDs == [promotingID, demotingID],
+                "the intermediate library retains one source and installs the other destination")
+        #expect(VaultFile.load(from: blockedVault).value?.records.map(\.id) == [demotingID])
+    }
+
     @Test func aTransactionThatChangesNothingWritesNothing() throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.dir) }
-        try SnippetLibraryCodec.encode([snippet("a")]).write(to: f.library)
+        let id = UUID()
+        try SnippetLibraryCodec.encode([snippet("a", id: id)]).write(to: f.library)
         try VaultFile.write(vaultDocument(), to: f.vault, temporaryDirectory: f.dir)
+        try SyncStateFile.write(.fresh(), to: f.state, temporaryDirectory: f.dir)
 
         let before = try FileManager.default.attributesOfItem(atPath: f.library.path)[.modificationDate] as? Date
-        let outcome = try perform(f) { _ in }
+        let outcome = try perform(f) { contents in
+            // Intent without a corresponding data change is not an in-flight move.
+            contents.marker = .demoting(id)
+        }
         let after = try FileManager.default.attributesOfItem(atPath: f.library.path)[.modificationDate] as? Date
 
         #expect(outcome.wroteLibrary == false)
         #expect(outcome.wroteVault == false)
+        #expect(LibraryTransaction.pendingMarker(stateURL: f.state) == .none)
         // Not merely cosmetic: a needless write fires the folder monitor the app
         // watches, and once sync is live it is what makes two devices ping-pong.
         #expect(before == after)

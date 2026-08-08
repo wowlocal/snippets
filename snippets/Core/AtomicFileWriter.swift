@@ -26,6 +26,8 @@ nonisolated enum AtomicFileWriter {
         case cannotCreateTemporary(directory: String, errno: Int32)
         case writeFailed(errno: Int32)
         case renameFailed(destination: String, errno: Int32)
+        case removeFailed(path: String, errno: Int32)
+        case directorySyncFailed(path: String, errno: Int32)
 
         var description: String {
             switch self {
@@ -35,6 +37,10 @@ nonisolated enum AtomicFileWriter {
                 return "could not write the temporary file: \(String(cString: strerror(code))) (\(code))"
             case .renameFailed(let destination, let code):
                 return "could not move the temporary file onto \(destination): \(String(cString: strerror(code))) (\(code))"
+            case .removeFailed(let path, let code):
+                return "could not remove \(path): \(String(cString: strerror(code))) (\(code))"
+            case .directorySyncFailed(let path, let code):
+                return "could not make the directory change durable at \(path): \(String(cString: strerror(code))) (\(code))"
             }
         }
     }
@@ -109,6 +115,31 @@ nonisolated enum AtomicFileWriter {
         if directory >= 0 {
             fsync(directory)
             close(directory)
+        }
+    }
+
+    /// Removes a file and makes the missing directory entry durable before returning.
+    ///
+    /// `unlink(2)` succeeding is not enough when the next operation destroys the only
+    /// key that could read the file: after a power loss, an unsynced directory entry
+    /// may reappear while the Keychain deletion remains committed. Missing is already
+    /// the requested postcondition and therefore succeeds.
+    static func removeDurablyIfPresent(_ url: URL) throws {
+        if unlink(url.path) != 0 {
+            let code = errno
+            if code != ENOENT { throw Failure.removeFailed(path: url.path, errno: code) }
+            // Still sync the parent. This may be a retry after a prior unlink landed
+            // but its directory fsync failed; absence is not yet a durable fact.
+        }
+
+        let parent = url.deletingLastPathComponent()
+        let directory = open(parent.path, O_RDONLY | O_CLOEXEC)
+        guard directory >= 0 else {
+            throw Failure.directorySyncFailed(path: parent.path, errno: errno)
+        }
+        defer { close(directory) }
+        guard fsync(directory) == 0 else {
+            throw Failure.directorySyncFailed(path: parent.path, errno: errno)
         }
     }
 

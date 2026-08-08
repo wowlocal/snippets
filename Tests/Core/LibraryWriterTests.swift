@@ -330,6 +330,47 @@ import Darwin
         #expect(!LibraryLockPolicy.isFatal(.cannotOpen(path: sandbox.lockFile.path, errno: EPERM)))
     }
 
+    /// A PID is not a process identity: after the owner crashes, macOS can assign its
+    /// PID to an unrelated process. The old sentinel then looked permanently live and
+    /// every future write on a no-`flock` filesystem timed out forever. A mismatched
+    /// start generation must be stolen even when `kill(pid, 0)` says that PID exists.
+    @Test func aSentinelOwnedByAnEarlierIncarnationOfALivePIDIsStolen() throws {
+        let sandbox = try Sandbox("sentinel-pid-reuse")
+        defer { sandbox.destroy() }
+
+        let sentinel = sandbox.lockFile.appendingPathExtension("sentinel")
+        let actual = try #require(SentinelLock.processGeneration(for: getpid()))
+        let impossibleMicroseconds = actual.microseconds + 1
+        let staleOwner = "\(ProcessInfo.processInfo.hostName)\n\(getpid())\n"
+            + "\(actual.seconds)\n\(impossibleMicroseconds)\n"
+        try staleOwner.write(to: sentinel, atomically: false, encoding: .utf8)
+
+        // This times out on the PID-only implementation because the test process is
+        // demonstrably alive. With the generation check it replaces the stale name.
+        let held = try SentinelLock.acquire(sentinelURL: sentinel, timeout: 0.25)
+        defer { held.release() }
+
+        let replacement = try String(contentsOf: sentinel, encoding: .utf8)
+        #expect(replacement != staleOwner)
+        #expect(replacement.contains("\n\(actual.seconds)\n\(actual.microseconds)\n"))
+    }
+
+    @Test func aStaleLegacySentinelCannotBeHeldForeverByAReusedLivePID() throws {
+        let sandbox = try Sandbox("sentinel-legacy-pid-reuse")
+        defer { sandbox.destroy() }
+
+        let sentinel = sandbox.lockFile.appendingPathExtension("sentinel")
+        let legacyOwner = "\(ProcessInfo.processInfo.hostName)\n\(getpid())\n"
+        try legacyOwner.write(to: sentinel, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -(SentinelLock.staleAfter + 1))],
+            ofItemAtPath: sentinel.path)
+
+        let held = try SentinelLock.acquire(sentinelURL: sentinel, timeout: 0.25)
+        defer { held.release() }
+        #expect(try String(contentsOf: sentinel, encoding: .utf8) != legacyOwner)
+    }
+
     /// The policy above, as `LibraryWriter` applies it: a contended lock surfaces as
     /// `.busy` and the transform never runs, so a caller cannot accidentally publish
     /// a decision made from a snapshot it was never allowed to take.

@@ -404,11 +404,11 @@ struct VaultIntegrationTests {
         #expect(envelope.contentHash?.count == 64)
     }
 
-    // MARK: - The CLI door, through the store that holds it
+    // MARK: - The optional CLI-wrap format
 
-    /// The headless path end to end: the secret comes out of a `SecretStore`, opens the
-    /// vault, and reads a record — no human present.
-    @Test func theCLIDoorWorksFromASecretStoreWithNoHumanPresent() throws {
+    /// Pins the dormant wrap format end to end. The shipping CLI deliberately does
+    /// not receive this secret; reveal remains app-brokered and human-approved.
+    @Test func anOptionalCLIWrapCanBeOpenedByItsSecretStoreMaterial() throws {
         var vault = try NewVault(passphrase: "p", iterations: fastIterations)
         let store = InMemorySecretStore()
         try store.setSecret(vault.cliSecret, named: "vault.cli")

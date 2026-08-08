@@ -566,11 +566,19 @@ extension ViewController {
         guard let snippet = selectedSnippet,
               store.isSecure(snippet.id),
               let app = NSApp.delegate as? AppDelegate else { return }
-        do {
-            try app.vaultSession.unlock(reason: "Reveal \u{201C}\(snippet.displayName)\u{201D}")
-            applySecureStateToEditor(for: snippet)
-        } catch {
-            importExportMessage = "Could not unlock: \(error)"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await app.vaultSession.unlock(
+                    reason: "Reveal \u{201C}\(snippet.displayName)\u{201D}")
+                // Authentication suspends the main actor. If another row was selected
+                // while the system prompt was open, never render this row's plaintext
+                // into that row's editor.
+                guard selectedSnippet?.id == snippet.id else { return }
+                applySecureStateToEditor(for: snippet)
+            } catch {
+                importExportMessage = "Could not unlock: \(error)"
+            }
         }
     }
 }

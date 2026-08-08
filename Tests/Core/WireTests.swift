@@ -352,6 +352,19 @@ struct WireTests {
             return try #require(value.object)
         }
 
+        /// Recomputes the self-hash after a test changes one of the nine covered
+        /// members. This models bytes emitted by an older implementation rather than
+        /// manufacturing a value through today's normalizing initializers.
+        private func canonicalDataRefreshingHash(
+            _ original: [String: CanonicalJSON.Value]
+        ) throws -> Data {
+            var object = original
+            object.removeValue(forKey: "hash")
+            let digest = SHA256.hash(data: try CanonicalJSON.data(.object(object)))
+            object["hash"] = .string(SyncEnvelope.hex(digest))
+            return try CanonicalJSON.data(.object(object))
+        }
+
         /// The same discipline `snippets.json` has at nine keys, for the same reason: a
         /// build that does not know a key strips it and writes the stripped version
         /// back. A key set that cannot grow cannot be stripped. Future fields go in `x`.
@@ -379,6 +392,58 @@ struct WireTests {
                 "name", "keyword", "content", "tags", "isEnabled", "isPinned",
                 "createdAt", "updatedAt",
             ])
+        }
+
+        /// These are wire spellings now, not merely UI cleanup choices. Pinning both
+        /// the normalized values and the resulting hash makes an intentional format
+        /// migration necessary before either domain normalizer can change.
+        @Test func locallyProducedTagAndDeviceSpellingsArePinnedToLiterals() throws {
+            let envelope = SyncEnvelope.plain(
+                snippet(0, tags: ["  Team\n Notes  ", "TEAM NOTES", "Café", "CAFE", " \t "]),
+                hlc: HLC(wallMs: 1_000, counter: 2, device: "AA-BB-CC-DD"),
+                origin: "AB-CD-EF-01")
+
+            #expect(envelope.fields?.tags == ["Team Notes", "Café"])
+            #expect(envelope.hlc.string == "0000000003e8-0002-aabbccdd")
+            #expect(envelope.origin == "abcdef01")
+            #expect(try envelope.envelopeHash()
+                == "dbc644e2963dccd24f99ff4919e1a61b03216d80bf0459b01977c2855560ec4c")
+        }
+
+        /// Parsing is the compatibility boundary: a future build may choose different
+        /// tag cleanup rules for newly created snippets, but it must still verify and
+        /// re-emit every already-hashed spelling byte-for-byte.
+        @Test func parsedTagsBypassDomainNormalizationBeforeHashVerification() throws {
+            let envelope = SyncEnvelope.plain(
+                snippet(0), hlc: clock(1_000), origin: thisDevice)
+            var object = try canonicalObject(envelope)
+            var fields = try #require(object["fields"]?.object)
+            let legacyTags = ["  Legacy\n Tag  ", "LEGACY TAG", ""]
+            fields["tags"] = .array(legacyTags.map(CanonicalJSON.Value.string))
+            object["fields"] = .object(fields)
+            let legacyBytes = try canonicalDataRefreshingHash(object)
+
+            let parsed = try SyncEnvelope.parse(legacyBytes)
+            let declaredHash = try CanonicalJSON.value(legacyBytes).object?["hash"]?.text
+
+            #expect(parsed.fields?.tags == legacyTags)
+            #expect(try parsed.canonicalData() == legacyBytes)
+            #expect(try parsed.envelopeHash() == declaredHash)
+        }
+
+        /// `origin` has a frozen lowercase-ASCII spelling. Refusing a different
+        /// spelling is safer than silently changing a hash-covered value.
+        @Test func aNoncanonicalOriginIsRejectedRatherThanNormalized() throws {
+            let envelope = SyncEnvelope.plain(
+                snippet(0), hlc: clock(1_000), origin: thisDevice)
+            var object = try canonicalObject(envelope)
+            object["origin"] = .string("AABBCCDD")
+            let bytes = try canonicalDataRefreshingHash(object)
+
+            #expect(throws: SyncEnvelope.Failure.malformed(
+                "\"origin\" is not an eight-character lowercase hexadecimal device id")) {
+                try SyncEnvelope.parse(bytes)
+            }
         }
 
         /// A tombstone still emits all ten keys, with `fields` and `contentHash` null. A

@@ -506,31 +506,44 @@ extension ViewController {
 
         if !isSecure, !confirmPromotion(of: snippet, isFirstEver: secureStore.isEmpty) { return }
 
-        do {
-            if !isSecure { try secureStore.createVaultIfNeeded() }
-            try app.vaultSession.unlock(
-                reason: isSecure
-                    ? "Make \u{201C}\(snippet.displayName)\u{201D} an ordinary snippet"
-                    : "Make \u{201C}\(snippet.displayName)\u{201D} secure")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                if !isSecure {
+                    try secureStore.createVaultIfNeeded(
+                        confirmRecoveryKey: presentRecoveryKeyForSaving)
+                }
+                try await app.vaultSession.unlock(
+                    reason: isSecure
+                        ? "Make \u{201C}\(snippet.displayName)\u{201D} an ordinary snippet"
+                        : "Make \u{201C}\(snippet.displayName)\u{201D} secure")
 
-            if isSecure {
-                try secureStore.demote(recordID: snippet.id)
-                importExportMessage = "\(snippet.displayName) is an ordinary snippet again."
-            } else {
-                try secureStore.promote(snippetID: snippet.id)
-                importExportMessage = "\(snippet.displayName) is now secure."
+                if !isSecure, !secureStore.hasRecoveryKey {
+                    _ = try secureStore.addRecoveryKeyIfNeeded(
+                        confirmRecoveryKey: presentRecoveryKeyForSaving)
+                }
+
+                if isSecure {
+                    try secureStore.demote(recordID: snippet.id)
+                    importExportMessage = "\(snippet.displayName) is an ordinary snippet again."
+                } else {
+                    try secureStore.promote(snippetID: snippet.id)
+                    importExportMessage = "\(snippet.displayName) is now secure."
+                }
+                selectedSnippetID = snippet.id
+                reloadVisibleSnippets(keepSelection: true)
+                applySelectedSnippetToEditor()
+            } catch SecureSnippetStore.Failure.setupCancelled {
+                // The user kept setup from committing; there is nothing to report or undo.
+            } catch {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = isSecure ? "Could not make this snippet ordinary" : "Could not make this snippet secure"
+                alert.informativeText = "\(error)"
+                alert.runModal()
             }
-            selectedSnippetID = snippet.id
-            reloadVisibleSnippets(keepSelection: true)
-            applySelectedSnippetToEditor()
-        } catch {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = isSecure ? "Could not make this snippet ordinary" : "Could not make this snippet secure"
-            alert.informativeText = "\(error)"
-            alert.runModal()
+            closeActionPanel()
         }
-        closeActionPanel()
     }
 
     /// Explains what changes, once, before the first snippet is ever secured.
@@ -544,7 +557,7 @@ extension ViewController {
         let alert = NSAlert()
         alert.messageText = "Make \u{201C}\(snippet.displayName)\u{201D} secure?"
         alert.informativeText =
-            "Its text will be encrypted and unlocked with Touch ID.\n\n"
+            "Its text will be encrypted and unlocked with Touch ID or your login password.\n\n"
             + "It will no longer expand automatically when you type its keyword \u{2014} you will pick it "
             + "from the list instead. It will not appear in exports or share links.\n\n"
             + "Its name, keyword and tags stay readable so Snippets can still find it while locked."
@@ -552,4 +565,28 @@ extension ViewController {
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }
+}
+
+/// A new recovery key is committed only after this returns true. The text field is
+/// selectable so a user can move it into a password manager, but Snippets never copies
+/// it to the pasteboard on their behalf where a clipboard manager would capture it.
+@MainActor
+func presentRecoveryKeyForSaving(_ recoveryKey: String) -> Bool {
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "Save your recovery key"
+    alert.informativeText =
+        "This is the only way to restore secure snippets if the Keychain item is lost. "
+        + "Write it down or save it in a password manager. Snippets will not show it again."
+
+    let field = NSTextField(labelWithString: recoveryKey)
+    field.font = .monospacedSystemFont(ofSize: 15, weight: .semibold)
+    field.alignment = .center
+    field.isSelectable = true
+    field.lineBreakMode = .byClipping
+    field.frame = NSRect(x: 0, y: 0, width: 430, height: 28)
+    alert.accessoryView = field
+    alert.addButton(withTitle: "I’ve Saved It")
+    alert.addButton(withTitle: "Cancel Setup")
+    return alert.runModal() == .alertFirstButtonReturn
 }

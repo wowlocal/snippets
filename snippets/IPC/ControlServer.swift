@@ -21,7 +21,7 @@ import Security
 /// a prompt that appears often enough becomes a prompt people dismiss without reading,
 /// and at that point the control is gone.
 @MainActor
-final class ControlServer {
+final class ControlServer: NSObject {
 
     private let session: VaultSession
     private let secureStore: SecureSnippetStore
@@ -30,7 +30,13 @@ final class ControlServer {
 
     private var listenerDescriptor: Int32 = -1
     private var acceptSource: DispatchSourceRead?
-    private let queue = DispatchQueue(label: "com.khm.snippets.ipc", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.khm.snippets.ipc.accept", qos: .userInitiated)
+    /// A stalled or slow client must occupy only its own worker, never the serial queue
+    /// which accepts every other CLI connection.
+    nonisolated private static let connectionQueue = DispatchQueue(
+        label: "com.khm.snippets.ipc.connections",
+        qos: .userInitiated,
+        attributes: .concurrent)
 
     /// At most this many reveal prompts per window, across all callers.
     ///
@@ -41,12 +47,31 @@ final class ControlServer {
     private static let revealWindow: TimeInterval = 60
     private var recentReveals: [Date] = []
 
+    private enum RevealConsent {
+        case approved
+        case denied
+        case timedOut
+    }
+
+    private struct ActiveRevealPrompt {
+        let alert: NSAlert
+        let continuation: CheckedContinuation<RevealConsent, Never>
+        var timeoutTask: Task<Void, Never>?
+    }
+
+    /// Covers both our consent panel and the subsequent system authentication. This
+    /// prevents a second reveal from putting another prompt on top of either one while
+    /// still allowing ping and status to be served through actor reentrancy.
+    private var revealInFlight = false
+    private var activeRevealPrompt: ActiveRevealPrompt?
+
     init(session: VaultSession, secureStore: SecureSnippetStore,
          socketURL: URL = SnippetsIPC.socketURL(), auditURL: URL = SnippetStorageLocations.vaultAuditFileURL) {
         self.session = session
         self.secureStore = secureStore
         self.socketURL = socketURL
         self.auditURL = auditURL
+        super.init()
     }
 
     deinit {
@@ -70,12 +95,18 @@ final class ControlServer {
             return
         }
 
-        let source = DispatchSource.makeReadSource(fileDescriptor: listenerDescriptor, queue: queue)
+        let listener = listenerDescriptor
+        let source = DispatchSource.makeReadSource(fileDescriptor: listener, queue: queue)
         source.setEventHandler { [weak self] in
-            guard let self else { return }
-            let descriptor = accept(self.listenerDescriptor, nil, nil)
+            let descriptor = accept(listener, nil, nil)
             guard descriptor >= 0 else { return }
-            self.serve(descriptor)
+            Self.connectionQueue.async { [weak self] in
+                guard let self else {
+                    close(descriptor)
+                    return
+                }
+                self.serve(descriptor)
+            }
         }
         source.setCancelHandler { [socketURL] in
             unlink(socketURL.path)
@@ -85,6 +116,9 @@ final class ControlServer {
     }
 
     func stop() {
+        if activeRevealPrompt != nil {
+            finishRevealPrompt(with: .denied)
+        }
         acceptSource?.cancel()
         acceptSource = nil
         if listenerDescriptor >= 0 {
@@ -96,28 +130,27 @@ final class ControlServer {
 
     // MARK: - Serving
 
-    /// Runs on `queue`; hops to the main actor only to touch app state or show UI.
+    /// Runs on the concurrent connection pool; hops to the main actor only to touch app
+    /// state or show UI. In particular, waiting for consent never occupies the serial
+    /// accept queue, so a second client can still ask for `ping` or `status`.
     nonisolated private func serve(_ descriptor: Int32) {
-        defer { close(descriptor) }
-
         let peer = PeerIdentity(descriptor: descriptor)
         guard peer.isTrusted else {
             // Deliberately terse. Telling an unverified caller *why* it failed helps it
             // iterate towards passing.
-            try? UnixSocket.send(
-                SnippetsIPC.Response.failure(.refused, "unrecognised caller"), on: descriptor)
+            Self.respond(
+                .failure(.refused, "unrecognised caller"), on: descriptor)
             return
         }
 
         guard let request = try? UnixSocket.receive(SnippetsIPC.Request.self, on: descriptor) else {
-            try? UnixSocket.send(
-                SnippetsIPC.Response.failure(.error, "malformed request"), on: descriptor)
+            Self.respond(.failure(.error, "malformed request"), on: descriptor)
             return
         }
 
         guard request.v == SnippetsIPC.protocolVersion else {
-            try? UnixSocket.send(
-                SnippetsIPC.Response.failure(
+            Self.respond(
+                .failure(
                     .unsupported,
                     "this Snippets speaks protocol \(SnippetsIPC.protocolVersion), the CLI speaks \(request.v)"
                         + " — reinstall the CLI from Settings"),
@@ -125,13 +158,29 @@ final class ControlServer {
             return
         }
 
-        let response = DispatchQueue.main.sync {
-            MainActor.assumeIsolated { self.handle(request, from: peer) }
+        Task { @MainActor [weak self] in
+            guard let self else {
+                Self.respond(.failure(.error, "Snippets is shutting down"), on: descriptor)
+                return
+            }
+            let response = await self.handle(request, from: peer)
+            Self.respond(response, on: descriptor)
         }
-        try? UnixSocket.send(response, on: descriptor)
     }
 
-    private func handle(_ request: SnippetsIPC.Request, from peer: PeerIdentity) -> SnippetsIPC.Response {
+    /// Sends off the main actor and owns the descriptor's one and only close.
+    nonisolated private static func respond(
+        _ response: SnippetsIPC.Response, on descriptor: Int32
+    ) {
+        connectionQueue.async {
+            defer { close(descriptor) }
+            try? UnixSocket.send(response, on: descriptor)
+        }
+    }
+
+    private func handle(
+        _ request: SnippetsIPC.Request, from peer: PeerIdentity
+    ) async -> SnippetsIPC.Response {
         switch request.command {
         case SnippetsIPC.Command.ping:
             return SnippetsIPC.Response(status: .ok)
@@ -143,7 +192,7 @@ final class ControlServer {
                 unlocked: session.state.isUnlocked)
 
         case SnippetsIPC.Command.reveal:
-            return reveal(keyword: request.keyword ?? "", peer: peer)
+            return await reveal(keyword: request.keyword ?? "", peer: peer)
 
         default:
             return .failure(.unsupported, "unknown command \"\(request.command)\"")
@@ -152,7 +201,7 @@ final class ControlServer {
 
     // MARK: - Reveal
 
-    private func reveal(keyword: String, peer: PeerIdentity) -> SnippetsIPC.Response {
+    private func reveal(keyword: String, peer: PeerIdentity) async -> SnippetsIPC.Response {
         let lookup = Snippet.sanitizedKeyword(keyword)
         guard !lookup.isEmpty else { return .failure(.notFound, "no keyword given") }
 
@@ -163,6 +212,13 @@ final class ControlServer {
             return .failure(.notFound, "no secure snippet with keyword '\(keyword)'")
         }
 
+        guard !revealInFlight else {
+            record(audit: "busy", keyword: lookup, peer: peer)
+            return .failure(
+                .refused,
+                "another reveal request is already awaiting approval; approve or deny it in Snippets")
+        }
+
         guard allowanceRemains() else {
             record(audit: "rate-limited", keyword: lookup, peer: peer)
             return .failure(
@@ -170,13 +226,24 @@ final class ControlServer {
                 "too many reveal requests in the last minute; approve them one at a time from the app")
         }
 
-        guard confirm(shell: shell, peer: peer) else {
+        revealInFlight = true
+        defer { revealInFlight = false }
+
+        switch await confirm(shell: shell, peer: peer) {
+        case .denied:
             record(audit: "denied", keyword: lookup, peer: peer)
             return .failure(.denied, "the request was not approved")
+        case .timedOut:
+            record(audit: "timed-out", keyword: lookup, peer: peer)
+            return .failure(
+                .denied,
+                "the request was not approved within \(Int(SnippetsIPC.revealConsentTimeout)) seconds")
+        case .approved:
+            break
         }
 
         do {
-            try session.unlock(reason: "Reveal “\(shell.displayName)” for \(peer.displayName)")
+            try await session.unlock(reason: "Reveal “\(shell.displayName)” for \(peer.displayName)")
             let content = try secureStore.content(for: shell.id)
             record(audit: "revealed", keyword: lookup, peer: peer)
             return SnippetsIPC.Response(status: .ok, content: content)
@@ -196,28 +263,73 @@ final class ControlServer {
         return true
     }
 
-    /// The prompt. Modal on purpose, and it names the caller.
-    ///
-    /// "A program wants to read a secret" is a dialog people approve. "Terminal (pid
-    /// 4711) wants to read AWS root password" is one they can actually evaluate, and the
-    /// only version that makes consent mean anything.
-    private func confirm(shell: Snippet, peer: PeerIdentity) -> Bool {
+    /// A modeless consent panel which names the caller. `runModal` is forbidden here:
+    /// it would occupy the app's only server queue until somebody clicked, wedging even
+    /// unrelated `ping` and `status` requests. The continuation suspends only this
+    /// reveal task, and the bounded timer turns silence into the documented denial.
+    private func confirm(shell: Snippet, peer: PeerIdentity) async -> RevealConsent {
         NSApp.activate(ignoringOtherApps: true)
 
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Reveal “\(shell.displayName)” to \(peer.displayName)?"
-        alert.informativeText =
-            "\(peer.displayName) is asking Snippets for the text of a secure snippet.\n\n"
-            + "If you did not just run a command that would need it, deny this.\n\n"
-            + "The text will be printed to that program's output, where it may be logged "
-            + "or saved in shell history."
-        alert.addButton(withTitle: "Reveal")
-        alert.addButton(withTitle: "Deny")
-        // Deny is the default, so a stray Return key is the safe answer.
-        alert.buttons.last?.keyEquivalent = "\r"
-        alert.buttons.first?.keyEquivalent = ""
-        return alert.runModal() == .alertFirstButtonReturn
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Reveal “\(shell.displayName)” to \(peer.displayName)?"
+            alert.informativeText =
+                "\(peer.displayName) is asking Snippets for the text of a secure snippet.\n\n"
+                + "If you did not just run a command that would need it, deny this.\n\n"
+                + "The text will be printed to that program's output, where it may be logged "
+                + "or saved in shell history."
+
+            let revealButton = alert.addButton(withTitle: "Reveal")
+            revealButton.target = self
+            revealButton.action = #selector(approveRevealPrompt(_:))
+            revealButton.keyEquivalent = ""
+
+            let denyButton = alert.addButton(withTitle: "Deny")
+            denyButton.target = self
+            denyButton.action = #selector(denyRevealPrompt(_:))
+            // Deny is the default, so a stray Return key is the safe answer.
+            denyButton.keyEquivalent = "\r"
+
+            let window = alert.window
+            window.level = .modalPanel
+            window.collectionBehavior.insert(.moveToActiveSpace)
+            window.standardWindowButton(.closeButton)?.isEnabled = false
+            window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
+            window.standardWindowButton(.zoomButton)?.isEnabled = false
+
+            activeRevealPrompt = ActiveRevealPrompt(
+                alert: alert, continuation: continuation, timeoutTask: nil)
+            activeRevealPrompt?.timeoutTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(
+                        for: .seconds(SnippetsIPC.revealConsentTimeout))
+                } catch {
+                    return
+                }
+                self?.finishRevealPrompt(with: .timedOut)
+            }
+
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            window.initialFirstResponder = denyButton
+        }
+    }
+
+    @objc private func approveRevealPrompt(_ sender: Any?) {
+        finishRevealPrompt(with: .approved)
+    }
+
+    @objc private func denyRevealPrompt(_ sender: Any?) {
+        finishRevealPrompt(with: .denied)
+    }
+
+    private func finishRevealPrompt(with result: RevealConsent) {
+        guard let prompt = activeRevealPrompt else { return }
+        activeRevealPrompt = nil
+        prompt.timeoutTask?.cancel()
+        prompt.alert.window.orderOut(nil)
+        prompt.continuation.resume(returning: result)
     }
 
     /// Appends to `Vault/audit.json`. **Never records content** — an audit log that
@@ -250,7 +362,7 @@ final class ControlServer {
 }
 
 /// Who is on the other end of the socket.
-nonisolated struct PeerIdentity {
+nonisolated struct PeerIdentity: Sendable {
     let pid: Int32
     let isTrusted: Bool
     let displayName: String

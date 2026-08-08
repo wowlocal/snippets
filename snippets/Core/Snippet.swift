@@ -147,6 +147,15 @@ nonisolated enum SnippetStorageLocations {
         syncFolderURL.appendingPathComponent("base.json", isDirectory: false)
     }
 
+    /// The last envelope projected into the frozen local library files.
+    ///
+    /// Unlike `base.json`, this is the local side of the merge. It retains clocks,
+    /// origins and extension data that neither `snippets.json` nor `vault.json` can
+    /// represent, and is entirely derived/recoverable.
+    static var syncLibraryMetadataFileURL: URL {
+        syncFolderURL.appendingPathComponent("library-metadata.json", isDirectory: false)
+    }
+
     static var tombstonesFileURL: URL {
         syncFolderURL.appendingPathComponent("tombstones.json", isDirectory: false)
     }

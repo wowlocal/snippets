@@ -765,6 +765,16 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
 
     static let currentSchemaVersion = 1
 
+    /// The vault's keyed plaintext hash, carried inside the encrypted extension bag.
+    ///
+    /// `contentHash` at the top level is deliberately the SHA-256 of `fields.content`.
+    /// For a secure record those bytes are the stable sealed value from `vault.json`,
+    /// not the plaintext, so that digest cannot be written back to
+    /// `VaultRecord.contentHash`: the latter is an HMAC under the library key. Keeping
+    /// the HMAC in `x` lets a locked peer preserve it without changing the frozen wire
+    /// key set or exposing it outside the encrypted blob.
+    static let vaultContentHashExtensionKey = "vaultContentHash"
+
     /// Exactly these, forever. `WireTests` asserts the count, mirroring the "exactly
     /// nine keys" discipline for `snippets.json`.
     static let topLevelKeys: Set<String> = [
@@ -821,6 +831,29 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
             self.keyword = keyword
             self.content = content
             self.tags = SnippetTagging.normalizedTags(tags)
+            self.isEnabled = isEnabled
+            self.isPinned = isPinned
+            self.createdAt = createdAt
+            self.updatedAt = updatedAt
+        }
+
+        /// Reconstitutes fields that are already on the wire without applying today's
+        /// domain normalization rules to yesterday's hashed bytes. New local fields go
+        /// through the public module initializer above; parsed fields must be lossless.
+        private init(
+            wireName name: String,
+            keyword: String,
+            content: Data,
+            wireTags tags: [String],
+            isEnabled: Bool,
+            isPinned: Bool,
+            createdAt: Date,
+            updatedAt: Date
+        ) {
+            self.name = name
+            self.keyword = keyword
+            self.content = content
+            self.tags = tags
             self.isEnabled = isEnabled
             self.isPinned = isPinned
             self.createdAt = createdAt
@@ -884,7 +917,7 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
             }
 
             return Fields(
-                name: name, keyword: keyword, content: content, tags: tags,
+                wireName: name, keyword: keyword, content: content, wireTags: tags,
                 isEnabled: isEnabled, isPinned: isPinned,
                 createdAt: Date(timeIntervalSinceReferenceDate: createdAt),
                 updatedAt: Date(timeIntervalSinceReferenceDate: updatedAt))
@@ -960,6 +993,29 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
         // checked at the call sites. A deleted secret must not linger anywhere: not in
         // the blob, not in the tombstone the backend keeps forever, not in a debug dump
         // of an envelope somebody pasted into an issue.
+        self.fields = deleted ? nil : fields
+        self.x = x
+    }
+
+    /// Reconstitutes a validated wire value without feeding persisted fields through
+    /// domain-input normalizers. In particular, `origin` participates in `hash`, so a
+    /// future change to `HLC.normalizedDevice` must not rewrite it before verification.
+    private init(
+        wireSchemaVersion schemaVersion: Int,
+        id: UUID,
+        hlc: HLC,
+        wireOrigin origin: String,
+        secure: Bool,
+        deleted: Bool,
+        fields: Fields?,
+        x: [String: CanonicalJSON.Value]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.hlc = hlc
+        self.origin = origin
+        self.secure = secure
+        self.deleted = deleted
         self.fields = deleted ? nil : fields
         self.x = x
     }
@@ -1080,6 +1136,10 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
         guard let origin = try require("origin").text else {
             throw Failure.malformed("\"origin\" is not a string")
         }
+        guard HLC.isCanonicalDeviceID(origin) else {
+            throw Failure.malformed(
+                "\"origin\" is not an eight-character lowercase hexadecimal device id")
+        }
         guard let secure = try require("secure").bool, let deleted = try require("deleted").bool else {
             throw Failure.malformed("\"secure\" and \"deleted\" must be booleans")
         }
@@ -1108,7 +1168,7 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
         }
 
         let envelope = SyncEnvelope(
-            schemaVersion: Int(version), id: id, hlc: hlc, origin: origin,
+            wireSchemaVersion: Int(version), id: id, hlc: hlc, wireOrigin: origin,
             secure: secure, deleted: deleted, fields: fields, x: x)
 
         guard try envelope.envelopeHash() == declaredHash else { throw Failure.hashMismatch }

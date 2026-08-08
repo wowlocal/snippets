@@ -392,6 +392,48 @@ struct VaultWriteSafetyTests {
         // The damaged bytes are still there for a quarantine pass to rescue.
         #expect(try String(contentsOf: url, encoding: .utf8) == "not json at all")
     }
+
+    /// `update` validates the document it read, but the transform is free to return a
+    /// different schema version. The output needs the same guard as the whole-file
+    /// `write` API or an older build can publish bytes it promises not to understand.
+    @Test func updateRefusesANewerSchemaReturnedByItsTransform() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("vault.json")
+        try VaultFile.write(emptyVault(), to: url, temporaryDirectory: dir)
+        let original = try Data(contentsOf: url)
+
+        let failure = #expect(throws: VaultFileError.self) {
+            try VaultFile.update(
+                at: url, lockURL: dir.appendingPathComponent("lock"),
+                temporaryDirectory: dir, lockTimeout: 1
+            ) { current in
+                var unsupported = try #require(current)
+                unsupported.schemaVersion = VaultDocument.currentSchemaVersion + 1
+                return unsupported
+            }
+        }
+        guard case .writeRefused = try #require(failure) else {
+            Issue.record("expected the schema write to be refused, got \(String(describing: failure))")
+            return
+        }
+        #expect(try Data(contentsOf: url) == original, "the refused update changed the vault")
+    }
+
+    @Test func durableRemovalIsIdempotent() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("vault.json")
+        try Data("ciphertext".utf8).write(to: url)
+
+        try AtomicFileWriter.removeDurablyIfPresent(url)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+
+        // A retry still fsyncs the parent before returning; it must not reinterpret
+        // the requested missing postcondition as an error.
+        try AtomicFileWriter.removeDurablyIfPresent(url)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
 }
 
 /// Secure content must not be able to leave through a share link.

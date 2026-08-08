@@ -14,55 +14,60 @@ import Foundation
 /// - Syncing needs no key, so a locked Mac still participates.
 /// - The bytes are stable, so an unchanged record does not look changed every time it
 ///   is sent, which is what would otherwise make two devices trade writes forever.
-/// - The keyed `contentHash` travels alongside, so a device that cannot decrypt can
-///   still tell whether the content changed and merge correctly.
+/// - The keyed vault content hash travels inside the envelope's encrypted extension
+///   bag, so importing ciphertext never replaces the vault HMAC with a SHA of the
+///   sealed bytes.
 @MainActor
 final class SnippetLibraryBridge: SyncLibraryAccess {
 
     private let store: SnippetStore
     private let secureStore: SecureSnippetStore
     private let lockTimeout: TimeInterval
+    private let baseURL: URL
+    private let metadataURL: URL
+    private let temporaryDirectory: URL
+    private var metadataCache: SyncBase?
 
-    init(store: SnippetStore, secureStore: SecureSnippetStore, lockTimeout: TimeInterval = 2.0) {
+    private struct ApplyResult {
+        var changedIDs: [UUID]
+        var appliedEnvelopes: [SyncEnvelope]
+    }
+
+    init(
+        store: SnippetStore,
+        secureStore: SecureSnippetStore,
+        lockTimeout: TimeInterval = 2.0,
+        baseURL: URL = SnippetStorageLocations.syncBaseFileURL,
+        metadataURL: URL = SnippetStorageLocations.syncLibraryMetadataFileURL,
+        temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL
+    ) {
         self.store = store
         self.secureStore = secureStore
         self.lockTimeout = lockTimeout
+        self.baseURL = baseURL
+        self.metadataURL = metadataURL
+        self.temporaryDirectory = temporaryDirectory
     }
 
     // MARK: - Reading
 
     func currentEnvelopes() throws -> [UUID: SyncEnvelope] {
-        var out: [UUID: SyncEnvelope] = [:]
-
-        for snippet in store.snippets {
-            out[snippet.id] = SyncEnvelope(
-                id: snippet.id,
-                hlc: HLC.foreign(updatedAt: snippet.updatedAt),
-                origin: store.deviceID,
-                secure: false,
-                deleted: false,
-                fields: SyncEnvelope.Fields(
-                    name: snippet.name, keyword: snippet.normalizedKeyword,
-                    content: Data(snippet.content.utf8), tags: snippet.tags,
-                    isEnabled: snippet.isEnabled, isPinned: snippet.isPinned,
-                    createdAt: snippet.createdAt, updatedAt: snippet.updatedAt))
+        let agreedBase: SyncBase
+        if case .loaded(let loaded) = SyncBaseFile.load(from: baseURL) {
+            agreedBase = loaded
+        } else {
+            // The base is derived state. Losing it costs one full reconcile; it must
+            // never make the user's library unreadable or stop local edits syncing.
+            agreedBase = SyncBase()
         }
-
-        for record in secureStore.document?.records ?? [] {
-            out[record.id] = SyncEnvelope(
-                id: record.id,
-                hlc: record.hlc,
-                origin: store.deviceID,
-                secure: true,
-                deleted: false,
-                // The sealed string, not the plaintext. This is why sync works locked.
-                fields: SyncEnvelope.Fields(
-                    name: record.name, keyword: record.keyword,
-                    content: Data(record.sealed.utf8), tags: record.tags,
-                    isEnabled: record.isEnabled, isPinned: record.isPinned,
-                    createdAt: record.createdAt, updatedAt: record.updatedAt))
-        }
-        return out
+        let envelopes = SyncLibraryProjection.currentEnvelopes(
+            snippets: store.snippets,
+            records: secureStore.document?.records ?? [],
+            deviceID: store.deviceID,
+            metadata: loadMetadata(fallingBackTo: agreedBase),
+            agreedBase: agreedBase)
+        persistMetadata(envelopes)
+        return envelopes
     }
 
     func liveIDs() -> Set<UUID> {
@@ -82,6 +87,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
 
         let outcome = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
             var changed: [UUID] = []
+            var applied: [SyncEnvelope] = []
 
             for envelope in envelopes {
                 let wasPlain = contents.snippets.contains { $0.id == envelope.id }
@@ -94,27 +100,31 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                         contents.vault = vault
                     }
                     if wasPlain || wasSecure { changed.append(envelope.id) }
+                    // Even an already-absent record must leave the projection cache:
+                    // absence plus an old live envelope would manufacture a local
+                    // resurrection on the next read.
+                    applied.append(envelope)
                     continue
                 }
 
-                guard let fields = envelope.fields else { continue }
+                guard envelope.fields != nil else { continue }
 
                 if envelope.secure {
                     // Arriving secure. A vault must already exist here — its `kid` is the
                     // crypto scope, and inventing one locally would produce a document
                     // whose records no other device can open. Skipping is correct and
-                    // recoverable: the record is left in the base as unseen, so it
-                    // reappears on the next round once the vault has been set up.
-                    guard var vault = contents.vault else { continue }
+                    // recoverable: aborting this round leaves the fetch cursor before
+                    // the record, so it reappears once the vault has been set up.
+                    // Silently skipping would still advance the cursor and then make
+                    // the live base record look locally deleted on the next round.
+                    guard var vault = contents.vault else {
+                        throw SyncLibraryProjection.Failure.secureVaultMissing(envelope.id)
+                    }
 
-                    let sealed = String(decoding: fields.content, as: UTF8.self)
-                    let record = VaultRecord(
-                        id: envelope.id, name: fields.name, keyword: fields.keyword,
-                        tags: fields.tags, isEnabled: fields.isEnabled, isPinned: fields.isPinned,
-                        createdAt: fields.createdAt, updatedAt: fields.updatedAt,
-                        hlc: envelope.hlc,
-                        contentHash: envelope.contentHash ?? "",
-                        sealed: sealed)
+                    let existing = vault.record(envelope.id)
+                    guard let record = try SyncLibraryProjection.vaultRecord(
+                        from: envelope, preserving: existing)
+                    else { continue }
 
                     if let index = vault.records.firstIndex(where: { $0.id == envelope.id }) {
                         vault.records[index] = record
@@ -139,13 +149,56 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                     }
                 }
                 changed.append(envelope.id)
+                applied.append(envelope)
             }
-            return changed
+            return ApplyResult(changedIDs: changed, appliedEnvelopes: applied)
         }
+
+        var metadata = loadMetadata(fallingBackTo: SyncBase())
+        for envelope in outcome.value.appliedEnvelopes {
+            if envelope.deleted {
+                metadata.envelopes[SyncBase.key(envelope.id)] = nil
+            } else {
+                metadata.record(envelope)
+            }
+        }
+        persistMetadata(metadata.envelopes.values.reduce(into: [:]) { result, envelope in
+            result[envelope.id] = envelope
+        })
 
         // Both stores re-read from disk, because the transaction wrote underneath them.
         store.reloadAfterExternalWrite()
         secureStore.reload()
-        return outcome.value
+        return outcome.value.changedIDs
+    }
+
+    // MARK: - Frozen-file metadata
+
+    /// The file intentionally reuses `SyncBase`'s canonical-envelope map encoding. Its
+    /// cursor is always nil; semantically this is the local projection, not the agreed
+    /// backend ancestor.
+    private func loadMetadata(fallingBackTo fallback: SyncBase) -> SyncBase {
+        if let metadataCache { return metadataCache }
+        if case .loaded(let loaded) = SyncBaseFile.load(from: metadataURL) {
+            metadataCache = loaded
+        } else {
+            metadataCache = fallback
+        }
+        return metadataCache ?? fallback
+    }
+
+    private func persistMetadata(_ envelopes: [UUID: SyncEnvelope]) {
+        var next = SyncBase()
+        for envelope in envelopes.values { next.record(envelope) }
+        guard metadataCache != next else { return }
+        metadataCache = next
+        do {
+            try SyncBaseFile.write(
+                next, to: metadataURL, temporaryDirectory: temporaryDirectory)
+        } catch {
+            // Derived state only. The agreed base is the fallback, so losing this can
+            // cause one conservative re-push after restart but cannot lose a snippet.
+            NSLog("Snippets: could not write sync library metadata: \(error)")
+        }
     }
 }

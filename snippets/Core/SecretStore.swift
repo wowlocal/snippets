@@ -10,21 +10,17 @@ import Foundation
 ///
 /// ## Why this is a protocol rather than a direct Keychain call
 ///
-/// Not for tidiness, and not "in case we swap the backend one day". It is the only
-/// way this module can be tested at all.
+/// This is the optional 32-byte wrapping-secret seam used by `KeyWrap`'s CLI/export
+/// formats. It is not the primary vault-key store: `KeychainSecretStore` has tier
+/// migration and interactive-session semantics and deliberately does not conform.
+/// No production path currently creates `wrapCLI`; the protocol and in-memory
+/// implementation keep that format testable without mutating a developer's real
+/// login keychain.
 ///
-/// `swift test` builds an **unsigned** binary. An unsigned process has no keychain-
-/// access-group entitlement, so every `SecItemAdd`/`SecItemCopyMatching` it makes
-/// returns `errSecMissingEntitlement` (-34018) — not "item not found", which could be
-/// handled, but a hard failure on every call. Any test that reached the real Keychain
-/// would therefore fail on a clean checkout, on CI, and on the author's machine, for
-/// a reason that has nothing to do with the code under test. Worse, the obvious
-/// workaround — sign the test bundle — makes the tests write into the *developer's
-/// own login keychain*, where they would collide with the running app's live secrets.
-///
-/// So the split is: everything in this module takes a `SecretStore`, tests pass
-/// `InMemorySecretStore`, and the one `SecItem*` call site is app-side where it can be
-/// exercised by a signed build.
+/// An unsigned process can use the entitlement-free login keychain. What fails with
+/// `errSecMissingEntitlement` is the data-protection/access-group tier. Core tests use
+/// this abstraction for determinism and platform independence, while
+/// `Tests/Harnesses/KeychainSelfTest.swift` exercises the actual local Keychain path.
 ///
 /// ## What a secret is
 ///
@@ -45,10 +41,9 @@ nonisolated protocol SecretStore: Sendable {
 
     /// The secret stored under `name`, or `nil` if there is none.
     ///
-    /// Absence is a return value rather than an error because it is the ordinary
-    /// first-run state: the user has not opted into headless CLI reveal yet. Throwing
-    /// is reserved for "the store itself did not work", which is a completely
-    /// different thing to tell the user about.
+    /// Absence is a return value rather than an error because an optional wrapping
+    /// feature may never have stored this name. Throwing is reserved for "the store
+    /// itself did not work", which is a completely different condition.
     func secret(named name: String) throws -> Data?
 
     /// Stores `secret` under `name`, replacing any existing value.
@@ -91,10 +86,9 @@ nonisolated extension SecretStore {
 
     /// `secret(named:)`, but absence is an error.
     ///
-    /// For the call sites where "there is no secret" is already known to be
-    /// impossible — an unlock path reached only because `wrapCLI` is non-nil — so that
-    /// a missing entry surfaces as a real error rather than an optional that gets
-    /// `?? Data()`d into a silent authentication failure.
+    /// For format tests and future call sites where a corresponding wrap proves the
+    /// secret should exist, so a missing entry surfaces as a real error rather than an
+    /// optional that gets `?? Data()`d into a silent authentication failure.
     func requireSecret(named name: String) throws -> Data {
         guard let secret = try secret(named: name) else {
             throw SecretStoreError.unavailable(
@@ -118,13 +112,12 @@ nonisolated extension SecretStore {
     }
 }
 
-/// The `SecretStore` every test uses, and the one the app falls back to when the user
-/// has declined keychain access.
+/// The deterministic `SecretStore` used by the Core wrapping tests.
 ///
-/// Falling back to this rather than to a file is the point: secrets held here die with
-/// the process. A "temporary" on-disk fallback is how key material ends up in a Time
-/// Machine backup, which is one of the few things the vault's threat model actually
-/// claims to defend against.
+/// Nothing in the app falls back to this store. A process-only fallback would make a
+/// newly written wrap impossible to open after restart, while a file fallback would
+/// put raw key material into backups; the shipping vault path fails explicitly when
+/// Keychain storage is unavailable.
 nonisolated final class InMemorySecretStore: SecretStore, @unchecked Sendable {
 
     /// `swift test` runs suites in parallel and a store may be shared by a test's own

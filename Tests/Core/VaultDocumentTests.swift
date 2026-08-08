@@ -836,10 +836,10 @@ private struct BagRandom {
         #expect(try store.requireSecret(named: "vault.cli") == key(7))
     }
 
-    /// The reason the protocol exists: `swift test` runs unsigned, so the real Keychain
-    /// answers `errSecMissingEntitlement` (-34018) to every call. Code that must cope
-    /// with that needs a way to reproduce it without a keychain.
-    @Test func theStoreCanBeMadeToFailTheWayAnUnsignedKeychainDoes() throws {
+    /// The data-protection/access-group tier can fail with
+    /// `errSecMissingEntitlement` (-34018). Code that must cope with Keychain failures
+    /// needs a deterministic way to reproduce one without mutating the real keychain.
+    @Test func theStoreCanBeMadeToFailLikeAnUnavailableKeychainTier() throws {
         let store = InMemorySecretStore(["vault.cli": key(3)])
         let missingEntitlement = SecretStoreError.unavailable(
             detail: "keychain unavailable", status: -34018)

@@ -54,6 +54,18 @@ nonisolated struct HLC: Comparable, Hashable, Sendable, Codable, CustomStringCon
         self.device = HLC.normalizedDevice(device)
     }
 
+    /// Builds a value that has already passed the frozen wire-format checks.
+    ///
+    /// Parsing must not route a persisted device id back through `normalizedDevice`:
+    /// that helper is a domain-input convenience and may evolve, while the spelling
+    /// inside a hashed envelope may not. Keeping this initializer private makes the
+    /// distinction impossible to miss at either call site.
+    private init(wireWallMs: UInt64, counter: UInt16, wireDevice: String) {
+        self.wallMs = wireWallMs
+        self.counter = counter
+        self.device = wireDevice
+    }
+
     /// The synthesized clock for a record that arrived without one.
     static func foreign(updatedAt: Date) -> HLC {
         HLC(wallMs: updatedAt.millisecondsSince1970, counter: 0, device: foreignDevice)
@@ -94,14 +106,36 @@ nonisolated struct HLC: Comparable, Hashable, Sendable, Codable, CustomStringCon
     }
 
     init?(parsing raw: String) {
-        let parts = raw.split(separator: "-", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              parts[0].count == 12, parts[1].count == 4, parts[2].count == 8,
-              let wall = UInt64(parts[0], radix: 16),
-              let counter = UInt16(parts[1], radix: 16),
-              parts[2].allSatisfy(\.isHexDigit)
+        // This is deliberately an ASCII byte check, not `Character.isHexDigit`:
+        // the latter recognizes non-ASCII Unicode digits, while the frozen wire form
+        // is exactly 12 lowercase ASCII hex bytes, a dash, 4, a dash, and 8.
+        let bytes = Array(raw.utf8)
+        guard bytes.count == 26,
+              bytes[12] == UInt8(ascii: "-"), bytes[17] == UInt8(ascii: "-"),
+              bytes[0..<12].allSatisfy(Self.isLowercaseHexByte),
+              bytes[13..<17].allSatisfy(Self.isLowercaseHexByte),
+              bytes[18..<26].allSatisfy(Self.isLowercaseHexByte),
+              let wall = UInt64(String(decoding: bytes[0..<12], as: UTF8.self), radix: 16),
+              let counter = UInt16(String(decoding: bytes[13..<17], as: UTF8.self), radix: 16)
         else { return nil }
-        self.init(wallMs: wall, counter: counter, device: String(parts[2]))
+
+        self.init(
+            wireWallMs: wall,
+            counter: counter,
+            wireDevice: String(decoding: bytes[18..<26], as: UTF8.self))
+    }
+
+    /// The device-id spelling embedded in the HLC and envelope formats. This check is
+    /// intentionally independent of `normalizedDevice`, so changing how new local
+    /// input is cleaned up cannot invalidate records already in the fleet.
+    static func isCanonicalDeviceID(_ raw: String) -> Bool {
+        let bytes = Array(raw.utf8)
+        return bytes.count == 8 && bytes.allSatisfy(Self.isLowercaseHexByte)
+    }
+
+    private static func isLowercaseHexByte(_ byte: UInt8) -> Bool {
+        (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+            || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
     }
 
     /// Eight lowercase hex characters, whatever was handed in. A malformed device id

@@ -127,7 +127,10 @@ private func cmdTags() {
     // Mirror the app's tag list: dedupe by folded key, keep first-seen casing.
     var canonicalTags: [String: String] = [:]
     var counts: [String: Int] = [:]
-    for snippet in loadSnippets() {
+    // Tags deliberately span both stores. Secure shells contain metadata only, so
+    // including them exposes no secret text while keeping this view consistent with
+    // the app's filter bar.
+    for snippet in loadSnippets() + secureShells() {
         for tag in snippet.tags {
             let key = SnippetTagging.filterKey(for: tag)
             if canonicalTags[key] == nil { canonicalTags[key] = tag }
@@ -192,6 +195,22 @@ private func secureShells() -> [Snippet] {
     }
 }
 
+/// Mutations must fail closed when secure metadata cannot be checked. Treating an
+/// unreadable vault as empty would let `add` or `update` claim a secure snippet's
+/// keyword and break the cross-store uniqueness invariant.
+private func secureShellsForMutation() -> [Snippet] {
+    switch VaultFile.loadMetadata() {
+    case .loaded(let metadata):
+        return metadata.shells
+    case .missing:
+        return []
+    case .tooNew(let version):
+        fail("cannot validate keyword uniqueness against vault schemaVersion \(version)")
+    case .unreadable(let error), .corrupt(let error):
+        fail("cannot validate keyword uniqueness against the secure vault: \(error)")
+    }
+}
+
 /// Asks the running app to reveal a secure snippet.
 ///
 /// The CLI cannot decrypt. This sends a request over the local socket and the app
@@ -201,7 +220,7 @@ private func cmdReveal(keyword: String) {
     let url = SnippetsIPC.socketURL()
     let descriptor: Int32
     do {
-        descriptor = try UnixSocket.connect(to: url)
+        descriptor = try UnixSocket.connect(to: url, timeout: SnippetsIPC.revealSocketTimeout)
     } catch {
         fail("Snippets is not running, so there is nothing to approve the request. Open Snippets and try again.",
              code: SnippetsIPC.ExitCode.appNotRunning.rawValue)
@@ -262,11 +281,28 @@ private func cmdSecureStatus() {
                          unlocked: nil, socket: url.path))
         return
     }
-    printJSON(Status(
-        appRunning: true,
-        secureCount: response.secureCount ?? secureShells().count,
-        unlocked: response.unlocked,
-        socket: url.path))
+    switch response.status {
+    case .ok:
+        printJSON(Status(
+            appRunning: true,
+            secureCount: response.secureCount ?? secureShells().count,
+            unlocked: response.unlocked,
+            socket: url.path))
+    case .denied:
+        fail(response.message ?? "the request was not approved",
+             code: SnippetsIPC.ExitCode.denied.rawValue)
+    case .locked:
+        fail(response.message ?? "the vault could not be unlocked",
+             code: SnippetsIPC.ExitCode.locked.rawValue)
+    case .notFound:
+        fail(response.message ?? "the requested status was not found",
+             code: SnippetsIPC.ExitCode.notFound.rawValue)
+    case .unsupported:
+        fail(response.message ?? "unsupported request",
+             code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+    case .refused, .error:
+        fail(response.message ?? "the request was refused")
+    }
 }
 
 private func cmdGet(keyword: String) {
@@ -317,7 +353,10 @@ private func cmdAdd(name: String, keyword: String, content: String, tags: [Strin
         // Validated against what is on disk right now, inside the lock. Checking a
         // copy read earlier would let two concurrent `add`s both pass the collision
         // check and both land.
-        requireNoKeywordCollision(sanitizedKeyword, in: current)
+        // The vault and plaintext library share this lock. Read secure metadata only
+        // after taking it, otherwise a concurrent promotion could move a keyword
+        // between files in the gap and let this mutation claim it a second time.
+        requireNoKeywordCollision(sanitizedKeyword, in: current + secureShellsForMutation())
         let snippet = Snippet(
             name: name,
             keyword: sanitizedKeyword,
@@ -365,7 +404,9 @@ private func cmdUpdate(
         if let name    = name    { updated.name    = name }
         if let keyword = keyword {
             let sanitized = Snippet.sanitizedKeyword(keyword)
-            requireNoKeywordCollision(sanitized, in: snippets, excludingID: updated.id)
+            // As in `add`, the secure-metadata read belongs inside the shared lock.
+            requireNoKeywordCollision(
+                sanitized, in: snippets + secureShellsForMutation(), excludingID: updated.id)
             updated.keyword = sanitized
         }
         if let content = content { updated.content = content }

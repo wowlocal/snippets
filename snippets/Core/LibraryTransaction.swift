@@ -20,11 +20,12 @@ import Foundation
 /// ## What it does not promise
 ///
 /// Two files cannot be updated atomically with respect to a **crash**. There is a
-/// window between the two renames. The transaction narrows it to exactly one ordering
-/// and leaves a marker describing what was in flight, so the next launch can finish the
-/// job — see `CrashMarker` and `SecureSnippetStore.reconcileAfterCrash`. The invariant
-/// is that the window can only ever produce a *duplicate*, never a disappearance:
-/// whichever way it crashes, the record exists in at least one file.
+/// window between the two renames. The transaction writes each move's destination
+/// before removing its source and leaves a marker describing what was in flight, so the
+/// next launch can finish the job — see `CrashMarker` and
+/// `SecureSnippetStore.reconcileAfterCrash`. The invariant is that the window can only
+/// ever produce a *duplicate*, never a disappearance: whichever way it crashes, the
+/// record exists in at least one file.
 nonisolated enum LibraryTransaction {
 
     /// Records a move that is part-done, so a crash is repairable rather than silent.
@@ -81,6 +82,20 @@ nonisolated enum LibraryTransaction {
 
     private static let maxAttempts = 12
 
+    /// Which durable write has to land first to keep every moved record recoverable.
+    ///
+    /// A normal user action moves records in only one direction. A sync batch can carry
+    /// promotions and demotions together, though, and no ordering of the two final files
+    /// is safe for both: either one removes a source before the other has installed its
+    /// destination. That case gets an intermediate plaintext library which retains the
+    /// promoted sources while adding the demoted destinations. After that duplicate
+    /// stage, either final file may be written without creating a disappearance window.
+    private enum WritePlan {
+        case vaultThenLibrary
+        case libraryThenVault
+        case duplicateLibraryThenVaultThenLibrary(promoting: Set<UUID>)
+    }
+
     static func perform<T>(
         libraryURL: URL = SnippetStorageLocations.snippetsFileURL,
         vaultURL: URL = SnippetStorageLocations.vaultFileURL,
@@ -129,15 +144,35 @@ nonisolated enum LibraryTransaction {
                 continue
             }
 
-            // ORDERING IS THE CONTRACT, and it is vault-first.
-            //
-            // A promote writes the sealed record before removing the plaintext one, so
-            // a crash between the two leaves the secret in the vault and a stale
-            // plaintext copy in the library — recoverable, and reconcile completes it.
-            // The opposite order would leave a window in which the plaintext is gone
-            // and the ciphertext was never written: the secret would simply cease to
-            // exist. A duplicate is an inconvenience; a disappearance is data loss.
-            if vaultChanged {
+            // Encode before either half lands. An encoding refusal is not a crash
+            // window and should leave both original files exactly as they were.
+            let encodedLibrary: Data?
+            if libraryChanged {
+                do {
+                    encodedLibrary = try SnippetLibraryCodec.encode(contents.snippets)
+                } catch {
+                    throw Failure.writeFailed("could not encode the snippet library: \(error)")
+                }
+            } else {
+                encodedLibrary = nil
+            }
+
+            let plan = writePlan(
+                beforeSnippets: librarySnapshot.snippets,
+                beforeVault: vault,
+                after: contents)
+
+            func writeLibrary(_ data: Data?) throws {
+                guard let data else { return }
+                do {
+                    try AtomicFileWriter.write(data, to: libraryURL, temporaryDirectory: temporaryDirectory)
+                } catch {
+                    throw Failure.writeFailed("could not save the snippet library: \(error)")
+                }
+            }
+
+            func writeVault() throws {
+                guard vaultChanged else { return }
                 if let updated = contents.vault {
                     do {
                         try VaultFile.write(updated, to: vaultURL, temporaryDirectory: temporaryDirectory)
@@ -147,22 +182,52 @@ nonisolated enum LibraryTransaction {
                 } else {
                     // Removing the vault entirely is only legitimate when it holds
                     // nothing; anything else would be deleting secrets by omission.
-                    try? FileManager.default.removeItem(at: vaultURL)
+                    do {
+                        try FileManager.default.removeItem(at: vaultURL)
+                    } catch {
+                        let nsError = error as NSError
+                        if !nsError.isFileNotFound {
+                            throw Failure.writeFailed("could not remove the empty vault: \(error)")
+                        }
+                    }
                 }
             }
 
-            writeMarker(contents.marker, stateURL: stateURL, temporaryDirectory: temporaryDirectory)
+            // ORDERING IS THE CONTRACT. The destination lands first, then the marker,
+            // then the old source is removed. A failure of the first write leaves the
+            // original source and no misleading marker; a failure of the second leaves
+            // a duplicate plus the marker reconcile needs.
+            switch plan {
+            case .vaultThenLibrary:
+                try writeVault()
+                writeMarker(contents.marker, stateURL: stateURL, temporaryDirectory: temporaryDirectory)
+                try writeLibrary(encodedLibrary)
 
-            if libraryChanged {
-                do {
-                    let data = try SnippetLibraryCodec.encode(contents.snippets)
-                    try AtomicFileWriter.write(data, to: libraryURL, temporaryDirectory: temporaryDirectory)
-                } catch {
-                    // The vault write already landed. Leave the marker in place: the
-                    // record now exists in both files, and reconcile at next launch is
-                    // exactly the mechanism for that.
-                    throw Failure.writeFailed("could not save the snippet library: \(error)")
+            case .libraryThenVault:
+                try writeLibrary(encodedLibrary)
+                writeMarker(contents.marker, stateURL: stateURL, temporaryDirectory: temporaryDirectory)
+                try writeVault()
+
+            case .duplicateLibraryThenVaultThenLibrary(let promoting):
+                // Retain the old plaintext source of every promotion while installing
+                // all final plaintext destinations. This is the only extra write, and
+                // it is required only for a batch containing both move directions.
+                let finalIDs = Set(contents.snippets.map(\.id))
+                let retainedSources = librarySnapshot.snippets.filter {
+                    promoting.contains($0.id) && !finalIDs.contains($0.id)
                 }
+                let intermediate = contents.snippets + retainedSources
+                let intermediateData: Data
+                do {
+                    intermediateData = try SnippetLibraryCodec.encode(intermediate)
+                } catch {
+                    throw Failure.writeFailed("could not encode the intermediate snippet library: \(error)")
+                }
+
+                try writeLibrary(intermediateData)
+                writeMarker(contents.marker, stateURL: stateURL, temporaryDirectory: temporaryDirectory)
+                try writeVault()
+                try writeLibrary(encodedLibrary)
             }
 
             // Both halves are on disk, so the move is no longer in flight.
@@ -174,6 +239,39 @@ nonisolated enum LibraryTransaction {
                 wroteWithoutLock: held.isUnlocked, attempts: attempt)
         }
         throw Failure.busy
+    }
+
+    /// Derives direction from actual ownership changes first, using the marker only
+    /// when the diff itself does not identify a move. This makes a stale or mistaken
+    /// marker unable to select the one ordering that could delete a record from both
+    /// files, while still making the marker an explicit intent for ordinary callers.
+    private static func writePlan(
+        beforeSnippets: [Snippet],
+        beforeVault: VaultDocument?,
+        after: Contents
+    ) -> WritePlan {
+        let beforeLibraryIDs = Set(beforeSnippets.map(\.id))
+        let afterLibraryIDs = Set(after.snippets.map(\.id))
+        let beforeVaultIDs = Set(beforeVault?.records.map(\.id) ?? [])
+        let afterVaultIDs = Set(after.vault?.records.map(\.id) ?? [])
+
+        let promoting = beforeLibraryIDs
+            .subtracting(afterLibraryIDs)
+            .intersection(afterVaultIDs)
+        let demoting = beforeVaultIDs
+            .subtracting(afterVaultIDs)
+            .intersection(afterLibraryIDs)
+
+        if !promoting.isEmpty && !demoting.isEmpty {
+            return .duplicateLibraryThenVaultThenLibrary(promoting: promoting)
+        }
+        if !promoting.isEmpty { return .vaultThenLibrary }
+        if !demoting.isEmpty { return .libraryThenVault }
+
+        switch after.marker {
+        case .demoting: return .libraryThenVault
+        case .none, .promoting: return .vaultThenLibrary
+        }
     }
 
     // MARK: - Reading

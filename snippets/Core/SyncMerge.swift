@@ -535,7 +535,57 @@ nonisolated extension SyncMerge {
             guard let localFields = local.fields, let remoteFields = remote.fields else {
                 return local.hlc > remote.hlc ? local : remote
             }
-            if localFields == remoteFields { return local.hlc >= remote.hlc ? local : remote }
+            if localFields == remoteFields, local.secure == remote.secure {
+                let localWins = local.hlc >= remote.hlc
+                let winner = localWins ? local : remote
+                var mergedX = local.x.merging(remote.x) { mine, theirs in
+                    localWins ? mine : theirs
+                }
+                if local.secure {
+                    // Same sealed body means either keyed hash describes the same
+                    // plaintext. Prefer the clock winner's value, but let a newer peer
+                    // backfill a legacy envelope that did not carry one at all.
+                    mergedX[SyncEnvelope.vaultContentHashExtensionKey] =
+                        winner.x[SyncEnvelope.vaultContentHashExtensionKey]
+                        ?? (localWins ? remote.x : local.x)[
+                            SyncEnvelope.vaultContentHashExtensionKey]
+                } else {
+                    mergedX[SyncEnvelope.vaultContentHashExtensionKey] = nil
+                }
+                return SyncEnvelope(
+                    id: winner.id, hlc: winner.hlc, origin: winner.origin,
+                    secure: winner.secure, deleted: false, fields: winner.fields, x: mergedX)
+            }
+
+            // `fields.content` has two representations: plaintext in a plain
+            // envelope, and the opaque vault seal in a secure one. A one-sided move
+            // relative to the ancestor is explicit and must carry its representation
+            // with it. OR-ing the flags and then merging the body independently can
+            // put plaintext in `VaultRecord.sealed`, and also makes a real demotion
+            // impossible to sync.
+            let mergedSecure: Bool
+            let representationCameFromLocal: Bool?
+            if local.secure == remote.secure {
+                mergedSecure = local.secure
+                representationCameFromLocal = nil
+            } else if let base {
+                let localMoved = local.secure != base.secure
+                let remoteMoved = remote.secure != base.secure
+                if localMoved != remoteMoved {
+                    representationCameFromLocal = localMoved
+                    mergedSecure = localMoved ? local.secure : remote.secure
+                } else {
+                    // Defensive fallback for an inconsistent ancestor. Keeping the
+                    // secure representation is the non-leaking direction.
+                    mergedSecure = true
+                    representationCameFromLocal = local.secure
+                }
+            } else {
+                // With no ancestor there is no proof that a plain copy is a deliberate
+                // demotion. Keep the secure representation.
+                mergedSecure = true
+                representationCameFromLocal = local.secure
+            }
 
             // Symmetric, so both devices pick the same winner from mirrored inputs. The
             // HLC already carries a device tiebreak, so unlike the local merge there is
@@ -555,17 +605,23 @@ nonisolated extension SyncMerge {
 
             // Content resolves on the keyed hash, so this branch is identical whether or
             // not the vault happens to be unlocked.
-            let localKey = local.contentHash ?? sha256_128(String(decoding: localFields.content, as: UTF8.self))
-            let remoteKey = remote.contentHash ?? sha256_128(String(decoding: remoteFields.content, as: UTF8.self))
+            let localKey = mergeContentKey(local, fields: localFields)
+            let remoteKey = mergeContentKey(remote, fields: remoteFields)
             let baseKey = base.flatMap { envelope in
-                envelope.contentHash
-                    ?? envelope.fields.map { sha256_128(String(decoding: $0.content, as: UTF8.self)) }
+                envelope.fields.map { mergeContentKey(envelope, fields: $0) }
             }
 
-            if localKey == remoteKey || baseKey == remoteKey {
+            let contentCameFromLocal: Bool
+            if let representationCameFromLocal {
+                merged.content = representationCameFromLocal
+                    ? localFields.content : remoteFields.content
+                contentCameFromLocal = representationCameFromLocal
+            } else if localKey == remoteKey || baseKey == remoteKey {
                 merged.content = localFields.content
+                contentCameFromLocal = true
             } else if baseKey == localKey {
                 merged.content = remoteFields.content
+                contentCameFromLocal = false
             } else {
                 // Both sides genuinely changed the body. Unlike the local merge there is
                 // no conflict copy here: minting one would require sealing a new record,
@@ -573,19 +629,31 @@ nonisolated extension SyncMerge {
                 // The loser is preserved by the OTHER device, which does hold its own
                 // copy and will push it back as an ordinary edit if the user keeps it.
                 merged.content = localWins ? localFields.content : remoteFields.content
+                contentCameFromLocal = localWins
             }
 
             let winner = localWins ? local : remote
+            var mergedX = local.x.merging(remote.x) { mine, theirs in
+                localWins ? mine : theirs
+            }
+            if mergedSecure {
+                // This extension is the vault HMAC for the selected sealed body. It
+                // must follow the content winner, which can differ from the overall
+                // HLC winner when only one side changed the body from the ancestor.
+                mergedX[SyncEnvelope.vaultContentHashExtensionKey] =
+                    (contentCameFromLocal ? local.x : remote.x)[
+                        SyncEnvelope.vaultContentHashExtensionKey]
+            } else {
+                mergedX[SyncEnvelope.vaultContentHashExtensionKey] = nil
+            }
             return SyncEnvelope(
                 id: local.id,
                 hlc: max(local.hlc, remote.hlc),
                 origin: winner.origin,
-                // Once secure, always secure. Demotion is an explicit user action on one
-                // device, never something a merge infers.
-                secure: local.secure || remote.secure,
+                secure: mergedSecure,
                 deleted: false,
                 fields: merged,
-                x: local.x.merging(remote.x) { mine, theirs in localWins ? mine : theirs })
+                x: mergedX)
         }
     }
 
@@ -596,7 +664,14 @@ nonisolated extension SyncMerge {
         return (try? base.envelopeHash()) != (try? envelope.envelopeHash())
     }
 
-    private static func sha256_128(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    private static func mergeContentKey(
+        _ envelope: SyncEnvelope, fields: SyncEnvelope.Fields
+    ) -> String {
+        if envelope.secure,
+           let keyedHash = envelope.x[SyncEnvelope.vaultContentHashExtensionKey]?.text {
+            return keyedHash
+        }
+        return envelope.contentHash
+            ?? SHA256.hash(data: fields.content).map { String(format: "%02x", $0) }.joined()
     }
 }

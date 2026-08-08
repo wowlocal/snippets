@@ -30,6 +30,12 @@ nonisolated enum SnippetsIPC {
     /// the world, not an exceptional one.
     static let protocolVersion = 1
 
+    /// How long the app leaves its human-consent prompt unanswered before denying it.
+    /// The CLI's receive timeout must be longer than this or it will give up before the
+    /// app can send the documented `.denied` response.
+    static let revealConsentTimeout: TimeInterval = 30
+    static let revealSocketTimeout: TimeInterval = revealConsentTimeout + 10
+
     // MARK: - Wire types
     //
     // Flat structs with a string `command`, not an enum with associated values. An
@@ -37,7 +43,7 @@ nonisolated enum SnippetsIPC {
     // Codable enum would fail to decode entirely and the peer would see a parse error
     // instead of "this build does not know that command".
 
-    struct Request: Codable {
+    struct Request: Codable, Sendable {
         var v: Int = SnippetsIPC.protocolVersion
         var command: String
         /// For `reveal`: which snippet, by keyword.
@@ -47,7 +53,7 @@ nonisolated enum SnippetsIPC {
         var invocation: String?
     }
 
-    struct Response: Codable {
+    struct Response: Codable, Sendable {
         var v: Int = SnippetsIPC.protocolVersion
         var status: Status
         var content: String?
@@ -55,7 +61,7 @@ nonisolated enum SnippetsIPC {
         var secureCount: Int?
         var unlocked: Bool?
 
-        enum Status: String, Codable {
+        enum Status: String, Codable, Sendable {
             case ok
             /// The user said no, or the prompt timed out.
             case denied
@@ -82,7 +88,7 @@ nonisolated enum SnippetsIPC {
 
     /// Exit codes the CLI reports. Distinct values so a script can tell "you said no"
     /// from "the app is not running" without parsing prose.
-    enum ExitCode: Int32 {
+    enum ExitCode: Int32, Sendable {
         case ok = 0
         case generic = 1
         case appNotRunning = 3

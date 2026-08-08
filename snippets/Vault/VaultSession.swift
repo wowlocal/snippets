@@ -36,12 +36,14 @@ final class VaultSession {
     enum Failure: Error, CustomStringConvertible {
         case locked
         case noKey
+        case authentication(String)
         case keychain(String)
 
         var description: String {
             switch self {
             case .locked: return "the vault is locked"
             case .noKey: return "no vault key is available on this Mac"
+            case .authentication(let detail): return detail
             case .keychain(let detail): return detail
             }
         }
@@ -73,8 +75,8 @@ final class VaultSession {
     private var libraryKey: SymmetricKey?
     private var expiryTimer: Timer?
 
-    /// Reused so macOS can suppress a second biometric prompt inside the window; a fresh
-    /// context per read would prompt every single time and train the user to tap through.
+    /// Kept so a screen lock or explicit lock can cancel authentication already in
+    /// flight. Once the session is open, `libraryKey` itself supplies the reuse window.
     private var authenticationContext: LAContext?
 
     /// - Parameter keychain: injected so tests can avoid the real keychain entirely.
@@ -119,32 +121,56 @@ final class VaultSession {
     /// "Reveal “AWS root password”" beats "Snippets wants to authenticate". A prompt the
     /// user cannot connect to an action is a prompt they learn to approve reflexively.
     @discardableResult
-    func unlock(reason: String) throws -> SymmetricKey {
+    func unlock(reason: String) async throws -> SymmetricKey {
         guard let keyID else { throw Failure.noKey }
 
-        if case .unlocked = state, let libraryKey {
-            extendWindow()
-            return libraryKey
+        if case .unlocked(let until) = state, let libraryKey {
+            if until > now() {
+                extendWindow()
+                return libraryKey
+            }
+            // The timer can be delayed while the main run loop is busy. The deadline,
+            // not delivery of that timer callback, is the authority.
+            lock()
         }
 
+        // Do not stack two system prompts if two callers arrive while the actor is
+        // suspended in LocalAuthentication.
+        guard authenticationContext == nil else { throw Failure.locked }
+
         let context = LAContext()
-        // Lets macOS skip a second prompt inside our own window rather than asking on
-        // every read. Capped at the session length so the two cannot disagree.
-        context.touchIDAuthenticationAllowableReuseDuration = duration
+        authenticationContext = context
+
+        do {
+            let authenticated = try await context.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: reason)
+            guard authenticated else {
+                if authenticationContext === context { authenticationContext = nil }
+                throw Failure.authentication("authentication was not approved")
+            }
+            guard authenticationContext === context else { throw Failure.locked }
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            if authenticationContext === context { authenticationContext = nil }
+            throw Failure.authentication(error.localizedDescription)
+        }
 
         let data: Data
         do {
-            data = try keychain.loadKey(keyID: keyID, reason: reason, context: context)
+            data = try keychain.loadKey(keyID: keyID)
         } catch KeychainSecretStore.Failure.notFound {
+            authenticationContext = nil
             transition(to: .noKey)
             throw Failure.noKey
         } catch {
+            authenticationContext = nil
             throw Failure.keychain("\(error)")
         }
 
         let key = SymmetricKey(data: data)
         libraryKey = key
-        authenticationContext = context
         extendWindow()
         return key
     }
@@ -156,7 +182,14 @@ final class VaultSession {
     /// keystrokes being expanded. The caller must decide what to do when locked —
     /// see `SecureExpansionCoordinator`.
     func currentKey() throws -> SymmetricKey {
-        guard case .unlocked(let until) = state, until > now(), let libraryKey else {
+        guard case .unlocked(let until) = state, let libraryKey else {
+            throw Failure.locked
+        }
+        guard until > now() else {
+            // As in `unlock`, the deadline is authoritative even if the main run loop
+            // has delayed delivery of the expiry timer. Drop the bytes and correct the
+            // published state before refusing the read.
+            lock()
             throw Failure.locked
         }
         return libraryKey
