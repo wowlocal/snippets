@@ -811,8 +811,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 // MARK: - Cell View
 
 private final class SuggestionCellView: NSTableCellView {
-    private let primaryLabel = NSTextField(labelWithString: "")
-    private let secondaryLabel = NSTextField(labelWithString: "")
+    private let primaryLabel = MatchHighlightLabel(labelWithString: "")
+    private let secondaryLabel = MatchHighlightLabel(labelWithString: "")
     private let tagChipsStack = NSStackView()
     private var renderedTags: [String] = []
     private var renderedChipWidth: CGFloat = -1
@@ -882,22 +882,34 @@ private final class SuggestionCellView: NSTableCellView {
         keywordMatchRanges: [NSRange],
         availableWidth: CGFloat
     ) {
-        primaryLabel.attributedStringValue = highlightedString(
+        // Read once per cell rather than per label: the style is a defaults read,
+        // and this runs for every visible row on every keystroke.
+        let style = MatchHighlightPreference.style
+
+        let nameRendering = MatchHighlightRenderer.render(
             name,
             font: .systemFont(ofSize: 13),
-            color: .labelColor,
-            matchRanges: nameMatchRanges
+            baseColor: .labelColor,
+            matchRanges: nameMatchRanges,
+            style: style
         )
-        let keywordString = highlightedString(
+        primaryLabel.attributedStringValue = nameRendering.string
+        primaryLabel.applyWash(ranges: nameRendering.washRanges, color: nameRendering.washColor)
+
+        let keywordRendering = MatchHighlightRenderer.render(
             keyword,
             font: .monospacedSystemFont(ofSize: 11, weight: .regular),
-            color: .secondaryLabelColor,
-            matchRanges: keywordMatchRanges
+            baseColor: .secondaryLabelColor,
+            matchRanges: keywordMatchRanges,
+            style: style
         )
-        secondaryLabel.attributedStringValue = keywordString
+        secondaryLabel.attributedStringValue = keywordRendering.string
+        secondaryLabel.applyWash(ranges: keywordRendering.washRanges, color: keywordRendering.washColor)
         secondaryLabel.isHidden = keyword.isEmpty
 
-        let keywordWidth = keyword.isEmpty ? 0 : ceil(keywordString.size().width) + Self.secondaryRowSpacing
+        let keywordWidth = keyword.isEmpty
+            ? 0
+            : ceil(keywordRendering.string.size().width) + Self.secondaryRowSpacing
         updateTagChips(tags: tags, availableWidth: availableWidth - keywordWidth)
     }
 
@@ -938,39 +950,4 @@ private final class SuggestionCellView: NSTableCellView {
         tagChipsStack.isHidden = chips.isEmpty
     }
 
-    private func highlightedString(
-        _ string: String,
-        font: NSFont,
-        color: NSColor,
-        matchRanges: [NSRange]
-    ) -> NSAttributedString {
-        let attributed = NSMutableAttributedString(
-            string: string,
-            attributes: [.font: font, .foregroundColor: color]
-        )
-        guard !string.isEmpty, !matchRanges.isEmpty else { return attributed }
-
-        let highlightedFont = highlightedFont(for: font)
-        let fullRange = NSRange(location: 0, length: (string as NSString).length)
-
-        for range in matchRanges where NSIntersectionRange(range, fullRange).length == range.length {
-            attributed.addAttributes(
-                [
-                    .font: highlightedFont,
-                    .foregroundColor: NSColor.controlAccentColor
-                ],
-                range: range
-            )
-        }
-
-        return attributed
-    }
-
-    private func highlightedFont(for font: NSFont) -> NSFont {
-        if font.fontDescriptor.symbolicTraits.contains(.monoSpace) {
-            return .monospacedSystemFont(ofSize: font.pointSize, weight: .semibold)
-        }
-
-        return .systemFont(ofSize: font.pointSize, weight: .semibold)
-    }
 }
