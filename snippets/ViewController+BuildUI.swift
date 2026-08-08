@@ -811,6 +811,19 @@ extension ViewController {
         secureLockOverlayButton.target = self
         secureLockOverlayButton.action = #selector(unlockFromEditorOverlay)
         secureLockOverlayButton.translatesAutoresizingMaskIntoConstraints = false
+        // The box sizes the overlay, never the other way round — and a button
+        // stretched across a container that has no intrinsic size of its own does
+        // the opposite by default. Its hugging of 250 reads "no taller than one
+        // button", which outranks both the box's preferred 220 (priority 200) and
+        // the box's own hugging of 1, so the box sat on its 84pt floor at every
+        // window height: measured 84 at a 430pt window and 84 at a 1000pt one,
+        // against 132 and 686 for the same window before this overlay existed.
+        // Hidden changes nothing — `isHidden` takes a view out of the *stack*, not
+        // out of Auto Layout, so this held for ordinary snippets too.
+        secureLockOverlayButton.setContentHuggingPriority(.init(1), for: .vertical)
+        secureLockOverlayButton.setContentHuggingPriority(.init(1), for: .horizontal)
+        secureLockOverlayButton.setContentCompressionResistancePriority(.init(1), for: .vertical)
+        secureLockOverlayButton.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
         secureLockOverlayLabel.font = .systemFont(ofSize: 13)
         secureLockOverlayLabel.textColor = .secondaryLabelColor
