@@ -775,6 +775,22 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
     /// key set or exposing it outside the encrypted blob.
     static let vaultContentHashExtensionKey = "vaultContentHash"
 
+    /// The `kid` of the vault whose key sealed this record's body, inside the encrypted
+    /// extension bag.
+    ///
+    /// A secure record's body travels as the vault's `sealed` bytes verbatim, and those
+    /// are AEAD-bound to the originating vault's `kid`. Nothing on the receiving side
+    /// could see that: the scope lives in the AAD, which is not part of the envelope
+    /// text, so a Mac with a *different* vault would happily file the record, show its
+    /// name and keyword in the list, and fail every reveal for ever after with no
+    /// explanation. Carrying the scope in the clear-to-us-but-encrypted-to-the-backend
+    /// bag is what lets the import compare before writing.
+    ///
+    /// Absent on records written before this existed. Absent means "assume it matches",
+    /// which is what the old code did unconditionally — no worse than before, and it
+    /// keeps a pre-existing library from quarantining itself on upgrade.
+    static let vaultKeyIDExtensionKey = "vaultKID"
+
     /// Exactly these, forever. `WireTests` asserts the count, mirroring the "exactly
     /// nine keys" discipline for `snippets.json`.
     static let topLevelKeys: Set<String> = [
@@ -1249,8 +1265,18 @@ nonisolated extension SyncEnvelope {
     /// cannot leave the body attached. The `x` bag deliberately does **not** travel: a
     /// future build could have put anything in there, including something derived from
     /// the content, and a tombstone is the last record we want carrying a souvenir.
+    ///
+    /// One structural exception survives for secure records: `vaultKID`. It contains no
+    /// content and is needed to stop a rival vault's tombstone from deleting a local
+    /// record that was authenticated under a different crypto scope.
     func tombstoned(hlc: HLC, origin: String) -> SyncEnvelope {
-        SyncEnvelope(id: id, hlc: hlc, origin: origin, secure: secure, deleted: true, fields: nil)
+        var tombstoneExtensions: [String: CanonicalJSON.Value] = [:]
+        if secure, let vaultKID = x[Self.vaultKeyIDExtensionKey] {
+            tombstoneExtensions[Self.vaultKeyIDExtensionKey] = vaultKID
+        }
+        return SyncEnvelope(
+            id: id, hlc: hlc, origin: origin, secure: secure, deleted: true,
+            fields: nil, x: tombstoneExtensions)
     }
 
     /// The `snippets.json` view. `nil` for a tombstone, and `nil` for a secure record —

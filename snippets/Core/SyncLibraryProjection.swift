@@ -15,25 +15,28 @@ nonisolated enum SyncLibraryProjection {
 
     enum Failure: Error, CustomStringConvertible, Equatable {
         case invalidSecureBody(UUID)
-        case secureVaultMissing(UUID)
 
         var description: String {
             switch self {
             case .invalidSecureBody(let id):
                 return "secure sync record \(id) does not contain a valid UTF-8 sealed value"
-            case .secureVaultMissing(let id):
-                return "secure sync record \(id) cannot be applied until this device has a vault"
             }
         }
     }
 
     /// Builds the exact envelope view of the two local stores.
+    ///
+    /// - Parameter vaultKID: the `kid` of the vault `records` came out of, stamped into
+    ///   each secure envelope's encrypted extension bag so a receiving Mac can tell
+    ///   whether its own vault can actually open them. `nil` only when there are no
+    ///   secure records to stamp.
     static func currentEnvelopes(
         snippets: [Snippet],
         records: [VaultRecord],
         deviceID: String,
         metadata: SyncBase,
-        agreedBase: SyncBase = SyncBase()
+        agreedBase: SyncBase = SyncBase(),
+        vaultKID: String? = nil
     ) -> [UUID: SyncEnvelope] {
         var out: [UUID: SyncEnvelope] = [:]
 
@@ -80,14 +83,19 @@ nonisolated enum SyncLibraryProjection {
             let projected = metadata.envelope(record.id)
             let agreed = agreedBase.envelope(record.id)
 
-            if let known = exactSecure(projected, record: record)
-                ?? exactSecure(agreed, record: record) {
+            if let known = exactSecure(projected, record: record, vaultKID: vaultKID) {
+                out[record.id] = known
+            } else if let known = exactSecure(agreed, record: record, vaultKID: vaultKID) {
                 out[record.id] = known
             } else {
                 let known = newest(projected, agreed)
                 var extensions = known?.x ?? [:]
                 extensions[SyncEnvelope.vaultContentHashExtensionKey] =
                     nonEmpty(record.contentHash).map(CanonicalJSON.Value.string)
+                // Stamped alongside the content hash, and for the same reason: the
+                // receiving side cannot otherwise learn which vault sealed these bytes.
+                extensions[SyncEnvelope.vaultKeyIDExtensionKey] =
+                    vaultKID.map(CanonicalJSON.Value.string)
                 out[record.id] = SyncEnvelope(
                     id: record.id,
                     hlc: localClock(
@@ -162,8 +170,13 @@ nonisolated enum SyncLibraryProjection {
         return candidate
     }
 
+    /// - Parameter vaultKID: an otherwise-identical envelope from before the scope stamp
+    ///   existed is deliberately **not** exact. Reusing it verbatim would keep a record
+    ///   unstamped for as long as nothing else about it changed, which is for ever for a
+    ///   snippet nobody edits — and an unstamped record is one the other Mac cannot check
+    ///   before filing. Failing the match here re-projects it once, with the stamp.
     private static func exactSecure(
-        _ candidate: SyncEnvelope?, record: VaultRecord
+        _ candidate: SyncEnvelope?, record: VaultRecord, vaultKID: String?
     ) -> SyncEnvelope? {
         guard let candidate, !candidate.deleted, candidate.secure,
               let fields = candidate.fields,
@@ -177,7 +190,8 @@ nonisolated enum SyncLibraryProjection {
               fields.createdAt == record.createdAt,
               fields.updatedAt == record.updatedAt,
               candidate.x[SyncEnvelope.vaultContentHashExtensionKey]?.text
-                == nonEmpty(record.contentHash)
+                == nonEmpty(record.contentHash),
+              candidate.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == vaultKID
         else { return nil }
         return candidate
     }

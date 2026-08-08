@@ -42,10 +42,9 @@ import Foundation
 /// user enabling sync on two Macs within about a minute, ever, and only the very first
 /// time. iCloud Keychain converges on one of them, `SyncCoordinator` notices the stored
 /// key no longer matches the one its engine was built with and rebuilds, and both Macs
-/// end up on the winner. What is left over is records pushed under the losing key, which
-/// stay unreadable until they are edited or the base is cleared. Stated rather than
-/// engineered around: distributed consensus over a keychain item is not worth building
-/// for a window that size.
+/// end up on the winner. The rebuild clears the agreed base, so every local record is
+/// offered again under the winning key; stale losing-key records in the backend can be
+/// overwritten or removed with the rest of the old zone.
 @MainActor
 final class SyncKeyStore {
 
@@ -56,7 +55,7 @@ final class SyncKeyStore {
 
     /// 32 bytes of key followed by 32 bytes of HKDF salt, exactly what
     /// `SnippetCrypto.Keyring.generate()` produces.
-    private static let materialByteCount =
+    private nonisolated static let materialByteCount =
         SnippetCrypto.keyByteCount + SnippetCrypto.saltByteCount
 
     enum Failure: Error, CustomStringConvertible {
@@ -88,11 +87,15 @@ final class SyncKeyStore {
     /// way that helps, and the comparison is the whole point.
     func material() throws -> Data? {
         do {
-            guard let stored = try keychain.loadItem(account: Self.account) else { return nil }
+            guard let stored = try keychain.loadItem(
+                account: Self.account, expectedByteCount: Self.materialByteCount)
+            else { return nil }
             guard stored.count == Self.materialByteCount else {
                 throw Failure.malformedMaterial(stored.count)
             }
             return stored
+        } catch KeychainSecretStore.Failure.invalidItemLength(_, let actual) {
+            throw Failure.malformedMaterial(actual)
         } catch let failure as Failure {
             throw failure
         } catch {

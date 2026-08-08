@@ -1183,13 +1183,33 @@ private final class VaultSettingsViewController: NSViewController {
         guard let app = NSApp.delegate as? AppDelegate else { return }
         let count = app.secureStore.count
 
+        // Refused outright while sync is on — the next fetch would immediately restore
+        // a locally removed shared vault. Meeting a destructive confirmation first only
+        // to be told "no" afterwards is worse than being told now.
+        guard !SyncCoordinator.isEnabled else {
+            let alert = NSAlert()
+            alert.messageText = "Turn off iCloud Sync first"
+            alert.informativeText = "\(SecureSnippetStore.Failure.forgetRequiresSyncOff)"
+            alert.runModal()
+            return
+        }
+
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "Permanently delete \(count) secure snippet(s)?"
-        alert.informativeText =
-            "This deletes the encrypted snippets and the key that opens them. "
-            + "There is no undo, and no export or backup of this app contains their text."
-        alert.addButton(withTitle: "Delete")
+        alert.messageText = app.secureStore.isVaultShared
+            ? "Remove \(count) secure snippet(s) from this Mac?"
+            : "Permanently delete \(count) secure snippet(s)?"
+        // A synchronizable Keychain item cannot be deleted locally: its deletion would
+        // reach every Mac. The store therefore preserves the shared key and identity and
+        // removes only this Mac's vault. Device-only builds keep the original permanent
+        // deletion semantics.
+        alert.informativeText = app.secureStore.isVaultShared
+            ? "This removes the encrypted snippets from this Mac only. Their shared key "
+                + "and copies on your other Macs stay intact. Re-enabling iCloud Sync "
+                + "will bring them back to this Mac."
+            : "This deletes the encrypted snippets and the key that opens them. "
+                + "There is no undo, and no export or backup of this app contains their text."
+        alert.addButton(withTitle: app.secureStore.isVaultShared ? "Remove" : "Delete")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 

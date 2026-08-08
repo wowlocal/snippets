@@ -33,6 +33,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
         case recoveryUnavailable
         case invalidUTF8
         case transaction(String)
+        case sharedVaultKeyMissing
+        case forgetRequiresSyncOff
 
         var description: String {
             switch self {
@@ -44,6 +46,13 @@ final class SecureSnippetStore: SecureSnippetProviding {
             case .recoveryUnavailable: return "this vault has no recovery key"
             case .invalidUTF8: return "the secure snippet is not valid UTF-8"
             case .transaction(let detail): return detail
+            case .sharedVaultKeyMissing:
+                return "your other Mac's secure-snippets key has not reached this one yet. "
+                    + "Check that iCloud Keychain is on in System Settings, or restore the "
+                    + "key with your recovery key under Secure Snippets."
+            case .forgetRequiresSyncOff:
+                return "Turn off iCloud Sync first. Then Snippets can remove this Mac's "
+                    + "vault without deleting the shared key or affecting your other Macs."
             }
         }
     }
@@ -66,6 +75,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
     private let libraryURL: URL
     private let lockURL: URL
     private let temporaryDirectory: URL
+    private let syncBaseURL: URL
+    private let syncMetadataURL: URL
     private let lockTimeout: TimeInterval
 
     /// Injected so tests can drive timestamps and clocks deterministically.
@@ -80,6 +91,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
         libraryURL: URL = SnippetStorageLocations.snippetsFileURL,
         lockURL: URL = SnippetStorageLocations.libraryLockFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
+        syncBaseURL: URL = SnippetStorageLocations.syncBaseFileURL,
+        syncMetadataURL: URL = SnippetStorageLocations.syncLibraryMetadataFileURL,
         lockTimeout: TimeInterval = 2.0
     ) {
         let resolvedKeychain = keychain ?? KeychainSecretStore()
@@ -90,6 +103,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
         self.libraryURL = libraryURL
         self.lockURL = lockURL
         self.temporaryDirectory = temporaryDirectory
+        self.syncBaseURL = syncBaseURL
+        self.syncMetadataURL = syncMetadataURL
         self.lockTimeout = lockTimeout
         self.clock = HLCGenerator(device: deviceID)
         reload()
@@ -141,6 +156,14 @@ final class SecureSnippetStore: SecureSnippetProviding {
     var count: Int { document?.records.count ?? 0 }
 
     var hasRecoveryKey: Bool { document?.wrapRecovery != nil }
+
+    /// Whether deleting this vault's Keychain item would reach the user's other Macs.
+    ///
+    /// This follows the Keychain tier rather than the published identity. Publication can
+    /// fail or its slot can be temporarily missing while `K_lib` is still a
+    /// synchronizable item whose deletion propagates account-wide. Destructive behavior
+    /// must over-report sharing, never infer "local" from a failed identity lookup.
+    var isVaultShared: Bool { keychain.tier.syncsBetweenDevices }
 
     func isSecure(_ id: UUID) -> Bool { document?.record(id) != nil }
 
@@ -210,6 +233,17 @@ final class SecureSnippetStore: SecureSnippetProviding {
         return adopted
     }
 
+    /// Refuses an operation that needs to *write* a secret when the key is not here.
+    ///
+    /// Only reachable on an adopted vault: a vault this Mac minted stored its key in the
+    /// same breath. `hasKey` rather than an unlock, because this is a question about the
+    /// keychain, not about the user — raising a Touch ID prompt to discover that there is
+    /// nothing to authenticate against would be a prompt that cannot succeed.
+    private func requireUsableKey(for document: VaultDocument) throws {
+        guard !keychain.hasKey(keyID: document.kid) else { return }
+        throw Failure.sharedVaultKeyMissing
+    }
+
     /// Joins the shared vault if there is one, announcing it if it worked.
     ///
     /// For callers outside the load path — chiefly `SnippetLibraryBridge`, when a secure
@@ -234,12 +268,28 @@ final class SecureSnippetStore: SecureSnippetProviding {
     func createVaultIfNeeded(
         confirmRecoveryKey: (String) -> Bool
     ) throws -> VaultDocument {
-        if let document { return document }
+        if let document {
+            try requireUsableKey(for: document)
+            return document
+        }
         guard !isUnreadable else {
             throw Failure.vaultUnreadable("refusing to create a vault over an unreadable one")
         }
         if let adopted = adoptSharedVaultIfAvailable(requireSyncEnabled: false) {
             onChange?()
+            // Adopted, written, and pointed at — and then refused, because a vault whose
+            // key has not arrived cannot take a new secret. Saying so here is the whole
+            // point: without it the caller went on to `promote`, failed deep inside
+            // `VaultSession` with a bare "no vault key is available on this Mac", and left
+            // the user with a vault they could neither use nor replace, since `document`
+            // is now non-nil and the minting path above can never run again.
+            //
+            // Adopting anyway, rather than refusing before the write, is deliberate: the
+            // alternative is minting a rival `kid`, which splits the vault permanently.
+            // A vault that is merely waiting for its key is recoverable — by iCloud
+            // Keychain delivering it, or by the recovery key Settings now offers, because
+            // the adopted document carries the wrap.
+            try requireUsableKey(for: adopted)
             return adopted
         }
 
@@ -492,20 +542,32 @@ final class SecureSnippetStore: SecureSnippetProviding {
         adopt(outcome)
     }
 
-    /// Deletes every secure snippet **and** the key that opens them.
+    /// Removes every secure snippet from this Mac.
     ///
-    /// Both halves, deliberately. Removing the file but leaving the key would strand an
-    /// unusable keychain item and a Touch ID prompt the user can no longer explain;
-    /// removing the key but leaving the file would leave records that look present and
-    /// can never be opened, which is the worst of the three states.
+    /// A device-only vault also loses its device-only key and identity. A synchronizable
+    /// vault deliberately keeps both: deleting either Keychain item would propagate to
+    /// every Mac, turning a local removal into fleet-wide key destruction. With sync off,
+    /// keeping them is inert; explicitly setting up Secure Snippets again or re-enabling
+    /// sync adopts the shared identity and restores the records.
     ///
-    /// The key goes last: if that fails, the records are already gone and the leftover
-    /// key opens nothing. The other order can leave readable ciphertext with no way to
-    /// tell the user their "deletion" only half happened.
+    /// For a device-only vault the key goes last. If that fails, the exact locked
+    /// document is restored so the operation remains retryable.
     func forgetEverything() throws {
         guard !isUnreadable else {
-            throw Failure.vaultUnreadable("the vault could not be read; refusing to discard its key")
+            throw Failure.vaultUnreadable("the vault could not be read; refusing to remove it")
         }
+
+        // With sync running, removing the local file would be undone by the next fetch:
+        // the bridge would immediately re-adopt the published identity and restore the
+        // records. Require the user to stop that loop before making a local-only change.
+        guard !SyncCoordinator.isEnabled else {
+            throw Failure.forgetRequiresSyncOff
+        }
+
+        // A synchronizable item has no honest "delete only here" operation. Preserve the
+        // shared key and identity, regardless of whether the identity lookup currently
+        // succeeds; the Keychain tier is the authority on deletion propagation.
+        let preserveSharedKey = keychain.tier.syncsBetweenDevices
 
         let held: FileGuard.Held
         do {
@@ -518,7 +580,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
             // Compare-and-swap retries can protect an ordinary file write without a
             // lock; they cannot make a file deletion and a Keychain deletion atomic
             // with respect to another writer.
-            throw Failure.transaction("this filesystem cannot lock the vault; refusing to delete its only key")
+            throw Failure.transaction("this filesystem cannot lock the vault; refusing a non-atomic removal")
         }
 
         let onDisk: VaultDocument?
@@ -529,22 +591,22 @@ final class SecureSnippetStore: SecureSnippetProviding {
             onDisk = nil
         case .tooNew(let version):
             throw Failure.vaultUnreadable(
-                "vault schemaVersion \(version) is newer than this build; refusing to discard its key")
+                "vault schemaVersion \(version) is newer than this build; refusing to remove it")
         case .unreadable(let error), .corrupt(let error):
-            throw Failure.vaultUnreadable("the vault could not be read; refusing to discard its key: \(error)")
+            throw Failure.vaultUnreadable("the vault could not be read; refusing to remove it: \(error)")
         }
 
         let rollbackDocument = onDisk ?? document
         let kid = rollbackDocument?.kid
         do {
-            // The directory fsync is load-bearing: the missing vault entry must be
-            // durable before deleting the only key that could open it.
+            // The directory fsync is load-bearing: the removal must survive a crash
+            // before any device-only key is deleted.
             try AtomicFileWriter.removeDurablyIfPresent(vaultURL)
         } catch {
             throw Failure.transaction("could not durably delete the vault: \(error)")
         }
 
-        if let kid {
+        if let kid, !preserveSharedKey {
             do {
                 try keychain.deleteKey(keyID: kid)
             } catch let keychainError {
@@ -567,16 +629,24 @@ final class SecureSnippetStore: SecureSnippetProviding {
             }
         }
 
-        // Last, and only once the file and the key are actually gone. Leaving the
-        // identity published would have `reload` immediately re-adopt the vault that was
-        // just deleted, as a records-free document whose key no longer exists — the app
-        // would report "secure snippets are set up here, but their key is missing" to
-        // someone who had asked for exactly the opposite.
-        //
-        // This clears the slot on the user's other Macs too. That is the honest reading
-        // of "delete the key that opens them", and it strands nothing: a Mac that still
-        // holds a real vault republishes on its next reload.
-        identityStore.forget()
+        // The local-tier identity is as stale as its deleted key. The synchronizable
+        // identity must remain: deleting it would propagate, and it is what lets this Mac
+        // rejoin the same vault later instead of minting a rival one.
+        if !preserveSharedKey { identityStore.forget() }
+
+        // The agreed base still lists every secure record this Mac ever synced, and with
+        // the vault gone `SnippetLibraryBridge` would read that as "the vault file went
+        // missing" and halt the moment sync is turned back on. It is derived state —
+        // losing it costs one reconcile and can never lose a snippet — so discarding it
+        // is both safe and the only honest option: this Mac has no opinion about those
+        // records any more.
+        for url in [syncBaseURL, syncMetadataURL] {
+            do {
+                try AtomicFileWriter.removeDurablyIfPresent(url)
+            } catch {
+                NSLog("Snippets: could not clear \(url.lastPathComponent) after forgetting the vault (\(error)).")
+            }
+        }
 
         document = nil
         isUnreadable = false

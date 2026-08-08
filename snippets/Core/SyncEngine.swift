@@ -2,6 +2,30 @@ import Foundation
 
 // Compiled into the app and the test package — see `Snippet.swift`.
 
+/// What `applyRemote` managed to do.
+///
+/// `deferredIDs` exists because "this Mac cannot file this record *yet*" is a real state
+/// and used to be expressed by throwing, which took the whole round down with it. A secure
+/// record arriving at a Mac whose vault has not appeared — or whose vault is a different
+/// one — is not an error in the batch; it is one record that has to wait. Every other
+/// envelope in the same batch is perfectly applicable, and the plaintext ones have nothing
+/// to do with vaults at all.
+///
+/// `nonisolated` like the rest of the wire model: the app target compiles this file with
+/// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, and a value the fake library constructs
+/// from a nonisolated context must not inherit that.
+nonisolated struct ApplyOutcome: Equatable {
+    /// Ids whose local state actually changed.
+    var changedIDs: [UUID]
+    /// Ids that could not be filed and must be offered again on a later round.
+    var deferredIDs: [UUID]
+
+    init(changedIDs: [UUID] = [], deferredIDs: [UUID] = []) {
+        self.changedIDs = changedIDs
+        self.deferredIDs = deferredIDs
+    }
+}
+
 /// What the engine reads and writes. The engine never touches a file itself.
 ///
 /// A protocol rather than direct calls into `SnippetStore` and `SecureSnippetStore` so
@@ -13,8 +37,8 @@ import Foundation
 protocol SyncLibraryAccess: AnyObject {
     /// Everything syncable, plaintext and secure, as envelopes ready to seal.
     func currentEnvelopes() throws -> [UUID: SyncEnvelope]
-    /// Applies merged remote state. Returns the ids that actually changed.
-    func applyRemote(_ envelopes: [SyncEnvelope]) throws -> [UUID]
+    /// Applies merged remote state, reporting what changed and what had to wait.
+    func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome
     /// Live ids, for the deletion guard.
     func liveIDs() -> Set<UUID>
 }
@@ -123,27 +147,30 @@ final class SyncEngine {
 
         transition(to: .syncing)
         do {
-            try await performRound()
+            let deferred = try await performRound()
             consecutiveFailures = 0
-            transition(to: .idle(lastSync: now()))
+            if let deferred {
+                transition(to: .waitingForVault(
+                    "\(deferred) secure snippet(s) from another Mac are waiting for a key "
+                    + "this one does not have yet"))
+            } else {
+                transition(to: .idle(lastSync: now()))
+            }
         } catch let failure as SyncTransportFailure {
             handle(failure)
         } catch let failure as SyncEngineFailure {
             transition(to: .halted(failure.reason, detail: failure.detail))
-        } catch SyncLibraryProjection.Failure.secureVaultMissing {
-            // Deliberately not counted as a failure and not backed off. Nothing is wrong
-            // with the backend or the data; the cursor simply stays put until this Mac
-            // has somewhere to put a secure record, and the next poll tries again.
-            transition(to: .waitingForVault(
-                "a secure snippet arrived from another Mac, but the key for it has not "
-                + "reached this one yet"))
         } catch {
             handle(.unreachable(detail: "\(error)"))
         }
         return state
     }
 
-    private func performRound() async throws {
+    /// - Returns: how many records had to be deferred, or `nil` when the round applied
+    ///   everything it fetched. A deferred round is not a failure — the push half
+    ///   completed, everything applicable was applied — so it must not back off or count
+    ///   against `consecutiveFailures`; it simply did not finish arriving.
+    private func performRound() async throws -> Int? {
         // PUSH FIRST, deliberately.
         //
         // Fetching first and applying would rewrite local records before this device's
@@ -242,7 +269,7 @@ final class SyncEngine {
         guard !incoming.isEmpty || isFullResync else {
             base.cursor = cursor
             try persistBase()
-            return
+            return nil
         }
 
         // Three-way merge against the base BEFORE the guard, so the guard judges what
@@ -267,22 +294,45 @@ final class SyncEngine {
             throw SyncEngineFailure(reason: .massDeletion, detail: refusal.description)
         }
 
-        _ = try library.applyRemote(merged)
+        let outcome = try library.applyRemote(merged)
+        let deferred = Set(outcome.deferredIDs)
+
         // The base records what the BACKEND said, not what we merged to. Recording the
         // merged value would make the next diff believe the backend has already seen our
         // side of the merge, and our half would never be pushed.
-        for envelope in incoming { base.record(envelope) }
-        base.cursor = cursor
+        //
+        // A deferred record is recorded neither in the base nor by advancing the cursor.
+        // Both halves matter: leaving it out of the base keeps the local library from
+        // looking like it deleted a record it never received, and holding the cursor is
+        // what makes the backend offer it again. Everything that *did* apply is recorded
+        // normally, so the re-fetch re-applies it as a no-op rather than as churn.
+        for envelope in incoming where !deferred.contains(envelope.id) {
+            base.record(envelope)
+        }
+        if deferred.isEmpty {
+            base.cursor = cursor
+        }
         try persistBase()
+        return deferred.isEmpty ? nil : outcome.deferredIDs.count
     }
 
     // MARK: - Failure handling
 
     private func handle(_ failure: SyncTransportFailure) {
         switch failure {
-        case .rejected(.authenticationRequired(let detail)), .rejected(.permanent(let detail)):
+        case .rejected(.authenticationRequired(let detail)):
             // Retrying an auth failure forever just locks the account out.
             transition(to: .needsAuthentication(detail))
+        case .rejected(.permanent(let detail)):
+            // Split out of the case above, where it used to sit. A permanent rejection is
+            // not an authentication problem, and lumping the two together meant an
+            // undeployed CloudKit schema — the commonest cause of a `.permanent` on the
+            // *fetch* leg, since `fetchChanges` maps `.invalidArguments`/`.badContainer`
+            // through the same table — told the user "iCloud needs attention", sending
+            // them to check a sign-in that was never the problem. The submit leg already
+            // routes this to `backendRefused`; the same condition must not describe
+            // itself two different ways depending on which half of the round saw it.
+            transition(to: .halted(.backendRefused, detail: detail))
         case .pushUnsupported:
             transition(to: .needsAuthentication("this backend does not accept pushes"))
         case .unreachable, .rejected:

@@ -424,7 +424,7 @@ as strict as it was, and is now only ever read to reveal a secret — which is t
 genuinely needs a human.
 
 `Readiness` lost `needsVault` and `needsUnlock` as a result. What is left is `off`, `ready`, and
-`keyUnavailable` for a keychain that will not answer at all.
+`cannotStart` when a start prerequisite such as the Keychain is temporarily unavailable.
 
 ### Getting a second Mac working: nothing to copy
 
@@ -470,9 +470,9 @@ lie: iCloud is reachable, the round is fine, and the user's problem is a key.
 so two processes on one Mac cannot mint two wire keys. Two *Macs* that both mint before iCloud
 Keychain has propagated either can — which needs a user enabling sync on two Macs within about a
 minute, ever, and only the first time. iCloud Keychain converges on one; `SyncCoordinator` notices
-the stored key no longer matches the one its engine holds and rebuilds on the winner. What is left
-over is records pushed under the losing key, which stay unreadable until they next change.
-Distributed consensus over a Keychain item is not worth building for a window that size.
+the stored key no longer matches the one its engine holds, rebuilds on the winner, and discards the
+agreed base so every local record is offered again under that key. Stale losing-key records still
+need the planned zone wipe, but they no longer suppress readable replacements.
 
 ### The loop
 

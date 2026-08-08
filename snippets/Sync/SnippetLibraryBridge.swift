@@ -31,6 +31,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     private struct ApplyResult {
         var changedIDs: [UUID]
         var appliedEnvelopes: [SyncEnvelope]
+        var deferredIDs: [UUID] = []
     }
 
     init(
@@ -60,14 +61,59 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
             // never make the user's library unreadable or stop local edits syncing.
             agreedBase = SyncBase()
         }
+
+        try refuseToSpeakForAnUnreadableVault(against: agreedBase)
+
         let envelopes = SyncLibraryProjection.currentEnvelopes(
             snippets: store.snippets,
             records: secureStore.document?.records ?? [],
             deviceID: store.deviceID,
             metadata: loadMetadata(fallingBackTo: agreedBase),
-            agreedBase: agreedBase)
+            agreedBase: agreedBase,
+            vaultKID: secureStore.document?.kid)
         persistMetadata(envelopes)
         return envelopes
+    }
+
+    /// Halts rather than letting a vault this Mac cannot read be projected as an empty one.
+    ///
+    /// The projection takes `secureStore.document?.records ?? []`, and
+    /// `SyncBase.pendingChanges` turns "in the base, absent from the projection" into an
+    /// explicit tombstone. Those two are only correct together while the absence is
+    /// *real*. A vault that failed to **load** — written by a newer build, corrupt,
+    /// unreadable, or a file that went missing — projects as zero records too, and the
+    /// result is a tombstone for every secure snippet this device ever synced, pushed to
+    /// every other Mac, waved through by `DeletionGuard` because five records is not a
+    /// mass deletion. A read failure on one machine would delete the user's secrets on all
+    /// of them.
+    ///
+    /// `SyncCoordinator` used to hold this line by accident: `makeSealer()` threw when the
+    /// vault document was nil, so no engine existed to push anything. Splitting the wire
+    /// key off the vault key removed that coupling, and this replaces it deliberately —
+    /// at the projection, which is where the damage is actually done, rather than as a
+    /// precondition in a type that no longer has any other reason to know what a vault is.
+    ///
+    /// Both halts are sticky, and re-checked on every round, so "Resume After Review" on a
+    /// vault that is still unreadable stops again instead of pushing.
+    private func refuseToSpeakForAnUnreadableVault(against base: SyncBase) throws {
+        if secureStore.isUnreadable {
+            throw SyncEngineFailure(
+                reason: .vaultUnreadable,
+                detail: "the secure vault on this Mac could not be read, so its snippets "
+                    + "cannot be synced without appearing to have been deleted")
+        }
+
+        // No vault at all is ordinary: a Mac that never made one, or one whose vault the
+        // user deliberately forgot — `forgetEverything` clears these entries itself, so
+        // reaching here means the file went away underneath us instead.
+        guard secureStore.document == nil else { return }
+        let orphaned = base.envelopes.values.filter { $0.secure && !$0.deleted }.count
+        guard orphaned == 0 else {
+            throw SyncEngineFailure(
+                reason: .vaultUnreadable,
+                detail: "\(orphaned) secure snippet(s) have been synced from this Mac but "
+                    + "its vault file is missing, so syncing now would delete them everywhere")
+        }
     }
 
     func liveIDs() -> Set<UUID> {
@@ -81,9 +127,22 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     /// Everything goes through one `LibraryTransaction`, so a remote change that moves a
     /// record between plaintext and secure cannot be observed half-applied — and so a
     /// concurrent CLI write cannot interleave with it.
-    @discardableResult
-    func applyRemote(_ envelopes: [SyncEnvelope]) throws -> [UUID] {
-        guard !envelopes.isEmpty else { return [] }
+    ///
+    /// ## A record this Mac cannot file waits; it does not take the round down with it
+    ///
+    /// Two secure records cannot be filed here: one that arrives with no local vault, and
+    /// one sealed under a *different* vault's `kid`. Both used to throw — the first
+    /// explicitly, the second not at all, because nothing checked. Throwing from inside
+    /// the transaction rolls back every plaintext envelope merged alongside it and leaves
+    /// the cursor where it was, so one un-fileable secret stopped **all** inbound sync,
+    /// permanently, retried every two minutes for ever. Ordinary snippets edited on
+    /// another Mac simply never arrived, while the pane talked about vault keys.
+    ///
+    /// So they are deferred instead: excluded from this transaction, reported to the
+    /// engine, left out of the base, and re-offered by holding the cursor. Everything else
+    /// in the batch applies normally.
+    func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome {
+        guard !envelopes.isEmpty else { return ApplyOutcome() }
 
         // Same hazard as promote: the transaction below reads snippets.json from disk,
         // so an unflushed in-memory edit would be invisible to it and then land on top
@@ -105,10 +164,27 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         let outcome = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
             var changed: [UUID] = []
             var applied: [SyncEnvelope] = []
+            var deferred: [UUID] = []
 
             for envelope in envelopes {
                 let wasPlain = contents.snippets.contains { $0.id == envelope.id }
                 let wasSecure = contents.vault?.record(envelope.id) != nil
+
+                // Scope-check tombstones too, before they can remove anything. A rival
+                // vault's live record was already deferred below, but its tombstone took
+                // the earlier deletion branch and could erase a local record with the
+                // same UUID despite being authenticated for a different vault. Legitimate
+                // secure tombstones retain the `vaultKID` extension from their live
+                // envelope. A tombstone may still delete a plaintext copy of the same
+                // logical snippet after a concurrent demotion; the unrelated local vault
+                // matters only when the incoming record is live or the local copy is in
+                // that vault.
+                let arrivingKID = envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text
+                if envelope.secure, let arrivingKID, let localKID = contents.vault?.kid,
+                   arrivingKID != localKID, !envelope.deleted || wasSecure {
+                    deferred.append(envelope.id)
+                    continue
+                }
 
                 if envelope.deleted {
                     if wasPlain { contents.snippets.removeAll { $0.id == envelope.id } }
@@ -129,15 +205,21 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 if envelope.secure {
                     // Arriving secure. A vault must already exist here — its `kid` is the
                     // crypto scope, and inventing one locally would produce a document
-                    // whose records no other device can open. Skipping is correct and
-                    // recoverable: aborting this round leaves the fetch cursor before
-                    // the record, so it reappears once the vault has been set up.
-                    // Silently skipping would still advance the cursor and then make
-                    // the live base record look locally deleted on the next round.
+                    // whose records no other device can open.
                     guard var vault = contents.vault else {
-                        throw SyncLibraryProjection.Failure.secureVaultMissing(envelope.id)
+                        deferred.append(envelope.id)
+                        continue
                     }
 
+                    // And it has to be the *same* vault. The body is the originating
+                    // vault's sealed bytes verbatim, AEAD-bound to that vault's `kid`,
+                    // which lives in the AAD and so is invisible from the envelope text —
+                    // the scope stamp in `x` is the only way to see it. Without this
+                    // check a Mac that lost the first-publisher race filed the record
+                    // happily, showed its name and keyword in the list, and failed every
+                    // reveal for ever with nothing explaining why. Deferring instead
+                    // keeps the record on the backend, where it stays readable by the
+                    // Mac that owns it, and leaves this one repairable by the recovery key.
                     let existing = vault.record(envelope.id)
                     guard let record = try SyncLibraryProjection.vaultRecord(
                         from: envelope, preserving: existing)
@@ -168,7 +250,8 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 changed.append(envelope.id)
                 applied.append(envelope)
             }
-            return ApplyResult(changedIDs: changed, appliedEnvelopes: applied)
+            return ApplyResult(
+                changedIDs: changed, appliedEnvelopes: applied, deferredIDs: deferred)
         }
 
         var metadata = loadMetadata(fallingBackTo: SyncBase())
@@ -186,7 +269,8 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         // Both stores re-read from disk, because the transaction wrote underneath them.
         store.reloadAfterExternalWrite()
         secureStore.reload()
-        return outcome.value.changedIDs
+        return ApplyOutcome(
+            changedIDs: outcome.value.changedIDs, deferredIDs: outcome.value.deferredIDs)
     }
 
     // MARK: - Frozen-file metadata

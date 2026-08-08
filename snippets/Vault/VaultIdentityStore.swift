@@ -43,12 +43,6 @@ final class VaultIdentityStore {
 
     private let keychain: KeychainSecretStore
 
-    /// What this process last put in the slot. `reload()` publishes opportunistically so
-    /// that a slot another Mac cleared heals itself, and reload runs on every external
-    /// library change — so the common call is "publish what is already there", and it
-    /// should not cost a keychain round trip and a JSON decode every time.
-    private var lastPublished: VaultDocument?
-
     init(keychain: KeychainSecretStore) {
         self.keychain = keychain
     }
@@ -109,8 +103,19 @@ final class VaultIdentityStore {
         // cannot silently undo the guarantee it was added for.
         identity.wrapPass = nil
 
-        if lastPublished == identity { return true }
-
+        // The keychain is read every time, deliberately.
+        //
+        // An in-process cache of "what I last published" lived here and was wrong: the
+        // slot can be emptied by *another Mac* — an older build's `forgetEverything` or
+        // a direct Keychain deletion propagates that removal — and a cache short-circuits
+        // before the read that would notice. The self-heal this method exists to provide (a Mac holding a
+        // real vault re-publishes an identity someone else cleared) then never ran until
+        // the app was relaunched, and a third Mac meanwhile minted a rival `kid`.
+        //
+        // The cost is one `SecItemCopyMatching` and a small JSON decode per `reload()`,
+        // which is sub-millisecond and not on any hot path. Correctness is worth more
+        // than that here, and a cache that can be invalidated by another machine is not a
+        // cache this type can hold.
         if let existing = published() {
             guard existing.kid == identity.kid else {
                 NSLog("Snippets: not publishing vault \(identity.kid); "
@@ -119,15 +124,11 @@ final class VaultIdentityStore {
             }
             // Wraps change when a recovery key is added later. Everything else about an
             // identity is fixed at creation, so an equal document means nothing to do.
-            if existing == identity {
-                lastPublished = identity
-                return true
-            }
+            if existing == identity { return true }
         }
 
         do {
             try keychain.storeItem(try VaultFile.encode(identity), account: Self.account)
-            lastPublished = identity
             return true
         } catch {
             NSLog("Snippets: the vault identity could not be published (\(error)).")
@@ -135,13 +136,11 @@ final class VaultIdentityStore {
         }
     }
 
-    /// Drops the shared identity. Called when the vault it names is deleted.
-    ///
-    /// This removes it from the user's other Macs too, which is the honest reading of
-    /// "delete the key that opens them". A Mac that still holds a real vault republishes
-    /// on its next reload, so a delete on one Mac cannot strand a vault on another.
+    /// Drops an identity that is no longer usable on the current Keychain tier.
+    /// Synchronizable-vault teardown deliberately does not call this: deleting a shared
+    /// slot would propagate account-wide. This remains for device-only teardown and
+    /// explicit reset or migration tools.
     func forget() {
-        lastPublished = nil
         do {
             try keychain.deleteItem(account: Self.account)
         } catch {

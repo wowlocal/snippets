@@ -27,25 +27,38 @@ struct SyncEngineTests {
             return envelopes
         }
 
-        func applyRemote(_ incoming: [SyncEnvelope]) throws -> [UUID] {
+        /// Ids this fake refuses to file, standing in for a secure record whose vault is
+        /// missing or is a different one. The real bridge defers those rather than
+        /// throwing, and the engine has to hold the cursor for them.
+        var deferIDs: Set<UUID> = []
+
+        func applyRemote(_ incoming: [SyncEnvelope]) throws -> ApplyOutcome {
             applied.append(incoming)
+            var changed: [UUID] = []
+            var deferred: [UUID] = []
             for envelope in incoming {
+                guard !deferIDs.contains(envelope.id) else {
+                    deferred.append(envelope.id)
+                    continue
+                }
                 if envelope.deleted { envelopes[envelope.id] = nil } else { envelopes[envelope.id] = envelope }
+                changed.append(envelope.id)
             }
-            return incoming.map(\.id)
+            return ApplyOutcome(changedIDs: changed, deferredIDs: deferred)
         }
 
         func liveIDs() -> Set<UUID> { Set(envelopes.keys) }
     }
 
     private func envelope(
-        _ id: UUID, name: String, content: String = "body", ms: UInt64 = 1_000, deleted: Bool = false
+        _ id: UUID, name: String, content: String = "body", ms: UInt64 = 1_000,
+        secure: Bool = false, deleted: Bool = false
     ) -> SyncEnvelope {
         SyncEnvelope(
             id: id,
             hlc: HLC(wallMs: ms, counter: 0, device: "aaaaaaa1"),
             origin: "aaaaaaa1",
-            secure: false,
+            secure: secure,
             deleted: deleted,
             fields: deleted ? nil : SyncEnvelope.Fields(
                 name: name, keyword: name, content: Data(content.utf8), tags: [],
@@ -213,6 +226,51 @@ struct SyncEngineTests {
         }
     }
 
+    /// The submit path already classified a permanent refusal as a backend halt. The
+    /// fetch path used to route the identical transport failure to authentication,
+    /// making an undeployed CloudKit schema look like a sign-in problem depending only
+    /// on which half of the round encountered it.
+    @Test func aPermanentFetchRejectionHaltsAsBackendRefused() async throws {
+        final class RejectingFetchTransport: SyncTransport, @unchecked Sendable {
+            let inner = InMemoryTransport()
+
+            var identifier: String { inner.identifier }
+            var supportsPush: Bool { inner.supportsPush }
+            var pollInterval: TimeInterval { inner.pollInterval }
+            var events: AsyncStream<SyncTransportEvent> { inner.events }
+
+            func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+                throw SyncTransportFailure.rejected(.permanent(detail: "schema missing"))
+            }
+
+            func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
+                try await inner.submit(records, at: cursor)
+            }
+        }
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("engine-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let transport = RejectingFetchTransport()
+        let library = FakeLibrary()
+        let engine = SyncEngine(
+            transport: transport, library: library,
+            sealer: SnippetCryptoSealer(
+                keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test"),
+            device: "aaaaaaa1", baseURL: dir.appendingPathComponent("base.json"),
+            temporaryDirectory: dir)
+
+        let state = await engine.sync()
+        guard case .halted(let reason, let detail) = state else {
+            Issue.record("expected .halted, got \(state)")
+            return
+        }
+        #expect(reason == .backendRefused)
+        #expect(detail == "schema missing")
+    }
+
     // MARK: - Backoff
 
     @Test func anUnreachableBackendBacksOffAndRefusesToRunBeforeItsDeadline() async throws {
@@ -310,6 +368,46 @@ struct SyncEngineTests {
     }
 
     // MARK: - Cursors
+
+    /// One secure record that cannot be filed must not roll back unrelated plaintext.
+    /// Holding the cursor makes the backend offer the deferred record again, while
+    /// recording the applied record in the base prevents it from looking locally new.
+    @Test func aDeferredSecureRecordDoesNotBlockPlaintextAndIsRetried() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let plainID = UUID()
+        let secureID = UUID()
+        h.library.deferIDs = [secureID]
+        await h.transport.seed([
+            try WireCodec.seal(envelope(plainID, name: "plain"), using: h.sealer),
+            try WireCodec.seal(
+                envelope(secureID, name: "secure", secure: true), using: h.sealer),
+        ])
+
+        let waiting = await h.engine.sync()
+        guard case .waitingForVault = waiting else {
+            Issue.record("expected .waitingForVault, got \(waiting)")
+            return
+        }
+        #expect(h.library.envelopes[plainID] != nil,
+                "an unfileable secret must not roll back plaintext in the same batch")
+        #expect(h.library.envelopes[secureID] == nil)
+        #expect(h.engine.agreedBase.envelope(plainID) != nil)
+        #expect(h.engine.agreedBase.envelope(secureID) == nil)
+        #expect(h.engine.agreedBase.cursor == nil,
+                "the cursor must stay before a record that still needs to be offered")
+
+        h.library.deferIDs = []
+        let recovered = await h.engine.sync()
+        guard case .idle = recovered else {
+            Issue.record("expected .idle after the vault became usable, got \(recovered)")
+            return
+        }
+        #expect(h.library.envelopes[secureID] != nil)
+        #expect(h.engine.agreedBase.envelope(secureID) != nil)
+        #expect(h.engine.agreedBase.cursor != nil)
+    }
 
     @Test func anInvalidatedCursorTriggersAFullResyncRatherThanSilentDivergence() async throws {
         let h = try harness()

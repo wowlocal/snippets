@@ -655,6 +655,25 @@ struct WireTests {
             #expect(live.tombstoned(hlc: clock(2_000), origin: thisDevice).x.isEmpty)
         }
 
+        /// The vault scope is structural rather than content-derived. It is the one bag
+        /// entry a secure tombstone must retain so a different vault cannot apply the
+        /// deletion to a record its key never owned.
+        @Test func aSecureTombstoneRetainsOnlyItsVaultScope() {
+            let live = SyncEnvelope.secureRecord(
+                id: id(5), name: "Router admin", keyword: "rtr",
+                plaintext: Data("sealed bytes".utf8), createdAt: at(1), updatedAt: at(2),
+                hlc: clock(3_000), origin: thisDevice,
+                x: [
+                    SyncEnvelope.vaultKeyIDExtensionKey: .string("k-origin"),
+                    "derived": .string("must disappear"),
+                ])
+
+            let tombstone = live.tombstoned(hlc: clock(4_000), origin: thisDevice)
+            #expect(tombstone.x == [
+                SyncEnvelope.vaultKeyIDExtensionKey: .string("k-origin")
+            ])
+        }
+
         @Test func aTombstoneThatArrivesCarryingFieldsIsRefusedRatherThanTrusted() throws {
             let live = SyncEnvelope.plain(snippet(0), hlc: clock(1_000), origin: thisDevice)
             var object = try #require(CanonicalJSON.value(live.canonicalData()).object)

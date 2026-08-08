@@ -78,6 +78,38 @@ struct SyncLibraryProjectionTests {
                 "an applied secure record must not echo back on the following round")
     }
 
+    /// A secure body is AEAD-bound to the originating vault's `kid`, but that AAD is not
+    /// present in the sealed bytes. The encrypted extension stamp is therefore the only
+    /// way a receiver can reject a record its local vault can never reveal.
+    @Test func aLegacySecureProjectionIsStampedWithItsVaultKIDOnce() throws {
+        let id = UUID()
+        let kid = "k-shared-vault"
+        let legacy = SyncEnvelope(
+            id: id,
+            hlc: HLC(wallMs: 60_000, counter: 3, device: remoteDevice),
+            origin: remoteDevice,
+            secure: true,
+            deleted: false,
+            fields: fields(content: Data("v1.nonce.ciphertext".utf8)),
+            x: [SyncEnvelope.vaultContentHashExtensionKey: .string("keyed-hash")])
+        let record = try #require(try SyncLibraryProjection.vaultRecord(from: legacy))
+        let agreed = base(legacy)
+
+        let first = SyncLibraryProjection.currentEnvelopes(
+            snippets: [], records: [record], deviceID: localDevice,
+            metadata: agreed, agreedBase: agreed, vaultKID: kid)
+        let stamped = try #require(first[id])
+        #expect(stamped.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == kid)
+        #expect(agreed.pendingChanges(from: first) == [stamped],
+                "an unstamped agreed record must be re-pushed once with its vault scope")
+
+        let second = SyncLibraryProjection.currentEnvelopes(
+            snippets: [], records: [record], deviceID: localDevice,
+            metadata: base(stamped), agreedBase: agreed, vaultKID: kid)
+        #expect(second[id] == stamped,
+                "the scope backfill must stabilize instead of minting a new clock each read")
+    }
+
     @Test func theLocalProjectionSidecarWinsWhenBackendMetadataIsOlderButFieldsMatch() {
         let id = UUID()
         let commonFields = fields()

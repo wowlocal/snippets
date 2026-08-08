@@ -51,6 +51,7 @@ final class KeychainSecretStore {
         case unavailable(OSStatus)
         case notFound
         case invalidKeyLength(Int)
+        case invalidItemLength(expected: Int, actual: Int)
         case authenticationFailed
         case userCancelled
 
@@ -62,6 +63,8 @@ final class KeychainSecretStore {
             case .notFound: return "no vault key is stored on this Mac"
             case .invalidKeyLength(let count):
                 return "the stored vault key must be 32 bytes; found \(count)"
+            case .invalidItemLength(let expected, let actual):
+                return "the stored keychain item must be \(expected) bytes; found \(actual)"
             case .authenticationFailed: return "authentication failed"
             case .userCancelled: return "authentication was cancelled"
             }
@@ -184,20 +187,44 @@ final class KeychainSecretStore {
     /// Reads an item, or `nil` when there is none. If this build newly gained the sync
     /// entitlement, an existing device-only item is copied into the new tier and
     /// verified before use.
-    func loadItem(account: String) throws -> Data? {
-        if let current = try copyData(matching: baseQuery(account: account)) { return current }
-
-        if case .synchronizable = tier,
-           let legacy = try copyData(matching: deviceOnlyQuery(account: account)) {
-            try storeItem(legacy, account: account)
-            guard let migrated = try copyData(matching: baseQuery(account: account)),
-                  migrated == legacy
-            else {
-                throw Failure.unavailable(errSecNotAvailable)
+    ///
+    /// - Parameter expectedByteCount: the size this item must be, when the caller knows
+    ///   it. **Checked before the migration write, not after**, and that ordering is the
+    ///   whole point of the parameter. The migration copies a device-only item into the
+    ///   `kSecAttrSynchronizable` tier, from which iCloud Keychain hands it to every
+    ///   other Mac on the account — so validating afterwards would mean a truncated local
+    ///   key item (an interrupted keychain write, a partial backup restore) is propagated
+    ///   over the good copies its siblings already hold, turning one unopenable vault into
+    ///   all of them. An earlier version of this type enforced the length inside the read
+    ///   itself for exactly that reason; this restores the guarantee without forcing every
+    ///   item to be a 32-byte key.
+    func loadItem(account: String, expectedByteCount: Int? = nil) throws -> Data? {
+        func validated(_ data: Data) throws -> Data {
+            if let expectedByteCount, data.count != expectedByteCount {
+                throw Failure.invalidItemLength(
+                    expected: expectedByteCount, actual: data.count)
             }
-            return migrated
+            return data
         }
-        return nil
+
+        if let current = try copyData(matching: baseQuery(account: account)) {
+            return try validated(current)
+        }
+
+        guard case .synchronizable = tier,
+              let legacy = try copyData(matching: deviceOnlyQuery(account: account))
+        else { return nil }
+
+        // Local damage stays local. Validation happens before the migration write.
+        _ = try validated(legacy)
+
+        try storeItem(legacy, account: account)
+        guard let migrated = try copyData(matching: baseQuery(account: account)),
+              migrated == legacy
+        else {
+            throw Failure.unavailable(errSecNotAvailable)
+        }
+        return try validated(migrated)
     }
 
     /// Whether an item exists, without reading its bytes. The legacy-tier fallback keeps
@@ -274,7 +301,15 @@ final class KeychainSecretStore {
 
     /// Reads the library key after `VaultSession` has authenticated the user.
     func loadKey(keyID: String) throws -> Data {
-        guard let data = try loadItem(account: keyID) else { throw Failure.notFound }
+        let data: Data
+        do {
+            guard let loaded = try loadItem(account: keyID, expectedByteCount: 32) else {
+                throw Failure.notFound
+            }
+            data = loaded
+        } catch Failure.invalidItemLength(_, let actual) {
+            throw Failure.invalidKeyLength(actual)
+        }
         guard data.count == 32 else { throw Failure.invalidKeyLength(data.count) }
         return data
     }

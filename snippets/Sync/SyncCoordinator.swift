@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // App target only — see the note at the top of `CloudKitRecordMapping.swift`.
@@ -54,10 +55,9 @@ final class SyncCoordinator {
     /// that no longer exists.
     enum Readiness: Equatable {
         case off
-        /// The keychain would not give up a wire key, so there is nothing to seal with.
-        /// Rare and not self-inflicted: a locked keychain, or a build whose entitlements
-        /// the profile does not back.
-        case keyUnavailable(String)
+        /// A start prerequisite is temporarily unavailable: usually a locked Keychain,
+        /// or rarely stale sync bookkeeping that could not yet be removed safely.
+        case cannotStart(String)
         case ready
     }
 
@@ -74,6 +74,7 @@ final class SyncCoordinator {
 
     private var transport: CloudKitTransport?
     private var pollTimer: Timer?
+    private var startRetryTimer: Timer?
     private var eventTask: Task<Void, Never>?
 
     /// `SyncEngine.sync()` returns early when a round is already in flight, which
@@ -88,7 +89,7 @@ final class SyncCoordinator {
     /// a cheap computed property: the keychain is consulted when sync starts and once a
     /// round, never on every redraw of the settings pane.
     private var activeKeyMaterial: Data?
-    private var keyFailure: String?
+    private var startFailure: String?
 
     init(
         library: any SyncLibraryAccess,
@@ -108,7 +109,7 @@ final class SyncCoordinator {
 
     var readiness: Readiness {
         guard Self.isEnabled else { return .off }
-        if let keyFailure { return .keyUnavailable(keyFailure) }
+        if let startFailure { return .cannotStart(startFailure) }
         return .ready
     }
 
@@ -142,18 +143,21 @@ final class SyncCoordinator {
             material = try keys.materialMintingIfNeeded()
             sealer = SnippetCryptoSealer(
                 keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
+            try discardAgreedBaseIfWireKeyChanged(material)
         } catch {
-            // Not a halt: nothing has gone wrong with anybody's data. The keychain is
-            // simply not answering, which on a signed build means the keychain is locked
-            // or the profile does not back the entitlement. `readiness` carries the
-            // detail to the pane rather than leaving a checkbox that appears to do
-            // nothing.
-            NSLog("Snippets: iCloud sync is on but has no key to seal with: \(error)")
-            keyFailure = "\(error)"
+            // Not a halt: no remote or library data was changed. The keychain may not be
+            // answering, or the stale agreed base may not yet be removable. Both are
+            // start prerequisites worth retrying rather than running under ambiguous
+            // crypto state. `readiness` carries the detail to Settings.
+            NSLog("Snippets: iCloud sync is on but cannot prepare its wire key: \(error)")
+            startFailure = "\(error)"
+            scheduleStartRetry()
             publish(.disabled)
             return
         }
-        keyFailure = nil
+        startRetryTimer?.invalidate()
+        startRetryTimer = nil
+        startFailure = nil
         activeKeyMaterial = material
 
         let transport = CloudKitTransport()
@@ -171,7 +175,35 @@ final class SyncCoordinator {
         syncNow()
     }
 
+    /// Retries a start that failed on the keychain.
+    ///
+    /// The poll timer is created *by* `start()`, so a start that fails leaves nothing
+    /// running at all — no timer, no event pump, no engine. The old failure mode was
+    /// benign about that because it could only be "no vault yet" or "vault locked", and
+    /// `AppDelegate` drove a retry from `secureStore.onChange` when the user fixed it. A
+    /// keychain refusal has no such trigger: `errSecInteractionNotAllowed` from a login
+    /// keychain that is still locked at auto-login resolves itself minutes later with no
+    /// library change to notice it, and until then nothing this Mac writes reaches any
+    /// other one. So the retry has to be a timer of its own.
+    ///
+    /// A minute rather than the two-minute poll: this is cheap — one keychain read — and
+    /// the window it covers is a user waiting for their session to finish unlocking.
+    private func scheduleStartRetry() {
+        guard startRetryTimer == nil else { return }
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, Self.isEnabled, self.engine == nil else { return }
+                self.start()
+            }
+        }
+        timer.tolerance = 15
+        RunLoop.main.add(timer, forMode: .common)
+        startRetryTimer = timer
+    }
+
     func stop() {
+        startRetryTimer?.invalidate()
+        startRetryTimer = nil
         pollTimer?.invalidate()
         pollTimer = nil
         eventTask?.cancel()
@@ -234,6 +266,57 @@ final class SyncCoordinator {
 
     // MARK: - Internals
 
+    /// Where the fingerprint of the wire key the base was built against is kept.
+    ///
+    /// `UserDefaults` rather than `Sync/state.json`, because this is local derived state
+    /// whose worst failure is one extra reconcile — the same reasoning that lets the base
+    /// itself be disposable — and because putting it in the state file would invite
+    /// someone to source the crypto scope from there, which that file's own documentation
+    /// spends a paragraph forbidding.
+    private static let wireKeyFingerprintDefaultsKey = "SnippetsSyncWireKeyFingerprint"
+
+    /// Throws away the agreed base when the key that sealed it is no longer the key we
+    /// hold, so everything is re-pushed under the new one.
+    ///
+    /// Without this, changing the sealing key is a silent, one-way data loss. `base.json`
+    /// records each record as *agreed with the backend*, so `pendingChanges` skips them
+    /// for ever; meanwhile every record already up there was sealed under the old key and
+    /// fails to open on fetch, so it is quarantined and never applied. The snippets vanish
+    /// from sync with no halt and nothing in the pane, and clearing the backend does not
+    /// help — the base still claims they are agreed, so they are never re-uploaded.
+    ///
+    /// This is what makes the vault-key-to-`K_sync` change survivable, and it is not a
+    /// one-off migration: it fires again for any future rekey, including the losing side
+    /// of the mint race `SyncKeyStore` documents.
+    ///
+    /// A fingerprint, not the key: this value sits in `UserDefaults`, which is neither
+    /// encrypted nor access-controlled, and the only question it has to answer is "same
+    /// as last time".
+    private func discardAgreedBaseIfWireKeyChanged(_ material: Data) throws {
+        let fingerprint = SHA256.hash(data: material)
+            .prefix(8).map { String(format: "%02x", $0) }.joined()
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: Self.wireKeyFingerprintDefaultsKey)
+        guard previous != fingerprint else { return }
+
+        // Absent means either a first run, which has no base to discard and costs
+        // nothing, or an install from before the fingerprint existed — which is exactly
+        // the vault-key era whose base must be discarded. Both want the same action.
+        if previous != nil || FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path) {
+            NSLog("Snippets: the iCloud sync key changed; discarding the agreed base so "
+                  + "every snippet is re-uploaded under the new one.")
+        }
+        for url in [SnippetStorageLocations.syncBaseFileURL,
+                    SnippetStorageLocations.syncLibraryMetadataFileURL] {
+            try AtomicFileWriter.removeDurablyIfPresent(url)
+        }
+        // Record the winner only after both stale files are durably absent. If either
+        // removal fails, the next start must retry rather than treating a stale base as
+        // belonging to this key for the rest of the install.
+        defaults.set(fingerprint, forKey: Self.wireKeyFingerprintDefaultsKey)
+    }
+
     /// Adopts a wire key that arrived from another Mac after this engine was built.
     ///
     /// The only way the stored key differs from the one in use is the race `SyncKeyStore`
@@ -242,10 +325,9 @@ final class SyncCoordinator {
     /// no other device holds would make this Mac's uploads permanently unreadable, so it
     /// rebuilds on the winner instead.
     ///
-    /// Records already pushed under the losing key stay unreadable — they are recorded in
-    /// `base.json` as accepted, so they are not re-pushed until they next change. That is
-    /// a stated limit rather than a repair, because the window it needs is two first-ever
-    /// enables inside a minute of each other.
+    /// `start()` fingerprints the new material and clears `base.json` before constructing
+    /// the replacement engine, so records accepted under the losing key are re-pushed
+    /// rather than remaining permanently suppressed by a stale agreed base.
     ///
     /// Skipped mid-round, so a rebuild can never race the engine it is replacing.
     ///
@@ -308,7 +390,7 @@ final class SyncCoordinator {
         switch readiness {
         case .off:
             return "Off. Your snippets stay on this Mac."
-        case .keyUnavailable(let detail):
+        case .cannotStart(let detail):
             return "Cannot start: \(detail)"
         case .ready:
             break

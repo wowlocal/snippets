@@ -114,6 +114,12 @@ struct KeychainSelfTest {
         let replacement = Data(repeating: 0xA5, count: 64)
         try store.storeItem(replacement, account: account)
         check("storeItem replaces in place", try store.loadItem(account: account) == replacement)
+        do {
+            _ = try store.loadItem(account: account, expectedByteCount: 63)
+            check("a fixed-width item is validated before use", false)
+        } catch KeychainSecretStore.Failure.invalidItemLength(63, 64) {
+            check("a fixed-width item is validated before use", true)
+        }
 
         // The whole reason this call exists: two Macs must not each mint a wire key. The
         // incumbent wins and is handed back, rather than being overwritten.
