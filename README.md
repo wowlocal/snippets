@@ -34,6 +34,21 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 2. Select the `Snippets` scheme.
 3. Build and run.
 
+### Install on a connected iPad
+
+With a paired iPad connected, run:
+
+```sh
+./scripts/install-ipad.sh
+```
+
+The script discovers the device, performs an incremental signed Release build, verifies
+the finished app and its provisioning profile, installs it without deleting its data
+sandbox, and launches it. Use `--device <name>` when more than one iPad is paired,
+`--no-build` to reinstall the existing derived-data artifact, or `--no-launch` to stop
+after installation. If the device is locked, an interactive run asks you to unlock it
+and retries the launch. Run `./scripts/install-ipad.sh --help` for all options.
+
 ## First Launch and Permissions
 
 The global expander uses Accessibility APIs. If expansion does not start:

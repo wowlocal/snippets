@@ -176,6 +176,20 @@ A direct device build may still be signed with an Apple Development identity; th
 expected for a registered development device. What matters for sync is the actual
 Production CloudKit entitlement and a profile that permits it.
 
+The preferred workflow is the repository script. It discovers both identifiers, performs
+an incremental Release build, validates the signed artifact and embedded profile, installs
+in place, and launches the app:
+
+```sh
+./scripts/install-ipad.sh
+```
+
+Use `--device <name>` when more than one paired iPad is available, `--no-build` to reuse
+the existing device artifact, or `--no-launch` to install without launching. The script
+does not clean derived data, remove an installed app, or delete its data sandbox.
+
+The underlying manual flow is documented below for troubleshooting.
+
 Discover the Xcode destination and CoreDevice identifiers instead of hardcoding them:
 
 ```sh
