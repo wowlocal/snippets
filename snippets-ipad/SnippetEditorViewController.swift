@@ -57,7 +57,6 @@ final class SnippetEditorViewController: UIViewController {
 
     override var keyCommands: [UIKeyCommand]? {
         [
-            UIKeyCommand(title: "Copy Snippet", action: #selector(copySnippet), input: "\r", modifierFlags: .command),
             UIKeyCommand(title: "Delete Snippet", action: #selector(deleteSnippet), input: UIKeyCommand.inputDelete, modifierFlags: .command),
         ]
     }
@@ -707,17 +706,21 @@ final class SnippetEditorViewController: UIViewController {
         }
     }
 
-    @objc private func copySnippet() {
+    @discardableResult
+    func copySelectedSnippet() -> String? {
         guard let id = selectedID,
               !environment.store.isSecure(id),
-              let snippet = environment.store.snippet(id: id) else { return }
+              let snippet = environment.store.snippet(id: id) else { return nil }
         let clipboard = UIPasteboard.general.string
         UIPasteboard.general.string = PlaceholderResolver.resolve(
             template: snippet.content,
             clipboard: { clipboard }
         )
         footerStatusLabel.text = "Copied “\(snippet.displayName)”."
+        return snippet.displayName
     }
+
+    @objc private func copySnippet() { copySelectedSnippet() }
 
     private func copyShareLink() {
         guard let id = selectedID,

@@ -6,6 +6,24 @@ final class SnippetsIPadUITests: XCTestCase {
     }
 
     func testEmptyOnboardingCreatesAndSearchesSnippet() throws {
+        _ = createGreetingSnippetAndFocusSearch()
+    }
+
+    func testCommandReturnCopiesSelectedSnippetWhileSearchIsFocused() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("The iOS Simulator does not dispatch synthesized modifier keys through UIKeyCommand")
+        #else
+        let (app, search) = createGreetingSnippetAndFocusSearch()
+
+        search.typeKey(.return, modifierFlags: .command)
+        XCTAssertTrue(
+            app.staticTexts["Copied “iPad Greeting”."].waitForExistence(timeout: 3),
+            "⌘Return should copy the selected snippet even while Search owns focus"
+        )
+        #endif
+    }
+
+    private func createGreetingSnippetAndFocusSearch() -> (XCUIApplication, XCUIElement) {
         XCUIDevice.shared.orientation = .landscapeLeft
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
 
@@ -29,5 +47,6 @@ final class SnippetsIPadUITests: XCTestCase {
         search.tap()
         search.typeText("Greeting")
         XCTAssertTrue(app.staticTexts["iPad Greeting"].waitForExistence(timeout: 3))
+        return (app, search)
     }
 }

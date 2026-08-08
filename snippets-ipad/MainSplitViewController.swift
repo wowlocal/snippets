@@ -80,6 +80,7 @@ final class MainSplitViewController: UISplitViewController {
 
     override var keyCommands: [UIKeyCommand]? {
         [
+            Self.copySnippetKeyCommand(),
             UIKeyCommand(title: "New Snippet", action: #selector(newSnippetCommand), input: "n", modifierFlags: .command),
             UIKeyCommand(title: "New from Clipboard", action: #selector(newClipboardCommand), input: "n", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Import", action: #selector(importCommand), input: "i", modifierFlags: [.command, .shift]),
@@ -88,6 +89,17 @@ final class MainSplitViewController: UISplitViewController {
             UIKeyCommand(title: "Undo", action: #selector(undoCommand), input: "z", modifierFlags: .command),
             UIKeyCommand(title: "Redo", action: #selector(redoCommand), input: "z", modifierFlags: [.command, .shift]),
         ]
+    }
+
+    static func copySnippetKeyCommand() -> UIKeyCommand {
+        let command = UIKeyCommand(
+            title: "Copy Snippet",
+            action: #selector(copySnippetCommand(_:)),
+            input: "\r",
+            modifierFlags: .command
+        )
+        command.wantsPriorityOverSystemBehavior = true
+        return command
     }
 
     func open(_ url: URL) {
@@ -297,6 +309,10 @@ final class MainSplitViewController: UISplitViewController {
     @objc private func importCommand() { showImporter() }
     @objc private func exportCommand() { showExporter() }
     @objc private func shortcutsCommand() { showShortcuts() }
+    @objc func copySnippetCommand(_ sender: UIKeyCommand) {
+        guard let name = editorController.copySelectedSnippet() else { return }
+        listController.showStatus("Copied “\(name)”.")
+    }
 
     @objc private func undoCommand() {
         guard environment.store.undo() else { return }
