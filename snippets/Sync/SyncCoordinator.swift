@@ -333,7 +333,13 @@ final class SyncCoordinator {
         case .waitingForVault(let detail):
             return "Waiting: \(detail)."
         case .halted(let reason, let detail):
-            return "Stopped for safety (\(reason)): \(detail)"
+            // The reason in words, then the backend's own account, then where to look.
+            // Previously this interpolated the enum case, so the sentence a user met was
+            // "Stopped for safety (manifestIntegrityFailed): …".
+            var sentence = "Stopped: \(reason.title). \(detail)"
+            if !sentence.hasSuffix(".") { sentence += "." }
+            if let guidance = reason.guidance { sentence += " \(guidance)" }
+            return sentence
         }
     }
 }

@@ -179,6 +179,25 @@ struct SyncEngineTests {
 
         let state = await h.engine.sync()
         #expect(state.isHalted)
+
+        guard case .halted(let reason, let detail) = state else {
+            Issue.record("expected .halted, got \(state)")
+            return
+        }
+
+        // The reason has to name what happened. This branch used to report
+        // `manifestIntegrityFailed` — documented as "the backend was rolled back,
+        // truncated, or tampered with" — for every non-retryable rejection there is. A
+        // CloudKit container whose schema had simply never been deployed to Production
+        // therefore told the user their backend had been tampered with, and sent them
+        // looking for corruption that was not there.
+        #expect(reason == .backendRefused)
+
+        // The backend's own words, unwrapped. `Rejection.description` prefixes "the
+        // backend permanently refused this snippet", and the halt title already says
+        // iCloud refused a snippet, so keeping both made the sentence say it twice
+        // before reaching anything a reader could act on.
+        #expect(detail == "schema rejected")
     }
 
     @Test func anAuthenticationFailureAsksForCredentialsInsteadOfBackingOff() async throws {

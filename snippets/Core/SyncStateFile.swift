@@ -21,8 +21,26 @@ nonisolated struct SyncState: Codable, Equatable {
     enum HaltReason: String, Codable {
         /// The remote asked us to delete more than the deletion guard allows.
         case massDeletion
+        /// The backend refused a record and will keep refusing it: the container's
+        /// schema, the account's quota, the size of one record, a missing entitlement.
+        ///
+        /// Nothing is wrong with anybody's data, which is exactly why this is separate
+        /// from `manifestIntegrityFailed`. It used to be reported as that, and the
+        /// result was that a CloudKit container whose schema had never been deployed to
+        /// Production told the user their backend had been tampered with. Still a halt,
+        /// because retrying on a timer cannot fix any of these and a sticky stop is what
+        /// gets a human to look — but a halt that says what it means.
+        case backendRefused
         /// The manifest HMAC did not match — the backend was rolled back, truncated,
         /// or tampered with.
+        ///
+        /// **Nothing raises this today**, and the honest reading is that it never did:
+        /// there is no manifest in this codebase, and until `backendRefused` existed
+        /// this case was serving as the catch-all for every non-retryable rejection.
+        /// Kept rather than deleted so a `state.json` halted by an older build still
+        /// decodes — dropping the case would make that file unreadable, and an
+        /// unreadable state file is regenerated fresh, which would silently clear a
+        /// sticky halt. Reserved for the integrity check it names, if that is ever built.
         case manifestIntegrityFailed
         /// `snippets.json` was unreadable and had to be quarantined. Pushing now
         /// would propagate the damage to every other device.
@@ -32,9 +50,44 @@ nonisolated struct SyncState: Codable, Equatable {
         /// The file was written by a newer build. Pull and display, never push.
         case schemaTooNew
 
+        /// What the pane calls this, in words rather than a case name.
+        ///
+        /// The settings pane used to interpolate the enum straight into a sentence, so a
+        /// user read "Stopped for safety (manifestIntegrityFailed)". Naming the thing is
+        /// the least a sticky halt can do for the person it is asking to look.
+        var title: String {
+            switch self {
+            case .massDeletion: return "an unusually large deletion arrived"
+            case .backendRefused: return "iCloud refused a snippet"
+            case .manifestIntegrityFailed: return "the backend failed an integrity check"
+            case .localLibraryQuarantined: return "the snippet library could not be read"
+            case .vaultUnreadable: return "the secure vault could not be read"
+            case .schemaTooNew: return "a newer version of Snippets wrote this library"
+            }
+        }
+
+        /// Where to look. Deliberately a list of causes rather than a guess at which one:
+        /// the backend hands back its own wording in `Halt.detail`, and inventing a
+        /// diagnosis on top of that would eventually be confidently wrong.
+        var guidance: String? {
+            switch self {
+            case .backendRefused:
+                return "Usually the iCloud container's schema has not been deployed to "
+                    + "Production, the account is out of space, or one snippet is too "
+                    + "large. None of them is fixed by waiting."
+            case .massDeletion:
+                return "Check another Mac still has your snippets before resuming."
+            case .schemaTooNew:
+                return "Update Snippets on this Mac."
+            case .manifestIntegrityFailed, .localLibraryQuarantined, .vaultUnreadable:
+                return nil
+            }
+        }
+
         var isUserRecoverable: Bool {
             switch self {
-            case .massDeletion, .manifestIntegrityFailed, .localLibraryQuarantined, .vaultUnreadable:
+            case .massDeletion, .backendRefused, .manifestIntegrityFailed,
+                 .localLibraryQuarantined, .vaultUnreadable:
                 return true
             case .schemaTooNew:
                 return false

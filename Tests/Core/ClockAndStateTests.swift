@@ -692,6 +692,49 @@ struct ClockAndStateTests {
             #expect(SyncState.HaltReason.schemaTooNew.isUserRecoverable == false)
         }
 
+        /// A halt written before `backendRefused` existed must still decode.
+        ///
+        /// This is the whole reason `manifestIntegrityFailed` was kept rather than
+        /// renamed when it stopped being raised. A `HaltReason` that no longer decodes
+        /// makes `state.json` unreadable, `SyncStateFile.load` regenerates unreadable
+        /// state fresh — correctly, it holds no user data — and a fresh state has no
+        /// halt. So deleting the case would silently *clear a sticky halt* on upgrade,
+        /// which for a mass-deletion stop is the one outcome that must never happen
+        /// quietly.
+        @Test func aHaltFromAnOlderBuildStillDecodes() throws {
+            let scratch = ScratchDirectory("state-legacy-halt")
+            defer { scratch.remove() }
+            let url = scratch.file("state.json")
+
+            var state = Self.sampleState()
+            state.halt = SyncState.Halt(
+                reason: .manifestIntegrityFailed,
+                detail: "the backend permanently rejected a record",
+                at: Date(timeIntervalSince1970: 0))
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(state).write(to: url)
+
+            let outcome = SyncStateFile.load(from: url, makeFresh: {
+                Issue.record("a decodable halt fell through to `fresh`, clearing a sticky stop")
+                return SyncState.fresh(deviceID: "ffffffff", now: Date(timeIntervalSince1970: 0))
+            })
+            #expect(outcome.loadedState?.halt?.reason == .manifestIntegrityFailed)
+        }
+
+        /// Every halt a backend can cause is one a human can clear once they have fixed
+        /// the thing — deploying the schema, freeing space, shrinking the snippet. It
+        /// stays sticky because none of them is fixed by waiting.
+        @Test func aBackendRefusalIsRecoverableAndSaysWhereToLook() {
+            #expect(SyncState.HaltReason.backendRefused.isUserRecoverable)
+            #expect(SyncState.HaltReason.backendRefused.title.contains("refused"))
+            #expect(SyncState.HaltReason.backendRefused.guidance != nil)
+
+            // The name is what a user reads. An enum case is not a sentence, and this
+            // one used to be interpolated into the settings pane verbatim.
+            #expect(!SyncState.HaltReason.backendRefused.title.contains("backendRefused"))
+        }
+
         /// A file at the current version loads, so the probe is not simply refusing
         /// everything.
         @Test func aFileAtTheCurrentSchemaVersionLoadsNormally() throws {

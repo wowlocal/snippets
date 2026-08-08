@@ -185,11 +185,23 @@ final class SyncEngine {
                     // halting for it would put a scary sticky error in front of someone
                     // who just needs to sign in again.
                     throw SyncTransportFailure.rejected(.authenticationRequired(detail: detail))
+                case .rejected(.permanent(let detail)):
+                    // `backendRefused`, not `manifestIntegrityFailed`. This branch
+                    // catches a container whose schema was never deployed, a full
+                    // account, an oversized record — none of which is an integrity
+                    // failure, and all of which used to be reported as one.
+                    //
+                    // The backend's own words, unwrapped: `Rejection.description`
+                    // prefixes "the backend permanently refused this snippet", and after
+                    // a halt title that already says exactly that, the sentence said the
+                    // same thing twice before reaching anything a reader could act on.
+                    throw SyncEngineFailure(reason: .backendRefused, detail: detail)
                 case .rejected(let rejection):
                     guard rejection.isRetryable else {
+                        // Kept for a non-retryable kind added later, so a new case
+                        // cannot silently become a record that is dropped in silence.
                         throw SyncEngineFailure(
-                            reason: .manifestIntegrityFailed,
-                            detail: "the backend permanently rejected a record: \(rejection)")
+                            reason: .backendRefused, detail: "\(rejection)")
                     }
                     // Retryable: leave it out of the base so the next round tries again.
                 }
