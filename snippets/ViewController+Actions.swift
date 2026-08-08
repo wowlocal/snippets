@@ -424,9 +424,15 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID,
-              let targetSnippet = store.snippet(id: targetSnippetID) else { return }
+              let targetSnippet = store.snippetForDisplay(id: targetSnippetID) else { return }
         let deletedSnippetName = targetSnippet.displayName
-        store.delete(snippetID: targetSnippetID)
+        if store.isSecure(targetSnippetID) {
+            // Deleting ciphertext needs no key — requiring Touch ID to throw something
+            // away would be friction in the one direction that cannot leak anything.
+            try? (NSApp.delegate as? AppDelegate)?.secureStore.delete(id: targetSnippetID)
+        } else {
+            store.delete(snippetID: targetSnippetID)
+        }
         reloadVisibleSnippets(keepSelection: true)
         applySelectedSnippetToEditor()
         closeActionPanel()
@@ -444,6 +450,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
     func duplicateSelectedSnippet() {
         let targetSnippetID = activeCommandSnippetID()
+        if refuseSecureCommand(targetSnippetID, "duplicated") { return }
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID,
@@ -466,9 +473,11 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID else { return }
-        store.togglePinned(snippetID: targetSnippetID)
+        if !applySecureMetadataToggle(targetSnippetID, pinned: true) {
+            store.togglePinned(snippetID: targetSnippetID)
+        }
 
-        let isPinned = store.snippet(id: targetSnippetID)?.isPinned == true
+        let isPinned = store.snippetForDisplay(id: targetSnippetID)?.isPinned == true
         importExportMessage = isPinned ? "Pinned snippet." : "Unpinned snippet."
 
         reloadVisibleSnippets(keepSelection: true)
@@ -483,7 +492,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID else { return }
-        let name = store.snippet(id: targetSnippetID)?.displayName
+        let name = store.snippetForDisplay(id: targetSnippetID)?.displayName
         usageStore.forget(snippetID: targetSnippetID)
 
         importExportMessage = name.map { "Reset usage history for \($0)." } ?? "Reset usage history."
@@ -497,12 +506,14 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID else { return }
-        store.toggleEnabled(snippetID: targetSnippetID)
+        if !applySecureMetadataToggle(targetSnippetID, enabled: true) {
+            store.toggleEnabled(snippetID: targetSnippetID)
+        }
 
-        let isEnabled = store.snippet(id: targetSnippetID)?.isEnabled == true
+        let isEnabled = store.snippetForDisplay(id: targetSnippetID)?.isEnabled == true
         importExportMessage = isEnabled ? "Enabled snippet." : "Disabled snippet."
 
-        if let snippet = store.snippet(id: targetSnippetID) {
+        if let snippet = store.snippetForDisplay(id: targetSnippetID) {
             applySnippetToEditor(snippet)
         }
         closeActionPanel()
@@ -510,6 +521,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
     func copySelectedSnippet() {
         let targetSnippetID = activeCommandSnippetID()
+        if refuseSecureCommand(targetSnippetID, "copied") { return }
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID,
@@ -520,6 +532,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
     func pasteSelectedSnippet() {
         let targetSnippetID = activeCommandSnippetID()
+        if refuseSecureCommand(targetSnippetID, "pasted from here") { return }
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID,
@@ -678,6 +691,13 @@ extension ViewController {
     /// rather than in a dialog that is dismissed once and never seen again.
     @objc func toggleSelectedSnippetSecurity() {
         commitActiveEditorState(endingEditing: true)
+        // Committing the editor only updates memory; the write is debounced 0.3s. Both
+        // directions below run inside a LibraryTransaction that reads snippets.json from
+        // DISK, so without this they would encrypt the pre-edit text and delete the row —
+        // and the pending write would then land, find its record missing, correctly apply
+        // "an edit beats a delete", and put the plaintext row back. One UUID in both
+        // files, auto-expanding, with the newer edit destroyed at the next reconcile.
+        store.flushPendingWrites()
         guard let snippet = selectedSnippet else { return }
         if store.isSecure(snippet.id) {
             beginDemoteConfirmation(for: snippet)

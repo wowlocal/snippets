@@ -479,21 +479,6 @@ final class SnippetStore {
         secureProvider?.isSecure(id) ?? false
     }
 
-    /// Every keyword in use across BOTH stores, folded.
-    ///
-    /// Uniqueness has to span the two files or the expander becomes ambiguous: a
-    /// plaintext snippet and a secure one sharing `awsroot` would both match, and the
-    /// user would have no way to see why. The editor's existing conflict warning reads
-    /// this rather than `snippets` alone.
-    func keywordKeysInUse(excluding id: UUID? = nil) -> Set<String> {
-        var keys = Set<String>()
-        for snippet in snippets + (secureProvider?.secureShellsForDisplay() ?? []) where snippet.id != id {
-            let key = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
-            if !key.isEmpty { keys.insert(key) }
-        }
-        return keys
-    }
-
     /// The auto-expansion candidates — deliberately **plaintext only**.
     ///
     /// Do not merge secure shells in here. This is the list the keystroke buffer is
@@ -733,14 +718,37 @@ final class SnippetStore {
     private func preflightImportMerge(_ imported: [Snippet]) throws {
         var conflicts: [String] = []
 
+        // Both stores. An import that reuses a secure record's id would replace its
+        // plaintext twin here while the encrypted original stayed in the vault, and one
+        // that reuses a secure keyword would leave two live rows on the same trigger —
+        // in both cases with nothing said to the user, because this only ever looked at
+        // `snippets`.
+        let secureShells = secureProvider?.secureShellsForDisplay() ?? []
+        let existing = snippets + secureShells
+
         for incoming in imported {
-            guard let idMatch = snippets.first(where: { $0.id == incoming.id }) else { continue }
+            if secureShells.contains(where: { $0.id == incoming.id }) {
+                conflicts.append(
+                    "Imported \(incoming.displayName) has the same ID as a secure snippet. "
+                    + "Importing it would create a plaintext copy of something you chose to encrypt.")
+                continue
+            }
 
             let keyword = incoming.normalizedKeyword
             guard !keyword.isEmpty else { continue }
-
             let keywordKey = SnippetTagging.filterKey(for: keyword)
-            if let keywordMatch = snippets.first(where: {
+
+            if let secureMatch = secureShells.first(where: {
+                SnippetTagging.filterKey(for: $0.normalizedKeyword) == keywordKey
+            }) {
+                conflicts.append(
+                    "Imported \(incoming.displayName) uses keyword \\\(keyword), which belongs to the "
+                    + "secure snippet \(secureMatch.displayName).")
+                continue
+            }
+
+            guard let idMatch = existing.first(where: { $0.id == incoming.id }) else { continue }
+            if let keywordMatch = existing.first(where: {
                 $0.id != incoming.id &&
                 SnippetTagging.filterKey(for: $0.normalizedKeyword) == keywordKey
             }) {

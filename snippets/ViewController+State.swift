@@ -376,15 +376,49 @@ extension ViewController {
         return store.snippetForDisplay(id: editingSnippetID)
     }
 
+    /// The row a command should act on, secure or not.
+    ///
+    /// This used to require `store.snippet`, i.e. plaintext only — so Delete, Pin,
+    /// Enable, Reset Usage and the tag menu all returned early for a secure row while
+    /// their buttons and menu items stayed enabled. Nothing happened and nothing was
+    /// said. Commands that genuinely cannot apply to a secure record now refuse out
+    /// loud; see `refuseSecureCommand`.
     func activeCommandSnippetID() -> UUID? {
         let preferredID = isEditingDetails ? editingSnippetID : selectedSnippetID
-        guard let preferredID, store.snippet(id: preferredID) != nil else { return nil }
+        guard let preferredID, store.snippetForDisplay(id: preferredID) != nil else { return nil }
         return preferredID
+    }
+
+    /// Says no, visibly, for the commands that would need the plaintext.
+    ///
+    /// Duplicating or copying a secret means making a second copy of it — on the
+    /// clipboard, or as a new record — which is the opposite of what the vault is for.
+    /// Returns true when the command was refused and the caller should stop.
+    func refuseSecureCommand(_ id: UUID?, _ what: String) -> Bool {
+        guard let id, store.isSecure(id) else { return false }
+        importExportMessage = "Secure snippets can\u{2019}t be \(what). Type \\ and pick it from the list to use it."
+        closeActionPanel()
+        return true
+    }
+
+    /// Routes a metadata change to whichever store owns the record.
+    @discardableResult
+    func applySecureMetadataToggle(_ id: UUID, pinned: Bool? = nil, enabled: Bool? = nil) -> Bool {
+        guard store.isSecure(id), let app = NSApp.delegate as? AppDelegate,
+              let record = app.secureStore.record(id) else { return false }
+        try? app.secureStore.updateMetadata(
+            id: id,
+            isEnabled: enabled.map { _ in !record.isEnabled },
+            isPinned: pinned.map { _ in !record.isPinned })
+        return true
     }
 
     func commitActiveEditorState(endingEditing: Bool) {
         guard isEditingDetails else { return }
         updateSelectedSnippetFromEditor()
+        // `updateSelectedSnippetFromEditor` may have queued a secure write; anything
+        // reading the vault after this must see it.
+        flushPendingSecureEdit()
         store.commitEditTransaction()
 
         guard endingEditing else { return }
@@ -592,7 +626,13 @@ extension ViewController {
         var duplicate: Snippet?
         var blockedBy: Snippet?
         var blocks: Snippet?
-        for other in store.enabledSnippetsSorted() where other.id != snippet.id {
+        // Both stores. `enabledSnippetsSorted()` is plaintext-only by design — it feeds
+        // auto-expansion — so checking conflicts against it alone let a plaintext snippet
+        // silently claim a keyword a secure record already owns, leaving two live rows
+        // matching the same trigger with no warning anywhere.
+        let candidates = store.enabledSnippetsSorted()
+            + (store.secureProvider?.secureShellsForDisplay().filter(\.isEnabled) ?? [])
+        for other in candidates where other.id != snippet.id {
             switch KeywordRelation.between(keyword, SnippetTagging.filterKey(for: other.normalizedKeyword)) {
             case .duplicate:
                 duplicate = duplicate ?? other
@@ -743,17 +783,51 @@ extension ViewController {
     /// rather than the snippet, so saving it would overwrite the secret with the word
     /// that stands in for it. Renaming or retagging a locked record is still allowed,
     /// because that never needs the key.
+    /// Debounced, exactly like the plaintext path.
+    ///
+    /// This runs from `textDidChange`, so it fires on every keystroke. Writing straight
+    /// through meant a locked, fsync'd vault write per character — and, because a vault
+    /// write publishes a library change, the editor was also rebuilt under the caret on
+    /// every character, sending it to the end of the line mid-word. `SnippetStore` has
+    /// debounced for exactly this reason since long before secure snippets existed.
     func commitSecureEdit(_ snippet: Snippet) {
+        pendingSecureEdit = snippet
+        secureEditWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.flushPendingSecureEdit() }
+        }
+        secureEditWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// Writes any pending secure edit immediately.
+    ///
+    /// Must run before anything reads the vault from disk — committing the editor,
+    /// promoting, demoting, quitting — or that reader sees the pre-edit record.
+    func flushPendingSecureEdit() {
+        secureEditWorkItem?.cancel()
+        secureEditWorkItem = nil
+        guard let snippet = pendingSecureEdit else { return }
+        pendingSecureEdit = nil
+
         guard let app = NSApp.delegate as? AppDelegate else { return }
         let secureStore = app.secureStore
 
         do {
-            try secureStore.updateMetadata(
-                id: snippet.id,
-                name: snippet.name,
-                keyword: snippet.keyword,
-                tags: snippet.tags,
-                isEnabled: snippet.isEnabled)
+            // Only when something actually moved. Typing in the body changes no
+            // metadata, and an unconditional write there was most of the storm.
+            if let record = secureStore.record(snippet.id),
+               record.name != snippet.name
+                   || record.keyword != snippet.normalizedKeyword
+                   || record.tags != snippet.tags
+                   || record.isEnabled != snippet.isEnabled {
+                try secureStore.updateMetadata(
+                    id: snippet.id,
+                    name: snippet.name,
+                    keyword: snippet.keyword,
+                    tags: snippet.tags,
+                    isEnabled: snippet.isEnabled)
+            }
 
             // The latch, not a string comparison: content is written back only if this
             // editor is currently displaying the real decrypted text for this exact

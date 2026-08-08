@@ -251,6 +251,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // borrowed for a paste would otherwise outlive the process.
         // Before anything else: remove the socket, so a CLI invocation racing our exit
         // gets "not running" rather than a connection that dies mid-request.
+        // Before the library flush: a queued secure edit exists only in the editor, and
+        // the process is about to end.
+        (NSApp.windows.compactMap { $0.contentViewController as? ViewController }.first)?
+            .flushPendingSecureEdit()
         controlServer.stop()
         expansionEngine.prepareForTermination()
         // Synchronous on purpose: this method returns and the process dies long

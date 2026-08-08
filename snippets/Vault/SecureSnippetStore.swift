@@ -339,7 +339,14 @@ final class SecureSnippetStore: SecureSnippetProviding {
             let plaintext = Data(snippet.content.utf8)
             let record = VaultRecord(
                 id: snippet.id,
-                name: snippet.name,
+                // Fix the name now, not later. `Snippet.displayName` falls back to the
+                // first line of the content, and a secure shell has no content — so an
+                // unnamed snippet that was recognisable in the list becomes one of
+                // several identical "Untitled Snippet" rows the moment it is encrypted.
+                // This is the last instant the text is still available to name it from.
+                name: snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? snippet.displayName
+                    : snippet.name,
                 keyword: snippet.normalizedKeyword,
                 tags: snippet.tags,
                 isEnabled: snippet.isEnabled,
@@ -566,8 +573,14 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 try change(&vault)
                 return vault
             }
+            // Only announce a real change. `VaultFile.update` already skips the write
+            // when the encoded document is byte-identical, but firing onChange anyway
+            // published a `.external` library change — which reloads the editor and
+            // sends the caret to the end of the line. On the content path that happens
+            // on every single keystroke.
+            let changed = updated != document
             document = updated
-            onChange?()
+            if changed { onChange?() }
         } catch let failure as Failure {
             throw failure
         } catch {

@@ -148,6 +148,10 @@ final class ViewController: NSViewController {
     /// Which secure snippet's real text is on screen right now. This identity latch,
     /// rather than placeholder text, gates whether editor content may be written back.
     var secureContentEditableForID: UUID?
+
+    /// The debounce for secure content edits, mirroring `SnippetStore`'s own.
+    var pendingSecureEdit: Snippet?
+    var secureEditWorkItem: DispatchWorkItem?
     /// Inline replacement for the demote confirmation alert.
     let secureDemoteStrip = NSStackView()
     let secureDemoteLabel = NSTextField(wrappingLabelWithString: "")

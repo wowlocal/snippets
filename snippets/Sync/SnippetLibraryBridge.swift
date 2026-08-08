@@ -85,6 +85,11 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     func applyRemote(_ envelopes: [SyncEnvelope]) throws -> [UUID] {
         guard !envelopes.isEmpty else { return [] }
 
+        // Same hazard as promote: the transaction below reads snippets.json from disk,
+        // so an unflushed in-memory edit would be invisible to it and then land on top
+        // of the merged result a fraction of a second later.
+        store.flushPendingWrites()
+
         let outcome = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
             var changed: [UUID] = []
             var applied: [SyncEnvelope] = []
