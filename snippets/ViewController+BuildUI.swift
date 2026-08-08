@@ -13,6 +13,53 @@ enum MainLayoutMetrics {
     static let sidebarCollapsedDefaultsKey = "SnippetsMainSidebarCollapsed"
 }
 
+/// The editor's vertical give. The content box is the only view in the form with
+/// a scroller of its own, so it is the only one that can lose height for free —
+/// these numbers make it the view that yields, and make it yield first.
+enum EditorVerticalMetrics {
+    /// Four lines of the 14pt monospaced font: `defaultLineHeight` measures 17.0
+    /// for it and `textContainerInset` is 8pt top and bottom, so 4 * 17 + 16 = 84.
+    /// Three lines is 67 and one is 33; four is the smallest box in which a
+    /// paragraph still has a shape and the caret has a line above and below it.
+    /// The cost is exactly linear — every point here is a point of minimum window
+    /// height — so 67 would buy 17pt of window and 50 would buy 34.
+    static let contentBoxMinimumHeight: CGFloat = 84
+
+    /// What the box asks for when there is room. Optional, so it is the first
+    /// thing in the whole editor that the layout gives up.
+    static let contentBoxPreferredHeight: CGFloat = 220
+    static let contentBoxPreferredPriority = NSLayoutConstraint.Priority(200)
+
+    /// Strictly below `windowSizeStayPut`, and that is the whole trick.
+    ///
+    /// The constraint this carries is `document height == viewport height`, whose
+    /// `<=` half reads "the viewport must be at least as tall as the form" — and
+    /// at or above 500 the layout engine happily satisfies that by *growing the
+    /// window*. Measured: asking a 300pt window for this at 700, 510 and 500 got
+    /// back 479, 479 and 373; at 490 and below the window stayed exactly where it
+    /// was put. 20 under keeps clear of all three of AppKit's window-drag
+    /// priorities (490 / 500 / 510) rather than tying with the lowest.
+    ///
+    /// Anyone tempted to raise this "so it works better" will silently break
+    /// window resizing instead: there is no constraint log for it, just a window
+    /// that will not get small.
+    static let editorFitsViewportPriority = NSLayoutConstraint.Priority(
+        rawValue: NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 20
+    )
+
+    /// Above `editorFitsViewportPriority`, so the preview keeps its lines.
+    ///
+    /// It used to be `.defaultLow`, which is below the viewport pull, so between
+    /// roughly 560 and 640pt of window height the form took its next 100pt out of
+    /// the preview while the box sat parked on its floor. The preview is a
+    /// wrapping label with no scroller of its own, so those lines were not
+    /// scrolled out of reach, they were gone — and showing what will actually be
+    /// pasted is the preview's entire job. It is still bounded by
+    /// `previewMaxHeight` and its own 8-line cap; past that the outer scroller
+    /// takes over, which is recoverable.
+    static let previewKeepsItsLinesPriority = NSLayoutConstraint.Priority.defaultHigh
+}
+
 private struct ActionShortcutDescriptor {
     let title: String
     let shortcut: String
@@ -586,7 +633,12 @@ extension ViewController {
         snippetTextView.allowsUndo = true
         snippetTextView.isHorizontallyResizable = false
         snippetTextView.autoresizingMask = [.width]
-        snippetTextView.minSize = NSSize(width: 0, height: 220)
+        // Zero, not 220. `minSize` is NSTextView's own floor and Auto Layout
+        // cannot see it, so leaving it at 220 would not stop the box shrinking —
+        // it would only put a 220pt document inside an 84pt viewport the first
+        // time anything called `sizeToFit()`, i.e. an inner scroller over 136pt
+        // of nothing.
+        snippetTextView.minSize = NSSize(width: 0, height: 0)
         snippetTextView.isVerticallyResizable = true
         snippetTextView.textContainerInset = NSSize(width: 8, height: 8)
         snippetTextView.textContainer?.widthTracksTextView = true
@@ -595,7 +647,29 @@ extension ViewController {
 
         snippetScrollView.documentView = snippetTextView
         snippetContainer.addSubview(snippetScrollView)
-        snippetContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        // Two floors, not one. The hard floor is what the box may never go below
+        // at any window size; the preferred floor is what it asks for when there
+        // is room, and is the first thing in the whole editor that the layout
+        // gives up. A single required 220 is why Keyword sat on the window's
+        // bottom edge and Name, Tags and Enabled went under the fold: the box
+        // kept every point it had and the form's overflow went to the outer
+        // scroller instead.
+        snippetContainer.heightAnchor
+            .constraint(greaterThanOrEqualToConstant: EditorVerticalMetrics.contentBoxMinimumHeight)
+            .isActive = true
+
+        let preferredContentBoxHeight = snippetContainer.heightAnchor
+            .constraint(greaterThanOrEqualToConstant: EditorVerticalMetrics.contentBoxPreferredHeight)
+        preferredContentBoxHeight.priority = EditorVerticalMetrics.contentBoxPreferredPriority
+        preferredContentBoxHeight.isActive = true
+
+        // The box is both the grower and the yielder: it takes the slack in a
+        // tall window and gives it back first in a short one. It has no intrinsic
+        // size, so these two state the intent rather than carry it — the explicit
+        // constraints above and the viewport pull in `buildEditor` are the
+        // mechanism.
+        snippetContainer.setContentHuggingPriority(.init(1), for: .vertical)
+        snippetContainer.setContentCompressionResistancePriority(.init(1), for: .vertical)
 
         NSLayoutConstraint.activate([
             snippetScrollView.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
@@ -650,7 +724,10 @@ extension ViewController {
         previewValueField.maximumNumberOfLines = 8
         previewValueField.allowsDefaultTighteningForTruncation = false
         previewValueField.translatesAutoresizingMaskIntoConstraints = false
-        previewValueField.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        previewValueField.setContentCompressionResistancePriority(
+            EditorVerticalMetrics.previewKeepsItsLinesPriority,
+            for: .vertical
+        )
 
         previewContainer.addSubview(previewValueField)
 
@@ -732,6 +809,24 @@ extension ViewController {
         // arrival and departure shifts Keyword by the same amount as any other
         // row and it reads as part of the same block.
         stack.setCustomSpacing(16, after: previewSectionStack)
+
+        // The active half of the vertical fix, and the half that is not obvious.
+        // `contentView.height >= clipView.height` below only ever pushes the
+        // document *up* — it is what lets the box grow into a tall window, and it
+        // is also why lowering the box's floor on its own changes nothing at all:
+        // nothing in this layout asked the form to fit its viewport, so an
+        // optional floor is simply satisfied and the document grows instead.
+        // This is the opposite pull: prefer a form that fits. It outranks the
+        // box's preferred height, so the box compresses; every field's and
+        // label's compression resistance outranks it, so none of them ever does;
+        // and it is below `windowSizeStayPut`, so it can never resize the window
+        // to get its way. When the form genuinely will not fit with the box on
+        // its floor this constraint breaks — silently, which is what optional
+        // means — and the outer scroller takes over as it always did.
+        let editorFitsViewport = contentView.heightAnchor
+            .constraint(equalTo: scrollView.contentView.heightAnchor)
+        editorFitsViewport.priority = EditorVerticalMetrics.editorFitsViewportPriority
+        editorFitsViewport.isActive = true
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.leadingAnchor),
