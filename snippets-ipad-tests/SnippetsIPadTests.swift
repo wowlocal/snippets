@@ -101,6 +101,126 @@ final class SnippetsIPadTests: XCTestCase {
         )
         XCTAssertEqual(UIPasteboard.general.string, "Hello from iPad")
     }
+
+    func testSidebarKeepsProgrammaticSelectionVisibleAcrossReload() {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Selected", content: "Visible selection")
+        let controller = SnippetListViewController(environment: environment)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 800))
+        window.rootViewController = controller
+        window.isHidden = false
+        addTeardownBlock { window.isHidden = true }
+
+        controller.loadViewIfNeeded()
+        controller.select(id: snippet.id)
+        controller.reload(keepingSelection: true)
+        controller.view.layoutIfNeeded()
+
+        let tableView = controller.view.descendant(
+            withAccessibilityIdentifier: "snippet-list"
+        ) as? UITableView
+        XCTAssertEqual(tableView?.indexPathForSelectedRow, IndexPath(row: 0, section: 0))
+        XCTAssertTrue(tableView?.cellForRow(at: IndexPath(row: 0, section: 0))?.isSelected == true)
+        XCTAssertTrue(
+            tableView?.cellForRow(at: IndexPath(row: 0, section: 0))?
+                .accessibilityTraits.contains(.selected) == true
+        )
+    }
+
+    func testSidebarTagFiltersWrapAndExpandWithoutHorizontalScrolling() {
+        let filter = SidebarTagFilterView()
+        let tags = [
+            "Engineering", "Personal", "Meetings", "Support", "Email",
+            "Planning", "Design", "Finance", "Documentation", "Research",
+        ]
+        let items = tags.enumerated().map {
+            SidebarTagFilterView.Item(tag: $0.element, count: $0.offset + 1)
+        }
+        filter.update(
+            items: items,
+            activeKeys: []
+        )
+
+        let width: CGFloat = 300
+        let collapsedHeight = filter.sizeThatFits(
+            CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        ).height
+        filter.frame = CGRect(x: 0, y: 0, width: width, height: collapsedHeight)
+        filter.layoutIfNeeded()
+
+        XCTAssertGreaterThan(collapsedHeight, 38, "Several tags should wrap instead of scrolling sideways")
+        XCTAssertFalse(filter.containsDescendant(ofType: UIScrollView.self))
+
+        var toggledTag: String?
+        filter.onToggleTag = { toggledTag = $0 }
+        let engineering = filter.descendant(
+            withAccessibilityIdentifier: "tag-filter-engineering"
+        ) as? UIButton
+        engineering?.sendActions(for: .touchUpInside)
+        XCTAssertEqual(toggledTag, "Engineering")
+
+        filter.update(items: items, activeKeys: ["engineering"])
+        filter.frame.size.height = filter.sizeThatFits(
+            CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        ).height
+        filter.layoutIfNeeded()
+        XCTAssertEqual(
+            filter.descendant(withAccessibilityIdentifier: "tag-filter-engineering")?
+                .accessibilityValue,
+            "Selected"
+        )
+
+        var didClear = false
+        filter.onClearFilters = { didClear = true }
+        let clear = filter.descendant(
+            withAccessibilityIdentifier: "clear-tag-filters"
+        ) as? UIButton
+        clear?.sendActions(for: .touchUpInside)
+        XCTAssertTrue(didClear)
+
+        let disclosure = filter.descendant(
+            withAccessibilityIdentifier: "tag-filters-disclosure"
+        ) as? UIButton
+        XCTAssertNotNil(disclosure)
+        XCTAssertFalse(disclosure?.isHidden == true)
+        disclosure?.sendActions(for: .touchUpInside)
+
+        let expandedHeight = filter.sizeThatFits(
+            CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        ).height
+        XCTAssertGreaterThan(expandedHeight, collapsedHeight)
+    }
+
+    func testScrollFadeTracksOnlyEdgesWithHiddenContent() {
+        let scrollView = UIScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        let container = ScrollFadeContainerView(containing: scrollView)
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+        host.addSubview(container)
+        NSLayoutConstraint.activate([
+            container.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            container.topAnchor.constraint(equalTo: host.topAnchor),
+            container.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+        host.layoutIfNeeded()
+        scrollView.contentSize = CGSize(width: 300, height: 600)
+
+        scrollView.contentOffset = .zero
+        container.updateFade()
+        XCTAssertEqual(container.topFadeIntensity, 0, accuracy: 0.001)
+        XCTAssertEqual(container.bottomFadeIntensity, 1, accuracy: 0.001)
+
+        scrollView.contentOffset.y = 200
+        container.updateFade()
+        XCTAssertEqual(container.topFadeIntensity, 1, accuracy: 0.001)
+        XCTAssertEqual(container.bottomFadeIntensity, 1, accuracy: 0.001)
+
+        scrollView.contentOffset.y = 400
+        container.updateFade()
+        XCTAssertEqual(container.topFadeIntensity, 1, accuracy: 0.001)
+        XCTAssertEqual(container.bottomFadeIntensity, 0, accuracy: 0.001)
+    }
 }
 
 @MainActor
@@ -110,4 +230,22 @@ private final class SecureProviderStub: SecureSnippetProviding {
     init(shell: Snippet) { self.shell = shell }
     func secureShellsForDisplay() -> [Snippet] { [shell] }
     func isSecure(_ id: UUID) -> Bool { id == shell.id }
+}
+
+@MainActor
+private extension UIView {
+    func descendant(withAccessibilityIdentifier identifier: String) -> UIView? {
+        if accessibilityIdentifier == identifier { return self }
+        for subview in subviews {
+            if let match = subview.descendant(withAccessibilityIdentifier: identifier) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    func containsDescendant<T: UIView>(ofType type: T.Type) -> Bool {
+        if self is T { return true }
+        return subviews.contains { $0.containsDescendant(ofType: type) }
+    }
 }

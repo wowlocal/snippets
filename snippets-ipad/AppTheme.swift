@@ -7,15 +7,26 @@ enum AppTheme {
     static let warning = UIColor.systemOrange
     static let disabled = UIColor.secondaryLabel
     static let selectedRow = UIColor { traits in
-        UIColor.systemIndigo.withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.26 : 0.14)
+        if traits.accessibilityContrast == .high {
+            return UIColor.systemIndigo.withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.34 : 0.26)
+        }
+        return traits.userInterfaceStyle == .dark
+            ? UIColor.white.withAlphaComponent(0.14)
+            : UIColor.systemIndigo.withAlphaComponent(0.13)
     }
-    static let hoveredRow = UIColor.secondaryLabel.withAlphaComponent(0.07)
+    static let selectedRowBorder = UIColor { traits in
+        if traits.accessibilityContrast == .high { return UIColor.systemIndigo }
+        return UIColor.separator.withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.20 : 0.18)
+    }
+    static let hoveredRow = UIColor { traits in
+        (traits.userInterfaceStyle == .dark ? UIColor.white : UIColor.black).withAlphaComponent(0.055)
+    }
     static let editorSurface = UIColor { traits in
         traits.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
     }
     static let previewSurface = UIColor.secondaryLabel.withAlphaComponent(0.075)
 
-    private static let tagColors: [UIColor] = [
+    private static let tagBaseColors: [UIColor] = [
         .systemRed,
         .systemOrange,
         .systemYellow,
@@ -32,11 +43,31 @@ enum AppTheme {
 
     static func tagColor(for tag: String) -> UIColor {
         let key = SnippetTagging.filterKey(for: tag)
-        return tagColors[Int(fnv1aHash(key) % UInt64(tagColors.count))]
+        let base = tagBaseColors[Int(fnv1aHash(key) % UInt64(tagBaseColors.count))]
+        return mutedTagColor(base)
     }
 
     static func tagFillColor(for tag: String, selected: Bool = false) -> UIColor {
-        tagColor(for: tag).withAlphaComponent(selected ? 0.9 : 0.13)
+        UIColor { traits in
+            tagColor(for: tag)
+                .resolvedColor(with: traits)
+                .withAlphaComponent(selected ? 0.92 : 0.13)
+        }
+    }
+
+    static func contrastingTextColor(on background: UIColor) -> UIColor {
+        UIColor { traits in
+            let resolved = background.resolvedColor(with: traits)
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+                return .label
+            }
+            let luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+            return luminance > 0.55 ? UIColor.black.withAlphaComponent(0.85) : .white
+        }
     }
 
     static func scaledFont(
@@ -80,6 +111,38 @@ enum AppTheme {
         let effect = UIGlassEffect(style: .regular)
         effect.tintColor = tintColor ?? UIColor.clear
         return UIVisualEffectView(effect: effect)
+    }
+
+    private static func mutedTagColor(_ base: UIColor) -> UIColor {
+        UIColor { traits in
+            let resolved = base.resolvedColor(with: traits)
+            var hue: CGFloat = 0
+            var saturation: CGFloat = 0
+            var brightness: CGFloat = 0
+            var alpha: CGFloat = 0
+            guard resolved.getHue(
+                &hue,
+                saturation: &saturation,
+                brightness: &brightness,
+                alpha: &alpha
+            ) else {
+                return resolved
+            }
+            if traits.userInterfaceStyle == .dark {
+                return UIColor(
+                    hue: hue,
+                    saturation: saturation * 0.5,
+                    brightness: min(brightness, 0.92),
+                    alpha: alpha
+                )
+            }
+            return UIColor(
+                hue: hue,
+                saturation: saturation * 0.65,
+                brightness: brightness * 0.72,
+                alpha: alpha
+            )
+        }
     }
 
     private static func fnv1aHash(_ string: String) -> UInt64 {

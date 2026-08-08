@@ -5,14 +5,14 @@ final class SnippetListViewController: UIViewController {
 
     private let environment: AppEnvironment
     private let tableView = UITableView(frame: .zero, style: .plain)
-    private let tagScrollView = UIScrollView()
-    private let tagStack = UIStackView()
+    private let tagFilterBar = SidebarTagFilterView()
     private let footerView = UIView()
     private let deleteButton = UIButton(type: .system)
     private let statusLabel = UILabel()
     private let emptyView = EmptyLibraryView()
     private let searchController = UISearchController(searchResultsController: nil)
     private var tagBarHeightConstraint: NSLayoutConstraint?
+    private lazy var tableFadeContainer = ScrollFadeContainerView(containing: tableView)
     private var visibleSnippets: [Snippet] = []
     private var activeTagKeys = Set<String>()
     private var selectedID: UUID?
@@ -42,7 +42,14 @@ final class SnippetListViewController: UIViewController {
         configureFooter()
         configureTable()
         configureEmptyView()
-        reload(keepingSelection: false)
+        reload(keepingSelection: selectedID != nil)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateTagBarHeight()
+        tableView.layoutIfNeeded()
+        tableFadeContainer.updateFade()
     }
 
     override var canBecomeFirstResponder: Bool { true }
@@ -52,6 +59,9 @@ final class SnippetListViewController: UIViewController {
     }
 
     func reload(keepingSelection: Bool) {
+        if !keepingSelection {
+            selectedID = nil
+        }
         let query = searchController.searchBar.text?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
@@ -69,17 +79,18 @@ final class SnippetListViewController: UIViewController {
             return matchesSearch && matchesTags
         }
 
-        rebuildTagButtons()
+        rebuildTagFilters()
         tableView.reloadData()
         updateEmptyState(query: query)
 
         if keepingSelection, let selectedID,
            let row = visibleSnippets.firstIndex(where: { $0.id == selectedID }) {
             tableView.selectRow(at: IndexPath(row: row, section: 0), animated: false, scrollPosition: .none)
-        } else if !keepingSelection {
-            selectedID = nil
+        } else if let selectedRow = tableView.indexPathForSelectedRow {
+            tableView.deselectRow(at: selectedRow, animated: false)
         }
         deleteButton.isEnabled = selectedID != nil
+        tableFadeContainer.setNeedsLayout()
     }
 
     func select(id: UUID) {
@@ -154,29 +165,30 @@ final class SnippetListViewController: UIViewController {
     }
 
     private func configureTags() {
-        tagScrollView.translatesAutoresizingMaskIntoConstraints = false
-        tagScrollView.showsHorizontalScrollIndicator = false
-        tagScrollView.accessibilityIdentifier = "tag-filters"
+        tagFilterBar.onToggleTag = { [weak self] tag in
+            guard let self else { return }
+            let key = SnippetTagging.filterKey(for: tag)
+            if !self.activeTagKeys.insert(key).inserted {
+                self.activeTagKeys.remove(key)
+            }
+            self.reload(keepingSelection: true)
+        }
+        tagFilterBar.onClearFilters = { [weak self] in
+            self?.activeTagKeys.removeAll()
+            self?.reload(keepingSelection: true)
+        }
+        tagFilterBar.onHeightChange = { [weak self] in
+            self?.updateTagBarHeight()
+        }
 
-        tagStack.translatesAutoresizingMaskIntoConstraints = false
-        tagStack.axis = .horizontal
-        tagStack.spacing = 6
-        tagStack.alignment = .center
-        tagScrollView.addSubview(tagStack)
-
-        view.addSubview(tagScrollView)
-        let height = tagScrollView.heightAnchor.constraint(equalToConstant: 0)
+        view.addSubview(tagFilterBar)
+        let height = tagFilterBar.heightAnchor.constraint(equalToConstant: 0)
         tagBarHeightConstraint = height
         NSLayoutConstraint.activate([
-            tagScrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            tagScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tagScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tagFilterBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            tagFilterBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tagFilterBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             height,
-            tagStack.leadingAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.leadingAnchor, constant: 12),
-            tagStack.trailingAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.trailingAnchor, constant: -12),
-            tagStack.topAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.topAnchor),
-            tagStack.bottomAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.bottomAnchor),
-            tagStack.heightAnchor.constraint(equalTo: tagScrollView.frameLayoutGuide.heightAnchor),
         ])
     }
 
@@ -236,12 +248,12 @@ final class SnippetListViewController: UIViewController {
         tableView.keyboardDismissMode = .onDrag
         tableView.register(SnippetListCell.self, forCellReuseIdentifier: SnippetListCell.reuseIdentifier)
         tableView.accessibilityIdentifier = "snippet-list"
-        view.insertSubview(tableView, belowSubview: footerView)
+        view.insertSubview(tableFadeContainer, belowSubview: footerView)
         NSLayoutConstraint.activate([
-            tableView.topAnchor.constraint(equalTo: tagScrollView.bottomAnchor),
-            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableView.bottomAnchor.constraint(equalTo: footerView.topAnchor),
+            tableFadeContainer.topAnchor.constraint(equalTo: tagFilterBar.bottomAnchor),
+            tableFadeContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableFadeContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableFadeContainer.bottomAnchor.constraint(equalTo: footerView.topAnchor),
         ])
     }
 
@@ -260,41 +272,27 @@ final class SnippetListViewController: UIViewController {
         }
     }
 
-    private func rebuildTagButtons() {
-        tagStack.arrangedSubviews.forEach { view in
-            tagStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
+    private func rebuildTagFilters() {
         let tags = environment.store.tagUsage()
-        tagScrollView.isHidden = tags.isEmpty
-        tagBarHeightConstraint?.constant = tags.isEmpty ? 0 : 38
+        tagFilterBar.isHidden = tags.isEmpty
+        tagFilterBar.update(
+            items: tags.map { SidebarTagFilterView.Item(tag: $0.tag, count: $0.count) },
+            activeKeys: activeTagKeys
+        )
+        updateTagBarHeight()
+    }
 
-        if !activeTagKeys.isEmpty {
-            let clear = TagFilterButton(title: "Clear", selected: false, color: .secondaryLabel)
-            clear.addAction(UIAction { [weak self] _ in
-                self?.activeTagKeys.removeAll()
-                self?.reload(keepingSelection: true)
-            }, for: .touchUpInside)
-            tagStack.addArrangedSubview(clear)
-        }
-
-        for item in tags {
-            let key = SnippetTagging.filterKey(for: item.tag)
-            let button = TagFilterButton(
-                title: "\(item.tag)  \(item.count)",
-                selected: activeTagKeys.contains(key),
-                color: AppTheme.tagColor(for: item.tag)
-            )
-            button.accessibilityLabel = "Filter by \(item.tag), \(item.count) snippets"
-            button.addAction(UIAction { [weak self] _ in
-                guard let self else { return }
-                if !self.activeTagKeys.insert(key).inserted {
-                    self.activeTagKeys.remove(key)
-                }
-                self.reload(keepingSelection: true)
-            }, for: .touchUpInside)
-            tagStack.addArrangedSubview(button)
-        }
+    private func updateTagBarHeight() {
+        guard let tagBarHeightConstraint else { return }
+        let width = tagFilterBar.bounds.width > 1 ? tagFilterBar.bounds.width : view.bounds.width
+        let nextHeight = tagFilterBar.isHidden || width <= 1
+            ? 0
+            : tagFilterBar.sizeThatFits(
+                CGSize(width: width, height: .greatestFiniteMagnitude)
+            ).height
+        guard abs(tagBarHeightConstraint.constant - nextHeight) > 0.5 else { return }
+        tagBarHeightConstraint.constant = nextHeight
+        view.setNeedsLayout()
     }
 
     private func updateEmptyState(query: String) {
@@ -430,7 +428,7 @@ extension SnippetListViewController: UITableViewDataSource, UITableViewDelegate 
         cell.configure(
             snippet: snippet,
             isSecure: environment.store.isSecure(snippet.id),
-            selectedColor: AppTheme.selectedRow
+            isSelected: snippet.id == selectedID
         )
         return cell
     }
@@ -459,6 +457,11 @@ extension SnippetListViewController: UITableViewDataSource, UITableViewDelegate 
         delete.image = UIImage(systemName: "trash")
         return UISwipeActionsConfiguration(actions: [delete])
     }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === tableView else { return }
+        tableFadeContainer.updateFade()
+    }
 }
 
 private final class SnippetListCell: UITableViewCell {
@@ -470,18 +473,24 @@ private final class SnippetListCell: UITableViewCell {
     private let previewLabel = UILabel()
     private let tagsStack = UIStackView()
     private let stateImage = UIImageView()
-    private var selectedColor = AppTheme.selectedRow
+    private var isPointerHovering = false
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         backgroundColor = .clear
         selectionStyle = .none
+        focusStyle = .custom
+        focusEffect = nil
 
         highlightView.translatesAutoresizingMaskIntoConstraints = false
         highlightView.layer.cornerRadius = 11
         highlightView.layer.cornerCurve = .continuous
         highlightView.isHidden = true
+        highlightView.isUserInteractionEnabled = false
         contentView.addSubview(highlightView)
+
+        let hoverRecognizer = UIHoverGestureRecognizer(target: self, action: #selector(hoverChanged(_:)))
+        addGestureRecognizer(hoverRecognizer)
 
         titleLabel.font = AppTheme.scaledFont(size: 14, weight: .semibold, textStyle: .body)
         titleLabel.adjustsFontForContentSizeCategory = true
@@ -549,8 +558,7 @@ private final class SnippetListCell: UITableViewCell {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(snippet: Snippet, isSecure: Bool, selectedColor: UIColor) {
-        self.selectedColor = selectedColor
+    func configure(snippet: Snippet, isSecure: Bool, isSelected: Bool) {
         titleLabel.text = snippet.displayName
         let hasKeyword = !snippet.normalizedKeyword.isEmpty
         keywordLabel.text = hasKeyword ? "\\\(snippet.normalizedKeyword)" : "No keyword"
@@ -577,7 +585,7 @@ private final class SnippetListCell: UITableViewCell {
         }
 
         rebuildTags(snippet.tags, muted: !snippet.isEnabled)
-        updateHighlight()
+        setSelected(isSelected, animated: false)
         accessibilityIdentifier = "snippet-row-\(snippet.id.uuidString)"
         accessibilityLabel = snippet.displayName
         accessibilityValue = [isSecure ? "Secure" : nil, snippet.isPinned ? "Pinned" : nil, snippet.isEnabled ? "Enabled" : "Disabled"]
@@ -594,11 +602,35 @@ private final class SnippetListCell: UITableViewCell {
         updateHighlight()
     }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        isPointerHovering = false
+        setSelected(false, animated: false)
+    }
+
+    @objc private func hoverChanged(_ recognizer: UIHoverGestureRecognizer) {
+        switch recognizer.state {
+        case .began, .changed:
+            isPointerHovering = true
+        default:
+            isPointerHovering = false
+        }
+        updateHighlight()
+    }
+
     private func updateHighlight() {
-        highlightView.isHidden = !isSelected && !isHighlighted
-        highlightView.backgroundColor = isSelected ? selectedColor : AppTheme.hoveredRow
+        let showsHighlight = isSelected || isHighlighted || isPointerHovering
+        highlightView.isHidden = !showsHighlight
+        highlightView.backgroundColor = isSelected ? AppTheme.selectedRow : AppTheme.hoveredRow
         highlightView.layer.borderWidth = isSelected ? 1 / max(traitCollection.displayScale, 1) : 0
-        highlightView.layer.borderColor = AppTheme.tint.withAlphaComponent(0.18).cgColor
+        highlightView.layer.borderColor = AppTheme.selectedRowBorder
+            .resolvedColor(with: traitCollection)
+            .cgColor
+        if isSelected {
+            accessibilityTraits.insert(.selected)
+        } else {
+            accessibilityTraits.remove(.selected)
+        }
     }
 
     private func rebuildTags(_ tags: [String], muted: Bool) {
@@ -620,25 +652,6 @@ private final class SnippetListCell: UITableViewCell {
         }
         tagsStack.isHidden = tags.isEmpty
     }
-}
-
-private final class TagFilterButton: UIButton {
-    init(title: String, selected: Bool, color: UIColor) {
-        super.init(frame: .zero)
-        var configuration = UIButton.Configuration.tinted()
-        configuration.title = title
-        configuration.image = selected ? UIImage(systemName: "checkmark") : nil
-        configuration.imagePadding = 4
-        configuration.cornerStyle = .capsule
-        configuration.buttonSize = .small
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10)
-        configuration.baseForegroundColor = color
-        configuration.baseBackgroundColor = color.withAlphaComponent(selected ? 0.28 : 0.12)
-        self.configuration = configuration
-        accessibilityTraits = selected ? [.button, .selected] : .button
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
 private final class EmptyLibraryView: UIView {
