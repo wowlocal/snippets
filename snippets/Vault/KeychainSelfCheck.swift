@@ -21,6 +21,7 @@ enum KeychainSelfCheck {
     static func run() {
         let store = KeychainSecretStore()
         let keyID = "k-selftest-\(UUID().uuidString.prefix(8))"
+        let account = "item-selftest-\(UUID().uuidString.prefix(8))"
         var failures = 0
 
         func check(_ label: String, _ ok: Bool) {
@@ -58,10 +59,33 @@ enum KeychainSelfCheck {
 
             try store.deleteKey(keyID: keyID)
             check("deleting twice is tolerated", true)
+
+            // The generic item path, which the wire key and the vault identity ride on.
+            // On this tier both of those cross iCloud Keychain, and that is the single
+            // thing that makes sync one click instead of a file copy — so it is worth
+            // proving here rather than inferring it from the key path passing.
+            check("no item before storing", !store.hasItem(account: account))
+
+            let identity = Data("{\"kid\":\"k-abc\",\"schemaVersion\":1}".utf8)
+            try store.storeItem(identity, account: account)
+            check("round-trips a variable-length payload", try store.loadItem(account: account) == identity)
+
+            // `addItemIfAbsent` must refuse to clobber and hand back the incumbent;
+            // that is what stops two Macs sealing under two different wire keys.
+            let rival = Data(repeating: 0x5A, count: 64)
+            check("addItemIfAbsent keeps the incumbent",
+                  try store.addItemIfAbsent(rival, account: account) == identity)
+
+            try store.deleteItem(account: account)
+            check("item gone after delete", !store.hasItem(account: account))
+            check("addItemIfAbsent stores when absent",
+                  try store.addItemIfAbsent(rival, account: account) == rival)
+            try store.deleteItem(account: account)
         } catch {
             print("  FAIL  threw: \(error)")
             failures += 1
             try? store.deleteKey(keyID: keyID)
+            try? store.deleteItem(account: account)
         }
 
         print(failures == 0 ? "ALL KEYCHAIN CHECKS PASSED" : "\(failures) KEYCHAIN CHECK(S) FAILED")

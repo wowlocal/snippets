@@ -1220,10 +1220,13 @@ private extension NSBox {
 
 /// The opt-in switch for iCloud sync, and an honest account of what it does.
 ///
-/// Off by default, and off means nothing is constructed — see `SyncCoordinator`. The pane
-/// exists mainly so that the two states this feature can be *waiting* in are visible: a
-/// user who ticks the box without a vault, and one whose vault is locked, both need to be
-/// told which it is rather than watching a checkbox that appears to do nothing.
+/// Off by default, and off means nothing is constructed — see `SyncCoordinator`.
+///
+/// This pane used to carry two "waiting" states and a paragraph of manual setup, because
+/// sync sealed with the vault key: it could not start without Secure Snippets and could
+/// not run without an unlocked vault, and a second Mac minted its own key and could not
+/// read a thing. `SyncKeyStore` and `VaultIdentityStore` removed all three, so what is
+/// left to say is what actually happens.
 @MainActor
 private final class SyncSettingsViewController: NSViewController {
     private let enableCheckbox = NSButton(
@@ -1242,8 +1245,9 @@ private final class SyncSettingsViewController: NSViewController {
 
         let intro = makeSecondaryLabel(
             "Keeps your snippets on every Mac signed in to this iCloud account. "
-            + "Every snippet is encrypted with your secure-snippets key before it leaves this Mac, "
-            + "so Apple stores only ciphertext \u{2014} names, keywords and tags included.")
+            + "Every snippet is encrypted on this Mac before it leaves, so Apple stores only "
+            + "ciphertext \u{2014} names, keywords and tags included. The key is kept in your "
+            + "iCloud Keychain, which is how your other Macs can read what this one sends.")
 
         enableCheckbox.target = self
         enableCheckbox.action = #selector(handleEnabledChanged(_:))
@@ -1309,24 +1313,46 @@ private final class SyncSettingsViewController: NSViewController {
         enableCheckbox.state = SyncCoordinator.isEnabled ? .on : .off
         statusLabel.stringValue = coordinator.statusDescription
 
-        let running = coordinator.engine != nil
-        syncNowButton.isHidden = !running
+        // Shown whenever sync is on, not only when an engine exists: a start that failed
+        // on the keychain leaves no engine and no poll timer, and this button is what
+        // retries it. Hiding it there was offering "relaunch the app" as the only cure.
+        syncNowButton.isHidden = !SyncCoordinator.isEnabled
         clearHaltButton.isHidden = !coordinator.state.isHalted
 
-        // The honest sentence, and the reason this pane is not just a checkbox.
-        //
-        // A second Mac derives the sealing key from *its own* vault, and
-        // `createVaultIfNeeded` mints a fresh key and `kid` per device — so two Macs that
-        // both set up secure snippets independently cannot read each other's records at
-        // all. Records arrive and are quarantined. Until an enrolment flow exists, the
-        // vault has to be carried across once by hand, and a user who is not told that
-        // will conclude the feature is broken.
-        secondMacLabel.stringValue = SyncCoordinator.isEnabled
-            ? "Setting up another Mac: it must use the same secure-snippets key as this one. "
-                + "Copy Vault/vault.json from this Mac's application-support folder to the other "
-                + "Mac before turning sync on there, and keep iCloud Keychain enabled on both. "
-                + "A Mac that makes its own key will receive snippets it cannot decrypt."
-            : ""
+        secondMacLabel.stringValue = secondMacAdvice()
+    }
+
+    /// What to do about another Mac — which, for the first time, is usually "nothing".
+    ///
+    /// Both keys ride iCloud Keychain: `K_sync` seals the wire and `K_lib` opens secure
+    /// snippets, and `VaultIdentityStore` carries the vault's `kid` and salt alongside
+    /// them so the second Mac joins this vault rather than minting a rival. So the
+    /// interesting cases are the two where that channel is not available, and those are
+    /// worth naming precisely rather than covering with one paragraph of hedging.
+    private func secondMacAdvice() -> String {
+        guard SyncCoordinator.isEnabled, let app = NSApp.delegate as? AppDelegate else { return "" }
+        let session = app.vaultSession
+
+        guard session.syncsBetweenDevices else {
+            // No `keychain-access-groups` in this binary, so `KeychainSecretStore` is on
+            // the login-keychain tier and nothing it holds leaves this Mac. Release
+            // builds are entitled; a local or unsigned build is not, and silently
+            // syncing nothing would look like a bug in sync itself.
+            return "This build cannot use iCloud Keychain, so its keys stay on this Mac. "
+                + "Another Mac running it will receive snippets it cannot decrypt. "
+                + "A signed release build syncs its keys automatically."
+        }
+
+        if app.secureStore.hasVault, case .noKey = session.state {
+            return "This Mac has \(app.secureStore.count) secure snippet(s) whose key has not "
+                + "arrived from iCloud Keychain. Ordinary snippets sync regardless. Check that "
+                + "iCloud Keychain is on in System Settings, or restore the key with your "
+                + "recovery key under Secure Snippets."
+        }
+
+        return "Setting up another Mac: sign in to the same iCloud account, keep iCloud "
+            + "Keychain on, and tick this same box there. Nothing needs copying \u{2014} the "
+            + "encryption key travels in your iCloud Keychain, and secure snippets come with it."
     }
 
     @objc private func handleEnabledChanged(_ sender: NSButton) {

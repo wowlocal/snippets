@@ -1,10 +1,11 @@
 import Foundation
 import Security
 
-/// Holds the vault's library key in the macOS Keychain.
+/// Holds the small items that have to reach a user's other Macs, in the macOS Keychain.
 ///
 /// This is the primary home of `K_lib`. The wraps in `vault.json` are escape hatches;
-/// on the machine that created a vault, this is what opens it.
+/// on the machine that created a vault, this is what opens it. It also carries the wire
+/// key and the vault's identity — see the note above `storeItem`.
 ///
 /// ## Two tiers, chosen at runtime
 ///
@@ -110,15 +111,27 @@ final class KeychainSecretStore {
         return entitlements[key]
     }
 
-    // MARK: - Storing and reading the key
+    // MARK: - Storing and reading items
 
-    /// Writes the library key without a delete-first window. If replacement fails, the
-    /// previous value is still present and the vault remains openable.
-    func store(_ key: Data, keyID: String) throws {
-        guard key.count == 32 else { throw Failure.invalidKeyLength(key.count) }
-        let query = baseQuery(keyID: keyID)
+    // Three kinds of item live here. They share the service and the tier and are told
+    // apart only by their account name:
+    //
+    // - the vault library key `K_lib`, account = the vault's `kid`, 32 bytes;
+    // - the wire key `K_sync`, account = `SyncKeyStore.account`, 64 bytes;
+    // - the vault identity, account = `VaultIdentityStore.account`, a JSON document.
+    //
+    // Only the first is a secret this app's threat model is built around. The other two
+    // are here because this is the one channel already known to reach the user's other
+    // Macs, and because a second mechanism would be a second thing to get wrong. The
+    // identity in particular holds nothing secret at all — a salt, KDF parameters, and
+    // wraps that are themselves useless without the key that opens them.
+
+    /// Writes an item without a delete-first window. If replacement fails, the previous
+    /// value is still present.
+    func storeItem(_ data: Data, account: String) throws {
+        let query = baseQuery(account: account)
         let values: [String: Any] = [
-            kSecValueData as String: key,
+            kSecValueData as String: data,
             kSecAttrAccessible as String: accessibility,
         ]
 
@@ -136,24 +149,90 @@ final class KeychainSecretStore {
         }
     }
 
-    /// Reads the library key after `VaultSession` has authenticated the user. If this
-    /// build newly gained the sync entitlement, an existing device-only item is copied
-    /// into the new tier and verified before use.
-    func loadKey(keyID: String) throws -> Data {
-        if let current = try copyKey(matching: baseQuery(keyID: keyID)) { return current }
+    /// Writes an item only if none exists, and returns whichever value ends up stored.
+    ///
+    /// This is how a value two Macs could each mint independently gets one winner:
+    /// `SecItemAdd` reports `errSecDuplicateItem` rather than clobbering, so the loser
+    /// adopts what is already there instead of overwriting it. It settles the race
+    /// *within* a device only — two Macs that both add before iCloud Keychain has
+    /// propagated either are outside what a keychain call can arbitrate. See
+    /// `SyncKeyStore` for what is done about that.
+    @discardableResult
+    func addItemIfAbsent(_ data: Data, account: String) throws -> Data {
+        if let existing = try loadItem(account: account) { return existing }
+
+        var attributes = baseQuery(account: account)
+        attributes[kSecValueData as String] = data
+        attributes[kSecAttrAccessible as String] = accessibility
+
+        let add = SecItemAdd(attributes as CFDictionary, nil)
+        switch add {
+        case errSecSuccess:
+            return data
+        case errSecDuplicateItem:
+            // Someone stored one between the read above and this add. Theirs wins;
+            // returning ours would mean two devices sealing under different keys.
+            guard let existing = try loadItem(account: account) else {
+                throw Failure.unavailable(add)
+            }
+            return existing
+        default:
+            throw Failure.unavailable(add)
+        }
+    }
+
+    /// Reads an item, or `nil` when there is none. If this build newly gained the sync
+    /// entitlement, an existing device-only item is copied into the new tier and
+    /// verified before use.
+    func loadItem(account: String) throws -> Data? {
+        if let current = try copyData(matching: baseQuery(account: account)) { return current }
 
         if case .synchronizable = tier,
-           let legacy = try copyKey(matching: deviceOnlyQuery(keyID: keyID)) {
-            try store(legacy, keyID: keyID)
-            guard let migrated = try copyKey(matching: baseQuery(keyID: keyID)), migrated == legacy else {
+           let legacy = try copyData(matching: deviceOnlyQuery(account: account)) {
+            try storeItem(legacy, account: account)
+            guard let migrated = try copyData(matching: baseQuery(account: account)),
+                  migrated == legacy
+            else {
                 throw Failure.unavailable(errSecNotAvailable)
             }
             return migrated
         }
-        throw Failure.notFound
+        return nil
     }
 
-    private func copyKey(matching base: [String: Any]) throws -> Data? {
+    /// Whether an item exists, without reading its bytes. The legacy-tier fallback keeps
+    /// an entitlement upgrade from making an existing vault look keyless.
+    func hasItem(account: String) -> Bool {
+        if contains(baseQuery(account: account)) { return true }
+        if case .synchronizable = tier { return contains(deviceOnlyQuery(account: account)) }
+        return false
+    }
+
+    /// Removes an item from every tier it may be in.
+    func deleteItem(account: String) throws {
+        guard case .synchronizable = tier else {
+            try deleteMatching(baseQuery(account: account))
+            return
+        }
+
+        let primary = baseQuery(account: account)
+        let legacy = deviceOnlyQuery(account: account)
+
+        // Before deleting the fallback, prove whether the preferred copy exists.
+        // An entitlement may appear before the first unlock has migrated the key;
+        // in that state the fallback is the only copy and a failing DP-keychain
+        // delete must not strand restored ciphertext without a key.
+        if try itemExists(primary) {
+            // Delete the fallback first and the preferred sync copy last. If
+            // either operation throws, at least one usable copy remains.
+            try deleteMatching(legacy)
+            try deleteMatching(primary)
+        } else {
+            try deleteMatching(legacy)
+        }
+    }
+
+    private func copyData(matching base: [String: Any]) throws -> Data? {
         var query = base
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -162,7 +241,6 @@ final class KeychainSecretStore {
         switch status {
         case errSecSuccess:
             guard let data = item as? Data else { throw Failure.unavailable(status) }
-            guard data.count == 32 else { throw Failure.invalidKeyLength(data.count) }
             return data
         case errSecItemNotFound:
             return nil
@@ -175,45 +253,37 @@ final class KeychainSecretStore {
         }
     }
 
-    /// Whether a key exists, without reading its bytes. The legacy-tier fallback keeps
-    /// an entitlement upgrade from making an existing vault look keyless.
-    func hasKey(keyID: String) -> Bool {
-        if contains(baseQuery(keyID: keyID)) { return true }
-        if case .synchronizable = tier { return contains(deviceOnlyQuery(keyID: keyID)) }
-        return false
-    }
-
-    /// Removes the key. The vault's ciphertext is untouched and stays openable with a
-    /// recovery key or passphrase if the user set either up.
-    func deleteKey(keyID: String) throws {
-        if case .synchronizable = tier {
-            let primary = baseQuery(keyID: keyID)
-            let legacy = deviceOnlyQuery(keyID: keyID)
-
-            // Before deleting the fallback, prove whether the preferred copy exists.
-            // An entitlement may appear before the first unlock has migrated the key;
-            // in that state the fallback is the only copy and a failing DP-keychain
-            // delete must not strand restored ciphertext without a key.
-            let primaryExists = try itemExists(primary)
-            if primaryExists {
-                // Delete the fallback first and the preferred sync copy last. If
-                // either operation throws, at least one usable copy remains.
-                try deleteItem(legacy)
-                try deleteItem(primary)
-            } else {
-                try deleteItem(legacy)
-            }
-        } else {
-            try deleteItem(baseQuery(keyID: keyID))
-        }
-    }
-
-    private func deleteItem(_ query: [String: Any]) throws {
+    private func deleteMatching(_ query: [String: Any]) throws {
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecSuccess, status != errSecItemNotFound {
             throw Failure.unavailable(status)
         }
     }
+
+    // MARK: - The library key
+
+    // The length guard lives here rather than on the generic item path: 32 bytes is a
+    // property of `K_lib` specifically, and a wrong-sized *key* is a corruption worth
+    // refusing loudly, where a wrong-sized item in general is just an item.
+
+    /// Writes the library key. See `storeItem` for the no-delete-first ordering.
+    func store(_ key: Data, keyID: String) throws {
+        guard key.count == 32 else { throw Failure.invalidKeyLength(key.count) }
+        try storeItem(key, account: keyID)
+    }
+
+    /// Reads the library key after `VaultSession` has authenticated the user.
+    func loadKey(keyID: String) throws -> Data {
+        guard let data = try loadItem(account: keyID) else { throw Failure.notFound }
+        guard data.count == 32 else { throw Failure.invalidKeyLength(data.count) }
+        return data
+    }
+
+    func hasKey(keyID: String) -> Bool { hasItem(account: keyID) }
+
+    /// Removes the key. The vault's ciphertext is untouched and stays openable with a
+    /// recovery key or passphrase if the user set either up.
+    func deleteKey(keyID: String) throws { try deleteItem(account: keyID) }
 
     // MARK: - Query construction
 
@@ -226,8 +296,8 @@ final class KeychainSecretStore {
             : kSecAttrAccessibleWhenUnlockedThisDeviceOnly
     }
 
-    private func baseQuery(keyID: String) -> [String: Any] {
-        var query = deviceOnlyQuery(keyID: keyID)
+    private func baseQuery(account: String) -> [String: Any] {
+        var query = deviceOnlyQuery(account: account)
 
         switch tier {
         case .deviceOnly:
@@ -242,11 +312,11 @@ final class KeychainSecretStore {
         return query
     }
 
-    private func deviceOnlyQuery(keyID: String) -> [String: Any] {
+    private func deviceOnlyQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: keyID,
+            kSecAttrAccount as String: account,
         ]
     }
 

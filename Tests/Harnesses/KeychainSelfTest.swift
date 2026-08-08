@@ -79,11 +79,58 @@ struct KeychainSelfTest {
             // the app unable to clean up.
             try store.deleteKey(keyID: keyID)
             check("deleting twice is tolerated", true)
+
+            try checkItems(store, check)
             print("ALL KEYCHAIN CHECKS PASSED")
         } catch {
             print("  FAIL  threw: \(error)")
             try? store.deleteKey(keyID: keyID)
             exit(1)
         }
+    }
+
+    /// The generic item path, which the sync key and the vault identity ride on.
+    ///
+    /// Worth exercising separately from the key path even though one calls the other:
+    /// these carry payloads the 32-byte guard would have rejected, and `addItemIfAbsent`
+    /// has semantics — refuse to clobber, return the incumbent — that no other call has.
+    @MainActor
+    private static func checkItems(
+        _ store: KeychainSecretStore, _ check: (String, Bool) -> Void
+    ) throws {
+        let account = "item-selftest-\(UUID().uuidString.prefix(8))"
+        defer { try? store.deleteItem(account: account) }
+
+        check("no item before storing", !store.hasItem(account: account))
+        check("loading an absent item is nil", try store.loadItem(account: account) == nil)
+
+        // A vault identity is JSON of no fixed size, which is the point of a path with
+        // no length guard on it.
+        let identity = Data("{\"kid\":\"k-abc\",\"schemaVersion\":1}".utf8)
+        try store.storeItem(identity, account: account)
+        check("hasItem after storing", store.hasItem(account: account))
+        check("round-trips a variable-length payload", try store.loadItem(account: account) == identity)
+
+        let replacement = Data(repeating: 0xA5, count: 64)
+        try store.storeItem(replacement, account: account)
+        check("storeItem replaces in place", try store.loadItem(account: account) == replacement)
+
+        // The whole reason this call exists: two Macs must not each mint a wire key. The
+        // incumbent wins and is handed back, rather than being overwritten.
+        let rival = Data(repeating: 0x5A, count: 64)
+        let winner = try store.addItemIfAbsent(rival, account: account)
+        check("addItemIfAbsent keeps the incumbent", winner == replacement)
+        check("addItemIfAbsent did not overwrite", try store.loadItem(account: account) == replacement)
+
+        try store.deleteItem(account: account)
+        check("item gone after delete", !store.hasItem(account: account))
+
+        let minted = try store.addItemIfAbsent(rival, account: account)
+        check("addItemIfAbsent stores when absent", minted == rival)
+        check("addItemIfAbsent is readable afterwards", try store.loadItem(account: account) == rival)
+
+        try store.deleteItem(account: account)
+        try store.deleteItem(account: account)
+        check("deleting an item twice is tolerated", true)
     }
 }

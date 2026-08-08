@@ -59,6 +59,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
     private let session: VaultSession
     private let keychain: KeychainSecretStore
+    /// Publishes and adopts the vault's identity through iCloud Keychain, which is what
+    /// makes a second Mac join this vault instead of minting a rival one.
+    private let identityStore: VaultIdentityStore
     private let vaultURL: URL
     private let libraryURL: URL
     private let lockURL: URL
@@ -79,8 +82,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
         lockTimeout: TimeInterval = 2.0
     ) {
+        let resolvedKeychain = keychain ?? KeychainSecretStore()
         self.session = session
-        self.keychain = keychain ?? KeychainSecretStore()
+        self.keychain = resolvedKeychain
+        self.identityStore = VaultIdentityStore(keychain: resolvedKeychain)
         self.vaultURL = vaultURL
         self.libraryURL = libraryURL
         self.lockURL = lockURL
@@ -98,10 +103,15 @@ final class SecureSnippetStore: SecureSnippetProviding {
             document = loaded
             isUnreadable = false
             session.adopt(keyID: loaded.kid)
+            // Opportunistic, and cheap after the first call. It upgrades a vault created
+            // before identity sharing existed, and heals a slot another Mac cleared,
+            // without either needing a migration step of its own.
+            identityStore.publish(loaded)
         case .missing:
             document = nil
             isUnreadable = false
             session.adopt(keyID: nil)
+            adoptSharedVaultIfAvailable()
         case .tooNew(let version):
             // A newer build owns this file. Show what we can; never write.
             document = nil
@@ -152,10 +162,74 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
     // MARK: - Creating the vault
 
+    /// Joins the vault the user's other Macs already share, when there is one.
+    ///
+    /// Writes a records-free `vault.json` carrying the shared `kid`, salt and wraps, and
+    /// points the session at it. The library key itself is already on its way over the
+    /// same channel — `KeychainSecretStore` stores `K_lib` as a synchronizable item — so
+    /// in the ordinary case this Mac can open the vault the moment records arrive. When
+    /// the key has *not* arrived (iCloud Keychain off, most likely), the vault reports
+    /// `.noKey` and Settings offers the recovery key, which is a state the app already
+    /// knows how to be in. What it must never do instead is mint a rival vault: a second
+    /// `kid` is a second crypto scope, and the two Macs then cannot read a single one of
+    /// each other's records.
+    ///
+    /// Adoption writes a file, so `reload` only does it when sync is on — a Mac that
+    /// merely shares an iCloud account should not spontaneously grow a vault. An
+    /// explicit "make this secure" is a different matter: the user is asking for a
+    /// vault, and the right one to give them is the one they already have.
+    @discardableResult
+    private func adoptSharedVaultIfAvailable(requireSyncEnabled: Bool = true) -> VaultDocument? {
+        guard document == nil, !isUnreadable else { return nil }
+        guard !requireSyncEnabled || SyncCoordinator.isEnabled else { return nil }
+        guard let identity = identityStore.published() else { return nil }
+
+        let adopted: VaultDocument
+        do {
+            adopted = try VaultFile.update(
+                at: vaultURL,
+                lockURL: lockURL,
+                temporaryDirectory: temporaryDirectory,
+                lockTimeout: lockTimeout
+            ) { existing in
+                // Read under the lock: another process may have created a vault since
+                // the load that reported `.missing`. Theirs wins — it may already hold
+                // records, and this document holds none.
+                if let existing { return existing }
+                var fresh = identity
+                fresh.records = []
+                return fresh
+            }
+        } catch {
+            NSLog("Snippets: the shared vault could not be adopted (\(error)).")
+            return nil
+        }
+
+        document = adopted
+        session.adopt(keyID: adopted.kid)
+        return adopted
+    }
+
+    /// Joins the shared vault if there is one, announcing it if it worked.
+    ///
+    /// For callers outside the load path — chiefly `SnippetLibraryBridge`, when a secure
+    /// record arrives and there is nowhere to put it. That moment is the best trigger
+    /// there is: this Mac has just been told, by the backend, that a vault exists
+    /// somewhere. Without it, adoption would wait for the next launch or the next local
+    /// vault change, neither of which a Mac with no secure snippets ever has.
+    @discardableResult
+    func joinSharedVaultIfAvailable() -> Bool {
+        guard adoptSharedVaultIfAvailable() != nil else { return false }
+        onChange?()
+        return true
+    }
+
     /// Creates a vault and its library key, storing the key in the keychain.
     ///
     /// Idempotent: an existing vault is returned untouched, so this is safe to call
-    /// from a "make this snippet secure" flow without a separate setup step.
+    /// from a "make this snippet secure" flow without a separate setup step. A vault the
+    /// user's other Macs already share counts as existing — see
+    /// `adoptSharedVaultIfAvailable`.
     @discardableResult
     func createVaultIfNeeded(
         confirmRecoveryKey: (String) -> Bool
@@ -163,6 +237,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
         if let document { return document }
         guard !isUnreadable else {
             throw Failure.vaultUnreadable("refusing to create a vault over an unreadable one")
+        }
+        if let adopted = adoptSharedVaultIfAvailable(requireSyncEnabled: false) {
+            onChange?()
+            return adopted
         }
 
         let keyring = SnippetCrypto.Keyring.generate()
@@ -202,6 +280,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }
         document = created
         session.adopt(keyID: kid)
+        // Publish only after the vault exists on disk. The other order would advertise a
+        // vault this Mac might then have failed to write, and a second Mac would adopt a
+        // `kid` whose records live nowhere.
+        identityStore.publish(created)
         onChange?()
         return created
     }
@@ -232,6 +314,11 @@ final class SecureSnippetStore: SecureSnippetProviding {
         try mutateVault { vault in
             if vault.wrapRecovery == nil { vault.wrapRecovery = envelope }
         }
+        // The recovery wrap is part of the identity, and it is the escape hatch a second
+        // Mac needs when iCloud Keychain did not carry the key. Republish so that Mac can
+        // use it without this one being present. `self.document`, not the local capture
+        // above — that one predates the wrap this just added.
+        if let updated = self.document { identityStore.publish(updated) }
         return true
     }
 
@@ -479,6 +566,17 @@ final class SecureSnippetStore: SecureSnippetProviding {
                     "the keychain kept the vault key; \(recovery): \(keychainError)")
             }
         }
+
+        // Last, and only once the file and the key are actually gone. Leaving the
+        // identity published would have `reload` immediately re-adopt the vault that was
+        // just deleted, as a records-free document whose key no longer exists — the app
+        // would report "secure snippets are set up here, but their key is missing" to
+        // someone who had asked for exactly the opposite.
+        //
+        // This clears the slot on the user's other Macs too. That is the honest reading
+        // of "delete the key that opens them", and it strands nothing: a Mac that still
+        // holds a real vault republishes on its next reload.
+        identityStore.forget()
 
         document = nil
         isUnreadable = false

@@ -34,7 +34,7 @@ happening. `syncEngine == nil` is the honest representation of "sync is off".
 
 | | |
 |---|---|
-| Verified at runtime | The concurrency harness (`Tests/concurrency-harness.sh`), the entitlement-free Keychain store/load/replace/delete path (`Tests/Harnesses/KeychainSelfTest.swift`), the CLI control socket including a refused unsigned peer, and a clean app launch. |
+| Verified at runtime | The concurrency harness (`Tests/concurrency-harness.sh`), the entitlement-free Keychain store/load/replace/delete/item path including `addItemIfAbsent` (`Tests/Harnesses/KeychainSelfTest.swift`), the publish → adopt → open round trip that replaced the manual vault copy (`Tests/Harnesses/VaultIdentityTest.swift`), the CLI control socket including a refused unsigned peer, and a clean app launch. |
 | Proven only against a fake | The whole sync loop. That is the point of Phase 4 — the wire format cannot change after a second device speaks it, so it had to be settled while it was still free to be wrong. |
 | **Not automated** | The interactive LocalAuthentication prompt, the data-protection tier (which needs a provisioned entitlement), and an *approved* CLI reveal. All three need a human at a signed, stapled build. |
 
@@ -235,6 +235,10 @@ at all, so it can never type ciphertext into a chat window, and `exportSnippets(
 
 ### Keys
 
+> **Superseded in part.** This block still describes `K_lib` correctly, but sync no longer uses it:
+> the wire has its own key and the vault's identity travels on its own. See "The wire key is not the
+> vault key" and "Getting a second Mac working" in §6.
+>
 > **Decided 2026-08-08:** the vault key lives in the **Keychain**, with no mandatory passphrase.
 > `K_lib` is stored with `kSecAttrSynchronizable` when the entitlement is present so iCloud
 > Keychain carries it between devices. The app separately requires Touch ID or the login password
@@ -389,11 +393,86 @@ Name, keyword, tags, clock, origin, and the secure flag all live *inside* the bl
 padded to a fixed multiple, so the backend cannot tell which records are secure or how long
 anything is. `deleted` is in the clear only so a backend can garbage-collect tombstones.
 
-**The crypto scope must come from the vault document, never from `Sync/state.json`.** That file is
-designed to regenerate itself whenever it cannot be read, because it holds no user data — so
-binding ciphertext to a value stored there would destroy every secure snippet the first time it
-went missing. The scope is `VaultDocument.kid`, which lives in the same file as the records it
-protects. The rule generalises: the value that unlocks a file belongs in that file.
+**The crypto scope must never come from `Sync/state.json`.** That file is designed to regenerate
+itself whenever it cannot be read, because it holds no user data — so binding ciphertext to a value
+stored there would destroy every secure snippet the first time it went missing. A secure record's
+scope is `VaultDocument.kid`, which lives in the same file as the records it protects. The rule
+generalises: the value that unlocks a file belongs in that file.
+
+### The wire key is not the vault key
+
+Originally it was: `SyncCoordinator` built its sealer from `VaultSession.keyring(...)`, so sync
+could not start without a vault and could not *run* without an unlocked one. Two consequences, both
+bad and neither bought anything:
+
+- Syncing an ordinary snippet required setting up Secure Snippets and saving a recovery key.
+- Background rounds stopped every half hour, at the vault's absolute session ceiling, until the
+  user proved presence again — for a loop whose entire job is to run unattended every two minutes.
+
+Work out what that key actually protects and the gate collapses. Ordinary snippet bodies are
+already plaintext in `snippets.json`; a secure snippet's name, keyword and tags are already
+plaintext in `vault.json`; and a secure snippet's *content* is not protected by the wire key at all,
+because `SnippetLibraryBridge` puts the vault's `sealed` bytes on the wire verbatim, already
+encrypted under `K_rec`. So the wire key defends against Apple and against whoever ends up with the
+bucket. It cannot defend against someone at the unlocked Mac — they can read both files directly.
+Touch ID on it was guarding a copy of data sitting in the clear two directories away.
+
+`SyncKeyStore` therefore owns `K_sync`, a 256-bit key with its own HKDF salt, stored in the Keychain
+under the fixed account `sync-v1`, which doubles as the scope bound into every envelope's AAD. It is
+read with no user-presence check, because nothing it protects justifies one. `K_lib` stays exactly
+as strict as it was, and is now only ever read to reveal a secret — which is the one thing that
+genuinely needs a human.
+
+`Readiness` lost `needsVault` and `needsUnlock` as a result. What is left is `off`, `ready`, and
+`keyUnavailable` for a keychain that will not answer at all.
+
+### Getting a second Mac working: nothing to copy
+
+`K_lib` already travelled — `KeychainSecretStore` stores it with `kSecAttrSynchronizable` whenever
+the entitlement is present, and the shipping build has it. What did not travel was the name of the
+lock it opens. A second Mac called `createVaultIfNeeded`, minted a fresh `kid`, and since `kid` is
+the crypto scope, the two Macs could not read one record of each other's. Settings told the user to
+copy `Vault/vault.json` across by hand — carrying about six hundred bytes of **non-secret** metadata
+over a channel already open for the actual secret.
+
+`VaultIdentityStore` publishes the vault document with its records stripped — `kid`, salt, KDF
+parameters, wraps — as one more synchronizable Keychain item under the fixed account
+`vault-identity`. A Mac with no vault adopts it instead of minting a rival, writing a records-free
+`vault.json` and pointing the session at the shared `kid`. `K_lib` is already arriving over the same
+channel, so the ordinary case needs one click and no file.
+
+Chosen over a CloudKit record because the identity has to be readable *before* the first round — it
+is what decides whether this Mac has a vault at all — and fetching it would need a sealer that needs
+a vault. It also adds no schema, no entitlement, and is end-to-end encrypted between the user's
+devices rather than merely encrypted to Apple.
+
+Three rules keep it safe:
+
+- **First publisher wins.** A published identity is never overwritten with a different `kid`. Two
+  Macs that each minted a vault before this existed keep whichever published first, and the loser's
+  local vault is left completely alone — its records are the only copy of secrets that exist
+  nowhere else, and re-pointing it at a key it was not encrypted under would destroy them. Reported,
+  not repaired; the recovery key is the way out.
+- **`reload` adopts only when sync is on**, because adoption writes a file and a Mac that merely
+  shares an iCloud account should not spontaneously grow a vault. An explicit "make this secure"
+  adopts regardless: the user is asking for a vault, and the right one to give them is the one they
+  already have.
+- **`applyRemote` adopts too**, before refusing an incoming secure record. That is the only moment a
+  Mac with no secure snippets of its own ever learns a vault exists, and without it adoption would
+  wait for the next launch.
+
+When the key genuinely has not arrived — iCloud Keychain switched off, most likely — the vault
+reports `.noKey`, ordinary snippets keep syncing, and Settings offers the recovery key. The engine
+reports that as `waitingForVault` rather than as `offline`, which is what it used to say and was a
+lie: iCloud is reachable, the round is fine, and the user's problem is a key.
+
+**The residual race, stated rather than engineered around.** `addItemIfAbsent` refuses to clobber,
+so two processes on one Mac cannot mint two wire keys. Two *Macs* that both mint before iCloud
+Keychain has propagated either can — which needs a user enabling sync on two Macs within about a
+minute, ever, and only the first time. iCloud Keychain converges on one; `SyncCoordinator` notices
+the stored key no longer matches the one its engine holds and rebuilds on the winner. What is left
+over is records pushed under the losing key, which stay unreadable until they next change.
+Distributed consensus over a Keychain item is not worth building for a window that size.
 
 ### The loop
 
@@ -493,5 +572,8 @@ notarization does **not** check that.
 | Conflict copies for content only | Content is the only irreplaceable field | A text CRDT — content is a *template*, and character-merging `{date:yyyyMMdd}` yields garbage |
 | Keep JSON + `flock` + CAS | Human-readable, git-friendly, keeps old writers first-class | SQLite, directory-per-snippet — both give a stale CLI a silent split-brain library |
 | Usage never syncs | An already-published promise | An opt-in toggle |
+| A separate `K_sync` for the wire | Everything it protects is already plaintext on this disk, so a presence gate cost the whole feature and bought nothing; and it lets sync work with no vault at all | Reading `K_lib` without the presence check — same exposure, but it hollows out the one gate that matters |
+| Vault identity rides iCloud Keychain | It has to be readable before the first round, and it is not secret; the key was already on that channel | A CloudKit record (needs a sealer that needs a vault); `NSUbiquitousKeyValueStore` (another entitlement) |
+| First publisher wins the identity slot | Deterministic without a protocol, and it can never re-point an existing vault at a key its records were not sealed under | Last writer wins; merging two vaults automatically |
 | CLI reveal is app-brokered | A CLI that can decrypt unattended makes every `curl \| sh` an exfiltration primitive; routing through the app puts a human in the loop | Never revealing at all (simpler, ~900 lines lighter); giving the CLI the Keychain group unconditionally |
 | Peer check anchored to the team ID | The CLI is a bare Mach-O with its own signing identifier, so a bundle-id requirement would not match it | Checking the bundle id; trusting `LOCAL_PEERPID` alone (racy — pids are reused) |

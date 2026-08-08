@@ -42,6 +42,15 @@ final class SyncEngine {
         case syncing
         case offline(retryAfter: Date)
         case needsAuthentication(String)
+        /// A secure record arrived and there is no vault here to file it in.
+        ///
+        /// Separate from `.offline` because that is what it used to be reported as, and
+        /// it was a lie: iCloud is reachable, the round is fine, and the user's actual
+        /// problem is that the vault key has not reached this Mac. Separate from
+        /// `.halted` because halts are sticky by design and this one heals itself the
+        /// moment the key arrives — pushes keep working throughout, and every round
+        /// retries the apply.
+        case waitingForVault(String)
         case halted(SyncState.HaltReason, detail: String)
 
         var isHalted: Bool { if case .halted = self { return true }; return false }
@@ -121,6 +130,13 @@ final class SyncEngine {
             handle(failure)
         } catch let failure as SyncEngineFailure {
             transition(to: .halted(failure.reason, detail: failure.detail))
+        } catch SyncLibraryProjection.Failure.secureVaultMissing {
+            // Deliberately not counted as a failure and not backed off. Nothing is wrong
+            // with the backend or the data; the cursor simply stays put until this Mac
+            // has somewhere to put a secure record, and the next poll tries again.
+            transition(to: .waitingForVault(
+                "a secure snippet arrived from another Mac, but the key for it has not "
+                + "reached this one yet"))
         } catch {
             handle(.unreachable(detail: "\(error)"))
         }

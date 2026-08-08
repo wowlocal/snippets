@@ -73,12 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// `SyncState.Backend.none` means.
     lazy var syncCoordinator = SyncCoordinator(
         library: syncLibrary,
-        session: vaultSession,
-        secureStore: secureStore,
+        keys: SyncKeyStore(keychain: KeychainSecretStore()),
         device: store.deviceID)
 
     /// The engine, when one is running. Read by the settings pane; `nil` whenever the
-    /// user has not opted in or the vault is not open.
+    /// user has not opted in, or the keychain would not supply a wire key.
     var syncEngine: SyncEngine? { syncCoordinator.engine }
     lazy var expansionEngine: SnippetExpansionEngine = {
         let engine = SnippetExpansionEngine(store: store, usage: usageStore)
@@ -181,10 +180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             // A vault change alters the merged display list, so the same channel a
             // library change uses has to fire, or the list silently goes stale.
             self.store.onChange?(.external)
-            // Sync seals with the vault key, so creating or unlocking a vault is what
-            // makes an opted-in-but-waiting coordinator able to start. Without this the
-            // user would have to relaunch after setting up secure snippets.
-            self.syncCoordinator.vaultStateChanged()
+            // Sync does not need the vault to run, but creating or adopting one changes
+            // what there is to sync. Without this, records that appeared in the vault a
+            // moment ago would wait for the next two-minute poll.
+            self.syncCoordinator.libraryStructureChanged()
         }
 
         // Finish any secure-snippet move that a crash interrupted. Runs before the

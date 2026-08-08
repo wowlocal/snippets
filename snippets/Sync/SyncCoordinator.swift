@@ -22,13 +22,23 @@ import Foundation
 /// of "sync is off", and there is deliberately no placeholder transport that would run a
 /// loop describing a synchronisation that is not happening.
 ///
-/// ## Why enabling it needs the vault
+/// ## Enabling it needs nothing but the checkbox
 ///
-/// Every record on the wire is sealed — plaintext snippets included — and the sealing key
-/// is the vault's `K_lib`, scoped by the vault's `kid`. So there is no such thing as
-/// "sync the ordinary snippets without setting up secure ones": no vault means no
-/// keyring, which means no `SyncBlobSealing`, which means nothing can be pushed. Saying
-/// that plainly in the UI is better than a checkbox that silently does nothing.
+/// Every record on the wire is still sealed, plaintext snippets included. What changed is
+/// which key does it: `SyncKeyStore`'s `K_sync`, not the vault's `K_lib`.
+///
+/// The old arrangement made sync a dependent of Secure Snippets — no vault meant no
+/// keyring meant nothing could be pushed, and a *locked* vault meant background rounds
+/// stopped until the user proved presence again. For a feature whose whole job is to run
+/// unattended every two minutes, that was fatal, and it was buying nothing: the wire key
+/// protects snippet bodies and metadata that already sit in the clear in `snippets.json`
+/// and `vault.json` on this disk, and it never protected a secure snippet's content,
+/// which reaches this layer already sealed under `K_rec`. See `SyncKeyStore` for the full
+/// argument.
+///
+/// So this type no longer knows what a vault is. Secure records ride through it as opaque
+/// bytes like everything else, and `VaultSession` is left to gate the one thing that
+/// genuinely needs a human: reading a secret.
 @MainActor
 final class SyncCoordinator {
 
@@ -37,19 +47,22 @@ final class SyncCoordinator {
     /// key and an explicit "off" behave identically, which is what we want.
     static let enabledDefaultsKey = "SnippetsICloudSyncEnabled"
 
-    /// Why sync cannot start, in the order a user has to fix them.
+    /// Why sync is not running.
+    ///
+    /// Down from four cases to three, because two of them — "set up Secure Snippets
+    /// first" and "unlock Secure Snippets to start syncing" — described a dependency
+    /// that no longer exists.
     enum Readiness: Equatable {
         case off
-        /// No vault on this Mac. There is nothing to seal with.
-        case needsVault
-        /// A vault exists but its key is not available right now.
-        case needsUnlock
+        /// The keychain would not give up a wire key, so there is nothing to seal with.
+        /// Rare and not self-inflicted: a locked keychain, or a build whose entitlements
+        /// the profile does not back.
+        case keyUnavailable(String)
         case ready
     }
 
     private let library: any SyncLibraryAccess
-    private let session: VaultSession
-    private let secureStore: SecureSnippetStore
+    private let keys: SyncKeyStore
     private let device: String
 
     private(set) var engine: SyncEngine?
@@ -71,15 +84,19 @@ final class SyncCoordinator {
     private var isRoundInFlight = false
     private var wantsAnotherRound = false
 
+    /// The wire key bytes the running engine was built with, and why `readiness` can be
+    /// a cheap computed property: the keychain is consulted when sync starts and once a
+    /// round, never on every redraw of the settings pane.
+    private var activeKeyMaterial: Data?
+    private var keyFailure: String?
+
     init(
         library: any SyncLibraryAccess,
-        session: VaultSession,
-        secureStore: SecureSnippetStore,
+        keys: SyncKeyStore,
         device: String
     ) {
         self.library = library
-        self.session = session
-        self.secureStore = secureStore
+        self.keys = keys
         self.device = device
     }
 
@@ -91,8 +108,7 @@ final class SyncCoordinator {
 
     var readiness: Readiness {
         guard Self.isEnabled else { return .off }
-        guard secureStore.hasVault, secureStore.document != nil else { return .needsVault }
-        guard case .unlocked = session.state else { return .needsUnlock }
+        if let keyFailure { return .keyUnavailable(keyFailure) }
         return .ready
     }
 
@@ -120,17 +136,25 @@ final class SyncCoordinator {
     func start() {
         guard Self.isEnabled, engine == nil else { return }
 
+        let material: Data
         let sealer: SnippetCryptoSealer
         do {
-            sealer = try makeSealer()
+            material = try keys.materialMintingIfNeeded()
+            sealer = SnippetCryptoSealer(
+                keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
         } catch {
-            // Not a halt and not an error state: the user has opted in but the vault is
-            // not open yet. `readiness` is what the pane reads to say which of the two it
-            // is, and unlocking calls `start()` again.
-            NSLog("Snippets: iCloud sync is on but cannot start yet: \(error)")
+            // Not a halt: nothing has gone wrong with anybody's data. The keychain is
+            // simply not answering, which on a signed build means the keychain is locked
+            // or the profile does not back the entitlement. `readiness` carries the
+            // detail to the pane rather than leaving a checkbox that appears to do
+            // nothing.
+            NSLog("Snippets: iCloud sync is on but has no key to seal with: \(error)")
+            keyFailure = "\(error)"
             publish(.disabled)
             return
         }
+        keyFailure = nil
+        activeKeyMaterial = material
 
         let transport = CloudKitTransport()
         let engine = SyncEngine(
@@ -154,21 +178,36 @@ final class SyncCoordinator {
         eventTask = nil
         engine = nil
         transport = nil
+        activeKeyMaterial = nil
         isRoundInFlight = false
         wantsAnotherRound = false
         publish(.disabled)
     }
 
-    /// Re-evaluates after something outside changed — the vault was unlocked, or a vault
-    /// was created. Safe to call repeatedly; `start()` is a no-op once running.
-    func vaultStateChanged() {
+    /// Re-evaluates after the shape of the library changed underneath — most usefully,
+    /// after a vault was created or adopted, which adds records sync had nothing to say
+    /// about a moment ago. Safe to call repeatedly; `start()` is a no-op once running.
+    func libraryStructureChanged() {
         guard Self.isEnabled else { return }
-        if engine == nil { start() }
+        // `syncNow` already starts a stopped engine, so there is one path rather than two
+        // that have to be kept saying the same thing.
+        syncNow()
     }
 
     // MARK: - Running a round
 
     func syncNow() {
+        guard engine != nil else {
+            // A start that failed — the keychain would not answer — is retried here
+            // rather than only at launch. Without this the only way back was to relaunch
+            // or toggle the checkbox, because the poll timer is started by `start()` and
+            // so does not exist yet. `start()` ends by syncing, so this call is done.
+            if Self.isEnabled { start() }
+            return
+        }
+        // A rebuild also ends by syncing; running a second round here would be waste.
+        if restartIfWireKeyChanged() { return }
+
         guard let engine else { return }
         if isRoundInFlight {
             wantsAnotherRound = true
@@ -195,31 +234,32 @@ final class SyncCoordinator {
 
     // MARK: - Internals
 
-    private func makeSealer() throws -> SnippetCryptoSealer {
-        guard let document = secureStore.document else {
-            throw Failure.noVault
-        }
-        guard let salt = document.vaultSaltBytes else {
-            throw Failure.malformedVault
-        }
-        // `scopeID` is the vault document's `kid`, never anything from `Sync/state.json` —
-        // that file regenerates itself when unreadable, and binding ciphertext to a value
-        // stored there would make every secure snippet undecryptable the first time it
-        // went missing. The value that unlocks a file belongs in that file.
-        return SnippetCryptoSealer(
-            keyring: try session.keyring(vaultSalt: salt), scopeID: document.kid)
-    }
+    /// Adopts a wire key that arrived from another Mac after this engine was built.
+    ///
+    /// The only way the stored key differs from the one in use is the race `SyncKeyStore`
+    /// documents: two Macs each minted a key before iCloud Keychain had propagated
+    /// either, and it has since converged on one of them. Continuing to seal under a key
+    /// no other device holds would make this Mac's uploads permanently unreadable, so it
+    /// rebuilds on the winner instead.
+    ///
+    /// Records already pushed under the losing key stay unreadable — they are recorded in
+    /// `base.json` as accepted, so they are not re-pushed until they next change. That is
+    /// a stated limit rather than a repair, because the window it needs is two first-ever
+    /// enables inside a minute of each other.
+    ///
+    /// Skipped mid-round, so a rebuild can never race the engine it is replacing.
+    ///
+    /// Returns whether it restarted, because `start()` finishes by syncing and the caller
+    /// must not then run a second round.
+    @discardableResult
+    private func restartIfWireKeyChanged() -> Bool {
+        guard engine != nil, !isRoundInFlight, let activeKeyMaterial else { return false }
+        guard let current = try? keys.material(), current != activeKeyMaterial else { return false }
 
-    private enum Failure: Error, CustomStringConvertible {
-        case noVault
-        case malformedVault
-
-        var description: String {
-            switch self {
-            case .noVault: return "no vault exists on this Mac, so there is no key to seal with"
-            case .malformedVault: return "the vault document has no usable salt"
-            }
-        }
+        NSLog("Snippets: the iCloud sync key changed; restarting under the shared one.")
+        stop()
+        start()
+        return true
     }
 
     private func startPolling(every interval: TimeInterval) {
@@ -268,11 +308,8 @@ final class SyncCoordinator {
         switch readiness {
         case .off:
             return "Off. Your snippets stay on this Mac."
-        case .needsVault:
-            return "Waiting: iCloud sync encrypts every snippet with your secure-snippets key, "
-                + "so it needs Secure Snippets set up first."
-        case .needsUnlock:
-            return "Waiting: unlock Secure Snippets to start syncing."
+        case .keyUnavailable(let detail):
+            return "Cannot start: \(detail)"
         case .ready:
             break
         }
@@ -293,6 +330,8 @@ final class SyncCoordinator {
             return "Cannot reach iCloud. Trying again at \(formatter.string(from: retryAfter))."
         case .needsAuthentication(let detail):
             return "iCloud needs attention: \(detail)"
+        case .waitingForVault(let detail):
+            return "Waiting: \(detail)."
         case .halted(let reason, let detail):
             return "Stopped for safety (\(reason)): \(detail)"
         }

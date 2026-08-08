@@ -90,6 +90,18 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         // of the merged result a fraction of a second later.
         store.flushPendingWrites()
 
+        // A secure record is arriving and this Mac has no vault. Before the transaction
+        // refuses it, look for the vault the user's other Macs already share — this is
+        // the moment we learn one exists, and a Mac with no secure snippets of its own
+        // never has a local change that would trigger the check anywhere else.
+        //
+        // Outside the transaction on purpose: adopting takes the same library lock, and
+        // taking it twice would deadlock rather than merely fail.
+        if secureStore.document == nil,
+           envelopes.contains(where: { $0.secure && !$0.deleted }) {
+            secureStore.joinSharedVaultIfAvailable()
+        }
+
         let outcome = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
             var changed: [UUID] = []
             var applied: [SyncEnvelope] = []
