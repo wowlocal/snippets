@@ -200,6 +200,10 @@ final class VaultSession {
         guard newState != state else { return }
         state = newState
         onStateChange?(newState)
+        // Broadcast as well as calling the closure: the editor has to re-hide a revealed
+        // secret when the vault locks, and most locks are not initiated by the editor —
+        // they come from a timer, the screen locking, or the machine sleeping.
+        NotificationCenter.default.post(name: .snippetsVaultStateChanged, object: nil)
     }
 
     // MARK: - System triggers
@@ -226,4 +230,9 @@ final class VaultSession {
             MainActor.assumeIsolated { self?.lock() }
         }
     }
+}
+
+
+extension Notification.Name {
+    static let snippetsVaultStateChanged = Notification.Name("com.khm.snippets.vaultStateChanged")
 }

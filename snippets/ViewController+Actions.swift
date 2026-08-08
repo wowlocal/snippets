@@ -178,6 +178,29 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         shareItem.keyEquivalent = "C"
         shareItem.isEnabled = selectedSnippet != nil
 
+        // Placed next to Share deliberately: they are the two actions that decide where a
+        // snippet's text is allowed to go, and seeing "cannot be shared" beside "make
+        // secure" is what makes the trade legible at the moment of choosing.
+        let secureItem = LiquidGlassDesign.menuItem(
+            title: selectedSnippet.map { store.isSecure($0.id) } == true
+                ? "Make Ordinary\u{2026}" : "Make Secure\u{2026}",
+            symbolName: selectedSnippet.map { store.isSecure($0.id) } == true
+                ? "lock.open" : "lock",
+            action: #selector(toggleSelectedSnippetSecurity),
+            target: self
+        )
+        secureItem.isEnabled = selectedSnippet != nil
+
+        let revealItem = LiquidGlassDesign.menuItem(
+            title: "Reveal Secure Snippet",
+            symbolName: "eye",
+            action: #selector(revealSelectedSecureSnippet),
+            target: self
+        )
+        // Only meaningful for a secure record that is currently hidden.
+        revealItem.isHidden = !(selectedSnippet.map { store.isSecure($0.id) } ?? false)
+            || isSecureContentRevealed
+
         let shortcutsItem = LiquidGlassDesign.menuItem(
             title: "Keyboard Shortcuts",
             symbolName: "keyboard",
@@ -190,6 +213,8 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         menu.addItem(importItem)
         menu.addItem(exportItem)
         menu.addItem(shareItem)
+        menu.addItem(secureItem)
+        menu.addItem(revealItem)
         menu.addItem(shortcutsItem)
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -457,5 +482,74 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         applySelectedSnippetToEditor()
         closeActionPanel()
         importExportMessage = "Redid last change."
+    }
+}
+
+
+// MARK: - Making a snippet secure
+
+extension ViewController {
+
+    /// Promotes a plaintext snippet into the vault, or brings one back out.
+    ///
+    /// Both directions need the vault open, because both have to touch the ciphertext:
+    /// promoting seals, demoting opens. The unlock happens here rather than deeper down
+    /// so the Touch ID sheet appears while Snippets is frontmost and the user has just
+    /// clicked a menu item — never mid-expansion in somebody else's app.
+    @objc func toggleSelectedSnippetSecurity() {
+        commitActiveEditorState(endingEditing: true)
+        guard let snippet = selectedSnippet,
+              let app = NSApp.delegate as? AppDelegate else { return }
+
+        let secureStore = app.secureStore
+        let isSecure = store.isSecure(snippet.id)
+
+        if !isSecure, !confirmPromotion(of: snippet, isFirstEver: secureStore.isEmpty) { return }
+
+        do {
+            if !isSecure { try secureStore.createVaultIfNeeded() }
+            try app.vaultSession.unlock(
+                reason: isSecure
+                    ? "Make \u{201C}\(snippet.displayName)\u{201D} an ordinary snippet"
+                    : "Make \u{201C}\(snippet.displayName)\u{201D} secure")
+
+            if isSecure {
+                try secureStore.demote(recordID: snippet.id)
+                importExportMessage = "\(snippet.displayName) is an ordinary snippet again."
+            } else {
+                try secureStore.promote(snippetID: snippet.id)
+                importExportMessage = "\(snippet.displayName) is now secure."
+            }
+            selectedSnippetID = snippet.id
+            reloadVisibleSnippets(keepSelection: true)
+            applySelectedSnippetToEditor()
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = isSecure ? "Could not make this snippet ordinary" : "Could not make this snippet secure"
+            alert.informativeText = "\(error)"
+            alert.runModal()
+        }
+        closeActionPanel()
+    }
+
+    /// Explains what changes, once, before the first snippet is ever secured.
+    ///
+    /// The consequences are not guessable from the menu item — the snippet stops
+    /// auto-expanding, stops appearing in exports, and stops being shareable — and a
+    /// user who discovers that later has already lost a workflow they relied on.
+    private func confirmPromotion(of snippet: Snippet, isFirstEver: Bool) -> Bool {
+        guard isFirstEver else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = "Make \u{201C}\(snippet.displayName)\u{201D} secure?"
+        alert.informativeText =
+            "Its text will be encrypted and unlocked with Touch ID.\n\n"
+            + "It will no longer expand automatically when you type its keyword \u{2014} you will pick it "
+            + "from the list instead. It will not appear in exports or share links.\n\n"
+            + "Its name, keyword and tags stay readable so Snippets can still find it while locked."
+        alert.addButton(withTitle: "Make Secure")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }

@@ -16,15 +16,20 @@ required not to break.
 |---|---|
 | 1. Cross-process locking + three-way merge | **Shipped.** No network, no crypto, no format change. |
 | 2. Wire record model, transport protocol, fake transport | Types exist and are tested in isolation. **Nothing calls them yet** — no `VaultRecord` ↔ `SyncEnvelope` bridge, no engine. |
-| 3. Secure snippets | Crypto, vault document, Keychain store, unlock session, the store that owns `vault.json`, the two-file move, and the leak scrubbing are all in and wired. **No UI** — nothing in the app can create one yet. |
+| 3. Secure snippets | Complete and usable: create, reveal, edit, make ordinary, Settings pane. **Not yet exercised against a signed build** — see below. |
 | 4. Sync engine driven by the fake | Not started. |
 | 5. First real backend | Deliberately deferred — see §9. |
 | 6. Second backend, conflict UI | Not started. |
 | 7. Hosted server tier | Optional; not started. |
 | 8. iOS app | Deferred by decision. `snippets/Core/` is already platform-agnostic for it. |
 
-Only Phase 1 is wired into the running app. Phases 2 and 3 are libraries with tests and no
-callers; treat "landed" as "the pieces exist and are proven in isolation", not as a feature.
+Phases 1 and 3 are wired into the running app. Phase 2 is a tested library with no callers yet.
+
+**The one thing not verified**: no Keychain read or write has ever been executed. Every test uses
+`InMemorySecretStore`, because `swift test` runs unsigned and the real keychain returns
+`errSecMissingEntitlement`, and exercising it by hand raises a Touch ID prompt. Creating a vault,
+unlocking, and surviving a Sparkle update are the manual checks that have to happen on a stapled
+build before this ships — that is Phase 0a, and it is still open.
 
 Phase 1 was worth shipping on its own and does not depend on anything after it.
 

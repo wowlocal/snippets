@@ -225,6 +225,19 @@ final class ViewController: NSViewController {
             }
         }
 
+        NotificationCenter.default.addObserver(
+            forName: .snippetsVaultStateChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let snippet = self.selectedSnippet else { return }
+                // Re-applies in both directions. Locking must pull a revealed secret off
+                // the screen — a five-minute timeout that leaves the text sitting in the
+                // editor would make the whole session window decorative.
+                self.applySecureStateToEditor(for: snippet)
+                self.reloadVisibleSnippets(keepSelection: true)
+            }
+        }
+
         engine.onStateChange = { [weak self] in
             guard let self else { return }
             updatePermissionBanner()

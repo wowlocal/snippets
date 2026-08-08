@@ -111,6 +111,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
     var isEmpty: Bool { document?.records.isEmpty ?? true }
 
+    var count: Int { document?.records.count ?? 0 }
+
     func isSecure(_ id: UUID) -> Bool { document?.record(id) != nil }
 
     /// `SecureSnippetProviding`. Shells only — never content, never a key.
@@ -295,6 +297,26 @@ final class SecureSnippetStore: SecureSnippetProviding {
             contents.marker = .demoting(recordID)
         }
         adopt(outcome)
+    }
+
+    /// Deletes every secure snippet **and** the key that opens them.
+    ///
+    /// Both halves, deliberately. Removing the file but leaving the key would strand an
+    /// unusable keychain item and a Touch ID prompt the user can no longer explain;
+    /// removing the key but leaving the file would leave records that look present and
+    /// can never be opened, which is the worst of the three states.
+    ///
+    /// The key goes last: if that fails, the records are already gone and the leftover
+    /// key opens nothing. The other order can leave readable ciphertext with no way to
+    /// tell the user their "deletion" only half happened.
+    func forgetEverything() throws {
+        let kid = document?.kid
+        try? FileManager.default.removeItem(at: vaultURL)
+        document = nil
+        isUnreadable = false
+        if let kid { try? keychain.deleteKey(keyID: kid) }
+        session.adopt(keyID: nil)
+        onChange?()
     }
 
     // MARK: - Crash recovery
