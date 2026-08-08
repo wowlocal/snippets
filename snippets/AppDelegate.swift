@@ -52,6 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// cost for the vast majority of users who never create a secure snippet.
     let vaultSession = VaultSession()
     lazy var secureStore = SecureSnippetStore(session: vaultSession, deviceID: store.deviceID)
+    /// Answers `snippets-cli`. Started unconditionally: `status` has to work whether or
+    /// not a vault exists, and the socket is how the CLI discovers the app is running.
+    private lazy var controlServer = ControlServer(session: vaultSession, secureStore: secureStore)
     lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStore)
     private lazy var settingsWindowController = SettingsWindowController()
     #if !NO_SPARKLE
@@ -132,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // expansion engine starts, so the keyword matcher never sees the duplicate a
         // half-finished promote leaves behind.
         secureStore.reconcileInterruptedMove()
+        controlServer.start()
 
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
@@ -183,6 +187,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationWillTerminate(_ notification: Notification) {
         // First: give the user's clipboard back before writing anything of our own. A snippet
         // borrowed for a paste would otherwise outlive the process.
+        // Before anything else: remove the socket, so a CLI invocation racing our exit
+        // gets "not running" rather than a connection that dies mid-request.
+        controlServer.stop()
         expansionEngine.prepareForTermination()
         // Synchronous on purpose: this method returns and the process dies long
         // before an async write would run, so an async flush here writes nothing.

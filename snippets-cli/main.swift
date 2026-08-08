@@ -108,7 +108,10 @@ private func filterByTags(_ snippets: [Snippet], tagFilters: [String]) -> [Snipp
 // MARK: - Commands
 
 private func cmdList(enabledOnly: Bool, pinnedOnly: Bool, tagFilters: [String]) {
-    var snippets = loadSnippets()
+    // Shells included: a secure snippet the CLI cannot see is a secure snippet whose
+    // keyword someone will accidentally reuse. Their `content` is empty, never
+    // ciphertext — printing ciphertext would invite someone to try to crack it.
+    var snippets = loadSnippets() + secureShells()
     if enabledOnly { snippets = snippets.filter(\.isEnabled) }
     if pinnedOnly  { snippets = snippets.filter(\.isPinned) }
     snippets = filterByTags(snippets, tagFilters: tagFilters)
@@ -177,15 +180,115 @@ private func cmdSearch(query: String, enabledOnly: Bool, tagFilters: [String]) {
     printJSON(results)
 }
 
+/// Secure snippets, as content-free shells, read straight from the vault file.
+///
+/// The CLI reads metadata directly rather than asking the app, because metadata is
+/// plaintext in `vault.json` and the app may not be running. It can never read content
+/// this way: that is ciphertext, and the key is only ever in the app's memory.
+private func secureShells() -> [Snippet] {
+    switch VaultFile.loadMetadata() {
+    case .loaded(let metadata): return metadata.shells
+    case .missing, .tooNew, .unreadable, .corrupt: return []
+    }
+}
+
+/// Asks the running app to reveal a secure snippet.
+///
+/// The CLI cannot decrypt. This sends a request over the local socket and the app
+/// prompts a human, naming this process. That is the whole design: a script can *ask*,
+/// and a person answers.
+private func cmdReveal(keyword: String) {
+    let url = SnippetsIPC.socketURL()
+    let descriptor: Int32
+    do {
+        descriptor = try UnixSocket.connect(to: url)
+    } catch {
+        fail("Snippets is not running, so there is nothing to approve the request. Open Snippets and try again.",
+             code: SnippetsIPC.ExitCode.appNotRunning.rawValue)
+    }
+    defer { close(descriptor) }
+
+    let invocation = CommandLine.arguments.joined(separator: " ")
+    do {
+        try UnixSocket.send(
+            SnippetsIPC.Request(command: SnippetsIPC.Command.reveal, keyword: keyword, invocation: invocation),
+            on: descriptor)
+        let response = try UnixSocket.receive(SnippetsIPC.Response.self, on: descriptor)
+
+        switch response.status {
+        case .ok:
+            // Bare content on stdout, nothing else, so `$(snippets-cli reveal x)` is
+            // usable. Every other channel goes to stderr.
+            if let content = response.content { print(content) }
+        case .denied:
+            fail("the request was not approved", code: SnippetsIPC.ExitCode.denied.rawValue)
+        case .locked:
+            fail(response.message ?? "the vault could not be unlocked",
+                 code: SnippetsIPC.ExitCode.locked.rawValue)
+        case .notFound:
+            fail(response.message ?? "no such secure snippet",
+                 code: SnippetsIPC.ExitCode.notFound.rawValue)
+        case .unsupported:
+            fail(response.message ?? "unsupported request",
+                 code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+        case .refused, .error:
+            fail(response.message ?? "the request was refused")
+        }
+    } catch {
+        fail("\(error)")
+    }
+}
+
+private func cmdSecureStatus() {
+    struct Status: Encodable {
+        let appRunning: Bool
+        let secureCount: Int
+        let unlocked: Bool?
+        let socket: String
+    }
+
+    let url = SnippetsIPC.socketURL()
+    guard let descriptor = try? UnixSocket.connect(to: url) else {
+        // Still useful with the app closed: the metadata is on disk.
+        printJSON(Status(appRunning: false, secureCount: secureShells().count,
+                         unlocked: nil, socket: url.path))
+        return
+    }
+    defer { close(descriptor) }
+
+    guard (try? UnixSocket.send(SnippetsIPC.Request(command: SnippetsIPC.Command.status), on: descriptor)) != nil,
+          let response = try? UnixSocket.receive(SnippetsIPC.Response.self, on: descriptor) else {
+        printJSON(Status(appRunning: false, secureCount: secureShells().count,
+                         unlocked: nil, socket: url.path))
+        return
+    }
+    printJSON(Status(
+        appRunning: true,
+        secureCount: response.secureCount ?? secureShells().count,
+        unlocked: response.unlocked,
+        socket: url.path))
+}
+
 private func cmdGet(keyword: String) {
     let lookupKeyword = Snippet.sanitizedKeyword(keyword)
-    let snippets = loadSnippets()
-    guard let snippet = snippets.first(where: {
+    if let snippet = loadSnippets().first(where: {
         $0.normalizedKeyword.caseInsensitiveCompare(lookupKeyword) == .orderedSame
-    }) else {
-        fail("no snippet found with keyword '\(keyword)'")
+    }) {
+        printJSON(snippet)
+        return
     }
-    printJSON(snippet)
+
+    // A secure snippet must not look like a missing one — "no snippet found" would send
+    // someone off to recreate a secret they already have. Say it exists, say it is
+    // secure, and point at the command that can actually produce it.
+    if secureShells().contains(where: {
+        $0.normalizedKeyword.caseInsensitiveCompare(lookupKeyword) == .orderedSame
+    }) {
+        fail("'\(keyword)' is a secure snippet; its text is not readable from the command line. "
+             + "Use: snippets-cli reveal \(keyword)")
+    }
+
+    fail("no snippet found with keyword '\(keyword)'")
 }
 
 /// The expansion engine matches keywords ignoring case AND diacritics, so two
@@ -356,6 +459,16 @@ private func usage() -> Never {
         --tag <tag>                  Search only snippets with this tag (repeatable; AND)
 
       get <keyword>                  Get a snippet by exact keyword match
+                                     Secure snippets are reported, not printed.
+
+      reveal <keyword>               Ask the running Snippets app to reveal a secure
+                                     snippet. A person must approve it in the app; the
+                                     CLI cannot decrypt anything itself.
+                                     Exit codes: 3 app not running, 4 denied,
+                                     5 locked, 6 not found.
+
+      secure-status                  Report how many secure snippets exist and whether
+                                     the vault is currently unlocked.
 
       tags                           List all tags with usage counts
 
@@ -426,6 +539,13 @@ case "search":
 case "get":
     guard args.count >= 2 else { fail("get requires a keyword argument") }
     cmdGet(keyword: args[1])
+
+case "reveal":
+    guard args.count >= 2 else { fail("reveal requires a keyword argument") }
+    cmdReveal(keyword: args[1])
+
+case "secure-status":
+    cmdSecureStatus()
 
 case "tags":
     cmdTags()

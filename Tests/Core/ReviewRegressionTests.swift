@@ -430,3 +430,55 @@ struct ShareLinkTests {
         }
     }
 }
+
+/// The local control channel's addressing rules.
+///
+/// `sockaddr_un.sun_path` is 104 bytes on macOS — a hard kernel limit. A long home
+/// directory or a redirected support directory really does exceed it, and the failure
+/// mode without a guard is either a confusing `EINVAL` at bind time or, far worse, a
+/// silently truncated path that binds to a *different* socket whose name happens to be
+/// a prefix of the intended one.
+@Suite("IPC addressing")
+struct IPCAddressingTests {
+
+    @Test func aShortSupportPathKeepsTheSocketBesideTheOtherSyncFiles() {
+        let url = SnippetsIPC.socketURL(supportFolder: URL(fileURLWithPath: "/tmp/s/Sync"))
+        #expect(url.path == "/tmp/s/Sync/ipc.sock")
+    }
+
+    /// Observed in practice: the scratch directory used to test this project is itself
+    /// long enough to trigger the fallback.
+    @Test func anOverlongSupportPathFallsBackToAShortDeterministicName() {
+        let long = URL(fileURLWithPath: "/private/tmp/" + String(repeating: "d", count: 120) + "/Sync")
+        let url = SnippetsIPC.socketURL(supportFolder: long)
+
+        #expect(url.path.utf8.count < 104, "the fallback must itself fit in sun_path")
+        #expect(url.lastPathComponent.hasPrefix("snippets-"))
+        #expect(url.pathExtension == "sock")
+
+        // Both sides derive it independently with no handshake, so it has to be a pure
+        // function of the path — and a different path must not collide onto it.
+        #expect(SnippetsIPC.socketURL(supportFolder: long) == url)
+        let other = URL(fileURLWithPath: "/private/tmp/" + String(repeating: "e", count: 120) + "/Sync")
+        #expect(SnippetsIPC.socketURL(supportFolder: other) != url)
+    }
+
+    /// Exit codes are a contract with shell scripts: `4` has to keep meaning "denied"
+    /// or every wrapper anyone writes breaks on an upgrade.
+    @Test func exitCodesAreStable() {
+        #expect(SnippetsIPC.ExitCode.ok.rawValue == 0)
+        #expect(SnippetsIPC.ExitCode.appNotRunning.rawValue == 3)
+        #expect(SnippetsIPC.ExitCode.denied.rawValue == 4)
+        #expect(SnippetsIPC.ExitCode.locked.rawValue == 5)
+        #expect(SnippetsIPC.ExitCode.notFound.rawValue == 6)
+    }
+
+    /// An unknown command must decode and be answerable, not fail to parse. A stale
+    /// `/usr/local/bin/snippets-cli` symlink is the normal state of the world.
+    @Test func anUnknownCommandStillDecodes() throws {
+        let json = Data(#"{"v":1,"command":"someFutureThing","extra":true}"#.utf8)
+        let request = try JSONDecoder().decode(SnippetsIPC.Request.self, from: json)
+        #expect(request.command == "someFutureThing")
+        #expect(request.v == 1)
+    }
+}

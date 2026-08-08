@@ -289,6 +289,28 @@ keystroke trigger" true, rather than a policy a later refactor can quietly drop.
 | The snippet list | A secure row renders `••••••••`; it carries a shell with `content == ""`, so there is nothing to render even if the view forgot. |
 | Two-file moves | `LibraryTransaction` — one lock over both files, vault written first, crash marker. An interrupted move duplicates, never disappears. |
 
+### The CLI can ask for a secret; it cannot take one
+
+`snippets-cli reveal <keyword>` sends a request over an `AF_UNIX` socket to the running
+app, which prompts a human, naming the calling program. The CLI holds no key and has no
+code path that decrypts. `get` on a secure snippet reports that it is secure and points
+at `reveal` rather than saying "not found", which would send someone off to recreate a
+secret they already have. `list` includes secure snippets as content-free shells, so
+their keywords cannot be accidentally reused.
+
+The server checks the caller's audit token (`LOCAL_PEERTOKEN`, not `LOCAL_PEERPID` — pids
+are reused) and its code signature against the team identifier. **That proves which
+binary is calling and nothing about who told it to.** Any script running as this user can
+execute the genuine CLI; that is what "running as the user" means. The signature check
+stops a *different* program impersonating ours, and the human prompt is the actual
+control — which is why it is not suppressible, names the process, and is rate-limited to
+five per minute. A prompt that appears often enough is a prompt people dismiss unread.
+
+Verified end to end: the signed CLI is answered, an unsigned client gets `refused`, the
+socket is removed on quit, and `reveal` on an unknown keyword returns exit 6 without ever
+raising a prompt. The approved path — a real reveal — still needs a human and has not
+been exercised.
+
 Tags and keyword uniqueness deliberately *do* span both stores: a tag used only by secure snippets
 must still appear in the filter bar, and a plaintext snippet must not be able to claim a keyword a
 secure one already uses, or the expander becomes ambiguous with no way for the user to see why.
@@ -386,3 +408,4 @@ notarization does **not** check that.
 | Keep JSON + `flock` + CAS | Human-readable, git-friendly, keeps old writers first-class | SQLite, directory-per-snippet — both give a stale CLI a silent split-brain library |
 | Usage never syncs | An already-published promise | An opt-in toggle |
 | CLI reveal is app-brokered | A CLI that can decrypt unattended makes every `curl \| sh` an exfiltration primitive; routing through the app puts a human in the loop | Never revealing at all (simpler, ~900 lines lighter); giving the CLI the Keychain group unconditionally |
+| Peer check anchored to the team ID | The CLI is a bare Mach-O with its own signing identifier, so a bundle-id requirement would not match it | Checking the bundle id; trusting `LOCAL_PEERPID` alone (racy — pids are reused) |
