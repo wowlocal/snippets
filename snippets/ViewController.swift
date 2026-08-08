@@ -218,6 +218,7 @@ final class ViewController: NSViewController {
     var hasConfiguredMainWindowToolbar = false
     var hasRestoredSplitViewDivider = false
     var hasObservedWindowResize = false
+    var hasPrewarmedSidebarCollapse = false
     private var hasObservedWindowWillClose = false
 
     override func viewDidLoad() {
@@ -312,6 +313,9 @@ final class ViewController: NSViewController {
             // Once, here, after the autosaved frame has been restored above — the
             // width rule has to see the window the user actually gets.
             view.layoutSubtreeIfNeeded()
+            // Ahead of the rule's first run, so neither this launch's evaluation
+            // nor the user's first drag pays for it.
+            prewarmSidebarCollapseMachinery()
             evaluateAutomaticSidebarCollapse()
         }
 

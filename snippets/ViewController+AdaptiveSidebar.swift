@@ -58,6 +58,46 @@ extension ViewController {
         evaluateAutomaticSidebarCollapse()
     }
 
+    /// Pays the first `isCollapsed` transition's one-time cost at launch, where
+    /// nothing is watching, instead of in the middle of the user's drag.
+    ///
+    /// The first crossing of a launch costs about five times what every later one
+    /// does, and `evaluateAutomaticSidebarCollapse` spends it synchronously inside
+    /// `NSWindow.didResizeNotification`. Measured over three narrow/widen cycles
+    /// against a real live resize: 37.5ms for the first crossing against 5.8–8.6ms
+    /// for the next five. 22.8ms of it is AppKit allocating and filling layer
+    /// backing stores for an editor pane that has never been drawn without a
+    /// sidebar beside it, plus first-time `updateLayer` passes for the toolbar and
+    /// the titlebar; the rest is the collapse machinery itself and the first touch
+    /// of the search field. That is four dropped frames at 120Hz, and it shows:
+    /// the window edge keeps following the mouse while the content stands still,
+    /// and the split view then jumps 18pt in a single frame. Every later crossing
+    /// moves 0.
+    ///
+    /// Both assignments land in the same runloop turn, so CoreAnimation only ever
+    /// commits the state the sidebar started in — nothing appears on screen, and
+    /// the ~5ms is spent while the window is still settling.
+    ///
+    /// Warming the cheap halves on their own does not do it: paying only the first
+    /// `searchField` access left 28.5ms of the 37.5. It has to be a real
+    /// transition, in both directions.
+    func prewarmSidebarCollapseMachinery() {
+        guard !hasPrewarmedSidebarCollapse else { return }
+        hasPrewarmedSidebarCollapse = true
+        guard let sidebarItem = mainSidebarSplitItem else { return }
+
+        let original = sidebarItem.isCollapsed
+        // The same flag the real transitions raise: neither half of this is an
+        // answer about the sidebar, and `handleMainSplitViewDidResize` must not
+        // persist either one.
+        isApplyingAutomaticSidebarCollapse = true
+        sidebarItem.isCollapsed = !original
+        view.layoutSubtreeIfNeeded()
+        sidebarItem.isCollapsed = original
+        view.layoutSubtreeIfNeeded()
+        isApplyingAutomaticSidebarCollapse = false
+    }
+
     /// The width the rule is keyed off: the window's, not the split view's.
     ///
     /// The split view's bounds lag a resize by a layout pass, so a rule keyed off
