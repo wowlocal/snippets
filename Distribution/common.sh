@@ -193,6 +193,103 @@ function export_developer_id_app() {
 
     sign_app_for_developer_id "$app_path" "$identity"
     codesign --verify --deep --strict --verbose=2 "$app_path"
+    assert_provisioning_profile "$app_path"
+}
+
+# assert_provisioning_profile <app_path>
+#
+# Since secure snippets shipped, the app claims keychain-access-groups and iCloud
+# entitlements. Those are *restricted*: macOS only honours them if the bundle carries an
+# embedded provisioning profile that authorises each one, and Gatekeeper checks that at
+# every launch. Get it wrong and the app does not misbehave — it refuses to start, for
+# everyone, with nothing in the UI to explain why.
+#
+# Nothing else in the pipeline catches this. `codesign --verify` checks the signature's
+# integrity, not whether the profile backs the entitlements, and notarization does not
+# check it either. So this is the only thing standing between a bad export and a release
+# that cannot launch.
+function assert_provisioning_profile() {
+    local app_path="$1"
+    local profile="$app_path/Contents/embedded.provisionprofile"
+
+    if [ ! -f "$profile" ]; then
+        red_text
+        echo "Export failed — no embedded.provisionprofile in $app_path"
+        echo "The app claims restricted entitlements, so without a profile it will not launch."
+        normal_text
+        exit 1
+    fi
+
+    local plist
+    plist=$(mktemp)
+    if ! security cms -D -i "$profile" >"$plist" 2>/dev/null; then
+        red_text
+        echo "Export failed — embedded.provisionprofile does not parse"
+        normal_text
+        rm -f "$plist"
+        exit 1
+    fi
+
+    # A profile that expires takes the app down with it — it stops launching, for
+    # everyone, and the failure lands on users rather than here. 90 days is the margin,
+    # not a year: a Developer ID profile is issued for ~18 years, but a freshly minted
+    # development profile is only good for one, and rejecting that would fail every
+    # local Release build for no reason.
+    local expiry expiry_seconds now_seconds
+    expiry=$(/usr/libexec/PlistBuddy -c "Print :ExpirationDate" "$plist" 2>/dev/null || echo "")
+    expiry_seconds=$(date -j -f "%a %b %d %T %Z %Y" "$expiry" +%s 2>/dev/null || echo 0)
+    now_seconds=$(date +%s)
+    if [ "$expiry_seconds" -lt "$((now_seconds + 7776000))" ]; then
+        red_text
+        echo "Export failed — provisioning profile expires within 90 days ($expiry)"
+        echo "Refresh it before shipping; when it lapses the app stops launching."
+        normal_text
+        rm -f "$plist"
+        exit 1
+    fi
+
+    # Every restricted entitlement the binary claims must actually be authorised by the
+    # profile. A claim the profile does not back is exactly the case that launches fine
+    # here — where a development profile is installed — and fails on the user's Mac.
+    local claimed
+    claimed=$(mktemp)
+    /usr/bin/codesign -d --entitlements :- "$app_path" >"$claimed" 2>/dev/null || true
+
+    local key
+    for key in $(/usr/libexec/PlistBuddy -c "Print" "$claimed" 2>/dev/null \
+                 | sed -n 's/^[[:space:]]*\([A-Za-z][A-Za-z0-9.-]*\) = .*/\1/p' | sort -u); do
+        case "$key" in
+            keychain-access-groups|com.apple.developer.*) ;;
+            *) continue ;;
+        esac
+        if ! /usr/libexec/PlistBuddy -c "Print :Entitlements:$key" "$plist" >/dev/null 2>&1; then
+            red_text
+            echo "Export failed — the profile does not authorise entitlement: $key"
+            echo "Enable the matching capability for this App ID, then refresh the profile."
+            normal_text
+            rm -f "$plist" "$claimed"
+            exit 1
+        fi
+    done
+
+    # snippets-cli is a bare Mach-O. A bare executable claiming restricted entitlements is
+    # SIGKILLed at exec, so this must stay empty rather than inherit the app's.
+    local cli="$app_path/Contents/MacOS/snippets-cli"
+    if [ -f "$cli" ]; then
+        if /usr/bin/codesign -d --entitlements :- "$cli" 2>/dev/null \
+           | grep -qE "keychain-access-groups|com\.apple\.developer\."; then
+            red_text
+            echo "Export failed — snippets-cli must not claim restricted entitlements"
+            normal_text
+            rm -f "$plist" "$claimed"
+            exit 1
+        fi
+    fi
+
+    gray_text
+    echo "  Provisioning profile OK (expires $expiry)"
+    normal_text
+    rm -f "$plist" "$claimed"
 }
 
 function developer_id_application_identity() {
