@@ -105,13 +105,13 @@ extension ViewController {
         return isSearchFieldActive || searchSuggestionOverlayView.containsFirstResponder(in: view.window)
     }
 
+    /// The split view item is the whole answer. The geometric fallback that used
+    /// to sit here read `mainSplitView.subviews.first`, which is the *editor*
+    /// wrapper rather than the sidebar's, and a collapsed sidebar's own pane
+    /// stays in the tree at full width anyway — so there is no measurement of the
+    /// view hierarchy that could stand in for this.
     var isSidebarCollapsed: Bool {
-        if mainSidebarSplitItem?.isCollapsed == true {
-            return true
-        }
-
-        guard let sidebarView = mainSplitView.subviews.first else { return false }
-        return sidebarView.isHidden || sidebarView.frame.width <= 1
+        mainSidebarSplitItem?.isCollapsed == true
     }
 
     func handleSearchSuggestionKeyEvent(_ event: NSEvent) -> Bool {

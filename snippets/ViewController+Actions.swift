@@ -131,6 +131,18 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         let willCollapse = !sidebarItem.isCollapsed
         let shouldMoveFocusAfterCollapse = willCollapse && shouldMoveFocusAfterCollapsingSidebar()
         storeSidebarCollapsedState(isCollapsed: willCollapse)
+        // ⌘B is the user taking the wheel, so the width rule no longer owns this
+        // sidebar's state either way. Asking for it *back* at a width the rule
+        // would immediately hide it at also stands the rule down, until the
+        // window is wide again — otherwise the sidebar would vanish again in the
+        // same breath. (Showing it usually widens the window past the expand
+        // width on its own, which clears the suppression immediately; that is
+        // fine, the end state is the same. It matters when the window has no room
+        // to grow.)
+        isSidebarAutoCollapsed = false
+        if !willCollapse, adaptiveSidebarReferenceWidth < MainLayoutMetrics.sidebarAutoExpandWidth {
+            isAutomaticSidebarCollapseSuppressed = true
+        }
         hideSearchSuggestionOverlay()
 
         NSAnimationContext.runAnimationGroup { context in

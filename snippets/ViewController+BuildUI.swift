@@ -7,10 +7,35 @@ enum MainLayoutMetrics {
     static let editorMinWidth: CGFloat = 230
     static let editorHorizontalPadding: CGFloat = 24
     static let previewMaxHeight: CGFloat = 150
-    static let minimumInlineSidebarWidth: CGFloat = 300
-    static let splitViewAutosaveName = NSSplitView.AutosaveName("SnippetsMainSplitView")
+    /// AppKit's own responsive-sidebar mechanism, deliberately disarmed — see
+    /// `buildUI` for why the app runs the rule itself instead.
+    static let minimumInlineSidebarWidth: CGFloat = 0
     static let splitViewDividerPositionDefaultsKey = "SnippetsMainSplitDividerPosition"
     static let sidebarCollapsedDefaultsKey = "SnippetsMainSidebarCollapsed"
+
+    /// Window content width below which the sidebar takes itself out of the way.
+    ///
+    /// The sidebar is 268pt at its narrowest (260pt pane plus the 8pt Liquid
+    /// Glass inset), the editor pane is the rest, and the form inside it is 48pt
+    /// narrower again. At 680 that leaves a 40-column content box in the 14pt
+    /// monospaced font — and the box wraps `.byCharWrapping`, so below that it
+    /// stops breaking at spaces and starts breaking inside URLs and
+    /// `{placeholders}`. Under 680 the sidebar costs more than it gives.
+    static let sidebarAutoCollapseWidth: CGFloat = 680
+
+    /// …and the width at which it comes back. 140pt above the collapse width, not
+    /// equal to it: a single threshold flips on hand-wobble — measured 34 times
+    /// over 200 samples of ±6pt jitter versus once with this band. The rule reads
+    /// the *window's* width, never the editor's, so the band only has to absorb
+    /// input jitter rather than the 268pt step collapsing puts through the
+    /// editor.
+    static let sidebarAutoExpandWidth: CGFloat = 820
+
+    /// Enough that the editor can never be laid out at zero height. Without it,
+    /// dragging the window small enough reaches a state where the split view,
+    /// both panes and the editor's scroll view are all 0pt tall and only the
+    /// permission banner is on screen.
+    static let splitViewMinimumHeight: CGFloat = 120
 }
 
 /// The editor's vertical give. The content box is the only view in the form with
@@ -153,6 +178,12 @@ extension ViewController {
         splitView.translatesAutoresizingMaskIntoConstraints = false
         splitView.setContentHuggingPriority(.defaultLow, for: .vertical)
         splitView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        // Low compression resistance is what lets the editor give height back, but
+        // it has no floor of its own, so a small enough window laid the whole
+        // split view out at zero and left only the permission banner on screen.
+        splitView.heightAnchor
+            .constraint(greaterThanOrEqualToConstant: MainLayoutMetrics.splitViewMinimumHeight)
+            .isActive = true
         rootStack.addArrangedSubview(splitView)
 
         NotificationCenter.default.addObserver(
@@ -185,9 +216,24 @@ extension ViewController {
         let managedSplitView = NSSplitView()
         managedSplitView.isVertical = true
         managedSplitView.dividerStyle = .thin
-        managedSplitView.autosaveName = MainLayoutMetrics.splitViewAutosaveName
+        // Deliberately no `autosaveName`. NSSplitView's autosave records the
+        // collapsed flag as well as the divider, and it re-applies it on the next
+        // window open *after* the assignment below — so it, not the app, decided
+        // what the sidebar did. Worse, an automatic collapse landed in that store
+        // and came back looking exactly like something the user had chosen: leave
+        // the window narrow once, close it, and the sidebar was pinned hidden at
+        // every width, in that launch and every one after. The app persists both
+        // pieces itself, under its own keys, so there is nothing here to keep and
+        // one fewer source of truth to disagree with.
 
         mainSplitViewController.splitView = managedSplitView
+        // AppKit's own responsive-sidebar mechanism, disarmed. It never fired for
+        // a programmatic resize at any threshold tried, and what it promises is
+        // worse than useless here: it keeps its "I collapsed this" bit private,
+        // so an AppKit collapse is indistinguishable from ⌘B, and its documented
+        // auto-uncollapse would undo a deliberate collapse on every re-widen.
+        // `evaluateAutomaticSidebarCollapse` runs the rule instead, where the two
+        // are kept apart. 0 so the two can never race on `isCollapsed`.
         mainSplitViewController.minimumThicknessForInlineSidebars = MainLayoutMetrics.minimumInlineSidebarWidth
 
         let sidebarController = NSViewController()
@@ -220,7 +266,11 @@ extension ViewController {
 
         mainSidebarSplitItem = sidebarItem
         mainContentSplitItem = contentItem
-        sidebarItem.isCollapsed = UserDefaults.standard.bool(forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
+        // The app's own key, unconditionally, and after `addSplitViewItem`. With
+        // the autosave gone this really is the only thing that decides the
+        // starting state; the width rule runs later, in `viewDidAppear`, once the
+        // restored frame is known.
+        sidebarItem.isCollapsed = userWantsSidebarCollapsed
     }
 
     @objc
@@ -231,14 +281,37 @@ extension ViewController {
         if isSearchSuggestionOverlayVisible {
             updateSearchSuggestionOverlay()
         }
-        storeSidebarCollapsedState(isCollapsed: isSidebarCollapsed)
+        // Only a collapse the user performed — ⌘B, or dragging the divider off
+        // the edge — is a preference. An automatic one is a fact about the window
+        // they happen to be dragging, and persisting it would make one narrow
+        // window a permanent decision no later wide window undoes.
+        if !isApplyingAutomaticSidebarCollapse, !isSidebarAutoCollapsed {
+            storeSidebarCollapsedState(isCollapsed: isSidebarCollapsed)
+        }
 
         guard !isSidebarCollapsed else { return }
-
-        let position = mainSplitView.subviews[0].frame.width
-        guard position.isFinite, position > 0 else { return }
+        guard let position = currentSidebarThickness() else { return }
 
         UserDefaults.standard.set(Double(position), forKey: MainLayoutMetrics.splitViewDividerPositionDefaultsKey)
+    }
+
+    /// The sidebar wrapper's width, i.e. the divider position.
+    ///
+    /// Found by ancestry, not by index. This used to read `subviews[0]`, which is
+    /// the *editor* wrapper on both appearance paths — on the glass path it is
+    /// full-bleed, so the app stored the window's width as the sidebar's, and
+    /// `clampedSidebarWidth` capped it at the 520pt maximum on the way back in.
+    /// Drag the sidebar to 300, get 520 next launch. The split view's subview
+    /// array is several entries of mostly private decoration on macOS 26 and its
+    /// order is not API.
+    func currentSidebarThickness() -> CGFloat? {
+        guard let sidebarView = mainSidebarSplitItem?.viewController.view else { return nil }
+        guard let wrapper = mainSplitView.subviews.first(where: { sidebarView.isDescendant(of: $0) })
+        else { return nil }
+
+        let width = wrapper.frame.width
+        guard width.isFinite, width > 0 else { return nil }
+        return width
     }
 
     func restoreMainSplitViewDividerIfNeeded() {
@@ -255,14 +328,34 @@ extension ViewController {
         let proposedMaximum = mainSplitView.bounds.width - mainSplitView.dividerThickness
         guard proposedMaximum > 0 else { return }
 
+        // Wait for a layout pass where the stored width actually fits, and only
+        // then restore — once, for good. The first `viewDidLayout` runs while the
+        // split view is still at its storyboard width, where a 320pt sidebar
+        // clamps to 269; marking it done there meant the clamped value got
+        // written back over the stored one and the sidebar reset to its minimum
+        // on every launch. Deferring is safe in a way that retrying is not: this
+        // returns without touching the divider, so it can never fight a drag,
+        // and it stops the moment the window is wide enough.
+        guard proposedMaximum - MainLayoutMetrics.editorMinWidth >= CGFloat(storedPosition) else { return }
+
         let clampedPosition = clampedSidebarWidth(in: mainSplitView, proposedWidth: CGFloat(storedPosition))
         mainSplitView.setPosition(clampedPosition, ofDividerAt: 0)
 
         hasRestoredSplitViewDivider = true
     }
 
+    /// Idempotent, because this runs on every split-view resize notification and
+    /// "how many times did the app record a decision the user did not make?" is
+    /// only answerable if a no-op write is not one of them.
     func storeSidebarCollapsedState(isCollapsed: Bool) {
-        UserDefaults.standard.set(isCollapsed, forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
+        let key = MainLayoutMetrics.sidebarCollapsedDefaultsKey
+        guard UserDefaults.standard.bool(forKey: key) != isCollapsed else { return }
+        UserDefaults.standard.set(isCollapsed, forKey: key)
+    }
+
+    /// What the user last asked for, as opposed to what is on screen right now.
+    var userWantsSidebarCollapsed: Bool {
+        UserDefaults.standard.bool(forKey: MainLayoutMetrics.sidebarCollapsedDefaultsKey)
     }
 
     func updateSnippetTextViewWrappingWidth() {
@@ -311,7 +404,19 @@ extension ViewController {
 
         permissionStatusLabel.font = .systemFont(ofSize: 13)
         permissionStatusLabel.textColor = .secondaryLabelColor
-        permissionStatusLabel.lineBreakMode = .byTruncatingTail
+        // Two lines rather than one truncated one. This sentence is the only
+        // explanation of why expansion is not working, and at a narrow window a
+        // single line cut it down to about three words.
+        permissionStatusLabel.lineBreakMode = .byWordWrapping
+        permissionStatusLabel.usesSingleLineMode = false
+        permissionStatusLabel.maximumNumberOfLines = 2
+        // This sentence set the whole window's minimum width — and it did it even
+        // with the banner hidden, because the banner is pinned to the root
+        // stack's width whether or not `detachesHiddenViews` has taken it out of
+        // the arrangement. At required resistance no window could be narrower
+        // than the sentence, which is wider than the width the sidebar is
+        // supposed to step aside at, so the rule would have been unreachable.
+        permissionStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // No "Refresh": that button existed only because nothing else re-checked
         // the grant, which made the user do the app's polling by hand. The app

@@ -141,6 +141,28 @@ final class ViewController: NSViewController {
     var mainSidebarSplitItem: NSSplitViewItem?
     var mainContentSplitItem: NSSplitViewItem?
 
+    /// The sidebar is hidden because the *window* is narrow, not because anyone
+    /// asked for it. Never persisted: it is recomputed from the restored window
+    /// width at launch, so a narrow window opens collapsed, a wide one does not,
+    /// and nothing is written either way.
+    var isSidebarAutoCollapsed = false
+    /// The user pressed ⌘B to *show* the sidebar at a width where the rule would
+    /// immediately hide it again. Stands the rule down until the window is back
+    /// in the wide regime, where automatic behaviour is unsurprising again.
+    var isAutomaticSidebarCollapseSuppressed = false
+    /// True for the duration of an automatic collapse or expand, including its
+    /// animation, so `handleMainSplitViewDidResize` can tell the app's own doing
+    /// from the user's and persist only theirs.
+    var isApplyingAutomaticSidebarCollapse = false
+    /// Where an in-flight automatic transition is heading. `isCollapsed` still
+    /// reads the old value mid-animation, so this is what a reversal compares
+    /// against.
+    var sidebarTransitionTarget: Bool?
+    /// Bumped per automatic transition so a completion handler that has been
+    /// overtaken can tell, and decline to apply its stale end state.
+    var sidebarTransitionGeneration = 0
+    var isWindowInLiveResize = false
+
     let actionOverlayView = ActionOverlayView()
     let actionPanelView = NSView()
     let actionShortcutStack = NSStackView()
@@ -155,6 +177,7 @@ final class ViewController: NSViewController {
     var hasConfiguredWindowFrameAutosave = false
     var hasConfiguredMainWindowToolbar = false
     var hasRestoredSplitViewDivider = false
+    var hasObservedWindowResize = false
     private var hasObservedWindowWillClose = false
 
     override func viewDidLoad() {
@@ -244,6 +267,14 @@ final class ViewController: NSViewController {
                     object: window
                 )
             }
+
+            observeWindowResizeForAdaptiveSidebar(window)
+            // Once, here, after the autosaved frame has been restored above — the
+            // width rule has to see the window the user actually gets. Never
+            // animated: the sidebar must already be in the right state the first
+            // time the window is drawn.
+            view.layoutSubtreeIfNeeded()
+            evaluateAutomaticSidebarCollapse(animated: false)
         }
 
         installKeyboardMonitorIfNeeded()
@@ -472,6 +503,14 @@ final class ViewController: NSViewController {
             context.duration = 0
             statusMessageOverlayView.animator().alphaValue = 1
         }
+    }
+
+    /// The sidebar moved out from under a message that is already on screen.
+    /// `presentStatusMessageOverlay` chooses between the sidebar footer and the
+    /// overlay at the moment a message is *set*, so a collapse or expand under a
+    /// live message has to ask it again.
+    func refreshStatusMessagePresentation() {
+        presentStatusMessageOverlay(importExportMessage)
     }
 
     private func updateImportExportMessageLabel(from oldValue: String?, to newValue: String?) {
