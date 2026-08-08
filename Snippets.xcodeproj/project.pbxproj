@@ -7,6 +7,47 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		28A00000000000000000000D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 28A00000000000000000000B /* Assets.xcassets */; };
+		28A00000000000000000000E /* Snippet.icon in Resources */ = {isa = PBXBuildFile; fileRef = 28A00000000000000000000C /* Snippet.icon */; };
+		28A200000000000000000001 /* AtomicFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000001 /* AtomicFileWriter.swift */; };
+		28A200000000000000000002 /* DeletionGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000002 /* DeletionGuard.swift */; };
+		28A200000000000000000003 /* HybridLogicalClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000003 /* HybridLogicalClock.swift */; };
+		28A200000000000000000004 /* KeyWrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000004 /* KeyWrap.swift */; };
+		28A200000000000000000005 /* KeywordSuggestions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000005 /* KeywordSuggestions.swift */; };
+		28A200000000000000000006 /* LibraryGeneration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000006 /* LibraryGeneration.swift */; };
+		28A200000000000000000007 /* LibraryLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000007 /* LibraryLock.swift */; };
+		28A200000000000000000008 /* LibraryTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000008 /* LibraryTransaction.swift */; };
+		28A200000000000000000009 /* PassphraseKDF.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000009 /* PassphraseKDF.swift */; };
+		28A20000000000000000000A /* PlaceholderResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000A /* PlaceholderResolver.swift */; };
+		28A20000000000000000000B /* RaycastPlaceholders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000B /* RaycastPlaceholders.swift */; };
+		28A20000000000000000000C /* RecoveryKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000C /* RecoveryKey.swift */; };
+		28A20000000000000000000D /* SecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000D /* SecretStore.swift */; };
+		28A20000000000000000000E /* Snippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000E /* Snippet.swift */; };
+		28A20000000000000000000F /* SnippetCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000F /* SnippetCrypto.swift */; };
+		28A200000000000000000010 /* SnippetDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000010 /* SnippetDeepLink.swift */; };
+		28A200000000000000000011 /* SnippetLibraryCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000011 /* SnippetLibraryCodec.swift */; };
+		28A200000000000000000012 /* SyncBase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000012 /* SyncBase.swift */; };
+		28A200000000000000000013 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000013 /* SyncEngine.swift */; };
+		28A200000000000000000014 /* SyncEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000014 /* SyncEnvelope.swift */; };
+		28A200000000000000000015 /* SyncLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000015 /* SyncLibraryProjection.swift */; };
+		28A200000000000000000016 /* SyncMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000016 /* SyncMerge.swift */; };
+		28A200000000000000000017 /* SyncStateFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000017 /* SyncStateFile.swift */; };
+		28A200000000000000000018 /* SyncTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000018 /* SyncTransport.swift */; };
+		28A200000000000000000019 /* Tombstones.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000019 /* Tombstones.swift */; };
+		28A20000000000000000001A /* VaultDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000001A /* VaultDocument.swift */; };
+		28A20000000000000000001B /* SnippetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000001B /* SnippetStore.swift */; };
+		28A20000000000000000001C /* SecureSnippetProviding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000001C /* SecureSnippetProviding.swift */; };
+		28A20000000000000000001D /* SecurePlaintextLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000001D /* SecurePlaintextLease.swift */; };
+		28A20000000000000000001E /* VaultSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000001E /* VaultSession.swift */; };
+		28A20000000000000000001F /* KeychainSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000001F /* KeychainSecretStore.swift */; };
+		28A200000000000000000020 /* VaultIdentityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000020 /* VaultIdentityStore.swift */; };
+		28A200000000000000000021 /* SecureSnippetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000021 /* SecureSnippetStore.swift */; };
+		28A200000000000000000022 /* CloudKitErrorMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000022 /* CloudKitErrorMapping.swift */; };
+		28A200000000000000000023 /* CloudKitRecordMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000023 /* CloudKitRecordMapping.swift */; };
+		28A200000000000000000024 /* CloudKitTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000024 /* CloudKitTransport.swift */; };
+		28A200000000000000000025 /* SyncKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000025 /* SyncKeyStore.swift */; };
+		28A200000000000000000026 /* SnippetLibraryBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000026 /* SnippetLibraryBridge.swift */; };
+		28A200000000000000000027 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000027 /* SyncCoordinator.swift */; };
 		270SPK012F53000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 270SPK022F53000000000002 /* Sparkle */; };
 		27C110052F53000000000005 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110022F53000000000002 /* main.swift */; };
 		27C110062F53000000000006 /* Snippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110032F53000000000003 /* Snippet.swift */; };
@@ -28,6 +69,20 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		28B000000000000000000008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 272782CF2F41F9F1000B9989 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 28A000000000000000000004;
+			remoteInfo = "Snippets iPad";
+		};
+		28C000000000000000000008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 272782CF2F41F9F1000B9989 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 28A000000000000000000004;
+			remoteInfo = "Snippets iPad";
+		};
 		27C1100F2F5300000000000F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 272782CF2F41F9F1000B9989 /* Project object */;
@@ -51,6 +106,50 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		28A000000000000000000001 /* Snippets iPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Snippets iPad.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		28B000000000000000000001 /* Snippets iPadTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iPadTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		28C000000000000000000001 /* Snippets iPadUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iPadUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		28A00000000000000000000B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = snippets/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		28A00000000000000000000C /* Snippet.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; name = Snippet.icon; path = snippets/Snippet.icon; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000001 /* AtomicFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AtomicFileWriter.swift; path = snippets/Core/AtomicFileWriter.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000002 /* DeletionGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DeletionGuard.swift; path = snippets/Core/DeletionGuard.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000003 /* HybridLogicalClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HybridLogicalClock.swift; path = snippets/Core/HybridLogicalClock.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000004 /* KeyWrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeyWrap.swift; path = snippets/Core/KeyWrap.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000005 /* KeywordSuggestions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeywordSuggestions.swift; path = snippets/Core/KeywordSuggestions.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000006 /* LibraryGeneration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryGeneration.swift; path = snippets/Core/LibraryGeneration.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000007 /* LibraryLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryLock.swift; path = snippets/Core/LibraryLock.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000008 /* LibraryTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryTransaction.swift; path = snippets/Core/LibraryTransaction.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000009 /* PassphraseKDF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PassphraseKDF.swift; path = snippets/Core/PassphraseKDF.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000000A /* PlaceholderResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PlaceholderResolver.swift; path = snippets/Core/PlaceholderResolver.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000000B /* RaycastPlaceholders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RaycastPlaceholders.swift; path = snippets/Core/RaycastPlaceholders.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000000C /* RecoveryKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecoveryKey.swift; path = snippets/Core/RecoveryKey.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000000D /* SecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SecretStore.swift; path = snippets/Core/SecretStore.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000000E /* Snippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Snippet.swift; path = snippets/Core/Snippet.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000000F /* SnippetCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetCrypto.swift; path = snippets/Core/SnippetCrypto.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000010 /* SnippetDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetDeepLink.swift; path = snippets/Core/SnippetDeepLink.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000011 /* SnippetLibraryCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetLibraryCodec.swift; path = snippets/Core/SnippetLibraryCodec.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000012 /* SyncBase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncBase.swift; path = snippets/Core/SyncBase.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000013 /* SyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncEngine.swift; path = snippets/Core/SyncEngine.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000014 /* SyncEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncEnvelope.swift; path = snippets/Core/SyncEnvelope.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000015 /* SyncLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncLibraryProjection.swift; path = snippets/Core/SyncLibraryProjection.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000016 /* SyncMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncMerge.swift; path = snippets/Core/SyncMerge.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000017 /* SyncStateFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncStateFile.swift; path = snippets/Core/SyncStateFile.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000018 /* SyncTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncTransport.swift; path = snippets/Core/SyncTransport.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000019 /* Tombstones.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Tombstones.swift; path = snippets/Core/Tombstones.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000001A /* VaultDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VaultDocument.swift; path = snippets/Core/VaultDocument.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000001B /* SnippetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetStore.swift; path = snippets/SnippetStore.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000001C /* SecureSnippetProviding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SecureSnippetProviding.swift; path = snippets/Vault/SecureSnippetProviding.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000001D /* SecurePlaintextLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SecurePlaintextLease.swift; path = snippets/Vault/SecurePlaintextLease.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000001E /* VaultSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VaultSession.swift; path = snippets/Vault/VaultSession.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000001F /* KeychainSecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeychainSecretStore.swift; path = snippets/Vault/KeychainSecretStore.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000020 /* VaultIdentityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VaultIdentityStore.swift; path = snippets/Vault/VaultIdentityStore.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000021 /* SecureSnippetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SecureSnippetStore.swift; path = snippets/Vault/SecureSnippetStore.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000022 /* CloudKitErrorMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudKitErrorMapping.swift; path = snippets/Sync/CloudKitErrorMapping.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000023 /* CloudKitRecordMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudKitRecordMapping.swift; path = snippets/Sync/CloudKitRecordMapping.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000024 /* CloudKitTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudKitTransport.swift; path = snippets/Sync/CloudKitTransport.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000025 /* SyncKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncKeyStore.swift; path = snippets/Sync/SyncKeyStore.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000026 /* SnippetLibraryBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetLibraryBridge.swift; path = snippets/Sync/SnippetLibraryBridge.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000027 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncCoordinator.swift; path = snippets/Sync/SyncCoordinator.swift; sourceTree = SOURCE_ROOT; };
 		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Snippets.app; path = "Snippets Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110012F53000000000001 /* snippets-cli */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "snippets-cli"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110022F53000000000002 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -71,7 +170,36 @@
 		27C131262F55000000000226 /* SecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SecretStore.swift; path = ../snippets/Core/SecretStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		28A00000000000000000000F /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info-iPad.plist,
+				"Snippets-iPad.entitlements",
+			);
+			target = 28A000000000000000000004 /* Snippets iPad */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		28A000000000000000000002 /* snippets-ipad */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				28A00000000000000000000F /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
+			path = "snippets-ipad";
+			sourceTree = "<group>";
+		};
+		28B000000000000000000002 /* snippets-ipad-tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "snippets-ipad-tests";
+			sourceTree = "<group>";
+		};
+		28C000000000000000000002 /* snippets-ipad-uitests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "snippets-ipad-uitests";
+			sourceTree = "<group>";
+		};
 		272782D92F41F9F1000B9989 /* snippets */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = snippets;
@@ -80,6 +208,27 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		28A000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28B000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28C000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		272782D42F41F9F1000B9989 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -102,6 +251,10 @@
 			isa = PBXGroup;
 			children = (
 				272782D92F41F9F1000B9989 /* snippets */,
+				28A000000000000000000002 /* snippets-ipad */,
+				28B000000000000000000002 /* snippets-ipad-tests */,
+				28C000000000000000000002 /* snippets-ipad-uitests */,
+				28A000000000000000000003 /* Shared iPad Sources */,
 				27C1100E2F5300000000000E /* snippets-cli */,
 				272782D82F41F9F1000B9989 /* Products */,
 			);
@@ -111,6 +264,9 @@
 			isa = PBXGroup;
 			children = (
 				272782D72F41F9F1000B9989 /* Snippets.app */,
+				28A000000000000000000001 /* Snippets iPad.app */,
+				28B000000000000000000001 /* Snippets iPadTests.xctest */,
+				28C000000000000000000001 /* Snippets iPadUITests.xctest */,
 				27C110012F53000000000001 /* snippets-cli */,
 			);
 			name = Products;
@@ -139,9 +295,125 @@
 			path = "snippets-cli";
 			sourceTree = "<group>";
 		};
+		28A000000000000000000003 /* Shared iPad Sources */ = {
+			isa = PBXGroup;
+			children = (
+				28A100000000000000000001 /* AtomicFileWriter.swift */,
+				28A100000000000000000002 /* DeletionGuard.swift */,
+				28A100000000000000000003 /* HybridLogicalClock.swift */,
+				28A100000000000000000004 /* KeyWrap.swift */,
+				28A100000000000000000005 /* KeywordSuggestions.swift */,
+				28A100000000000000000006 /* LibraryGeneration.swift */,
+				28A100000000000000000007 /* LibraryLock.swift */,
+				28A100000000000000000008 /* LibraryTransaction.swift */,
+				28A100000000000000000009 /* PassphraseKDF.swift */,
+				28A10000000000000000000A /* PlaceholderResolver.swift */,
+				28A10000000000000000000B /* RaycastPlaceholders.swift */,
+				28A10000000000000000000C /* RecoveryKey.swift */,
+				28A10000000000000000000D /* SecretStore.swift */,
+				28A10000000000000000000E /* Snippet.swift */,
+				28A10000000000000000000F /* SnippetCrypto.swift */,
+				28A100000000000000000010 /* SnippetDeepLink.swift */,
+				28A100000000000000000011 /* SnippetLibraryCodec.swift */,
+				28A100000000000000000012 /* SyncBase.swift */,
+				28A100000000000000000013 /* SyncEngine.swift */,
+				28A100000000000000000014 /* SyncEnvelope.swift */,
+				28A100000000000000000015 /* SyncLibraryProjection.swift */,
+				28A100000000000000000016 /* SyncMerge.swift */,
+				28A100000000000000000017 /* SyncStateFile.swift */,
+				28A100000000000000000018 /* SyncTransport.swift */,
+				28A100000000000000000019 /* Tombstones.swift */,
+				28A10000000000000000001A /* VaultDocument.swift */,
+				28A10000000000000000001B /* SnippetStore.swift */,
+				28A10000000000000000001C /* SecureSnippetProviding.swift */,
+				28A10000000000000000001D /* SecurePlaintextLease.swift */,
+				28A10000000000000000001E /* VaultSession.swift */,
+				28A10000000000000000001F /* KeychainSecretStore.swift */,
+				28A100000000000000000020 /* VaultIdentityStore.swift */,
+				28A100000000000000000021 /* SecureSnippetStore.swift */,
+				28A100000000000000000022 /* CloudKitErrorMapping.swift */,
+				28A100000000000000000023 /* CloudKitRecordMapping.swift */,
+				28A100000000000000000024 /* CloudKitTransport.swift */,
+				28A100000000000000000025 /* SyncKeyStore.swift */,
+				28A100000000000000000026 /* SnippetLibraryBridge.swift */,
+				28A100000000000000000027 /* SyncCoordinator.swift */,
+				28A00000000000000000000B /* Assets.xcassets */,
+				28A00000000000000000000C /* Snippet.icon */,
+			);
+			name = "Shared iPad Sources";
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		28A000000000000000000004 /* Snippets iPad */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 28A00000000000000000000A /* Build configuration list for PBXNativeTarget "Snippets iPad" */;
+			buildPhases = (
+				28A000000000000000000005 /* Sources */,
+				28A000000000000000000006 /* Frameworks */,
+				28A000000000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				28A000000000000000000002 /* snippets-ipad */,
+			);
+			name = "Snippets iPad";
+			packageProductDependencies = (
+			);
+			productName = "Snippets iPad";
+			productReference = 28A000000000000000000001 /* Snippets iPad.app */;
+			productType = "com.apple.product-type.application";
+		};
+		28B000000000000000000003 /* Snippets iPadTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 28B00000000000000000000B /* Build configuration list for PBXNativeTarget "Snippets iPadTests" */;
+			buildPhases = (
+				28B000000000000000000004 /* Sources */,
+				28B000000000000000000005 /* Frameworks */,
+				28B000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				28B000000000000000000007 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				28B000000000000000000002 /* snippets-ipad-tests */,
+			);
+			name = "Snippets iPadTests";
+			packageProductDependencies = (
+			);
+			productName = "Snippets iPadTests";
+			productReference = 28B000000000000000000001 /* Snippets iPadTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		28C000000000000000000003 /* Snippets iPadUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 28C00000000000000000000B /* Build configuration list for PBXNativeTarget "Snippets iPadUITests" */;
+			buildPhases = (
+				28C000000000000000000004 /* Sources */,
+				28C000000000000000000005 /* Frameworks */,
+				28C000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				28C000000000000000000007 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				28C000000000000000000002 /* snippets-ipad-uitests */,
+			);
+			name = "Snippets iPadUITests";
+			packageProductDependencies = (
+			);
+			productName = "Snippets iPadUITests";
+			productReference = 28C000000000000000000001 /* Snippets iPadUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		272782D62F41F9F1000B9989 /* Snippets */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 272782E52F41F9F2000B9989 /* Build configuration list for PBXNativeTarget "Snippets" */;
@@ -193,6 +465,17 @@
 				LastSwiftUpdateCheck = 2620;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
+					28A000000000000000000004 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					28B000000000000000000003 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 28A000000000000000000004;
+					};
+					28C000000000000000000003 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 28A000000000000000000004;
+					};
 					272782D62F41F9F1000B9989 = {
 						CreatedOnToolsVersion = 26.2;
 					};
@@ -219,12 +502,38 @@
 			projectRoot = "";
 			targets = (
 				272782D62F41F9F1000B9989 /* Snippets */,
+				28A000000000000000000004 /* Snippets iPad */,
+				28B000000000000000000003 /* Snippets iPadTests */,
+				28C000000000000000000003 /* Snippets iPadUITests */,
 				27C1100A2F5300000000000A /* snippets-cli */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		28A000000000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				28A00000000000000000000D /* Assets.xcassets in Resources */,
+				28A00000000000000000000E /* Snippet.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28B000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28C000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		272782D52F41F9F1000B9989 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -235,6 +544,66 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		28A000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				28A200000000000000000001 /* AtomicFileWriter.swift in Sources */,
+				28A200000000000000000002 /* DeletionGuard.swift in Sources */,
+				28A200000000000000000003 /* HybridLogicalClock.swift in Sources */,
+				28A200000000000000000004 /* KeyWrap.swift in Sources */,
+				28A200000000000000000005 /* KeywordSuggestions.swift in Sources */,
+				28A200000000000000000006 /* LibraryGeneration.swift in Sources */,
+				28A200000000000000000007 /* LibraryLock.swift in Sources */,
+				28A200000000000000000008 /* LibraryTransaction.swift in Sources */,
+				28A200000000000000000009 /* PassphraseKDF.swift in Sources */,
+				28A20000000000000000000A /* PlaceholderResolver.swift in Sources */,
+				28A20000000000000000000B /* RaycastPlaceholders.swift in Sources */,
+				28A20000000000000000000C /* RecoveryKey.swift in Sources */,
+				28A20000000000000000000D /* SecretStore.swift in Sources */,
+				28A20000000000000000000E /* Snippet.swift in Sources */,
+				28A20000000000000000000F /* SnippetCrypto.swift in Sources */,
+				28A200000000000000000010 /* SnippetDeepLink.swift in Sources */,
+				28A200000000000000000011 /* SnippetLibraryCodec.swift in Sources */,
+				28A200000000000000000012 /* SyncBase.swift in Sources */,
+				28A200000000000000000013 /* SyncEngine.swift in Sources */,
+				28A200000000000000000014 /* SyncEnvelope.swift in Sources */,
+				28A200000000000000000015 /* SyncLibraryProjection.swift in Sources */,
+				28A200000000000000000016 /* SyncMerge.swift in Sources */,
+				28A200000000000000000017 /* SyncStateFile.swift in Sources */,
+				28A200000000000000000018 /* SyncTransport.swift in Sources */,
+				28A200000000000000000019 /* Tombstones.swift in Sources */,
+				28A20000000000000000001A /* VaultDocument.swift in Sources */,
+				28A20000000000000000001B /* SnippetStore.swift in Sources */,
+				28A20000000000000000001C /* SecureSnippetProviding.swift in Sources */,
+				28A20000000000000000001D /* SecurePlaintextLease.swift in Sources */,
+				28A20000000000000000001E /* VaultSession.swift in Sources */,
+				28A20000000000000000001F /* KeychainSecretStore.swift in Sources */,
+				28A200000000000000000020 /* VaultIdentityStore.swift in Sources */,
+				28A200000000000000000021 /* SecureSnippetStore.swift in Sources */,
+				28A200000000000000000022 /* CloudKitErrorMapping.swift in Sources */,
+				28A200000000000000000023 /* CloudKitRecordMapping.swift in Sources */,
+				28A200000000000000000024 /* CloudKitTransport.swift in Sources */,
+				28A200000000000000000025 /* SyncKeyStore.swift in Sources */,
+				28A200000000000000000026 /* SnippetLibraryBridge.swift in Sources */,
+				28A200000000000000000027 /* SyncCoordinator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28B000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28C000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		272782D32F41F9F1000B9989 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -268,6 +637,16 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		28B000000000000000000007 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 28A000000000000000000004 /* Snippets iPad */;
+			targetProxy = 28B000000000000000000008 /* PBXContainerItemProxy */;
+		};
+		28C000000000000000000007 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 28A000000000000000000004 /* Snippets iPad */;
+			targetProxy = 28C000000000000000000008 /* PBXContainerItemProxy */;
+		};
 		27C110102F53000000000010 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 27C1100A2F5300000000000A /* snippets-cli */;
@@ -276,6 +655,151 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		28A000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = Snippet;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "snippets-ipad/Snippets-iPad.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 68;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "snippets-ipad/Info-iPad.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Snippets;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.3.67;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.debug;
+				PRODUCT_NAME = Snippets;
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		28A000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = Snippet;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "snippets-ipad/Snippets-iPad.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 68;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "snippets-ipad/Info-iPad.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Snippets;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.3.67;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets;
+				PRODUCT_NAME = Snippets;
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		28B000000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.iPadTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Snippets.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Snippets";
+			};
+			name = Debug;
+		};
+		28B00000000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.iPadTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Snippets.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Snippets";
+			};
+			name = Release;
+		};
+		28C000000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.iPadUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_TARGET_NAME = "Snippets iPad";
+			};
+			name = Debug;
+		};
+		28C00000000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.iPadUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_TARGET_NAME = "Snippets iPad";
+			};
+			name = Release;
+		};
 		272782E32F41F9F2000B9989 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -510,6 +1034,33 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		28A00000000000000000000A /* Build configuration list for PBXNativeTarget "Snippets iPad" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				28A000000000000000000008 /* Debug */,
+				28A000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		28B00000000000000000000B /* Build configuration list for PBXNativeTarget "Snippets iPadTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				28B000000000000000000009 /* Debug */,
+				28B00000000000000000000A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		28C00000000000000000000B /* Build configuration list for PBXNativeTarget "Snippets iPadUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				28C000000000000000000009 /* Debug */,
+				28C00000000000000000000A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "Snippets" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

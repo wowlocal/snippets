@@ -86,6 +86,7 @@ nonisolated enum CloudKitErrorMapping {
         // Sharing and assets. This transport creates neither, so these mean the schema
         // is not what this build thinks it is.
         case .alreadyShared, .tooManyParticipants, .participantMayNeedVerification,
+             .participantAlreadyInvited,
              .assetFileNotFound, .assetFileModified, .assetNotAvailable,
              .resultsTruncated, .partialFailure:
             return .permanent(detail: ckError.localizedDescription)
@@ -185,10 +186,10 @@ nonisolated extension CKAccountStatus {
             return nil
         case .noAccount:
             return .rejected(.authenticationRequired(
-                detail: "no iCloud account is signed in on this Mac"))
+                detail: "no iCloud account is signed in on this device"))
         case .restricted:
             return .rejected(.authenticationRequired(
-                detail: "iCloud is restricted on this Mac by a profile or parental control"))
+                detail: "iCloud is restricted on this device by a profile or parental control"))
         case .couldNotDetermine:
             // Not an auth failure: the usual cause is being offline, and telling someone
             // to sign in when they are merely on a train is worse than backing off.

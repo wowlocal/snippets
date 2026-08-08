@@ -60,7 +60,7 @@ final class KeychainSecretStore {
             case .unavailable(let status):
                 let detail = SecCopyErrorMessageString(status, nil) as String? ?? "\(status)"
                 return "the keychain refused the request: \(detail) (\(status))"
-            case .notFound: return "no vault key is stored on this Mac"
+            case .notFound: return "no vault key is stored on this device"
             case .invalidKeyLength(let count):
                 return "the stored vault key must be 32 bytes; found \(count)"
             case .invalidItemLength(let expected, let actual):
@@ -87,6 +87,16 @@ final class KeychainSecretStore {
     /// build made before the portal work would keep claiming the local tier long after
     /// the entitlement arrived. `SecCodeCopySelf` asks the only authority that matters.
     static func detectTier() -> Tier {
+        #if os(iOS)
+        // SecCode is macOS-only. The iPad target injects the expanded access group
+        // through Info.plist from the same build setting used by its entitlement.
+        guard let group = Bundle.main.object(
+            forInfoDictionaryKey: "SnippetsKeychainAccessGroup") as? String,
+              !group.isEmpty,
+              !group.contains("$(")
+        else { return .deviceOnly }
+        return .synchronizable(accessGroup: group)
+        #else
         guard let applicationIdentifier = selfEntitlement(
                   forKey: "com.apple.application-identifier") as? String,
               !applicationIdentifier.isEmpty,
@@ -94,8 +104,10 @@ final class KeychainSecretStore {
               let group = groups.first(where: { !$0.isEmpty && !$0.contains("*") })
         else { return .deviceOnly }
         return .synchronizable(accessGroup: group)
+        #endif
     }
 
+    #if os(macOS)
     static func selfEntitlement(forKey key: String) -> Any? {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
@@ -113,6 +125,7 @@ final class KeychainSecretStore {
 
         return entitlements[key]
     }
+    #endif
 
     // MARK: - Storing and reading items
 
@@ -377,7 +390,7 @@ extension KeychainSecretStore {
     var statusDescription: String {
         switch tier {
         case .deviceOnly:
-            return "Secure snippets stay on this Mac. Syncing them needs the iCloud Keychain entitlement."
+            return "Secure snippets stay on this device. Syncing them needs the iCloud Keychain entitlement."
         case .synchronizable:
             return "Secure snippets can sync to your other devices through iCloud Keychain."
         }

@@ -15,6 +15,20 @@ protocol SnippetStoreSyncDelegate: AnyObject {
 
 @MainActor
 final class SnippetStore {
+    struct Configuration {
+        var seedsStarterSnippet: Bool
+        var observesExternalChanges: Bool
+
+        nonisolated static let macOSDefault = Configuration(
+            seedsStarterSnippet: true,
+            observesExternalChanges: true
+        )
+        nonisolated static let iPad = Configuration(
+            seedsStarterSnippet: false,
+            observesExternalChanges: false
+        )
+    }
+
     struct ImportOptions {
         var preserveExclamationPrefix = false
     }
@@ -46,7 +60,9 @@ final class SnippetStore {
     private let externalReloadDelay: TimeInterval = 0.05
     private var externalReloadWorkItem: DispatchWorkItem?
     private var saveDirectoryMonitor: DispatchSourceFileSystemObject?
+    #if os(macOS)
     private var distributedChangeObserver: NSObjectProtocol?
+    #endif
     private var lastKnownDiskData: Data?
 
     /// SHA-256 of `lastKnownDiskData`. Kept alongside the bytes so the hot path can
@@ -131,6 +147,7 @@ final class SnippetStore {
         let undoSnapshot: [Snippet]?
     }
     private var blankDraft: BlankDraft?
+    private let configuration: Configuration
 
     enum ImportExportError: LocalizedError {
         case emptyImport
@@ -166,7 +183,8 @@ final class SnippetStore {
         let keyword: String?
     }
 
-    init() {
+    init(configuration: Configuration = .macOSDefault) {
+        self.configuration = configuration
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
         let folder = SnippetStorageLocations.supportFolderURL
@@ -181,7 +199,9 @@ final class SnippetStore {
         adoptDeviceIdentity()
         seedFirstRunBackupIfNeeded()
         load()
-        startObservingExternalChanges()
+        if configuration.observesExternalChanges {
+            startObservingExternalChanges()
+        }
     }
 
     /// Reads (or mints) this install's device id.
@@ -229,9 +249,11 @@ final class SnippetStore {
         persistWorkItem?.cancel()
         externalReloadWorkItem?.cancel()
         saveDirectoryMonitor?.cancel()
+        #if os(macOS)
         if let distributedChangeObserver {
             DistributedNotificationCenter.default().removeObserver(distributedChangeObserver)
         }
+        #endif
     }
 
     /// `name` is set here rather than by a follow-up `update`: creation pushes
@@ -563,7 +585,7 @@ final class SnippetStore {
         var importedCount = 0
 
         for incoming in imported {
-            upsertImportedSnippet(incoming, into: &merged)
+            _ = upsertImportedSnippet(incoming, into: &merged)
             importedCount += 1
         }
 
@@ -613,8 +635,8 @@ final class SnippetStore {
             // snippet, so that screen only ever appears to someone who deleted
             // everything. Remove the seed and the teaching sentence has to come
             // back with it.
-            snippets = [Snippet.starterSnippet]
-            persist()
+            snippets = configuration.seedsStarterSnippet ? [Snippet.starterSnippet] : []
+            if !snippets.isEmpty { persist() }
             return
         }
 
@@ -624,7 +646,7 @@ final class SnippetStore {
             rememberDiskBytes(data)
         } catch {
             NSLog("Failed to load snippets: \(error.localizedDescription)")
-            snippets = [Snippet.starterSnippet]
+            snippets = configuration.seedsStarterSnippet ? [Snippet.starterSnippet] : []
 
             // Preserve the user's data: move the unreadable file aside before
             // anything is written back to snippets.json. If the move fails,
@@ -1083,6 +1105,7 @@ final class SnippetStore {
     }
 
     private func startObservingExternalChanges() {
+        #if os(macOS)
         distributedChangeObserver = DistributedNotificationCenter.default().addObserver(
             forName: SnippetStorageSync.distributedChangeNotification,
             object: saveURL.path,
@@ -1109,6 +1132,7 @@ final class SnippetStore {
         }
         saveDirectoryMonitor = monitor
         monitor.resume()
+        #endif
     }
 
     private func scheduleExternalReload(immediately: Bool) {

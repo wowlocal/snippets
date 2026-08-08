@@ -224,7 +224,7 @@ final class SyncEngine {
             consecutiveFailures = 0
             if let deferred {
                 transition(to: .waitingForVault(
-                    "\(deferred) secure snippet(s) from another Mac are waiting for a key "
+                    "\(deferred) secure snippet(s) from another device are waiting for a key "
                     + "this one does not have yet"))
             } else {
                 transition(to: .idle(lastSync: now()))
@@ -412,7 +412,7 @@ final class SyncEngine {
             throw SyncEngineFailure(
                 reason: .vaultUnreadable,
                 detail: "\(incompatible.count) secure snippet(s) belong to a different "
-                    + "vault identity. Their ciphertext cannot be opened by this Mac; "
+                    + "vault identity. Their ciphertext cannot be opened by this device; "
                     + "sync stopped instead of repeatedly fetching the same records.")
         }
         return deferred.isEmpty ? nil : deferred.count
