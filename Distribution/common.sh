@@ -412,21 +412,46 @@ function assert_app_launches() {
         exit 1
     fi
 
-    local scratch output
+    local scratch output status=0
     scratch=$(mktemp -d "${TMPDIR:-/tmp}/snippets-launch.XXXXXX")
     output="$scratch/launch.log"
 
-    ( SNIPPETS_SUPPORT_DIR="$scratch/support" \
-        "$app_path/Contents/MacOS/$executable_name" >"$output" 2>&1 ) &
-    local pid=$!
+    # The launch is confined to a subshell with `set +e` and its stderr discarded. Both
+    # halves of that are load-bearing, and each one broke a release on its own:
+    #
+    #  - Callers run under `set -e`. `kill -9` on a process that has already exited
+    #    returns non-zero, so the "it survived, now stop it" path aborted the release
+    #    *between* stopping the app and reporting success. The check passed and the
+    #    release died anyway, with no failure message — the worst of both.
+    #  - Reaping a signalled background job makes the shell print "Terminated: 15" to its
+    #    own stderr. That is not this function's output and cannot be redirected from
+    #    inside it, and it reads exactly like the crash this check exists to report.
+    #
+    # The subshell's exit status is the verdict, so `|| status=$?` is also what keeps
+    # `set -e` from firing on a genuine failure before it can be explained.
+    (
+        set +e
+        SNIPPETS_SUPPORT_DIR="$scratch/support" \
+            "$app_path/Contents/MacOS/$executable_name" >"$output" 2>&1 &
+        child=$!
+        sleep 3
+        if kill -0 "$child" 2>/dev/null; then
+            kill -TERM "$child" 2>/dev/null
+            sleep 1
+            kill -9 "$child" 2>/dev/null
+            wait "$child" 2>/dev/null
+            exit 0
+        fi
+        wait "$child" 2>/dev/null
+        code=$?
+        # A GUI app that exits by itself within three seconds has not passed, even with
+        # status 0 — reported as its own case rather than as a crash, because the cause is
+        # different and so is the fix.
+        [ "$code" -eq 0 ] && exit 111
+        exit "$code"
+    ) 2>/dev/null || status=$?
 
-    sleep 3
-
-    if kill -0 "$pid" 2>/dev/null; then
-        kill -TERM "$pid" 2>/dev/null
-        sleep 1
-        kill -9 "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null || true
+    if [ "$status" -eq 0 ]; then
         rm -rf "$scratch"
         gray_text
         echo "  App launches and stays running."
@@ -434,11 +459,13 @@ function assert_app_launches() {
         return 0
     fi
 
-    wait "$pid" 2>/dev/null
-    local code=$?
     red_text
-    echo "Export failed — the exported app does not launch (exit code $code)."
-    if [ "$code" -eq 137 ]; then
+    if [ "$status" -eq 111 ]; then
+        echo "Export failed — the exported app exited on its own within 3 seconds."
+    else
+        echo "Export failed — the exported app does not launch (exit code $status)."
+    fi
+    if [ "$status" -eq 137 ]; then
         echo "137 is SIGKILL: the kernel refused the binary before any code ran, which is"
         echo "almost always the embedded provisioning profile failing to authorise a"
         echo "restricted entitlement the binary claims."
