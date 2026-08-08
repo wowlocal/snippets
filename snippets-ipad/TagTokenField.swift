@@ -11,11 +11,11 @@ final class TagTokenField: UIView, UITextFieldDelegate {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 10
+        layer.cornerRadius = 9
         layer.cornerCurve = .continuous
         layer.borderWidth = 1 / max(traitCollection.displayScale, 1)
-        layer.borderColor = UIColor.separator.cgColor
-        backgroundColor = .secondarySystemBackground
+        layer.borderColor = UIColor.separator.withAlphaComponent(0.45).cgColor
+        backgroundColor = AppTheme.editorSurface
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.showsHorizontalScrollIndicator = false
@@ -24,8 +24,9 @@ final class TagTokenField: UIView, UITextFieldDelegate {
         stack.alignment = .center
         stack.spacing = 7
 
-        textField.placeholder = "Add tag"
-        textField.font = .preferredFont(forTextStyle: .body)
+        textField.placeholder = "work, email"
+        textField.font = AppTheme.scaledFont(size: 15, textStyle: .body)
+        textField.adjustsFontForContentSizeCategory = true
         textField.autocapitalizationType = .none
         textField.autocorrectionType = .no
         textField.returnKeyType = .done
@@ -130,8 +131,10 @@ final class TagTokenField: UIView, UITextFieldDelegate {
             configuration.imagePadding = 5
             configuration.cornerStyle = .capsule
             configuration.buttonSize = .small
-            configuration.baseForegroundColor = AppTheme.tint
-            configuration.baseBackgroundColor = AppTheme.tint.withAlphaComponent(0.12)
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8)
+            let color = AppTheme.tagColor(for: tag)
+            configuration.baseForegroundColor = color
+            configuration.baseBackgroundColor = AppTheme.tagFillColor(for: tag)
             let button = UIButton(configuration: configuration)
             button.accessibilityLabel = "Remove tag \(tag)"
             button.addAction(UIAction { [weak self] _ in self?.remove(tag: tag) }, for: .touchUpInside)

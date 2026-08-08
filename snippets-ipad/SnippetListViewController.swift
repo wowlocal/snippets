@@ -7,9 +7,12 @@ final class SnippetListViewController: UIViewController {
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let tagScrollView = UIScrollView()
     private let tagStack = UIStackView()
+    private let footerView = UIView()
+    private let deleteButton = UIButton(type: .system)
     private let statusLabel = UILabel()
     private let emptyView = EmptyLibraryView()
     private let searchController = UISearchController(searchResultsController: nil)
+    private var tagBarHeightConstraint: NSLayoutConstraint?
     private var visibleSnippets: [Snippet] = []
     private var activeTagKeys = Set<String>()
     private var selectedID: UUID?
@@ -28,14 +31,15 @@ final class SnippetListViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Snippets"
-        navigationItem.largeTitleDisplayMode = .always
-        navigationController?.navigationBar.prefersLargeTitles = true
-        view.backgroundColor = .systemBackground
+        title = nil
+        navigationItem.largeTitleDisplayMode = .never
+        navigationController?.navigationBar.prefersLargeTitles = false
+        view.backgroundColor = .secondarySystemBackground
 
         configureSearch()
         configureToolbar()
         configureTags()
+        configureFooter()
         configureTable()
         configureEmptyView()
         reload(keepingSelection: false)
@@ -75,10 +79,12 @@ final class SnippetListViewController: UIViewController {
         } else if !keepingSelection {
             selectedID = nil
         }
+        deleteButton.isEnabled = selectedID != nil
     }
 
     func select(id: UUID) {
         selectedID = id
+        deleteButton.isEnabled = true
         guard let row = visibleSnippets.firstIndex(where: { $0.id == id }) else { return }
         tableView.selectRow(at: IndexPath(row: row, section: 0), animated: false, scrollPosition: .none)
     }
@@ -102,11 +108,12 @@ final class SnippetListViewController: UIViewController {
     private func configureSearch() {
         searchController.searchResultsUpdater = self
         searchController.obscuresBackgroundDuringPresentation = false
-        searchController.searchBar.placeholder = "Search snippets"
+        searchController.searchBar.placeholder = "Search"
         searchController.searchBar.accessibilityIdentifier = "snippet-search"
         searchController.searchBar.searchTextField.accessibilityIdentifier = "snippet-search"
         navigationItem.searchController = searchController
         navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.preferredSearchBarPlacement = .stacked
         definesPresentationContext = true
     }
 
@@ -153,31 +160,68 @@ final class SnippetListViewController: UIViewController {
 
         tagStack.translatesAutoresizingMaskIntoConstraints = false
         tagStack.axis = .horizontal
-        tagStack.spacing = 8
+        tagStack.spacing = 6
         tagStack.alignment = .center
         tagScrollView.addSubview(tagStack)
 
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .preferredFont(forTextStyle: .caption1)
-        statusLabel.textColor = .secondaryLabel
-        statusLabel.numberOfLines = 1
-        statusLabel.isHidden = true
-
         view.addSubview(tagScrollView)
-        view.addSubview(statusLabel)
+        let height = tagScrollView.heightAnchor.constraint(equalToConstant: 0)
+        tagBarHeightConstraint = height
         NSLayoutConstraint.activate([
             tagScrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             tagScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tagScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tagScrollView.heightAnchor.constraint(equalToConstant: 44),
-            tagStack.leadingAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.leadingAnchor, constant: 16),
-            tagStack.trailingAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.trailingAnchor, constant: -16),
+            height,
+            tagStack.leadingAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.leadingAnchor, constant: 12),
+            tagStack.trailingAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.trailingAnchor, constant: -12),
             tagStack.topAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.topAnchor),
             tagStack.bottomAnchor.constraint(equalTo: tagScrollView.contentLayoutGuide.bottomAnchor),
             tagStack.heightAnchor.constraint(equalTo: tagScrollView.frameLayoutGuide.heightAnchor),
-            statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+        ])
+    }
+
+    private func configureFooter() {
+        footerView.translatesAutoresizingMaskIntoConstraints = false
+        deleteButton.translatesAutoresizingMaskIntoConstraints = false
+        deleteButton.configuration = {
+            var configuration = UIButton.Configuration.plain()
+            configuration.image = UIImage(systemName: "trash")
+            configuration.buttonSize = .small
+            configuration.baseForegroundColor = .secondaryLabel
+            return configuration
+        }()
+        deleteButton.accessibilityLabel = "Delete Snippet"
+        deleteButton.accessibilityIdentifier = "delete-snippet"
+        deleteButton.isEnabled = false
+        deleteButton.addAction(UIAction { [weak self] _ in
+            guard let self, let selectedID = self.selectedID else { return }
+            self.delegate?.snippetList(self, requestedDelete: selectedID)
+        }, for: .touchUpInside)
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = AppTheme.scaledFont(size: 11, textStyle: .caption1)
+        statusLabel.adjustsFontForContentSizeCategory = true
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.textAlignment = .right
+        statusLabel.numberOfLines = 1
+        statusLabel.isHidden = true
+
+        let stack = UIStackView(arrangedSubviews: [deleteButton, statusLabel])
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.spacing = 8
+        footerView.addSubview(stack)
+        view.addSubview(footerView)
+        NSLayoutConstraint.activate([
+            footerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            footerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            footerView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            footerView.heightAnchor.constraint(equalToConstant: 42),
+            stack.leadingAnchor.constraint(equalTo: footerView.leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: footerView.trailingAnchor, constant: -12),
+            stack.topAnchor.constraint(equalTo: footerView.topAnchor, constant: 4),
+            stack.bottomAnchor.constraint(equalTo: footerView.bottomAnchor, constant: -4),
         ])
     }
 
@@ -186,15 +230,18 @@ final class SnippetListViewController: UIViewController {
         tableView.delegate = self
         tableView.dataSource = self
         tableView.separatorStyle = .none
+        tableView.backgroundColor = .clear
+        tableView.rowHeight = 68
+        tableView.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         tableView.keyboardDismissMode = .onDrag
         tableView.register(SnippetListCell.self, forCellReuseIdentifier: SnippetListCell.reuseIdentifier)
         tableView.accessibilityIdentifier = "snippet-list"
-        view.insertSubview(tableView, belowSubview: statusLabel)
+        view.insertSubview(tableView, belowSubview: footerView)
         NSLayoutConstraint.activate([
             tableView.topAnchor.constraint(equalTo: tagScrollView.bottomAnchor),
             tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            tableView.bottomAnchor.constraint(equalTo: footerView.topAnchor),
         ])
     }
 
@@ -207,9 +254,9 @@ final class SnippetListViewController: UIViewController {
             guard let self else { return }
             self.delegate?.snippetListRequestedImport(self)
         }
-        emptyView.onSync = { [weak self] in
+        emptyView.onClipboard = { [weak self] in
             guard let self else { return }
-            self.delegate?.snippetListRequestedSettings(self)
+            self.delegate?.snippetListRequestedClipboardSnippet(self)
         }
     }
 
@@ -220,9 +267,10 @@ final class SnippetListViewController: UIViewController {
         }
         let tags = environment.store.tagUsage()
         tagScrollView.isHidden = tags.isEmpty
+        tagBarHeightConstraint?.constant = tags.isEmpty ? 0 : 38
 
         if !activeTagKeys.isEmpty {
-            let clear = TagFilterButton(title: "Clear", selected: false)
+            let clear = TagFilterButton(title: "Clear", selected: false, color: .secondaryLabel)
             clear.addAction(UIAction { [weak self] _ in
                 self?.activeTagKeys.removeAll()
                 self?.reload(keepingSelection: true)
@@ -234,7 +282,8 @@ final class SnippetListViewController: UIViewController {
             let key = SnippetTagging.filterKey(for: item.tag)
             let button = TagFilterButton(
                 title: "\(item.tag)  \(item.count)",
-                selected: activeTagKeys.contains(key)
+                selected: activeTagKeys.contains(key),
+                color: AppTheme.tagColor(for: item.tag)
             )
             button.accessibilityLabel = "Filter by \(item.tag), \(item.count) snippets"
             button.addAction(UIAction { [weak self] _ in
@@ -256,7 +305,7 @@ final class SnippetListViewController: UIViewController {
         if environment.store.snippetsSortedForDisplay().isEmpty {
             emptyView.configure(
                 title: "Your snippet library is empty",
-                message: "Create your first snippet, import an existing library, or turn on iCloud Sync.",
+                message: "Create a snippet, start from the clipboard, or import an existing library.",
                 showsActions: true
             )
         } else if !query.isEmpty {
@@ -389,6 +438,7 @@ extension SnippetListViewController: UITableViewDataSource, UITableViewDelegate 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         let snippet = snippet(at: indexPath)
         selectedID = snippet.id
+        deleteButton.isEnabled = true
         delegate?.snippetList(self, selected: snippet.id)
     }
 
@@ -414,78 +464,176 @@ extension SnippetListViewController: UITableViewDataSource, UITableViewDelegate 
 private final class SnippetListCell: UITableViewCell {
     static let reuseIdentifier = "SnippetListCell"
 
+    private let highlightView = UIView()
     private let titleLabel = UILabel()
-    private let detailLabel = UILabel()
+    private let keywordLabel = UILabel()
+    private let previewLabel = UILabel()
+    private let tagsStack = UIStackView()
     private let stateImage = UIImageView()
-    private let pinImage = UIImageView()
+    private var selectedColor = AppTheme.selectedRow
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         backgroundColor = .clear
-        selectedBackgroundView = UIView()
+        selectionStyle = .none
 
-        titleLabel.font = .preferredFont(forTextStyle: .body)
+        highlightView.translatesAutoresizingMaskIntoConstraints = false
+        highlightView.layer.cornerRadius = 11
+        highlightView.layer.cornerCurve = .continuous
+        highlightView.isHidden = true
+        contentView.addSubview(highlightView)
+
+        titleLabel.font = AppTheme.scaledFont(size: 14, weight: .semibold, textStyle: .body)
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 1
-        detailLabel.font = .preferredFont(forTextStyle: .caption1)
-        detailLabel.adjustsFontForContentSizeCategory = true
-        detailLabel.textColor = .secondaryLabel
-        detailLabel.numberOfLines = 1
-        stateImage.contentMode = .scaleAspectFit
-        pinImage.contentMode = .scaleAspectFit
 
-        let text = UIStackView(arrangedSubviews: [titleLabel, detailLabel])
+        keywordLabel.font = AppTheme.scaledFont(size: 11, weight: .medium, textStyle: .caption1)
+        keywordLabel.adjustsFontForContentSizeCategory = true
+        keywordLabel.numberOfLines = 1
+        keywordLabel.setContentHuggingPriority(.required, for: .horizontal)
+        keywordLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        previewLabel.font = AppTheme.scaledFont(size: 12, textStyle: .caption1)
+        previewLabel.adjustsFontForContentSizeCategory = true
+        previewLabel.textColor = .secondaryLabel
+        previewLabel.numberOfLines = 1
+        previewLabel.lineBreakMode = .byTruncatingTail
+        previewLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        stateImage.contentMode = .scaleAspectFit
+        stateImage.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+
+        tagsStack.axis = .horizontal
+        tagsStack.alignment = .center
+        tagsStack.spacing = 4
+        tagsStack.setContentHuggingPriority(.required, for: .horizontal)
+        tagsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let topRow = UIStackView(arrangedSubviews: [titleLabel, keywordLabel])
+        topRow.axis = .horizontal
+        topRow.alignment = .firstBaseline
+        topRow.spacing = 6
+
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let bottomRow = UIStackView(arrangedSubviews: [previewLabel, spacer, tagsStack])
+        bottomRow.axis = .horizontal
+        bottomRow.alignment = .center
+        bottomRow.spacing = 6
+
+        let text = UIStackView(arrangedSubviews: [topRow, bottomRow])
         text.axis = .vertical
+        text.alignment = .fill
         text.spacing = 3
-        let row = UIStackView(arrangedSubviews: [stateImage, text, pinImage])
+
+        let row = UIStackView(arrangedSubviews: [stateImage, text])
         row.translatesAutoresizingMaskIntoConstraints = false
         row.axis = .horizontal
         row.alignment = .center
-        row.spacing = 10
+        row.spacing = 8
         contentView.addSubview(row)
 
         NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            row.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10),
-            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10),
-            stateImage.widthAnchor.constraint(equalToConstant: 18),
-            stateImage.heightAnchor.constraint(equalToConstant: 18),
-            pinImage.widthAnchor.constraint(equalToConstant: 16),
-            pinImage.heightAnchor.constraint(equalToConstant: 16),
+            highlightView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
+            highlightView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
+            highlightView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 2),
+            highlightView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -2),
+            row.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            row.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
+            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
+            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8),
+            stateImage.widthAnchor.constraint(equalToConstant: 11),
+            stateImage.heightAnchor.constraint(equalToConstant: 11),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func configure(snippet: Snippet, isSecure: Bool, selectedColor: UIColor) {
+        self.selectedColor = selectedColor
         titleLabel.text = snippet.displayName
-        var details: [String] = []
-        if !snippet.normalizedKeyword.isEmpty { details.append("\\\(snippet.normalizedKeyword)") }
-        if !snippet.tags.isEmpty { details.append(snippet.tags.map { "#\($0)" }.joined(separator: "  ")) }
-        detailLabel.text = details.isEmpty ? "No keyword" : details.joined(separator: "  •  ")
-        stateImage.image = UIImage(systemName: isSecure ? "lock.fill" : (snippet.isEnabled ? "circle.fill" : "circle"))
-        stateImage.tintColor = isSecure ? AppTheme.warning : AppTheme.enabled
-        pinImage.image = snippet.isPinned ? UIImage(systemName: "pin.fill") : nil
-        pinImage.tintColor = AppTheme.pin
-        contentView.alpha = snippet.isEnabled ? 1 : 0.58
-        selectedBackgroundView?.backgroundColor = selectedColor
+        let hasKeyword = !snippet.normalizedKeyword.isEmpty
+        keywordLabel.text = hasKeyword ? "\\\(snippet.normalizedKeyword)" : "No keyword"
+        keywordLabel.textColor = snippet.isEnabled
+            ? (hasKeyword ? .secondaryLabel : AppTheme.warning)
+            : .tertiaryLabel
+
+        let hasName = !snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let preview = isSecure ? "••••••••" : snippet.contentFirstLineUntruncated
+        previewLabel.text = preview
+        previewLabel.isHidden = preview.isEmpty || (!isSecure && !hasName)
+        previewLabel.textColor = snippet.isEnabled ? .secondaryLabel : .tertiaryLabel
+        titleLabel.textColor = snippet.isEnabled ? .label : .secondaryLabel
+
+        if snippet.isPinned {
+            stateImage.image = UIImage(systemName: "pin.fill")
+            stateImage.tintColor = AppTheme.pin
+        } else if snippet.isEnabled && !hasKeyword {
+            stateImage.image = UIImage(systemName: "circle")
+            stateImage.tintColor = AppTheme.warning
+        } else {
+            stateImage.image = UIImage(systemName: "circle.fill")
+            stateImage.tintColor = snippet.isEnabled ? AppTheme.enabled : AppTheme.disabled
+        }
+
+        rebuildTags(snippet.tags, muted: !snippet.isEnabled)
+        updateHighlight()
         accessibilityIdentifier = "snippet-row-\(snippet.id.uuidString)"
         accessibilityLabel = snippet.displayName
         accessibilityValue = [isSecure ? "Secure" : nil, snippet.isPinned ? "Pinned" : nil, snippet.isEnabled ? "Enabled" : "Disabled"]
             .compactMap { $0 }.joined(separator: ", ")
     }
+
+    override func setSelected(_ selected: Bool, animated: Bool) {
+        super.setSelected(selected, animated: animated)
+        updateHighlight()
+    }
+
+    override func setHighlighted(_ highlighted: Bool, animated: Bool) {
+        super.setHighlighted(highlighted, animated: animated)
+        updateHighlight()
+    }
+
+    private func updateHighlight() {
+        highlightView.isHidden = !isSelected && !isHighlighted
+        highlightView.backgroundColor = isSelected ? selectedColor : AppTheme.hoveredRow
+        highlightView.layer.borderWidth = isSelected ? 1 / max(traitCollection.displayScale, 1) : 0
+        highlightView.layer.borderColor = AppTheme.tint.withAlphaComponent(0.18).cgColor
+    }
+
+    private func rebuildTags(_ tags: [String], muted: Bool) {
+        tagsStack.arrangedSubviews.forEach { view in
+            tagsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let visible = Array(tags.prefix(2))
+        for tag in visible {
+            let badge = TagBadgeLabel()
+            badge.configure(text: tag, color: AppTheme.tagColor(for: tag), muted: muted)
+            tagsStack.addArrangedSubview(badge)
+        }
+        if tags.count > visible.count {
+            let badge = TagBadgeLabel()
+            badge.configure(text: "+\(tags.count - visible.count)", color: .secondaryLabel, muted: muted)
+            tagsStack.addArrangedSubview(badge)
+        }
+        tagsStack.isHidden = tags.isEmpty
+    }
 }
 
 private final class TagFilterButton: UIButton {
-    init(title: String, selected: Bool) {
+    init(title: String, selected: Bool, color: UIColor) {
         super.init(frame: .zero)
-        var configuration = UIButton.Configuration.gray()
+        var configuration = UIButton.Configuration.tinted()
         configuration.title = title
+        configuration.image = selected ? UIImage(systemName: "checkmark") : nil
+        configuration.imagePadding = 4
         configuration.cornerStyle = .capsule
         configuration.buttonSize = .small
-        configuration.baseForegroundColor = selected ? .white : AppTheme.tint
-        configuration.baseBackgroundColor = selected ? AppTheme.tint : AppTheme.tint.withAlphaComponent(0.10)
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10)
+        configuration.baseForegroundColor = color
+        configuration.baseBackgroundColor = color.withAlphaComponent(selected ? 0.28 : 0.12)
         self.configuration = configuration
         accessibilityTraits = selected ? [.button, .selected] : .button
     }
@@ -495,8 +643,8 @@ private final class TagFilterButton: UIButton {
 
 private final class EmptyLibraryView: UIView {
     var onCreate: (() -> Void)?
+    var onClipboard: (() -> Void)?
     var onImport: (() -> Void)?
-    var onSync: (() -> Void)?
 
     private let titleLabel = UILabel()
     private let messageLabel = UILabel()
@@ -504,27 +652,32 @@ private final class EmptyLibraryView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        titleLabel.font = .preferredFont(forTextStyle: .title3)
+        titleLabel.font = AppTheme.scaledFont(size: 15, weight: .semibold, textStyle: .headline)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textAlignment = .center
         titleLabel.numberOfLines = 0
-        messageLabel.font = .preferredFont(forTextStyle: .body)
+        messageLabel.font = AppTheme.scaledFont(size: 13, textStyle: .subheadline)
+        messageLabel.adjustsFontForContentSizeCategory = true
         messageLabel.textColor = .secondaryLabel
         messageLabel.textAlignment = .center
         messageLabel.numberOfLines = 0
 
         actions.axis = .vertical
-        actions.spacing = 10
+        actions.spacing = 7
         actions.alignment = .fill
-        let create = actionButton(title: "Create Snippet", symbol: "plus") { [weak self] in self?.onCreate?() }
+        let create = actionButton(title: "New Snippet", symbol: "plus") { [weak self] in self?.onCreate?() }
         create.accessibilityIdentifier = "empty-create"
-        let importButton = actionButton(title: "Import Library", symbol: "square.and.arrow.down") { [weak self] in self?.onImport?() }
-        let sync = actionButton(title: "Set Up iCloud Sync", symbol: "icloud") { [weak self] in self?.onSync?() }
-        [create, importButton, sync].forEach(actions.addArrangedSubview)
+        let clipboard = actionButton(title: "New from Clipboard", symbol: "doc.on.clipboard") { [weak self] in self?.onClipboard?() }
+        let importButton = actionButton(title: "Import…", symbol: "square.and.arrow.down") { [weak self] in self?.onImport?() }
+        [create, clipboard, importButton].forEach(actions.addArrangedSubview)
 
-        let stack = UIStackView(arrangedSubviews: [UIImageView(image: UIImage(systemName: "text.page")), titleLabel, messageLabel, actions])
+        let icon = UIImageView(image: UIImage(systemName: "text.page"))
+        icon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 24, weight: .regular)
+        icon.tintColor = .tertiaryLabel
+        let stack = UIStackView(arrangedSubviews: [icon, titleLabel, messageLabel, actions])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.axis = .vertical
-        stack.spacing = 14
+        stack.spacing = 10
         stack.alignment = .center
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -533,7 +686,7 @@ private final class EmptyLibraryView: UIView {
             stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
             messageLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
-            actions.widthAnchor.constraint(equalToConstant: 220),
+            actions.widthAnchor.constraint(equalToConstant: 200),
         ])
     }
 
@@ -546,13 +699,49 @@ private final class EmptyLibraryView: UIView {
     }
 
     private func actionButton(title: String, symbol: String, handler: @escaping () -> Void) -> UIButton {
-        var configuration = UIButton.Configuration.tinted()
+        var configuration = UIButton.Configuration.gray()
         configuration.title = title
         configuration.image = UIImage(systemName: symbol)
-        configuration.imagePadding = 8
+        configuration.imagePadding = 7
         configuration.cornerStyle = .capsule
+        configuration.buttonSize = .small
+        configuration.baseForegroundColor = AppTheme.tint
         let button = UIButton(configuration: configuration)
         button.addAction(UIAction { _ in handler() }, for: .touchUpInside)
         return button
+    }
+}
+
+private final class TagBadgeLabel: UILabel {
+    private let insets = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        font = AppTheme.scaledFont(size: 10, weight: .medium, textStyle: .caption2)
+        adjustsFontForContentSizeCategory = true
+        numberOfLines = 1
+        lineBreakMode = .byTruncatingTail
+        layer.cornerRadius = 7
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(width: size.width + insets.left + insets.right, height: size.height + insets.top + insets.bottom)
+    }
+
+    override func drawText(in rect: CGRect) {
+        super.drawText(in: rect.inset(by: insets))
+    }
+
+    func configure(text: String, color: UIColor, muted: Bool) {
+        self.text = text
+        textColor = muted ? .secondaryLabel : color
+        backgroundColor = (muted ? UIColor.secondaryLabel : color).withAlphaComponent(0.13)
     }
 }

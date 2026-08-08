@@ -9,17 +9,22 @@ final class SnippetEditorViewController: UIViewController {
     private let emptyView = UIContentUnavailableView(configuration: .empty())
     private let bodyTextView = UITextView()
     private let bodyContainer = UIView()
+    private let bodyPlaceholderLabel = UILabel()
     private let lockedOverlay = UIView()
     private let revealButton = UIButton(type: .system)
     private let previewSection = UIStackView()
+    private let previewSurface = UIView()
     private let previewLabel = UILabel()
     private let keywordField = UITextField()
+    private let keywordPrefixLabel = UILabel()
     private let keywordStatusLabel = UILabel()
     private let suggestionsStack = UIStackView()
     private let nameField = UITextField()
     private let tagField = TagTokenField()
     private let enabledSwitch = UISwitch()
     private let secureSwitch = UISwitch()
+    private let enabledButton = UIButton(type: .system)
+    private let secureButton = UIButton(type: .system)
     private let footerStatusLabel = UILabel()
 
     private var selectedID: UUID?
@@ -94,6 +99,8 @@ final class SnippetEditorViewController: UIViewController {
 
         scrollView.isHidden = false
         emptyView.isHidden = true
+        updateBodyPlaceholder()
+        updateToggleButtons()
         updateSecurePresentation()
         refreshDerivedUI()
         updateNavigationActions()
@@ -114,17 +121,12 @@ final class SnippetEditorViewController: UIViewController {
     private func configureForm() {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.keyboardDismissMode = .interactive
+        scrollView.alwaysBounceVertical = false
         formStack.translatesAutoresizingMaskIntoConstraints = false
         formStack.axis = .vertical
-        formStack.spacing = 22
+        formStack.spacing = 16
 
-        let glass = AppTheme.glassView()
-        glass.translatesAutoresizingMaskIntoConstraints = false
-        glass.layer.cornerRadius = 22
-        glass.layer.cornerCurve = .continuous
-        glass.clipsToBounds = true
-        glass.contentView.addSubview(formStack)
-        scrollView.addSubview(glass)
+        scrollView.addSubview(formStack)
         view.addSubview(scrollView)
 
         emptyView.translatesAutoresizingMaskIntoConstraints = false
@@ -140,17 +142,13 @@ final class SnippetEditorViewController: UIViewController {
             scrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            glass.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 24),
-            glass.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -24),
-            glass.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 20),
-            glass.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -20),
-            glass.centerXAnchor.constraint(equalTo: scrollView.frameLayoutGuide.centerXAnchor),
-            glass.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
-            glass.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -40).withPriority(.defaultHigh),
-            formStack.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 24),
-            formStack.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -24),
-            formStack.topAnchor.constraint(equalTo: glass.contentView.topAnchor, constant: 24),
-            formStack.bottomAnchor.constraint(equalTo: glass.contentView.bottomAnchor, constant: -24),
+            formStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 18),
+            formStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -20),
+            formStack.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 24),
+            formStack.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -24),
+            formStack.centerXAnchor.constraint(equalTo: scrollView.frameLayoutGuide.centerXAnchor),
+            formStack.widthAnchor.constraint(lessThanOrEqualToConstant: 820),
+            formStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -48).withPriority(.defaultHigh),
             emptyView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             emptyView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             emptyView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -161,15 +159,24 @@ final class SnippetEditorViewController: UIViewController {
         configureTextFields()
         configureSwitches()
 
-        formStack.addArrangedSubview(section(title: "Content", content: bodyContainer))
+        let snippetHeader = sectionLabel("Snippet")
+        let snippetHeaderRow = UIStackView(arrangedSubviews: [snippetHeader, UIView(), secureButton])
+        snippetHeaderRow.axis = .horizontal
+        snippetHeaderRow.alignment = .center
+        snippetHeaderRow.spacing = 8
+        let snippetSection = UIStackView(arrangedSubviews: [snippetHeaderRow, bodyContainer])
+        snippetSection.axis = .vertical
+        snippetSection.spacing = 8
+
+        formStack.addArrangedSubview(snippetSection)
         formStack.addArrangedSubview(previewSection)
         formStack.addArrangedSubview(section(title: "Keyword", content: keywordSection()))
         formStack.addArrangedSubview(section(title: "Name", content: nameField))
         formStack.addArrangedSubview(section(title: "Tags", content: tagField))
-        formStack.addArrangedSubview(switchRow(title: "Enabled", detail: "Available to the Mac app’s expansion engine.", control: enabledSwitch))
-        formStack.addArrangedSubview(switchRow(title: "Secure", detail: "Encrypt content and require Face ID, Touch ID, or device passcode to reveal it.", control: secureSwitch))
+        formStack.addArrangedSubview(enabledButton)
 
-        footerStatusLabel.font = .preferredFont(forTextStyle: .footnote)
+        footerStatusLabel.font = AppTheme.scaledFont(size: 11, textStyle: .caption1)
+        footerStatusLabel.adjustsFontForContentSizeCategory = true
         footerStatusLabel.textColor = .secondaryLabel
         footerStatusLabel.numberOfLines = 0
         footerStatusLabel.accessibilityIdentifier = "editor-status"
@@ -178,24 +185,26 @@ final class SnippetEditorViewController: UIViewController {
 
     private func configureBody() {
         bodyContainer.translatesAutoresizingMaskIntoConstraints = false
-        bodyContainer.layer.cornerRadius = 12
-        bodyContainer.layer.cornerCurve = .continuous
-        bodyContainer.layer.borderWidth = 1 / max(traitCollection.displayScale, 1)
-        bodyContainer.layer.borderColor = UIColor.separator.cgColor
-        bodyContainer.clipsToBounds = true
+        AppTheme.configureSurface(bodyContainer, cornerRadius: 10)
 
         bodyTextView.translatesAutoresizingMaskIntoConstraints = false
-        bodyTextView.font = .preferredFont(forTextStyle: .body)
+        bodyTextView.font = AppTheme.scaledFont(size: 14, textStyle: .body, monospaced: true)
         bodyTextView.adjustsFontForContentSizeCategory = true
-        bodyTextView.backgroundColor = .secondarySystemBackground
-        bodyTextView.textContainerInset = UIEdgeInsets(top: 14, left: 12, bottom: 14, right: 12)
+        bodyTextView.backgroundColor = .clear
+        bodyTextView.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
         bodyTextView.delegate = self
         bodyTextView.accessibilityIdentifier = "snippet-content"
         bodyTextView.smartDashesType = .no
         bodyTextView.smartQuotesType = .no
 
+        bodyPlaceholderLabel.translatesAutoresizingMaskIntoConstraints = false
+        bodyPlaceholderLabel.text = "Paste or type"
+        bodyPlaceholderLabel.font = bodyTextView.font
+        bodyPlaceholderLabel.textColor = .placeholderText
+        bodyPlaceholderLabel.isUserInteractionEnabled = false
+
         lockedOverlay.translatesAutoresizingMaskIntoConstraints = false
-        lockedOverlay.backgroundColor = .secondarySystemBackground
+        lockedOverlay.backgroundColor = AppTheme.editorSurface
         let lockImage = UIImageView(image: UIImage(systemName: "lock.fill"))
         lockImage.tintColor = AppTheme.warning
         var revealConfiguration = UIButton.Configuration.tinted()
@@ -213,10 +222,11 @@ final class SnippetEditorViewController: UIViewController {
         lockStack.spacing = 14
 
         bodyContainer.addSubview(bodyTextView)
+        bodyTextView.addSubview(bodyPlaceholderLabel)
         bodyContainer.addSubview(lockedOverlay)
         lockedOverlay.addSubview(lockStack)
         NSLayoutConstraint.activate([
-            bodyContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 260),
+            bodyContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
             bodyTextView.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
             bodyTextView.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             bodyTextView.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
@@ -227,24 +237,44 @@ final class SnippetEditorViewController: UIViewController {
             lockedOverlay.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
             lockStack.centerXAnchor.constraint(equalTo: lockedOverlay.centerXAnchor),
             lockStack.centerYAnchor.constraint(equalTo: lockedOverlay.centerYAnchor),
+            bodyPlaceholderLabel.leadingAnchor.constraint(equalTo: bodyTextView.leadingAnchor, constant: 15),
+            bodyPlaceholderLabel.topAnchor.constraint(equalTo: bodyTextView.topAnchor, constant: 12),
+            bodyPlaceholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: bodyTextView.trailingAnchor, constant: -15),
         ])
 
         previewSection.axis = .vertical
-        previewSection.spacing = 7
+        previewSection.spacing = 8
         let previewTitle = sectionLabel("Preview")
-        previewLabel.font = .preferredFont(forTextStyle: .body)
-        previewLabel.numberOfLines = 0
+        previewSurface.translatesAutoresizingMaskIntoConstraints = false
+        AppTheme.configureSurface(
+            previewSurface,
+            cornerRadius: 10,
+            backgroundColor: AppTheme.previewSurface
+        )
+        previewLabel.translatesAutoresizingMaskIntoConstraints = false
+        previewLabel.font = AppTheme.scaledFont(size: 13, weight: .medium, textStyle: .body, monospaced: true)
+        previewLabel.adjustsFontForContentSizeCategory = true
+        previewLabel.numberOfLines = 8
+        previewLabel.lineBreakMode = .byTruncatingTail
         previewLabel.textColor = .secondaryLabel
         previewLabel.accessibilityIdentifier = "snippet-preview"
+        previewSurface.addSubview(previewLabel)
         previewSection.addArrangedSubview(previewTitle)
-        previewSection.addArrangedSubview(previewLabel)
+        previewSection.addArrangedSubview(previewSurface)
+        NSLayoutConstraint.activate([
+            previewSurface.heightAnchor.constraint(greaterThanOrEqualToConstant: 42),
+            previewLabel.leadingAnchor.constraint(equalTo: previewSurface.leadingAnchor, constant: 10),
+            previewLabel.trailingAnchor.constraint(equalTo: previewSurface.trailingAnchor, constant: -10),
+            previewLabel.topAnchor.constraint(equalTo: previewSurface.topAnchor, constant: 9),
+            previewLabel.bottomAnchor.constraint(equalTo: previewSurface.bottomAnchor, constant: -9),
+        ])
     }
 
     private func configureTextFields() {
         configure(field: keywordField, placeholder: "sig", identifier: "snippet-keyword")
         keywordField.autocapitalizationType = .none
         keywordField.autocorrectionType = .no
-        configure(field: nameField, placeholder: "Snippet name", identifier: "snippet-name")
+        configure(field: nameField, placeholder: "First line is used when blank", identifier: "snippet-name")
         keywordField.addTarget(self, action: #selector(fieldChanged), for: .editingChanged)
         nameField.addTarget(self, action: #selector(fieldChanged), for: .editingChanged)
         keywordField.addTarget(self, action: #selector(editingBegan), for: .editingDidBegin)
@@ -253,7 +283,19 @@ final class SnippetEditorViewController: UIViewController {
         nameField.addTarget(self, action: #selector(editingEnded), for: .editingDidEnd)
         tagField.onChange = { [weak self] _ in self?.editorChanged() }
 
-        keywordStatusLabel.font = .preferredFont(forTextStyle: .caption1)
+        keywordPrefixLabel.text = "\\"
+        keywordPrefixLabel.font = AppTheme.scaledFont(
+            size: 16,
+            weight: .medium,
+            textStyle: .body,
+            monospaced: true
+        )
+        keywordPrefixLabel.adjustsFontForContentSizeCategory = true
+        keywordPrefixLabel.textColor = .tertiaryLabel
+        keywordPrefixLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        keywordStatusLabel.font = AppTheme.scaledFont(size: 11, textStyle: .caption1)
+        keywordStatusLabel.adjustsFontForContentSizeCategory = true
         keywordStatusLabel.textColor = AppTheme.warning
         keywordStatusLabel.numberOfLines = 0
         suggestionsStack.axis = .horizontal
@@ -264,8 +306,22 @@ final class SnippetEditorViewController: UIViewController {
     private func configureSwitches() {
         enabledSwitch.accessibilityIdentifier = "snippet-enabled"
         secureSwitch.accessibilityIdentifier = "snippet-secure"
-        enabledSwitch.addAction(UIAction { [weak self] _ in self?.editorChanged() }, for: .valueChanged)
-        secureSwitch.addAction(UIAction { [weak self] _ in self?.secureSwitchChanged() }, for: .valueChanged)
+
+        enabledButton.accessibilityIdentifier = "snippet-enabled"
+        enabledButton.contentHorizontalAlignment = .leading
+        enabledButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.enabledSwitch.isOn.toggle()
+            self.updateToggleButtons()
+            self.editorChanged()
+        }, for: .touchUpInside)
+
+        secureButton.accessibilityIdentifier = "snippet-secure"
+        secureButton.accessibilityLabel = "Make Secure"
+        secureButton.setContentHuggingPriority(.required, for: .horizontal)
+        secureButton.addAction(UIAction { [weak self] _ in
+            self?.secureSwitchChanged()
+        }, for: .touchUpInside)
     }
 
     private func configureActions() {
@@ -300,12 +356,20 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     private func configure(field: UITextField, placeholder: String, identifier: String) {
-        field.borderStyle = .roundedRect
-        field.backgroundColor = .secondarySystemBackground
-        field.font = .preferredFont(forTextStyle: .body)
+        field.borderStyle = .none
+        field.backgroundColor = AppTheme.editorSurface
+        field.layer.cornerRadius = 9
+        field.layer.cornerCurve = .continuous
+        field.layer.borderWidth = 1 / max(traitCollection.displayScale, 1)
+        field.layer.borderColor = UIColor.separator.withAlphaComponent(0.45).cgColor
+        field.font = AppTheme.scaledFont(size: 15, textStyle: .body)
         field.adjustsFontForContentSizeCategory = true
         field.placeholder = placeholder
         field.accessibilityIdentifier = identifier
+        field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 1))
+        field.leftViewMode = .always
+        field.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 1))
+        field.rightViewMode = .always
         field.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
     }
 
@@ -319,33 +383,21 @@ final class SnippetEditorViewController: UIViewController {
     private func sectionLabel(_ text: String) -> UILabel {
         let label = UILabel()
         label.text = text
-        label.font = .preferredFont(forTextStyle: .headline)
+        label.font = AppTheme.scaledFont(size: 13, weight: .semibold, textStyle: .subheadline)
         label.adjustsFontForContentSizeCategory = true
+        label.textColor = .secondaryLabel
         return label
     }
 
     private func keywordSection() -> UIStackView {
-        let stack = UIStackView(arrangedSubviews: [keywordField, keywordStatusLabel, suggestionsStack])
+        let fieldRow = UIStackView(arrangedSubviews: [keywordPrefixLabel, keywordField])
+        fieldRow.axis = .horizontal
+        fieldRow.alignment = .center
+        fieldRow.spacing = 4
+        let stack = UIStackView(arrangedSubviews: [fieldRow, keywordStatusLabel, suggestionsStack])
         stack.axis = .vertical
         stack.spacing = 7
         return stack
-    }
-
-    private func switchRow(title: String, detail: String, control: UISwitch) -> UIView {
-        let titleLabel = sectionLabel(title)
-        let detailLabel = UILabel()
-        detailLabel.text = detail
-        detailLabel.font = .preferredFont(forTextStyle: .caption1)
-        detailLabel.textColor = .secondaryLabel
-        detailLabel.numberOfLines = 0
-        let labels = UIStackView(arrangedSubviews: [titleLabel, detailLabel])
-        labels.axis = .vertical
-        labels.spacing = 3
-        let row = UIStackView(arrangedSubviews: [labels, control])
-        row.axis = .horizontal
-        row.alignment = .center
-        row.spacing = 16
-        return row
     }
 
     private func showEmptyEditor() {
@@ -354,6 +406,8 @@ final class SnippetEditorViewController: UIViewController {
         scrollView.isHidden = true
         emptyView.isHidden = false
         navigationItem.rightBarButtonItems = nil
+        enabledButton.isEnabled = false
+        secureButton.isEnabled = false
     }
 
     private func updateNavigationActions() {
@@ -404,12 +458,52 @@ final class SnippetEditorViewController: UIViewController {
         bodyTextView.accessibilityLabel = secure && !secureContentIsRevealed
             ? "Secure content locked"
             : "Snippet content"
+        updateBodyPlaceholder()
+        updateToggleButtons()
+    }
+
+    private func updateBodyPlaceholder() {
+        let contentIsLocked = selectedID.map(environment.store.isSecure) == true
+            && !secureContentIsRevealed
+        bodyPlaceholderLabel.isHidden = contentIsLocked || !(bodyTextView.text ?? "").isEmpty
+    }
+
+    private func updateToggleButtons() {
+        let hasSelection = selectedID != nil
+        let isSecure = selectedID.map(environment.store.isSecure) == true
+        let isEnabled = enabledSwitch.isOn
+
+        var enabledConfiguration = UIButton.Configuration.plain()
+        enabledConfiguration.title = "Enabled"
+        enabledConfiguration.image = UIImage(
+            systemName: isEnabled ? "checkmark.square.fill" : "square"
+        )
+        enabledConfiguration.imagePadding = 7
+        enabledConfiguration.contentInsets = .zero
+        enabledConfiguration.baseForegroundColor = .label
+        enabledConfiguration.imageColorTransformer = UIConfigurationColorTransformer { _ in
+            isEnabled ? AppTheme.tint : .secondaryLabel
+        }
+        enabledButton.configuration = enabledConfiguration
+        enabledButton.isEnabled = hasSelection
+        enabledButton.accessibilityValue = isEnabled ? "On" : "Off"
+
+        var secureConfiguration = UIButton.Configuration.plain()
+        secureConfiguration.image = UIImage(systemName: isSecure ? "lock.fill" : "lock")
+        secureConfiguration.buttonSize = .small
+        secureConfiguration.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+        secureConfiguration.baseForegroundColor = isSecure ? AppTheme.warning : .secondaryLabel
+        secureButton.configuration = secureConfiguration
+        secureButton.isEnabled = hasSelection
+        secureButton.accessibilityLabel = isSecure ? "Make Ordinary" : "Make Secure"
+        secureButton.accessibilityValue = isSecure ? "Secure" : "Ordinary"
     }
 
     private func refreshDerivedUI() {
         guard let id = selectedID,
               let snippet = environment.store.snippetForDisplay(id: id) else { return }
         title = snippet.displayName
+        updateNamePlaceholder(for: snippet)
         updatePreview()
         updateKeywordStatus(for: snippet)
         updateSuggestions(for: snippet)
@@ -417,9 +511,20 @@ final class SnippetEditorViewController: UIViewController {
             ? (secureContentIsRevealed ? "Secure content is revealed until the vault locks." : "Content is encrypted and hidden. Metadata remains searchable.")
             : (snippet.updatedAt.formatted(date: .abbreviated, time: .shortened))
         updateNavigationActions()
+        updateToggleButtons()
+    }
+
+    private func updateNamePlaceholder(for snippet: Snippet) {
+        guard snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            nameField.placeholder = "First line is used when blank"
+            return
+        }
+        let fallback = environment.store.isSecure(snippet.id) ? "" : snippet.contentFirstLine
+        nameField.placeholder = fallback.isEmpty ? "Untitled Snippet" : fallback
     }
 
     private func updatePreview() {
+        updateBodyPlaceholder()
         let template = bodyTextView.text ?? ""
         let hasPlaceholders = PlaceholderResolver.containsResolvablePlaceholder(in: template)
         previewSection.isHidden = !hasPlaceholders || (selectedID.map(environment.store.isSecure) == true && !secureContentIsRevealed)
@@ -542,9 +647,11 @@ final class SnippetEditorViewController: UIViewController {
 
     private func refreshDerivedUIForImmediateEdit(_ snippet: Snippet) {
         title = snippet.displayName
+        updateNamePlaceholder(for: snippet)
         updatePreview()
         updateKeywordStatus(for: snippet)
         updateSuggestions(for: snippet)
+        updateToggleButtons()
     }
 
     private func beginPlainEditTransaction() {
@@ -813,6 +920,7 @@ extension SnippetEditorViewController: UITextViewDelegate {
 
     func textViewDidChange(_ textView: UITextView) {
         guard !isBinding else { return }
+        updateBodyPlaceholder()
         if let selectedID, environment.store.isSecure(selectedID) {
             scheduleSecureContentSave()
             updatePreview()

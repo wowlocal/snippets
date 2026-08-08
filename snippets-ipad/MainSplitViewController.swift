@@ -47,10 +47,16 @@ final class MainSplitViewController: UISplitViewController {
 
         preferredDisplayMode = .oneBesideSecondary
         preferredSplitBehavior = .tile
-        minimumPrimaryColumnWidth = 260
-        maximumPrimaryColumnWidth = 520
-        preferredPrimaryColumnWidthFraction = 0.32
+        primaryBackgroundStyle = .sidebar
+        minimumPrimaryColumnWidth = 280
+        maximumPrimaryColumnWidth = 500
+        preferredPrimaryColumnWidthFraction = 0.28
         presentsWithGesture = true
+
+        AppTheme.configureNavigationBar(listNavigationController.navigationBar)
+        AppTheme.configureNavigationBar(editorNavigationController.navigationBar)
+        listNavigationController.view.backgroundColor = .secondarySystemBackground
+        editorNavigationController.view.backgroundColor = .systemBackground
 
         listController.delegate = self
         editorController.delegate = self
