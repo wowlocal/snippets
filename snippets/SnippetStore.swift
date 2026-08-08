@@ -1,6 +1,18 @@
 import Darwin
 import Foundation
 
+/// The second observer of library changes, alongside `SnippetStore.onChange`.
+///
+/// Two named channels rather than an observer registry: `onChange` is a
+/// single-assignment slot owned by `ViewController`, and there will only ever be one
+/// other listener — the sync engine. A dictionary of observers would be more general
+/// and strictly harder to reason about at the exact moment reasoning matters, which
+/// is when a remote change lands mid-edit.
+@MainActor
+protocol SnippetStoreSyncDelegate: AnyObject {
+    func libraryDidChange(_ source: SnippetStore.ChangeSource)
+}
+
 @MainActor
 final class SnippetStore {
     struct ImportOptions {
@@ -15,6 +27,7 @@ final class SnippetStore {
     private(set) var snippets: [Snippet] = []
 
     var onChange: ((ChangeSource) -> Void)?
+    weak var syncDelegate: SnippetStoreSyncDelegate?
 
     private let saveURL: URL
     private let saveFolderURL: URL
@@ -27,6 +40,30 @@ final class SnippetStore {
     private var saveDirectoryMonitor: DispatchSourceFileSystemObject?
     private var distributedChangeObserver: NSObjectProtocol?
     private var lastKnownDiskData: Data?
+
+    /// SHA-256 of `lastKnownDiskData`. Kept alongside the bytes so the hot path can
+    /// answer "did the file change under me?" without rehashing the whole library.
+    private var lastKnownDigest: String?
+
+    /// This install's eight-hex identity, used to break exact merge ties in our
+    /// favour. Persisted in `Sync/state.json`; regenerated if that file is lost,
+    /// which costs nothing.
+    private(set) var deviceID: String = HLC.foreignDevice
+
+    /// How long the writer has been unable to take the cross-process lock. Drives an
+    /// escalating retry rather than a dropped write.
+    private var lockFailureCount = 0
+
+    /// How long to wait for the library lock on the ordinary debounced write path.
+    /// Short: this runs on the main thread, and a slow peer must degrade to "retry
+    /// shortly", never to a beachball.
+    private let lockTimeout: TimeInterval = 2.0
+    /// The terminate path has nothing left to reschedule onto, so it waits longer.
+    private let terminateLockTimeout: TimeInterval = 5.0
+
+    /// Bumped on every accepted mutation, local or remote. Lets an observer notice it
+    /// is looking at stale state without diffing the whole array.
+    private(set) var librarySeq: UInt64 = 0
 
     private var undoStack: [[Snippet]] = []
     private var redoStack: [[Snippet]] = []
@@ -72,12 +109,59 @@ final class SnippetStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
         let folder = SnippetStorageLocations.supportFolderURL
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Every directory is created here, before the monitor goes up a few lines
+        // below. Creating any of them later would mutate the watched folder's vnode
+        // at an arbitrary moment and fire `scheduleExternalReload` for no reason —
+        // the same trap the `Usage/` subdirectory comment describes.
+        SnippetStorageLocations.createAllDirectories()
         saveFolderURL = folder
         saveURL = SnippetStorageLocations.snippetsFileURL
 
+        adoptDeviceIdentity()
+        seedFirstRunBackupIfNeeded()
         load()
         startObservingExternalChanges()
+    }
+
+    /// Reads (or mints) this install's device id.
+    ///
+    /// Deliberately tolerant: if `state.json` is missing, unreadable, or from a newer
+    /// build, we fall back to a fresh random id. The id only breaks exact merge ties,
+    /// so a wrong one costs nothing, and refusing to launch over it would be absurd.
+    private func adoptDeviceIdentity() {
+        switch SyncStateFile.load() {
+        case .loaded(let state):
+            deviceID = state.deviceID
+        case .fresh(let state):
+            deviceID = state.deviceID
+            try? SyncStateFile.write(state)
+        case .tooNew(let version):
+            // A newer build owns this directory. Do not write anything here; a random
+            // id for this session is harmless.
+            NSLog("Snippets: Sync/state.json is version \(version); running without sync bookkeeping.")
+            deviceID = HLC.makeDeviceID()
+        }
+    }
+
+    /// One byte-copy of the library, taken the first time a sync-capable build ever
+    /// runs, before that build has written anything.
+    ///
+    /// The merge below is careful, but "careful" is not "proven on your machine with
+    /// your data". This is the copy the user can be pointed at if anything about the
+    /// new write path goes wrong, and it costs one file copy, once, ever.
+    private func seedFirstRunBackupIfNeeded() {
+        let fileManager = FileManager.default
+        let backups = SnippetStorageLocations.backupsFolderURL
+        let existing = (try? fileManager.contentsOfDirectory(atPath: backups.path)) ?? []
+        guard !existing.contains(where: { $0.hasPrefix("pre-sync-") }) else { return }
+        guard fileManager.fileExists(atPath: SnippetStorageLocations.snippetsFileURL.path) else { return }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let destination = backups.appendingPathComponent(
+            "pre-sync-\(formatter.string(from: Date())).json", isDirectory: false)
+        try? fileManager.copyItem(at: SnippetStorageLocations.snippetsFileURL, to: destination)
     }
 
     deinit {
@@ -351,7 +435,7 @@ final class SnippetStore {
         do {
             let data = try Data(contentsOf: saveURL)
             snippets = try decodeImportData(data)
-            lastKnownDiskData = data
+            rememberDiskBytes(data)
         } catch {
             NSLog("Failed to load snippets: \(error.localizedDescription)")
             snippets = [Snippet.starterSnippet]
@@ -523,7 +607,7 @@ final class SnippetStore {
 
     private func persist(immediately: Bool = false) {
         restartEditTransactionIfNeeded()
-        onChange?(.local)
+        notifyChanged(.local)
         persistWorkItem?.cancel()
         persistWorkItem = nil
 
@@ -545,21 +629,103 @@ final class SnippetStore {
         DispatchQueue.main.asyncAfter(deadline: .now() + persistDelay, execute: workItem)
     }
 
-    private func writeToDisk() {
+    /// The single write funnel, and the place the library's oldest data-loss bug is fixed.
+    ///
+    /// Two processes used to read-modify-write the whole file with no coordination,
+    /// which loses roughly two thirds of concurrent writes outright. Serializing them
+    /// is necessary but not sufficient, because of a race that survives correct
+    /// locking entirely:
+    ///
+    /// 1. `t=0.00` the user types; a debounced write is scheduled for `t=0.30`.
+    /// 2. `t=0.28` the CLI writes, correctly, under the lock.
+    /// 3. `t=0.30` this method writes, correctly, under the lock — from an in-memory
+    ///    array that never saw step 2 — and records its own bytes as "what is on disk".
+    /// 4. `t=0.33` the folder monitor fires, sees bytes matching what we last wrote,
+    ///    and short-circuits. The CLI's edit is gone, silently.
+    ///
+    /// Everyone behaved correctly and an edit still vanished. So the writer re-reads
+    /// *inside* the lock and merges when the bytes moved, instead of trusting its own
+    /// snapshot to still be current.
+    private func writeToDisk(lockTimeout timeout: TimeInterval? = nil) {
+        let previousDigest = lastKnownDigest
+        let ancestor = lastKnownDiskData.flatMap { try? SnippetLibraryCodec.decode($0) } ?? []
+
         do {
-            let data = try encoder.encode(snippets)
-            try data.write(to: saveURL, options: .atomic)
-            lastKnownDiskData = data
+            let outcome = try LibraryWriter.update(
+                libraryURL: saveURL,
+                lockTimeout: timeout ?? lockTimeout,
+                expectedDigest: previousDigest
+            ) { onDisk in
+                // Fast path: nobody moved the file, so there is nothing to reconcile.
+                guard onDisk.digest != previousDigest else { return self.snippets }
+
+                let merged = SyncMerge.mergeLocal(
+                    base: ancestor, local: self.snippets, remote: onDisk.snippets,
+                    localDevice: self.deviceID)
+                self.adoptMergedLibrary(merged, preMergeLocal: self.snippets)
+                return self.snippets
+            }
+
+            lockFailureCount = 0
+            rememberDiskBytes(outcome.data)
+
+            if outcome.foldedInForeignWrite {
+                // Someone else's edit just became part of our state. The UI has to be
+                // told, or it keeps rendering a library that no longer exists.
+                notifyChanged(.external)
+            }
+            if outcome.wroteWithoutLock {
+                NSLog("Snippets: wrote the library without an advisory lock; this filesystem does not support flock.")
+            }
+        } catch LibraryWriter.Failure.busy {
+            // NEVER return silently here. `persist()` has already cleared
+            // `persistWorkItem`, so nothing else would ever reschedule this write and
+            // the user's in-memory edit would be lost — a data-loss bug introduced by
+            // a data-loss fix.
+            lockFailureCount += 1
+            schedulePersistRetry()
         } catch {
-            NSLog("Failed to save snippets: \(error.localizedDescription)")
+            NSLog("Failed to save snippets: \(error)")
         }
+    }
+
+    /// Backs off linearly, capped, and keeps trying. The alternative — giving up —
+    /// silently discards whatever the user just typed.
+    private func schedulePersistRetry() {
+        persistWorkItem?.cancel()
+        let delay = min(0.25 * Double(lockFailureCount), 2.0)
+        let workItem = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.persistWorkItem = nil
+                self.writeToDisk()
+            }
+        }
+        persistWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+
+        // Two failures in a row is no longer a hiccup; let the UI say so.
+        if lockFailureCount >= 2 { syncDelegate?.libraryDidChange(.local) }
+    }
+
+    private func rememberDiskBytes(_ data: Data) {
+        lastKnownDiskData = data
+        lastKnownDigest = SnippetLibraryCodec.digest(of: data)
+    }
+
+    private func notifyChanged(_ source: ChangeSource) {
+        librarySeq &+= 1
+        onChange?(source)
+        syncDelegate?.libraryDidChange(source)
     }
 
     func flushPendingWrites() {
         guard persistWorkItem != nil else { return }
         persistWorkItem?.cancel()
         persistWorkItem = nil
-        writeToDisk()
+        // The terminate path calls this synchronously and then the process dies, so
+        // there is nothing left to retry onto — wait longer for the lock instead.
+        writeToDisk(lockTimeout: terminateLockTimeout)
     }
 
     // MARK: - Undo / Redo
@@ -679,40 +845,90 @@ final class SnippetStore {
         DispatchQueue.main.asyncAfter(deadline: .now() + externalReloadDelay, execute: workItem)
     }
 
+    /// Folds an external change into our state.
+    ///
+    /// The behaviour this replaces was: *if a local write is pending, flush it over
+    /// the external change.* That policy destroys any CLI write that lands within
+    /// `persistDelay` of a keystroke — silently, while the CLI reports success. It was
+    /// a reasonable call when merging was out of scope; now that there is a merge,
+    /// there is no reason to choose a side at all.
+    ///
+    /// A pending write is now no longer special. Both sides are merged against the
+    /// last bytes we saw, and whatever comes out is persisted on the normal path.
     private func reloadFromDiskIfNeeded() {
-        // True conflict: a local debounced write is still pending AND the file
-        // changed underneath us. Policy: the in-app edit wins — the user made
-        // it within the last `persistDelay` seconds, so flush it over the
-        // external change rather than dropping their keystrokes. (Merging the
-        // two is out of scope.) A non-nil persistWorkItem is guaranteed to
-        // mean a genuinely pending write; completed or superseded work items
-        // clear the reference.
-        guard persistWorkItem == nil else {
-            flushPendingWrites()
-            return
-        }
-
         guard let data = try? Data(contentsOf: saveURL) else { return }
         guard data != lastKnownDiskData else { return }
 
+        let reloaded: [Snippet]
         do {
-            let reloadedSnippets = try decodeImportData(data)
-            lastKnownDiskData = data
+            reloaded = try decodeImportData(data)
+        } catch {
+            // Unreadable bytes must never be adopted, and must never be written back
+            // over. Keep serving what we have; `load()` owns the quarantine path.
+            NSLog("Failed to reload snippets: \(error.localizedDescription)")
+            return
+        }
 
-            guard reloadedSnippets != snippets else { return }
+        let ancestor = lastKnownDiskData.flatMap { try? SnippetLibraryCodec.decode($0) } ?? []
+        rememberDiskBytes(data)
 
+        let preMergeLocal = snippets
+        let merged = SyncMerge.mergeLocal(
+            base: ancestor, local: snippets, remote: reloaded, localDevice: deviceID)
+
+        guard merged.snippets != preMergeLocal else { return }
+        adoptMergedLibrary(merged, preMergeLocal: preMergeLocal)
+        notifyChanged(.external)
+
+        // If the merge produced something neither side had on disk — a conflict copy,
+        // a disabled duplicate keyword, or simply our own unflushed edits surviving —
+        // that result has to be written back or it exists only in this process.
+        if merged.snippets != reloaded {
+            persist()
+        }
+    }
+
+    /// Installs a merge result and keeps undo coherent with it.
+    private func adoptMergedLibrary(_ merged: SyncMerge.Outcome, preMergeLocal: [Snippet]) {
+        snippets = merged.snippets
+        rebaseUndoHistory(preMergeLocal: preMergeLocal, merged: merged.snippets)
+
+        if !merged.conflictCopies.isEmpty {
+            NSLog("Snippets: kept \(merged.conflictCopies.count) conflicting edit(s) as separate disabled snippets.")
+        }
+        if !merged.disabledByKeywordCollision.isEmpty {
+            NSLog("Snippets: disabled \(merged.disabledByKeywordCollision.count) snippet(s) whose keyword collided after merging.")
+        }
+    }
+
+    /// Rebases the undo/redo stacks onto merged state instead of discarding them.
+    ///
+    /// Each undo entry is "the library as it was before my edit", stated relative to
+    /// `preMergeLocal`. Left untouched, pressing ⌘Z after a merge would persist an
+    /// array that predates every record the other side just added — i.e. undo would
+    /// delete someone else's snippets. Replaying the remote delta onto each entry
+    /// keeps undo meaning "undo *my* edit" and nothing more.
+    ///
+    /// The size guard exists because this is O(entries × records) on the main thread.
+    /// Above the threshold it degrades to the previous behaviour, which is safe: a
+    /// cleared stack loses undo history, never data.
+    private func rebaseUndoHistory(preMergeLocal: [Snippet], merged: [Snippet]) {
+        func rebase(_ snapshot: [Snippet]) -> [Snippet] {
+            SyncMerge.mergeLocal(
+                base: preMergeLocal, local: snapshot, remote: merged, localDevice: deviceID
+            ).snippets
+        }
+
+        let work = (undoStack.count + redoStack.count) * max(merged.count, 1)
+        guard work <= 50_000 else {
             undoStack.removeAll()
             redoStack.removeAll()
-            // If a UI edit transaction is open, rebase it onto the reloaded
-            // state; committing the pre-reload snapshot would let undo
-            // resurrect (and persist) data that no longer exists on disk.
-            if editTransactionSnapshot != nil {
-                editTransactionSnapshot = reloadedSnippets
-            }
-            snippets = reloadedSnippets
-            onChange?(.external)
-        } catch {
-            NSLog("Failed to reload snippets: \(error.localizedDescription)")
+            editTransactionSnapshot = editTransactionSnapshot.map { _ in merged }
+            return
         }
+
+        undoStack = undoStack.map(rebase)
+        redoStack = redoStack.map(rebase)
+        editTransactionSnapshot = editTransactionSnapshot.map(rebase)
     }
 }

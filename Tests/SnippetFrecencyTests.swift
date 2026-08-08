@@ -3,7 +3,7 @@ import Foundation
 // Standalone executable, matching Tests/SuggestionTriggerContextTests.swift.
 // Build and run:
 //
-//   swiftc -O snippets/Snippet.swift snippets/FuzzyMatch.swift \
+//   swiftc -O snippets/Core/Snippet.swift snippets/FuzzyMatch.swift \
 //          snippets/SnippetFrecency.swift snippets/SnippetUsageDocument.swift \
 //          Tests/SnippetFrecencyTests.swift -o /tmp/frecency-tests && /tmp/frecency-tests
 

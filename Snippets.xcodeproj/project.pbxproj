@@ -11,6 +11,12 @@
 		27C110052F53000000000005 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110022F53000000000002 /* main.swift */; };
 		27C110062F53000000000006 /* Snippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110032F53000000000003 /* Snippet.swift */; };
 		27C110072F53000000000007 /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110042F53000000000004 /* FuzzyMatch.swift */; };
+		27C120012F54000000000001 /* LibraryLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121012F54000000000101 /* LibraryLock.swift */; };
+		27C120022F54000000000002 /* AtomicFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121022F54000000000102 /* AtomicFileWriter.swift */; };
+		27C120032F54000000000003 /* SnippetLibraryCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121032F54000000000103 /* SnippetLibraryCodec.swift */; };
+		27C120042F54000000000004 /* LibraryGeneration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121042F54000000000104 /* LibraryGeneration.swift */; };
+		27C120052F54000000000005 /* SyncStateFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121052F54000000000105 /* SyncStateFile.swift */; };
+		27C120062F54000000000006 /* HybridLogicalClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121062F54000000000106 /* HybridLogicalClock.swift */; };
 		27C110122F53000000000012 /* snippets-cli in CopyFiles */ = {isa = PBXBuildFile; fileRef = 27C110012F53000000000001 /* snippets-cli */; };
 /* End PBXBuildFile section */
 
@@ -41,8 +47,14 @@
 		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Snippets.app; path = "Snippets Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110012F53000000000001 /* snippets-cli */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "snippets-cli"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110022F53000000000002 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		27C110032F53000000000003 /* Snippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Snippet.swift; path = ../snippets/Snippet.swift; sourceTree = "<group>"; };
+		27C110032F53000000000003 /* Snippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Snippet.swift; path = ../snippets/Core/Snippet.swift; sourceTree = "<group>"; };
 		27C110042F53000000000004 /* FuzzyMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FuzzyMatch.swift; path = ../snippets/FuzzyMatch.swift; sourceTree = "<group>"; };
+		27C121012F54000000000101 /* LibraryLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryLock.swift; path = ../snippets/Core/LibraryLock.swift; sourceTree = "<group>"; };
+		27C121022F54000000000102 /* AtomicFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AtomicFileWriter.swift; path = ../snippets/Core/AtomicFileWriter.swift; sourceTree = "<group>"; };
+		27C121032F54000000000103 /* SnippetLibraryCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetLibraryCodec.swift; path = ../snippets/Core/SnippetLibraryCodec.swift; sourceTree = "<group>"; };
+		27C121042F54000000000104 /* LibraryGeneration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryGeneration.swift; path = ../snippets/Core/LibraryGeneration.swift; sourceTree = "<group>"; };
+		27C121052F54000000000105 /* SyncStateFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncStateFile.swift; path = ../snippets/Core/SyncStateFile.swift; sourceTree = "<group>"; };
+		27C121062F54000000000106 /* HybridLogicalClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HybridLogicalClock.swift; path = ../snippets/Core/HybridLogicalClock.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -96,6 +108,12 @@
 				27C110022F53000000000002 /* main.swift */,
 				27C110032F53000000000003 /* Snippet.swift */,
 				27C110042F53000000000004 /* FuzzyMatch.swift */,
+				27C121012F54000000000101 /* LibraryLock.swift */,
+				27C121022F54000000000102 /* AtomicFileWriter.swift */,
+				27C121032F54000000000103 /* SnippetLibraryCodec.swift */,
+				27C121042F54000000000104 /* LibraryGeneration.swift */,
+				27C121052F54000000000105 /* SyncStateFile.swift */,
+				27C121062F54000000000106 /* HybridLogicalClock.swift */,
 			);
 			path = "snippets-cli";
 			sourceTree = "<group>";
@@ -210,6 +228,12 @@
 				27C110052F53000000000005 /* main.swift in Sources */,
 				27C110062F53000000000006 /* Snippet.swift in Sources */,
 				27C110072F53000000000007 /* FuzzyMatch.swift in Sources */,
+				27C120012F54000000000001 /* LibraryLock.swift in Sources */,
+				27C120022F54000000000002 /* AtomicFileWriter.swift in Sources */,
+				27C120032F54000000000003 /* SnippetLibraryCodec.swift in Sources */,
+				27C120042F54000000000004 /* LibraryGeneration.swift in Sources */,
+				27C120052F54000000000005 /* SyncStateFile.swift in Sources */,
+				27C120062F54000000000006 /* HybridLogicalClock.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

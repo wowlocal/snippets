@@ -32,7 +32,7 @@
 
 Проверено по исходникам — четыре независимых механизма, каждый из которых дисквалифицирует поле на модели:
 
-* `Snippet.encode(to:)` (`snippets/Snippet.swift:134-145`) пишет ровно 9 ключей, `init(from:)` (`:120-132`) игнорирует неизвестные. Отдельно установленный старый `snippets-cli` делает read → mutate → write (`snippets-cli/main.swift:15-43`) и **молча обнулит новое поле у всех сниппетов** при первой же команде. Ни ошибки, ни лога.
+* `Snippet.encode(to:)` (`snippets/Core/Snippet.swift:134-145`) пишет ровно 9 ключей, `init(from:)` (`:120-132`) игнорирует неизвестные. Отдельно установленный старый `snippets-cli` делает read → mutate → write (`snippets-cli/main.swift:15-43`) и **молча обнулит новое поле у всех сниппетов** при первой же команде. Ни ошибки, ни лога.
 * `SnippetStore.update(_:)` (`snippets/SnippetStore.swift:102-129`) считает `didChange` ровно по шести полям (`:111-116`) — новое поле туда не попадёт и не сохранится через единственный debounced-путь.
 * `undoStack`/`redoStack` хранят полные снимки `[Snippet]` (`SnippetStore.swift:582-608`), а `Snippet: Equatable` (`Snippet.swift:3`). Счётчик на модели откатывался бы по ⌘Z и создавал бы фиктивные undo-записи в `commitEditTransaction` (`SnippetStore.swift:574-580`).
 * `exportSnippets(to:)` (`SnippetStore.swift:335-344`) кодирует все поля без фильтра — статистика утекла бы в файл, который пользователь отдаёт коллеге.
@@ -63,7 +63,7 @@
 Цель CLI компилирует три файла (`project.pbxproj:206-213`): `main.swift`, `Snippet.swift`, `FuzzyMatch.swift`. Значит `Snippet.swift` — подходящее место для констант пути (а `FuzzyMatch.swift`, уже двухцелевой, делает PR 4 дешевле, чем казалось: сопоставление в CLI доступно бесплатно). Литерал `snippets.json` уже продублирован в `snippets-cli/main.swift:5-10`; не повторяем эту ошибку.
 
 ```swift
-// snippets/Snippet.swift — дописать после SnippetStorageSync (:68-70)
+// snippets/Core/Snippet.swift — дописать после SnippetStorageSync (:68-70)
 
 enum SnippetStorageLocations {
     static var supportFolderURL: URL {
@@ -1394,7 +1394,7 @@ items.forEach(menu.addItem)                         // :112, без измене
 ### PR 1 — ядро frecency ← **МИНИМАЛЬНЫЙ ОТГРУЖАЕМЫЙ СРЕЗ**
 
 **Файлы:**
-`snippets/Snippet.swift` (+`SnippetStorageLocations` после `:70`),
+`snippets/Core/Snippet.swift` (+`SnippetStorageLocations` после `:70`),
 `snippets/SnippetStore.swift` (`:75-79` — переход на константы, 3 строки),
 `snippets-cli/main.swift` (`:5-10`, 2 строки),
 `snippets/SnippetFrecency.swift` (константы, `growth`, `clamp`, `emptyQueryRanks`, `shouldCoalesce`, `flushDelay`, `FrecencySnapshot`),
@@ -1475,7 +1475,7 @@ lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStor
 Запуск:
 
 ```bash
-swiftc -O snippets/Snippet.swift snippets/FuzzyMatch.swift \
+swiftc -O snippets/Core/Snippet.swift snippets/FuzzyMatch.swift \
        snippets/SnippetFrecency.swift snippets/SnippetUsageDocument.swift \
        Tests/SnippetFrecencyTests.swift \
        -o /tmp/frecency-tests && /tmp/frecency-tests

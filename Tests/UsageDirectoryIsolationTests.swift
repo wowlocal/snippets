@@ -7,7 +7,7 @@ import Foundation
 //
 // Build and run:
 //
-//   swiftc -O snippets/Snippet.swift snippets/SnippetFrecency.swift \
+//   swiftc -O snippets/Core/Snippet.swift snippets/SnippetFrecency.swift \
 //          snippets/SnippetUsageDocument.swift \
 //          Tests/UsageDirectoryIsolationTests.swift \
 //          -o /tmp/usage-isolation-tests && /tmp/usage-isolation-tests
