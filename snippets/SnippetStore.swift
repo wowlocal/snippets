@@ -671,7 +671,7 @@ final class SnippetStore {
                         from: rc.keyword,
                         preserveExclamationPrefix: options.preserveExclamationPrefix
                     ),
-                    content: Self.convertRaycastPlaceholders(rc.text)
+                    content: RaycastPlaceholders.converted(rc.text)
                 )
             }
         }
@@ -776,18 +776,6 @@ final class SnippetStore {
         }
 
         return keyword
-    }
-
-    private static let raycastDateRegex = try? NSRegularExpression(
-        pattern: #"\{date "([^"]+)"\}"#
-    )
-
-    private static func convertRaycastPlaceholders(_ text: String) -> String {
-        guard let regex = raycastDateRegex else { return text }
-        let range = NSRange(text.startIndex..., in: text)
-        return regex.stringByReplacingMatches(
-            in: text, range: range, withTemplate: "{date:$1}"
-        )
     }
 
     private func normalizeImportedSnippets(_ imported: [Snippet]) -> [Snippet] {

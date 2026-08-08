@@ -2010,6 +2010,10 @@ final class SnippetExpansionEngine {
             if case .failed = lease.restoreIfOwned() { continue }
             break
         }
+        // A lease that is still owned here could not hand the clipboard back — as opposed to
+        // having lost it to a newer copy, which finishes it. Reporting success would mean
+        // telling `beginPasteboardLease` it may take a clipboard we are still holding, and
+        // taking a second lease over our own snippet text loses the user's data for good.
         guard !lease.isOwned else { return false }
         activePasteboardLease = nil
         return true

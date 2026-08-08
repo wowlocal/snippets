@@ -96,7 +96,10 @@ final class TemporaryPasteboardLease {
         case restored(changeCount: Int)
         /// Someone copied over us; their content wins.
         case superseded
-        /// Still ours, but the write failed — worth retrying.
+        /// Still ours, but the write failed — worth retrying. The lease deliberately stays
+        /// unfinished so `isOwned` keeps reporting `true`: that is the only thing separating
+        /// "we could not hand the clipboard back" from "someone else took it", and the caller
+        /// must not mistake the first for a clean handback.
         case failed
     }
 
@@ -110,10 +113,15 @@ final class TemporaryPasteboardLease {
     }
 
     private let pasteboard: any SnippetPasteboardAccess
-    private let ownedChangeCount: Int
+    /// The change count our own last write left behind. `var`, because the rewrite restore
+    /// clears the pasteboard before it writes and that moves the count: re-anchoring keeps the
+    /// question `isOwned` asks — "has anyone copied since we last wrote?" — answerable.
+    private var ownedChangeCount: Int
     private let strategy: Strategy
     private var isFinished = false
 
+    /// Also the failure signal: a restore that could not put the user's data back leaves the
+    /// lease unfinished, so `isOwned` stays `true` to say we still owe the clipboard back.
     var isOwned: Bool { !isFinished && pasteboard.changeCount == ownedChangeCount }
 
     private init(
@@ -236,13 +244,27 @@ final class TemporaryPasteboardLease {
 
         case .rewrite(let snapshot):
             guard let items = snapshot.makeItems() else { return .failed }
-            pasteboard.clearContents()
-            guard items.isEmpty || pasteboard.writeObjects(items) else {
+            // `clearContents` moves the change count, so the count `begin` handed us can never
+            // match again. Re-anchor on our own write before anything can fail: a newer copy by
+            // the user still pushes the count past this one, so the "never overwrite a newer
+            // copy" guard keeps its meaning, while a failed write no longer masquerades as
+            // `superseded` on the next attempt.
+            ownedChangeCount = pasteboard.clearContents()
+            if items.isEmpty || pasteboard.writeObjects(items) {
                 isFinished = true
-                return .failed
+                return .restored(changeCount: pasteboard.changeCount)
             }
-            isFinished = true
-            return .restored(changeCount: pasteboard.changeCount)
+            // The clipboard is empty right now and that is our doing. Rebuild the items and try
+            // once more, the same recovery the acquisition path performs — a write can fail for
+            // reasons that do not survive building fresh `NSPasteboardItem`s.
+            if let rebuilt = snapshot.makeItems(), pasteboard.writeObjects(rebuilt) {
+                isFinished = true
+                return .restored(changeCount: pasteboard.changeCount)
+            }
+            // Left cleared. `isFinished` stays false on purpose: `isOwned` remains true, the
+            // caller's retry loop gets its remaining attempts, and a caller that runs out of
+            // them reports failure instead of calling an emptied clipboard a success.
+            return .failed
         }
     }
 }

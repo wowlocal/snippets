@@ -28,6 +28,16 @@ private final class FakePasteboard: SnippetPasteboardAccess {
     var items: [NSPasteboardItem] = []
     var writeObjectsSucceeds = true
 
+    /// Number of upcoming `writeObjects` calls to refuse before behaving normally again.
+    /// `writeObjectsSucceeds` alone cannot express the case that matters — a restore whose
+    /// write fails and whose *recovery* write then succeeds — because it fails every write,
+    /// including the one that is supposed to put the user's data back.
+    var writeObjectsFailuresRemaining = 0
+
+    /// Every `writeObjects` call, successful or not, so a test can prove a failed restore
+    /// tried to recover rather than walking away from a cleared pasteboard.
+    private(set) var writeObjectsCallCount = 0
+
     var pasteboardItems: [NSPasteboardItem]? { items }
 
     @discardableResult
@@ -51,6 +61,11 @@ private final class FakePasteboard: SnippetPasteboardAccess {
     }
 
     func writeObjects(_ objects: [any NSPasteboardWriting]) -> Bool {
+        writeObjectsCallCount += 1
+        if writeObjectsFailuresRemaining > 0 {
+            writeObjectsFailuresRemaining -= 1
+            return false
+        }
         guard writeObjectsSucceeds else { return false }
         items = objects.compactMap { $0 as? NSPasteboardItem }
         return true
@@ -74,6 +89,19 @@ private func makeItem(_ values: [(NSPasteboard.PasteboardType, String)]) -> NSPa
 private let html = NSPasteboard.PasteboardType("public.html")
 private let tiff = NSPasteboard.PasteboardType("public.tiff")
 
+/// The caller in `SnippetExpansionEngine.finishPendingPasteboardOwnership`, verbatim in
+/// behaviour. The bug this suite pins was only visible through it: the lease reported
+/// `.failed` and the caller still returned `true`.
+@MainActor
+private func finishPendingPasteboardOwnership(_ lease: TemporaryPasteboardLease) -> Bool {
+    for _ in 0..<3 {
+        guard lease.isOwned else { break }
+        if case .failed = lease.restoreIfOwned() { continue }
+        break
+    }
+    return !lease.isOwned
+}
+
 @main
 private enum TemporaryPasteboardLeaseTests {
     static func main() {
@@ -92,6 +120,10 @@ private enum TemporaryPasteboardLeaseTests {
         testEmptyPasteboardUsesRewrite()
         testImageFirstPasteboardUsesRewrite()
         testConcealedWritesAreScopedToThisHost()
+        testRestoreWriteThatFailsOnceStillPutsTheUsersImageBack()
+        testRestoreThatCannotWriteAtAllReportsFailure()
+        testCallerRetryLoopKeepsTryingUntilTheWriteTakes()
+        testUserCopyDuringAFailingRestoreWins()
         print("TemporaryPasteboardLease tests passed")
     }
 
@@ -201,14 +233,32 @@ private enum TemporaryPasteboardLeaseTests {
     private static func testFailedWriteRestoresOriginals() {
         let pasteboard = FakePasteboard()
         pasteboard.items = [makeItem([(.string, "user text")])]
-        pasteboard.writeObjectsSucceeds = false
+        // Only the lease's own write fails; the recovery write that follows must succeed. The
+        // blanket `writeObjectsSucceeds` flag used to hide this: it failed the recovery write
+        // too, so the test could only ever observe a cleared pasteboard — the symptom of the
+        // bug, asserted as if it were the specification.
+        pasteboard.writeObjectsFailuresRemaining = 1
 
         assertTrue(
             TemporaryPasteboardLease.begin(text: "snippet", pasteboard: pasteboard) == nil,
             "a pasteboard that refuses our write yields no lease"
         )
-        pasteboard.writeObjectsSucceeds = true
-        assertTrue(pasteboard.items.isEmpty, "the failed write left the pasteboard cleared")
+        assertEqual(
+            pasteboard.items.first?.string(forType: .string),
+            "user text",
+            "a failed acquisition hands the user's clipboard straight back"
+        )
+
+        // A pasteboard that refuses every write, recovery included, still yields no lease. There
+        // is nothing left to hand back in that case, so an empty clipboard is the honest outcome.
+        let dead = FakePasteboard()
+        dead.items = [makeItem([(.string, "user text")])]
+        dead.writeObjectsSucceeds = false
+        assertTrue(
+            TemporaryPasteboardLease.begin(text: "snippet", pasteboard: dead) == nil,
+            "a permanently dead pasteboard yields no lease either"
+        )
+        assertTrue(dead.items.isEmpty, "nothing could be written back, so it stays cleared")
     }
 
     @MainActor
@@ -291,6 +341,106 @@ private enum TemporaryPasteboardLeaseTests {
     _ = plain.clearContents()
     _ = TemporaryPasteboardLease.begin(text: "ordinary", pasteboard: plain, isConcealed: false)
     assertEqual(plain.lastContentsOptions, nil, "an ordinary write must not be host-scoped")
+    }
+
+// MARK: - A failed restore never leaves the clipboard cleared
+
+/// The regression. The rewrite restore clears the pasteboard before it writes, so a write that
+/// fails there has already destroyed the user's clipboard. It used to leave it that way and mark
+/// the lease finished, which made `isOwned` false and told the caller the handback had succeeded.
+///
+/// The `tiff` fixture is deliberate in all four of these: an image-first pasteboard is the only
+/// way to force the `.rewrite` strategy on the non-concealed path, because `firstStringData` is
+/// nil and the in-place strategy is therefore unavailable.
+    @MainActor
+    private static func testRestoreWriteThatFailsOnceStillPutsTheUsersImageBack() {
+        let pasteboard = FakePasteboard()
+        pasteboard.items = [makeItem([(tiff, "image bytes")])]
+
+        let lease = TemporaryPasteboardLease.begin(text: "snippet", pasteboard: pasteboard)!
+        // Fail only the restore's first write, so the in-branch recovery write is what saves it.
+        pasteboard.writeObjectsFailuresRemaining = 1
+
+        assertEqual(
+            lease.restoreIfOwned(),
+            .restored(changeCount: pasteboard.changeCount),
+            "a restore whose first write fails still recovers"
+        )
+        assertEqual(
+            pasteboard.items.first?.data(forType: tiff).flatMap { String(data: $0, encoding: .utf8) },
+            "image bytes",
+            "the recovery write puts the user's clipboard back"
+        )
+        assertTrue(!lease.isOwned, "a lease that restored is finished")
+    }
+
+    @MainActor
+    private static func testRestoreThatCannotWriteAtAllReportsFailure() {
+        let pasteboard = FakePasteboard()
+        pasteboard.items = [makeItem([(tiff, "image bytes")])]
+
+        let lease = TemporaryPasteboardLease.begin(text: "snippet", pasteboard: pasteboard)!
+        pasteboard.writeObjectsSucceeds = false
+        let writesAfterAcquisition = pasteboard.writeObjectsCallCount
+
+        assertEqual(lease.restoreIfOwned(), .failed, "a restore that cannot write reports failure")
+        assertEqual(
+            pasteboard.writeObjectsCallCount - writesAfterAcquisition,
+            2,
+            "a restore that clears the pasteboard and then fails tries once more before giving up"
+        )
+        assertTrue(lease.isOwned, "a lease that still owes the user their clipboard is still owned")
+        // The caller must not be able to mistake this for a clean handback: that mistake is what
+        // made the clipboard vanish with every expansion.
+        assertEqual(
+            finishPendingPasteboardOwnership(lease),
+            false,
+            "the caller reports failure rather than success"
+        )
+    }
+
+    @MainActor
+    private static func testCallerRetryLoopKeepsTryingUntilTheWriteTakes() {
+        let pasteboard = FakePasteboard()
+        pasteboard.items = [makeItem([(tiff, "image bytes")])]
+
+        let lease = TemporaryPasteboardLease.begin(text: "snippet", pasteboard: pasteboard)!
+        // Four refusals: the first attempt's write and recovery write, then the second attempt's
+        // write and recovery write. The third attempt is the one that lands.
+        pasteboard.writeObjectsFailuresRemaining = 4
+
+        assertTrue(
+            finishPendingPasteboardOwnership(lease),
+            "the caller reports success once the write lands"
+        )
+        assertEqual(
+            pasteboard.items.first?.data(forType: tiff).flatMap { String(data: $0, encoding: .utf8) },
+            "image bytes",
+            "the user's clipboard came back"
+        )
+        assertTrue(!lease.isOwned, "a restored lease is finished")
+    }
+
+    @MainActor
+    private static func testUserCopyDuringAFailingRestoreWins() {
+        let pasteboard = FakePasteboard()
+        pasteboard.items = [makeItem([(tiff, "image bytes")])]
+
+        let lease = TemporaryPasteboardLease.begin(text: "snippet", pasteboard: pasteboard)!
+        pasteboard.writeObjectsSucceeds = false
+        assertEqual(lease.restoreIfOwned(), .failed, "the restore could not write")
+
+        // Re-anchoring the change count must not blind the lease to a real copy.
+        pasteboard.writeObjectsSucceeds = true
+        pasteboard.clearContents()
+        pasteboard.items = [makeItem([(.string, "something the user just copied")])]
+
+        assertEqual(lease.restoreIfOwned(), .superseded, "the user's newer copy wins")
+        assertEqual(
+            pasteboard.items[0].string(forType: .string),
+            "something the user just copied",
+            "the newer copy survives untouched"
+        )
     }
 
 }
