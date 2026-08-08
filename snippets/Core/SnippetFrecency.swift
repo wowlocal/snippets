@@ -3,8 +3,8 @@ import Foundation
 /// Tuning constants and pure ranking math for usage-based ordering of
 /// suggestions.
 ///
-/// Deliberately free of AppKit and actor isolation so `Tests/` can compile it
-/// standalone with `swiftc`, the same way `SuggestionTriggerContext` is tested.
+/// Deliberately free of AppKit and actor isolation so the `CorePackage` overlay
+/// can exercise it with the rest of the pure core through `swift test`.
 nonisolated enum SnippetFrecency {
     // MARK: - Decay
 

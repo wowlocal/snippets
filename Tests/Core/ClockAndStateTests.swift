@@ -842,6 +842,7 @@ struct ClockAndStateTests {
         /// Every file a subsystem writes, with the name it is known by in the source.
         static let files: [(String, URL)] = [
             ("Usage/usage.json", SnippetStorageLocations.usageFileURL),
+            ("Usage/usage.lock", SnippetStorageLocations.usageLockFileURL),
             ("Sync/state.json", SnippetStorageLocations.syncStateFileURL),
             ("Sync/base.json", SnippetStorageLocations.syncBaseFileURL),
             ("Sync/library-metadata.json", SnippetStorageLocations.syncLibraryMetadataFileURL),

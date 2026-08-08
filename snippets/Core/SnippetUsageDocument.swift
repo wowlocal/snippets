@@ -237,19 +237,51 @@ nonisolated enum SnippetUsageFile {
         liveIDs: Set<UUID>?,
         now: Double = Date().timeIntervalSince1970,
         folderURL: URL = SnippetStorageLocations.usageFolderURL,
-        fileURL: URL = SnippetStorageLocations.usageFileURL
+        fileURL: URL = SnippetStorageLocations.usageFileURL,
+        lockURL: URL? = nil,
+        lockTimeout: TimeInterval = 0.25
     ) -> Bool {
         // Defensive: normally the directory was created at launch, before the
         // library store installed its monitor on the parent.
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
 
+        // Atomic replacement prevents torn JSON, but it does not make the read/join/write
+        // transaction atomic: two processes can read the same ancestor, independently add
+        // A and B, then have the last rename discard the other addition. Usage data has its
+        // own stable lock because it is intentionally outside the library/vault transaction.
+        // Derive the test default from `folderURL` so isolated tests never touch the live lock.
+        let effectiveLockURL = lockURL
+            ?? folderURL.appendingPathComponent("usage.lock", isDirectory: false)
+        let held: FileGuard.Held
+        do {
+            held = try FileGuard.acquire(at: effectiveLockURL, timeout: lockTimeout)
+        } catch {
+            NSLog("Snippets: could not lock usage data: \(error)")
+            return false
+        }
+        // Unlike the library writer, this path has no compare-and-swap verification fallback.
+        // Proceeding after both lock mechanisms fail would silently reintroduce lost updates.
+        guard !held.isUnlocked else {
+            NSLog("Snippets: no supported usage lock is available; preserving the existing file")
+            return false
+        }
+        defer { held.release() }
+
         var merged = sanitized(mine)
 
-        if let data = try? Data(contentsOf: fileURL),
-           let probe = try? JSONDecoder().decode(SnippetUsageVersionProbe.self, from: data),
-           (probe.v ?? SnippetUsageDocument.currentVersion) <= SnippetUsageDocument.currentVersion,
-           let disk = try? JSONDecoder().decode(SnippetUsageDocument.self, from: data) {
-            merged = joined(mine: sanitized(mine), disk: sanitized(disk))
+        if let data = try? Data(contentsOf: fileURL) {
+            // The store performs the same check at launch, but another (newer) process can
+            // replace the file after launch and before this flush. The last responsible place
+            // to fail closed is here, under the same lock as the eventual write.
+            if let probe = try? JSONDecoder().decode(SnippetUsageVersionProbe.self, from: data),
+               let version = probe.v,
+               version > SnippetUsageDocument.currentVersion {
+                return false
+            }
+
+            if let disk = try? JSONDecoder().decode(SnippetUsageDocument.self, from: data) {
+                merged = joined(mine: sanitized(mine), disk: sanitized(disk))
+            }
         }
 
         merged = pruned(merged, liveIDs: liveIDs, now: now)

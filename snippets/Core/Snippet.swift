@@ -123,6 +123,12 @@ nonisolated enum SnippetStorageLocations {
         usageFolderURL.appendingPathComponent("usage.json", isDirectory: false)
     }
 
+    /// Stable lock for the usage document's cross-process read/join/write transaction.
+    /// It must not be the JSON file itself because atomic replacement changes that inode.
+    static var usageLockFileURL: URL {
+        usageFolderURL.appendingPathComponent("usage.lock", isDirectory: false)
+    }
+
     // MARK: - Sync, vault, and backup locations
     //
     // Every one of these is a SUBDIRECTORY, for exactly the reason spelled out

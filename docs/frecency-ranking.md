@@ -1470,18 +1470,15 @@ lazy var expansionEngine = SnippetExpansionEngine(store: store, usage: usageStor
 
 ## 10. Тесты
 
-`grep -c "Tests" Snippets.xcodeproj/project.pbxproj` возвращает **0** — каталог `Tests/` не входит ни в одну цель Xcode. Тесты — самостоятельные `@main`-исполняемые файлы в стиле `Tests/SuggestionTriggerContextTests.swift` (`assertEqual` / `fputs` / `exit(1)`). Именно поэтому вся математика, компараторы, формат файла **и чистая логика записи** (`shouldCoalesce`, `flushDelay`) живут в `SnippetFrecency`/`SnippetUsageDocument`, а не внутри `@MainActor`-движка.
+`grep -c "Tests" Snippets.xcodeproj/project.pbxproj` возвращает **0** — каталог `Tests/` по-прежнему не входит ни в одну цель Xcode. Чистое ядро и его тесты подключены к тестовому пакету-оверлею SwiftPM через относительные символические ссылки `CorePackage/Sources/SnippetsCore` и `CorePackage/Tests/SnippetsCoreTests`. Поэтому математика, компараторы, формат файла **и чистая логика записи** (`shouldCoalesce`, `flushDelay`) живут в `snippets/Core/`, а `swift test` проверяет ровно те же исходники, которые компилирует приложение.
 
 Запуск:
 
 ```bash
-swiftc -O snippets/Core/Snippet.swift snippets/Core/FuzzyMatch.swift \
-       snippets/Core/SnippetFrecency.swift snippets/SnippetUsageDocument.swift \
-       Tests/SnippetFrecencyTests.swift \
-       -o /tmp/frecency-tests && /tmp/frecency-tests
+swift test --package-path CorePackage --filter FrecencyRankingTests
 ```
 
-`Snippet.swift` нужен ради `SnippetStorageLocations`, `FuzzyMatch.swift` — ради тестов ничьих по score (§3.3), `SnippetUsageDocument.swift` содержит и документ, и `SnippetUsageFile`. Добавить хелперы `assertClose(_:_:tolerance:_:)` и `assertTrue(_:_:)` рядом с существующими.
+Тесты слияния, записи и изоляции каталога usage запускаются отдельно через `swift test --package-path CorePackage --filter UsageRecordingTests`; без `--filter` выполняется весь набор `SnippetsCoreTests`.
 
 ### Математика распада
 

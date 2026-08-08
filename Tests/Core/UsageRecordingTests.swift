@@ -177,28 +177,51 @@ struct UsageRecordingTests {
         let folder = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appendingPathComponent("usage.json")
+        let lockFile = folder.appendingPathComponent("usage.lock")
         let now = 1_785_312_000.0
 
-        let idA = UUID().uuidString
-        let idB = UUID().uuidString
+        // Real overlapping writers, not two serial calls carrying a "concurrent" label.
+        // Without a lock around the whole read/join/write transaction, several writers read
+        // the same ancestor and the last atomic rename silently discards the others.
+        let ids = (0..<40).map { _ in UUID().uuidString }
+        let resultLock = NSLock()
+        var results: [Bool] = []
+        DispatchQueue.concurrentPerform(iterations: ids.count) { index in
+            let wrote = SnippetUsageFile.mergeAndWrite(
+                singleRecordDocument(ids[index], weight: Double(index + 1)),
+                liveIDs: nil,
+                now: now,
+                folderURL: folder,
+                fileURL: file,
+                lockURL: lockFile,
+                lockTimeout: 10
+            )
+            resultLock.lock()
+            results.append(wrote)
+            resultLock.unlock()
+        }
 
-        // Two "processes" writing different snippets: neither loses.
-        SnippetUsageFile.mergeAndWrite(singleRecordDocument(idA, weight: 10), liveIDs: nil, now: now,
-                                       folderURL: folder, fileURL: file)
-        SnippetUsageFile.mergeAndWrite(singleRecordDocument(idB, weight: 20), liveIDs: nil, now: now,
-                                       folderURL: folder, fileURL: file)
+        #expect(results.count == ids.count)
+        #expect(results.allSatisfy { $0 }, "every contending writer acquires the lock and writes")
         let merged = try #require(readDocument(at: file))
-        #expect(merged.records.count == 2, "concurrent writers both survive")
-        let mergedA = try #require(merged.records[idA])
-        let mergedB = try #require(merged.records[idB])
-        expectClose(mergedA.weight, 10, tolerance: 1e-6, "no weight is inflated")
-        expectClose(mergedB.weight, 20, tolerance: 1e-6, "no weight is inflated")
+        #expect(merged.records.count == ids.count, "concurrent writers all survive")
+        for (index, id) in ids.enumerated() {
+            let record = try #require(merged.records[id])
+            expectClose(
+                record.weight,
+                Double(index + 1),
+                tolerance: 1e-6,
+                "writer \(index)'s weight is present and not inflated"
+            )
+        }
 
         // Idempotent: merging the same state again changes nothing.
-        SnippetUsageFile.mergeAndWrite(singleRecordDocument(idB, weight: 20), liveIDs: nil, now: now,
-                                       folderURL: folder, fileURL: file)
+        let repeatedID = ids[19]
+        SnippetUsageFile.mergeAndWrite(
+            singleRecordDocument(repeatedID, weight: 20), liveIDs: nil, now: now,
+            folderURL: folder, fileURL: file, lockURL: lockFile)
         let repeated = try #require(readDocument(at: file))
-        let repeatedB = try #require(repeated.records[idB])
+        let repeatedB = try #require(repeated.records[repeatedID])
         expectClose(repeatedB.weight, 20, tolerance: 1e-6, "re-merging does not inflate")
     }
 
@@ -289,13 +312,13 @@ struct UsageRecordingTests {
 
         // A file written by a newer version is never overwritten.
         try? FileManager.default.removeItem(at: file)
-        let future = "{\"v\":99,\"w\":{}}"
-        try Data(future.utf8).write(to: file)
-        SnippetUsageFile.mergeAndWrite(singleRecordDocument(idA, weight: 10), liveIDs: nil, now: now,
-                                       folderURL: folder, fileURL: file)
-        // The writer here is the store, which refuses to flush in read-only
-        // mode; mergeAndWrite itself only declines to *merge* the future file.
-        #expect(readDocument(at: file) != nil, "the merge still produces a readable file")
+        let future = Data("{\"v\":99,\"futureOnly\":{\"doNotLose\":true}}".utf8)
+        try future.write(to: file)
+        let wrote = SnippetUsageFile.mergeAndWrite(
+            singleRecordDocument(idA, weight: 10), liveIDs: nil, now: now,
+            folderURL: folder, fileURL: file)
+        #expect(!wrote, "an old writer refuses a file owned by a future schema")
+        #expect(try Data(contentsOf: file) == future, "the future file survives byte for byte")
     }
 
     // MARK: - Pruning
