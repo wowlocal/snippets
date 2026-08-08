@@ -69,7 +69,7 @@ extension ViewController {
             // selection to another snippet mid-typing.
             let keepEditingHiddenSnippet = isEditingDetails
                 && editingSnippetID == selectedSnippetID
-                && store.snippet(id: selectedSnippetID) != nil
+                && store.snippetForDisplay(id: selectedSnippetID) != nil
             // Likewise when the snippet open in the editor drops out because
             // its own tags changed (the user cleared the tag the filter is on)
             // rather than because the filter itself changed. That is editing,
@@ -103,7 +103,7 @@ extension ViewController {
     private func reconfigureVisibleRows() {
         for row in 0..<visibleSnippets.count {
             if let cellView = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SnippetRowCellView {
-                cellView.configure(with: visibleSnippets[row])
+                cellView.configure(with: visibleSnippets[row], isSecure: store.isSecure(visibleSnippets[row].id))
             }
         }
     }
@@ -335,6 +335,24 @@ extension ViewController {
         updateKeywordStatus(for: snippet)
         updateNameFieldPlaceholder()
         setEditorEnabled(true)
+        // Must run after `setEditorEnabled(true)`, which unconditionally makes the text
+        // view editable — a locked secret has to end up read-only regardless.
+        let isSecure = store.isSecure(snippet.id)
+        secureLockToggle.state = isSecure ? .on : .off
+        secureLockToggle.contentTintColor = isSecure ? .controlAccentColor : .secondaryLabelColor
+        secureLockToggle.toolTip = isSecure
+            ? "Make this an ordinary snippet again (\u{2303}\u{2318}L)."
+            : "Encrypt this snippet (\u{2303}\u{2318}L). It will stop expanding on its own \u{2014} "
+                + "you\u{2019}ll pick it from the \\ list instead."
+        secureDemoteStrip.isHidden = true
+
+        if isSecure {
+            applySecureStateToEditor(for: snippet)
+        } else {
+            // Otherwise the overlay from a previously selected secure snippet would sit
+            // over this one, and the caption would describe the wrong record.
+            clearSecureEditorChrome()
+        }
         updateSuggestedTagsRow()
         updateSuggestedKeywordsRow(for: snippet)
         isApplyingSnippetToEditor = false
@@ -350,12 +368,12 @@ extension ViewController {
 
     var selectedSnippet: Snippet? {
         guard let selectedSnippetID else { return nil }
-        return store.snippet(id: selectedSnippetID)
+        return store.snippetForDisplay(id: selectedSnippetID)
     }
 
     var editingSnippet: Snippet? {
         guard let editingSnippetID else { return nil }
-        return store.snippet(id: editingSnippetID)
+        return store.snippetForDisplay(id: editingSnippetID)
     }
 
     func activeCommandSnippetID() -> UUID? {
@@ -385,7 +403,11 @@ extension ViewController {
 
         snippet.isEnabled = enabledCheckbox.state == .on
 
-        store.update(snippet)
+        if store.isSecure(snippet.id) {
+            commitSecureEdit(snippet)
+        } else {
+            store.update(snippet)
+        }
         updatePreview(withTemplate: snippet.content)
         updateKeywordStatus(for: snippet)
         updateNameFieldPlaceholder()
@@ -705,4 +727,143 @@ extension ViewController {
         }
         return false
     }
+}
+
+
+// MARK: - Editing a secure snippet
+
+extension ViewController {
+
+    /// Whether the selected record's text is currently readable.
+
+    /// Writes an edit of a secure record back to the vault rather than to `snippets.json`.
+    ///
+    /// Metadata always goes through; **content only when the vault is unlocked**. That
+    /// asymmetry is the whole point: while locked, the text view is showing a placeholder
+    /// rather than the snippet, so saving it would overwrite the secret with the word
+    /// that stands in for it. Renaming or retagging a locked record is still allowed,
+    /// because that never needs the key.
+    func commitSecureEdit(_ snippet: Snippet) {
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        let secureStore = app.secureStore
+
+        do {
+            try secureStore.updateMetadata(
+                id: snippet.id,
+                name: snippet.name,
+                keyword: snippet.keyword,
+                tags: snippet.tags,
+                isEnabled: snippet.isEnabled)
+
+            // The latch, not a string comparison: content is written back only if this
+            // editor is currently displaying the real decrypted text for this exact
+            // record.
+            if secureContentEditableForID == snippet.id,
+               (try? secureStore.content(for: snippet.id)) != snippet.content {
+                try secureStore.setContent(snippet.content, for: snippet.id)
+            }
+        } catch {
+            importExportMessage = "Could not save the secure snippet: \(error)"
+        }
+    }
+
+    /// Stands in for the text while the vault is locked.
+    ///
+    /// Deliberately a sentence rather than dots: a row of bullets in an editable text
+    /// view reads as content the user could overwrite, and someone would.
+
+    /// Swaps the editor between the real text and the placeholder.
+    ///
+    /// Called from `applySnippetToEditor` and whenever the vault locks or unlocks, so a
+    /// lock timeout does not leave a secret sitting visible on screen.
+    func applySecureStateToEditor(for snippet: Snippet) {
+        guard store.isSecure(snippet.id), let app = NSApp.delegate as? AppDelegate else { return }
+
+        let wasApplying = isApplyingSnippetToEditor
+        isApplyingSnippetToEditor = true
+        defer { isApplyingSnippetToEditor = wasApplying }
+
+        secureCaptionLabel.stringValue =
+            "Encrypted on this Mac. Won\u{2019}t expand when you type its keyword \u{2014} type \\, "
+            + "pick it from the list, and confirm with Touch ID. Never in exports, share links, or "
+            + "snippets.json. Its name, keyword and tags stay readable so Snippets can find it while locked."
+        secureCaptionLabel.isHidden = !secureDemoteStrip.isHidden
+
+        func mask(_ message: String, action: String? = nil) {
+            secureContentEditableForID = nil
+            snippetTextView.string = ""
+            snippetTextView.isEditable = false
+            secureLockOverlayLabel.stringValue = message
+            secureLockOverlayButton.isEnabled = action != nil
+            secureLockOverlay.isHidden = false
+            // The preview renders placeholders like {clipboard}; feeding it the real
+            // text of a locked snippet would display exactly what the lock is hiding.
+            updatePreview(withTemplate: "")
+        }
+
+        if app.secureStore.isUnreadable {
+            mask("Snippets can\u{2019}t read your vault file, so it has been left completely untouched.")
+            return
+        }
+        if case .noKey = app.vaultSession.state {
+            mask("This snippet\u{2019}s key isn\u{2019}t on this Mac, so its text can\u{2019}t be read here. "
+                 + "Its name and keyword still work.")
+            return
+        }
+        // Masked whenever Snippets is not the frontmost app. This costs nothing — the
+        // key's lifetime is untouched, and it comes straight back on activation — but it
+        // means a revealed secret is not sitting on screen behind a screen share, or
+        // visible over a shoulder while the user works in another window.
+        guard NSApp.isActive else {
+            mask("Hidden while Snippets is in the background.")
+            return
+        }
+        guard app.vaultSession.state.isUnlocked,
+              let text = try? app.secureStore.content(for: snippet.id) else {
+            mask("Locked. Click to unlock with Touch ID or your login password.", action: "unlock")
+            return
+        }
+
+        snippetTextView.string = text
+        snippetTextView.isEditable = true
+        secureLockOverlay.isHidden = true
+        secureContentEditableForID = snippet.id
+        updatePreview(withTemplate: text)
+    }
+
+    /// Clears the secure chrome for an ordinary snippet. Without this the overlay from a
+    /// previously selected secure snippet would stay over the next one.
+    func clearSecureEditorChrome() {
+        secureContentEditableForID = nil
+        secureLockOverlay.isHidden = true
+        secureCaptionLabel.isHidden = true
+        secureDemoteStrip.isHidden = true
+    }
+
+    /// The whole content area is the button. Clicking where the text should be is what
+    /// people try first, so it is what unlocks.
+    @objc func unlockFromEditorOverlay() {
+        guard let snippet = selectedSnippet,
+              store.isSecure(snippet.id),
+              let app = NSApp.delegate as? AppDelegate else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await app.vaultSession.unlock(
+                    reason: "Show \u{201C}\(snippet.displayName)\u{201D}")
+                // Authentication suspends the main actor; the selection may have moved.
+                guard self.selectedSnippet?.id == snippet.id else { return }
+                self.applySecureStateToEditor(for: snippet)
+                self.view.window?.makeFirstResponder(self.snippetTextView)
+                self.snippetTextView.setSelectedRange(
+                    NSRange(location: self.snippetTextView.string.count, length: 0))
+            } catch VaultSession.Failure.authentication {
+                // Cancelling is an ordinary answer, not an error worth announcing.
+            } catch {
+                self.importExportMessage = "Couldn\u{2019}t unlock: \(error)"
+            }
+        }
+    }
+
+    /// Unlocks and shows the selected secure snippet.
 }

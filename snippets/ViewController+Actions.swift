@@ -282,6 +282,19 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         shareItem.keyEquivalent = "C"
         shareItem.isEnabled = selectedSnippet != nil
 
+        // Placed next to Share deliberately: they are the two actions that decide where a
+        // snippet's text is allowed to go, and seeing "cannot be shared" beside "make
+        // secure" is what makes the trade legible at the moment of choosing.
+        let secureItem = LiquidGlassDesign.menuItem(
+            title: selectedSnippet.map { store.isSecure($0.id) } == true
+                ? "Make Ordinary\u{2026}" : "Make Secure",
+            symbolName: selectedSnippet.map { store.isSecure($0.id) } == true
+                ? "lock.open" : "lock",
+            action: #selector(toggleSelectedSnippetSecurity),
+            target: self
+        )
+        secureItem.isEnabled = selectedSnippet != nil
+
         let shortcutsItem = LiquidGlassDesign.menuItem(
             title: "Keyboard Shortcuts",
             symbolName: "keyboard",
@@ -294,6 +307,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         menu.addItem(importItem)
         menu.addItem(exportItem)
         menu.addItem(shareItem)
+        menu.addItem(secureItem)
         menu.addItem(shortcutsItem)
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -522,7 +536,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
               let snippet = store.snippet(id: targetSnippetID) else { return }
 
         do {
-            let url = try SnippetDeepLink.url(for: snippet)
+            let url = try SnippetDeepLink.url(for: snippet, isSecure: store.isSecure(snippet.id))
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(url.absoluteString, forType: .string)
@@ -647,4 +661,134 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         closeActionPanel()
         importExportMessage = "Redid last change."
     }
+}
+
+
+// MARK: - Making a snippet secure
+
+extension ViewController {
+
+    /// Promotes a plaintext snippet into the vault, or brings one back out.
+    ///
+    /// Both directions need the vault open, because both have to touch the ciphertext:
+    /// promoting seals, demoting opens. The unlock happens here rather than deeper down
+    /// so the Touch ID sheet appears while Snippets is frontmost and the user has just
+    /// clicked a menu item — never mid-expansion in somebody else's app.
+    /// The lock toggle. One click each way; the consequences are stated in the editor
+    /// rather than in a dialog that is dismissed once and never seen again.
+    @objc func toggleSelectedSnippetSecurity() {
+        commitActiveEditorState(endingEditing: true)
+        guard let snippet = selectedSnippet else { return }
+        if store.isSecure(snippet.id) {
+            beginDemoteConfirmation(for: snippet)
+        } else {
+            promoteSelectedSnippet(snippet)
+        }
+    }
+
+    /// Encrypting is the safe direction, so it asks nothing beyond proving presence:
+    /// the vault creates itself, the recovery key sheet appears once ever, and the only
+    /// interaction is the Touch ID prompt that has to happen anyway to seal the content.
+    private func promoteSelectedSnippet(_ snippet: Snippet) {
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        let secureStore = app.secureStore
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try secureStore.createVaultIfNeeded(confirmRecoveryKey: presentRecoveryKeyForSaving)
+                try await app.vaultSession.unlock(
+                    reason: "Make \u{201C}\(snippet.displayName)\u{201D} secure")
+                if !secureStore.hasRecoveryKey {
+                    _ = try secureStore.addRecoveryKeyIfNeeded(
+                        confirmRecoveryKey: presentRecoveryKeyForSaving)
+                }
+                try secureStore.promote(snippetID: snippet.id)
+
+                importExportMessage = snippet.normalizedKeyword.isEmpty
+                    ? "\(snippet.displayName) is encrypted."
+                    : "\(snippet.displayName) is encrypted. Typing \\\(snippet.normalizedKeyword) "
+                        + "no longer expands it on its own — pick it from the list instead."
+                selectedSnippetID = snippet.id
+                reloadVisibleSnippets(keepSelection: true)
+                applySelectedSnippetToEditor()
+            } catch SecureSnippetStore.Failure.setupCancelled {
+                // Setup was not committed. Nothing happened, so say nothing; just put the
+                // toggle back where the user left it.
+                applySelectedSnippetToEditor()
+            } catch {
+                // Inline, not modal. A failure here changed nothing, and a dialog would
+                // make a non-event feel like a catastrophe.
+                importExportMessage = "Couldn\u{2019}t make that secure: \(error). Nothing was changed."
+                applySelectedSnippetToEditor()
+            }
+            closeActionPanel()
+        }
+    }
+
+    /// Decrypting is the direction that loses protection, so unlike every other step in
+    /// this feature it gets *more* friction rather than less — and the confirmation says
+    /// what actually happens to the bytes, which "are you sure?" never did.
+    private func beginDemoteConfirmation(for snippet: Snippet) {
+        secureLockToggle.state = .on
+        secureCaptionLabel.isHidden = true
+        secureDemoteLabel.stringValue =
+            "Make \u{201C}\(snippet.displayName)\u{201D} ordinary? Its text will be written to "
+            + "snippets.json in plain text, and will appear in exports and share links from then on."
+        secureDemoteStrip.isHidden = false
+    }
+
+    @objc func cancelDemoteConfirmation() {
+        secureDemoteStrip.isHidden = true
+        applySelectedSnippetToEditor()
+    }
+
+    @objc func confirmDemoteSelectedSnippet() {
+        secureDemoteStrip.isHidden = true
+        guard let snippet = selectedSnippet,
+              let app = NSApp.delegate as? AppDelegate,
+              store.isSecure(snippet.id) else { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await app.vaultSession.unlock(
+                    reason: "Make \u{201C}\(snippet.displayName)\u{201D} an ordinary snippet")
+                try app.secureStore.demote(recordID: snippet.id)
+                importExportMessage = "\(snippet.displayName) is an ordinary snippet again."
+                selectedSnippetID = snippet.id
+                reloadVisibleSnippets(keepSelection: true)
+                applySelectedSnippetToEditor()
+            } catch {
+                importExportMessage = "Couldn\u{2019}t make that ordinary: \(error). Nothing was changed."
+                applySelectedSnippetToEditor()
+            }
+            closeActionPanel()
+        }
+    }
+
+}
+
+/// A new recovery key is committed only after this returns true. The text field is
+/// selectable so a user can move it into a password manager, but Snippets never copies
+/// it to the pasteboard on their behalf where a clipboard manager would capture it.
+@MainActor
+func presentRecoveryKeyForSaving(_ recoveryKey: String) -> Bool {
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "Save your recovery key"
+    alert.informativeText =
+        "This is the only way to restore secure snippets if the Keychain item is lost. "
+        + "Write it down or save it in a password manager. Snippets will not show it again."
+
+    let field = NSTextField(labelWithString: recoveryKey)
+    field.font = .monospacedSystemFont(ofSize: 15, weight: .semibold)
+    field.alignment = .center
+    field.isSelectable = true
+    field.lineBreakMode = .byClipping
+    field.frame = NSRect(x: 0, y: 0, width: 430, height: 28)
+    alert.accessoryView = field
+    alert.addButton(withTitle: "I’ve Saved It")
+    alert.addButton(withTitle: "Cancel Setup")
+    return alert.runModal() == .alertFirstButtonReturn
 }

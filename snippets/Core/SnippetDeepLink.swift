@@ -1,11 +1,16 @@
 import Foundation
 
-enum SnippetDeepLinkError: LocalizedError {
+// Compiled into the app and the test package — see `Snippet.swift`. Lives in `Core/`
+// because it is one of the few paths by which snippet content leaves the machine, so it
+// needs to be reachable by `swift test`.
+
+nonisolated enum SnippetDeepLinkError: LocalizedError {
     case unsupportedURL
     case missingPayload
     case invalidPayload
     case unsupportedVersion
     case cannotEncodePayload
+    case secureSnippetNotShareable
 
     var errorDescription: String? {
         switch self {
@@ -19,11 +24,13 @@ enum SnippetDeepLinkError: LocalizedError {
             return "This share link was created by a newer version of Snippets."
         case .cannotEncodePayload:
             return "Could not create a share link for this snippet."
+        case .secureSnippetNotShareable:
+            return "Secure snippets cannot be shared. A share link carries the snippet's text in plain sight."
         }
     }
 }
 
-enum SnippetDeepLink {
+nonisolated enum SnippetDeepLink {
     static let scheme = "snippets"
 
     private static let host = "share"
@@ -60,7 +67,20 @@ enum SnippetDeepLink {
         return url.host?.lowercased() == creationHost
     }
 
-    static func url(for snippet: Snippet) throws -> URL {
+    /// Builds a share link.
+    ///
+    /// - Parameter isSecure: whether this snippet lives in the vault. **Required, with
+    ///   no default.** A share link is a plaintext payload in a URL that ends up on the
+    ///   pasteboard, in a chat window, and in shell history — the single worst place a
+    ///   secret could go. Making the caller state this turns "someone forgot the check"
+    ///   into a compile error. Belt and braces: a secure snippet reaching here carries
+    ///   `content == ""` anyway, because the vault only ever hands out shells.
+    static func url(for snippet: Snippet, isSecure: Bool) throws -> URL {
+        guard !isSecure else { throw SnippetDeepLinkError.secureSnippetNotShareable }
+        return try unsafeURL(for: snippet)
+    }
+
+    private static func unsafeURL(for snippet: Snippet) throws -> URL {
         let payload = Payload(
             version: currentVersion,
             name: snippet.name,

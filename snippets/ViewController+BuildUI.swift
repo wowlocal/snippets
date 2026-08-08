@@ -710,6 +710,51 @@ extension ViewController {
         nameField.placeholderString = EditorCopy.namePlaceholderFallback
         nameField.controlSize = .large
 
+        let snippetLabel = NSTextField(labelWithString: "Snippet")
+        snippetLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        snippetLabel.textColor = .secondaryLabelColor
+        snippetLabel.alignment = .left
+
+        // The lock lives on the section header, beside the word "Snippet", because that
+        // is the thing it applies to. Reaching it through a menu was two clicks and a
+        // modal for a state that is really just a property of the snippet.
+        secureLockToggle.bezelStyle = .accessoryBarAction
+        secureLockToggle.isBordered = false
+        secureLockToggle.setButtonType(.toggle)
+        secureLockToggle.imagePosition = .imageOnly
+        secureLockToggle.image = NSImage(systemSymbolName: "lock", accessibilityDescription: "Make secure")
+        secureLockToggle.alternateImage = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Secure")
+        secureLockToggle.contentTintColor = .secondaryLabelColor
+        secureLockToggle.target = self
+        secureLockToggle.action = #selector(toggleSelectedSnippetSecurity)
+        secureLockToggle.keyEquivalent = "l"
+        secureLockToggle.keyEquivalentModifierMask = [.control, .command]
+
+        let snippetHeaderRow = NSStackView(views: [snippetLabel, NSView(), secureLockToggle])
+        snippetHeaderRow.orientation = .horizontal
+        snippetHeaderRow.alignment = .centerY
+        snippetHeaderRow.spacing = 6
+
+        secureCaptionLabel.font = .systemFont(ofSize: 11)
+        secureCaptionLabel.textColor = .tertiaryLabelColor
+        secureCaptionLabel.isHidden = true
+
+        secureDemoteLabel.font = .systemFont(ofSize: 12)
+        secureDemoteLabel.textColor = .labelColor
+        let demoteConfirm = NSButton(
+            title: "Make Ordinary", target: self, action: #selector(confirmDemoteSelectedSnippet))
+        demoteConfirm.bezelStyle = NSButton.BezelStyle.rounded
+        demoteConfirm.hasDestructiveAction = true
+        let demoteCancel = NSButton(
+            title: "Cancel", target: self, action: #selector(cancelDemoteConfirmation))
+        demoteCancel.bezelStyle = NSButton.BezelStyle.rounded
+        demoteCancel.keyEquivalent = "\u{1b}"
+        secureDemoteStrip.orientation = .horizontal
+        secureDemoteStrip.alignment = .centerY
+        secureDemoteStrip.spacing = 8
+        secureDemoteStrip.setViews([secureDemoteLabel, NSView(), demoteCancel, demoteConfirm], in: .leading)
+        secureDemoteStrip.isHidden = true
+
         let snippetContainer = NSView()
         snippetContainer.translatesAutoresizingMaskIntoConstraints = false
         configureEditorSurface(snippetContainer, backgroundColor: .textBackgroundColor)
@@ -752,6 +797,46 @@ extension ViewController {
 
         snippetScrollView.documentView = snippetTextView
         snippetContainer.addSubview(snippetScrollView)
+
+        // Above the scroll view, filling the container. A full-bleed transparent button
+        // sits behind the label so a click anywhere on the area unlocks — matching what
+        // people instinctively do, which is click where the text should be.
+        secureLockOverlay.translatesAutoresizingMaskIntoConstraints = false
+        secureLockOverlay.wantsLayer = true
+        secureLockOverlay.isHidden = true
+
+        secureLockOverlayButton.title = ""
+        secureLockOverlayButton.isBordered = false
+        secureLockOverlayButton.bezelStyle = .shadowlessSquare
+        secureLockOverlayButton.target = self
+        secureLockOverlayButton.action = #selector(unlockFromEditorOverlay)
+        secureLockOverlayButton.translatesAutoresizingMaskIntoConstraints = false
+
+        secureLockOverlayLabel.font = .systemFont(ofSize: 13)
+        secureLockOverlayLabel.textColor = .secondaryLabelColor
+        secureLockOverlayLabel.alignment = .center
+        secureLockOverlayLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        secureLockOverlay.addSubview(secureLockOverlayButton)
+        secureLockOverlay.addSubview(secureLockOverlayLabel)
+        snippetContainer.addSubview(secureLockOverlay)
+
+        NSLayoutConstraint.activate([
+            secureLockOverlay.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
+            secureLockOverlay.trailingAnchor.constraint(equalTo: snippetContainer.trailingAnchor),
+            secureLockOverlay.topAnchor.constraint(equalTo: snippetContainer.topAnchor),
+            secureLockOverlay.bottomAnchor.constraint(equalTo: snippetContainer.bottomAnchor),
+            secureLockOverlayButton.leadingAnchor.constraint(equalTo: secureLockOverlay.leadingAnchor),
+            secureLockOverlayButton.trailingAnchor.constraint(equalTo: secureLockOverlay.trailingAnchor),
+            secureLockOverlayButton.topAnchor.constraint(equalTo: secureLockOverlay.topAnchor),
+            secureLockOverlayButton.bottomAnchor.constraint(equalTo: secureLockOverlay.bottomAnchor),
+            secureLockOverlayLabel.centerYAnchor.constraint(equalTo: secureLockOverlay.centerYAnchor),
+            secureLockOverlayLabel.leadingAnchor.constraint(
+                equalTo: secureLockOverlay.leadingAnchor, constant: 20),
+            secureLockOverlayLabel.trailingAnchor.constraint(
+                equalTo: secureLockOverlay.trailingAnchor, constant: -20),
+        ])
+
         // Two floors, not one. The hard floor is what the box may never go below
         // at any window size; the preferred floor is what it asks for when there
         // is room, and is the first thing in the whole editor that the layout
@@ -857,11 +942,19 @@ extension ViewController {
         // Keyword, Name, Tags must stay in this order: `editorNeighbor` in
         // ViewController+TextEditing.swift is a hand-wired tab loop that walks
         // exactly this sequence.
+        // The lock is part of the Snippet header, so this section supplies its
+        // own header row rather than asking EditorFormSection to make a label.
         let snippetSection = EditorFormSection(
-            title: "Snippet",
-            fields: [snippetContainer],
-            labelSpacing: 10
+            title: nil,
+            fields: [
+                snippetHeaderRow,
+                snippetContainer,
+                secureCaptionLabel,
+                secureDemoteStrip,
+            ],
+            fieldSpacing: 8
         )
+        snippetSection.fieldColumn.setCustomSpacing(10, after: snippetHeaderRow)
         // Reuses the stack the controller already holds, so `updatePreview` goes
         // on hiding one view and now collapses the label with it.
         let previewSection = EditorFormSection(

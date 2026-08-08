@@ -26,6 +26,7 @@ private enum SnippetInjectionGateTests {
     static func main() {
         testSyntheticTag()
         testRefusal()
+        testApplicationActivationInvalidation()
         testInputDisposition()
         print("SnippetInjectionGate tests passed")
     }
@@ -67,6 +68,8 @@ private enum SnippetInjectionGateTests {
         assertEqual(
             SnippetInjectionGate.refusal(
                 secureEventInputEnabled: true,
+                isSecureSnippet: true,
+                secureSnippetIsAuthenticated: false,
                 isListening: false,
                 ownAppIsFrontmost: true,
                 deleteCount: 0
@@ -77,6 +80,8 @@ private enum SnippetInjectionGateTests {
         assertEqual(
             SnippetInjectionGate.refusal(
                 secureEventInputEnabled: true,
+                isSecureSnippet: false,
+                secureSnippetIsAuthenticated: false,
                 isListening: true,
                 ownAppIsFrontmost: false,
                 deleteCount: 6
@@ -87,6 +92,32 @@ private enum SnippetInjectionGateTests {
         assertEqual(
             SnippetInjectionGate.refusal(
                 secureEventInputEnabled: false,
+                isSecureSnippet: true,
+                secureSnippetIsAuthenticated: false,
+                isListening: true,
+                ownAppIsFrontmost: false,
+                deleteCount: 6
+            ),
+            .secureSnippetRequiresAuthentication,
+            "a secure display shell is refused before any trigger deletion"
+        )
+        assertEqual(
+            SnippetInjectionGate.refusal(
+                secureEventInputEnabled: false,
+                isSecureSnippet: true,
+                secureSnippetIsAuthenticated: true,
+                isListening: true,
+                ownAppIsFrontmost: false,
+                deleteCount: 6
+            ),
+            nil,
+            "an explicitly authenticated secure expansion is allowed"
+        )
+        assertEqual(
+            SnippetInjectionGate.refusal(
+                secureEventInputEnabled: false,
+                isSecureSnippet: false,
+                secureSnippetIsAuthenticated: false,
                 isListening: true,
                 ownAppIsFrontmost: false,
                 deleteCount: 0
@@ -97,6 +128,8 @@ private enum SnippetInjectionGateTests {
         assertEqual(
             SnippetInjectionGate.refusal(
                 secureEventInputEnabled: false,
+                isSecureSnippet: false,
+                secureSnippetIsAuthenticated: false,
                 isListening: true,
                 ownAppIsFrontmost: true,
                 deleteCount: 6
@@ -107,6 +140,8 @@ private enum SnippetInjectionGateTests {
         assertEqual(
             SnippetInjectionGate.refusal(
                 secureEventInputEnabled: false,
+                isSecureSnippet: false,
+                secureSnippetIsAuthenticated: false,
                 isListening: true,
                 ownAppIsFrontmost: false,
                 deleteCount: 6
@@ -150,6 +185,30 @@ private enum SnippetInjectionGateTests {
             ),
             .resetAndPassThrough,
             "secure input drops state without suppressing the key"
+        )
+        assertEqual(
+            SnippetInjectionGate.inputDisposition(
+                origin: .user,
+                secureEventInputEnabled: true,
+                isListening: true,
+                isInjecting: true,
+                ownAppIsFrontmost: false,
+                isAuthenticatingSecureSuggestion: true
+            ),
+            .ignore,
+            "password fallback passes through without invalidating its saved target"
+        )
+        assertEqual(
+            SnippetInjectionGate.inputDisposition(
+                origin: .user,
+                secureEventInputEnabled: false,
+                isListening: true,
+                isInjecting: true,
+                ownAppIsFrontmost: true,
+                isAuthenticatingSecureSuggestion: true
+            ),
+            .ignore,
+            "authentication-sheet typing is never collected as a snippet query"
         )
         assertEqual(
             SnippetInjectionGate.inputDisposition(
@@ -205,6 +264,92 @@ private enum SnippetInjectionGateTests {
             ),
             .process,
             "ordinary typing is processed"
+        )
+    }
+
+    private static func testApplicationActivationInvalidation() {
+        let own: Int32 = 10
+        let target: Int32 = 20
+
+        assertTrue(
+            !SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: own,
+                ownPID: own,
+                secureAuthenticationTargetPID: target,
+                secureEventInputEnabled: true),
+            "our Touch ID activation does not invalidate its own pending expansion"
+        )
+        assertTrue(
+            !SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: target,
+                ownPID: own,
+                secureAuthenticationTargetPID: target,
+                secureEventInputEnabled: false),
+            "returning focus to the authenticated target is expected"
+        )
+        assertTrue(
+            !SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: 30,
+                currentFrontmostPID: target,
+                ownPID: own,
+                secureAuthenticationTargetPID: nil,
+                secureExpansionTargetPID: target,
+                secureEventInputEnabled: false),
+            "a stale authentication activation cannot cancel insertion into the still-frontmost target"
+        )
+        assertTrue(
+            SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: 30,
+                currentFrontmostPID: 30,
+                ownPID: own,
+                secureAuthenticationTargetPID: nil,
+                secureExpansionTargetPID: target,
+                secureEventInputEnabled: false),
+            "a real switch away from the restored target still cancels insertion"
+        )
+        assertTrue(
+            !SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: target,
+                currentFrontmostPID: nil,
+                ownPID: own,
+                secureAuthenticationTargetPID: nil,
+                secureExpansionTargetPID: target,
+                secureEventInputEnabled: false),
+            "the notification PID remains a fallback when frontmost state is unavailable"
+        )
+        assertTrue(
+            !SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: 30,
+                ownPID: own,
+                secureAuthenticationTargetPID: target,
+                secureEventInputEnabled: false),
+            "authentication implementation processes do not invalidate the saved target"
+        )
+        assertTrue(
+            SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: 30,
+                ownPID: own,
+                secureAuthenticationTargetPID: nil,
+                secureEventInputEnabled: true),
+            "unrelated secure input still tears down an ordinary suggestion"
+        )
+        assertTrue(
+            !SnippetInjectionGate.applicationActivationInvalidatesContext(
+                activatedPID: own,
+                ownPID: own,
+                secureAuthenticationTargetPID: nil,
+                secureEventInputEnabled: false),
+            "our nonactivating suggestion UI does not invalidate its own session"
+        )
+        assertTrue(
+            !SnippetInjectionGate.pointerInteractionInvalidatesContext(
+                secureAuthenticationTargetPID: target),
+            "clicking Use Password belongs to the pending authentication flow"
+        )
+        assertTrue(
+            SnippetInjectionGate.pointerInteractionInvalidatesContext(
+                secureAuthenticationTargetPID: nil),
+            "an ordinary global click still invalidates its caret snapshot"
         )
     }
 }

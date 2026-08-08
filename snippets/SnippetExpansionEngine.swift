@@ -4,6 +4,11 @@ import Foundation
 
 @MainActor
 final class SnippetExpansionEngine {
+    typealias SecureSnippetContentResolver = @MainActor (
+        _ snippet: Snippet,
+        _ authenticationReason: String
+    ) async throws -> SecurePlaintextLease
+
     private(set) var accessibilityGranted = false { didSet { onStateChange?() } }
     private(set) var listening = false
     private(set) var lastExpansionName: String? { didSet { onStateChange?() } }
@@ -18,6 +23,11 @@ final class SnippetExpansionEngine {
     static let accessibilityRequiredStatus = "Snippets needs Accessibility access to expand keywords."
 
     var onStateChange: (() -> Void)?
+    /// Supplied by the app layer so this engine can request one decrypted record without
+    /// learning how the vault key is stored. The lease carries bytes rather than a
+    /// `String`, and a secure shell never reaches injection unless this resolver returns
+    /// after explicit authentication.
+    var secureSnippetContentResolver: SecureSnippetContentResolver?
 
     private let store: SnippetStore
     private let usage: SnippetUsageStore
@@ -49,6 +59,14 @@ final class SnippetExpansionEngine {
     private var suggestionLocalFallbackUsable = false
     private var suggestionHasSyncedAXContext = false
     private var suggestionSyncGeneration = 0
+    /// Non-nil only while LocalAuthentication is servicing an explicit secure
+    /// suggestion. Its own activation/secure-input transitions must not invalidate
+    /// the target we are about to restore and re-check.
+    private var secureSuggestionAuthenticationTargetPID: pid_t?
+    /// Survives the prompt itself until the authenticated insertion finishes. NSWorkspace
+    /// sometimes delivers the restored target's activation notification late; only
+    /// that exact PID gets this grace, while activating any other app still cancels.
+    private var secureExpansionActivationTargetPID: pid_t?
     /// Frozen for the lifetime of one suggestion session so the three refreshes
     /// per keystroke cannot reshuffle rows under the user's fingers.
     private var suggestionFrecency: FrecencySnapshot = .empty
@@ -61,6 +79,17 @@ final class SnippetExpansionEngine {
     private let suggestionTextSyncDelays: [Duration] = [
         .milliseconds(18),
         .milliseconds(60)
+    ]
+    /// LocalAuthentication can return just before the host regains its focused AX
+    /// element. During this bounded handoff, keep polling; only an exact fresh match
+    /// authorizes deletion, so transient system-UI focus cannot cause a blind write.
+    private let secureSuggestionRevalidationDelays: [Duration] = [
+        .zero,
+        .milliseconds(60),
+        .milliseconds(120),
+        .milliseconds(220),
+        .milliseconds(400),
+        .milliseconds(700)
     ]
     // On macOS some apps drop rapid synthetic key events; keep a small delay
     // between injected keystrokes to ensure trigger deletion is complete.
@@ -96,10 +125,33 @@ final class SnippetExpansionEngine {
         }
     }
 
+    private enum ExpansionAuthorization {
+        case ordinary
+        case authenticatedSecure
+
+        var authenticatesSecureSnippet: Bool { self == .authenticatedSecure }
+        var concealsPasteboard: Bool { self == .authenticatedSecure }
+    }
+
     private enum FocusedTriggerContextRead {
         case found(SuggestionTriggerContext)
         case missingTrigger
         case unavailable
+    }
+
+    private enum SecureDeletionRevalidation {
+        case confirmed(TriggerDeletion)
+        case contextChanged
+        case secureInputDidNotSettle
+        case triggerNotConfirmed
+    }
+
+    /// The exact host control that owned keyboard focus when a secure suggestion was
+    /// accepted. LocalAuthentication can leave the host process frontmost while its
+    /// sheet still owns keyboard focus, so a PID alone is not a safe insertion target.
+    private struct SecureExpansionFocusTarget {
+        let element: AXUIElement
+        let window: AXUIElement?
     }
 
     init(store: SnippetStore, usage: SnippetUsageStore) {
@@ -131,7 +183,11 @@ final class SnippetExpansionEngine {
             globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
             ) { [weak self] _ in
-                self?.resetTypingContext()
+                guard let self,
+                      SnippetInjectionGate.pointerInteractionInvalidatesContext(
+                          secureAuthenticationTargetPID: self.secureSuggestionAuthenticationTargetPID)
+                else { return }
+                self.resetTypingContext()
             }
         }
 
@@ -146,21 +202,20 @@ final class SnippetExpansionEngine {
                 // Delivered on the main queue, so the isolation is real rather than assumed away.
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    // Secure input often comes up during an activation we would otherwise ignore, and
-                    // once it is on no further key events reach us to notice it.
-                    if self.secureEventInputEnabled {
+                    let activatedPID = (
+                        notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                            as? NSRunningApplication
+                    )?.processIdentifier
+                    if SnippetInjectionGate.applicationActivationInvalidatesContext(
+                        activatedPID: activatedPID,
+                        currentFrontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                        ownPID: ProcessInfo.processInfo.processIdentifier,
+                        secureAuthenticationTargetPID: self.secureSuggestionAuthenticationTargetPID,
+                        secureExpansionTargetPID: self.secureExpansionActivationTargetPID,
+                        secureEventInputEnabled: self.secureEventInputEnabled
+                    ) {
                         self.resetTypingContext()
-                        return
                     }
-                    // Ignore our own activation: interacting with the (non-
-                    // activating) suggestion panel must not tear down the session
-                    // that drives it; `handle(event:)` already resets state when
-                    // this app is frontmost.
-                    if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                       app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
-                        return
-                    }
-                    self.resetTypingContext()
                 }
             }
         }
@@ -383,17 +438,23 @@ final class SnippetExpansionEngine {
     @discardableResult
     private func handle(event: NSEvent, eventUserData: Int64?) -> Bool {
         let origin = SnippetSyntheticEvent.origin(eventUserData: eventUserData)
+        let isAuthenticatingSecureSuggestion = secureSuggestionAuthenticationTargetPID != nil
         switch SnippetInjectionGate.inputDisposition(
             origin: origin,
             secureEventInputEnabled: secureEventInputEnabled,
             isListening: listening,
             isInjecting: isInjecting,
-            ownAppIsFrontmost: frontmostProcessIsThisApp()
+            ownAppIsFrontmost: frontmostProcessIsThisApp(),
+            isAuthenticatingSecureSuggestion: isAuthenticatingSecureSuggestion
         ) {
         case .ignore:
             // Real typing during an injection moves the text our queued delete counts were measured
-            // against, so they must not be applied afterwards.
-            if origin == .user, isInjecting { injectionContextGeneration &+= 1 }
+            // against, so they must not be applied afterwards. LocalAuthentication's
+            // password events are the exception: they never reached the target, and
+            // that target plus its exact trigger are revalidated after the prompt.
+            if origin == .user, isInjecting, !isAuthenticatingSecureSuggestion {
+                injectionContextGeneration &+= 1
+            }
             return false
         case .resetAndPassThrough:
             resetTypingContext()
@@ -558,6 +619,11 @@ final class SnippetExpansionEngine {
         let localQuery = suggestionQuery
         let localFallbackUsable = suggestionLocalFallbackUsable
         let hadSyncedAXContext = suggestionHasSyncedAXContext
+        let acceptedGeneration = injectionContextGeneration
+        let acceptedTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let acceptedFocusTarget = store.isSecure(snippet.id)
+            ? captureSecureExpansionFocusTarget(targetPID: acceptedTargetPID)
+            : nil
 
         // Captured before `dismissSuggestions()` clears the query. Only an
         // explicit accept teaches selection memory; auto-expansions never do.
@@ -622,10 +688,225 @@ final class SnippetExpansionEngine {
                 self.endInjection()
                 return
             }
-            // Enqueue before releasing our own hold, so user input stays ignored across the handover.
-            self.enqueueExpansion(of: snippet, deletion: deletion)
+            if self.store.isSecure(snippet.id) {
+                await self.authenticateAndPerformSecureExpansion(
+                    shell: snippet,
+                    query: localQuery,
+                    acceptedGeneration: acceptedGeneration,
+                    acceptedTargetPID: acceptedTargetPID,
+                    acceptedFocusTarget: acceptedFocusTarget)
+            } else {
+                self.enqueueExpansion(of: snippet, deletion: deletion)
+            }
             self.endInjection()
         }
+    }
+
+    /// Turns a content-free secure shell into a one-use expansion only after the user
+    /// authenticates. The prompt can remain open for seconds, so the pre-prompt delete
+    /// count is never reused: the original app, focused control, generation, and exact
+    /// trigger are all checked again before plaintext is converted to a String or inserted.
+    private func authenticateAndPerformSecureExpansion(
+        shell: Snippet,
+        query: String,
+        acceptedGeneration: UInt,
+        acceptedTargetPID: pid_t?,
+        acceptedFocusTarget: SecureExpansionFocusTarget?
+    ) async {
+        guard let resolver = secureSnippetContentResolver else {
+            pendingSelectionMemoryQuery = nil
+            statusText = "Secure expansion is not configured."
+            return
+        }
+        guard let targetPID = acceptedTargetPID,
+              let focusTarget = acceptedFocusTarget,
+              targetPID != ProcessInfo.processInfo.processIdentifier,
+              acceptedGeneration == injectionContextGeneration,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID,
+              currentFocusMatches(focusTarget.element)
+        else {
+            pendingSelectionMemoryQuery = nil
+            statusText = "Skipped \(shell.displayName): the original input field is no longer focused."
+            return
+        }
+
+        let targetName = NSRunningApplication(processIdentifier: targetPID)?.localizedName
+            ?? "the current app"
+        let reason = "Insert \u{201C}\(shell.displayName)\u{201D} into \(targetName)"
+        statusText = "Waiting for authentication to expand \(shell.displayName)\u{2026}"
+        secureSuggestionAuthenticationTargetPID = targetPID
+        secureExpansionActivationTargetPID = targetPID
+        defer {
+            if secureSuggestionAuthenticationTargetPID == targetPID {
+                secureSuggestionAuthenticationTargetPID = nil
+            }
+            if secureExpansionActivationTargetPID == targetPID {
+                secureExpansionActivationTargetPID = nil
+            }
+        }
+
+        let plaintext: SecurePlaintextLease
+        do {
+            plaintext = try await resolver(shell, reason)
+        } catch {
+            pendingSelectionMemoryQuery = nil
+            statusText = "Could not expand \(shell.displayName): \(error)"
+            return
+        }
+        defer { plaintext.wipe() }
+
+        guard await restoreSecureExpansionTarget(
+            targetPID: targetPID,
+            acceptedGeneration: acceptedGeneration,
+            focusTarget: focusTarget)
+        else {
+            pendingSelectionMemoryQuery = nil
+            statusText = "Skipped \(shell.displayName): Snippets could not restore the original input field after authentication."
+            return
+        }
+
+        let revalidation = await confirmedSecureDeletionAfterAuthentication(
+            query: query,
+            acceptedGeneration: acceptedGeneration,
+            targetPID: targetPID,
+            focusTarget: focusTarget)
+        let deletion: TriggerDeletion
+        switch revalidation {
+        case .confirmed(let confirmed):
+            deletion = confirmed
+        case .contextChanged:
+            pendingSelectionMemoryQuery = nil
+            statusText = "Skipped \(shell.displayName): the target app changed during authentication."
+            return
+        case .secureInputDidNotSettle:
+            pendingSelectionMemoryQuery = nil
+            statusText = "Skipped \(shell.displayName): macOS did not release secure keyboard entry."
+            return
+        case .triggerNotConfirmed:
+            pendingSelectionMemoryQuery = nil
+            statusText = "Skipped \(shell.displayName): the original trigger was no longer at the cursor."
+            return
+        }
+
+        // Password/Touch ID input is over, so real user input must invalidate the
+        // freshly confirmed trigger again. The activation grace remains until the
+        // direct insertion finishes, but applies only while this exact target is still
+        // genuinely frontmost.
+        if secureSuggestionAuthenticationTargetPID == targetPID {
+            secureSuggestionAuthenticationTargetPID = nil
+        }
+
+        let refusal = SnippetInjectionGate.refusal(
+            secureEventInputEnabled: secureEventInputEnabled,
+            isSecureSnippet: store.isSecure(shell.id),
+            secureSnippetIsAuthenticated: true,
+            isListening: listening,
+            ownAppIsFrontmost: frontmostProcessIsThisApp(),
+            deleteCount: deletion.characterCount)
+        guard deletion.isSelfConsistent,
+              store.isSecure(shell.id),
+              refusal == nil
+        else {
+            pendingSelectionMemoryQuery = nil
+            statusText = "Skipped \(shell.displayName): secure insertion was no longer available."
+            return
+        }
+
+        // We already hold the outer `beginInjection()` from accepting the suggestion.
+        // Running directly removes the task-queue handoff that let a delayed workspace
+        // notification invalidate every other otherwise-valid Touch ID expansion.
+        await performExpansion(
+            of: shell,
+            deletion: deletion,
+            bindingQuery: consumePendingSelectionMemoryQuery(),
+            generation: acceptedGeneration,
+            targetPID: targetPID,
+            authorization: .authenticatedSecure,
+            securePlaintext: plaintext,
+            secureFocusTarget: focusTarget)
+    }
+
+    private func restoreSecureExpansionTarget(
+        targetPID: pid_t,
+        acceptedGeneration: UInt,
+        focusTarget: SecureExpansionFocusTarget
+    ) async -> Bool {
+        guard acceptedGeneration == injectionContextGeneration,
+              listening,
+              let target = NSRunningApplication(processIdentifier: targetPID),
+              !target.isTerminated
+        else { return false }
+
+        // Do this even when the target already reports as frontmost. The LocalAuthentication
+        // sheet can disappear from NSWorkspace first and keep the real keyboard focus for a
+        // little longer; activation plus an explicit AX focus write closes that race.
+        _ = target.activate()
+        var consecutiveFocusConfirmations = 0
+        for delay in [
+            Duration.milliseconds(80),
+            .milliseconds(100),
+            .milliseconds(160),
+            .milliseconds(300),
+            .milliseconds(500),
+            .milliseconds(500)
+        ] {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled,
+                  acceptedGeneration == injectionContextGeneration,
+                  listening
+            else { return false }
+
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
+                _ = target.activate()
+                continue
+            }
+
+            _ = target.activate()
+            if restoreKeyboardFocus(to: focusTarget, targetPID: targetPID) {
+                // The authentication agent and the host can briefly disagree about
+                // who owns keyboard focus while the sheet animates away. Require the
+                // same system-wide answer twice, separated by a real run-loop turn.
+                consecutiveFocusConfirmations += 1
+                if consecutiveFocusConfirmations >= 2 { return true }
+            } else {
+                consecutiveFocusConfirmations = 0
+            }
+        }
+        return false
+    }
+
+    private func confirmedSecureDeletionAfterAuthentication(
+        query: String,
+        acceptedGeneration: UInt,
+        targetPID: pid_t,
+        focusTarget: SecureExpansionFocusTarget
+    ) async -> SecureDeletionRevalidation {
+        for delay in secureSuggestionRevalidationDelays {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled,
+                  acceptedGeneration == injectionContextGeneration,
+                  listening,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
+            else { return .contextChanged }
+
+            // LocalAuthentication can release its sheet a fraction before Secure Event
+            // Input and the focused AX element settle. During this bounded handoff even
+            // a readable mismatch can belong to the disappearing system UI. Nothing is
+            // authorized until a later read proves the exact original trigger again.
+            if secureEventInputEnabled { continue }
+            guard restoreKeyboardFocus(to: focusTarget, targetPID: targetPID) else {
+                continue
+            }
+            switch readAcceptContext(matchingQuery: query) {
+            case .confirmed(let context):
+                return .confirmed(.confirmed(context))
+            case .unavailable, .mismatch, .missingTrigger:
+                continue
+            case .unsafe:
+                return .triggerNotConfirmed
+            }
+        }
+        return secureEventInputEnabled ? .secureInputDidNotSettle : .triggerNotConfirmed
     }
 
     private func dismissSuggestions() {
@@ -991,6 +1272,7 @@ final class SnippetExpansionEngine {
                 .map {
                     SuggestionItem(
                         snippet: $0.element,
+                        isSecure: store.isSecure($0.element.id),
                         score: 0,
                         frecency: suggestionFrecency.value(for: $0.element.id)
                     )
@@ -1007,6 +1289,7 @@ final class SnippetExpansionEngine {
                 guard matched else { return nil }
                 return SuggestionItem(
                     snippet: snippet,
+                    isSecure: store.isSecure(snippet.id),
                     score: best,
                     nameMatchRanges: nameResult.matchedRanges,
                     keywordMatchRanges: keywordResult.matchedRanges,
@@ -1134,37 +1417,71 @@ final class SnippetExpansionEngine {
 
     /// The one place an expansion is scheduled. Callers stay synchronous — a tap callback has to
     /// return its suppress decision immediately — while delivery runs on the queue afterwards.
-    private func enqueueExpansion(of snippet: Snippet, deletion: TriggerDeletion) {
+    private func enqueueExpansion(
+        of snippet: Snippet,
+        deletion: TriggerDeletion,
+        authorization: ExpansionAuthorization = .ordinary,
+        expectedGeneration: UInt? = nil,
+        expectedTargetPID: pid_t? = nil,
+        securePlaintext: SecurePlaintextLease? = nil
+    ) {
         // Consumed on every attempt, recorded only on the ones that commit.
         let bindingQuery = consumePendingSelectionMemoryQuery()
-        guard deletion.isSelfConsistent,
-              SnippetInjectionGate.refusal(
-                  secureEventInputEnabled: secureEventInputEnabled,
-                  isListening: listening,
-                  ownAppIsFrontmost: frontmostProcessIsThisApp(),
-                  deleteCount: deletion.characterCount
-              ) == nil
-        else { return }
+        let isSecureSnippet = store.isSecure(snippet.id)
+        let refusal = SnippetInjectionGate.refusal(
+            secureEventInputEnabled: secureEventInputEnabled,
+            isSecureSnippet: isSecureSnippet,
+            secureSnippetIsAuthenticated: authorization.authenticatesSecureSnippet,
+            isListening: listening,
+            ownAppIsFrontmost: frontmostProcessIsThisApp(),
+            deleteCount: deletion.characterCount)
+        let payloadMatchesAuthorization = authorization.authenticatesSecureSnippet
+            ? (isSecureSnippet && securePlaintext != nil)
+            : securePlaintext == nil
+        guard deletion.isSelfConsistent, refusal == nil, payloadMatchesAuthorization else {
+            securePlaintext?.wipe()
+            if authorization.authenticatesSecureSnippet,
+               secureExpansionActivationTargetPID == expectedTargetPID {
+                secureExpansionActivationTargetPID = nil
+            }
+            if refusal == .secureSnippetRequiresAuthentication {
+                statusText = "Secure snippets never expand automatically. Choose one in suggestions to authenticate."
+            }
+            return
+        }
 
-        let generation = injectionContextGeneration
-        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let generation = expectedGeneration ?? injectionContextGeneration
+        let targetPID = expectedTargetPID
+            ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         // An expansion still waiting its turn was measured against text the one now starting is
         // about to rewrite. Cancelling is a no-op once a unit is past its start check.
         injectionQueue.cancelAutomatic()
         // Raised synchronously, so a key arriving before the unit starts is already ignored.
         beginInjection()
-        injectionQueue.enqueue(isAutomatic: true) { [weak self] in
+        injectionQueue.enqueue(isAutomatic: true) { [weak self, securePlaintext] in
+            // Covers cancellation before `performExpansion` starts as well as every
+            // early return inside it. `wipe()` is intentionally idempotent.
+            defer { securePlaintext?.wipe() }
             guard let self else { return }
             // Paired with the `beginInjection()` above, and released on every exit — a stranded
             // count would leave user input ignored until the app restarts.
-            defer { self.endInjection() }
+            defer {
+                if authorization.authenticatesSecureSnippet,
+                   self.secureExpansionActivationTargetPID == targetPID {
+                    self.secureExpansionActivationTargetPID = nil
+                }
+                self.endInjection()
+            }
             guard !Task.isCancelled else { return }
             await self.performExpansion(
                 of: snippet,
                 deletion: deletion,
                 bindingQuery: bindingQuery,
                 generation: generation,
-                targetPID: targetPID
+                targetPID: targetPID,
+                authorization: authorization,
+                securePlaintext: securePlaintext,
+                secureFocusTarget: nil
             )
         }
     }
@@ -1174,14 +1491,62 @@ final class SnippetExpansionEngine {
         deletion: TriggerDeletion,
         bindingQuery: String?,
         generation: UInt,
-        targetPID: pid_t?
+        targetPID: pid_t?,
+        authorization: ExpansionAuthorization,
+        securePlaintext: SecurePlaintextLease?,
+        secureFocusTarget: SecureExpansionFocusTarget?
     ) async {
-        guard injectionIsAllowed(generation: generation, targetPID: targetPID) else { return }
+        // Defense in depth for any future caller that bypasses the queue wrapper.
+        defer { securePlaintext?.wipe() }
+        if let block = injectionBlockDescription(generation: generation, targetPID: targetPID) {
+            if authorization.authenticatesSecureSnippet {
+                statusText = "Skipped \(snippet.displayName): \(block)."
+            }
+            return
+        }
+        if let secureFocusTarget,
+           !restoreKeyboardFocus(to: secureFocusTarget, targetPID: targetPID) {
+            statusText = "Skipped \(snippet.displayName): the original input field did not regain keyboard focus."
+            return
+        }
         // `{clipboard}` has to see the user's clipboard, never a snippet we are still holding.
         finishPendingPasteboardOwnership()
-        let resolvedText = PlaceholderResolver.resolve(template: snippet.content)
 
-        let replacement = replaceUsingAccessibility(deletion: deletion, with: resolvedText)
+        var resolvedText: String
+        if let securePlaintext {
+            guard let text = resolvedSecureText(consuming: securePlaintext) else {
+                statusText = "Could not expand \(snippet.displayName): its secure content is not valid UTF-8."
+                return
+            }
+            resolvedText = text
+        } else {
+            resolvedText = PlaceholderResolver.resolve(template: snippet.content)
+        }
+        // Swift strings cannot be securely zeroed. Dropping our last intentional
+        // reference at the narrowest scope is the strongest truthful guarantee here;
+        // the controlled raw-byte lease above has already been explicitly zeroed.
+        defer {
+            if authorization.authenticatesSecureSnippet {
+                resolvedText.removeAll(keepingCapacity: false)
+            }
+        }
+
+        // Nothing to insert, so insert nothing — and crucially, do not delete first.
+        //
+        // Both write paths below start by removing the trigger the user typed. With an
+        // empty replacement every verification downstream passes vacuously, so the
+        // expansion is recorded as a success while the visible result is that the user's
+        // typing silently disappeared. An empty snippet is easy to reach: a draft with no
+        // body yet, or a secure record whose content resolved to nothing.
+        guard !resolvedText.isEmpty else {
+            statusText = "\(snippet.displayName) is empty — nothing to insert. Your text was left as you typed it."
+            return
+        }
+
+        let replacement = replaceUsingAccessibility(
+            deletion: deletion,
+            with: resolvedText,
+            expectedFocusedElement: secureFocusTarget?.element)
         switch AccessibilityReplacementPolicy.action(for: replacement, provenance: deletion.provenance) {
         case .commit:
             recordExpansion(of: snippet, bindingQuery: bindingQuery)
@@ -1198,9 +1563,28 @@ final class SnippetExpansionEngine {
             characterCount: deleteCount,
             with: resolvedText,
             generation: generation,
-            targetPID: targetPID
-        ) else { return }
+            targetPID: targetPID,
+            isConcealed: authorization.concealsPasteboard,
+            expectedFocusedElement: secureFocusTarget?.element
+        ) else {
+            if authorization.authenticatesSecureSnippet {
+                statusText = "Authentication succeeded, but Snippets could not insert \(snippet.displayName)."
+            }
+            return
+        }
         recordExpansion(of: snippet, bindingQuery: bindingQuery)
+    }
+
+    /// Materializes secure bytes only for placeholder resolution, then zeroes the
+    /// controlled buffer before any Accessibility or pasteboard call begins.
+    private func resolvedSecureText(consuming plaintext: SecurePlaintextLease) -> String? {
+        guard var template = plaintext.makeUTF8String() else {
+            plaintext.wipe()
+            return nil
+        }
+        plaintext.wipe()
+        defer { template.removeAll(keepingCapacity: false) }
+        return PlaceholderResolver.resolve(template: template)
     }
 
     /// The single point that means "the host's text changed" — every earlier stage can still abort
@@ -1212,11 +1596,20 @@ final class SnippetExpansionEngine {
     }
 
     private func injectionIsAllowed(generation: UInt, targetPID: pid_t?) -> Bool {
-        guard generation == injectionContextGeneration, listening, !secureEventInputEnabled else {
-            return false
+        injectionBlockDescription(generation: generation, targetPID: targetPID) == nil
+    }
+
+    private func injectionBlockDescription(generation: UInt, targetPID: pid_t?) -> String? {
+        if generation != injectionContextGeneration { return "the input context changed before insertion" }
+        if !listening { return "global expansion stopped before insertion" }
+        if secureEventInputEnabled { return "macOS still had secure keyboard entry enabled" }
+        guard let targetPID else {
+            return frontmostProcessIsThisApp() ? "Snippets itself became the target" : nil
         }
-        guard let targetPID else { return !frontmostProcessIsThisApp() }
-        return NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
+            return "another app became active before insertion"
+        }
+        return nil
     }
 
     /// Process-global: true when *any* process has secure keyboard entry on, not only the frontmost
@@ -1242,7 +1635,8 @@ final class SnippetExpansionEngine {
     /// replaces it have to happen in the same turn, or the proof means nothing.
     private func replaceUsingAccessibility(
         deletion: TriggerDeletion,
-        with replacement: String
+        with replacement: String,
+        expectedFocusedElement: AXUIElement?
     ) -> AccessibilityReplacement {
         guard accessibilityGranted,
               deletion.isSelfConsistent,
@@ -1254,6 +1648,7 @@ final class SnippetExpansionEngine {
               // Only the focused element, never an ancestor: reading from a parent is safe, writing
               // into one is not.
               let element = frontmostFocusedElement(),
+              expectedFocusedElement.map({ CFEqual(element, $0) }) ?? true,
               let caret = selectedRange(of: element),
               caret.location >= 0, caret.length >= 0
         else { return .unavailable }
@@ -1466,17 +1861,25 @@ final class SnippetExpansionEngine {
         characterCount: Int,
         with replacement: String,
         generation: UInt,
-        targetPID: pid_t?
+        targetPID: pid_t?,
+        isConcealed: Bool = false,
+        expectedFocusedElement: AXUIElement? = nil
     ) async -> Bool {
-        guard injectionIsAllowed(generation: generation, targetPID: targetPID) else { return false }
+        guard injectionIsAllowed(generation: generation, targetPID: targetPID),
+              expectedFocusedElement.map(currentFocusMatches) ?? true
+        else { return false }
         // Borrowed before a single character is deleted: a pasteboard we cannot borrow safely must
         // cost the user nothing, and once the trigger is gone "nothing" is no longer on the table.
-        guard beginPasteboardLease(placing: replacement) else { return false }
+        guard beginPasteboardLease(placing: replacement, isConcealed: isConcealed) else {
+            return false
+        }
 
         // Delete trigger text one character at a time with a small delay to avoid
         // dropped synthetic key events in some host apps.
         for index in 0..<characterCount {
-            guard injectionIsAllowed(generation: generation, targetPID: targetPID) else {
+            guard injectionIsAllowed(generation: generation, targetPID: targetPID),
+                  expectedFocusedElement.map(currentFocusMatches) ?? true
+            else {
                 finishPendingPasteboardOwnership()
                 return false
             }
@@ -1493,6 +1896,10 @@ final class SnippetExpansionEngine {
         await settle(for: pasteboardWriteSettleDelay)
 
         guard let lease = activePasteboardLease, lease.isOwned else {
+            finishPendingPasteboardOwnership()
+            return false
+        }
+        guard expectedFocusedElement.map(currentFocusMatches) ?? true else {
             finishPendingPasteboardOwnership()
             return false
         }
@@ -1582,13 +1989,14 @@ final class SnippetExpansionEngine {
         return nil
     }
 
-    private func beginPasteboardLease(placing text: String) -> Bool {
+    private func beginPasteboardLease(placing text: String, isConcealed: Bool = false) -> Bool {
         // A previous lease still held would become this one's "original", losing the user's
         // clipboard for good.
         guard finishPendingPasteboardOwnership() else { return false }
         guard let lease = TemporaryPasteboardLease.begin(
             text: text,
-            pasteboard: NSPasteboard.general
+            pasteboard: NSPasteboard.general,
+            isConcealed: isConcealed
         ) else { return false }
         activePasteboardLease = lease
         return true
@@ -1853,6 +2261,96 @@ final class SnippetExpansionEngine {
             return nil
         }
         return deepestFocusedElement(startingAt: focused, maxDepth: 4)
+    }
+
+    private func captureSecureExpansionFocusTarget(targetPID: pid_t?) -> SecureExpansionFocusTarget? {
+        guard let targetPID,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID,
+              let element = frontmostFocusedElement()
+        else { return nil }
+
+        return SecureExpansionFocusTarget(
+            element: element,
+            window: elementAttribute(of: element, attribute: kAXWindowAttribute as CFString)
+                ?? ancestorWindow(of: element)
+        )
+    }
+
+    /// Reasserts both the host window and its original control. Merely observing the
+    /// application as frontmost is insufficient while a biometric/password sheet is
+    /// handing keyboard ownership back to the host.
+    private func restoreKeyboardFocus(
+        to focusTarget: SecureExpansionFocusTarget,
+        targetPID: pid_t?
+    ) -> Bool {
+        guard let targetPID,
+              !secureEventInputEnabled,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
+        else { return false }
+
+        let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(targetPID))
+        if let window = focusTarget.window {
+            _ = AXUIElementSetAttributeValue(
+                appElement,
+                kAXFocusedWindowAttribute as CFString,
+                window
+            )
+            _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        }
+        _ = AXUIElementSetAttributeValue(
+            focusTarget.element,
+            kAXFocusedAttribute as CFString,
+            kCFBooleanTrue
+        )
+        return currentFocusMatches(focusTarget.element)
+    }
+
+    private func currentFocusMatches(_ expected: AXUIElement) -> Bool {
+        guard let expectedPID = processIdentifier(of: expected),
+              systemWideFocusedApplicationPID() == expectedPID
+        else { return false }
+        guard let current = frontmostFocusedElement() else { return false }
+        return CFEqual(current, expected)
+    }
+
+    /// NSWorkspace's frontmost process can remain the host throughout a system
+    /// authentication sheet. This attribute follows the application that actually
+    /// owns keyboard focus, which is the distinction secure insertion needs.
+    private func systemWideFocusedApplicationPID() -> pid_t? {
+        let systemWide = AXUIElementCreateSystemWide()
+        guard let focusedApplication = elementAttribute(
+            of: systemWide,
+            attribute: kAXFocusedApplicationAttribute as CFString
+        ) else { return nil }
+        return processIdentifier(of: focusedApplication)
+    }
+
+    private func processIdentifier(of element: AXUIElement) -> pid_t? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+        return pid
+    }
+
+    private func ancestorWindow(of element: AXUIElement) -> AXUIElement? {
+        var current = element
+        for _ in 0..<16 {
+            guard let parent = parentElement(of: current) else { return nil }
+            if stringAttribute(of: parent, attribute: kAXRoleAttribute as CFString)
+                == (kAXWindowRole as String) {
+                return parent
+            }
+            current = parent
+        }
+        return nil
+    }
+
+    private func elementAttribute(of element: AXUIElement, attribute: CFString) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        return withBoundedMessagingTimeout(value as! AXUIElement)
     }
 
     /// Applies the engine's bounded messaging timeout to an element we are

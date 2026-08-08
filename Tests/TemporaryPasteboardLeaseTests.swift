@@ -13,7 +13,6 @@ private func assertEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: St
         exit(1)
     }
 }
-
 private func assertTrue(_ condition: Bool, _ message: String) {
     if !condition {
         fputs("FAIL: \(message)\n", stderr)
@@ -35,6 +34,19 @@ private final class FakePasteboard: SnippetPasteboardAccess {
     func clearContents() -> Int {
         changeCount += 1
         items = []
+        lastContentsOptions = nil
+        return changeCount
+    }
+
+    /// Recorded so a test can assert that a concealed write was scoped to this Mac.
+    /// Universal Clipboard would otherwise carry the secret to devices where the
+    /// `ConcealedType` marker means nothing.
+    private(set) var lastContentsOptions: NSPasteboard.ContentsOptions?
+
+    func prepareForNewContents(with options: NSPasteboard.ContentsOptions) -> Int {
+        changeCount += 1
+        items = []
+        lastContentsOptions = options
         return changeCount
     }
 
@@ -76,8 +88,10 @@ private enum TemporaryPasteboardLeaseTests {
         testRestoreIsIdempotent()
         testUnreadablePasteboardIsRefused()
         testFailedWriteRestoresOriginals()
+        testConcealedLeaseMarksOnlyTemporaryItem()
         testEmptyPasteboardUsesRewrite()
         testImageFirstPasteboardUsesRewrite()
+        testConcealedWritesAreScopedToThisHost()
         print("TemporaryPasteboardLease tests passed")
     }
 
@@ -198,6 +212,28 @@ private enum TemporaryPasteboardLeaseTests {
     }
 
     @MainActor
+    private static func testConcealedLeaseMarksOnlyTemporaryItem() {
+        let pasteboard = FakePasteboard()
+        pasteboard.items = [makeItem([(.string, "user text")])]
+        let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+        let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+
+        guard let lease = TemporaryPasteboardLease.begin(
+            text: "secret", pasteboard: pasteboard, isConcealed: true
+        ) else {
+            fputs("FAIL: a secure snippet should still get a pasteboard lease\n", stderr)
+            exit(1)
+        }
+
+        assertTrue(pasteboard.items[0].types.contains(concealed), "secure content is marked concealed")
+        assertTrue(pasteboard.items[0].types.contains(transient), "secure content is marked transient")
+        assertTrue(lease.restoreIfOwned() != .failed, "the concealed lease restores")
+        assertEqual(pasteboard.items[0].string(forType: .string), "user text", "the user's text returns")
+        assertTrue(!pasteboard.items[0].types.contains(concealed), "concealment does not contaminate restored data")
+        assertTrue(!pasteboard.items[0].types.contains(transient), "transience does not contaminate restored data")
+    }
+
+    @MainActor
     private static func testEmptyPasteboardUsesRewrite() {
         let pasteboard = FakePasteboard()
         pasteboard.items = []
@@ -232,4 +268,29 @@ private enum TemporaryPasteboardLeaseTests {
             "the user's image comes back byte for byte"
         )
     }
+
+// MARK: - Concealed writes stay on this Mac
+
+/// A secret on the fallback pasteboard path must not reach Universal Clipboard.
+/// `org.nspasteboard.ConcealedType` is a macOS clipboard-manager convention; an iPhone
+/// receiving the same clipboard has never heard of it, so scoping the write is the only
+/// part of the concealed path that is a control rather than a courtesy.
+    @MainActor
+    private static func testConcealedWritesAreScopedToThisHost() {
+    let pasteboard = FakePasteboard()
+    _ = pasteboard.clearContents()
+
+    _ = TemporaryPasteboardLease.begin(text: "hunter2", pasteboard: pasteboard, isConcealed: true)
+    assertEqual(
+        pasteboard.lastContentsOptions, .currentHostOnly,
+        "a concealed write must be scoped to the current host")
+
+    // And the ordinary path must NOT be scoped — de-scoping the user's own clipboard
+    // would silently break their Universal Clipboard for everything else.
+    let plain = FakePasteboard()
+    _ = plain.clearContents()
+    _ = TemporaryPasteboardLease.begin(text: "ordinary", pasteboard: plain, isConcealed: false)
+    assertEqual(plain.lastContentsOptions, nil, "an ordinary write must not be host-scoped")
+    }
+
 }

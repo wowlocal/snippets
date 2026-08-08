@@ -3,7 +3,7 @@ import Foundation
 // Standalone executable, matching Tests/SuggestionTriggerContextTests.swift.
 // Build and run:
 //
-//   swiftc -O snippets/Snippet.swift snippets/KeywordSuggestions.swift \
+//   swiftc -O snippets/Core/Snippet.swift snippets/KeywordSuggestions.swift \
 //          Tests/KeywordSuggestionsTests.swift -o /tmp/keyword-suggestion-tests \
 //          && /tmp/keyword-suggestion-tests
 

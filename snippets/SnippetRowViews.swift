@@ -184,22 +184,33 @@ final class SnippetRowCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(with snippet: Snippet) {
+    /// - Parameter isSecure: the row belongs to a vault record. Its `content` is empty
+    ///   because the vault hands out shells, so without this the row would render blank
+    ///   and read as an unfinished draft rather than as something deliberately hidden.
+    func configure(with snippet: Snippet, isSecure: Bool = false) {
         status = SnippetRowStatus(snippet)
 
         nameLabel.stringValue = snippet.displayName
         keywordLabel.stringValue = status.keywordText
         keywordLabel.isHidden = false
 
-        // Uncut: the label truncates at the row's own edge, so a count decided
-        // up front would leave the "…" mid-row with empty space after it on any
-        // sidebar wider than the minimum.
-        let preview = snippet.contentFirstLineUntruncated
-        contentPreviewLabel.stringValue = preview
-        // With no name the title above is already this exact line; printing it
-        // twice in one row reads as a rendering bug.
-        let hasName = !snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        contentPreviewLabel.isHidden = preview.isEmpty || !hasName
+        // A secure snippet arrives here as a shell with empty content, which would
+        // otherwise render as a blank row indistinguishable from an unfinished draft.
+        // Show that something is deliberately hidden instead.
+        if isSecure {
+            contentPreviewLabel.stringValue = "••••••••"
+            contentPreviewLabel.isHidden = false
+        } else {
+            // Uncut: the label truncates at the row's own edge, so a count decided
+            // up front would leave the "…" mid-row with empty space after it on any
+            // sidebar wider than the minimum.
+            let preview = snippet.contentFirstLineUntruncated
+            contentPreviewLabel.stringValue = preview
+            // With no name the title above is already this exact line; printing it
+            // twice in one row reads as a rendering bug.
+            let hasName = !snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            contentPreviewLabel.isHidden = preview.isEmpty || !hasName
+        }
 
         updateTagChips(tags: snippet.tags, muted: !snippet.isEnabled)
 

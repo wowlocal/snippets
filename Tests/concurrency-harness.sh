@@ -1,0 +1,192 @@
+#!/bin/bash
+#
+# Measures what concurrent writers actually do to the snippet library.
+#
+# This exists because the claim "unlocked writers lose most of their edits" is the
+# entire justification for the locking work, and a number in a commit message that
+# nobody can reproduce is not evidence. Every figure quoted in docs/cloud-sync.md
+# comes from running this.
+#
+#   Tests/concurrency-harness.sh <path-to-snippets-cli> [writers]
+#
+# The CLI under test must honour SNIPPETS_SUPPORT_DIR (added for exactly this
+# reason). It is not optional: an earlier version of this experiment tried to
+# isolate itself with HOME, which FileManager ignores for the Application Support
+# directory, and wrote sixty rows into a live library.
+
+set -u
+
+CLI="${1:-}"
+WRITERS="${2:-60}"
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/snippets-concurrency.XXXXXX")"
+trap 'rm -rf "$SCRATCH"' EXIT
+
+if [ -z "$CLI" ] || [ ! -x "$CLI" ]; then
+    echo "usage: $0 <path-to-snippets-cli> [writers]" >&2
+    echo "  e.g. $0 \"\$(find ~/Library/Developer/Xcode/DerivedData -name snippets-cli -type f | head -1)\"" >&2
+    exit 2
+fi
+
+# Refuse to run if the CLI ignores the override, rather than discovering that by
+# corrupting the real library. This guard is the whole reason the harness is safe.
+probe="$SCRATCH/probe"
+mkdir -p "$probe"
+SNIPPETS_SUPPORT_DIR="$probe" "$CLI" add --keyword probe --name probe --content x >/dev/null 2>&1
+if [ ! -f "$probe/snippets.json" ]; then
+    echo "ABORT: $CLI did not honour SNIPPETS_SUPPORT_DIR — it would write to the real library." >&2
+    exit 1
+fi
+
+count() { python3 -c "import json,sys;print(len(json.load(open(sys.argv[1]))))" "$1" 2>/dev/null || echo 0; }
+
+# ---------------------------------------------------------------- reference points
+#
+# Two Python writers stand in for "the shape of the algorithm", so the harness can
+# show the unlocked baseline without needing a build of the pre-fix CLI. The gap
+# between them is the effect being measured; the real CLI run below is the claim
+# that actually matters.
+
+cat > "$SCRATCH/unlocked.py" <<'PY'
+import json, sys, os, time
+p, i, gap = sys.argv[1], sys.argv[2], float(sys.argv[3])
+d = json.load(open(p))
+time.sleep(gap)                              # decode + edit + encode window
+d.insert(0, {"i": i})
+tmp = p + "." + i
+open(tmp, "w").write(json.dumps(d))
+os.replace(tmp, p)                           # atomic rename, exactly like the old code
+PY
+
+cat > "$SCRATCH/locked.py" <<'PY'
+import json, sys, os, time, fcntl
+p, i, gap, lock = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
+fd = os.open(lock, os.O_RDONLY | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+try:
+    d = json.load(open(p)); time.sleep(gap)
+    d.insert(0, {"i": i})
+    tmp = p + "." + i; open(tmp, "w").write(json.dumps(d)); os.replace(tmp, p)
+finally:
+    fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
+PY
+
+echo
+echo "== algorithm baseline: $WRITERS concurrent writers, varying read-to-write gap =="
+printf '%-10s %-26s %-26s\n' "gap" "unlocked" "flock"
+for GAP in 0.005 0.010 0.020; do
+    d="$SCRATCH/u"; rm -rf "$d"; mkdir -p "$d"; echo '[]' > "$d/snippets.json"
+    for i in $(seq 1 "$WRITERS"); do python3 "$SCRATCH/unlocked.py" "$d/snippets.json" "$i" "$GAP" & done; wait
+    u=$(count "$d/snippets.json")
+
+    d="$SCRATCH/l"; rm -rf "$d"; mkdir -p "$d"; echo '[]' > "$d/snippets.json"
+    for i in $(seq 1 "$WRITERS"); do python3 "$SCRATCH/locked.py" "$d/snippets.json" "$i" "$GAP" "$d/lock" & done; wait
+    l=$(count "$d/snippets.json")
+
+    printf '%-10s %-26s %-26s\n' "${GAP}s" "$u/$WRITERS kept" "$l/$WRITERS kept"
+done
+
+# ---------------------------------------------------------------- the real binary
+
+echo
+echo "== snippets-cli: $WRITERS concurrent \`add\` =="
+d="$SCRATCH/cli"; mkdir -p "$d"
+errs="$SCRATCH/cli.err"; : > "$errs"
+for i in $(seq 1 "$WRITERS"); do
+    SNIPPETS_SUPPORT_DIR="$d" "$CLI" add --keyword "kw$i" --name "S$i" --content "b$i" \
+        >/dev/null 2>>"$errs" &
+done; wait
+printf '   kept %s/%s   stderr lines: %s\n' "$(count "$d/snippets.json")" "$WRITERS" "$(wc -l < "$errs" | tr -d ' ')"
+
+echo
+echo "== snippets-cli: $WRITERS concurrent \`update --add-tags\` on ONE record =="
+d="$SCRATCH/upd"; mkdir -p "$d"
+SNIPPETS_SUPPORT_DIR="$d" "$CLI" add --keyword target --name T --content x >/dev/null 2>&1
+for i in $(seq 1 "$WRITERS"); do
+    SNIPPETS_SUPPORT_DIR="$d" "$CLI" update target --add-tags "t$i" >/dev/null 2>&1 &
+done; wait
+printf '   tags landed: %s/%s\n' \
+    "$(python3 -c "import json;d=json.load(open('$d/snippets.json'));print(len(d[0]['tags']))" 2>/dev/null || echo 0)" \
+    "$WRITERS"
+
+echo
+echo "== snippets-cli: $WRITERS concurrent \`add\` of the SAME keyword (exactly 1 must win) =="
+d="$SCRATCH/dup"; mkdir -p "$d"
+for i in $(seq 1 "$WRITERS"); do
+    SNIPPETS_SUPPORT_DIR="$d" "$CLI" add --keyword same --name "S$i" --content "b$i" >/dev/null 2>&1 &
+done; wait
+printf '   records with keyword \"same\": %s (expected 1)\n' "$(count "$d/snippets.json")"
+
+# ---------------------------------------------------------------- lock robustness
+#
+# flock attaches to an inode, not a path. If the lock file is replaced underneath
+# the writers — a folder restore, a file-syncing tool, an over-eager cleanup — each
+# process can end up holding a lock on a different inode and mutual exclusion
+# silently evaporates, with a success receipt for every lost write.
+#
+# Two scenarios, because they behave differently and only one is realistic:
+#   * a SINGLE replacement, which is what a restore or a sync tool actually does;
+#   * continuous churn at 5 ms, which is a stress test, not a real event.
+#
+# The gate is a THRESHOLD, not equality. The churn case is inherently racy — a
+# replacement can land inside the one window the compare-and-swap cannot close — so
+# demanding a perfect score makes the harness fail intermittently on a healthy tree,
+# which is worse than useless. Perfection is required only of the realistic case.
+
+run_writers() {  # dir, count, [env assignments...]
+    local d="$1" n="$2"; shift 2
+    for i in $(seq 1 "$n"); do
+        env "$@" SNIPPETS_SUPPORT_DIR="$d" "$CLI" add \
+            --keyword "kw$i" --name "S$i" --content "b$i" >/dev/null 2>&1 &
+    done
+    wait
+}
+
+echo
+echo "== lock file REPLACED ONCE mid-run (the realistic vector) =="
+for run in 1 2 3; do
+    d="$SCRATCH/once$run"; mkdir -p "$d/Sync"
+    SNIPPETS_SUPPORT_DIR="$d" "$CLI" add --keyword seed --name seed --content x >/dev/null 2>&1
+    ( sleep 0.15; rm -f "$d/Sync/library.lock" ) &
+    run_writers "$d" "$WRITERS"
+    wait
+    printf '   run %s: kept %s/%s\n' "$run" "$(count "$d/snippets.json")" "$((WRITERS + 1))"
+done
+
+echo
+echo "== lock file replaced every 5ms throughout (stress, not realistic) =="
+worst=9999
+for run in 1 2 3; do
+    d="$SCRATCH/churn$run"; mkdir -p "$d/Sync"
+    SNIPPETS_SUPPORT_DIR="$d" "$CLI" add --keyword seed --name seed --content x >/dev/null 2>&1
+    ( for _ in $(seq 1 400); do rm -f "$d/Sync/library.lock"; sleep 0.005; done ) &
+    churn=$!
+    run_writers "$d" "$WRITERS"
+    kill "$churn" 2>/dev/null; wait "$churn" 2>/dev/null
+    k=$(count "$d/snippets.json")
+    [ "$k" -lt "$worst" ] && worst=$k
+    printf '   run %s: kept %s/%s\n' "$run" "$k" "$((WRITERS + 1))"
+done
+floor=$(( (WRITERS + 1) * 85 / 100 ))
+printf '   worst %s, threshold %s (85%%)  ' "$worst" "$floor"
+[ "$worst" -ge "$floor" ] && echo "PASS" || echo "FAIL — the compare-and-swap is not recovering"
+
+# ---------------------------------------------------------------- no flock at all
+#
+# Some network-mounted home directories do not implement flock. That population is
+# supported on purpose (LibraryLockPolicy.isFatal returns false so the app is not
+# bricked for them), which makes this a real configuration rather than a hypothetical
+# — and unlike a contended lock it is not transient, it is every write forever.
+#
+# Proceeding unlocked and relying on the compare-and-swap alone was measured at
+# 42-44/61: an optimistic read-modify-write has an irreducible window that more
+# re-reads only move. Hence the link(2) sentinel, which IS atomic on those
+# filesystems. SNIPPETS_DISABLE_FLOCK forces that path.
+
+echo
+echo "== flock unavailable: link(2) sentinel fallback =="
+for run in 1 2 3; do
+    d="$SCRATCH/noflock$run"; mkdir -p "$d"
+    run_writers "$d" "$WRITERS" SNIPPETS_DISABLE_FLOCK=1
+    printf '   run %s: kept %s/%s\n' "$run" "$(count "$d/snippets.json")" "$WRITERS"
+done
+echo

@@ -60,3 +60,6 @@ playground.xcworkspace
 # Swift Package Manager
 /.build
 # Package.resolved
+
+# Swift Package Manager (the test-only CorePackage overlay)
+.build/

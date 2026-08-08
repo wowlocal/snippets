@@ -41,6 +41,7 @@ final class SettingsWindowController: NSWindowController {
 @MainActor
 private final class SettingsTabViewController: NSTabViewController {
     private let generalViewController = GeneralSettingsViewController()
+    private let vaultViewController = VaultSettingsViewController()
     private let browsersViewController = BrowserSettingsViewController()
 
     init() {
@@ -49,6 +50,7 @@ private final class SettingsTabViewController: NSTabViewController {
         canPropagateSelectedChildViewControllerTitle = false
 
         addTab(title: "General", symbolName: "gearshape", viewController: generalViewController)
+        addTab(title: "Secure", symbolName: "lock", viewController: vaultViewController)
         addTab(title: "Browsers", symbolName: "globe", viewController: browsersViewController)
     }
 
@@ -66,6 +68,7 @@ private final class SettingsTabViewController: NSTabViewController {
 
     func reloadFromStorage() {
         generalViewController.reloadFromStorage()
+        vaultViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
     }
 
@@ -960,6 +963,254 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         textField.lineBreakMode = .byTruncatingMiddle
         textField.stringValue = text
         return cell
+    }
+}
+
+// MARK: - Secure snippets
+
+@MainActor
+private final class VaultSettingsViewController: NSViewController {
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let tierLabel = NSTextField(wrappingLabelWithString: "")
+    private let primaryButton = NSButton(title: "Set Up Secure Snippets", target: nil, action: nil)
+    private let lockButton = NSButton(title: "Lock Now", target: nil, action: nil)
+    private let resetButton = NSButton(title: "Forget Secure Snippets", target: nil, action: nil)
+    private let healthLabel = NSTextField(wrappingLabelWithString: "")
+
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+
+        let title = NSTextField(labelWithString: "Secure Snippets")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+
+        // The honest version. A settings pane that says "end-to-end encrypted" and stops
+        // there is the reason people put things in a text expander that should not be in
+        // one.
+        let intro = makeSecondaryLabel(
+            "A secure snippet's text is encrypted on disk and unlocked with Touch ID or your login password. "
+            + "Its name, keyword and tags are not encrypted \u{2014} Snippets has to recognise the keyword "
+            + "while the vault is locked, so anyone with access to this Mac's files can see that a "
+            + "secure snippet exists and what it is called, just not what it contains.")
+
+        let limits = makeTertiaryLabel(
+            "Secure snippets never appear in exports or share links, and are never expanded "
+            + "automatically by typing their keyword \u{2014} you pick them from the list. "
+            + "This protects your snippets at rest and in transit; it cannot protect them from "
+            + "someone using your Mac while you are signed in.")
+
+        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
+
+        primaryButton.target = self
+        primaryButton.action = #selector(primaryAction)
+        LiquidGlassDesign.configureActionButton(primaryButton, symbolName: "lock.shield")
+
+        lockButton.target = self
+        lockButton.action = #selector(lockNow)
+        LiquidGlassDesign.configureActionButton(lockButton, symbolName: "lock")
+
+        resetButton.target = self
+        resetButton.action = #selector(forgetVault)
+        resetButton.bezelStyle = .rounded
+        resetButton.hasDestructiveAction = true
+
+        let buttonRow = NSStackView(views: [primaryButton, lockButton, NSView()])
+        buttonRow.orientation = .horizontal
+        buttonRow.spacing = 8
+
+        let healthTitle = NSTextField(labelWithString: "Storage")
+        healthTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(intro)
+        stack.addArrangedSubview(statusLabel)
+        stack.addArrangedSubview(tierLabel)
+        stack.addArrangedSubview(buttonRow)
+        stack.addArrangedSubview(limits)
+        stack.addArrangedSubview(NSBox.horizontalSeparator())
+        stack.addArrangedSubview(healthTitle)
+        stack.addArrangedSubview(healthLabel)
+        stack.addArrangedSubview(resetButton)
+
+        for label in [intro, limits, statusLabel, tierLabel, healthLabel] {
+            label.preferredMaxLayoutWidth = 620
+        }
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        reloadFromStorage()
+    }
+
+    func reloadFromStorage() {
+        guard isViewLoaded, let app = NSApp.delegate as? AppDelegate else { return }
+        let secure = app.secureStore
+        let session = app.vaultSession
+
+        if secure.isUnreadable {
+            statusLabel.stringValue =
+                "The secure vault exists but this build cannot read it. It has been left untouched."
+            primaryButton.isHidden = true
+            lockButton.isHidden = true
+        } else {
+            switch session.state {
+            case .noKey where !secure.hasVault:
+                statusLabel.stringValue = "Not set up on this Mac."
+                primaryButton.title = "Set Up Secure Snippets"
+                primaryButton.isHidden = false
+                lockButton.isHidden = true
+            case .noKey:
+                // Records exist but the key does not — a restored file, or a keychain the
+                // user cleared. Say so precisely; "locked" would be a lie that leads to a
+                // Touch ID prompt that can never succeed.
+                statusLabel.stringValue =
+                    "\(secure.count) secure snippet(s) are here, but the key for them is not on this Mac. "
+                    + "They cannot be read until the key is restored."
+                primaryButton.title = "Restore with Recovery Key"
+                primaryButton.isHidden = !secure.hasRecoveryKey
+                lockButton.isHidden = true
+            case .locked:
+                statusLabel.stringValue = "\(secure.count) secure snippet(s). Locked."
+                primaryButton.title = secure.hasRecoveryKey ? "Unlock" : "Unlock & Set Up Recovery"
+                primaryButton.isHidden = false
+                lockButton.isHidden = true
+            case .unlocked(let until):
+                let formatter = DateFormatter()
+                formatter.timeStyle = .short
+                statusLabel.stringValue =
+                    "\(secure.count) secure snippet(s). Unlocked until \(formatter.string(from: until))."
+                primaryButton.title = "Set Up Recovery Key"
+                primaryButton.isHidden = secure.hasRecoveryKey
+                lockButton.isHidden = false
+            }
+        }
+
+        tierLabel.stringValue = session.keychainStatusDescription
+        tierLabel.textColor = session.syncsBetweenDevices ? .secondaryLabelColor : .tertiaryLabelColor
+        resetButton.isHidden = secure.isUnreadable || !secure.hasVault
+
+        // The degraded-write signal the review asked for. Previously this was NSLogged
+        // and nothing read it, so a user whose filesystem cannot lock sat in a
+        // permanently lossy configuration with no indication at all.
+        switch app.store.writeHealth {
+        case .healthy:
+            healthLabel.stringValue = "Snippets are saved normally."
+            healthLabel.textColor = .secondaryLabelColor
+        case .contended(let attempts):
+            healthLabel.stringValue =
+                "Another program is writing your snippets at the same time as Snippets "
+                + "(last save took \(attempts) attempts). Nothing has been lost, but if this "
+                + "persists something else is editing the library."
+            healthLabel.textColor = .systemOrange
+        case .unlocked:
+            healthLabel.stringValue =
+                "This location does not support file locking, so Snippets cannot fully "
+                + "coordinate with other programs writing the same library. Concurrent edits "
+                + "may be lost. This usually means your home folder is on a network drive."
+            healthLabel.textColor = .systemRed
+        }
+    }
+
+    @objc private func primaryAction() {
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await performPrimaryAction(app)
+        }
+    }
+
+    private func performPrimaryAction(_ app: AppDelegate) async {
+        do {
+            switch app.vaultSession.state {
+            case .noKey where !app.secureStore.hasVault:
+                try app.secureStore.createVaultIfNeeded(
+                    confirmRecoveryKey: presentRecoveryKeyForSaving)
+                try await app.vaultSession.unlock(reason: "Unlock your secure snippets")
+
+            case .noKey:
+                guard let recoveryKey = requestRecoveryKey() else { return }
+                try app.secureStore.restoreKey(fromRecoveryKey: recoveryKey)
+                try await app.vaultSession.unlock(reason: "Restore your secure snippets")
+
+            case .locked:
+                try await app.vaultSession.unlock(reason: "Unlock your secure snippets")
+                if !app.secureStore.hasRecoveryKey {
+                    _ = try app.secureStore.addRecoveryKeyIfNeeded(
+                        confirmRecoveryKey: presentRecoveryKeyForSaving)
+                }
+
+            case .unlocked:
+                _ = try app.secureStore.addRecoveryKeyIfNeeded(
+                    confirmRecoveryKey: presentRecoveryKeyForSaving)
+            }
+        } catch SecureSnippetStore.Failure.setupCancelled {
+            // Setup never committed, so cancellation needs no warning.
+        } catch {
+            showVaultError(error)
+        }
+        reloadFromStorage()
+    }
+
+    private func requestRecoveryKey() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Restore secure snippets"
+        alert.informativeText = "Enter the recovery key you saved when this vault was created."
+
+        let field = NSTextField(string: "")
+        field.placeholderString = "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXX"
+        field.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        field.frame = NSRect(x: 0, y: 0, width: 430, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
+    }
+
+    @objc private func lockNow() {
+        (NSApp.delegate as? AppDelegate)?.vaultSession.lock()
+        reloadFromStorage()
+    }
+
+    /// Destructive and irreversible, so the confirmation names the number and says the
+    /// word "permanently" rather than asking "are you sure?".
+    @objc private func forgetVault() {
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        let count = app.secureStore.count
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Permanently delete \(count) secure snippet(s)?"
+        alert.informativeText =
+            "This deletes the encrypted snippets and the key that opens them. "
+            + "There is no undo, and no export or backup of this app contains their text."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        do {
+            try app.secureStore.forgetEverything()
+        } catch {
+            showVaultError(error)
+        }
+        reloadFromStorage()
+    }
+
+    private func showVaultError(_ error: any Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Secure snippets"
+        alert.informativeText = "\(error)"
+        alert.runModal()
+    }
+}
+
+private extension NSBox {
+    static func horizontalSeparator() -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        return box
     }
 }
 
