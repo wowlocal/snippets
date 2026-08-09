@@ -112,6 +112,9 @@ final class SnippetsIPadTests: XCTestCase {
             (MainSplitViewController.shortcutsKeyCommand(), "k", .command),
             (MainSplitViewController.nextSnippetKeyCommand(), "n", .control),
             (MainSplitViewController.previousSnippetKeyCommand(), "p", .control),
+            (MainSplitViewController.nextSnippetArrowKeyCommand(), UIKeyCommand.inputDownArrow, []),
+            (MainSplitViewController.previousSnippetArrowKeyCommand(), UIKeyCommand.inputUpArrow, []),
+            (MainSplitViewController.escapeKeyCommand(), UIKeyCommand.inputEscape, []),
         ]
 
         for (command, input, modifiers) in commands {
@@ -255,6 +258,58 @@ final class SnippetsIPadTests: XCTestCase {
         hosted.controller.previousSnippetCommand()
         XCTAssertEqual(hosted.list.selectedSnippetID, firstID)
         XCTAssertTrue(body?.isFirstResponder == true)
+    }
+
+    func testEscapeMovesFromSearchToFilteredListForArrowAndControlNavigation() {
+        let environment = AppEnvironment()
+        _ = environment.store.addSnippet(name: "Match One", content: "One")
+        _ = environment.store.addSnippet(name: "Match Two", content: "Two")
+        _ = environment.store.addSnippet(name: "Different", content: "Three")
+        let hosted = hostMainSplit(environment: environment)
+        let searchField = hosted.list.searchTextField
+
+        hosted.controller.searchCommand()
+        XCTAssertTrue(waitUntil { hosted.list.isSearchFocused })
+        searchField.text = "Match"
+        hosted.list.reload(keepingSelection: false)
+
+        let escape = MainSplitViewController.escapeKeyCommand()
+        guard let escapeAction = escape.action else {
+            return XCTFail("Escape should have an action")
+        }
+        XCTAssertTrue(
+            searchField.target(forAction: escapeAction, withSender: escape) as AnyObject?
+                === hosted.controller
+        )
+
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(escapeAction, to: nil, from: escape, for: nil)
+        )
+
+        XCTAssertEqual(searchField.text, "Match")
+        XCTAssertFalse(hosted.list.isSearchFocused)
+        XCTAssertTrue(hosted.list.isListFocused)
+
+        let firstMatch = hosted.list.firstVisibleSnippetID
+        let down = MainSplitViewController.nextSnippetArrowKeyCommand()
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(down.action!, to: nil, from: down, for: nil)
+        )
+        XCTAssertEqual(hosted.list.selectedSnippetID, firstMatch)
+
+        let secondMatch = hosted.list.adjacentSnippetID(forward: true)
+        let controlN = MainSplitViewController.nextSnippetKeyCommand()
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(controlN.action!, to: nil, from: controlN, for: nil)
+        )
+        XCTAssertEqual(hosted.list.selectedSnippetID, secondMatch)
+
+        let up = MainSplitViewController.previousSnippetArrowKeyCommand()
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(up.action!, to: nil, from: up, for: nil)
+        )
+        XCTAssertEqual(hosted.list.selectedSnippetID, firstMatch)
+        XCTAssertTrue(hosted.list.isListFocused)
     }
 
     func testSidebarKeepsProgrammaticSelectionVisibleAcrossReload() {

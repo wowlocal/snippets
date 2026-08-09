@@ -19,6 +19,7 @@ final class SnippetListViewController: UIViewController {
 
     var firstVisibleSnippetID: UUID? { visibleSnippets.first?.id }
     var selectedSnippetID: UUID? { selectedID }
+    var searchTextField: UISearchTextField { searchController.searchBar.searchTextField }
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -377,7 +378,7 @@ final class SnippetListViewController: UIViewController {
     }
 
     func focusSearch() {
-        let searchField = searchController.searchBar.searchTextField
+        let searchField = searchTextField
         if !searchField.becomeFirstResponder() {
             DispatchQueue.main.async { [weak searchField] in
                 searchField?.becomeFirstResponder()
@@ -387,6 +388,11 @@ final class SnippetListViewController: UIViewController {
 
     func focusList() {
         searchController.isActive = false
+        focusFilteredList()
+    }
+
+    func focusFilteredList() {
+        searchTextField.resignFirstResponder()
         if !tableView.becomeFirstResponder() {
             becomeFirstResponder()
         }
@@ -394,9 +400,10 @@ final class SnippetListViewController: UIViewController {
 
     func adjacentSnippetID(forward: Bool) -> UUID? {
         guard !visibleSnippets.isEmpty else { return nil }
-        let current = selectedID.flatMap { id in
-            visibleSnippets.firstIndex(where: { $0.id == id })
-        } ?? 0
+        guard let selectedID,
+              let current = visibleSnippets.firstIndex(where: { $0.id == selectedID }) else {
+            return visibleSnippets[0].id
+        }
         let next = forward
             ? min(current + 1, visibleSnippets.count - 1)
             : max(current - 1, 0)
@@ -410,7 +417,11 @@ final class SnippetListViewController: UIViewController {
     }
 
     var isSearchFocused: Bool {
-        searchController.searchBar.searchTextField.isFirstResponder
+        searchTextField.isFirstResponder
+    }
+
+    var isListFocused: Bool {
+        tableView.isFirstResponder || isFirstResponder
     }
 }
 

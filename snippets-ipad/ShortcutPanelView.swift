@@ -26,8 +26,8 @@ final class ShortcutPanelView: UIView {
         Descriptor(title: "Export", shortcut: "⇧⌘E", isEssential: false),
         Descriptor(title: "Undo", shortcut: "⌘Z", isEssential: false),
         Descriptor(title: "Redo", shortcut: "⇧⌘Z", isEssential: false),
-        Descriptor(title: "Next Snippet", shortcut: "⌃N", isEssential: false),
-        Descriptor(title: "Previous Snippet", shortcut: "⌃P", isEssential: false),
+        Descriptor(title: "Next Snippet", shortcut: "↓  /  ⌃N", isEssential: false),
+        Descriptor(title: "Previous Snippet", shortcut: "↑  /  ⌃P", isEssential: false),
         Descriptor(title: "Toggle Shortcuts", shortcut: "⌘K", isEssential: false),
     ]
 

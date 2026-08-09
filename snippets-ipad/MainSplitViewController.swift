@@ -101,6 +101,8 @@ final class MainSplitViewController: UISplitViewController {
             Self.previousFieldKeyCommand(),
             Self.nextSnippetKeyCommand(),
             Self.previousSnippetKeyCommand(),
+            Self.nextSnippetArrowKeyCommand(),
+            Self.previousSnippetArrowKeyCommand(),
             UIKeyCommand(title: "New Snippet", action: #selector(newSnippetCommand), input: "n", modifierFlags: .command),
             UIKeyCommand(title: "New from Clipboard", action: #selector(newClipboardCommand), input: "n", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Import", action: #selector(importCommand), input: "i", modifierFlags: [.command, .shift]),
@@ -109,24 +111,24 @@ final class MainSplitViewController: UISplitViewController {
             UIKeyCommand(title: "Undo", action: #selector(undoCommand), input: "z", modifierFlags: .command),
             UIKeyCommand(title: "Redo", action: #selector(redoCommand), input: "z", modifierFlags: [.command, .shift]),
         ]
-        commands.append(
-            Self.priorityKeyCommand(
-                title: "Dismiss Shortcuts",
-                action: #selector(dismissShortcutPanelCommand),
-                input: UIKeyCommand.inputEscape
-            )
-        )
+        commands.append(Self.escapeKeyCommand())
         return commands
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-        if action == #selector(dismissShortcutPanelCommand) {
-            return shortcutPanel.isPresented
+        if action == #selector(escapeCommand) {
+            return shortcutPanel.isPresented || listController.isSearchFocused
         }
         if action == #selector(nextSnippetCommand)
             || action == #selector(previousSnippetCommand) {
             return !shortcutPanel.isPresented
                 && !listController.isSearchFocused
+                && listController.firstVisibleSnippetID != nil
+        }
+        if action == #selector(nextSnippetFromListCommand)
+            || action == #selector(previousSnippetFromListCommand) {
+            return !shortcutPanel.isPresented
+                && listController.isListFocused
                 && listController.firstVisibleSnippetID != nil
         }
         return super.canPerformAction(action, withSender: sender)
@@ -211,6 +213,30 @@ final class MainSplitViewController: UISplitViewController {
             action: #selector(previousSnippetCommand),
             input: "p",
             modifierFlags: .control
+        )
+    }
+
+    static func nextSnippetArrowKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Next Snippet",
+            action: #selector(nextSnippetFromListCommand),
+            input: UIKeyCommand.inputDownArrow
+        )
+    }
+
+    static func previousSnippetArrowKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Previous Snippet",
+            action: #selector(previousSnippetFromListCommand),
+            input: UIKeyCommand.inputUpArrow
+        )
+    }
+
+    static func escapeKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Return to Snippet List",
+            action: #selector(escapeCommand),
+            input: UIKeyCommand.inputEscape
         )
     }
 
@@ -507,6 +533,14 @@ final class MainSplitViewController: UISplitViewController {
         selectAdjacentSnippet(forward: false)
     }
 
+    @objc func nextSnippetFromListCommand() {
+        selectAdjacentSnippet(forward: true)
+    }
+
+    @objc func previousSnippetFromListCommand() {
+        selectAdjacentSnippet(forward: false)
+    }
+
     @objc func shortcutsCommand() {
         if shortcutPanel.isPresented {
             dismissShortcutPanel(animated: true, restoreFocus: true)
@@ -515,8 +549,12 @@ final class MainSplitViewController: UISplitViewController {
         }
     }
 
-    @objc private func dismissShortcutPanelCommand() {
-        dismissShortcutPanel(animated: true, restoreFocus: true)
+    @objc func escapeCommand() {
+        if shortcutPanel.isPresented {
+            dismissShortcutPanel(animated: true, restoreFocus: true)
+        } else if listController.isSearchFocused {
+            listController.focusFilteredList()
+        }
     }
 
     @objc func copySnippetCommand(_ sender: UIKeyCommand) {
