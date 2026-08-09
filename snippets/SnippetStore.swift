@@ -219,7 +219,10 @@ final class SnippetStore {
         case .tooNew(let version):
             // A newer build owns this directory. Do not write anything here; a random
             // id for this session is harmless.
-            NSLog("Snippets: Sync/state.json is version \(version); running without sync bookkeeping.")
+            Diagnostics.record(.storageState(
+                area: .syncState,
+                state: .versionTooNew,
+                value: version))
             deviceID = HLC.makeDeviceID()
         }
     }
@@ -645,7 +648,11 @@ final class SnippetStore {
             snippets = try decodeImportData(data)
             rememberDiskBytes(data)
         } catch {
-            NSLog("Failed to load snippets: \(error.localizedDescription)")
+            Diagnostics.record(.storageFailure(
+                area: .library,
+                operation: .read,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             snippets = configuration.seedsStarterSnippet ? [Snippet.starterSnippet] : []
 
             // Preserve the user's data: move the unreadable file aside before
@@ -656,9 +663,16 @@ final class SnippetStore {
             )
             do {
                 try FileManager.default.moveItem(at: saveURL, to: backupURL)
-                NSLog("Moved unreadable snippets file to \(backupURL.path)")
+                Diagnostics.record(.storageState(
+                    area: .library,
+                    state: .recovered,
+                    value: nil))
             } catch {
-                NSLog("Could not move unreadable snippets file aside: \(error.localizedDescription); leaving it untouched")
+                Diagnostics.record(.storageFailure(
+                    area: .library,
+                    operation: .recover,
+                    failure: DiagnosticFailure(error),
+                    attempt: nil))
                 return
             }
             persist()
@@ -899,7 +913,10 @@ final class SnippetStore {
                     // launch there is nothing there yet and "disappeared" is both wrong
                     // and frightening.
                     if previousDigest != nil {
-                        NSLog("Snippets: snippets.json disappeared; recreating it from memory rather than merging.")
+                        Diagnostics.record(.storageState(
+                            area: .library,
+                            state: .recreated,
+                            value: nil))
                     }
                     pendingMerge = nil
                     return self.snippets
@@ -925,7 +942,12 @@ final class SnippetStore {
             if health != writeHealth {
                 writeHealth = health
                 if health.isDegraded {
-                    NSLog("Snippets: degraded library write — \(health).")
+                    let attempts: Int?
+                    if case .contended(let value) = health { attempts = value } else { attempts = nil }
+                    Diagnostics.record(.storageState(
+                        area: .library,
+                        state: .degraded,
+                        value: attempts))
                 }
                 syncDelegate?.libraryDidChange(.local)
             }
@@ -950,7 +972,11 @@ final class SnippetStore {
             // discarding work the user can see on screen.
             lockFailureCount += 1
             if case LibraryWriter.Failure.busy = error {} else {
-                NSLog("Snippets: could not save the library (attempt \(lockFailureCount)): \(error)")
+                Diagnostics.record(.storageFailure(
+                    area: .library,
+                    operation: .write,
+                    failure: DiagnosticFailure(error),
+                    attempt: lockFailureCount))
             }
             // On the terminate path the run loop will never spin again, so an
             // asyncAfter retry would silently never run. `flushPendingWrites` retries
@@ -1030,8 +1056,19 @@ final class SnippetStore {
         let rescue = SnippetStorageLocations.backupsFolderURL.appendingPathComponent(
             "unsaved-\(formatter.string(from: Date())).json", isDirectory: false)
         if let data = try? SnippetLibraryCodec.encode(pending) {
-            try? AtomicFileWriter.write(data, to: rescue)
-            NSLog("Snippets: could not save on quit; the pending library was written to \(rescue.path)")
+            do {
+                try AtomicFileWriter.write(data, to: rescue)
+                Diagnostics.record(.storageState(
+                    area: .library,
+                    state: .recovered,
+                    value: pending.count))
+            } catch {
+                Diagnostics.record(.storageFailure(
+                    area: .library,
+                    operation: .recover,
+                    failure: DiagnosticFailure(error),
+                    attempt: 3))
+            }
         }
     }
 
@@ -1174,7 +1211,11 @@ final class SnippetStore {
         } catch {
             // Unreadable bytes must never be adopted, and must never be written back
             // over. Keep serving what we have; `load()` owns the quarantine path.
-            NSLog("Failed to reload snippets: \(error.localizedDescription)")
+            Diagnostics.record(.storageFailure(
+                area: .library,
+                operation: .read,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return
         }
 
@@ -1202,11 +1243,10 @@ final class SnippetStore {
         snippets = merged.snippets
         rebaseUndoHistory(preMergeLocal: preMergeLocal, merged: merged.snippets)
 
-        if !merged.conflictCopies.isEmpty {
-            NSLog("Snippets: kept \(merged.conflictCopies.count) conflicting edit(s) as separate disabled snippets.")
-        }
-        if !merged.disabledByKeywordCollision.isEmpty {
-            NSLog("Snippets: disabled \(merged.disabledByKeywordCollision.count) snippet(s) whose keyword collided after merging.")
+        if !merged.conflictCopies.isEmpty || !merged.disabledByKeywordCollision.isEmpty {
+            Diagnostics.record(.libraryMerge(
+                conflictCopies: merged.conflictCopies.count,
+                keywordCollisions: merged.disabledByKeywordCollision.count))
         }
     }
 

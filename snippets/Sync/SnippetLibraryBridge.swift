@@ -334,7 +334,11 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         } catch {
             // Derived state only. The agreed base is the fallback, so losing this can
             // cause one conservative re-push after restart but cannot lose a snippet.
-            NSLog("Snippets: could not write sync library metadata: \(error)")
+            Diagnostics.record(.storageFailure(
+                area: .syncMetadata,
+                operation: .write,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
     }
 

@@ -44,6 +44,7 @@ private final class SettingsTabViewController: NSTabViewController {
     private let vaultViewController = VaultSettingsViewController()
     private let syncViewController = SyncSettingsViewController()
     private let browsersViewController = BrowserSettingsViewController()
+    private let diagnosticsViewController = DiagnosticsSettingsViewController()
 
     init() {
         super.init(nibName: nil, bundle: nil)
@@ -55,6 +56,7 @@ private final class SettingsTabViewController: NSTabViewController {
         // After Secure, because sync depends on it: the sealing key is the vault's.
         addTab(title: "Sync", symbolName: "arrow.triangle.2.circlepath", viewController: syncViewController)
         addTab(title: "Browsers", symbolName: "globe", viewController: browsersViewController)
+        addTab(title: "Diagnostics", symbolName: "waveform.path.ecg", viewController: diagnosticsViewController)
     }
 
     required init?(coder: NSCoder) {
@@ -74,6 +76,7 @@ private final class SettingsTabViewController: NSTabViewController {
         vaultViewController.reloadFromStorage()
         syncViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
+        diagnosticsViewController.reloadFromStorage()
     }
 
     private func addTab(title: String, symbolName: String, viewController: NSViewController) {
@@ -1361,6 +1364,147 @@ private final class SyncSettingsViewController: NSViewController {
     @objc private func clearHalt() {
         Self.coordinator?.clearHaltAfterUserReview()
         reloadFromStorage()
+    }
+}
+
+@MainActor
+private final class DiagnosticsSettingsViewController: NSViewController {
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let privacyLabel = NSTextField(wrappingLabelWithString: "")
+    private let exportButton = NSButton(title: "Export Logs…", target: nil, action: nil)
+    private let deleteButton = NSButton(title: "Delete Logs", target: nil, action: nil)
+
+    private static var service: DiagnosticsService? {
+        (NSApp.delegate as? AppDelegate)?.diagnostics
+    }
+
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+
+        let title = NSTextField(labelWithString: "Persistent Diagnostics")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let intro = makeSecondaryLabel(
+            "Snippets keeps privacy-filtered operational events for up to "
+            + "\(DiagnosticsService.retentionDays) days. Logs rotate daily or at 1 MB, "
+            + "whichever comes first, and use at most 24 MB on this device.")
+        let privacy = makeTertiaryLabel(
+            "Exports are plaintext JSON Lines. They can include app and OS versions, "
+            + "operation counts, error families and numeric codes, and secure-snippet "
+            + "keywords. Snippet bodies, names, tags, paths, record IDs, keys and "
+            + "ciphertext are never accepted by the logging API.")
+
+        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        privacyLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        privacyLabel.textColor = .systemRed
+        privacyLabel.isHidden = true
+
+        exportButton.target = self
+        exportButton.action = #selector(exportLogs)
+        LiquidGlassDesign.configureActionButton(exportButton, symbolName: "square.and.arrow.up")
+        deleteButton.target = self
+        deleteButton.action = #selector(confirmDeleteLogs)
+        deleteButton.bezelStyle = .rounded
+
+        let buttons = NSStackView(views: [exportButton, deleteButton, NSView()])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(intro)
+        stack.addArrangedSubview(statusLabel)
+        stack.addArrangedSubview(privacyLabel)
+        stack.addArrangedSubview(buttons)
+        stack.addArrangedSubview(NSBox.horizontalSeparator())
+        stack.addArrangedSubview(privacy)
+
+        for label in [intro, privacy, statusLabel, privacyLabel] {
+            label.preferredMaxLayoutWidth = 620
+        }
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        reloadFromStorage()
+    }
+
+    func reloadFromStorage() {
+        guard isViewLoaded, let service = Self.service else { return }
+        let summary = service.summary()
+        let bytes = ByteCountFormatter.string(
+            fromByteCount: Int64(min(summary.byteCount, UInt64(Int64.max))),
+            countStyle: .file)
+        if summary.storageAvailable {
+            statusLabel.stringValue = summary.fileCount == 0
+                ? "No diagnostic events are stored yet."
+                : "\(summary.fileCount) log file(s), \(bytes) stored on this Mac."
+        } else {
+            statusLabel.stringValue = "The diagnostics folder is unavailable."
+        }
+        privacyLabel.stringValue = summary.privacyCleanupNeeded
+            ? "Legacy audit cleanup could not finish. Export is safe, but Vault/audit.json still needs removal."
+            : ""
+        privacyLabel.isHidden = !summary.privacyCleanupNeeded
+        exportButton.isEnabled = summary.storageAvailable && summary.fileCount > 0
+        deleteButton.isEnabled = summary.fileCount > 0
+    }
+
+    @objc private func exportLogs() {
+        guard let service = Self.service else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export Snippets Diagnostics"
+        panel.nameFieldStringValue = DiagnosticsService.suggestedExportFilename()
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "jsonl", conformingTo: .json) ?? .json,
+        ]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        setButtonsEnabled(false)
+        Task { [weak self] in
+            do {
+                let result = try await service.export(to: url)
+                self?.showResult(
+                    title: "Diagnostics Exported",
+                    message: "Exported \(result.recordCount) event(s) as privacy-filtered JSON Lines.")
+            } catch {
+                self?.showResult(
+                    title: "Couldn’t Export Diagnostics",
+                    message: (error as? LocalizedError)?.errorDescription
+                        ?? "The export could not be created.")
+            }
+            self?.setButtonsEnabled(true)
+            self?.reloadFromStorage()
+        }
+    }
+
+    @objc private func confirmDeleteLogs() {
+        guard let service = Self.service else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete Diagnostic Logs?"
+        alert.informativeText = "This permanently removes the retained diagnostics and any legacy reveal-audit file from this Mac."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete Logs")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        setButtonsEnabled(false)
+        Task { [weak self] in
+            await service.deleteStoredLogs()
+            self?.setButtonsEnabled(true)
+            self?.reloadFromStorage()
+        }
+    }
+
+    private func setButtonsEnabled(_ enabled: Bool) {
+        exportButton.isEnabled = enabled
+        deleteButton.isEnabled = enabled
+    }
+
+    private func showResult(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
     }
 }
 

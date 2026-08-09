@@ -145,7 +145,11 @@ final class SyncKeyStore {
         do {
             try keychain.deleteItem(account: Self.account)
         } catch {
-            NSLog("Snippets: the sync key could not be removed (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .syncKey,
+                operation: .remove,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
     }
 }

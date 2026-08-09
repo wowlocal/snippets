@@ -491,6 +491,182 @@ final class SnippetsIPadTests: XCTestCase {
         XCTAssertEqual(container.bottomFadeIntensity, 0, accuracy: 0.001)
     }
 
+    func testDiagnosticsRotateRetainExportAndDeleteWithoutLeakingErrors() async throws {
+        SnippetStorageLocations.createAllDirectories()
+
+        let oldURL = SnippetStorageLocations.diagnosticsLogsFolderURL
+            .appendingPathComponent("snippets-old.jsonl")
+        let oldRecord = DiagnosticRecord(
+            event: .lifecycle(.started),
+            timestamp: "2026-01-01T00:00:00.000Z",
+            elapsedMilliseconds: 0,
+            sessionIdentifier: "old-test-session",
+            sequence: 1)
+        try oldRecord.jsonLine().write(to: oldURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -20 * 24 * 60 * 60)],
+            ofItemAtPath: oldURL.path)
+
+        var service: DiagnosticsService? = DiagnosticsService(
+            retentionDays: 14,
+            maximumFileSize: 1_024,
+            maximumFileCount: 16,
+            diskQuota: 64 * 1_024,
+            registerGlobally: false,
+            mirrorToOSLog: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldURL.path))
+
+        for _ in 0..<80 {
+            service?.emit(.syncTriggered(.poll), level: .info, synchronous: false)
+        }
+        // Put the privacy assertions in the newest archive so a deliberately
+        // tiny test quota does not evict them while exercising rotation.
+        let forbiddenDescription = "PRIVATE-BODY-SENTINEL at /private/person/snippets.json"
+        service?.emit(
+            .storageFailure(
+                area: .library,
+                operation: .read,
+                failure: DiagnosticFailure(NSError(
+                    domain: "Private.SecretDomain",
+                    code: 917,
+                    userInfo: [NSLocalizedDescriptionKey: forbiddenDescription])),
+                attempt: nil),
+            level: .error,
+            synchronous: true)
+        service?.emit(
+            .secureReveal(
+                keyword: DiagnosticKeyword("approved keyword"),
+                outcome: .revealed,
+                caller: .trusted),
+            level: .info,
+            synchronous: true)
+        service?.flush()
+
+        let summary = try XCTUnwrap(service?.summary())
+        XCTAssertGreaterThan(summary.fileCount, 1)
+        XCTAssertLessThanOrEqual(summary.byteCount, 64 * 1_024)
+
+        let exportURL = rootURL.appendingPathComponent("diagnostics-export.jsonl")
+        let result = try await service!.export(to: exportURL)
+        XCTAssertGreaterThan(result.recordCount, 2)
+
+        let export = try String(contentsOf: exportURL, encoding: .utf8)
+        XCTAssertTrue(export.contains("\"event\":\"diagnostics_manifest\""))
+        XCTAssertTrue(export.contains("approved-keyword"))
+        XCTAssertTrue(export.contains("\"error_code\":917"))
+        XCTAssertFalse(export.contains("PRIVATE-BODY-SENTINEL"))
+        XCTAssertFalse(export.contains("/private/person"))
+        XCTAssertFalse(export.contains("Private.SecretDomain"))
+        for line in export.split(separator: "\n") {
+            XCTAssertNoThrow(try JSONSerialization.jsonObject(with: Data(line.utf8)))
+        }
+
+        let logURLs = try FileManager.default.contentsOfDirectory(
+            at: SnippetStorageLocations.diagnosticsLogsFolderURL,
+            includingPropertiesForKeys: nil)
+        for fileURL in logURLs where fileURL.pathExtension == "jsonl" {
+            let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+            XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+        }
+
+        await service!.deleteStoredLogs()
+        XCTAssertEqual(service?.summary().fileCount, 0)
+        service = nil
+    }
+
+    func testLegacyRevealAuditMigrationDropsCallerPathAndPID() async throws {
+        try FileManager.default.createDirectory(
+            at: SnippetStorageLocations.vaultFolderURL,
+            withIntermediateDirectories: true)
+        let legacyDate = ISO8601DateFormatter().string(from: Date())
+        let legacy = [[
+            "at": legacyDate,
+            "outcome": "revealed",
+            "keyword": " legacy keyword ",
+            "caller": "LEGACY-CALLER-SENTINEL /private/Caller.app",
+            "pid": 8_675_309,
+        ] as [String: Any]]
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        try legacyData.write(to: SnippetStorageLocations.vaultAuditFileURL)
+
+        let service = DiagnosticsService(
+            registerGlobally: false,
+            mirrorToOSLog: false)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.vaultAuditFileURL.path))
+
+        let exportURL = rootURL.appendingPathComponent("legacy-diagnostics.jsonl")
+        _ = try await service.export(to: exportURL)
+        let export = try String(contentsOf: exportURL, encoding: .utf8)
+        XCTAssertFalse(export.contains("LEGACY-CALLER-SENTINEL"))
+        XCTAssertFalse(export.contains("/private/Caller.app"))
+        XCTAssertFalse(export.contains("\"pid\""))
+
+        let objects = try export.split(separator: "\n").map { line in
+            try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        let migrated = try XCTUnwrap(objects.first { $0["event"] as? String == "secure_reveal" })
+        let fields = try XCTUnwrap(migrated["fields"] as? [String: Any])
+        XCTAssertEqual(fields["keyword"] as? String, "legacy-keyword")
+        XCTAssertEqual(fields["outcome"] as? String, "revealed")
+        XCTAssertEqual(fields["caller"] as? String, "unknown")
+    }
+
+    func testDiagnosticsExportRejectsFieldsOutsideClosedPrivacySchema() async throws {
+        let service = DiagnosticsService(
+            registerGlobally: false,
+            mirrorToOSLog: false)
+        let injectedURL = SnippetStorageLocations.diagnosticsLogsFolderURL
+            .appendingPathComponent("snippets-injected.jsonl")
+        let validRecord = DiagnosticRecord(
+            event: .lifecycle(.becameActive),
+            timestamp: "2026-08-09T09:00:00.000Z",
+            elapsedMilliseconds: 1,
+            sessionIdentifier: UUID().uuidString.lowercased(),
+            sequence: 1)
+        var injected = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: validRecord.jsonLine()) as? [String: Any])
+        var fields = try XCTUnwrap(injected["fields"] as? [String: Any])
+        fields["body"] = "PRIVATE-BODY-SENTINEL"
+        injected["fields"] = fields
+        var injectedData = try JSONSerialization.data(withJSONObject: injected)
+        injectedData.append(0x0A)
+        try injectedData.write(to: injectedURL)
+
+        do {
+            _ = try await service.export(to: rootURL.appendingPathComponent("unsafe.jsonl"))
+            XCTFail("Export must reject fields that the typed event schema cannot create")
+        } catch DiagnosticsExportError.corruptLog {
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: rootURL.appendingPathComponent("unsafe.jsonl").path))
+        } catch {
+            XCTFail("Expected corruptLog, got \(error)")
+        }
+    }
+
+    func testDeletingDiagnosticsRemovesAnUnmigratableLegacyAudit() async throws {
+        try FileManager.default.createDirectory(
+            at: SnippetStorageLocations.vaultFolderURL,
+            withIntermediateDirectories: true)
+        try Data("not a legacy audit".utf8).write(
+            to: SnippetStorageLocations.vaultAuditFileURL)
+        let service = DiagnosticsService(
+            registerGlobally: false,
+            mirrorToOSLog: false)
+
+        XCTAssertTrue(service.summary().privacyCleanupNeeded)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.vaultAuditFileURL.path))
+
+        await service.deleteStoredLogs()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.vaultAuditFileURL.path))
+        XCTAssertFalse(service.summary().privacyCleanupNeeded)
+    }
+
     private func hostMainSplit(
         environment: AppEnvironment,
         selecting snippetID: UUID? = nil

@@ -192,10 +192,20 @@ nonisolated enum SnippetStorageLocations {
         vaultFolderURL.appendingPathComponent("vault.json", isDirectory: false)
     }
 
-    /// Reveal-audit log. Deliberately *not* in `Usage/`, which carries a published
-    /// promise never to leave the Mac and a very different retention policy.
+    /// Retired reveal-audit location, retained only so DiagnosticsService can migrate
+    /// old installations into the bounded, privacy-filtered JSONL store.
     static var vaultAuditFileURL: URL {
         vaultFolderURL.appendingPathComponent("audit.json", isDirectory: false)
+    }
+
+    /// Persistent, privacy-filtered operational diagnostics. Keeping this below its
+    /// own subdirectory prevents log rotation from waking the Mac library observer.
+    static var diagnosticsFolderURL: URL {
+        supportFolderURL.appendingPathComponent("Diagnostics", isDirectory: true)
+    }
+
+    static var diagnosticsLogsFolderURL: URL {
+        diagnosticsFolderURL.appendingPathComponent("Logs", isDirectory: true)
     }
 
     /// Rolling snapshots taken before anything destructive.
@@ -219,7 +229,8 @@ nonisolated enum SnippetStorageLocations {
     static func createAllDirectories(fileManager: FileManager = .default) {
         for folder in [
             supportFolderURL, usageFolderURL, syncFolderURL,
-            syncQuarantineFolderURL, vaultFolderURL, backupsFolderURL, tmpFolderURL,
+            syncQuarantineFolderURL, vaultFolderURL, diagnosticsFolderURL,
+            diagnosticsLogsFolderURL, backupsFolderURL, tmpFolderURL,
         ] {
             try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         }

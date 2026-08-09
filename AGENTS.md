@@ -169,6 +169,115 @@ Library/Application Support/SnippetsClone/Sync/state.json
 Library/Application Support/SnippetsClone/Vault/vault.json
 ```
 
+## Persistent diagnostics and logging
+
+The macOS and iPad app targets use CocoaLumberjack 3.9.1 for persistent diagnostics.
+Keep that dependency at the app boundary: shared code talks only through the typed,
+Foundation-only facade in `snippets/Core/Diagnostics.swift`; the implementation is in
+`snippets/Diagnostics/DiagnosticsService.swift`. `CorePackage` and `snippets-cli` must
+not import CocoaLumberjack, MetricKit, AppKit, UIKit, or start writing diagnostics. The
+facade intentionally does nothing until an app installs a sink.
+
+Use `DiagnosticsService.shared` as the one process-wide production backend. Do not add
+another logger graph per store, scene, or `AppEnvironment`; CocoaLumberjack, its OS log
+mirror, and MetricKit registration are process-wide. An isolated test may construct a
+service with `registerGlobally: false` and `mirrorToOSLog: false`.
+
+Initialization order on macOS is load-bearing. Diagnostics must create `Diagnostics/`
+and `Tmp/`, and the usage store must create `Usage/`, before `SnippetStore` installs its
+external-filesystem observer. Creating those directories later looks like a library
+change. Preserve the declaration order and comment in `AppDelegate`.
+
+Persistent records are structured JSON Lines under:
+
+```text
+Library/Application Support/SnippetsClone/Diagnostics/Logs/
+```
+
+- Retain at most 14 days, roll at 1 MiB or 24 hours, retain at most 64 log files, and
+  cap the directory at 24 MiB. Do not add a second ad-hoc persistent log.
+- Keep directories mode `0700` and files mode `0600`, exclude `Diagnostics/` from
+  backup, and preserve iPad's `completeUntilFirstUserAuthentication` file protection.
+- Safe structured records are also mirrored to unified OS logging. Do not bypass the
+  typed facade to send a richer or less-sanitized version to `OSLog`.
+- Records use schema version 1 and a closed top-level shape: timestamp, session ID,
+  monotonic elapsed time, sequence, level, category, event, and typed event fields.
+
+### Logging privacy contract
+
+Diagnostics files and exports are plaintext and may be handed to an engineer. Every
+field therefore has to be safe at the point where `Diagnostics.record` is called.
+
+- By explicit product decision, a secure-snippet **keyword is not private** and may be
+  logged. It must still enter through `DiagnosticKeyword`, which applies
+  `Snippet.sanitizedKeyword` and bounds the result to 256 UTF-8 bytes. Do not pass the
+  keyword through a generic string field.
+- Never log snippet bodies, display names, tags, clipboard contents, ciphertext, keys,
+  recovery material, record UUIDs, CloudKit record names, filesystem paths, caller
+  paths or PIDs, stable device identifiers, or stable hashes derived from them.
+- Never persist `localizedDescription`, `String(describing:)` of an error,
+  `NSError.userInfo`, reflected values, or arbitrary exception text. Convert errors to
+  `DiagnosticFailure`, which retains only an allow-listed family and numeric code.
+- Prefer closed enums, booleans, bounded counts, durations, and aggregate outcomes. Do
+  not add generic `message`, metadata dictionary, raw JSON, `[String: Any]`, or other
+  escape hatch to `DiagnosticEvent`.
+- Aggregate batch and per-record failures before logging. Record counts and the first
+  sanitized failure when useful; do not emit one event per snippet or include an ID to
+  correlate it later.
+- MetricKit payloads must stay behind the existing allow-list sanitizer and its size,
+  depth, and node limits. Never persist MetricKit's raw JSON or binary names.
+
+### Adding or changing a diagnostic event
+
+Treat the event vocabulary and export validator as one schema. A new event is incomplete
+until all of these are done:
+
+1. Add a closed `DiagnosticEvent` case and any narrowly typed supporting enums or value
+   types in `snippets/Core/Diagnostics.swift`. Reuse an existing category where it fits.
+2. Give it an exact event name, category, default level, bounded field mapping, and only
+   if justified, synchronous-write policy. Ordinary and high-frequency events should
+   remain asynchronous; reserve synchronous persistence for terminal or high-risk facts
+   such as storage/CloudKit failures, halted sync, secure reveal, and MetricKit reports.
+3. Add the exact category and required/optional field set to
+   `DiagnosticsService.exportEventSchemas`, and update the string, boolean, and numeric
+   field allow-lists. Export must fail closed when an unexpected event, field, or type is
+   encountered.
+4. Instrument the owning boundary once. Avoid duplicate start/end events and avoid hot
+   loop logging; prefer a single outcome with duration and aggregate counts.
+5. Add privacy/schema tests in `Tests/Core/DiagnosticsTests.swift` and backend tests in
+   `snippets-ipad-tests/SnippetsIPadTests.swift`. Cover rotation/retention or export when
+   changing those mechanisms. Run the CorePackage test and both platform builds from the
+   verification section for cross-platform shared changes.
+6. Update `docs/diagnostics.md` and Settings privacy copy if retention, exported fields,
+   or the approved-data boundary changes.
+
+Do not guess the CloudKit environment for diagnostics. macOS reads the entitlement from
+the running signed process. The public iOS SDK cannot do that, so iPad device logs use
+`unrecognized` and simulator logs use `absent`. Inspect the built app's actual signed
+entitlements when diagnosing an iPad environment mismatch.
+
+### Export, collection, and deletion
+
+Use **Settings → Diagnostics → Export Logs** when possible. It creates one portable
+JSONL file, prepends a `diagnostics_manifest`, validates the exact schema and field
+types, rejects non-regular or linked inputs, and enforces a 25 MiB export limit. Only a
+torn final line may be skipped. Preserve the plaintext warning,
+including that secure-snippet keywords can be present.
+
+For engineering collection without opening Settings, use:
+
+```sh
+./scripts/collect-diagnostics.sh --mac
+./scripts/collect-diagnostics.sh --ipad --device "My iPad"
+```
+
+Use `--debug` only for the separate Debug iPad bundle. The script copies retained raw
+files and must not remove the app, container, or user data; the validated UI export is
+preferred for normal sharing. **Delete Logs** must continue deleting retained logs and
+an old `Vault/audit.json` if its privacy-preserving migration failed. Legacy audit
+migration may retain only timestamp, outcome, and the approved keyword; it must discard
+caller paths and PIDs. More operational detail lives in `docs/diagnostics.md`.
+
 ## Installing on a connected iPad
 
 Use a Release build when the goal is to see the same Production library as the Mac app.

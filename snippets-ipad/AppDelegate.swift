@@ -49,6 +49,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         configuration.delegateClass = SceneDelegate.self
         return configuration
     }
+
+    func applicationDidReceiveMemoryWarning(_ application: UIApplication) {
+        environment.receivedMemoryWarning()
+    }
 }
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {

@@ -127,7 +127,6 @@ final class ControlServer: NSObject {
     private let session: VaultSession
     private let secureStore: SecureSnippetStore
     private let socketURL: URL
-    private let auditURL: URL
 
     private var listenerDescriptor: Int32 = -1
     private var acceptSource: DispatchSourceRead?
@@ -167,11 +166,10 @@ final class ControlServer: NSObject {
     private var activeRevealPrompt: ActiveRevealPrompt?
 
     init(session: VaultSession, secureStore: SecureSnippetStore,
-         socketURL: URL = SnippetsIPC.socketURL(), auditURL: URL = SnippetStorageLocations.vaultAuditFileURL) {
+         socketURL: URL = SnippetsIPC.socketURL()) {
         self.session = session
         self.secureStore = secureStore
         self.socketURL = socketURL
-        self.auditURL = auditURL
         super.init()
     }
 
@@ -192,7 +190,11 @@ final class ControlServer: NSObject {
             // Not fatal. The app is fully usable without the CLI channel, and the most
             // likely cause is a support directory that cannot be written to — which the
             // user has much bigger problems about.
-            NSLog("Snippets: could not start the CLI control socket: \(error)")
+            Diagnostics.record(.storageFailure(
+                area: .controlSocket,
+                operation: .start,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return
         }
 
@@ -237,6 +239,10 @@ final class ControlServer: NSObject {
     nonisolated private func serve(_ descriptor: Int32) {
         let peer = PeerIdentity(descriptor: descriptor)
         guard peer.isTrusted else {
+            Diagnostics.record(.secureReveal(
+                keyword: DiagnosticKeyword(""),
+                outcome: .denied,
+                caller: .untrusted))
             // Deliberately terse. Telling an unverified caller *why* it failed helps it
             // iterate towards passing.
             Self.respond(
@@ -321,14 +327,14 @@ final class ControlServer: NSObject {
         }
 
         guard !revealInFlight else {
-            record(audit: "busy", keyword: lookup, peer: peer)
+            recordReveal(.busy, keyword: lookup, peer: peer)
             return .failure(
                 .refused,
                 "another reveal request is already awaiting approval; approve or deny it in Snippets")
         }
 
         guard allowanceRemains() else {
-            record(audit: "rate-limited", keyword: lookup, peer: peer)
+            recordReveal(.rateLimited, keyword: lookup, peer: peer)
             return .failure(
                 .refused,
                 "too many reveal requests in the last minute; approve them one at a time from the app")
@@ -343,10 +349,10 @@ final class ControlServer: NSObject {
 
         switch await confirm(shell: shell, invocation: invocation, peer: peer) {
         case .denied:
-            record(audit: "denied", keyword: lookup, peer: peer)
+            recordReveal(.denied, keyword: lookup, peer: peer)
             return .failure(.denied, "the request was not approved")
         case .timedOut:
-            record(audit: "timed-out", keyword: lookup, peer: peer)
+            recordReveal(.timedOut, keyword: lookup, peer: peer)
             return .failure(
                 .denied,
                 "the request was not approved within \(Int(SnippetsIPC.revealConsentTimeout)) seconds")
@@ -363,12 +369,13 @@ final class ControlServer: NSObject {
             let content = try await session.withOneUseAuthentication(
                 reason: "Reveal “\(shell.displayName)” for \(peer.applicationName)"
             ) { try secureStore.content(for: shell.id) }
-            record(audit: "revealed", keyword: lookup, peer: peer)
+            recordReveal(.revealed, keyword: lookup, peer: peer)
             return SnippetsIPC.Response(status: .ok, content: content)
         } catch VaultSession.Failure.noKey {
+            recordReveal(.failed, keyword: lookup, peer: peer)
             return .failure(.locked, "the key for this vault is not on this Mac")
         } catch {
-            record(audit: "failed", keyword: lookup, peer: peer)
+            recordReveal(.failed, keyword: lookup, peer: peer)
             return .failure(.locked, "\(error)")
         }
     }
@@ -699,32 +706,15 @@ final class ControlServer: NSObject {
         prompt.continuation.resume(returning: result)
     }
 
-    /// Appends to `Vault/audit.json`. **Never records content** — an audit log that
-    /// contains the secrets is a second copy of the vault with none of the protection.
-    private func record(audit outcome: String, keyword: String, peer: PeerIdentity) {
-        struct Entry: Codable {
-            var at: Date
-            var outcome: String
-            var keyword: String
-            var caller: String
-            var pid: Int32
-        }
-
-        var entries = (try? Data(contentsOf: auditURL))
-            .flatMap { try? JSONDecoder().decode([Entry].self, from: $0) } ?? []
-        entries.append(Entry(
-            at: Date(), outcome: outcome, keyword: keyword,
-            caller: peer.displayName, pid: peer.pid))
-        // Bounded: this is a diagnostic aid, not a compliance artefact, and an unbounded
-        // append-only file in the support directory is its own small bug.
-        if entries.count > 500 { entries.removeFirst(entries.count - 500) }
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(entries) {
-            try? AtomicFileWriter.write(data, to: auditURL)
-        }
+    private func recordReveal(
+        _ outcome: DiagnosticSecureRevealOutcome,
+        keyword: String,
+        peer: PeerIdentity
+    ) {
+        Diagnostics.record(.secureReveal(
+            keyword: DiagnosticKeyword(keyword),
+            outcome: outcome,
+            caller: peer.isTrusted ? .trusted : .untrusted))
     }
 }
 

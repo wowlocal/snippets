@@ -133,6 +133,9 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         do {
             status = try await container.accountStatus()
         } catch {
+            Diagnostics.record(.cloudKitFailure(
+                operation: .accountStatus,
+                failure: DiagnosticFailure(error)))
             throw CloudKitErrorMapping.failure(for: error)
         }
         if let failure = status.syncBlockingFailure {
@@ -156,6 +159,9 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             _ = try await database.modifyRecordZones(
                 saving: [CKRecordZone(zoneID: zoneID)], deleting: [])
         } catch {
+            Diagnostics.record(.cloudKitFailure(
+                operation: .ensureZone,
+                failure: DiagnosticFailure(error)))
             throw CloudKitErrorMapping.failure(for: error)
         }
 
@@ -191,11 +197,17 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             // `zoneNotFound` / `userDeletedZone` mean the zone itself is gone — which is
             // exactly what "Reset Development Environment" in the CloudKit Dashboard
             // does, so this path runs often while iterating, not only in disasters.
+            Diagnostics.record(.cloudKitFailure(
+                operation: .fetchChanges,
+                failure: DiagnosticFailure(error)))
             forgetZone()
             eventContinuation.yield(.cursorInvalidated(reason: describe(error)))
             try await ensureZone()
             return try await page(since: nil, isFullResync: true)
         } catch {
+            Diagnostics.record(.cloudKitFailure(
+                operation: .fetchChanges,
+                failure: DiagnosticFailure(error)))
             throw CloudKitErrorMapping.failure(for: error)
         }
     }
@@ -220,7 +232,9 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             }
 
         var records: [WireRecord] = []
-        for (recordID, outcome) in modifications {
+        var ignoredRecords = 0
+        var firstIgnoredFailure: DiagnosticFailure?
+        for (_, outcome) in modifications {
             switch outcome {
             case .success(let modification):
                 do {
@@ -231,13 +245,19 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                     // feed behind one bad record forever. The engine's own quarantine
                     // handles the undecryptable case; this is the un-*mappable* one,
                     // which means the CloudKit schema is not what this build expects.
-                    NSLog("Snippets: ignoring an unmappable iCloud record \(recordID.recordName): \(error)")
+                    ignoredRecords += 1
+                    if firstIgnoredFailure == nil {
+                        firstIgnoredFailure = DiagnosticFailure(error)
+                    }
                 }
             case .failure(let error):
                 // Per-record failure inside a fetch. Logged, not thrown, for the same
                 // reason — and not treated as a deletion, which is the one reading that
                 // could lose data.
-                NSLog("Snippets: iCloud could not return record \(recordID.recordName): \(error)")
+                ignoredRecords += 1
+                if firstIgnoredFailure == nil {
+                    firstIgnoredFailure = DiagnosticFailure(error)
+                }
             }
         }
 
@@ -249,11 +269,15 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         // it is a zone reset, a Dashboard action, or another client — and inferring
         // "remove this snippet" from it is the fastest known way to wipe a library.
         if !result.deletions.isEmpty {
-            NSLog("""
-                Snippets: iCloud reported \(result.deletions.count) record deletion(s), \
-                which this transport never issues; ignoring them rather than deleting \
-                local snippets.
-                """)
+            ignoredRecords += result.deletions.count
+        }
+        if ignoredRecords > 0 {
+            Diagnostics.record(.cloudKitRecordsIgnored(count: ignoredRecords))
+        }
+        if let firstIgnoredFailure {
+            Diagnostics.record(.cloudKitFailure(
+                operation: .fetchChanges,
+                failure: firstIgnoredFailure))
         }
 
         return SyncFetch(
@@ -317,6 +341,9 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                 // oversized-blob case. Permanent because retrying an 800 KB snippet
                 // produces the same 800 KB snippet.
                 outcomes[wire.id] = .rejected(.permanent(detail: describe(error)))
+                Diagnostics.record(.cloudKitFailure(
+                    operation: .mapRecord,
+                    failure: DiagnosticFailure(error)))
             }
         }
 
@@ -339,6 +366,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             let (saveResults, _) = try await database.modifyRecords(
                 saving: toSave, deleting: [], savePolicy: .allKeys, atomically: false)
 
+            var firstItemFailure: DiagnosticFailure?
             for (recordID, outcome) in saveResults {
                 guard let id = byRecordName[recordID.recordName] else { continue }
                 switch outcome {
@@ -355,7 +383,15 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                     outcomes[id] = .accepted(rev: rev ?? revision(of: id, in: chunk))
                 case .failure(let error):
                     outcomes[id] = .rejected(CloudKitErrorMapping.rejection(for: error))
+                    if firstItemFailure == nil {
+                        firstItemFailure = DiagnosticFailure(error)
+                    }
                 }
+            }
+            if let firstItemFailure {
+                Diagnostics.record(.cloudKitFailure(
+                    operation: .modifyRecords,
+                    failure: firstItemFailure))
             }
             return outcomes
 
@@ -363,6 +399,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             // The documented limits are prose; this is the empirical one. Halve and
             // recurse, so a request that was too big becomes two that are not.
             let middle = chunk.count / 2
+            Diagnostics.record(.cloudKitBatchSplit(recordCount: chunk.count))
             let first = try await submit(chunk: Array(chunk[..<middle]))
             let second = try await submit(chunk: Array(chunk[middle...]))
             return outcomes
@@ -370,6 +407,9 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                 .merging(second) { _, newer in newer }
 
         } catch {
+            Diagnostics.record(.cloudKitFailure(
+                operation: .modifyRecords,
+                failure: DiagnosticFailure(error)))
             // A partial failure arrives as a thrown `CKError` carrying per-item errors.
             // Unwrapping it is what keeps a half-accepted batch from being reported as a
             // total loss.

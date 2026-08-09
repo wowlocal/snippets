@@ -293,6 +293,14 @@ final class VaultSession {
     private func transition(to newState: State) {
         guard newState != state else { return }
         state = newState
+        switch newState {
+        case .locked:
+            Diagnostics.record(.vaultAction(.locked, count: nil))
+        case .unlocked:
+            Diagnostics.record(.vaultAction(.unlocked, count: nil))
+        case .noKey:
+            break
+        }
         onStateChange?(newState)
         // Broadcast as well as calling the closure: the editor has to re-hide a revealed
         // secret when the vault locks, and most locks are not initiated by the editor —

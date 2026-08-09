@@ -1,5 +1,4 @@
 import AppKit
-import os
 
 struct SuggestionItem {
     let snippet: Snippet
@@ -78,8 +77,6 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     private var accessibilityPrimedPIDs: Set<pid_t> = []
     private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
     private var selectionWasUserDriven = false
-
-    private static let axLog = Logger(subsystem: "com.khm.snippets", category: "suggestion-anchor")
 
     private enum AnchorSource: String {
         case caret
@@ -211,9 +208,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         if anchor == nil {
             // Timed because this is the one place the panel talks to a possibly-stalled host, and
             // the cost is invisible from the outside: a slow answer and a fast one both just place
-            // the panel. `log stream --predicate 'subsystem == "com.khm.snippets"'` makes the
-            // bounded timeout observable, and says which path placed the panel when a host is slow.
-            let host = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+            // the panel. Persistent diagnostics make the bounded timeout observable and
+            // say which path placed the panel when a host is slow.
             let budget = axBudget ?? AXMessagingBudget()
             let resolution = resolveAnchor(
                 focusedElement: anchorFocusedElement,
@@ -224,14 +220,21 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
             // detection. Reporting only the panel slice would hide the very cumulative stall the
             // shared deadline prevents.
             let elapsedMS = budget.elapsedMilliseconds
-            Self.axLog.info(
-                """
-                anchor host=\(host, privacy: .public) \
-                source=\(resolution.source.rawValue, privacy: .public) \
-                reason=\(resolution.reason, privacy: .public) \
-                ms=\(elapsedMS, format: .fixed(precision: 1), privacy: .public)
-                """
-            )
+            let source: DiagnosticSuggestionAnchorSource = switch resolution.source {
+            case .caret: .caret
+            case .focusedElement: .accessibility
+            case .mouse: .mouse
+            }
+            let reason: DiagnosticSuggestionAnchorReason = switch resolution.reason {
+            case "none": .success
+            case "deadline", "timeout", "timeout-configuration": .timedOut
+            case "focus-unavailable", "range-unavailable", "element-unavailable": .unavailable
+            default: .unknown
+            }
+            Diagnostics.record(.suggestionAnchor(
+                source: source,
+                reason: reason,
+                durationMilliseconds: Int64(elapsedMS.rounded())))
         }
 
         let visibleCount = min(count, maxVisible, maxVisibleRowsOnScreen)

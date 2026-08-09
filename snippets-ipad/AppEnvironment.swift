@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class AppEnvironment {
+    let diagnostics: DiagnosticsService
     let store: SnippetStore
     let keychain: KeychainSecretStore
     let vaultSession: VaultSession
@@ -21,6 +22,7 @@ final class AppEnvironment {
             UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
         }
         #endif
+        diagnostics = DiagnosticsService.shared
         store = SnippetStore(configuration: .iPad)
         keychain = KeychainSecretStore()
         vaultSession = VaultSession(keychain: keychain)
@@ -51,15 +53,23 @@ final class AppEnvironment {
     }
 
     func becameActive() {
+        Diagnostics.record(.lifecycle(.becameActive))
         secureStore.reload()
         if SyncCoordinator.isEnabled {
-            syncCoordinator.syncNow()
+            syncCoordinator.syncNow(trigger: .becameActive)
         }
     }
 
     func enteredBackground() {
+        Diagnostics.record(.lifecycle(.enteredBackground))
         vaultSession.lock()
         store.flushPendingWrites()
+        Diagnostics.flush()
+    }
+
+    func receivedMemoryWarning() {
+        Diagnostics.record(.lifecycle(.memoryWarning))
+        Diagnostics.flush()
     }
 
     func performLocalSecureChange<T>(_ change: () throws -> T) rethrows -> T {

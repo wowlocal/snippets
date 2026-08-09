@@ -809,7 +809,11 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             }
         } catch {
             importExportMessage = "Couldn't update Launch at Login."
-            NSLog("Launch at login toggle failed: \(error)")
+            Diagnostics.record(.storageFailure(
+                area: .launchAtLogin,
+                operation: .register,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
     }
 

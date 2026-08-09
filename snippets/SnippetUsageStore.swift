@@ -307,13 +307,16 @@ final class SnippetUsageStore {
         if let probe = try? JSONDecoder().decode(SnippetUsageVersionProbe.self, from: data),
            let version = probe.v,
            version > SnippetUsageDocument.currentVersion {
-            NSLog("Snippets: usage data version \(version) is newer; running read-only.")
+            Diagnostics.record(.storageState(
+                area: .usage,
+                state: .versionTooNew,
+                value: version))
             isReadOnly = true
             return
         }
 
         guard let decoded = try? JSONDecoder().decode(SnippetUsageDocument.self, from: data) else {
-            NSLog("Snippets: usage data unreadable; starting fresh.")
+            Diagnostics.record(.storageState(area: .usage, state: .recreated, value: nil))
             return
         }
         guard decoded.version <= SnippetUsageDocument.currentVersion else {

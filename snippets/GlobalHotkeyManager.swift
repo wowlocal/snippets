@@ -103,7 +103,11 @@ final class GlobalHotkeyManager {
 
         guard status == noErr, let reference else {
             registrationFailed = true
-            NSLog("Global hotkey \(Self.displayString) registration failed (status \(status))")
+            Diagnostics.record(.storageFailure(
+                area: .globalHotkey,
+                operation: .register,
+                failure: DiagnosticFailure(family: .security, code: Int(status)),
+                attempt: nil))
             return
         }
 
@@ -156,7 +160,11 @@ final class GlobalHotkeyManager {
         )
 
         guard status == noErr else {
-            NSLog("Global hotkey event handler installation failed (status \(status))")
+            Diagnostics.record(.storageFailure(
+                area: .globalHotkey,
+                operation: .register,
+                failure: DiagnosticFailure(family: .security, code: Int(status)),
+                attempt: nil))
             return
         }
 

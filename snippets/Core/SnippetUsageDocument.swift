@@ -256,13 +256,17 @@ nonisolated enum SnippetUsageFile {
         do {
             held = try FileGuard.acquire(at: effectiveLockURL, timeout: lockTimeout)
         } catch {
-            NSLog("Snippets: could not lock usage data: \(error)")
+            Diagnostics.record(.storageFailure(
+                area: .usage,
+                operation: .lock,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return false
         }
         // Unlike the library writer, this path has no compare-and-swap verification fallback.
         // Proceeding after both lock mechanisms fail would silently reintroduce lost updates.
         guard !held.isUnlocked else {
-            NSLog("Snippets: no supported usage lock is available; preserving the existing file")
+            Diagnostics.record(.storageState(area: .usage, state: .degraded, value: nil))
             return false
         }
         defer { held.release() }
@@ -299,7 +303,11 @@ nonisolated enum SnippetUsageFile {
                 [.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
             return true
         } catch {
-            NSLog("Snippets: could not write usage data: \(error.localizedDescription)")
+            Diagnostics.record(.storageFailure(
+                area: .usage,
+                operation: .write,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return false
         }
     }

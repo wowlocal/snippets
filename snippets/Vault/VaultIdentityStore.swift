@@ -58,7 +58,11 @@ final class VaultIdentityStore {
         do {
             data = try keychain.loadItem(account: Self.account)
         } catch {
-            NSLog("Snippets: the shared vault identity could not be read (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .vaultIdentity,
+                operation: .read,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return nil
         }
         guard let data else { return nil }
@@ -67,13 +71,20 @@ final class VaultIdentityStore {
         // format lands in "this build is too old" rather than in "the bytes are broken".
         if let version = VaultFile.probeSchemaVersion(data),
            version > VaultDocument.currentSchemaVersion {
-            NSLog("Snippets: the shared vault identity is schemaVersion \(version); ignoring it.")
+            Diagnostics.record(.storageState(
+                area: .vaultIdentity,
+                state: .versionTooNew,
+                value: version))
             return nil
         }
         do {
             return try VaultFile.decode(data)
         } catch {
-            NSLog("Snippets: the shared vault identity could not be understood (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .vaultIdentity,
+                operation: .read,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return nil
         }
     }
@@ -119,8 +130,10 @@ final class VaultIdentityStore {
         var valueToPublish = identity
         if let existing = published() {
             guard existing.kid == identity.kid else {
-                NSLog("Snippets: not publishing vault \(identity.kid); "
-                      + "\(existing.kid) already holds the shared identity.")
+                Diagnostics.record(.storageState(
+                    area: .vaultIdentity,
+                    state: .degraded,
+                    value: nil))
                 return false
             }
             guard let merged = VaultDocument.mergingSharedIdentity(
@@ -129,8 +142,10 @@ final class VaultIdentityStore {
                 // A same-`kid` document with a different salt or KDF is corrupt or from
                 // an incompatible writer. Overwriting either direction would advertise
                 // wraps and records under an identity they cannot open.
-                NSLog("Snippets: not publishing vault \(identity.kid); its shared "
-                      + "identity disagrees on immutable crypto parameters.")
+                Diagnostics.record(.storageState(
+                    area: .vaultIdentity,
+                    state: .degraded,
+                    value: nil))
                 return false
             }
             if existing == merged { return true }
@@ -140,9 +155,14 @@ final class VaultIdentityStore {
         do {
             try keychain.storeItem(
                 try VaultFile.encode(valueToPublish), account: Self.account)
+            Diagnostics.record(.vaultAction(.publishedSharedIdentity, count: nil))
             return true
         } catch {
-            NSLog("Snippets: the vault identity could not be published (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .vaultIdentity,
+                operation: .publish,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return false
         }
     }
@@ -154,8 +174,13 @@ final class VaultIdentityStore {
     func forget() {
         do {
             try keychain.deleteItem(account: Self.account)
+            Diagnostics.record(.vaultAction(.removedSharedIdentity, count: nil))
         } catch {
-            NSLog("Snippets: the shared vault identity could not be removed (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .vaultIdentity,
+                operation: .remove,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
     }
 }

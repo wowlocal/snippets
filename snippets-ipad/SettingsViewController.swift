@@ -1,14 +1,16 @@
 import UIKit
 
-final class SettingsViewController: UITableViewController {
+final class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
     private enum Section: Int, CaseIterable {
         case sync
         case security
+        case diagnostics
 
         var title: String {
             switch self {
             case .sync: "iCloud Sync"
             case .security: "Secure Snippets"
+            case .diagnostics: "Diagnostics"
             }
         }
     }
@@ -23,9 +25,13 @@ final class SettingsViewController: UITableViewController {
         case addRecovery
         case restoreRecovery
         case forgetVault
+        case diagnosticsStatus
+        case exportDiagnostics
+        case deleteDiagnostics
     }
 
     private let environment: AppEnvironment
+    private var temporaryExportURL: URL?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -131,6 +137,32 @@ final class SettingsViewController: UITableViewController {
                 : "This also removes the device-only vault key."
             cell.textLabel?.textColor = .systemRed
             cell.imageView?.image = UIImage(systemName: "trash")
+        case .diagnosticsStatus:
+            let summary = environment.diagnostics.summary()
+            cell.textLabel?.text = "Persistent Logs"
+            let bytes = ByteCountFormatter.string(
+                fromByteCount: Int64(min(summary.byteCount, UInt64(Int64.max))),
+                countStyle: .file)
+            var detail = summary.storageAvailable
+                ? "\(summary.fileCount) file(s), \(bytes). Kept for up to \(DiagnosticsService.retentionDays) days."
+                : "The diagnostics folder is unavailable."
+            if summary.privacyCleanupNeeded {
+                detail += " Legacy audit cleanup still needs attention."
+                cell.detailTextLabel?.textColor = .systemRed
+            }
+            cell.detailTextLabel?.text = detail
+            cell.selectionStyle = .none
+        case .exportDiagnostics:
+            cell.textLabel?.text = "Export Diagnostic Logs"
+            cell.detailTextLabel?.text = "Plaintext JSON Lines. Secure-snippet keywords "
+                + "may be included; bodies, names, tags, IDs, paths, keys and ciphertext "
+                + "are excluded."
+            cell.imageView?.image = UIImage(systemName: "square.and.arrow.up")
+            cell.textLabel?.textColor = AppTheme.tint
+        case .deleteDiagnostics:
+            cell.textLabel?.text = "Delete Diagnostic Logs"
+            cell.imageView?.image = UIImage(systemName: "trash")
+            cell.textLabel?.textColor = .systemRed
         }
         return cell
     }
@@ -151,6 +183,10 @@ final class SettingsViewController: UITableViewController {
             promptForRecoveryKey()
         case .forgetVault:
             confirmForgetVault()
+        case .exportDiagnostics:
+            exportDiagnostics()
+        case .deleteDiagnostics:
+            confirmDeleteDiagnostics()
         default:
             break
         }
@@ -172,7 +208,65 @@ final class SettingsViewController: UITableViewController {
                 rows.append(.forgetVault)
             }
             return rows
+        case .diagnostics:
+            return [.diagnosticsStatus, .exportDiagnostics, .deleteDiagnostics]
         }
+    }
+
+    private func exportDiagnostics() {
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(
+            DiagnosticsService.suggestedExportFilename(),
+            isDirectory: false)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await environment.diagnostics.export(to: destination)
+                temporaryExportURL = result.url
+                let picker = UIDocumentPickerViewController(
+                    forExporting: [result.url],
+                    asCopy: true)
+                picker.delegate = self
+                present(picker, animated: true)
+            } catch {
+                showError(title: "Couldn’t Export Diagnostics", error: error)
+            }
+            tableView.reloadData()
+        }
+    }
+
+    private func confirmDeleteDiagnostics() {
+        let alert = UIAlertController(
+            title: "Delete Diagnostic Logs?",
+            message: "This permanently removes retained diagnostics and any legacy reveal-audit file from this iPad.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Delete Logs", style: .destructive) {
+            [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.environment.diagnostics.deleteStoredLogs()
+                self.tableView.reloadData()
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    func documentPicker(
+        _ controller: UIDocumentPickerViewController,
+        didPickDocumentsAt urls: [URL]
+    ) {
+        removeTemporaryExport()
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        removeTemporaryExport()
+    }
+
+    private func removeTemporaryExport() {
+        if let temporaryExportURL {
+            try? FileManager.default.removeItem(at: temporaryExportURL)
+        }
+        temporaryExportURL = nil
     }
 
     private func confirmResumeAfterReview() {

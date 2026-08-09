@@ -157,7 +157,11 @@ final class SyncCoordinator {
             // answering, or the stale agreed base may not yet be removable. Both are
             // start prerequisites worth retrying rather than running under ambiguous
             // crypto state. `readiness` carries the detail to Settings.
-            NSLog("Snippets: iCloud sync is on but cannot prepare its wire key: \(error)")
+            Diagnostics.record(.storageFailure(
+                area: .syncKey,
+                operation: .read,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             startFailure = "\(error)"
             scheduleStartRetry()
             publish(.disabled)
@@ -197,7 +201,7 @@ final class SyncCoordinator {
 
         startPolling(every: transport.pollInterval)
         startEventPump(for: transport)
-        syncNow()
+        syncNow(trigger: .startup)
     }
 
     /// Retries a start that failed on the keychain.
@@ -252,12 +256,12 @@ final class SyncCoordinator {
         guard Self.isEnabled else { return }
         // `syncNow` already starts a stopped engine, so there is one path rather than two
         // that have to be kept saying the same thing.
-        syncNow()
+        syncNow(trigger: .localLibraryChange)
     }
 
     // MARK: - Running a round
 
-    func syncNow() {
+    func syncNow(trigger: DiagnosticSyncTrigger = .manual) {
         guard engine != nil else {
             // A start that failed — the keychain would not answer — is retried here
             // rather than only at launch. Without this the only way back was to relaunch
@@ -270,6 +274,7 @@ final class SyncCoordinator {
         if restartIfWireKeyChanged() { return }
 
         guard let engine else { return }
+        Diagnostics.record(.syncTriggered(trigger))
         if roundTask != nil {
             wantsAnotherRound = true
             return
@@ -288,7 +293,7 @@ final class SyncCoordinator {
     func clearHaltAfterUserReview() {
         engine?.clearHaltAfterUserReview()
         if Self.isEnabled {
-            syncNow()
+            syncNow(trigger: .retry)
         } else {
             // Halt persistence failed and turned the opt-in off. Do not let the existing
             // in-memory engine bypass that preference after Review; a later checkbox-on
@@ -337,8 +342,7 @@ final class SyncCoordinator {
         // the vault-key era whose base must be discarded. Both want the same action.
         if previous != nil || FileManager.default.fileExists(
             atPath: SnippetStorageLocations.syncBaseFileURL.path) {
-            NSLog("Snippets: the iCloud sync key changed; discarding the agreed base so "
-                  + "every snippet is re-uploaded under the new one.")
+            Diagnostics.record(.syncTriggered(.keyChanged))
         }
         // Only the agreed ancestor belongs to the old wire key. The projection sidecar
         // contains forward-compatible `x` fields and local HLC/origin metadata; deleting
@@ -371,7 +375,7 @@ final class SyncCoordinator {
         guard engine != nil, roundTask == nil, let activeKeyMaterial else { return false }
         guard let current = try? keys.material(), current != activeKeyMaterial else { return false }
 
-        NSLog("Snippets: the iCloud sync key changed; restarting under the shared one.")
+        Diagnostics.record(.syncTriggered(.keyChanged))
         stop()
         start()
         return true
@@ -394,7 +398,7 @@ final class SyncCoordinator {
         let replay = wantsAnotherRound || generation != lifecycleGeneration
         wantsAnotherRound = false
         guard replay, engine != nil else { return }
-        syncNow()
+        syncNow(trigger: .retry)
     }
 
     private func startPolling(every interval: TimeInterval) {
@@ -404,7 +408,7 @@ final class SyncCoordinator {
         // change arrive. `tolerance` lets the system coalesce it with other timers, which
         // matters for a laptop's battery at a two-minute cadence.
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.syncNow() }
+            MainActor.assumeIsolated { self?.syncNow(trigger: .poll) }
         }
         timer.tolerance = interval / 4
         RunLoop.main.add(timer, forMode: .common)
@@ -419,12 +423,12 @@ final class SyncCoordinator {
                 guard let self else { return }
                 switch event {
                 case .changesAvailable, .cursorInvalidated:
-                    self.syncNow()
+                    self.syncNow(trigger: .poll)
                 case .authenticationRequired:
                     // Deliberately still a fetch. The round begins by checking the account
                     // and will report the real state; acting on the hint directly would be
                     // a second, competing opinion about whether the user is signed in.
-                    self.syncNow()
+                    self.syncNow(trigger: .retry)
                 }
             }
         }
@@ -432,7 +436,33 @@ final class SyncCoordinator {
 
     private func publish(_ newState: SyncEngine.State) {
         state = newState
+        Diagnostics.record(.syncState(
+            Self.diagnosticState(for: newState),
+            haltReason: Self.diagnosticHaltReason(for: newState)))
         onStateChange?(newState)
+    }
+
+    private static func diagnosticState(for state: SyncEngine.State) -> DiagnosticSyncState {
+        switch state {
+        case .disabled: .disabled
+        case .idle(let lastSync): lastSync == nil ? .idle : .synced
+        case .syncing: .syncing
+        case .offline, .waitingForVault: .waiting
+        case .needsAuthentication: .failed
+        case .halted: .halted
+        }
+    }
+
+    private static func diagnosticHaltReason(
+        for state: SyncEngine.State
+    ) -> DiagnosticSyncHaltReason? {
+        guard case .halted(let reason, _) = state else { return nil }
+        return switch reason {
+        case .massDeletion: .destructiveChange
+        case .backendRefused: .accountRequiresReview
+        case .schemaTooNew, .manifestIntegrityFailed,
+             .localLibraryQuarantined, .vaultUnreadable: .incompatibleState
+        }
     }
 
     // MARK: - Presentation

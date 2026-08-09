@@ -49,6 +49,10 @@
 		28A200000000000000000025 /* SyncKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000025 /* SyncKeyStore.swift */; };
 		28A200000000000000000026 /* SnippetLibraryBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000026 /* SnippetLibraryBridge.swift */; };
 		28A200000000000000000027 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000027 /* SyncCoordinator.swift */; };
+		28D000000000000000000002 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000001 /* Diagnostics.swift */; };
+		28D000000000000000000004 /* DiagnosticsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000003 /* DiagnosticsService.swift */; };
+		28D000000000000000000008 /* CocoaLumberjack in Frameworks */ = {isa = PBXBuildFile; productRef = 28D000000000000000000006 /* CocoaLumberjack */; };
+		28D000000000000000000009 /* CocoaLumberjack in Frameworks */ = {isa = PBXBuildFile; productRef = 28D000000000000000000007 /* CocoaLumberjack */; };
 		270SPK012F53000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 270SPK022F53000000000002 /* Sparkle */; };
 		27C110052F53000000000005 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110022F53000000000002 /* main.swift */; };
 		27C110062F53000000000006 /* Snippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110032F53000000000003 /* Snippet.swift */; };
@@ -152,6 +156,8 @@
 		28A100000000000000000025 /* SyncKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncKeyStore.swift; path = snippets/Sync/SyncKeyStore.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000026 /* SnippetLibraryBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetLibraryBridge.swift; path = snippets/Sync/SnippetLibraryBridge.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000027 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncCoordinator.swift; path = snippets/Sync/SyncCoordinator.swift; sourceTree = SOURCE_ROOT; };
+		28D000000000000000000001 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Diagnostics.swift; path = snippets/Core/Diagnostics.swift; sourceTree = SOURCE_ROOT; };
+		28D000000000000000000003 /* DiagnosticsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DiagnosticsService.swift; path = snippets/Diagnostics/DiagnosticsService.swift; sourceTree = SOURCE_ROOT; };
 		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Snippets.app; path = "Snippets Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110012F53000000000001 /* snippets-cli */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "snippets-cli"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110022F53000000000002 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -214,6 +220,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				28D000000000000000000009 /* CocoaLumberjack in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -235,6 +242,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				28D000000000000000000008 /* CocoaLumberjack in Frameworks */,
 				270SPK012F53000000000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -302,6 +310,8 @@
 			children = (
 				28A100000000000000000001 /* AtomicFileWriter.swift */,
 				28A100000000000000000002 /* DeletionGuard.swift */,
+				28D000000000000000000001 /* Diagnostics.swift */,
+				28D000000000000000000003 /* DiagnosticsService.swift */,
 				28A100000000000000000028 /* EncryptedSnippetBackup.swift */,
 				28A100000000000000000003 /* HybridLogicalClock.swift */,
 				28A100000000000000000004 /* KeyWrap.swift */,
@@ -366,6 +376,7 @@
 			);
 			name = "Snippets iPad";
 			packageProductDependencies = (
+				28D000000000000000000007 /* CocoaLumberjack */,
 			);
 			productName = "Snippets iPad";
 			productReference = 28A000000000000000000001 /* Snippets iPad.app */;
@@ -436,6 +447,7 @@
 			);
 			name = Snippets;
 			packageProductDependencies = (
+				28D000000000000000000006 /* CocoaLumberjack */,
 				270SPK022F53000000000002 /* Sparkle */,
 			);
 			productName = snippets;
@@ -497,6 +509,7 @@
 			mainGroup = 272782CE2F41F9F1000B9989;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				28D000000000000000000005 /* XCRemoteSwiftPackageReference "CocoaLumberjack" */,
 				270SPK032F53000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -553,6 +566,8 @@
 			files = (
 				28A200000000000000000001 /* AtomicFileWriter.swift in Sources */,
 				28A200000000000000000002 /* DeletionGuard.swift in Sources */,
+				28D000000000000000000002 /* Diagnostics.swift in Sources */,
+				28D000000000000000000004 /* DiagnosticsService.swift in Sources */,
 				28A200000000000000000028 /* EncryptedSnippetBackup.swift in Sources */,
 				28A200000000000000000003 /* HybridLogicalClock.swift in Sources */,
 				28A200000000000000000004 /* KeyWrap.swift in Sources */,
@@ -1095,6 +1110,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		28D000000000000000000005 /* XCRemoteSwiftPackageReference "CocoaLumberjack" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/CocoaLumberjack/CocoaLumberjack";
+			requirement = {
+				kind = exactVersion;
+				version = 3.9.1;
+			};
+		};
 		270SPK032F53000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -1106,6 +1129,16 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		28D000000000000000000006 /* CocoaLumberjack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 28D000000000000000000005 /* XCRemoteSwiftPackageReference "CocoaLumberjack" */;
+			productName = CocoaLumberjack;
+		};
+		28D000000000000000000007 /* CocoaLumberjack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 28D000000000000000000005 /* XCRemoteSwiftPackageReference "CocoaLumberjack" */;
+			productName = CocoaLumberjack;
+		};
 		270SPK022F53000000000002 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 270SPK032F53000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */;

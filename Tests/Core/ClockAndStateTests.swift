@@ -858,6 +858,8 @@ struct ClockAndStateTests {
             ("Sync", SnippetStorageLocations.syncFolderURL),
             ("Sync/Quarantine", SnippetStorageLocations.syncQuarantineFolderURL),
             ("Vault", SnippetStorageLocations.vaultFolderURL),
+            ("Diagnostics", SnippetStorageLocations.diagnosticsFolderURL),
+            ("Diagnostics/Logs", SnippetStorageLocations.diagnosticsLogsFolderURL),
             ("Backups", SnippetStorageLocations.backupsFolderURL),
             ("Tmp", SnippetStorageLocations.tmpFolderURL),
         ]

@@ -40,11 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         case cancel
     }
 
-    // Declaration order is load-bearing: stored properties initialize top to
-    // bottom, and `SnippetStore.init()` installs a `DispatchSource` on the
-    // support folder. The usage store creates `Usage/` in its own initializer,
-    // so that directory must exist before the monitor goes up — otherwise the
-    // one-off `createDirectory` would fire it at an arbitrary later moment.
+    // Declaration order is load-bearing: diagnostics creates `Diagnostics/` and
+    // `Tmp/` first, then the usage store creates `Usage/`, and only then does
+    // `SnippetStore.init()` install its support-folder DispatchSource. Creating
+    // either directory after the monitor went up would look like a library edit.
+    let diagnostics = DiagnosticsService.shared
     let usageStore = SnippetUsageStore()
     let store = SnippetStore()
     /// Constructed eagerly but does nothing until a vault exists: with no key it settles
@@ -252,7 +252,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         #endif
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Diagnostics.record(.lifecycle(.becameActive))
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        Diagnostics.record(.lifecycle(.willTerminate))
         // First: give the user's clipboard back before writing anything of our own. A snippet
         // borrowed for a paste would otherwise outlive the process.
         // Before anything else: remove the socket, so a CLI invocation racing our exit
@@ -267,6 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // before an async write would run, so an async flush here writes nothing.
         usageStore.flush(synchronously: true)
         store.flushPendingWrites()
+        Diagnostics.flush()
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
@@ -280,8 +286,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @objc private func flushUsageDataBeforeSleep() {
         // Sleeping with a borrowed clipboard would hold it for hours instead of milliseconds.
+        Diagnostics.record(.lifecycle(.willSleep))
         expansionEngine.releaseBorrowedPasteboard()
         usageStore.flush(synchronously: true)
+        Diagnostics.flush()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -393,7 +401,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 try service.register()
             }
         } catch {
-            NSLog("Launch at login toggle failed: \(error)")
+            Diagnostics.record(.storageFailure(
+                area: .launchAtLogin,
+                operation: .register,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
     }
 

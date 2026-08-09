@@ -212,19 +212,42 @@ final class SyncEngine {
 
     // MARK: - One round
 
+    private struct RoundOutcome {
+        var uploaded = 0
+        var downloaded = 0
+        var merged = 0
+        var deferred = 0
+        var quarantined = 0
+        var fullResync = false
+    }
+
     @discardableResult
     func sync() async -> State {
         guard !state.isHalted else { return state }
         if case .syncing = state { return state }
         if case .offline(let retryAfter) = state, now() < retryAfter { return state }
 
+        let startedAtUptime = ProcessInfo.processInfo.systemUptime
+        var diagnosticRound = DiagnosticSyncRound(durationMilliseconds: 0)
+        defer {
+            diagnosticRound.durationMilliseconds = Int64(max(
+                0,
+                (ProcessInfo.processInfo.systemUptime - startedAtUptime) * 1_000))
+            Diagnostics.record(.syncRound(diagnosticRound))
+        }
         transition(to: .syncing)
         do {
-            let deferred = try await performRound()
+            let outcome = try await performRound()
+            diagnosticRound.uploaded = outcome.uploaded
+            diagnosticRound.downloaded = outcome.downloaded
+            diagnosticRound.merged = outcome.merged
+            diagnosticRound.deferred = outcome.deferred
+            diagnosticRound.quarantined = outcome.quarantined
+            diagnosticRound.fullResync = outcome.fullResync
             consecutiveFailures = 0
-            if let deferred {
+            if outcome.deferred > 0 {
                 transition(to: .waitingForVault(
-                    "\(deferred) secure snippet(s) from another device are waiting for a key "
+                    "\(outcome.deferred) secure snippet(s) from another device are waiting for a key "
                     + "this one does not have yet"))
             } else {
                 transition(to: .idle(lastSync: now()))
@@ -248,8 +271,9 @@ final class SyncEngine {
     ///   everything it fetched. A deferred round is not a failure — the push half
     ///   completed, everything applicable was applied — so it must not back off or count
     ///   against `consecutiveFailures`; it simply did not finish arriving.
-    private func performRound() async throws -> Int? {
+    private func performRound() async throws -> RoundOutcome {
         try Task.checkCancellation()
+        var round = RoundOutcome()
         // PUSH FIRST, deliberately.
         //
         // Fetching first and applying would rewrite local records before this device's
@@ -288,6 +312,7 @@ final class SyncEngine {
                     // rather than trusted.
                     guard let accepted = pendingByID[result.id] else { continue }
                     base.record(accepted)
+                    round.uploaded += 1
                 case .rejected(.authenticationRequired(let detail)):
                     // Not a halt. An expired token is an ordinary, recoverable state and
                     // halting for it would put a scary sticky error in front of someone
@@ -336,6 +361,7 @@ final class SyncEngine {
             let fetch = try await transport.fetchChanges(since: cursor)
             try Task.checkCancellation()
             isFullResync = isFullResync || fetch.isFullResync
+            round.downloaded += fetch.records.count
             for record in fetch.records {
                 do {
                     incoming.append(try WireCodec.open(record, using: sealer))
@@ -343,7 +369,8 @@ final class SyncEngine {
                     // Undecryptable. Never applied, never dropped silently — a record we
                     // cannot read is either a key we do not have or a bug, and both need
                     // to be visible rather than inferred from missing data later.
-                    quarantine(record, error: error)
+                    quarantine(record)
+                    round.quarantined += 1
                 }
             }
             cursor = fetch.cursor
@@ -354,7 +381,8 @@ final class SyncEngine {
             try Task.checkCancellation()
             base.cursor = cursor
             try persistBase()
-            return nil
+            round.fullResync = isFullResync
+            return round
         }
 
         // Three-way merge against the base BEFORE the guard, so the guard judges what
@@ -389,6 +417,9 @@ final class SyncEngine {
         let incompatible = Set(classification.incompatibleVaultIDs)
             .union(outcome.incompatibleVaultIDs)
         let unapplied = deferred.union(incompatible)
+        round.merged = outcome.changedIDs.count
+        round.deferred = deferred.count
+        round.fullResync = isFullResync
 
         // The base records what the BACKEND said, not what we merged to. Recording the
         // merged value would make the next diff believe the backend has already seen our
@@ -415,7 +446,7 @@ final class SyncEngine {
                     + "vault identity. Their ciphertext cannot be opened by this device; "
                     + "sync stopped instead of repeatedly fetching the same records.")
         }
-        return deferred.isEmpty ? nil : deferred.count
+        return round
     }
 
     // MARK: - Failure handling
@@ -444,12 +475,19 @@ final class SyncEngine {
         }
     }
 
-    private func quarantine(_ record: WireRecord, error: any Error) {
+    private func quarantine(_ record: WireRecord) {
         let folder = SnippetStorageLocations.syncQuarantineFolderURL
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("\(record.id.uuidString).blob", isDirectory: false)
-        try? AtomicFileWriter.write(record.blob, to: url, temporaryDirectory: temporaryDirectory)
-        NSLog("Snippets: could not decrypt a synced record (\(error)); kept at \(url.lastPathComponent) and not applied.")
+        do {
+            try AtomicFileWriter.write(record.blob, to: url, temporaryDirectory: temporaryDirectory)
+        } catch {
+            Diagnostics.record(.storageFailure(
+                area: .syncQuarantine,
+                operation: .write,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
+        }
     }
 
     private func persistBase() throws {
@@ -458,7 +496,11 @@ final class SyncEngine {
         } catch {
             // Not fatal: the base is derived, and losing it costs one full reconcile
             // rather than any data. Worth surfacing, not worth halting for.
-            NSLog("Snippets: could not write the sync base: \(error)")
+            Diagnostics.record(.storageFailure(
+                area: .syncBase,
+                operation: .write,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
     }
 
@@ -521,7 +563,11 @@ final class SyncEngine {
         do {
             held = try FileGuard.acquire(at: lockURL, timeout: stateLockTimeout)
         } catch {
-            NSLog("Snippets: could not lock sync state while changing its halt (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .syncState,
+                operation: .lock,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return .failed
         }
         defer { held.release() }
@@ -531,7 +577,10 @@ final class SyncEngine {
         // proceeding unlocked could erase a concurrent crash marker, generation bump,
         // or newer halt. A safety marker must fail closed instead.
         guard !held.isUnlocked else {
-            NSLog("Snippets: refusing to change a sync halt without a filesystem lock.")
+            Diagnostics.record(.storageState(
+                area: .syncState,
+                state: .degraded,
+                value: nil))
             return .failed
         }
 
@@ -543,7 +592,10 @@ final class SyncEngine {
         case .loaded(let loaded), .fresh(let loaded):
             persisted = loaded
         case .tooNew(let version):
-            NSLog("Snippets: refusing to change a halt in sync state version \(version).")
+            Diagnostics.record(.storageState(
+                area: .syncState,
+                state: .versionTooNew,
+                value: version))
             return .tooNew(version)
         }
 
@@ -561,7 +613,11 @@ final class SyncEngine {
                 persisted, to: stateURL, temporaryDirectory: temporaryDirectory)
             return .written(halt)
         } catch {
-            NSLog("Snippets: could not persist the sync halt (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .syncState,
+                operation: .write,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return .failed
         }
     }

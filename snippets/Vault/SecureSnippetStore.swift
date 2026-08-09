@@ -157,6 +157,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
             // before identity sharing existed, and heals a slot another Mac cleared,
             // without either needing a migration step of its own.
             identityStore.publish(loaded)
+            Diagnostics.record(.vaultAction(.loaded, count: loaded.records.count))
         case .missing:
             document = nil
             isUnreadable = false
@@ -167,12 +168,20 @@ final class SecureSnippetStore: SecureSnippetProviding {
             document = nil
             isUnreadable = true
             session.adopt(keyID: nil)
-            NSLog("Snippets: vault is schemaVersion \(version); running read-only.")
+            Diagnostics.record(.storageState(
+                area: .vault,
+                state: .versionTooNew,
+                value: version))
+            Diagnostics.record(.vaultAction(.readOnly, count: nil))
         case .unreadable(let error), .corrupt(let error):
             document = nil
             isUnreadable = true
             session.adopt(keyID: nil)
-            NSLog("Snippets: vault could not be read (\(error)); refusing to write to it.")
+            Diagnostics.record(.storageFailure(
+                area: .vault,
+                operation: .read,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
         onChange?()
     }
@@ -259,12 +268,17 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 return fresh
             }
         } catch {
-            NSLog("Snippets: the shared vault could not be adopted (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .vault,
+                operation: .adopt,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
             return nil
         }
 
         document = adopted
         session.adopt(keyID: adopted.kid)
+        Diagnostics.record(.vaultAction(.adoptedSharedIdentity, count: nil))
         return adopted
     }
 
@@ -766,7 +780,11 @@ final class SecureSnippetStore: SecureSnippetProviding {
         } catch {
             // Safe failure: the bridge receives this exact ancestor from the engine and
             // refuses to project a missing vault as deletions.
-            NSLog("Snippets: could not clear \(syncBaseURL.lastPathComponent) after forgetting the vault (\(error)).")
+            Diagnostics.record(.storageFailure(
+                area: .syncBase,
+                operation: .remove,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
         }
 
         // The projection sidecar is key-independent and carries unknown extension fields
@@ -781,13 +799,18 @@ final class SecureSnippetStore: SecureSnippetProviding {
             } catch {
                 // Leaving secure entries is fail-closed: the next bridge projection sees
                 // them and halts rather than emitting tombstones.
-                NSLog("Snippets: could not prune secure projection metadata after forgetting the vault (\(error)).")
+                Diagnostics.record(.storageFailure(
+                    area: .syncMetadata,
+                    operation: .write,
+                    failure: DiagnosticFailure(error),
+                    attempt: nil))
             }
         }
 
         document = nil
         isUnreadable = false
         session.adopt(keyID: nil)
+        Diagnostics.record(.vaultAction(.forgotLocalVault, count: nil))
         onChange?()
     }
 
@@ -837,7 +860,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }
 
         if let outcome, outcome.value > 0 {
-            NSLog("Snippets: completed \(outcome.value) interrupted secure-snippet move(s) after a crash.")
+            Diagnostics.record(.vaultAction(
+                .reconciledInterruptedMove,
+                count: outcome.value))
             adopt(outcome)
         }
         return outcome?.value ?? 0
