@@ -77,6 +77,34 @@ nonisolated struct Snippet: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// The canonical order for every user-facing library listing.
+///
+/// The arrays in `snippets.json` and `vault.json` deliberately keep their local file
+/// order for compatibility, undo, and merge bookkeeping. That order is not synced,
+/// though, so it cannot be used as presentation state: a fresh device receives
+/// CloudKit records in transport order and would render a different library. Every
+/// field below is already part of the synced snippet payload, making this order the
+/// same on every device without adding a position field to the frozen local format.
+nonisolated enum SnippetDisplayOrder {
+    static func ranks(_ lhs: Snippet, before rhs: Snippet) -> Bool {
+        if lhs.isPinned != rhs.isPinned {
+            return lhs.isPinned
+        }
+        // Creation time, not update time: editing, pinning, and secure transitions
+        // must not make a row jump within its section.
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt > rhs.createdAt
+        }
+        // Imported batches can legitimately share a timestamp. UUID spelling is
+        // locale-independent and terminates the comparison deterministically.
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    static func sorted(_ snippets: [Snippet]) -> [Snippet] {
+        snippets.sorted(by: ranks)
+    }
+}
+
 nonisolated enum SnippetStorageSync {
     static let distributedChangeNotification = Notification.Name("com.khm.snippets.storageDidChange")
 }

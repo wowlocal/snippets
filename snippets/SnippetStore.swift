@@ -581,11 +581,13 @@ final class SnippetStore {
     }
 
     /// Everything the user should see in the list, plaintext and secure together.
+    ///
+    /// File-array order is intentionally local and can differ after a CloudKit fetch.
+    /// Sort only this presentation projection so storage, undo, and merge semantics do
+    /// not churn while every platform still renders the same canonical order.
     func snippetsSortedForDisplay() -> [Snippet] {
         let combined = snippets + (secureProvider?.secureShellsForDisplay() ?? [])
-        let pinned = combined.filter(\.isPinned)
-        let unpinned = combined.filter { !$0.isPinned }
-        return pinned + unpinned
+        return SnippetDisplayOrder.sorted(combined)
     }
 
     /// Whether this id belongs to a secure record rather than to `snippets`.

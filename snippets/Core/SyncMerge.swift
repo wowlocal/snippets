@@ -98,8 +98,9 @@ nonisolated enum SyncMerge {
         }
 
         // Sorted before use: the loop above walks a `Set`, whose iteration order is
-        // randomly seeded per process, so without this the *array* handed back to
-        // callers (and shown to the user) would differ between two identical merges.
+        // randomly seeded per process, so without this the stored array handed back to
+        // callers would differ between two identical merges. Presentation applies its
+        // own canonical order later, but storage still needs deterministic bytes.
         conflictCopies.sort { $0.id.uuidString < $1.id.uuidString }
 
         // Conflict copies are added after the main pass so a copy can never be

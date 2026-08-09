@@ -901,8 +901,8 @@ struct SyncMergeConvergenceTests {
         let a = SyncMerge.mergeLocal(base: base, local: onA, remote: onB)
         let b = SyncMerge.mergeLocal(base: base, local: onB, remote: onA)
 
-        // Order is each device's own list order, which legitimately differs; identity
-        // and field content are what must agree.
+        // Stored array order remains local and may legitimately differ; the UI applies
+        // `SnippetDisplayOrder`. Identity and field content are what must converge here.
         let byID = { (s: [Snippet]) in Dictionary(uniqueKeysWithValues: s.map { ($0.id, $0) }) }
         #expect(byID(a.snippets) == byID(b.snippets), "\(what): devices disagree",
                 sourceLocation: sourceLocation)

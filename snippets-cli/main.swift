@@ -115,6 +115,7 @@ private func cmdList(enabledOnly: Bool, pinnedOnly: Bool, tagFilters: [String]) 
     if enabledOnly { snippets = snippets.filter(\.isEnabled) }
     if pinnedOnly  { snippets = snippets.filter(\.isPinned) }
     snippets = filterByTags(snippets, tagFilters: tagFilters)
+    snippets = SnippetDisplayOrder.sorted(snippets)
     printJSON(snippets)
 }
 

@@ -505,8 +505,8 @@ import Darwin
         #expect(!outcome.foldedInForeignWrite)
         #expect(entries(of: sandbox.tmpFolder) == [], "a no-op write still staged a temporary file")
 
-        // Reordering *is* a change: the file's byte order is what other devices and
-        // the app's own row order both read.
+        // Reordering *is* a storage change even though presentation now applies a
+        // canonical order: the digest is a compare-and-swap token over exact bytes.
         let reordered = try update(sandbox, expectedDigest: outcome.digest) { $0.snippets.reversed() }
         #expect(identity(of: sandbox.library) != before)
         #expect(reordered.digest != written.digest)
