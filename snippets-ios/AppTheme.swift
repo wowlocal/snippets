@@ -92,6 +92,18 @@ enum AppTheme {
         navigationBar.standardAppearance = appearance
         navigationBar.scrollEdgeAppearance = appearance
         navigationBar.compactAppearance = appearance
+        navigationBar.isTranslucent = true
+    }
+
+    static func configureToolbar(_ toolbar: UIToolbar) {
+        let appearance = UIToolbarAppearance()
+        appearance.configureWithTransparentBackground()
+        appearance.shadowColor = .clear
+        toolbar.standardAppearance = appearance
+        toolbar.compactAppearance = appearance
+        toolbar.scrollEdgeAppearance = appearance
+        toolbar.compactScrollEdgeAppearance = appearance
+        toolbar.isTranslucent = true
     }
 
     static func configureSurface(

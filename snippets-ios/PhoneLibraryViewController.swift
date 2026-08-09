@@ -1,5 +1,10 @@
 import UIKit
 
+private enum PhoneLibraryLayout {
+    static let horizontalInset: CGFloat = 28
+    static let headerHorizontalInset: CGFloat = 20
+}
+
 @MainActor
 protocol PhoneLibraryViewControllerDelegate: AnyObject {
     func phoneLibrary(_ controller: PhoneLibraryViewController, requestedCopy id: UUID)
@@ -19,7 +24,7 @@ protocol PhoneLibraryViewControllerDelegate: AnyObject {
 
 final class PhoneLibraryViewController: UIViewController {
     private struct Section {
-        let title: String
+        let title: String?
         let snippets: [Snippet]
     }
 
@@ -30,13 +35,14 @@ final class PhoneLibraryViewController: UIViewController {
     weak var delegate: PhoneLibraryViewControllerDelegate?
 
     private let environment: AppEnvironment
-    private let tableView = UITableView(frame: .zero, style: .insetGrouped)
+    private let tableView = UITableView(frame: .zero, style: .grouped)
     private let searchController = UISearchController(searchResultsController: nil)
     private let emptyView = PhoneEmptyLibraryView()
+    private let syncStatusHeader = UIView()
     private let syncStatusBanner = PhoneSyncStatusBanner()
-    private let contentStack = UIStackView()
     private let filterButton = UIButton(type: .system)
     private let toastPresenter = PhoneToastPresenter()
+    private let copyFeedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
     private var filterItem: UIBarButtonItem?
     private var activeTagKeys = Set<String>()
     private var sections: [Section] = []
@@ -58,8 +64,8 @@ final class PhoneLibraryViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Library"
-        view.backgroundColor = .systemGroupedBackground
+        title = "Snippets"
+        view.backgroundColor = .systemBackground
         navigationItem.largeTitleDisplayMode = .always
         navigationController?.navigationBar.prefersLargeTitles = true
 
@@ -87,6 +93,11 @@ final class PhoneLibraryViewController: UIViewController {
         reload()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateSyncHeaderLayout()
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if navigationController?.isBeingDismissed == true, let syncObservation {
@@ -109,7 +120,7 @@ final class PhoneLibraryViewController: UIViewController {
             sections.append(Section(title: "Pinned", snippets: results.pinned))
         }
         if !results.snippets.isEmpty {
-            sections.append(Section(title: "Snippets", snippets: results.snippets))
+            sections.append(Section(title: nil, snippets: results.snippets))
         }
 
         tableView.reloadData()
@@ -133,11 +144,11 @@ final class PhoneLibraryViewController: UIViewController {
         case .copied(let name, let secure):
             let detail = secure ? " Secure clipboard expires in 60 seconds." : ""
             toastPresenter.show(message: "Copied “\(name)”.\(detail)")
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            copyFeedbackGenerator.impactOccurred(intensity: 0.75)
             scheduleGestureCoachingIfNeeded()
         case .empty(let name):
             toastPresenter.show(message: "“\(name)” has no content to copy.")
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            copyFeedbackGenerator.impactOccurred(intensity: 0.5)
         }
     }
 
@@ -157,7 +168,9 @@ final class PhoneLibraryViewController: UIViewController {
         searchController.searchBar.accessibilityIdentifier = "phone-snippet-search"
         searchController.searchBar.searchTextField.accessibilityIdentifier = "phone-snippet-search"
         navigationItem.searchController = searchController
-        navigationItem.hidesSearchBarWhenScrolling = false
+        // The large title should behave like Mail's: expanded at the scroll edge and
+        // compact as soon as the library moves. Search remains in the floating toolbar.
+        navigationItem.hidesSearchBarWhenScrolling = true
         navigationItem.preferredSearchBarPlacement = .integrated
         definesPresentationContext = true
     }
@@ -250,11 +263,24 @@ final class PhoneLibraryViewController: UIViewController {
         tableView.delegate = self
         tableView.dataSource = self
         tableView.backgroundColor = .clear
+        tableView.contentInsetAdjustmentBehavior = .always
         tableView.keyboardDismissMode = .onDrag
         tableView.sectionHeaderTopPadding = 8
-        tableView.estimatedRowHeight = 82
+        tableView.estimatedSectionHeaderHeight = 38
+        tableView.sectionHeaderHeight = UITableView.automaticDimension
+        tableView.estimatedSectionFooterHeight = 0
+        tableView.sectionFooterHeight = .leastNormalMagnitude
+        tableView.estimatedRowHeight = 96
         tableView.rowHeight = UITableView.automaticDimension
+        // PhoneSnippetCell owns its divider and horizontal geometry. UITableView can
+        // rewrite cell/contentView margins while cells enter and leave the reuse queue.
+        tableView.separatorStyle = .none
+        tableView.insetsContentViewsToSafeArea = true
         tableView.register(PhoneSnippetCell.self, forCellReuseIdentifier: PhoneSnippetCell.reuseIdentifier)
+        tableView.register(
+            PhoneSectionHeaderView.self,
+            forHeaderFooterViewReuseIdentifier: PhoneSectionHeaderView.reuseIdentifier
+        )
         tableView.accessibilityIdentifier = "phone-snippet-list"
 
         let refresh = UIRefreshControl()
@@ -263,24 +289,66 @@ final class PhoneLibraryViewController: UIViewController {
         }, for: .valueChanged)
         tableView.refreshControl = refresh
 
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        contentStack.axis = .vertical
-        contentStack.spacing = 0
-        contentStack.addArrangedSubview(syncStatusBanner)
-        contentStack.addArrangedSubview(tableView)
-        view.addSubview(contentStack)
+        syncStatusHeader.backgroundColor = .clear
+        syncStatusHeader.directionalLayoutMargins = NSDirectionalEdgeInsets(
+            top: 0,
+            leading: PhoneLibraryLayout.headerHorizontalInset,
+            bottom: 0,
+            trailing: PhoneLibraryLayout.headerHorizontalInset
+        )
+        syncStatusHeader.addSubview(syncStatusBanner)
         NSLayoutConstraint.activate([
-            contentStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            // The table background is a real interactive onboarding surface. Unlike
-            // table rows, UIKit does not automatically inset that background around a
-            // translucent navigation bar and toolbar, so constrain the whole library
-            // surface to the safe area to prevent large text/actions from sitting under
-            // either bar.
-            contentStack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            syncStatusBanner.leadingAnchor.constraint(
+                equalTo: syncStatusHeader.layoutMarginsGuide.leadingAnchor
+            ),
+            syncStatusBanner.trailingAnchor.constraint(
+                lessThanOrEqualTo: syncStatusHeader.layoutMarginsGuide.trailingAnchor
+            ),
+            syncStatusBanner.topAnchor.constraint(equalTo: syncStatusHeader.topAnchor, constant: 2),
+            syncStatusBanner.bottomAnchor.constraint(equalTo: syncStatusHeader.bottomAnchor, constant: -10),
+        ])
+
+        // The table remains underneath both bars so native iOS controls can refract its
+        // content. Sync status is part of the table's content and scrolls away with it.
+        view.addSubview(tableView)
+        NSLayoutConstraint.activate([
+            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableView.topAnchor.constraint(equalTo: view.topAnchor),
+            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         toastPresenter.install(in: view)
+    }
+
+    private func updateSyncHeaderLayout() {
+        guard !syncStatusBanner.isHidden else {
+            if tableView.tableHeaderView != nil {
+                tableView.tableHeaderView = nil
+            }
+            return
+        }
+
+        let width = tableView.bounds.width
+        guard width > 0 else { return }
+        if tableView.tableHeaderView !== syncStatusHeader {
+            syncStatusHeader.frame = CGRect(x: 0, y: 0, width: width, height: 1)
+            tableView.tableHeaderView = syncStatusHeader
+        }
+
+        syncStatusHeader.bounds.size.width = width
+        syncStatusHeader.setNeedsLayout()
+        syncStatusHeader.layoutIfNeeded()
+        let fittingSize = syncStatusHeader.systemLayoutSizeFitting(
+            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        let height = ceil(fittingSize.height)
+        guard abs(syncStatusHeader.frame.width - width) > 0.5
+                || abs(syncStatusHeader.frame.height - height) > 0.5 else { return }
+        syncStatusHeader.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        // UITableView snapshots this frame when the header is assigned.
+        tableView.tableHeaderView = syncStatusHeader
     }
 
     private func configureEmptyView() {
@@ -385,6 +453,7 @@ final class PhoneLibraryViewController: UIViewController {
     private func updateSyncPresentation() {
         guard SyncCoordinator.isEnabled else {
             syncStatusBanner.isHidden = true
+            view.setNeedsLayout()
             return
         }
 
@@ -394,6 +463,9 @@ final class PhoneLibraryViewController: UIViewController {
             status: environment.syncCoordinator.statusDescription,
             isFirstFetch: !hasCompletedSync
         )
+        // State changes are visual only. Pull-to-refresh owns the haptic for an explicit
+        // user gesture; background polling must never manufacture one by moving insets.
+        view.setNeedsLayout()
     }
 
     private func requestedRefresh() {
@@ -461,7 +533,7 @@ final class PhoneLibraryViewController: UIViewController {
         pendingCoachingWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             self?.toastPresenter.show(
-                message: "Tip: swipe right to pin. Swipe left to edit or delete.",
+                message: "Tip: swipe right to edit. Swipe left to pin or delete.",
                 duration: 5
             )
         }
@@ -515,8 +587,26 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
         sections[section].snippets.count
     }
 
-    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        sections[section].title
+    func tableView(
+        _ tableView: UITableView,
+        viewForHeaderInSection section: Int
+    ) -> UIView? {
+        guard let title = sections[section].title else { return nil }
+        let header = tableView.dequeueReusableHeaderFooterView(
+            withIdentifier: PhoneSectionHeaderView.reuseIdentifier
+        ) as! PhoneSectionHeaderView
+        header.configure(title: title)
+        return header
+    }
+
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        sections[section].title == nil
+            ? .leastNormalMagnitude
+            : UITableView.automaticDimension
+    }
+
+    func tableView(_ tableView: UITableView, estimatedHeightForHeaderInSection section: Int) -> CGFloat {
+        sections[section].title == nil ? 0 : 38
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -525,7 +615,11 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
             for: indexPath
         ) as! PhoneSnippetCell
         let snippet = snippet(at: indexPath)
-        cell.configure(snippet: snippet, isSecure: environment.store.isSecure(snippet.id))
+        cell.configure(
+            snippet: snippet,
+            isSecure: environment.store.isSecure(snippet.id),
+            showsSeparator: indexPath.row < sections[indexPath.section].snippets.count - 1
+        )
         cell.accessibilityCustomActions = [
             UIAccessibilityCustomAction(name: "Copy") { [weak self] _ in
                 guard let self else { return false }
@@ -553,8 +647,11 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         delegate?.phoneLibrary(self, requestedCopy: snippet(at: indexPath).id)
+    }
+
+    func tableView(_ tableView: UITableView, didHighlightRowAt indexPath: IndexPath) {
+        copyFeedbackGenerator.prepare()
     }
 
     func tableView(
@@ -573,17 +670,14 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
         leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath
     ) -> UISwipeActionsConfiguration? {
         let snippet = snippet(at: indexPath)
-        let pin = UIContextualAction(
-            style: .normal,
-            title: snippet.isPinned ? "Unpin" : "Pin"
-        ) { [weak self] _, _, completion in
+        let edit = UIContextualAction(style: .normal, title: "Edit") { [weak self] _, _, completion in
             guard let self else { completion(false); return }
-            self.delegate?.phoneLibrary(self, requestedPin: snippet.id)
+            self.delegate?.phoneLibrary(self, requestedEdit: snippet.id)
             completion(true)
         }
-        pin.image = UIImage(systemName: snippet.isPinned ? "pin.slash" : "pin")
-        pin.backgroundColor = AppTheme.tint
-        let configuration = UISwipeActionsConfiguration(actions: [pin])
+        edit.image = UIImage(systemName: "pencil")
+        edit.backgroundColor = AppTheme.tint
+        let configuration = UISwipeActionsConfiguration(actions: [edit])
         configuration.performsFirstActionWithFullSwipe = true
         return configuration
     }
@@ -599,34 +693,104 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
             completion(true)
         }
         delete.image = UIImage(systemName: "trash")
-        let edit = UIContextualAction(style: .normal, title: "Edit") { [weak self] _, _, completion in
+        let pin = UIContextualAction(
+            style: .normal,
+            title: snippet.isPinned ? "Unpin" : "Pin"
+        ) { [weak self] _, _, completion in
             guard let self else { completion(false); return }
-            self.delegate?.phoneLibrary(self, requestedEdit: snippet.id)
+            self.delegate?.phoneLibrary(self, requestedPin: snippet.id)
             completion(true)
         }
-        edit.image = UIImage(systemName: "pencil")
-        edit.backgroundColor = AppTheme.tint
-        let configuration = UISwipeActionsConfiguration(actions: [delete, edit])
+        pin.image = UIImage(systemName: snippet.isPinned ? "pin.slash" : "pin")
+        pin.backgroundColor = AppTheme.tint
+        let configuration = UISwipeActionsConfiguration(actions: [delete, pin])
         configuration.performsFirstActionWithFullSwipe = false
         return configuration
+    }
+}
+
+private final class PhoneSectionHeaderView: UITableViewHeaderFooterView {
+    static let reuseIdentifier = "PhoneSectionHeaderView"
+
+    private let titleLabel = UILabel()
+
+    override init(reuseIdentifier: String?) {
+        super.init(reuseIdentifier: reuseIdentifier)
+        backgroundConfiguration = .clear()
+        contentView.backgroundColor = .clear
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = AppTheme.scaledFont(
+            size: 14,
+            weight: .semibold,
+            textStyle: .subheadline
+        )
+        titleLabel.adjustsFontForContentSizeCategory = true
+        titleLabel.textColor = .secondaryLabel
+        titleLabel.accessibilityIdentifier = "phone-section-title"
+        contentView.addSubview(titleLabel)
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(
+                equalTo: contentView.leadingAnchor,
+                constant: PhoneLibraryLayout.horizontalInset
+            ),
+            titleLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: contentView.trailingAnchor,
+                constant: -PhoneLibraryLayout.horizontalInset
+            ),
+            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 14),
+            titleLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -7),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(title: String) {
+        titleLabel.text = title
     }
 }
 
 private final class PhoneSnippetCell: UITableViewCell {
     static let reuseIdentifier = "PhoneSnippetCell"
 
+    private let highlightView = UIView()
+    private let rowContentView = UIView()
+    private let separatorView = UIView()
     private let secureSymbolView = UIImageView(image: UIImage(systemName: "lock.fill"))
     private let pinnedSymbolView = UIImageView(image: UIImage(systemName: "pin.fill"))
     private let disabledSymbolView = UIImageView(image: UIImage(systemName: "pause.circle.fill"))
     private let statusSymbols = UIStackView()
     private let nameLabel = UILabel()
+    private let dateLabel = UILabel()
     private let detailLabel = UILabel()
+    private let titleRow = UIStackView()
     private let tagsStack = UIStackView()
+    private let tagsSpacer = UIView()
+    private let contentStack = UIStackView()
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         selectionStyle = .default
-        backgroundColor = .secondarySystemGroupedBackground
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
+        automaticallyUpdatesBackgroundConfiguration = false
+        backgroundConfiguration = .clear()
+        selectedBackgroundView = UIView()
+        selectedBackgroundView?.backgroundColor = .clear
+        preservesSuperviewLayoutMargins = false
+
+        highlightView.translatesAutoresizingMaskIntoConstraints = false
+        highlightView.backgroundColor = AppTheme.selectedRow
+        highlightView.layer.cornerRadius = 20
+        highlightView.layer.cornerCurve = .continuous
+        highlightView.alpha = 0
+
+        rowContentView.translatesAutoresizingMaskIntoConstraints = false
+        rowContentView.backgroundColor = .clear
+        rowContentView.accessibilityIdentifier = "phone-snippet-row-content"
+
+        separatorView.translatesAutoresizingMaskIntoConstraints = false
+        separatorView.backgroundColor = .separator
 
         secureSymbolView.tintColor = AppTheme.warning
         pinnedSymbolView.tintColor = AppTheme.tint
@@ -646,34 +810,79 @@ private final class PhoneSnippetCell: UITableViewCell {
         [secureSymbolView, pinnedSymbolView, disabledSymbolView]
             .forEach(statusSymbols.addArrangedSubview)
 
-        nameLabel.font = AppTheme.scaledFont(size: 16, weight: .semibold, textStyle: .headline)
+        nameLabel.font = AppTheme.scaledFont(size: 17, weight: .semibold, textStyle: .headline)
         nameLabel.adjustsFontForContentSizeCategory = true
-        nameLabel.numberOfLines = 0
+        nameLabel.numberOfLines = 1
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        detailLabel.font = AppTheme.scaledFont(size: 13, textStyle: .subheadline)
+        dateLabel.font = AppTheme.scaledFont(size: 13, textStyle: .subheadline)
+        dateLabel.adjustsFontForContentSizeCategory = true
+        dateLabel.textColor = .tertiaryLabel
+        dateLabel.setContentHuggingPriority(.required, for: .horizontal)
+        dateLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        dateLabel.accessibilityElementsHidden = true
+
+        detailLabel.font = AppTheme.scaledFont(size: 15, textStyle: .subheadline)
         detailLabel.adjustsFontForContentSizeCategory = true
         detailLabel.textColor = .secondaryLabel
         detailLabel.numberOfLines = 2
+        detailLabel.lineBreakMode = .byTruncatingTail
 
         tagsStack.axis = .horizontal
         tagsStack.spacing = 5
         tagsStack.alignment = .center
+        tagsSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        tagsSpacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let titleRow = UIStackView(arrangedSubviews: [statusSymbols, nameLabel])
+        [statusSymbols, nameLabel, dateLabel].forEach(titleRow.addArrangedSubview)
         titleRow.axis = .horizontal
         titleRow.spacing = 7
         titleRow.alignment = .center
-        let stack = UIStackView(arrangedSubviews: [titleRow, detailLabel, tagsStack])
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.axis = .vertical
-        stack.spacing = 4
-        contentView.addSubview(stack)
+        [titleRow, detailLabel, tagsStack].forEach(contentStack.addArrangedSubview)
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.axis = .vertical
+        contentStack.spacing = 5
+
+        contentView.addSubview(highlightView)
+        contentView.addSubview(rowContentView)
+        contentView.addSubview(separatorView)
+        rowContentView.addSubview(contentStack)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 11),
-            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -11),
+            highlightView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            highlightView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            highlightView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 3),
+            highlightView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -3),
+
+            // Fixed anchors, rather than layoutMarginsGuide, keep every reused row on
+            // exactly the same horizontal grid.
+            rowContentView.leadingAnchor.constraint(
+                equalTo: contentView.leadingAnchor,
+                constant: PhoneLibraryLayout.horizontalInset
+            ),
+            rowContentView.trailingAnchor.constraint(
+                equalTo: contentView.trailingAnchor,
+                constant: -PhoneLibraryLayout.horizontalInset
+            ),
+            rowContentView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            rowContentView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12),
+
+            contentStack.leadingAnchor.constraint(equalTo: rowContentView.leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: rowContentView.trailingAnchor),
+            contentStack.topAnchor.constraint(equalTo: rowContentView.topAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: rowContentView.bottomAnchor),
+
+            separatorView.leadingAnchor.constraint(
+                equalTo: contentView.leadingAnchor,
+                constant: PhoneLibraryLayout.horizontalInset
+            ),
+            separatorView.trailingAnchor.constraint(
+                equalTo: contentView.trailingAnchor,
+                constant: -PhoneLibraryLayout.horizontalInset
+            ),
+            separatorView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            separatorView.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale),
         ])
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
             (cell: PhoneSnippetCell, _: UITraitCollection) in
@@ -683,8 +892,29 @@ private final class PhoneSnippetCell: UITableViewCell {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(snippet: Snippet, isSecure: Bool) {
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        accessibilityCustomActions = nil
+        separatorView.isHidden = false
+        updateHighlight(animated: false)
+    }
+
+    override func setHighlighted(_ highlighted: Bool, animated: Bool) {
+        super.setHighlighted(highlighted, animated: animated)
+        updateHighlight(animated: animated)
+    }
+
+    override func setSelected(_ selected: Bool, animated: Bool) {
+        super.setSelected(selected, animated: animated)
+        updateHighlight(animated: animated)
+    }
+
+    func configure(snippet: Snippet, isSecure: Bool, showsSeparator: Bool) {
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
+        separatorView.isHidden = !showsSeparator
         nameLabel.text = snippet.displayName
+        dateLabel.text = Self.updatedText(for: snippet.updatedAt)
         secureSymbolView.isHidden = !isSecure
         pinnedSymbolView.isHidden = !snippet.isPinned
         disabledSymbolView.isHidden = snippet.isEnabled
@@ -720,6 +950,7 @@ private final class PhoneSnippetCell: UITableViewCell {
             more.text = "+\(snippet.tags.count - 3)"
             tagsStack.addArrangedSubview(more)
         }
+        tagsStack.addArrangedSubview(tagsSpacer)
         tagsStack.isHidden = snippet.tags.isEmpty
         updateTagLayout()
 
@@ -738,10 +969,44 @@ private final class PhoneSnippetCell: UITableViewCell {
             : "Double tap to copy"
     }
 
+    private func updateHighlight(animated: Bool) {
+        let changes = {
+            self.highlightView.alpha = self.isHighlighted || self.isSelected ? 1 : 0
+        }
+        if animated {
+            UIView.animate(
+                withDuration: 0.16,
+                delay: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction],
+                animations: changes
+            )
+        } else {
+            changes()
+        }
+    }
+
     private func updateTagLayout() {
         let usesVerticalTags = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        nameLabel.numberOfLines = usesVerticalTags ? 0 : 1
+        dateLabel.isHidden = usesVerticalTags
         tagsStack.axis = usesVerticalTags ? .vertical : .horizontal
         tagsStack.alignment = usesVerticalTags ? .leading : .center
+        tagsSpacer.isHidden = usesVerticalTags
+    }
+
+    private static func updatedText(for date: Date) -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        if calendar.isDateInToday(date) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        if calendar.isDateInYesterday(date) {
+            return "Yesterday"
+        }
+        if let sixDaysAgo = calendar.date(byAdding: .day, value: -6, to: Date()),
+           date >= sixDaysAgo {
+            return date.formatted(.dateTime.weekday(.abbreviated))
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day())
     }
 }
 
@@ -750,11 +1015,13 @@ private final class PhoneTagPillLabel: UILabel {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        accessibilityIdentifier = "phone-tag-pill"
         font = AppTheme.scaledFont(size: 11, weight: .medium, textStyle: .caption1)
         numberOfLines = 1
         layer.cornerRadius = 8
         layer.cornerCurve = .continuous
         clipsToBounds = true
+        setContentHuggingPriority(.required, for: .horizontal)
         setContentCompressionResistancePriority(.required, for: .horizontal)
     }
 
@@ -1071,15 +1338,19 @@ private final class PhoneTagFilterViewController: UITableViewController {
     }
 }
 
-private final class PhoneSyncStatusBanner: UIView {
+private final class PhoneSyncStatusBanner: UIVisualEffectView {
     private let symbolView = UIImageView()
     private let activityIndicator = UIActivityIndicatorView(style: .medium)
     private let statusLabel = UILabel()
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    init() {
+        let glass = UIGlassEffect(style: .regular)
+        glass.tintColor = AppTheme.tint.withAlphaComponent(0.035)
+        super.init(effect: glass)
         translatesAutoresizingMaskIntoConstraints = false
-        backgroundColor = .secondarySystemGroupedBackground
+        layer.cornerRadius = 17
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
         accessibilityIdentifier = "phone-sync-status"
         isAccessibilityElement = true
 
@@ -1092,7 +1363,8 @@ private final class PhoneSyncStatusBanner: UIView {
         statusLabel.font = AppTheme.scaledFont(size: 12, weight: .medium, textStyle: .footnote)
         statusLabel.adjustsFontForContentSizeCategory = true
         statusLabel.textColor = .secondaryLabel
-        statusLabel.numberOfLines = 0
+        statusLabel.numberOfLines = 1
+        statusLabel.lineBreakMode = .byTruncatingTail
 
         let leadingStatus = UIView()
         leadingStatus.translatesAutoresizingMaskIntoConstraints = false
@@ -1102,33 +1374,22 @@ private final class PhoneSyncStatusBanner: UIView {
         row.translatesAutoresizingMaskIntoConstraints = false
         row.axis = .horizontal
         row.alignment = .center
-        row.spacing = 9
-        addSubview(row)
-
-        let separator = UIView()
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        separator.backgroundColor = .separator
-        addSubview(separator)
+        row.spacing = 7
+        contentView.addSubview(row)
 
         NSLayoutConstraint.activate([
-            leadingStatus.widthAnchor.constraint(equalToConstant: 20),
-            leadingStatus.heightAnchor.constraint(equalToConstant: 20),
+            heightAnchor.constraint(equalToConstant: 34),
+            leadingStatus.widthAnchor.constraint(equalToConstant: 16),
+            leadingStatus.heightAnchor.constraint(equalToConstant: 16),
             symbolView.centerXAnchor.constraint(equalTo: leadingStatus.centerXAnchor),
             symbolView.centerYAnchor.constraint(equalTo: leadingStatus.centerYAnchor),
-            symbolView.widthAnchor.constraint(equalToConstant: 18),
-            symbolView.heightAnchor.constraint(equalToConstant: 18),
+            symbolView.widthAnchor.constraint(equalToConstant: 15),
+            symbolView.heightAnchor.constraint(equalToConstant: 15),
             activityIndicator.centerXAnchor.constraint(equalTo: leadingStatus.centerXAnchor),
             activityIndicator.centerYAnchor.constraint(equalTo: leadingStatus.centerYAnchor),
-            row.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.bottomAnchor.constraint(equalTo: bottomAnchor),
-            separator.heightAnchor.constraint(
-                equalToConstant: 1 / max(traitCollection.displayScale, 1)
-            ),
+            row.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 11),
+            row.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -13),
+            row.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
         ])
     }
 
@@ -1148,27 +1409,32 @@ private final class PhoneSyncStatusBanner: UIView {
             if isFirstFetch && lastSync == nil {
                 text = "Waiting to fetch your iCloud library…"
                 symbolName = "icloud.and.arrow.down"
+            } else if let lastSync {
+                let formatter = DateFormatter()
+                formatter.timeStyle = .short
+                text = "Synced at \(formatter.string(from: lastSync))"
+                symbolName = "checkmark.icloud"
             } else {
-                text = status
+                text = "iCloud on · Not synced yet"
                 symbolName = "checkmark.icloud"
             }
         case .offline:
-            text = isFirstFetch ? "First fetch paused. \(status)" : status
+            text = isFirstFetch ? "First sync paused" : "iCloud unavailable"
             symbolName = "icloud.slash"
         case .needsAuthentication:
-            text = status
+            text = "iCloud needs attention"
             symbolName = "person.crop.circle.badge.exclamationmark"
         case .waitingForVault:
-            text = status
+            text = "Waiting for Secure Snippets"
             symbolName = "lock.icloud"
         case .halted:
-            text = status
+            text = "Sync paused for safety"
             symbolName = "exclamationmark.icloud"
         }
 
         statusLabel.text = text
         accessibilityLabel = "iCloud Sync"
-        accessibilityValue = text
+        accessibilityValue = state.requiresSyncAttention ? status : text
         accessibilityHint = state.requiresSyncAttention
             ? "Open Settings for details and recovery actions"
             : nil

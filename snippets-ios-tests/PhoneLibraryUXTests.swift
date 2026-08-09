@@ -138,8 +138,10 @@ final class PhoneLibraryUXTests: XCTestCase {
         let environment = AppEnvironment()
         UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
         let library = PhoneLibraryViewController(environment: environment)
-        library.loadViewIfNeeded()
+        let navigation = UINavigationController(rootViewController: library)
+        _ = host(navigation)
         library.reload()
+        library.view.layoutIfNeeded()
 
         let banner = try XCTUnwrap(
             library.view.descendant(withAccessibilityIdentifier: "phone-sync-status")
@@ -151,6 +153,145 @@ final class PhoneLibraryUXTests: XCTestCase {
         )
         XCTAssertEqual(title.text, "Library Hasn’t Been Fetched")
         XCTAssertNotEqual(title.text, "Your Library Is Empty")
+    }
+
+    func testLibraryUsesInsetMailStyleRowsAndScrollingSyncStatus() throws {
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let environment = AppEnvironment()
+        _ = environment.store.addSnippet(
+            name: "Mail-style row",
+            content: "The preview remains readable beneath floating controls.",
+            tags: ["Work"]
+        )
+        for index in 0..<12 {
+            _ = environment.store.addSnippet(
+                name: "Additional row \(index)",
+                content: "Enough content to exercise scrolling behavior.",
+                tags: ["Work"]
+            )
+        }
+        let root = PhoneRootViewController(environment: environment)
+        _ = host(root)
+        let library = try XCTUnwrap(root.viewControllers.first as? PhoneLibraryViewController)
+        library.reload()
+        library.view.layoutIfNeeded()
+
+        let table = try XCTUnwrap(
+            library.view.descendant(withAccessibilityIdentifier: "phone-snippet-list") as? UITableView
+        )
+        let banner = try XCTUnwrap(
+            library.view.descendant(withAccessibilityIdentifier: "phone-sync-status")
+        )
+        let syncHeader = try XCTUnwrap(table.tableHeaderView)
+
+        XCTAssertEqual(library.title, "Snippets")
+        XCTAssertEqual(table.style, .grouped)
+        XCTAssertEqual(table.frame.minY, library.view.bounds.minY, accuracy: 0.5)
+        XCTAssertEqual(table.frame.maxY, library.view.bounds.maxY, accuracy: 0.5)
+        XCTAssertTrue(banner.isDescendant(of: syncHeader))
+        XCTAssertGreaterThan(syncHeader.bounds.height, banner.bounds.height)
+        XCTAssertEqual(banner.bounds.height, 34, accuracy: 0.5)
+        XCTAssertEqual(syncHeader.bounds.height, 46, accuracy: 0.5)
+        XCTAssertEqual(banner.frame.minX, 20, accuracy: 0.5)
+        XCTAssertEqual(table.contentInset.top, 0, accuracy: 0.5)
+        XCTAssertTrue(banner is UIVisualEffectView)
+        XCTAssertGreaterThan(banner.layer.cornerRadius, 0)
+        XCTAssertTrue(library.navigationItem.hidesSearchBarWhenScrolling)
+        XCTAssertTrue(root.toolbar.isTranslucent)
+
+        XCTAssertNil(library.tableView(table, viewForHeaderInSection: 0))
+        XCTAssertEqual(
+            library.tableView(table, heightForHeaderInSection: 0),
+            .leastNormalMagnitude
+        )
+
+        let bannerY = banner.convert(banner.bounds, to: library.view).minY
+        table.setContentOffset(
+            CGPoint(x: 0, y: table.contentOffset.y + 96),
+            animated: false
+        )
+        library.view.layoutIfNeeded()
+        XCTAssertLessThan(banner.convert(banner.bounds, to: library.view).minY, bannerY)
+
+        let cell = library.tableView(table, cellForRowAt: IndexPath(row: 0, section: 0))
+        cell.frame = CGRect(x: 0, y: 0, width: table.bounds.width, height: 110)
+        cell.setNeedsLayout()
+        cell.layoutIfNeeded()
+        let rowContent = try XCTUnwrap(
+            cell.descendant(withAccessibilityIdentifier: "phone-snippet-row-content")
+        )
+        let pill = try XCTUnwrap(
+            cell.descendant(withAccessibilityIdentifier: "phone-tag-pill")
+        )
+        XCTAssertLessThan(pill.bounds.width, cell.bounds.width / 2)
+        XCTAssertEqual(rowContent.frame.minX, 28, accuracy: 0.5)
+        XCTAssertEqual(cell.bounds.width - rowContent.frame.maxX, 28, accuracy: 0.5)
+        XCTAssertEqual(cell.backgroundColor?.cgColor.alpha ?? 1, 0, accuracy: 0.01)
+
+        // UITableView owns these margins and can mutate them while grouped cells are
+        // reused. The row's visual geometry must remain independent from that state.
+        cell.directionalLayoutMargins = .zero
+        cell.contentView.directionalLayoutMargins = .zero
+        cell.setNeedsLayout()
+        cell.layoutIfNeeded()
+        XCTAssertEqual(rowContent.frame.minX, 28, accuracy: 0.5)
+        XCTAssertEqual(cell.bounds.width - rowContent.frame.maxX, 28, accuracy: 0.5)
+
+        let assertVisibleRowsUseFixedGrid = {
+            var checkedRows = 0
+            for visibleCell in table.visibleCells {
+                guard let visibleContent = visibleCell.descendant(
+                    withAccessibilityIdentifier: "phone-snippet-row-content"
+                ) else { continue }
+                visibleCell.layoutIfNeeded()
+                let contentFrame = visibleContent.convert(visibleContent.bounds, to: visibleCell.contentView)
+                XCTAssertEqual(contentFrame.minX, 28, accuracy: 0.5)
+                XCTAssertEqual(
+                    visibleCell.contentView.bounds.width - contentFrame.maxX,
+                    28,
+                    accuracy: 0.5
+                )
+                checkedRows += 1
+            }
+            XCTAssertGreaterThan(checkedRows, 0)
+        }
+
+        // Exercise actual dequeue/reuse in both directions, not just a newly created
+        // cell. This reproduces the path that previously mixed 20 pt and 68 pt rows.
+        let bottomOffset = max(
+            -table.adjustedContentInset.top,
+            table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom
+        )
+        table.setContentOffset(CGPoint(x: 0, y: bottomOffset), animated: false)
+        table.layoutIfNeeded()
+        drainMainRunLoop()
+        assertVisibleRowsUseFixedGrid()
+
+        table.setContentOffset(
+            CGPoint(x: 0, y: -table.adjustedContentInset.top),
+            animated: false
+        )
+        table.layoutIfNeeded()
+        drainMainRunLoop()
+        assertVisibleRowsUseFixedGrid()
+
+        let leading = try XCTUnwrap(
+            library.tableView(
+                table,
+                leadingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: 0)
+            )
+        )
+        XCTAssertEqual(leading.actions.map(\.title), ["Edit"])
+        XCTAssertTrue(leading.performsFirstActionWithFullSwipe)
+
+        let trailing = try XCTUnwrap(
+            library.tableView(
+                table,
+                trailingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: 0)
+            )
+        )
+        XCTAssertEqual(trailing.actions.map(\.title), ["Delete", "Pin"])
+        XCTAssertFalse(trailing.performsFirstActionWithFullSwipe)
     }
 
     func testStatusActionCanOnlyRunOnce() throws {

@@ -29,6 +29,7 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
 
         library.delegate = self
         AppTheme.configureNavigationBar(navigationBar)
+        AppTheme.configureToolbar(toolbar)
         navigationBar.prefersLargeTitles = true
         toolbar.tintColor = AppTheme.tint
 
@@ -118,7 +119,7 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
             } else {
                 environment.store.togglePinned(snippetID: id)
             }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.5)
         } catch {
             showError(title: "Couldn’t Update Pin", error: error)
         }

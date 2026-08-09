@@ -12,6 +12,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private let environment: AppEnvironment
     private let snippetID: UUID
     private let modeControl = UISegmentedControl(items: ["Content", "Details"])
+    private let copyFeedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
     private let scrollView = UIScrollView()
     private let formStack = UIStackView()
     private let contentModeStack = UIStackView()
@@ -108,13 +109,33 @@ final class PhoneSnippetEditorViewController: UIViewController {
         modeControl.selectedSegmentIndex = 0
         modeControl.accessibilityIdentifier = "phone-editor-mode"
         modeControl.addAction(UIAction { [weak self] _ in self?.updateMode(animated: true) }, for: .valueChanged)
-        navigationItem.titleView = modeControl
+        modeControl.translatesAutoresizingMaskIntoConstraints = false
+        // UISegmentedControl already receives the native iOS 26 Liquid Glass treatment.
+        // Wrapping it in another UIGlassEffect created the visible double capsule/rim.
+        modeControl.layer.borderWidth = 0
+        view.addSubview(modeControl)
+        NSLayoutConstraint.activate([
+            modeControl.widthAnchor.constraint(equalToConstant: 264),
+            modeControl.heightAnchor.constraint(greaterThanOrEqualToConstant: 50),
+            modeControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            modeControl.leadingAnchor.constraint(
+                greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor,
+                constant: 16
+            ),
+            modeControl.trailingAnchor.constraint(
+                lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -16
+            ),
+            modeControl.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
+        ])
     }
 
     private func configureForm() {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.keyboardDismissMode = .interactive
         scrollView.alwaysBounceVertical = true
+        scrollView.contentInset.bottom = 66
+        scrollView.verticalScrollIndicatorInsets.bottom = 66
         formStack.translatesAutoresizingMaskIntoConstraints = false
         formStack.axis = .vertical
         formStack.spacing = 16
@@ -180,6 +201,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         formStack.addArrangedSubview(contentModeStack)
         formStack.addArrangedSubview(detailsModeStack)
         formStack.addArrangedSubview(footerStatusLabel)
+        view.bringSubviewToFront(modeControl)
         updateMode(animated: false)
     }
 
@@ -770,6 +792,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private func copySnippet() {
         view.endEditing(true)
         flushPendingSecureContent()
+        copyFeedbackGenerator.prepare()
         Task { @MainActor in
             do {
                 switch try await environment.snippetActions.copy(id: snippetID) {
@@ -777,10 +800,10 @@ final class PhoneSnippetEditorViewController: UIViewController {
                     setFooterStatus(secure
                         ? "Copied “\(name)”. Secure clipboard expires in 60 seconds."
                         : "Copied “\(name)”.")
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    copyFeedbackGenerator.impactOccurred(intensity: 0.75)
                 case .empty(let name):
                     setFooterStatus("“\(name)” has no content to copy.")
-                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                    copyFeedbackGenerator.impactOccurred(intensity: 0.5)
                 }
             } catch {
                 showError(title: "Couldn’t Copy Snippet", error: error)
@@ -945,7 +968,8 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func updateKeyboardInset(_ overlap: CGFloat, notification: Notification) {
-        let bottomInset = max(0, overlap - view.safeAreaInsets.bottom)
+        let keyboardInset = max(0, overlap - view.safeAreaInsets.bottom)
+        let bottomInset = keyboardInset + 66
         let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
         let rawCurve = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 0
         let options = UIView.AnimationOptions(rawValue: rawCurve << 16)

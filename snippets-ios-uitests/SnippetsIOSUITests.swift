@@ -52,7 +52,7 @@ final class SnippetsIOSUITests: XCTestCase {
 
         XCUIDevice.shared.orientation = .landscapeRight
         XCTAssertTrue(app.textFields["snippet-keyword"].waitForExistence(timeout: 3))
-        app.navigationBars.buttons["Library"].tap()
+        app.navigationBars.buttons["Snippets"].tap()
         XCTAssertTrue(app.staticTexts["iPhone Greeting"].waitForExistence(timeout: 3))
         app.staticTexts["iPhone Greeting"].tap()
         XCTAssertTrue(
@@ -130,7 +130,7 @@ final class SnippetsIOSUITests: XCTestCase {
         name.typeText(snippetName)
 
         if isPhone {
-            app.navigationBars.buttons["Library"].tap()
+            app.navigationBars.buttons["Snippets"].tap()
         }
 
         let search = app.searchFields[isPhone ? "phone-snippet-search" : "snippet-search"]

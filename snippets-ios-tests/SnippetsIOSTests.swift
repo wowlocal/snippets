@@ -261,10 +261,17 @@ final class SnippetsIOSTests: XCTestCase {
 
         let editor = try XCTUnwrap(root.topViewController as? PhoneSnippetEditorViewController)
         editor.loadViewIfNeeded()
-        let mode = try XCTUnwrap(editor.navigationItem.titleView as? UISegmentedControl)
+        XCTAssertNil(editor.navigationItem.titleView)
+        let mode = try XCTUnwrap(
+            editor.view.descendant(withAccessibilityIdentifier: "phone-editor-mode")
+                as? UISegmentedControl
+        )
         XCTAssertEqual(mode.numberOfSegments, 2)
         XCTAssertEqual(mode.titleForSegment(at: 0), "Content")
         XCTAssertEqual(mode.titleForSegment(at: 1), "Details")
+        XCTAssertTrue(mode.superview === editor.view)
+        XCTAssertNil(editor.view.descendant(withAccessibilityIdentifier: "phone-editor-mode-bar"))
+        XCTAssertEqual(mode.layer.borderWidth, 0)
         XCTAssertNotNil(editor.view.descendant(withAccessibilityIdentifier: "snippet-content"))
         XCTAssertNotNil(editor.view.descendant(withAccessibilityIdentifier: "snippet-keyword"))
     }
