@@ -36,6 +36,7 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     let environment: AppEnvironment
+    private let incomingLinkCoordinator: IncomingSnippetLinkCoordinator
 
     private let listController: SnippetListViewController
     private let editorController: SnippetEditorViewController
@@ -49,11 +50,14 @@ final class MainSplitViewController: UISplitViewController {
 
     init(environment: AppEnvironment) {
         self.environment = environment
+        incomingLinkCoordinator = IncomingSnippetLinkCoordinator(store: environment.store)
         listController = SnippetListViewController(environment: environment)
         editorController = SnippetEditorViewController(environment: environment)
         listNavigationController = UINavigationController(rootViewController: listController)
         editorNavigationController = UINavigationController(rootViewController: editorController)
         super.init(style: .doubleColumn)
+
+        TemporaryExportFiles.removeStale()
 
         preferredDisplayMode = .oneBesideSecondary
         preferredSplitBehavior = .tile
@@ -289,26 +293,16 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     func open(_ url: URL) {
-        guard SnippetDeepLink.canHandle(url) else { return }
-        do {
-            let incoming = try SnippetDeepLink.snippet(from: url)
-            let result: Snippet
-            if SnippetDeepLink.isCreationLink(url) {
-                result = environment.store.addSnippet(
-                    name: incoming.name,
-                    content: incoming.content,
-                    tags: incoming.tags
-                )
-                var updated = result
-                updated.keyword = incoming.keyword
-                environment.store.update(updated)
-            } else {
-                result = try environment.store.importSharedSnippet(incoming)
+        incomingLinkCoordinator.open(
+            url,
+            from: self,
+            accepted: { [weak self] action in
+                self?.select(id: action.snippetID, revealEditor: true)
+            },
+            failed: { [weak self] error in
+                self?.showError(title: "Couldn’t Open Link", error: error)
             }
-            select(id: result.id, revealEditor: true)
-        } catch {
-            showError(title: "Couldn’t Open Link", error: error)
-        }
+        )
     }
 
     private func libraryChanged(source: SnippetStore.ChangeSource) {
@@ -411,10 +405,12 @@ final class MainSplitViewController: UISplitViewController {
     private func showExporter() {
         editorController.prepareForModalPresentation()
         removeTemporaryExport()
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Snippets-Export.json", isDirectory: false)
+        var temporaryURL: URL?
         do {
+            let url = try TemporaryExportFiles.makeURL(filename: "Snippets-Export.json")
+            temporaryURL = url
             let count = try environment.store.exportSnippets(to: url)
+            try TemporaryExportFiles.protect(url)
             let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
             picker.delegate = self
             documentPickerPurpose = .exporting
@@ -422,6 +418,7 @@ final class MainSplitViewController: UISplitViewController {
             present(picker, animated: true)
             listController.showStatus("Exporting \(count) ordinary snippet\(count == 1 ? "" : "s") for sharing… Secure snippets are not included.")
         } catch {
+            if let temporaryURL { TemporaryExportFiles.remove(temporaryURL) }
             showError(title: "Couldn’t Export Snippets", error: error)
         }
     }
@@ -434,21 +431,22 @@ final class MainSplitViewController: UISplitViewController {
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                var temporaryURL: URL?
                 do {
                     let backup = try await environment.secureStore.makeEncryptedBackup(
                         store: environment.store,
                         passphrase: passphrase)
                     removeTemporaryExport()
-                    let url = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("Snippets-Backup.snippetsbackup", isDirectory: false)
+                    let url = try TemporaryExportFiles.makeURL(
+                        filename: "Snippets-Backup.snippetsbackup"
+                    )
+                    temporaryURL = url
                     try AtomicFileWriter.write(
                         backup.data,
                         to: url,
-                        temporaryDirectory: FileManager.default.temporaryDirectory,
+                        temporaryDirectory: url.deletingLastPathComponent(),
                         permissions: 0o600)
-                    try FileManager.default.setAttributes(
-                        [.protectionKey: FileProtectionType.complete],
-                        ofItemAtPath: url.path)
+                    try TemporaryExportFiles.protect(url)
 
                     let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
                     picker.delegate = self
@@ -458,6 +456,7 @@ final class MainSplitViewController: UISplitViewController {
                     listController.showStatus(
                         "Encrypted backup contains \(backup.ordinaryCount) ordinary and \(backup.secureCount) secure snippet\(backup.totalCount == 1 ? "" : "s").")
                 } catch {
+                    if let temporaryURL { TemporaryExportFiles.remove(temporaryURL) }
                     showError(title: "Couldn’t Create Encrypted Backup", error: error)
                 }
             }
@@ -466,44 +465,51 @@ final class MainSplitViewController: UISplitViewController {
 
     private func importDocument(at url: URL) {
         let hasAccess = url.startAccessingSecurityScopedResource()
-        let finish = { if hasAccess { url.stopAccessingSecurityScopedResource() } }
-
-        let encryptedData = try? Data(contentsOf: url)
-        let isEncryptedBackup = url.pathExtension.caseInsensitiveCompare(
-            EncryptedSnippetBackup.preferredFilenameExtension) == .orderedSame
-            || encryptedData.map(EncryptedSnippetBackup.isEncryptedBackup) == true
-        if isEncryptedBackup {
-            finish()
-            guard let encryptedData else {
-                showMessage(
-                    title: "Couldn’t Read Encrypted Backup",
-                    message: "The selected backup file could not be read.")
+        listController.showStatus("Reading import…")
+        Task { @MainActor [weak self] in
+            guard let self else {
+                if hasAccess { url.stopAccessingSecurityScopedResource() }
                 return
             }
-            importEncryptedBackup(encryptedData)
-            return
+            do {
+                let loaded = try await Task.detached(priority: .userInitiated) {
+                    try IncomingDocumentLoader.load(url)
+                }.value
+                if hasAccess { url.stopAccessingSecurityScopedResource() }
+                switch loaded {
+                case .encryptedBackup(let data):
+                    self.importEncryptedBackup(data)
+                case .snippets(let prepared):
+                    self.reviewAndImport(prepared)
+                }
+            } catch {
+                if hasAccess { url.stopAccessingSecurityScopedResource() }
+                self.showError(title: "Couldn’t Import Snippets", error: error)
+            }
         }
+    }
 
+    private func reviewAndImport(_ prepared: PreparedSnippetImport) {
         let runImport: (Bool) -> Void = { [weak self] preserveExclamation in
-            guard let self else { finish(); return }
-            defer { finish() }
+            guard let self else { return }
             do {
                 let count = try self.environment.store.importSnippets(
-                    from: url,
+                    prepared,
                     options: .init(preserveExclamationPrefix: preserveExclamation)
                 )
-                self.listController.showStatus("Imported \(count) snippet\(count == 1 ? "" : "s").")
+                self.listController.showStatus(
+                    "Imported \(count) snippet\(count == 1 ? "" : "s")."
+                )
                 self.selectInitialSnippetIfNeeded()
             } catch {
                 self.showError(title: "Couldn’t Import Snippets", error: error)
             }
         }
 
-        guard environment.store.detectsRaycastExclamationKeywords(in: url) else {
+        guard prepared.hasRaycastExclamationKeywords else {
             runImport(false)
             return
         }
-
         let alert = UIAlertController(
             title: "Raycast Keywords",
             message: "Some imported keywords begin with !. Keep it as part of each keyword?",
@@ -511,7 +517,7 @@ final class MainSplitViewController: UISplitViewController {
         )
         alert.addAction(UIAlertAction(title: "Remove !", style: .default) { _ in runImport(false) })
         alert.addAction(UIAlertAction(title: "Keep !", style: .default) { _ in runImport(true) })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in finish() })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         present(alert, animated: true)
     }
 
@@ -611,7 +617,7 @@ final class MainSplitViewController: UISplitViewController {
 
     private func removeTemporaryExport() {
         guard let exportedTemporaryURL else { return }
-        try? FileManager.default.removeItem(at: exportedTemporaryURL)
+        TemporaryExportFiles.remove(exportedTemporaryURL)
         self.exportedTemporaryURL = nil
     }
 

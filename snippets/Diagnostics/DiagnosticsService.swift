@@ -1,5 +1,6 @@
 import CocoaLumberjack
 import CoreFoundation
+import Darwin
 import Foundation
 import MetricKit
 #if os(macOS)
@@ -868,7 +869,18 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         #if os(macOS)
         "macos"
         #else
-        "ipados"
+        let simulatorModel = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"]
+        if simulatorModel?.hasPrefix("iPad") == true { return "ipados" }
+        if simulatorModel?.hasPrefix("iPhone") == true { return "ios" }
+
+        var system = utsname()
+        guard uname(&system) == 0 else { return "ios" }
+        let machine = withUnsafePointer(to: &system.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+                String(cString: $0)
+            }
+        }
+        return machine.hasPrefix("iPad") ? "ipados" : "ios"
         #endif
     }
 

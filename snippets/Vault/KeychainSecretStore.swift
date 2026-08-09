@@ -71,11 +71,21 @@ final class KeychainSecretStore {
         }
     }
 
-    private let service = "com.khm.snippets.vault"
+    private let service: String
+    /// Instance-local test backend. Production always leaves this `nil` and reaches
+    /// Security.framework; unsigned simulator tests can exercise vault ordering without
+    /// requiring or mutating a real keychain access group.
+    private var inMemoryItems: [String: Data]?
     let tier: Tier
 
-    init(tier: Tier? = nil) {
+    init(
+        tier: Tier? = nil,
+        service: String = "com.khm.snippets.vault",
+        inMemory: Bool = false
+    ) {
         self.tier = tier ?? Self.detectTier()
+        self.service = service
+        self.inMemoryItems = inMemory ? [:] : nil
     }
 
     // MARK: - Which tier this build actually gets
@@ -145,6 +155,10 @@ final class KeychainSecretStore {
     /// Writes an item without a delete-first window. If replacement fails, the previous
     /// value is still present.
     func storeItem(_ data: Data, account: String) throws {
+        if inMemoryItems != nil {
+            inMemoryItems?[account] = data
+            return
+        }
         let query = baseQuery(account: account)
         let values: [String: Any] = [
             kSecValueData as String: data,
@@ -175,6 +189,11 @@ final class KeychainSecretStore {
     /// `SyncKeyStore` for what is done about that.
     @discardableResult
     func addItemIfAbsent(_ data: Data, account: String) throws -> Data {
+        if let existing = inMemoryItems?[account] { return existing }
+        if inMemoryItems != nil {
+            inMemoryItems?[account] = data
+            return data
+        }
         if let existing = try loadItem(account: account) { return existing }
 
         var attributes = baseQuery(account: account)
@@ -220,6 +239,11 @@ final class KeychainSecretStore {
             return data
         }
 
+        if let inMemoryItems {
+            guard let value = inMemoryItems[account] else { return nil }
+            return try validated(value)
+        }
+
         if let current = try copyData(matching: baseQuery(account: account)) {
             return try validated(current)
         }
@@ -243,6 +267,7 @@ final class KeychainSecretStore {
     /// Whether an item exists, without reading its bytes. The legacy-tier fallback keeps
     /// an entitlement upgrade from making an existing vault look keyless.
     func hasItem(account: String) -> Bool {
+        if let inMemoryItems { return inMemoryItems[account] != nil }
         if contains(baseQuery(account: account)) { return true }
         if case .synchronizable = tier { return contains(deviceOnlyQuery(account: account)) }
         return false
@@ -250,6 +275,10 @@ final class KeychainSecretStore {
 
     /// Removes an item from every tier it may be in.
     func deleteItem(account: String) throws {
+        if inMemoryItems != nil {
+            inMemoryItems?[account] = nil
+            return
+        }
         guard case .synchronizable = tier else {
             try deleteMatching(baseQuery(account: account))
             return

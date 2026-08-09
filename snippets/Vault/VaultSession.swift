@@ -28,6 +28,8 @@ import UIKit
 @MainActor
 final class VaultSession {
 
+    typealias AuthenticationEvaluator = @MainActor (_ reason: String) async throws -> Bool
+
     enum State: Equatable {
         /// No vault key exists on this Mac yet — the feature has never been set up, or
         /// the key was lost and only a recovery key or passphrase can bring it back.
@@ -73,6 +75,7 @@ final class VaultSession {
 
     private let keychain: KeychainSecretStore
     private let duration: TimeInterval
+    private let authenticationEvaluator: AuthenticationEvaluator?
     private var keyID: String?
 
     /// The plaintext key, held only while unlocked.
@@ -87,6 +90,8 @@ final class VaultSession {
     /// which slides; this does not.
     private var authenticatedAt: Date?
     private var expiryTimer: Timer?
+    private var isLocking = false
+    private var isDeliveringPreLock = false
 
     /// Kept so a screen lock or explicit lock can cancel authentication already in
     /// flight. Once the session is open, `libraryKey` itself supplies the reuse window.
@@ -96,9 +101,14 @@ final class VaultSession {
     ///   Defaulted to `nil` rather than to `KeychainSecretStore()`, because a default
     ///   argument is evaluated at the call site — outside this type's actor — and
     ///   constructing a `@MainActor` type there does not typecheck.
-    init(keychain: KeychainSecretStore? = nil, duration: TimeInterval = VaultSession.defaultDuration) {
+    init(
+        keychain: KeychainSecretStore? = nil,
+        duration: TimeInterval = VaultSession.defaultDuration,
+        authenticationEvaluator: AuthenticationEvaluator? = nil
+    ) {
         self.keychain = keychain ?? KeychainSecretStore()
         self.duration = duration
+        self.authenticationEvaluator = authenticationEvaluator
         observeSystemLockEvents()
     }
 
@@ -158,9 +168,17 @@ final class VaultSession {
         authenticationContext = context
 
         do {
-            let authenticated = try await context.evaluatePolicy(
-                .deviceOwnerAuthentication,
-                localizedReason: reason)
+            let authenticated: Bool
+            if let authenticationEvaluator {
+                // Tests inject the smallest possible seam around LocalAuthentication.
+                // Keychain reads and all session state transitions still use the
+                // production path, so ordering and key lifetime remain exercised.
+                authenticated = try await authenticationEvaluator(reason)
+            } else {
+                authenticated = try await context.evaluatePolicy(
+                    .deviceOwnerAuthentication,
+                    localizedReason: reason)
+            }
             guard authenticated else {
                 if authenticationContext === context { authenticationContext = nil }
                 throw Failure.authentication("authentication was not approved")
@@ -228,6 +246,13 @@ final class VaultSession {
         guard case .unlocked(let until) = state, let libraryKey else {
             throw Failure.locked
         }
+        // `lock()` gives editors one synchronous, in-process chance to persist an
+        // already-visible secure edit before it destroys this key. A delayed expiry
+        // timer may arrive just after its deadline, so the normal deadline check below
+        // would otherwise make that hook useless and discard the final debounce window.
+        // This flag exists only while `.snippetsVaultWillLock` observers are running;
+        // no later run-loop turn can reuse it.
+        if isDeliveringPreLock { return libraryKey }
         guard until > now() else {
             // As in `unlock`, the deadline is authoritative even if the main run loop
             // has delayed delivery of the expiry timer. Drop the bytes and correct the
@@ -246,6 +271,24 @@ final class VaultSession {
     // MARK: - Locking
 
     func lock() {
+        guard !isLocking else { return }
+        isLocking = true
+        defer {
+            isDeliveringPreLock = false
+            isLocking = false
+        }
+
+        // Deliver this while `libraryKey` is still resident. Secure editors use the
+        // hook to synchronously flush their pending debounce; the ordinary state-change
+        // notification remains after key destruction and clears revealed UI. Posting
+        // only for a genuinely open session avoids spurious saves during adoption and
+        // the first half of one-use authentication.
+        if state.isUnlocked, libraryKey != nil {
+            isDeliveringPreLock = true
+            NotificationCenter.default.post(name: .snippetsVaultWillLock, object: self)
+            isDeliveringPreLock = false
+        }
+
         expiryTimer?.invalidate()
         expiryTimer = nil
         libraryKey = nil
@@ -348,5 +391,6 @@ final class VaultSession {
 
 
 extension Notification.Name {
+    static let snippetsVaultWillLock = Notification.Name("com.khm.snippets.vaultWillLock")
     static let snippetsVaultStateChanged = Notification.Name("com.khm.snippets.vaultStateChanged")
 }

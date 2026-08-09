@@ -3,6 +3,28 @@ import Foundation
 
 // App target only — see the note at the top of `CloudKitRecordMapping.swift`.
 
+/// Collapses any number of requests received during one round into one replay. Kept as
+/// a small value type so its edge cases can be tested without constructing CloudKit.
+nonisolated struct SyncRoundRequestCoalescer {
+    private(set) var wantsReplay = false
+
+    mutating func requestReplay() {
+        wantsReplay = true
+    }
+
+    mutating func cancelReplay() {
+        wantsReplay = false
+    }
+
+    mutating func finishRound(
+        generation: UInt64,
+        currentGeneration: UInt64
+    ) -> Bool {
+        defer { wantsReplay = false }
+        return wantsReplay || generation != currentGeneration
+    }
+}
+
 /// Owns whether sync is running, and runs it.
 ///
 /// ## Off is structural, not filtered
@@ -61,6 +83,23 @@ final class SyncCoordinator {
         case ready
     }
 
+    /// What happened when a caller asked for a round. This is deliberately separate
+    /// from `SyncEngine.State`: a refresh gesture needs to know whether it started work,
+    /// joined a future replay, or could not start at all.
+    enum RequestDisposition: Equatable {
+        case started
+        case queued
+        case notStarted(Readiness)
+    }
+
+    /// Completion of one requested round. A request made while another round is active
+    /// completes after the single coalesced replay, not after the older round that was
+    /// already in flight.
+    enum RequestResult: Equatable {
+        case completed(SyncEngine.State)
+        case notStarted(Readiness)
+    }
+
     private let library: any SyncLibraryAccess
     private let keys: SyncKeyStore
     private let device: String
@@ -68,9 +107,12 @@ final class SyncCoordinator {
     private(set) var engine: SyncEngine?
     private(set) var state: SyncEngine.State = .disabled
 
-    /// Set by the settings pane so it can redraw. One observer is enough; a second would
-    /// mean two things believe they own the presentation.
+    /// Compatibility hook used by the macOS settings window.
     var onStateChange: ((SyncEngine.State) -> Void)?
+
+    /// iOS presents sync state in both Library and Settings, so those views subscribe
+    /// independently instead of replacing one another's callback.
+    private var stateObservers: [UUID: (SyncEngine.State) -> Void] = [:]
 
     private var transport: CloudKitTransport?
     private var pollTimer: Timer?
@@ -79,6 +121,10 @@ final class SyncCoordinator {
     /// Retained until the round has actually returned. Cancellation is advisory across
     /// an awaited CloudKit call, so `engine == nil` is not proof that sync is quiescent.
     private var roundTask: Task<Void, Never>?
+    /// The generation of `roundTask`. After `stop()` cancellation is advisory, so a new
+    /// engine may exist while the old task is still draining. Requests for that new
+    /// generation belong to the replay, never to the old round.
+    private var roundGeneration: UInt64?
     /// Invalidates state callbacks and completions from engines stopped earlier.
     private var lifecycleGeneration: UInt64 = 0
 
@@ -87,7 +133,11 @@ final class SyncCoordinator {
     /// — the next tick retries — but for a user pressing "Sync Now" or a push hint
     /// arriving mid-round it would look like the button did nothing. So a dropped request
     /// is remembered and replayed once the round finishes.
-    private var wantsAnotherRound = false
+    private var roundRequests = SyncRoundRequestCoalescer()
+
+    private typealias RequestCompletion = (RequestResult) -> Void
+    private var currentRoundCompletions: [RequestCompletion] = []
+    private var replayRoundCompletions: [RequestCompletion] = []
 
     /// The wire key bytes the running engine was built with, and why `readiness` can be
     /// a cheap computed property: the keychain is consulted when sync starts and once a
@@ -120,6 +170,18 @@ final class SyncCoordinator {
     /// Destructive local maintenance may proceed only after an old round has returned,
     /// not merely after the checkbox was switched off.
     var isQuiescent: Bool { roundTask == nil }
+
+    @discardableResult
+    func addStateObserver(_ observer: @escaping (SyncEngine.State) -> Void) -> UUID {
+        let token = UUID()
+        stateObservers[token] = observer
+        observer(state)
+        return token
+    }
+
+    func removeStateObserver(_ token: UUID) {
+        stateObservers[token] = nil
+    }
 
     /// Turns sync on or off and acts on it immediately.
     ///
@@ -201,7 +263,7 @@ final class SyncCoordinator {
 
         startPolling(every: transport.pollInterval)
         startEventPump(for: transport)
-        syncNow(trigger: .startup)
+        _ = syncNow(trigger: .startup)
     }
 
     /// Retries a start that failed on the keychain.
@@ -245,8 +307,9 @@ final class SyncCoordinator {
         engine = nil
         transport = nil
         activeKeyMaterial = nil
-        wantsAnotherRound = false
+        roundRequests.cancelReplay()
         publish(.disabled)
+        finishAllRequests(with: .completed(.disabled))
     }
 
     /// Re-evaluates after the shape of the library changed underneath — most usefully,
@@ -256,36 +319,95 @@ final class SyncCoordinator {
         guard Self.isEnabled else { return }
         // `syncNow` already starts a stopped engine, so there is one path rather than two
         // that have to be kept saying the same thing.
-        syncNow(trigger: .localLibraryChange)
+        _ = syncNow(trigger: .localLibraryChange)
     }
 
     // MARK: - Running a round
 
-    func syncNow(trigger: DiagnosticSyncTrigger = .manual) {
+    /// Requests a round without requiring a caller to infer completion from state
+    /// transitions. That distinction matters for pull-to-refresh: a disabled or failed
+    /// start never emits `.syncing`, while a request queued behind an existing round must
+    /// wait for the replay it asked for rather than completing with the older round.
+    func requestSync(
+        trigger: DiagnosticSyncTrigger = .manual
+    ) async -> RequestResult {
+        await withCheckedContinuation { continuation in
+            _ = enqueueSyncRequest(trigger: trigger) { result in
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    /// Fire-and-forget compatibility entry point used by timers and the macOS UI.
+    @discardableResult
+    func syncNow(
+        trigger: DiagnosticSyncTrigger = .manual
+    ) -> RequestDisposition {
+        enqueueSyncRequest(trigger: trigger, completion: nil)
+    }
+
+    @discardableResult
+    private func enqueueSyncRequest(
+        trigger: DiagnosticSyncTrigger,
+        completion: RequestCompletion?
+    ) -> RequestDisposition {
+        guard Self.isEnabled else {
+            let unavailable = Readiness.off
+            completion?(.notStarted(unavailable))
+            return .notStarted(unavailable)
+        }
+
         guard engine != nil else {
             // A start that failed — the keychain would not answer — is retried here
             // rather than only at launch. Without this the only way back was to relaunch
             // or toggle the checkbox, because the poll timer is started by `start()` and
             // so does not exist yet. `start()` ends by syncing, so this call is done.
-            if Self.isEnabled { start() }
-            return
+            start()
+            guard engine != nil else {
+                let unavailable = readiness
+                completion?(.notStarted(unavailable))
+                return .notStarted(unavailable)
+            }
+
+            // `start()` requested its startup round. It may be the active round, or it
+            // may be waiting behind a cancelled operation from an older generation.
+            if roundGeneration == lifecycleGeneration {
+                if let completion { currentRoundCompletions.append(completion) }
+                return .started
+            }
+            roundRequests.requestReplay()
+            if let completion { replayRoundCompletions.append(completion) }
+            return .queued
         }
         // A rebuild also ends by syncing; running a second round here would be waste.
-        if restartIfWireKeyChanged() { return }
+        if restartIfWireKeyChanged() {
+            guard engine != nil else {
+                let unavailable = readiness
+                completion?(.notStarted(unavailable))
+                return .notStarted(unavailable)
+            }
+            if roundGeneration == lifecycleGeneration {
+                if let completion { currentRoundCompletions.append(completion) }
+                return .started
+            }
+            roundRequests.requestReplay()
+            if let completion { replayRoundCompletions.append(completion) }
+            return .queued
+        }
 
-        guard let engine else { return }
+        guard let engine else {
+            let unavailable = readiness
+            completion?(.notStarted(unavailable))
+            return .notStarted(unavailable)
+        }
         Diagnostics.record(.syncTriggered(trigger))
         if roundTask != nil {
-            wantsAnotherRound = true
-            return
+            roundRequests.requestReplay()
+            if let completion { replayRoundCompletions.append(completion) }
+            return .queued
         }
-        let generation = lifecycleGeneration
-        let task = Task { @MainActor [weak self] in
-            _ = await engine.sync()
-            guard let self else { return }
-            self.finishRound(generation: generation)
-        }
-        roundTask = task
+        startRound(with: engine, completions: completion.map { [$0] } ?? [])
+        return .started
     }
 
     /// The only way out of a halt, and it goes through the engine's deliberately
@@ -293,7 +415,7 @@ final class SyncCoordinator {
     func clearHaltAfterUserReview() {
         engine?.clearHaltAfterUserReview()
         if Self.isEnabled {
-            syncNow(trigger: .retry)
+            _ = syncNow(trigger: .retry)
         } else {
             // Halt persistence failed and turned the opt-in off. Do not let the existing
             // in-memory engine bypass that preference after Review; a later checkbox-on
@@ -381,8 +503,33 @@ final class SyncCoordinator {
         return true
     }
 
-    private func finishRound(generation: UInt64) {
+    private func startRound(
+        with engine: SyncEngine,
+        completions: [RequestCompletion]
+    ) {
+        let generation = lifecycleGeneration
+        roundGeneration = generation
+        currentRoundCompletions.append(contentsOf: completions)
+        let task = Task { @MainActor [weak self] in
+            let finalState = await engine.sync()
+            guard let self else { return }
+            self.finishRound(generation: generation, finalState: finalState)
+        }
+        roundTask = task
+    }
+
+    private func finishRound(
+        generation: UInt64,
+        finalState: SyncEngine.State
+    ) {
         roundTask = nil
+        roundGeneration = nil
+
+        let completedRequests = currentRoundCompletions
+        currentRoundCompletions.removeAll(keepingCapacity: true)
+        for completion in completedRequests {
+            completion(.completed(finalState))
+        }
 
         // The safety-halt fallback can switch the persisted opt-in off from inside this
         // round. Keep the task retained until this point so destructive maintenance still
@@ -395,10 +542,32 @@ final class SyncCoordinator {
             return
         }
 
-        let replay = wantsAnotherRound || generation != lifecycleGeneration
-        wantsAnotherRound = false
-        guard replay, engine != nil else { return }
-        syncNow(trigger: .retry)
+        let replay = roundRequests.finishRound(
+            generation: generation,
+            currentGeneration: lifecycleGeneration)
+        guard replay, let engine else {
+            // Defensive: every queued completion should imply a requested replay, but
+            // never leave an async caller suspended if future scheduling code violates
+            // that invariant.
+            let orphaned = replayRoundCompletions
+            replayRoundCompletions.removeAll(keepingCapacity: true)
+            for completion in orphaned {
+                completion(.completed(finalState))
+            }
+            return
+        }
+
+        let replayCompletions = replayRoundCompletions
+        replayRoundCompletions.removeAll(keepingCapacity: true)
+        Diagnostics.record(.syncTriggered(.retry))
+        startRound(with: engine, completions: replayCompletions)
+    }
+
+    private func finishAllRequests(with result: RequestResult) {
+        let completions = currentRoundCompletions + replayRoundCompletions
+        currentRoundCompletions.removeAll(keepingCapacity: true)
+        replayRoundCompletions.removeAll(keepingCapacity: true)
+        for completion in completions { completion(result) }
     }
 
     private func startPolling(every interval: TimeInterval) {
@@ -408,7 +577,7 @@ final class SyncCoordinator {
         // change arrive. `tolerance` lets the system coalesce it with other timers, which
         // matters for a laptop's battery at a two-minute cadence.
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.syncNow(trigger: .poll) }
+            MainActor.assumeIsolated { _ = self?.syncNow(trigger: .poll) }
         }
         timer.tolerance = interval / 4
         RunLoop.main.add(timer, forMode: .common)
@@ -423,12 +592,12 @@ final class SyncCoordinator {
                 guard let self else { return }
                 switch event {
                 case .changesAvailable, .cursorInvalidated:
-                    self.syncNow(trigger: .poll)
+                    _ = self.syncNow(trigger: .poll)
                 case .authenticationRequired:
                     // Deliberately still a fetch. The round begins by checking the account
                     // and will report the real state; acting on the hint directly would be
                     // a second, competing opinion about whether the user is signed in.
-                    self.syncNow(trigger: .retry)
+                    _ = self.syncNow(trigger: .retry)
                 }
             }
         }
@@ -440,6 +609,9 @@ final class SyncCoordinator {
             Self.diagnosticState(for: newState),
             haltReason: Self.diagnosticHaltReason(for: newState)))
         onStateChange?(newState)
+        for observer in stateObservers.values {
+            observer(newState)
+        }
     }
 
     private static func diagnosticState(for state: SyncEngine.State) -> DiagnosticSyncState {

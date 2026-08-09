@@ -13,13 +13,14 @@ Copy Snippets' retained, privacy-filtered JSONL diagnostics.
 
 Usage:
   ./scripts/collect-diagnostics.sh --mac [--output <directory>]
-  ./scripts/collect-diagnostics.sh --ipad --device <name> [options]
+  ./scripts/collect-diagnostics.sh --ios --device <name> [options]
 
 Options:
   --mac                  Collect from this Mac's Snippets support folder.
-  --ipad                 Collect from a paired iPad app data container.
-  --device <name>        Paired iPad name understood by devicectl (required for iPad).
-  --debug                Use the Debug iPad bundle, com.khm.snippets.debug.
+  --ios                  Collect from a paired iPhone or iPad app data container.
+  --ipad                 Legacy alias for --ios.
+  --device <name>        Paired iPhone/iPad name understood by devicectl.
+  --debug                Use the Debug iOS bundle, com.khm.snippets.debug.
   --output <directory>   New destination directory. The default is timestamped in $PWD.
   -h, --help             Show this help.
 
@@ -37,13 +38,13 @@ function fail() {
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --mac)
-            [ -z "$MODE" ] || fail "Choose exactly one of --mac or --ipad"
+            [ -z "$MODE" ] || fail "Choose exactly one of --mac or --ios"
             MODE="mac"
             shift
             ;;
-        --ipad)
-            [ -z "$MODE" ] || fail "Choose exactly one of --mac or --ipad"
-            MODE="ipad"
+        --ios|--ipad)
+            [ -z "$MODE" ] || fail "Choose exactly one of --mac or --ios"
+            MODE="ios"
             shift
             ;;
         --device)
@@ -70,7 +71,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[ -n "$MODE" ] || fail "Choose --mac or --ipad"
+[ -n "$MODE" ] || fail "Choose --mac or --ios"
 if [ -z "$OUTPUT" ]; then
     OUTPUT="$PWD/Snippets-Diagnostics-$(date -u +%Y%m%d-%H%M%S)"
 fi
@@ -83,8 +84,8 @@ if [ "$MODE" = "mac" ]; then
     [ -d "$LOGS_DIRECTORY" ] || fail "No retained diagnostics were found on this Mac"
     cp -R "$LOGS_DIRECTORY" "$OUTPUT/Logs"
 else
-    [ -n "$DEVICE" ] || fail "--device <name> is required for iPad collection"
-    command -v xcrun >/dev/null 2>&1 || fail "xcrun is required for iPad collection"
+    [ -n "$DEVICE" ] || fail "--device <name> is required for iOS collection"
+    command -v xcrun >/dev/null 2>&1 || fail "xcrun is required for iOS collection"
     xcrun devicectl device copy from \
         --device "$DEVICE" \
         --source "Library/Application Support/SnippetsClone/Diagnostics/Logs" \

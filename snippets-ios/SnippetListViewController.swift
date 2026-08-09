@@ -335,12 +335,12 @@ final class SnippetListViewController: UIViewController {
 
     private func copy(_ snippet: Snippet) {
         guard !environment.store.isSecure(snippet.id) else { return }
-        let clipboard = UIPasteboard.general.string
-        UIPasteboard.general.string = PlaceholderResolver.resolve(
-            template: snippet.content,
-            clipboard: { clipboard }
-        )
-        showStatus("Copied “\(snippet.displayName)”.")
+        switch environment.snippetActions.copyOrdinary(snippet) {
+        case .copied(let name, _):
+            showStatus("Copied “\(name)”.")
+        case .empty(let name):
+            showStatus("“\(name)” has no content to copy.")
+        }
     }
 
     private func copyLink(_ snippet: Snippet) {

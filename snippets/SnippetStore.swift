@@ -15,6 +15,16 @@ protocol SnippetStoreSyncDelegate: AnyObject {
 
 @MainActor
 final class SnippetStore {
+    /// An opaque, process-local handle for restoring one specific deletion.
+    ///
+    /// Unlike the store's global undo stack, this token never represents a whole
+    /// library snapshot. It is intended for transient UI affordances such as an
+    /// "Undo delete" toast, where unrelated edits may happen before the user taps
+    /// Undo and must remain intact.
+    struct DeletionUndoToken: Hashable {
+        fileprivate let operationID: UUID
+    }
+
     struct Configuration {
         var seedsStarterSnippet: Bool
         var observesExternalChanges: Bool
@@ -23,13 +33,14 @@ final class SnippetStore {
             seedsStarterSnippet: true,
             observesExternalChanges: true
         )
-        nonisolated static let iPad = Configuration(
+        /// Native iOS clients start empty and never watch a desktop filesystem.
+        nonisolated static let iOS = Configuration(
             seedsStarterSnippet: false,
             observesExternalChanges: false
         )
     }
 
-    struct ImportOptions {
+    nonisolated struct ImportOptions: Sendable {
         var preserveExclamationPrefix = false
     }
 
@@ -54,7 +65,6 @@ final class SnippetStore {
     private let saveURL: URL
     private let saveFolderURL: URL
     private let encoder = JSONEncoder()
-    private let decoder = JSONDecoder()
     private var persistWorkItem: DispatchWorkItem?
     private let persistDelay: TimeInterval = 0.3
     private let externalReloadDelay: TimeInterval = 0.05
@@ -131,6 +141,14 @@ final class SnippetStore {
     private var editTransactionNeedsRestart = false
     private let maxUndoLevels = 50
 
+    private struct PendingDeletionUndo {
+        let snippet: Snippet
+        let originalIndex: Int
+    }
+    private var pendingDeletionUndos: [UUID: PendingDeletionUndo] = [:]
+    private var pendingDeletionUndoOrder: [UUID] = []
+    private let maxPendingDeletionUndos = 50
+
     /// A snippet `addSnippet` created with nothing in it, remembered so a second
     /// ⌘N can reuse it and so leaving it can take it back out. Creation writes to
     /// disk before the first keystroke — that is what makes the editor bind to a
@@ -175,12 +193,6 @@ final class SnippetStore {
 
     private struct SnippetCollection: Codable {
         let snippets: [Snippet]
-    }
-
-    private struct RaycastSnippet: Decodable {
-        let name: String
-        let text: String
-        let keyword: String?
     }
 
     init(configuration: Configuration = .macOSDefault) {
@@ -392,6 +404,83 @@ final class SnippetStore {
         persist(immediately: true)
     }
 
+    /// Deletes one snippet and returns a one-use handle that can restore only that
+    /// record. This is deliberately separate from `undo()`: restoring the token
+    /// after another snippet was edited, pinned, imported, or deleted preserves all
+    /// of those intervening changes.
+    ///
+    /// The normal global undo entry is still recorded, so keyboard-oriented clients
+    /// retain their existing undo/redo behaviour.
+    @discardableResult
+    func deleteForUndo(snippetID: UUID) -> DeletionUndoToken? {
+        guard let originalIndex = snippets.firstIndex(where: { $0.id == snippetID }) else {
+            return nil
+        }
+
+        // At most one live scoped deletion can refer to a record. A stale toast from
+        // an earlier delete/restore/delete sequence must not resurrect an older copy.
+        invalidatePendingDeletionUndos(for: snippetID)
+
+        pushUndo()
+        let deleted = snippets.remove(at: originalIndex)
+        let token = DeletionUndoToken(operationID: UUID())
+        pendingDeletionUndos[token.operationID] = PendingDeletionUndo(
+            snippet: deleted,
+            originalIndex: originalIndex
+        )
+        pendingDeletionUndoOrder.append(token.operationID)
+        trimPendingDeletionUndosIfNeeded()
+        persist(immediately: true)
+        return token
+    }
+
+    /// Restores the record represented by `token` into the current library without
+    /// rolling back any intervening mutations. The token is consumed before any
+    /// validation or mutation, so every call after the first is a no-op.
+    @discardableResult
+    func restoreDeletedSnippet(using token: DeletionUndoToken) -> Bool {
+        guard let pending = consumePendingDeletionUndo(token.operationID) else {
+            return false
+        }
+
+        // A global undo, import, or remote merge may already have restored this ID.
+        // Consuming the token and leaving that current record untouched is safer than
+        // replacing newer data with the transient deletion snapshot.
+        guard !snippets.contains(where: { $0.id == pending.snippet.id }) else {
+            return false
+        }
+
+        pushUndo()
+        snippets.insert(pending.snippet, at: min(pending.originalIndex, snippets.count))
+        persist(immediately: true)
+        return true
+    }
+
+    private func consumePendingDeletionUndo(_ operationID: UUID) -> PendingDeletionUndo? {
+        pendingDeletionUndoOrder.removeAll { $0 == operationID }
+        return pendingDeletionUndos.removeValue(forKey: operationID)
+    }
+
+    private func invalidatePendingDeletionUndos(for snippetID: UUID) {
+        let operationIDs = pendingDeletionUndos.compactMap { operationID, pending in
+            pending.snippet.id == snippetID ? operationID : nil
+        }
+        guard !operationIDs.isEmpty else { return }
+
+        let invalidated = Set(operationIDs)
+        pendingDeletionUndoOrder.removeAll { invalidated.contains($0) }
+        for operationID in operationIDs {
+            pendingDeletionUndos.removeValue(forKey: operationID)
+        }
+    }
+
+    private func trimPendingDeletionUndosIfNeeded() {
+        while pendingDeletionUndoOrder.count > maxPendingDeletionUndos {
+            let operationID = pendingDeletionUndoOrder.removeFirst()
+            pendingDeletionUndos.removeValue(forKey: operationID)
+        }
+    }
+
     @discardableResult
     func duplicate(snippetID: UUID) -> Snippet? {
         guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return nil }
@@ -525,14 +614,8 @@ final class SnippetStore {
     /// Peeks at a file to check if it contains Raycast snippets with `!`-prefixed keywords.
     func detectsRaycastExclamationKeywords(in url: URL) -> Bool {
         guard let data = try? Data(contentsOf: url),
-              let raycastArray = decodeRaycastSnippets(from: data),
-              !raycastArray.isEmpty else { return false }
-        return raycastArray.contains {
-            Self.normalizedRaycastKeyword(
-                from: $0.keyword,
-                preserveExclamationPrefix: true
-            ).hasPrefix("!")
-        }
+              let prepared = try? SnippetImportParser.parse(data) else { return false }
+        return prepared.hasRaycastExclamationKeywords
     }
 
     @discardableResult
@@ -549,7 +632,25 @@ final class SnippetStore {
             throw ImportExportError.cannotAccessFile
         }
 
-        let decoded = try decodeImportData(data, options: options)
+        let prepared: PreparedSnippetImport
+        do {
+            prepared = try SnippetImportParser.parse(data)
+        } catch {
+            throw ImportExportError.invalidFormat
+        }
+        return try importSnippets(prepared, options: options)
+    }
+
+    /// Applies JSON that was already decoded off the main actor by the iOS document
+    /// loader. Preflight and mutation remain actor-isolated and atomic.
+    @discardableResult
+    func importSnippets(
+        _ prepared: PreparedSnippetImport,
+        options: ImportOptions = ImportOptions()
+    ) throws -> Int {
+        let decoded = prepared.snippets(
+            preservingExclamationPrefix: options.preserveExclamationPrefix
+        )
         try preflightImportedSnippets(decoded)
 
         let imported = normalizeImportedSnippets(decoded)
@@ -691,40 +792,13 @@ final class SnippetStore {
     }
 
     private func decodeImportData(_ data: Data, options: ImportOptions) throws -> [Snippet] {
-        if let directArray = try? decoder.decode([Snippet].self, from: data) {
-            return directArray
+        do {
+            return try SnippetImportParser.parse(data).snippets(
+                preservingExclamationPrefix: options.preserveExclamationPrefix
+            )
+        } catch {
+            throw ImportExportError.invalidFormat
         }
-
-        if let collection = try? decoder.decode(SnippetCollection.self, from: data) {
-            return collection.snippets
-        }
-
-        if let raycastArray = decodeRaycastSnippets(from: data) {
-            return raycastArray.map { rc in
-                return Snippet(
-                    name: rc.name,
-                    keyword: Self.normalizedRaycastKeyword(
-                        from: rc.keyword,
-                        preserveExclamationPrefix: options.preserveExclamationPrefix
-                    ),
-                    content: RaycastPlaceholders.converted(rc.text)
-                )
-            }
-        }
-
-        throw ImportExportError.invalidFormat
-    }
-
-    private func decodeRaycastSnippets(from data: Data) -> [RaycastSnippet]? {
-        let isNative = (try? decoder.decode([Snippet].self, from: data)) != nil
-            || (try? decoder.decode(SnippetCollection.self, from: data)) != nil
-        guard !isNative,
-              let raycastArray = try? decoder.decode([RaycastSnippet].self, from: data),
-              !raycastArray.isEmpty else {
-            return nil
-        }
-
-        return raycastArray
     }
 
     private func preflightImportedSnippets(_ imported: [Snippet]) throws {
@@ -800,20 +874,6 @@ final class SnippetStore {
         throw ImportExportError.importConflicts(Array(conflicts.prefix(8)))
     }
 
-    private static func normalizedRaycastKeyword(
-        from rawKeyword: String?,
-        preserveExclamationPrefix: Bool
-    ) -> String {
-        var keyword = Snippet.sanitizedKeyword(rawKeyword ?? "")
-
-        if !preserveExclamationPrefix, keyword.hasPrefix("!") {
-            keyword.removeFirst()
-            keyword = Snippet.sanitizedKeyword(keyword)
-        }
-
-        return keyword
-    }
-
     private func normalizeImportedSnippets(_ imported: [Snippet]) -> [Snippet] {
         var normalized: [Snippet] = []
         var seenIDs = Set<UUID>()
@@ -838,9 +898,9 @@ final class SnippetStore {
         return normalized
     }
 
-    private func persist(immediately: Bool = false) {
+    private func persist(immediately: Bool = false, notifyChange: Bool = true) {
         restartEditTransactionIfNeeded()
-        notifyChanged(.local)
+        if notifyChange { notifyChanged(.local) }
         persistWorkItem?.cancel()
         persistWorkItem = nil
 
@@ -1006,14 +1066,17 @@ final class SnippetStore {
     }
 
     /// Re-reads after something else wrote the library through a route that bypasses
-    /// this store's own write path — currently only `SnippetLibraryBridge`, applying a
-    /// remote change under `LibraryTransaction`.
+    /// this store's own write path, such as `SnippetLibraryBridge` or an iOS secure
+    /// transition applying a `LibraryTransaction`.
     ///
     /// Distinct from the folder monitor, which is debounced and may not have fired yet:
     /// the caller knows for a fact the bytes changed, so waiting for a notification
-    /// would leave the UI showing state that is already gone.
-    func reloadAfterExternalWrite() {
-        reloadFromDiskIfNeeded()
+    /// would leave the UI showing state that is already gone. A coordinated caller may
+    /// suppress this store's notification while it reloads another projection, then
+    /// publish one combined change after both caches agree.
+    @discardableResult
+    func reloadAfterExternalWrite(notifyChange: Bool = true) -> Bool {
+        reloadFromDiskIfNeeded(notifyChange: notifyChange)
     }
 
     private func rememberDiskBytes(_ data: Data) {
@@ -1201,9 +1264,10 @@ final class SnippetStore {
     ///
     /// A pending write is now no longer special. Both sides are merged against the
     /// last bytes we saw, and whatever comes out is persisted on the normal path.
-    private func reloadFromDiskIfNeeded() {
-        guard let data = try? Data(contentsOf: saveURL) else { return }
-        guard data != lastKnownDiskData else { return }
+    @discardableResult
+    private func reloadFromDiskIfNeeded(notifyChange: Bool = true) -> Bool {
+        guard let data = try? Data(contentsOf: saveURL) else { return false }
+        guard data != lastKnownDiskData else { return false }
 
         let reloaded: [Snippet]
         do {
@@ -1216,7 +1280,7 @@ final class SnippetStore {
                 operation: .read,
                 failure: DiagnosticFailure(error),
                 attempt: nil))
-            return
+            return false
         }
 
         let ancestor = lastKnownDiskData.flatMap { try? SnippetLibraryCodec.decode($0) } ?? []
@@ -1226,16 +1290,17 @@ final class SnippetStore {
         let merged = SyncMerge.mergeLocal(
             base: ancestor, local: snippets, remote: reloaded)
 
-        guard merged.snippets != preMergeLocal else { return }
+        guard merged.snippets != preMergeLocal else { return false }
         adoptMergedLibrary(merged, preMergeLocal: preMergeLocal)
-        notifyChanged(.external)
+        if notifyChange { notifyChanged(.external) }
 
         // If the merge produced something neither side had on disk — a conflict copy,
         // a disabled duplicate keyword, or simply our own unflushed edits surviving —
         // that result has to be written back or it exists only in this process.
         if merged.snippets != reloaded {
-            persist()
+            persist(notifyChange: notifyChange)
         }
+        return true
     }
 
     /// Installs a merge result and keeps undo coherent with it.

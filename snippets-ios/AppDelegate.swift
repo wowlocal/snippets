@@ -1,5 +1,15 @@
 import UIKit
 
+@MainActor
+protocol SnippetsRootController: AnyObject {
+    func open(_ url: URL)
+    func handleEscapeBeforeSystemSearch() -> Bool
+}
+
+extension SnippetsRootController {
+    func handleEscapeBeforeSystemSearch() -> Bool { false }
+}
+
 /// UISearchController treats a hardware Escape press as Cancel and clears the
 /// query before responder-chain key commands run. Catch that one press at the
 /// window boundary so the app can move focus while preserving the filter.
@@ -37,6 +47,21 @@ final class SnippetWindow: UIWindow {
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     let environment = AppEnvironment()
 
+    nonisolated static func allowsExtensionPoint(_ identifier: UIApplication.ExtensionPointIdentifier) -> Bool {
+        // UIKit has no public per-text-view switch for third-party keyboards. Secure
+        // snippet bodies are editable plaintext after authentication, so allowing a
+        // keyboard extension would hand every keystroke to another process. Apply the
+        // platform-supported app-wide policy instead.
+        identifier != .keyboard
+    }
+
+    func application(
+        _ application: UIApplication,
+        shouldAllowExtensionPointIdentifier extensionPointIdentifier: UIApplication.ExtensionPointIdentifier
+    ) -> Bool {
+        Self.allowsExtensionPoint(extensionPointIdentifier)
+    }
+
     func application(
         _ application: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
@@ -57,7 +82,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
-    private var rootController: MainSplitViewController?
+    private var rootController: (UIViewController & SnippetsRootController)?
 
     func scene(
         _ scene: UIScene,
@@ -67,7 +92,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene,
               let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
 
-        let root = MainSplitViewController(environment: appDelegate.environment)
+        let root: UIViewController & SnippetsRootController
+        if windowScene.traitCollection.userInterfaceIdiom == .phone {
+            root = PhoneRootViewController(environment: appDelegate.environment)
+        } else {
+            root = MainSplitViewController(environment: appDelegate.environment)
+        }
         let window = SnippetWindow(windowScene: windowScene)
         window.onEscapePress = { [weak root] in
             root?.handleEscapeBeforeSystemSearch() == true
@@ -80,9 +110,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         appDelegate.environment.start()
 
         if CommandLine.arguments.contains("--ui-testing-reset"),
-           CommandLine.arguments.contains("--ui-testing-show-shortcuts") {
+           CommandLine.arguments.contains("--ui-testing-show-shortcuts"),
+           let splitRoot = root as? MainSplitViewController {
             DispatchQueue.main.async {
-                root.shortcutsCommand()
+                splitRoot.shortcutsCommand()
             }
         }
 
@@ -107,3 +138,5 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         appDelegate.environment.enteredBackground()
     }
 }
+
+extension MainSplitViewController: SnippetsRootController {}

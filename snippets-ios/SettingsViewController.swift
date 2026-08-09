@@ -31,10 +31,13 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     }
 
     private let environment: AppEnvironment
+    private let showsDoneButton: Bool
     private var temporaryExportURL: URL?
+    private var syncObservation: UUID?
 
-    init(environment: AppEnvironment) {
+    init(environment: AppEnvironment, showsDoneButton: Bool = true) {
         self.environment = environment
+        self.showsDoneButton = showsDoneButton
         super.init(style: .insetGrouped)
     }
 
@@ -45,12 +48,14 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Settings"
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            systemItem: .done,
-            primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
-        )
+        if showsDoneButton {
+            navigationItem.rightBarButtonItem = UIBarButtonItem(
+                systemItem: .done,
+                primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
+            )
+        }
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-        environment.syncCoordinator.onStateChange = { [weak self] _ in
+        syncObservation = environment.syncCoordinator.addStateObserver { [weak self] _ in
             self?.tableView.reloadData()
         }
         NotificationCenter.default.addObserver(
@@ -61,11 +66,25 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         )
     }
 
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        if isBeingDismissed || navigationController?.isBeingDismissed == true {
-            environment.syncCoordinator.onStateChange = nil
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        if traitCollection.userInterfaceIdiom == .phone {
+            navigationController?.setToolbarHidden(true, animated: animated)
         }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isBeingDismissed || isMovingFromParent
+            || navigationController?.isBeingDismissed == true {
+            removeSyncObservation()
+        }
+    }
+
+    private func removeSyncObservation() {
+        guard let syncObservation else { return }
+        environment.syncCoordinator.removeStateObserver(syncObservation)
+        self.syncObservation = nil
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int { Section.allCases.count }
@@ -131,7 +150,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             cell.textLabel?.text = "Restore with Recovery Key"
             cell.imageView?.image = UIImage(systemName: "key.viewfinder")
         case .forgetVault:
-            cell.textLabel?.text = "Remove Secure Snippets from This iPad"
+            cell.textLabel?.text = "Remove Secure Snippets from This Device"
             cell.detailTextLabel?.text = environment.secureStore.usesSynchronizableVaultKey
                 ? "The shared Keychain key remains available to your other devices."
                 : "This also removes the device-only vault key."
@@ -237,7 +256,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     private func confirmDeleteDiagnostics() {
         let alert = UIAlertController(
             title: "Delete Diagnostic Logs?",
-            message: "This permanently removes retained diagnostics and any legacy reveal-audit file from this iPad.",
+            message: "This permanently removes retained diagnostics and any legacy reveal-audit file from this device.",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Delete Logs", style: .destructive) {
@@ -285,33 +304,43 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     private func addRecoveryKey() {
         Task { @MainActor in
             do {
-                _ = try await environment.vaultSession.unlock(reason: "Add a recovery key")
-                var recoveryKey: String?
-                _ = try environment.performLocalSecureChange {
-                    try environment.secureStore.addRecoveryKeyIfNeeded { key in
-                        recoveryKey = key
-                        return true
-                    }
+                let pending = try await environment.vaultSession.withOneUseAuthentication(
+                    reason: "Create and display a recovery key"
+                ) {
+                    try environment.secureStore.prepareRecoveryKeyAddition()
                 }
-                guard let recoveryKey else { return }
-                showRecoveryKey(recoveryKey)
-                tableView.reloadData()
+                guard let pending else { return }
+                showRecoveryKey(pending)
             } catch {
                 showError(title: "Couldn’t Add Recovery Key", error: error)
             }
         }
     }
 
-    private func showRecoveryKey(_ key: String) {
+    private func showRecoveryKey(_ pending: SecureSnippetStore.PendingRecoveryKeyAddition) {
+        let key = pending.recoveryKeyText
         let alert = UIAlertController(
             title: "Save Your Recovery Key",
             message: "Store this somewhere safe.\n\n\(key)",
             preferredStyle: .alert
         )
-        alert.addAction(UIAlertAction(title: "Copy", style: .default) { _ in
-            UIPasteboard.general.string = key
+        let commit = { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try self.environment.performLocalSecureChange {
+                    try self.environment.secureStore.commitRecoveryKeyAddition(pending)
+                }
+                self.tableView.reloadData()
+            } catch {
+                self.showError(title: "Couldn’t Add Recovery Key", error: error)
+            }
+        }
+        alert.addAction(UIAlertAction(title: "Copy & Save", style: .default) { _ in
+            RecoveryKeyPasteboard.copy(key)
+            commit()
         })
-        alert.addAction(UIAlertAction(title: "I’ve Saved It", style: .default))
+        alert.addAction(UIAlertAction(title: "I’ve Saved It", style: .default) { _ in commit() })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in pending.cancel() })
         present(alert, animated: true)
     }
 
@@ -323,13 +352,14 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         )
         alert.addTextField { field in
             field.placeholder = "Recovery key"
-            field.autocapitalizationType = .allCharacters
-            field.autocorrectionType = .no
             field.accessibilityIdentifier = "recovery-key"
+            RecoveryKeyInputProtection.configure(field)
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Restore", style: .default) { [weak self, weak alert] _ in
-            guard let self, let text = alert?.textFields?.first?.text else { return }
+            guard let self, let field = alert?.textFields?.first,
+                  let text = field.text else { return }
+            field.text = nil
             do {
                 try self.environment.performLocalSecureChange {
                     try self.environment.secureStore.restoreKey(fromRecoveryKey: text)
@@ -345,7 +375,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     private func confirmForgetVault() {
         let syncWarning = SyncCoordinator.isEnabled
             ? "Turn off iCloud Sync first."
-            : "This removes every secure snippet stored on this iPad. This action cannot be undone."
+            : "This removes every secure snippet stored on this device. This action cannot be undone."
         let alert = UIAlertController(
             title: "Remove Secure Snippets?",
             message: syncWarning,

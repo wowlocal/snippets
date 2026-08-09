@@ -4,23 +4,37 @@ import XCTest
 @testable import Snippets
 
 @MainActor
-final class SnippetsIPadTests: XCTestCase {
+final class SnippetsIOSTests: XCTestCase {
     private var rootURL: URL!
+    private var previousSyncPreference: Any?
 
     override func setUpWithError() throws {
         rootURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SnippetsIPadTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("SnippetsIOSTests-\(UUID().uuidString)", isDirectory: true)
         setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, rootURL.path, 1)
+        previousSyncPreference = UserDefaults.standard.object(
+            forKey: SyncCoordinator.enabledDefaultsKey
+        )
+        UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
     }
 
     override func tearDownWithError() throws {
         unsetenv(SnippetStorageLocations.rootOverrideEnvironmentKey)
+        if let previousSyncPreference {
+            UserDefaults.standard.set(
+                previousSyncPreference,
+                forKey: SyncCoordinator.enabledDefaultsKey
+            )
+        } else {
+            UserDefaults.standard.removeObject(forKey: SyncCoordinator.enabledDefaultsKey)
+        }
+        previousSyncPreference = nil
         if let rootURL { try? FileManager.default.removeItem(at: rootURL) }
         rootURL = nil
     }
 
-    func testFreshIPadLibraryStartsEmptyAndPersistsCRUD() throws {
-        var store: SnippetStore? = SnippetStore(configuration: .iPad)
+    func testFreshIOSLibraryStartsEmptyAndPersistsCRUD() throws {
+        var store: SnippetStore? = SnippetStore(configuration: .iOS)
         XCTAssertTrue(store?.snippets.isEmpty == true)
 
         let created = store!.addSnippet(name: "Greeting", content: "Hello", tags: ["Work"])
@@ -31,7 +45,7 @@ final class SnippetsIPadTests: XCTestCase {
         store!.flushPendingWrites()
         store = nil
 
-        let reloaded = SnippetStore(configuration: .iPad)
+        let reloaded = SnippetStore(configuration: .iOS)
         XCTAssertEqual(reloaded.snippets.count, 1)
         XCTAssertEqual(reloaded.snippets.first?.name, "Greeting")
         XCTAssertEqual(reloaded.snippets.first?.content, "Hello from iPad")
@@ -39,7 +53,7 @@ final class SnippetsIPadTests: XCTestCase {
     }
 
     func testExportStructurallyExcludesSecureShells() throws {
-        let store = SnippetStore(configuration: .iPad)
+        let store = SnippetStore(configuration: .iOS)
         _ = store.addSnippet(name: "Ordinary", content: "visible")
         let secureID = UUID()
         let secureProvider = SecureProviderStub(
@@ -56,7 +70,7 @@ final class SnippetsIPadTests: XCTestCase {
     }
 
     func testImportingTheSameNativeExportTwiceDoesNotCreateDuplicates() throws {
-        let store = SnippetStore(configuration: .iPad)
+        let store = SnippetStore(configuration: .iOS)
         let snippet = Snippet(
             id: UUID(),
             name: "Imported Once",
@@ -113,15 +127,164 @@ final class SnippetsIPadTests: XCTestCase {
         XCTAssertEqual(environment.store.snippets.first?.id, snippet.id)
     }
 
-    func testIPadConfigurationDoesNotSeedStarterContentAfterCorruptFileRecovery() throws {
+    func testIOSConfigurationDoesNotSeedStarterContentAfterCorruptFileRecovery() throws {
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: rootURL.appendingPathComponent("snippets.json"))
-        let store = SnippetStore(configuration: .iPad)
+        let store = SnippetStore(configuration: .iOS)
         XCTAssertTrue(store.snippets.isEmpty)
         XCTAssertTrue(
             try FileManager.default.contentsOfDirectory(atPath: rootURL.path)
                 .contains { $0.hasPrefix("snippets.json.corrupt-") }
         )
+    }
+
+    func testPhoneQueryBuildsPinnedAndSnippetSectionsWithANDTagFiltering() {
+        let pinned = Snippet(
+            name: "Café Reply",
+            keyword: "reply",
+            content: "Bonjour",
+            tags: ["Work", "Urgent"],
+            isPinned: true
+        )
+        let workOnly = Snippet(
+            name: "Status",
+            keyword: "status",
+            content: "Weekly status",
+            tags: ["Work"]
+        )
+        let personal = Snippet(
+            name: "Café List",
+            keyword: "coffee",
+            content: "Beans",
+            tags: ["Personal"]
+        )
+
+        let unfiltered = SnippetLibraryQuery.results(
+            in: [pinned, workOnly, personal],
+            searchText: "",
+            activeTagKeys: []
+        )
+        XCTAssertEqual(unfiltered.pinned.map(\.id), [pinned.id])
+        XCTAssertEqual(unfiltered.snippets.map(\.id), [workOnly.id, personal.id])
+
+        let filtered = SnippetLibraryQuery.results(
+            in: [pinned, workOnly, personal],
+            searchText: "cafe",
+            activeTagKeys: ["work", "urgent"]
+        )
+        XCTAssertEqual(filtered.all.map(\.id), [pinned.id])
+    }
+
+    func testPhoneOrdinaryCopyResolvesClipboardAndNeverClearsItForEmptyContent() async throws {
+        let environment = AppEnvironment()
+        let pasteboard = TestSnippetPasteboard(string: "source")
+        let service = SnippetActionService(
+            store: environment.store,
+            vaultSession: environment.vaultSession,
+            secureStore: environment.secureStore,
+            pasteboard: pasteboard
+        )
+        let snippet = environment.store.addSnippet(
+            name: "Greeting",
+            content: "Hello {clipboard}"
+        )
+
+        let copied = try await service.copy(id: snippet.id)
+        XCTAssertEqual(copied, .copied(name: "Greeting", secure: false))
+        XCTAssertEqual(pasteboard.string, "Hello source")
+
+        let empty = environment.store.addSnippet(name: "Empty", content: "")
+        pasteboard.string = "keep me"
+        let emptyResult = try await service.copy(id: empty.id)
+        XCTAssertEqual(emptyResult, .empty(name: "Empty"))
+        XCTAssertEqual(pasteboard.string, "keep me")
+    }
+
+    func testPhoneSecureCopyAuthenticatesEveryUseAndUsesLocalExpiringPasteboard() async throws {
+        let environment = AppEnvironment()
+        let secureID = UUID()
+        let secureProvider = SecureProviderStub(
+            shell: Snippet(
+                id: secureID,
+                name: "Token",
+                keyword: "token",
+                content: ""
+            )
+        )
+        environment.store.secureProvider = secureProvider
+        let instant = Date(timeIntervalSince1970: 1_000)
+        let pasteboard = TestSnippetPasteboard(string: "clipboard")
+        var requestedID: UUID?
+        var requestedReason: String?
+        var authenticationRequestCount = 0
+        let service = SnippetActionService(
+            store: environment.store,
+            vaultSession: environment.vaultSession,
+            secureStore: environment.secureStore,
+            pasteboard: pasteboard,
+            now: { instant },
+            secureContentLoader: { id, reason in
+                authenticationRequestCount += 1
+                requestedID = id
+                requestedReason = reason
+                var plaintext = Data("secret-{clipboard}".utf8)
+                return SecurePlaintextLease(consuming: &plaintext)
+            }
+        )
+
+        let result = try await service.copy(id: secureID)
+        XCTAssertEqual(result, .copied(name: "Token", secure: true))
+        XCTAssertEqual(requestedID, secureID)
+        XCTAssertEqual(requestedReason, "Copy Token")
+        XCTAssertEqual(pasteboard.string, "secret-clipboard")
+        XCTAssertEqual(
+            pasteboard.secureExpiration,
+            instant.addingTimeInterval(SnippetActionService.secureClipboardLifetime)
+        )
+        XCTAssertEqual(pasteboard.secureWriteCount, 1)
+        XCTAssertEqual(pasteboard.ordinaryWriteCount, 0)
+
+        _ = try await service.copy(id: secureID)
+        XCTAssertEqual(authenticationRequestCount, 2)
+        XCTAssertEqual(pasteboard.secureWriteCount, 2)
+    }
+
+    func testPhoneNavigationPushesTouchEditorWithContentAndDetailsModes() throws {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Phone", content: "Touch first")
+        let root = PhoneRootViewController(environment: environment)
+        root.loadViewIfNeeded()
+        let library = try XCTUnwrap(root.viewControllers.first as? PhoneLibraryViewController)
+        library.loadViewIfNeeded()
+
+        root.phoneLibrary(library, requestedEdit: snippet.id)
+
+        let editor = try XCTUnwrap(root.topViewController as? PhoneSnippetEditorViewController)
+        editor.loadViewIfNeeded()
+        let mode = try XCTUnwrap(editor.navigationItem.titleView as? UISegmentedControl)
+        XCTAssertEqual(mode.numberOfSegments, 2)
+        XCTAssertEqual(mode.titleForSegment(at: 0), "Content")
+        XCTAssertEqual(mode.titleForSegment(at: 1), "Details")
+        XCTAssertNotNil(editor.view.descendant(withAccessibilityIdentifier: "snippet-content"))
+        XCTAssertNotNil(editor.view.descendant(withAccessibilityIdentifier: "snippet-keyword"))
+    }
+
+    func testSyncStateObserversDoNotReplaceEachOther() {
+        let environment = AppEnvironment()
+        var firstStates: [SyncEngine.State] = []
+        var secondStates: [SyncEngine.State] = []
+        let first = environment.syncCoordinator.addStateObserver { firstStates.append($0) }
+        let second = environment.syncCoordinator.addStateObserver { secondStates.append($0) }
+
+        environment.syncCoordinator.setEnabled(false)
+        XCTAssertEqual(firstStates.count, 2)
+        XCTAssertEqual(secondStates.count, 2)
+
+        environment.syncCoordinator.removeStateObserver(first)
+        environment.syncCoordinator.setEnabled(false)
+        XCTAssertEqual(firstStates.count, 2)
+        XCTAssertEqual(secondStates.count, 3)
+        environment.syncCoordinator.removeStateObserver(second)
     }
 
     func testCopySnippetShortcutUsesCommandReturnWithTextInputPriority() {
@@ -133,10 +296,8 @@ final class SnippetsIPadTests: XCTestCase {
     }
 
     func testCopySnippetShortcutRoutesPastFocusedTextInputAndCopiesSelection() {
-        let previousPasteboardString = UIPasteboard.general.string
-        addTeardownBlock { UIPasteboard.general.string = previousPasteboardString }
-
-        let environment = AppEnvironment()
+        let pasteboard = TestSnippetPasteboard(string: nil)
+        let environment = AppEnvironment(pasteboard: pasteboard)
         let snippet = environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
         let rootController = MainSplitViewController(environment: environment)
         rootController.loadViewIfNeeded()
@@ -157,7 +318,7 @@ final class SnippetsIPadTests: XCTestCase {
         XCTAssertTrue(
             UIApplication.shared.sendAction(action, to: target, from: command, for: nil)
         )
-        XCTAssertEqual(UIPasteboard.general.string, "Hello from iPad")
+        XCTAssertEqual(pasteboard.string, "Hello from iPad")
     }
 
     func testAppWideKeyboardCommandsUseMacShortcutsAndWinTextInputPriority() {
@@ -739,6 +900,29 @@ private final class SecureProviderStub: SecureSnippetProviding {
     init(shell: Snippet) { self.shell = shell }
     func secureShellsForDisplay() -> [Snippet] { [shell] }
     func isSecure(_ id: UUID) -> Bool { id == shell.id }
+}
+
+@MainActor
+private final class TestSnippetPasteboard: SnippetPasteboard {
+    var string: String?
+    private(set) var secureExpiration: Date?
+    private(set) var ordinaryWriteCount = 0
+    private(set) var secureWriteCount = 0
+
+    init(string: String?) {
+        self.string = string
+    }
+
+    func writeOrdinaryText(_ text: String) {
+        ordinaryWriteCount += 1
+        string = text
+    }
+
+    func writeSecureText(_ text: String, expiresAt: Date) {
+        secureWriteCount += 1
+        secureExpiration = expiresAt
+        string = text
+    }
 }
 
 @MainActor

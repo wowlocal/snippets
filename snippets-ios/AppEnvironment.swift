@@ -10,20 +10,21 @@ final class AppEnvironment {
     let secureStore: SecureSnippetStore
     let syncLibrary: SnippetLibraryBridge
     let syncCoordinator: SyncCoordinator
+    let snippetActions: SnippetActionService
     private var localSecureChangeDepth = 0
 
-    init() {
+    init(pasteboard: (any SnippetPasteboard)? = nil) {
         #if DEBUG
         if CommandLine.arguments.contains("--ui-testing-reset") {
             let root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("Snippets-iPad-UI-Tests", isDirectory: true)
+                .appendingPathComponent("Snippets-iOS-UI-Tests", isDirectory: true)
             try? FileManager.default.removeItem(at: root)
             setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, root.path, 1)
             UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
         }
         #endif
         diagnostics = DiagnosticsService.shared
-        store = SnippetStore(configuration: .iPad)
+        store = SnippetStore(configuration: .iOS)
         keychain = KeychainSecretStore()
         vaultSession = VaultSession(keychain: keychain)
         secureStore = SecureSnippetStore(
@@ -36,6 +37,12 @@ final class AppEnvironment {
             library: syncLibrary,
             keys: SyncKeyStore(keychain: keychain),
             device: store.deviceID
+        )
+        snippetActions = SnippetActionService(
+            store: store,
+            vaultSession: vaultSession,
+            secureStore: secureStore,
+            pasteboard: pasteboard
         )
 
         store.secureProvider = secureStore
@@ -54,9 +61,20 @@ final class AppEnvironment {
 
     func becameActive() {
         Diagnostics.record(.lifecycle(.becameActive))
-        secureStore.reload()
-        if SyncCoordinator.isEnabled {
-            syncCoordinator.syncNow(trigger: .becameActive)
+        let previousDocument = secureStore.document
+        let wasUnreadable = secureStore.isUnreadable
+        secureStore.reload(notifyChange: false)
+
+        if secureStore.document != previousDocument
+            || secureStore.isUnreadable != wasUnreadable {
+            // A real vault change refreshes the UI and is itself the one foreground sync
+            // request. A read-only reload must not manufacture a local-library change.
+            store.onChange?(.external)
+            syncCoordinator.libraryStructureChanged()
+        } else if SyncCoordinator.isEnabled {
+            // No structural callback was emitted, so the lifecycle request is the one
+            // round this activation needs.
+            _ = syncCoordinator.syncNow(trigger: .becameActive)
         }
     }
 

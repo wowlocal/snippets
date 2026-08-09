@@ -1,6 +1,7 @@
-# Snippets (macOS)
+# Snippets
 
-Local text-expander app for macOS with a Raycast-style snippet list/editor and global snippet insertion.
+Native snippets app for macOS, iPhone, and iPad. The Mac app provides system-wide text
+expansion; the universal iOS companion keeps the same encrypted library available on mobile.
 
 ## Features
 
@@ -23,10 +24,15 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 - Global `⌘\` shortcut that shows the app from any app and hides it again when it already has focus (on by default, switchable in Settings).
 - Optional Launch at Login toggle.
 - Configurable extra Chromium bundle IDs in a dedicated `Snippets > Settings…` window (applies immediately, no relaunch).
+- On iPhone, tap a row to copy it, swipe to pin/edit/delete, filter by multiple tags, and
+  edit in touch-first Content and Details modes. Secure copies authenticate every time,
+  stay local to the device, and expire after 60 seconds.
+- On iPad, the keyboard-oriented split-view workflow and shortcuts remain available.
 
 ## Requirements
 
 - macOS 15.5+ (project deployment target).
+- iOS/iPadOS 26.0+ for the universal companion.
 - Xcode with Swift 5 support.
 
 ## Build and Run
@@ -35,20 +41,22 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
 2. Select the `Snippets` scheme.
 3. Build and run.
 
-### Install on a connected iPad
+### Build or install the iOS companion
 
-With a paired iPad connected, run:
+Select the `Snippets iOS` scheme to run on an iPhone or iPad simulator. With a paired
+iPhone or iPad connected, run:
 
 ```sh
-./scripts/install-ipad.sh
+./scripts/install-ios.sh
 ```
 
 The script discovers the device, performs an incremental signed Release build, verifies
 the finished app and its provisioning profile, installs it without deleting its data
-sandbox, and launches it. Use `--device <name>` when more than one iPad is paired,
+sandbox, and launches it. Use `--device <name>` when more than one iOS device is paired,
 `--no-build` to reinstall the existing derived-data artifact, or `--no-launch` to stop
 after installation. If the device is locked, an interactive run asks you to unlock it
-and retries the launch. Run `./scripts/install-ipad.sh --help` for all options.
+and retries the launch. Run `./scripts/install-ios.sh --help` for all options. The old
+`install-ipad.sh` command remains as a compatibility alias.
 
 ## First Launch and Permissions
 

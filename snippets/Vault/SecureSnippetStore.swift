@@ -30,6 +30,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
         case notSecure
         case alreadySecure
         case setupCancelled
+        case setupChanged
+        case invalidSetupTicket
         case recoveryUnavailable
         case invalidUTF8
         case transaction(String)
@@ -44,6 +46,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
             case .notSecure: return "that snippet is not secure"
             case .alreadySecure: return "that snippet is already secure"
             case .setupCancelled: return "secure-snippet setup was cancelled"
+            case .setupChanged:
+                return "the vault changed while its recovery key was being shown; try again"
+            case .invalidSetupTicket: return "that secure-snippet setup has already finished"
             case .recoveryUnavailable: return "this vault has no recovery key"
             case .invalidUTF8: return "the secure snippet is not valid UTF-8"
             case .transaction(let detail): return detail
@@ -90,6 +95,81 @@ final class SecureSnippetStore: SecureSnippetProviding {
         var ordinaryCount: Int
         var secureCount: Int
         var totalCount: Int { ordinaryCount + secureCount }
+    }
+
+    /// Immutable point-in-time input for the expensive backup KDF. The constituent
+    /// models are value types and this instance is never touched again on MainActor
+    /// after being transferred to the detached worker.
+    nonisolated private struct EncryptedBackupSnapshot: @unchecked Sendable {
+        let snippets: [Snippet]
+        let vault: VaultDocument?
+        let vaultKey: SymmetricKey?
+    }
+
+    /// A first-vault recovery key that has been generated and shown, but has not yet
+    /// changed either the Keychain or the filesystem. The UI commits this ticket only
+    /// from an explicit acknowledgement action; dismissing it leaves no half-created
+    /// vault behind.
+    final class PendingVaultCreation {
+        private(set) var recoveryKeyText: String
+        fileprivate var recoveryKey: Data?
+
+        fileprivate init(recoveryKey: Data, recoveryKeyText: String) {
+            self.recoveryKey = recoveryKey
+            self.recoveryKeyText = recoveryKeyText
+        }
+
+        func cancel() {
+            if var bytes = recoveryKey {
+                // Drop the stored reference first so `bytes` owns the Data buffer and
+                // wiping it does not trigger copy-on-write on a disposable copy.
+                recoveryKey = nil
+                SecureMemory.wipe(&bytes)
+            }
+            recoveryKey = nil
+            recoveryKeyText = ""
+        }
+
+        fileprivate func markCommitted() {
+            // The caller owns and wipes the consumed bytes in a `defer`.
+            recoveryKey = nil
+            recoveryKeyText = ""
+        }
+
+        deinit {
+            if var bytes = recoveryKey {
+                recoveryKey = nil
+                SecureMemory.wipe(&bytes)
+            }
+        }
+    }
+
+    /// An authenticated recovery wrap waiting for the user to confirm that the
+    /// printable key was saved. It contains ciphertext, not `K_lib`; the one-use vault
+    /// authentication that created it may therefore close before the alert is shown.
+    final class PendingRecoveryKeyAddition {
+        private(set) var recoveryKeyText: String
+        fileprivate let kid: String
+        fileprivate let vaultSalt: String
+        fileprivate let envelope: String
+        fileprivate var isActive = true
+
+        fileprivate init(
+            recoveryKeyText: String,
+            kid: String,
+            vaultSalt: String,
+            envelope: String
+        ) {
+            self.recoveryKeyText = recoveryKeyText
+            self.kid = kid
+            self.vaultSalt = vaultSalt
+            self.envelope = envelope
+        }
+
+        func cancel() {
+            isActive = false
+            recoveryKeyText = ""
+        }
     }
 
     private(set) var document: VaultDocument?
@@ -147,7 +227,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
     // MARK: - Loading
 
-    func reload() {
+    func reload(notifyChange: Bool = true) {
         switch VaultFile.load(from: vaultURL) {
         case .loaded(let loaded):
             document = loaded
@@ -183,7 +263,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 failure: DiagnosticFailure(error),
                 attempt: nil))
         }
-        onChange?()
+        if notifyChange { onChange?() }
     }
 
     // MARK: - Metadata, available while locked
@@ -317,10 +397,52 @@ final class SecureSnippetStore: SecureSnippetProviding {
     func createVaultIfNeeded(
         confirmRecoveryKey: (String) -> Bool
     ) throws -> VaultDocument {
-        if let document {
-            try requireUsableKey(for: document)
-            return document
+        guard let pending = try prepareVaultCreationIfNeeded() else {
+            return try requireDocument()
         }
+        guard confirmRecoveryKey(pending.recoveryKeyText) else {
+            pending.cancel()
+            throw Failure.setupCancelled
+        }
+        return try commitVaultCreation(pending)
+    }
+
+    /// Starts first-vault setup without storing a key, wrap, or vault document.
+    /// `nil` means an existing/adopted vault is already ready for promotion.
+    func prepareVaultCreationIfNeeded() throws -> PendingVaultCreation? {
+        if let existing = try existingVaultForCreation() {
+            try requireUsableKey(for: existing)
+            return nil
+        }
+
+        let recoveryKey = RecoveryKey.generate()
+        return PendingVaultCreation(
+            recoveryKey: recoveryKey,
+            recoveryKeyText: try RecoveryKey.formatted(recoveryKey))
+    }
+
+    /// Completes a prepared setup after the UI explicitly acknowledges the displayed
+    /// recovery key. If a shared identity appeared meanwhile, that vault wins.
+    @discardableResult
+    func commitVaultCreation(_ pending: PendingVaultCreation) throws -> VaultDocument {
+        guard var recoveryKey = pending.recoveryKey else { throw Failure.invalidSetupTicket }
+        defer { SecureMemory.wipe(&recoveryKey) }
+        if let existing = try existingVaultForCreation() {
+            try requireUsableKey(for: existing)
+            pending.cancel()
+            // The displayed recovery key was generated for a different, not-yet-created
+            // vault. Silently adopting `existing` would tell the user that unrelated key
+            // can recover it. Abort and let a retry use the real existing vault instead.
+            throw Failure.setupChanged
+        }
+
+        let created = try createVault(recoveryKey: recoveryKey)
+        pending.markCommitted()
+        return created
+    }
+
+    private func existingVaultForCreation() throws -> VaultDocument? {
+        if let document { return document }
         guard !isUnreadable else {
             throw Failure.vaultUnreadable("refusing to create a vault over an unreadable one")
         }
@@ -341,13 +463,12 @@ final class SecureSnippetStore: SecureSnippetProviding {
             try requireUsableKey(for: adopted)
             return adopted
         }
+        return nil
+    }
 
+    private func createVault(recoveryKey: Data) throws -> VaultDocument {
         let keyring = SnippetCrypto.Keyring.generate()
         let kid = "k-\(UUID().uuidString.lowercased().prefix(12))"
-        let recoveryKey = RecoveryKey.generate()
-        let recoveryText = try RecoveryKey.formatted(recoveryKey)
-        guard confirmRecoveryKey(recoveryText) else { throw Failure.setupCancelled }
-
         let recoveryWrap = try KeyWrap.wrap(
             keyring.libraryKey,
             under: recoveryKey,
@@ -391,33 +512,65 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// The vault must already be unlocked; cancellation writes nothing.
     @discardableResult
     func addRecoveryKeyIfNeeded(confirmRecoveryKey: (String) -> Bool) throws -> Bool {
+        guard let pending = try prepareRecoveryKeyAddition() else { return false }
+        guard confirmRecoveryKey(pending.recoveryKeyText) else {
+            pending.cancel()
+            throw Failure.setupCancelled
+        }
+        return try commitRecoveryKeyAddition(pending)
+    }
+
+    /// Builds an authenticated recovery wrap while the vault is freshly authorised,
+    /// but does not persist it. This may run inside `withOneUseAuthentication`; only
+    /// ciphertext and the printable recovery key remain while the alert is visible.
+    func prepareRecoveryKeyAddition() throws -> PendingRecoveryKeyAddition? {
         guard let document else { throw Failure.noSuchRecord }
-        guard document.wrapRecovery == nil else { return false }
+        guard document.wrapRecovery == nil else { return nil }
         guard let salt = document.vaultSaltBytes else {
             throw Failure.vaultUnreadable("the vault's salt could not be decoded")
         }
-
-        // Capture the authenticated key before showing a modal panel. The panel spins
-        // the run loop, so the session timer may fire while the user saves the text.
-        // An already-authorised recovery setup is allowed to finish; otherwise the
-        // user could save a key that is never actually committed.
         let libraryKey = try session.currentKey()
 
-        let recoveryKey = RecoveryKey.generate()
+        var recoveryKey = RecoveryKey.generate()
+        defer { SecureMemory.wipe(&recoveryKey) }
         let recoveryText = try RecoveryKey.formatted(recoveryKey)
-        guard confirmRecoveryKey(recoveryText) else { throw Failure.setupCancelled }
         let envelope = try KeyWrap.wrap(
             libraryKey, under: recoveryKey, purpose: .recovery,
             kid: document.kid, salt: salt)
 
+        return PendingRecoveryKeyAddition(
+            recoveryKeyText: recoveryText,
+            kid: document.kid,
+            vaultSalt: document.vaultSalt,
+            envelope: envelope)
+    }
+
+    /// Persists an already-authenticated recovery wrap only after the key has been
+    /// displayed and explicitly acknowledged.
+    @discardableResult
+    func commitRecoveryKeyAddition(_ pending: PendingRecoveryKeyAddition) throws -> Bool {
+        guard pending.isActive else { throw Failure.invalidSetupTicket }
+        guard let document else { throw Failure.noSuchRecord }
+        guard document.kid == pending.kid, document.vaultSalt == pending.vaultSalt else {
+            throw Failure.invalidSetupTicket
+        }
+        if document.wrapRecovery != nil {
+            pending.cancel()
+            return false
+        }
+
         try mutateVault { vault in
-            if vault.wrapRecovery == nil { vault.wrapRecovery = envelope }
+            guard vault.kid == pending.kid, vault.vaultSalt == pending.vaultSalt else {
+                throw Failure.invalidSetupTicket
+            }
+            if vault.wrapRecovery == nil { vault.wrapRecovery = pending.envelope }
         }
         // The recovery wrap is part of the identity, and it is the escape hatch a second
         // Mac needs when iCloud Keychain did not carry the key. Republish so that Mac can
         // use it without this one being present. `self.document`, not the local capture
         // above — that one predates the wrap this just added.
         if let updated = self.document { identityStore.publish(updated) }
+        pending.cancel()
         return true
     }
 
@@ -515,19 +668,37 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// from the authenticated session, then wrapped by `EncryptedSnippetBackup`.
     func makeEncryptedBackup(
         store: SnippetStore,
-        passphrase: String
+        passphrase: String,
+        iterations: Int = PassphraseKDF.iterations
     ) async throws -> EncryptedBackupExport {
         store.flushPendingWrites()
-        reload()
+        reload(notifyChange: false)
 
+        let snapshot: EncryptedBackupSnapshot
         if document?.records.isEmpty == false {
-            return try await session.withOneUseAuthentication(
+            snapshot = try await session.withOneUseAuthentication(
                 reason: "Export an encrypted backup including secure snippets"
             ) {
-                try self.buildEncryptedBackup(passphrase: passphrase)
+                try self.prepareEncryptedBackupSnapshot()
             }
+        } else {
+            snapshot = try prepareEncryptedBackupSnapshot()
         }
-        return try buildEncryptedBackup(passphrase: passphrase)
+
+        // PBKDF2 is intentionally expensive (600k iterations in production). Keep it
+        // off MainActor after taking an immutable, transaction-locked snapshot.
+        let data = try await Task.detached(priority: .userInitiated) {
+            try EncryptedSnippetBackup.seal(
+                snippets: snapshot.snippets,
+                vault: snapshot.vault,
+                vaultKey: snapshot.vaultKey,
+                passphrase: passphrase,
+                iterations: iterations)
+        }.value
+        return EncryptedBackupExport(
+            data: data,
+            ordinaryCount: snapshot.snippets.count,
+            secureCount: snapshot.vault?.records.count ?? 0)
     }
 
     /// Opens and merges a backup without ever writing its decrypted payload to disk.
@@ -540,7 +711,12 @@ final class SecureSnippetStore: SecureSnippetProviding {
         passphrase: String,
         into store: SnippetStore
     ) async throws -> EncryptedBackupImportResult {
-        let opened = try EncryptedSnippetBackup.open(data, passphrase: passphrase)
+        // Authenticate/decrypt the untrusted backup away from MainActor. Only the
+        // resulting immutable value crosses back; all file/keychain mutations remain
+        // actor-isolated below.
+        let opened = try await Task.detached(priority: .userInitiated) {
+            try EncryptedSnippetBackup.open(data, passphrase: passphrase)
+        }.value
         store.flushPendingWrites()
         reload()
 
@@ -598,7 +774,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// `snippets.json`.
     ///
     /// Requires an unlocked vault, because sealing needs the key.
-    func promote(snippetID: UUID) throws {
+    func promote(snippetID: UUID, notifyChange: Bool = true) throws {
         let document = try requireDocument()
         let ring = try keyring(document)
 
@@ -641,11 +817,11 @@ final class SecureSnippetStore: SecureSnippetProviding {
             // `LibraryTransaction.CrashMarker`.
             contents.marker = .promoting(snippetID)
         }
-        adopt(outcome)
+        adopt(outcome, notifyChange: notifyChange)
     }
 
     /// Turns a secure snippet back into a plaintext one.
-    func demote(recordID: UUID) throws {
+    func demote(recordID: UUID, notifyChange: Bool = true) throws {
         _ = try requireDocument()
 
         let outcome = try runTransaction { contents in
@@ -676,7 +852,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 at: 0)
             contents.marker = .demoting(recordID)
         }
-        adopt(outcome)
+        adopt(outcome, notifyChange: notifyChange)
     }
 
     /// Removes every secure snippet from this Mac.
@@ -868,7 +1044,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         return outcome?.value ?? 0
     }
 
-    private func buildEncryptedBackup(passphrase: String) throws -> EncryptedBackupExport {
+    private func prepareEncryptedBackupSnapshot() throws -> EncryptedBackupSnapshot {
         let snapshot = try runTransaction { contents in
             (snippets: contents.snippets, vault: contents.vault)
         }.value
@@ -885,15 +1061,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
             libraryKey = nil
         }
 
-        let data = try EncryptedSnippetBackup.seal(
+        return EncryptedBackupSnapshot(
             snippets: snapshot.snippets,
             vault: exportedVault,
-            vaultKey: libraryKey,
-            passphrase: passphrase)
-        return EncryptedBackupExport(
-            data: data,
-            ordinaryCount: snapshot.snippets.count,
-            secureCount: exportedVault?.records.count ?? 0)
+            vaultKey: libraryKey)
     }
 
     private func mergeEncryptedBackup(
@@ -1146,8 +1317,19 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }
     }
 
-    private func adopt<T>(_ outcome: LibraryTransaction.Outcome<T>) {
+    private func adopt<T>(
+        _ outcome: LibraryTransaction.Outcome<T>,
+        notifyChange: Bool = true
+    ) {
         document = outcome.vault
+        if notifyChange { onChange?() }
+    }
+
+    /// Publishes a move whose transaction notification was deliberately deferred until
+    /// both the ordinary and secure in-memory projections had been reloaded. This is an
+    /// iOS cache-coordination hook; direct macOS moves keep the default immediate
+    /// notification on `promote` and `demote`.
+    func coordinatedMoveDidFinish() {
         onChange?()
     }
 }

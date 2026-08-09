@@ -9,7 +9,7 @@ import Foundation
 // mismatch only ever shows up as a confusing diagnostic in the target you were not
 // looking at.
 
-nonisolated struct Snippet: Identifiable, Codable, Equatable {
+nonisolated struct Snippet: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var name: String
     var keyword: String

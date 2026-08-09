@@ -6,12 +6,13 @@ These instructions apply to the whole repository.
 
 - `Snippets` is the native AppKit macOS app. Its deployment target is macOS 15.5.
   Debug uses `com.khm.snippets.debug`; Release uses `com.khm.snippets`.
-- `Snippets iPad` is the native UIKit, iPad-only app in `snippets-ipad/`. Its deployment
-  target is iPadOS 26.0 and `TARGETED_DEVICE_FAMILY` is `2`. It is not Catalyst and it
-  is not a SwiftUI wrapper around the Mac app. Debug uses `com.khm.snippets.debug`;
-  Release uses `com.khm.snippets`.
-- `snippets-ipad-tests/` contains the iPad unit tests and `snippets-ipad-uitests/`
-  contains the UI smoke test. The shared scheme is `Snippets iPad`.
+- `Snippets iOS` is the native UIKit universal app in `snippets-ios/`. Its deployment
+  target is iOS/iPadOS 26.0 and `TARGETED_DEVICE_FAMILY` is `1,2`. It is not Catalyst
+  and it is not a SwiftUI wrapper around the Mac app. iPad keeps the keyboard-oriented
+  split-view UI; iPhone uses the touch-first library and editor. Debug uses
+  `com.khm.snippets.debug`; Release uses `com.khm.snippets`.
+- `snippets-ios-tests/` contains the iOS unit tests and `snippets-ios-uitests/` contains
+  the UI smoke tests. The shared scheme is `Snippets iOS`.
 - Shared model, persistence, merge, sync, and vault code lives under `snippets/Core/`,
   `snippets/Sync/`, `snippets/Vault/`, and `snippets/SnippetStore.swift`. Keep shared
   files free of unconditional AppKit or macOS-only APIs. Gate unavoidable differences
@@ -19,18 +20,18 @@ These instructions apply to the whole repository.
 - CloudKit implementation files remain app-target code. Do not move CloudKit imports
   into `snippets/Core/`: that core also builds in `CorePackage` and in the entitlement-free
   `snippets-cli` executable.
-- `SnippetStore(configuration: .iPad)` intentionally starts with an empty library and
+- `SnippetStore(configuration: .iOS)` intentionally starts with an empty library and
   does not run the Mac app's external-filesystem observer. Do not seed sample content on
-  iPad; a fresh install must be able to fetch the remote library without looking like it
+  iOS; a fresh install must be able to fetch the remote library without looking like it
   authored a local record.
 - Both apps use `SnippetStorageLocations`. On macOS the normal root is
-  `~/Library/Application Support/SnippetsClone`; on iPad it is the same relative path
+  `~/Library/Application Support/SnippetsClone`; on iOS it is the same relative path
   inside the app data container. `SNIPPETS_SUPPORT_DIR` is a test-only override. Never
   point tests at the user's live support directory.
 
 `docs/cloud-sync.md` still contains valuable protocol and safety rationale, but its
-phase/status table predates the CloudKit transport and iPad target. The code is now the
-authority for implementation status: CloudKit sync and the iPad app are implemented.
+phase/status table predates the CloudKit transport and iOS target. The code is now the
+authority for implementation status: CloudKit sync and the universal iOS app are implemented.
 
 ## Verification commands
 
@@ -51,24 +52,33 @@ xcodebuild \
 
 xcodebuild \
   -project Snippets.xcodeproj \
-  -scheme 'Snippets iPad' \
+  -scheme 'Snippets iOS' \
   -configuration Debug \
   -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath /tmp/snippets-ipad-derived \
+  -derivedDataPath /tmp/snippets-ios-derived \
   CODE_SIGNING_ALLOWED=NO \
   build
 ```
 
-Run the iPad unit and UI tests on an available iPad simulator:
+Run the iOS unit and UI tests on available iPhone and iPad simulators:
 
 ```sh
 xcrun simctl list devices available
 
 xcodebuild \
   -project Snippets.xcodeproj \
-  -scheme 'Snippets iPad' \
+  -scheme 'Snippets iOS' \
   -configuration Debug \
-  -destination 'platform=iOS Simulator,id=<SIMULATOR_UDID>' \
+  -destination 'platform=iOS Simulator,id=<IPHONE_SIMULATOR_UDID>' \
+  -derivedDataPath /tmp/snippets-iphone-tests-derived \
+  CODE_SIGNING_ALLOWED=NO \
+  test
+
+xcodebuild \
+  -project Snippets.xcodeproj \
+  -scheme 'Snippets iOS' \
+  -configuration Debug \
+  -destination 'platform=iOS Simulator,id=<IPAD_SIMULATOR_UDID>' \
   -derivedDataPath /tmp/snippets-ipad-tests-derived \
   CODE_SIGNING_ALLOWED=NO \
   test
@@ -85,9 +95,9 @@ Do not commit a physical device's identifiers; discover them for each installati
 - The Apple development team is `H8QG3CBM96`.
 - Both platforms use CloudKit container `iCloud.com.khm.snippets` and keychain access
   group `$(AppIdentifierPrefix)com.khm.snippets`.
-- macOS entitlements live in `snippets/Snippets.entitlements`. iPad entitlements live in
-  `snippets-ipad/Snippets-iPad.entitlements`.
-- The iPad entitlement explicitly sets
+- macOS entitlements live in `snippets/Snippets.entitlements`. iOS entitlements live in
+  `snippets-ios/Snippets-iOS.entitlements`.
+- The iOS entitlement explicitly sets
   `com.apple.developer.icloud-container-environment` to `Production`. Keep it present for
   builds intended to read the user's real library.
 - The Mac source entitlement does not name an environment. The supported macOS archive
@@ -112,7 +122,7 @@ codesign --verify --deep --strict /path/to/Snippets.app
 codesign -d --entitlements :- /path/to/Snippets.app 2>&1
 ```
 
-For a Production-connected iPad build, the second command must show all of:
+For a Production-connected iOS build, the second command must show all of:
 
 - application identifier ending in `com.khm.snippets`;
 - `iCloud.com.khm.snippets`;
@@ -130,7 +140,7 @@ For a Production-connected iPad build, the second command must show all of:
   container from the Debug bundle identifier and is not authorized for this app.
 - Wire payloads are encrypted before upload. The fixed `SyncKeyStore` account/scope is
   `sync-v1`; its material is stored through the synchronizable shared keychain group so
-  Mac and iPad can decrypt the same records. Secure-snippet bodies remain separately
+  Mac and iOS can decrypt the same records. Secure-snippet bodies remain separately
   sealed under their vault record keys.
 - Sync is opt-in. The per-bundle UserDefaults key is `SnippetsICloudSyncEnabled`. With the
   preference absent, no CloudKit transport is created and `Sync/base.json` is absent.
@@ -171,7 +181,7 @@ Library/Application Support/SnippetsClone/Vault/vault.json
 
 ## Persistent diagnostics and logging
 
-The macOS and iPad app targets use CocoaLumberjack 3.9.1 for persistent diagnostics.
+The macOS and iOS app targets use CocoaLumberjack 3.9.1 for persistent diagnostics.
 Keep that dependency at the app boundary: shared code talks only through the typed,
 Foundation-only facade in `snippets/Core/Diagnostics.swift`; the implementation is in
 `snippets/Diagnostics/DiagnosticsService.swift`. `CorePackage` and `snippets-cli` must
@@ -197,7 +207,7 @@ Library/Application Support/SnippetsClone/Diagnostics/Logs/
 - Retain at most 14 days, roll at 1 MiB or 24 hours, retain at most 64 log files, and
   cap the directory at 24 MiB. Do not add a second ad-hoc persistent log.
 - Keep directories mode `0700` and files mode `0600`, exclude `Diagnostics/` from
-  backup, and preserve iPad's `completeUntilFirstUserAuthentication` file protection.
+  backup, and preserve iOS's `completeUntilFirstUserAuthentication` file protection.
 - Safe structured records are also mirrored to unified OS logging. Do not bypass the
   typed facade to send a richer or less-sanitized version to `OSLog`.
 - Records use schema version 1 and a closed top-level shape: timestamp, session ID,
@@ -245,16 +255,16 @@ until all of these are done:
 4. Instrument the owning boundary once. Avoid duplicate start/end events and avoid hot
    loop logging; prefer a single outcome with duration and aggregate counts.
 5. Add privacy/schema tests in `Tests/Core/DiagnosticsTests.swift` and backend tests in
-   `snippets-ipad-tests/SnippetsIPadTests.swift`. Cover rotation/retention or export when
+   `snippets-ios-tests/SnippetsIOSTests.swift`. Cover rotation/retention or export when
    changing those mechanisms. Run the CorePackage test and both platform builds from the
    verification section for cross-platform shared changes.
 6. Update `docs/diagnostics.md` and Settings privacy copy if retention, exported fields,
    or the approved-data boundary changes.
 
 Do not guess the CloudKit environment for diagnostics. macOS reads the entitlement from
-the running signed process. The public iOS SDK cannot do that, so iPad device logs use
-`unrecognized` and simulator logs use `absent`. Inspect the built app's actual signed
-entitlements when diagnosing an iPad environment mismatch.
+the running signed process. The public iOS SDK cannot do that, so iPhone and iPad device
+logs use `unrecognized` and simulator logs use `absent`. Inspect the built app's actual
+signed entitlements when diagnosing an iOS environment mismatch.
 
 ### Export, collection, and deletion
 
@@ -268,17 +278,17 @@ For engineering collection without opening Settings, use:
 
 ```sh
 ./scripts/collect-diagnostics.sh --mac
-./scripts/collect-diagnostics.sh --ipad --device "My iPad"
+./scripts/collect-diagnostics.sh --ios --device "My iPhone"
 ```
 
-Use `--debug` only for the separate Debug iPad bundle. The script copies retained raw
+Use `--debug` only for the separate Debug iOS bundle. The script copies retained raw
 files and must not remove the app, container, or user data; the validated UI export is
 preferred for normal sharing. **Delete Logs** must continue deleting retained logs and
 an old `Vault/audit.json` if its privacy-preserving migration failed. Legacy audit
 migration may retain only timestamp, outcome, and the approved keyword; it must discard
 caller paths and PIDs. More operational detail lives in `docs/diagnostics.md`.
 
-## Installing on a connected iPad
+## Installing on a connected iPhone or iPad
 
 Use a Release build when the goal is to see the same Production library as the Mac app.
 A direct device build may still be signed with an Apple Development identity; that is
@@ -290,10 +300,10 @@ an incremental Release build, validates the signed artifact and embedded profile
 in place, and launches the app:
 
 ```sh
-./scripts/install-ipad.sh
+./scripts/install-ios.sh
 ```
 
-Use `--device <name>` when more than one paired iPad is available, `--no-build` to reuse
+Use `--device <name>` when more than one paired iOS device is available, `--no-build` to reuse
 the existing device artifact, or `--no-launch` to install without launching. The script
 does not clean derived data, remove an installed app, or delete its data sandbox.
 
@@ -302,7 +312,7 @@ The underlying manual flow is documented below for troubleshooting.
 Discover the Xcode destination and CoreDevice identifiers instead of hardcoding them:
 
 ```sh
-xcodebuild -project Snippets.xcodeproj -scheme 'Snippets iPad' -showdestinations
+xcodebuild -project Snippets.xcodeproj -scheme 'Snippets iOS' -showdestinations
 xcrun devicectl list devices
 ```
 
@@ -311,20 +321,20 @@ Build, validate, install, and launch:
 ```sh
 xcodebuild \
   -project Snippets.xcodeproj \
-  -scheme 'Snippets iPad' \
+  -scheme 'Snippets iOS' \
   -configuration Release \
   -destination 'platform=iOS,id=<XCODE_DEVICE_UDID>' \
-  -derivedDataPath /tmp/snippets-ipad-device-derived \
+  -derivedDataPath /tmp/snippets-ios-device-derived \
   -allowProvisioningUpdates \
   -allowProvisioningDeviceRegistration \
   build
 
 codesign -d --entitlements :- \
-  /tmp/snippets-ipad-device-derived/Build/Products/Release-iphoneos/Snippets.app 2>&1
+  /tmp/snippets-ios-device-derived/Build/Products/Release-iphoneos/Snippets.app 2>&1
 
 xcrun devicectl device install app \
   --device <COREDEVICE_ID> \
-  /tmp/snippets-ipad-device-derived/Build/Products/Release-iphoneos/Snippets.app
+  /tmp/snippets-ios-device-derived/Build/Products/Release-iphoneos/Snippets.app
 
 xcrun devicectl device process launch \
   --device <COREDEVICE_ID> \
@@ -335,6 +345,6 @@ xcrun devicectl device process launch \
 Debug and Release have different bundle identifiers and data sandboxes but the same
 display name. Avoid leaving both installed after a device test: two identical icons make
 it easy to open the wrong sandbox. A historical or differently signed Debug build may
-also still point at Development even though the current iPad entitlement names
+also still point at Development even though the current iOS entitlement names
 Production. Remove an old build only after resolving its exact bundle identifier and
 confirming that its sandbox holds no local-only data.

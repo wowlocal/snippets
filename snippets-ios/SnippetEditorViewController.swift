@@ -7,7 +7,7 @@ final class SnippetEditorViewController: UIViewController {
     private let scrollView = UIScrollView()
     private let formStack = UIStackView()
     private let emptyView = UIContentUnavailableView(configuration: .empty())
-    private let bodyTextView = UITextView()
+    private let bodyTextView = SecureSnippetTextView()
     private let bodyContainer = UIView()
     private let bodyPlaceholderLabel = UILabel()
     private let lockedOverlay = UIView()
@@ -40,6 +40,10 @@ final class SnippetEditorViewController: UIViewController {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     override func viewDidLoad() {
@@ -240,7 +244,7 @@ final class SnippetEditorViewController: UIViewController {
         lockImage.tintColor = AppTheme.warning
         var revealConfiguration = UIButton.Configuration.tinted()
         revealConfiguration.title = "Reveal Secure Content"
-        revealConfiguration.image = UIImage(systemName: "faceid")
+        revealConfiguration.image = UIImage(systemName: "lock.open")
         revealConfiguration.imagePadding = 8
         revealConfiguration.cornerStyle = .capsule
         revealButton.configuration = revealConfiguration
@@ -336,9 +340,15 @@ final class SnippetEditorViewController: UIViewController {
 
     private func configureSwitches() {
         enabledSwitch.accessibilityIdentifier = "snippet-enabled"
+        enabledSwitch.accessibilityLabel = "Enabled"
+        enabledSwitch.accessibilityHint = "Controls whether this keyword can expand on Mac."
         secureSwitch.accessibilityIdentifier = "snippet-secure"
+        secureSwitch.accessibilityLabel = "Secure"
+        secureSwitch.accessibilityHint = "Moves the content between the encrypted vault and the ordinary library."
 
         enabledButton.accessibilityIdentifier = "snippet-enabled"
+        enabledButton.accessibilityLabel = "Enabled"
+        enabledButton.accessibilityHint = "Double-tap to change whether this keyword can expand on Mac."
         enabledButton.contentHorizontalAlignment = .leading
         enabledButton.addAction(UIAction { [weak self] _ in
             guard let self else { return }
@@ -349,6 +359,7 @@ final class SnippetEditorViewController: UIViewController {
 
         secureButton.accessibilityIdentifier = "snippet-secure"
         secureButton.accessibilityLabel = "Make Secure"
+        secureButton.accessibilityHint = "Moves the content between the encrypted vault and the ordinary library."
         secureButton.setContentHuggingPriority(.required, for: .horizontal)
         secureButton.addAction(UIAction { [weak self] _ in
             self?.secureSwitchChanged()
@@ -360,6 +371,12 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     private func configureNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(vaultWillLock(_:)),
+            name: .snippetsVaultWillLock,
+            object: environment.vaultSession
+        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(vaultStateChanged),
@@ -486,6 +503,7 @@ final class SnippetEditorViewController: UIViewController {
         let secure = environment.store.isSecure(selectedID)
         lockedOverlay.isHidden = !secure || secureContentIsRevealed
         bodyTextView.isEditable = !secure || secureContentIsRevealed
+        bodyTextView.isSecureContentMode = secure
         bodyTextView.accessibilityLabel = secure && !secureContentIsRevealed
             ? "Secure content locked"
             : "Snippet content"
@@ -706,13 +724,14 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     private func makeSecure(id: UUID) {
-        var recoveryKey: String?
+        view.endEditing(true)
+        commitPlainEditTransaction()
+        environment.store.flushPendingWrites()
+
+        let pendingCreation: SecureSnippetStore.PendingVaultCreation?
         do {
-            _ = try environment.performLocalSecureChange {
-                try environment.secureStore.createVaultIfNeeded { key in
-                    recoveryKey = key
-                    return true
-                }
+            pendingCreation = try environment.performLocalSecureChange {
+                try environment.secureStore.prepareVaultCreationIfNeeded()
             }
         } catch {
             showError(title: "Couldn’t Set Up Secure Snippets", error: error)
@@ -727,7 +746,10 @@ final class SnippetEditorViewController: UIViewController {
                         reason: "Make this snippet secure"
                     )
                     try self.environment.performLocalSecureChange {
-                        try self.environment.secureStore.promote(snippetID: id)
+                        try SecureSnippetTransitionCoordinator.promote(
+                            snippetID: id,
+                            store: self.environment.store,
+                            secureStore: self.environment.secureStore)
                     }
                     self.bind(to: id)
                 } catch {
@@ -736,11 +758,21 @@ final class SnippetEditorViewController: UIViewController {
             }
         }
 
-        guard let recoveryKey else {
+        guard let pendingCreation else {
             continuePromotion()
             return
         }
-        showRecoveryKey(recoveryKey, completion: continuePromotion)
+        showRecoveryKey(pendingCreation) { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try self.environment.performLocalSecureChange {
+                    try self.environment.secureStore.commitVaultCreation(pendingCreation)
+                }
+                continuePromotion()
+            } catch {
+                self.showError(title: "Couldn’t Set Up Secure Snippets", error: error)
+            }
+        }
     }
 
     private func makeOrdinary(id: UUID) {
@@ -752,11 +784,19 @@ final class SnippetEditorViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Make Ordinary", style: .destructive) { [weak self] _ in
             guard let self else { return }
+            self.view.endEditing(true)
+            self.flushPendingSecureContent()
             Task { @MainActor in
                 do {
-                    _ = try await self.environment.vaultSession.unlock(reason: "Decrypt this secure snippet")
-                    try self.environment.performLocalSecureChange {
-                        try self.environment.secureStore.demote(recordID: id)
+                    try await self.environment.vaultSession.withOneUseAuthentication(
+                        reason: "Make this secure snippet ordinary"
+                    ) {
+                        try self.environment.performLocalSecureChange {
+                            try SecureSnippetTransitionCoordinator.demote(
+                                recordID: id,
+                                store: self.environment.store,
+                                secureStore: self.environment.secureStore)
+                        }
                     }
                     self.bind(to: id)
                 } catch {
@@ -767,17 +807,22 @@ final class SnippetEditorViewController: UIViewController {
         present(alert, animated: true)
     }
 
-    private func showRecoveryKey(_ key: String, completion: @escaping () -> Void) {
+    private func showRecoveryKey(
+        _ pending: SecureSnippetStore.PendingVaultCreation,
+        completion: @escaping () -> Void
+    ) {
+        let key = pending.recoveryKeyText
         let alert = UIAlertController(
             title: "Save Your Recovery Key",
             message: "Store this somewhere safe. It is the only way to recover secure snippets if the shared Keychain key is lost.\n\n\(key)",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "Copy & Continue", style: .default) { _ in
-            UIPasteboard.general.string = key
+            RecoveryKeyPasteboard.copy(key)
             completion()
         })
         alert.addAction(UIAlertAction(title: "I’ve Saved It", style: .default) { _ in completion() })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in pending.cancel() })
         present(alert, animated: true)
     }
 
@@ -849,13 +894,14 @@ final class SnippetEditorViewController: UIViewController {
         guard let id = selectedID,
               !environment.store.isSecure(id),
               let snippet = environment.store.snippet(id: id) else { return nil }
-        let clipboard = UIPasteboard.general.string
-        UIPasteboard.general.string = PlaceholderResolver.resolve(
-            template: snippet.content,
-            clipboard: { clipboard }
-        )
-        footerStatusLabel.text = "Copied “\(snippet.displayName)”."
-        return snippet.displayName
+        switch environment.snippetActions.copyOrdinary(snippet) {
+        case .copied(let name, _):
+            footerStatusLabel.text = "Copied “\(name)”."
+            return name
+        case .empty(let name):
+            footerStatusLabel.text = "“\(name)” has no content to copy."
+            return nil
+        }
     }
 
     @objc private func copySnippet() { copySelectedSnippet() }
@@ -902,6 +948,12 @@ final class SnippetEditorViewController: UIViewController {
     @objc private func fieldChanged() { editorChanged() }
     @objc private func editingBegan() { beginPlainEditTransaction() }
     @objc private func editingEnded() { editorChanged(); commitPlainEditTransaction() }
+
+    @objc private func vaultWillLock(_ notification: Notification) {
+        guard let session = notification.object as? VaultSession,
+              session === environment.vaultSession else { return }
+        flushPendingSecureContent()
+    }
 
     @objc private func vaultStateChanged() {
         guard let id = selectedID, environment.store.isSecure(id) else { return }
