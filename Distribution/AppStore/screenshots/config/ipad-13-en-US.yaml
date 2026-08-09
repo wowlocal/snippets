@@ -1,0 +1,87 @@
+project:
+  name: Snippets iPad App Store
+  output_dir: ../marketing/en-US/ipad-13
+  device: iPad Pro 13 - M4 - Space Gray - Portrait
+  output_size: iPadPro13
+
+defaults:
+  background:
+    type: linear
+    colors:
+      - "#171A3B"
+      - "#40359B"
+      - "#7167E8"
+    direction: 165
+
+screenshots:
+  01_workspace:
+    content:
+      - type: text
+        content: "A real iPad workspace"
+        position: ["50%", "12%"]
+        size: 100
+        color: "#FFFFFF"
+        weight: bold
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Display-Semibold.otf
+      - type: text
+        content: "Your library and editor, side by side."
+        position: ["50%", "20%"]
+        size: 50
+        color: "#DDD9FF"
+        weight: normal
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Text-Regular.otf
+      - type: image
+        asset: ../en-US/ipad-13/01-library-and-editor.png
+        position: ["50%", "62%"]
+        scale: 0.64
+        frame: true
+
+  02_placeholders:
+    content:
+      - type: text
+        content: "Templates that\nupdate themselves"
+        position: ["50%", "12%"]
+        size: 100
+        color: "#FFFFFF"
+        weight: bold
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Display-Semibold.otf
+      - type: text
+        content: "Preview dates and placeholders as you type."
+        position: ["50%", "20%"]
+        size: 50
+        color: "#DDD9FF"
+        weight: normal
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Text-Regular.otf
+      - type: image
+        asset: ../en-US/ipad-13/02-placeholder-preview.png
+        position: ["50%", "62%"]
+        scale: 0.64
+        frame: true
+
+  03_shortcuts:
+    content:
+      - type: text
+        content: "Keyboard-first\nwhen you want it"
+        position: ["50%", "12%"]
+        size: 112
+        color: "#FFFFFF"
+        weight: bold
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Display-Semibold.otf
+      - type: text
+        content: "Fast shortcuts for every common action."
+        position: ["50%", "20%"]
+        size: 50
+        color: "#DDD9FF"
+        weight: normal
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Text-Regular.otf
+      - type: image
+        asset: ../en-US/ipad-13/03-keyboard-shortcuts.png
+        position: ["50%", "62%"]
+        scale: 0.64
+        frame: true

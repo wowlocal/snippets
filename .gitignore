@@ -63,3 +63,6 @@ playground.xcworkspace
 
 # Swift Package Manager (the test-only CorePackage overlay)
 .build/
+
+# Local App Store Connect CLI reports and resumable failure artifacts
+/.asc/

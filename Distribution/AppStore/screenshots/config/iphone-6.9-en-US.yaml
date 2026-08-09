@@ -1,0 +1,87 @@
+project:
+  name: Snippets iPhone App Store
+  output_dir: ../marketing/en-US/iphone-6.9
+  device: iPhone 17 Pro Max - Deep Blue - Portrait
+  output_size: iPhone6_9
+
+defaults:
+  background:
+    type: linear
+    colors:
+      - "#171A3B"
+      - "#40359B"
+      - "#7167E8"
+    direction: 165
+
+screenshots:
+  01_library:
+    content:
+      - type: text
+        content: "Your words,\nready in a tap"
+        position: ["50%", "12%"]
+        size: 80
+        color: "#FFFFFF"
+        weight: bold
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Display-Semibold.otf
+      - type: text
+        content: "Find, copy, and reuse anything."
+        position: ["50%", "20%"]
+        size: 38
+        color: "#DDD9FF"
+        weight: normal
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Text-Regular.otf
+      - type: image
+        asset: ../en-US/iphone-6.9/01-library.png
+        position: ["50%", "63%"]
+        scale: 0.64
+        frame: true
+
+  02_editor:
+    content:
+      - type: text
+        content: "Write once.\nReuse anywhere."
+        position: ["50%", "12%"]
+        size: 80
+        color: "#FFFFFF"
+        weight: bold
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Display-Semibold.otf
+      - type: text
+        content: "Messages, templates, code, and more."
+        position: ["50%", "20%"]
+        size: 38
+        color: "#DDD9FF"
+        weight: normal
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Text-Regular.otf
+      - type: image
+        asset: ../en-US/iphone-6.9/02-editor.png
+        position: ["50%", "63%"]
+        scale: 0.64
+        frame: true
+
+  03_secure:
+    content:
+      - type: text
+        content: "Private when\nit matters"
+        position: ["50%", "12%"]
+        size: 82
+        color: "#FFFFFF"
+        weight: bold
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Display-Semibold.otf
+      - type: text
+        content: "Protect sensitive text with Face ID."
+        position: ["50%", "20%"]
+        size: 38
+        color: "#DDD9FF"
+        weight: normal
+        alignment: center
+        font_family: /Library/Fonts/SF-Pro-Text-Regular.otf
+      - type: image
+        asset: ../en-US/iphone-6.9/03-secure.png
+        position: ["50%", "63%"]
+        scale: 0.64
+        frame: true
