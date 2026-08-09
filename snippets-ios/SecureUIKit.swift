@@ -18,7 +18,7 @@ final class SecureSnippetTextView: UITextView {
         "select:",
         "selectAll:",
     ]
-    private var disabledUndoRegistration = false
+    private weak var undoManagerWithDisabledRegistration: UndoManager?
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -71,10 +71,11 @@ final class SecureSnippetTextView: UITextView {
             isFindInteractionEnabled = false
             allowsEditingTextAttributes = false
             textDragInteraction?.isEnabled = false
-            undoManager?.removeAllActions()
-            if !disabledUndoRegistration, undoManager != nil {
-                undoManager?.disableUndoRegistration()
-                disabledUndoRegistration = true
+            if undoManagerWithDisabledRegistration == nil,
+               let manager = undoManager {
+                manager.removeAllActions()
+                manager.disableUndoRegistration()
+                undoManagerWithDisabledRegistration = manager
             }
         } else {
             autocapitalizationType = .sentences
@@ -85,9 +86,14 @@ final class SecureSnippetTextView: UITextView {
             writingToolsBehavior = .default
             isFindInteractionEnabled = true
             textDragInteraction?.isEnabled = true
-            if disabledUndoRegistration {
-                undoManager?.enableUndoRegistration()
-                disabledUndoRegistration = false
+            if let manager = undoManagerWithDisabledRegistration {
+                // UITextView can replace its undo manager while the store reloads and
+                // the editor rebinds. Balance the manager we actually disabled instead
+                // of calling enable on a fresh manager whose disable count is zero.
+                if !manager.isUndoRegistrationEnabled {
+                    manager.enableUndoRegistration()
+                }
+                undoManagerWithDisabledRegistration = nil
             }
         }
         if isFirstResponder { reloadInputViews() }

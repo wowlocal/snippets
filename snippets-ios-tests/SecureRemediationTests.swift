@@ -272,6 +272,12 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertFalse(textView.isFindInteractionEnabled)
         XCTAssertFalse(AppDelegate.allowsExtensionPoint(.keyboard))
 
+        textView.isSecureContentMode = false
+        XCTAssertEqual(textView.autocorrectionType, .default)
+        XCTAssertEqual(textView.spellCheckingType, .default)
+        XCTAssertEqual(textView.writingToolsBehavior, .default)
+        XCTAssertTrue(textView.isFindInteractionEnabled)
+
         let instant = Date(timeIntervalSince1970: 20_000)
         let options = RecoveryKeyPasteboard.options(now: instant)
         XCTAssertEqual(options[.localOnly] as? Bool, true)
