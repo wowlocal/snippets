@@ -270,8 +270,36 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(mode.titleForSegment(at: 0), "Content")
         XCTAssertEqual(mode.titleForSegment(at: 1), "Details")
         XCTAssertTrue(mode.superview === editor.view)
-        XCTAssertNil(editor.view.descendant(withAccessibilityIdentifier: "phone-editor-mode-bar"))
-        XCTAssertEqual(mode.layer.borderWidth, 0)
+        XCTAssertTrue(editor.view.subviews.last === mode)
+        XCTAssertNil(
+            editor.view.descendant(withAccessibilityIdentifier: "phone-editor-mode-glass")
+        )
+        XCTAssertNil(
+            editor.view.descendant(withAccessibilityIdentifier: "phone-editor-mode-selection-glass")
+        )
+        XCTAssertNil(mode.backgroundImage(for: .normal, barMetrics: .default))
+        XCTAssertNil(mode.backgroundImage(for: .selected, barMetrics: .default))
+        XCTAssertNil(mode.selectedSegmentTintColor)
+        XCTAssertNil(mode.titleTextAttributes(for: .normal))
+        XCTAssertNil(mode.titleTextAttributes(for: .selected))
+        editor.view.layoutIfNeeded()
+        XCTAssertEqual(mode.bounds.height, mode.intrinsicContentSize.height, accuracy: 1.5)
+        mode.selectedSegmentIndex = 1
+        mode.sendActions(for: .valueChanged)
+        XCTAssertEqual(mode.selectedSegmentIndex, 1)
+        let modeContainer = try XCTUnwrap(
+            editor.view.descendant(withAccessibilityIdentifier: "phone-editor-mode-container")
+        )
+        let contentPane = try XCTUnwrap(
+            editor.view.descendant(withAccessibilityIdentifier: "phone-editor-content-pane")
+        )
+        let detailsPane = try XCTUnwrap(
+            editor.view.descendant(withAccessibilityIdentifier: "phone-editor-details-pane")
+        )
+        XCTAssertTrue(contentPane.superview === modeContainer)
+        XCTAssertTrue(detailsPane.superview === modeContainer)
+        XCTAssertFalse(modeContainer is UIStackView)
+        XCTAssertTrue(modeContainer.clipsToBounds)
         XCTAssertNotNil(editor.view.descendant(withAccessibilityIdentifier: "snippet-content"))
         XCTAssertNotNil(editor.view.descendant(withAccessibilityIdentifier: "snippet-keyword"))
     }

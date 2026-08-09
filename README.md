@@ -124,6 +124,8 @@ On macOS:
   relaunch.
 - Configure matched-letter highlighting, usage ranking, selection memory, the global
   shortcut, quit behavior, sync, secure storage, browsers, and diagnostics.
+- Signed releases check for updates with Sparkle and expose download/apply progress in
+  the app menu and window chrome.
 - Install the bundled `snippets-cli` from Settings for scripts and agents.
 
 On iPhone:

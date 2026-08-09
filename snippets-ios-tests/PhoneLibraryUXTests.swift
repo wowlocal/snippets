@@ -183,8 +183,21 @@ final class PhoneLibraryUXTests: XCTestCase {
             library.view.descendant(withAccessibilityIdentifier: "phone-sync-status")
         )
         let syncHeader = try XCTUnwrap(table.tableHeaderView)
+        let moreButton = try XCTUnwrap(
+            root.view.descendant(withAccessibilityIdentifier: "phone-library-more") as? UIButton
+        )
+        let moreFrameAtScrollEdge = moreButton.convert(moreButton.bounds, to: root.navigationBar)
 
         XCTAssertEqual(library.title, "Snippets")
+        XCTAssertTrue(moreButton.superview === root.navigationBar)
+        XCTAssertNil(library.navigationItem.rightBarButtonItem)
+        XCTAssertGreaterThan(root.navigationBar.bounds.height, 80)
+        XCTAssertEqual(
+            root.navigationBar.bounds.maxY - moreFrameAtScrollEdge.maxY,
+            4,
+            accuracy: 1,
+            "The expanded More control must follow the large-title row at the bar's lower edge"
+        )
         XCTAssertEqual(table.style, .grouped)
         XCTAssertEqual(table.frame.minY, library.view.bounds.minY, accuracy: 0.5)
         XCTAssertEqual(table.frame.maxY, library.view.bounds.maxY, accuracy: 0.5)
@@ -224,8 +237,8 @@ final class PhoneLibraryUXTests: XCTestCase {
             cell.descendant(withAccessibilityIdentifier: "phone-tag-pill")
         )
         XCTAssertLessThan(pill.bounds.width, cell.bounds.width / 2)
-        XCTAssertEqual(rowContent.frame.minX, 28, accuracy: 0.5)
-        XCTAssertEqual(cell.bounds.width - rowContent.frame.maxX, 28, accuracy: 0.5)
+        XCTAssertEqual(rowContent.frame.minX, 18, accuracy: 0.5)
+        XCTAssertEqual(cell.bounds.width - rowContent.frame.maxX, 18, accuracy: 0.5)
         XCTAssertEqual(cell.backgroundColor?.cgColor.alpha ?? 1, 0, accuracy: 0.01)
 
         // UITableView owns these margins and can mutate them while grouped cells are
@@ -234,8 +247,8 @@ final class PhoneLibraryUXTests: XCTestCase {
         cell.contentView.directionalLayoutMargins = .zero
         cell.setNeedsLayout()
         cell.layoutIfNeeded()
-        XCTAssertEqual(rowContent.frame.minX, 28, accuracy: 0.5)
-        XCTAssertEqual(cell.bounds.width - rowContent.frame.maxX, 28, accuracy: 0.5)
+        XCTAssertEqual(rowContent.frame.minX, 18, accuracy: 0.5)
+        XCTAssertEqual(cell.bounds.width - rowContent.frame.maxX, 18, accuracy: 0.5)
 
         let assertVisibleRowsUseFixedGrid = {
             var checkedRows = 0
@@ -245,10 +258,10 @@ final class PhoneLibraryUXTests: XCTestCase {
                 ) else { continue }
                 visibleCell.layoutIfNeeded()
                 let contentFrame = visibleContent.convert(visibleContent.bounds, to: visibleCell.contentView)
-                XCTAssertEqual(contentFrame.minX, 28, accuracy: 0.5)
+                XCTAssertEqual(contentFrame.minX, 18, accuracy: 0.5)
                 XCTAssertEqual(
                     visibleCell.contentView.bounds.width - contentFrame.maxX,
-                    28,
+                    18,
                     accuracy: 0.5
                 )
                 checkedRows += 1
@@ -394,4 +407,5 @@ private extension UIView {
         }
         return nil
     }
+
 }

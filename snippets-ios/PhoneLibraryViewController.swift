@@ -1,7 +1,7 @@
 import UIKit
 
 private enum PhoneLibraryLayout {
-    static let horizontalInset: CGFloat = 28
+    static let horizontalInset: CGFloat = 18
     static let headerHorizontalInset: CGFloat = 20
 }
 
@@ -41,6 +41,18 @@ final class PhoneLibraryViewController: UIViewController {
     private let syncStatusHeader = UIView()
     private let syncStatusBanner = PhoneSyncStatusBanner()
     private let filterButton = UIButton(type: .system)
+    private let moreButton: UIButton = {
+        var configuration = UIButton.Configuration.glass()
+        configuration.image = UIImage(systemName: "ellipsis.circle")
+        configuration.baseForegroundColor = .label
+        configuration.contentInsets = .zero
+        let button = UIButton(configuration: configuration)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.showsMenuAsPrimaryAction = true
+        button.accessibilityIdentifier = "phone-library-more"
+        button.accessibilityLabel = "More"
+        return button
+    }()
     private let toastPresenter = PhoneToastPresenter()
     private let copyFeedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
     private var filterItem: UIBarButtonItem?
@@ -49,6 +61,8 @@ final class PhoneLibraryViewController: UIViewController {
     private var syncObservation: UUID?
     private var pendingCoachingWorkItem: DispatchWorkItem?
     private var hasCompletedSync: Bool
+    private weak var moreButtonNavigationBar: UINavigationBar?
+    private var moreButtonBottomConstraint: NSLayoutConstraint?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -90,12 +104,19 @@ final class PhoneLibraryViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setToolbarHidden(false, animated: animated)
+        installMoreButton()
         reload()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        removeMoreButton()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateSyncHeaderLayout()
+        updateMoreButtonPosition()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -210,9 +231,50 @@ final class PhoneLibraryViewController: UIViewController {
                 self.delegate?.phoneLibraryRequestedSettings(self)
             },
         ])
-        let item = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: menu)
-        item.accessibilityLabel = "More"
-        navigationItem.rightBarButtonItem = item
+        moreButton.menu = menu
+        navigationItem.rightBarButtonItem = nil
+    }
+
+    /// UIKit keeps ordinary bar-button items in the compact row while a large title is
+    /// expanded. The library's only navigation action belongs with the title instead,
+    /// so it is hosted by the navigation bar and follows the bar's lower edge. As the
+    /// large title collapses, that same lower edge becomes the compact navigation row.
+    private func installMoreButton() {
+        guard let navigationBar = navigationController?.navigationBar else { return }
+        if moreButtonNavigationBar !== navigationBar {
+            removeMoreButton()
+            navigationBar.addSubview(moreButton)
+            let bottom = moreButton.bottomAnchor.constraint(equalTo: navigationBar.bottomAnchor)
+            NSLayoutConstraint.activate([
+                moreButton.widthAnchor.constraint(equalToConstant: 44),
+                moreButton.heightAnchor.constraint(equalToConstant: 44),
+                moreButton.trailingAnchor.constraint(
+                    equalTo: navigationBar.layoutMarginsGuide.trailingAnchor
+                ),
+                bottom,
+            ])
+            moreButtonNavigationBar = navigationBar
+            moreButtonBottomConstraint = bottom
+        }
+        navigationBar.bringSubviewToFront(moreButton)
+        updateMoreButtonPosition()
+    }
+
+    private func removeMoreButton() {
+        moreButton.removeFromSuperview()
+        moreButtonNavigationBar = nil
+        moreButtonBottomConstraint = nil
+    }
+
+    private func updateMoreButtonPosition() {
+        guard let navigationBar = moreButtonNavigationBar,
+              let moreButtonBottomConstraint else { return }
+        // The expanded large-title glyphs sit a few points above the bottom of their
+        // row, while the compact controls are vertically centered. Interpolate that
+        // small optical correction as UIKit collapses the navigation bar.
+        let expansion = min(max((navigationBar.bounds.height - 44) / 52, 0), 1)
+        moreButtonBottomConstraint.constant = -4 * expansion
+        navigationBar.bringSubviewToFront(moreButton)
     }
 
     private func configureToolbar() {
@@ -581,6 +643,10 @@ extension PhoneLibraryViewController: UISearchResultsUpdating {
 }
 
 extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate {
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        updateMoreButtonPosition()
+    }
+
     func numberOfSections(in tableView: UITableView) -> Int { sections.count }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -756,6 +822,9 @@ private final class PhoneSnippetCell: UITableViewCell {
     private let highlightView = UIView()
     private let rowContentView = UIView()
     private let separatorView = UIView()
+    private lazy var separatorHeightConstraint = separatorView.heightAnchor.constraint(
+        equalToConstant: 0.5
+    )
     private let secureSymbolView = UIImageView(image: UIImage(systemName: "lock.fill"))
     private let pinnedSymbolView = UIImageView(image: UIImage(systemName: "pin.fill"))
     private let disabledSymbolView = UIImageView(image: UIImage(systemName: "pause.circle.fill"))
@@ -882,7 +951,7 @@ private final class PhoneSnippetCell: UITableViewCell {
                 constant: -PhoneLibraryLayout.horizontalInset
             ),
             separatorView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            separatorView.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale),
+            separatorHeightConstraint,
         ])
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
             (cell: PhoneSnippetCell, _: UITraitCollection) in
@@ -891,6 +960,11 @@ private final class PhoneSnippetCell: UITableViewCell {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        separatorHeightConstraint.constant = 1 / max(traitCollection.displayScale, 1)
+    }
 
     override func prepareForReuse() {
         super.prepareForReuse()

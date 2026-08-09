@@ -15,6 +15,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private let copyFeedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
     private let scrollView = UIScrollView()
     private let formStack = UIStackView()
+    private let modeContainer = UIView()
     private let contentModeStack = UIStackView()
     private let detailsModeStack = UIStackView()
 
@@ -42,6 +43,10 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private var secureContentIsRevealed = false
     private var previewIsExpanded = false
     private var secureSaveWorkItem: DispatchWorkItem?
+    private var contentModeBottomConstraint: NSLayoutConstraint!
+    private var detailsModeBottomConstraint: NSLayoutConstraint!
+    private var displayedModeIndex = 0
+    private var modeTransitionAnimator: UIViewPropertyAnimator?
 
     init(environment: AppEnvironment, snippetID: UUID) {
         self.environment = environment
@@ -110,14 +115,17 @@ final class PhoneSnippetEditorViewController: UIViewController {
         modeControl.accessibilityIdentifier = "phone-editor-mode"
         modeControl.addAction(UIAction { [weak self] _ in self?.updateMode(animated: true) }, for: .valueChanged)
         modeControl.translatesAutoresizingMaskIntoConstraints = false
-        // UISegmentedControl already receives the native iOS 26 Liquid Glass treatment.
-        // Wrapping it in another UIGlassEffect created the visible double capsule/rim.
-        modeControl.layer.borderWidth = 0
         view.addSubview(modeControl)
+
+        let adaptiveWidth = modeControl.widthAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.widthAnchor,
+            multiplier: 0.7
+        )
+        adaptiveWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            modeControl.widthAnchor.constraint(equalToConstant: 264),
-            modeControl.heightAnchor.constraint(greaterThanOrEqualToConstant: 50),
-            modeControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            adaptiveWidth,
+            modeControl.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+            modeControl.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
             modeControl.leadingAnchor.constraint(
                 greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor,
                 constant: 16
@@ -143,6 +151,8 @@ final class PhoneSnippetEditorViewController: UIViewController {
         contentModeStack.spacing = 16
         detailsModeStack.axis = .vertical
         detailsModeStack.spacing = 16
+        contentModeStack.accessibilityIdentifier = "phone-editor-content-pane"
+        detailsModeStack.accessibilityIdentifier = "phone-editor-details-pane"
 
         view.addSubview(scrollView)
         scrollView.addSubview(formStack)
@@ -198,8 +208,29 @@ final class PhoneSnippetEditorViewController: UIViewController {
         footerStatusLabel.numberOfLines = 0
         footerStatusLabel.accessibilityIdentifier = "phone-editor-status"
 
-        formStack.addArrangedSubview(contentModeStack)
-        formStack.addArrangedSubview(detailsModeStack)
+        modeContainer.translatesAutoresizingMaskIntoConstraints = false
+        modeContainer.accessibilityIdentifier = "phone-editor-mode-container"
+        modeContainer.clipsToBounds = true
+        contentModeStack.translatesAutoresizingMaskIntoConstraints = false
+        detailsModeStack.translatesAutoresizingMaskIntoConstraints = false
+        modeContainer.addSubview(contentModeStack)
+        modeContainer.addSubview(detailsModeStack)
+        contentModeBottomConstraint = contentModeStack.bottomAnchor.constraint(
+            equalTo: modeContainer.bottomAnchor
+        )
+        detailsModeBottomConstraint = detailsModeStack.bottomAnchor.constraint(
+            equalTo: modeContainer.bottomAnchor
+        )
+        NSLayoutConstraint.activate([
+            contentModeStack.leadingAnchor.constraint(equalTo: modeContainer.leadingAnchor),
+            contentModeStack.trailingAnchor.constraint(equalTo: modeContainer.trailingAnchor),
+            contentModeStack.topAnchor.constraint(equalTo: modeContainer.topAnchor),
+            detailsModeStack.leadingAnchor.constraint(equalTo: modeContainer.leadingAnchor),
+            detailsModeStack.trailingAnchor.constraint(equalTo: modeContainer.trailingAnchor),
+            detailsModeStack.topAnchor.constraint(equalTo: modeContainer.topAnchor),
+            contentModeBottomConstraint,
+        ])
+        formStack.addArrangedSubview(modeContainer)
         formStack.addArrangedSubview(footerStatusLabel)
         view.bringSubviewToFront(modeControl)
         updateMode(animated: false)
@@ -402,17 +433,63 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func updateMode(animated: Bool) {
-        let showContent = modeControl.selectedSegmentIndex == 0
-        let changes = {
-            self.contentModeStack.isHidden = !showContent
-            self.detailsModeStack.isHidden = showContent
-            self.view.layoutIfNeeded()
+        let targetIndex = modeControl.selectedSegmentIndex
+        let previousIndex = displayedModeIndex
+        let targetStack = targetIndex == 0 ? contentModeStack : detailsModeStack
+        let otherStack = targetIndex == 0 ? detailsModeStack : contentModeStack
+
+        guard targetIndex != previousIndex,
+              animated,
+              !UIAccessibility.isReduceMotionEnabled else {
+            modeTransitionAnimator?.stopAnimation(true)
+            modeTransitionAnimator = nil
+            activateBottomConstraint(for: targetIndex)
+            contentModeStack.transform = .identity
+            detailsModeStack.transform = .identity
+            contentModeStack.isHidden = targetIndex != 0
+            detailsModeStack.isHidden = targetIndex == 0
+            displayedModeIndex = targetIndex
+            view.layoutIfNeeded()
+            return
         }
-        if animated {
-            UIView.transition(with: formStack, duration: 0.18, options: .transitionCrossDissolve, animations: changes)
-        } else {
-            changes()
+
+        modeTransitionAnimator?.stopAnimation(true)
+        modeTransitionAnimator = nil
+        contentModeStack.transform = .identity
+        detailsModeStack.transform = .identity
+        contentModeStack.isHidden = previousIndex != 0
+        detailsModeStack.isHidden = previousIndex == 0
+
+        let travel = max(modeContainer.bounds.width, view.bounds.width)
+        let direction: CGFloat = targetIndex > previousIndex ? 1 : -1
+        targetStack.isHidden = false
+        activateBottomConstraint(for: targetIndex)
+        view.layoutIfNeeded()
+        targetStack.transform = CGAffineTransform(translationX: direction * travel, y: 0)
+        otherStack.transform = .identity
+        displayedModeIndex = targetIndex
+
+        let animator = UIViewPropertyAnimator(duration: 0.32, dampingRatio: 0.92) {
+            targetStack.transform = .identity
+            otherStack.transform = CGAffineTransform(translationX: -direction * travel, y: 0)
         }
+        animator.addCompletion { [weak self, weak animator] _ in
+            guard let self,
+                  let animator,
+                  self.modeTransitionAnimator === animator else { return }
+            self.contentModeStack.isHidden = self.displayedModeIndex != 0
+            self.detailsModeStack.isHidden = self.displayedModeIndex == 0
+            self.contentModeStack.transform = .identity
+            self.detailsModeStack.transform = .identity
+            self.modeTransitionAnimator = nil
+        }
+        modeTransitionAnimator = animator
+        animator.startAnimation()
+    }
+
+    private func activateBottomConstraint(for modeIndex: Int) {
+        contentModeBottomConstraint.isActive = modeIndex == 0
+        detailsModeBottomConstraint.isActive = modeIndex == 1
     }
 
     private func updateSecurePresentation() {
