@@ -106,9 +106,40 @@ final class SnippetEditorViewController: UIViewController {
         updateNavigationActions()
     }
 
-    func focusBody() {
-        guard !environment.store.isSecure(selectedID ?? UUID()) else { return }
-        bodyTextView.becomeFirstResponder()
+    @discardableResult
+    func focusBody() -> Bool {
+        guard let selectedID,
+              !environment.store.isSecure(selectedID) || secureContentIsRevealed else { return false }
+        return bodyTextView.becomeFirstResponder()
+    }
+
+    @discardableResult
+    func focusFirstEditorField() -> Bool {
+        if focusBody() { return true }
+        guard selectedID != nil else { return false }
+        return keywordField.becomeFirstResponder()
+    }
+
+    /// Matches the macOS editor loop: Snippet → Keyword → Name → Tags → Snippet.
+    /// Returning false for Shift-Tab from Snippet lets the split controller hand
+    /// focus back to the selected sidebar row.
+    @discardableResult
+    func moveEditorFocus(forward: Bool) -> Bool {
+        guard selectedID != nil else { return false }
+
+        if bodyTextView.isFirstResponder {
+            return forward ? keywordField.becomeFirstResponder() : false
+        }
+        if keywordField.isFirstResponder {
+            return forward ? nameField.becomeFirstResponder() : focusBody()
+        }
+        if nameField.isFirstResponder {
+            return forward ? tagField.focusInput() : keywordField.becomeFirstResponder()
+        }
+        if tagField.isInputFirstResponder {
+            return forward ? focusFirstEditorField() : nameField.becomeFirstResponder()
+        }
+        return false
     }
 
     func prepareForModalPresentation() {

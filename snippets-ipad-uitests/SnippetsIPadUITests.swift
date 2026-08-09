@@ -23,6 +23,20 @@ final class SnippetsIPadUITests: XCTestCase {
         #endif
     }
 
+    func testShortcutPanelShowsMacStyleOptionHint() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset", "--ui-testing-show-shortcuts"]
+        app.launch()
+
+        XCTAssertTrue(
+            app.staticTexts["shortcut-panel-tip"].waitForExistence(timeout: 5)
+        )
+        XCTAssertEqual(
+            app.staticTexts["shortcut-panel-tip"].label,
+            "Hold ⌥ for all shortcuts."
+        )
+    }
+
     private func createGreetingSnippetAndFocusSearch() -> (XCUIApplication, XCUIElement) {
         XCUIDevice.shared.orientation = .landscapeLeft
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }

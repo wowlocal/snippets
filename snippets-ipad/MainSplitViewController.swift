@@ -34,6 +34,8 @@ final class MainSplitViewController: UISplitViewController {
     private let editorController: SnippetEditorViewController
     private let listNavigationController: UINavigationController
     private let editorNavigationController: UINavigationController
+    private let shortcutPanel = ShortcutPanelView()
+    private weak var shortcutPanelPreviousFirstResponder: UIView?
     private var selectedSnippetID: UUID?
     private var documentPickerPurpose: DocumentPickerPurpose?
 
@@ -74,6 +76,11 @@ final class MainSplitViewController: UISplitViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        configureShortcutPanel()
+    }
+
     override var canBecomeFirstResponder: Bool { true }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -85,16 +92,44 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        [
+        var commands = [
             Self.copySnippetKeyCommand(),
+            Self.searchKeyCommand(),
+            Self.toggleSidebarKeyCommand(),
+            Self.editSnippetKeyCommand(),
+            Self.nextFieldKeyCommand(),
+            Self.previousFieldKeyCommand(),
+            Self.nextSnippetKeyCommand(),
+            Self.previousSnippetKeyCommand(),
             UIKeyCommand(title: "New Snippet", action: #selector(newSnippetCommand), input: "n", modifierFlags: .command),
             UIKeyCommand(title: "New from Clipboard", action: #selector(newClipboardCommand), input: "n", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Import", action: #selector(importCommand), input: "i", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Export", action: #selector(exportCommand), input: "e", modifierFlags: [.command, .shift]),
-            UIKeyCommand(title: "Keyboard Shortcuts", action: #selector(shortcutsCommand), input: "k", modifierFlags: .command),
+            Self.shortcutsKeyCommand(),
             UIKeyCommand(title: "Undo", action: #selector(undoCommand), input: "z", modifierFlags: .command),
             UIKeyCommand(title: "Redo", action: #selector(redoCommand), input: "z", modifierFlags: [.command, .shift]),
         ]
+        commands.append(
+            Self.priorityKeyCommand(
+                title: "Dismiss Shortcuts",
+                action: #selector(dismissShortcutPanelCommand),
+                input: UIKeyCommand.inputEscape
+            )
+        )
+        return commands
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(dismissShortcutPanelCommand) {
+            return shortcutPanel.isPresented
+        }
+        if action == #selector(nextSnippetCommand)
+            || action == #selector(previousSnippetCommand) {
+            return !shortcutPanel.isPresented
+                && !listController.isSearchFocused
+                && listController.firstVisibleSnippetID != nil
+        }
+        return super.canPerformAction(action, withSender: sender)
     }
 
     static func copySnippetKeyCommand() -> UIKeyCommand {
@@ -106,6 +141,117 @@ final class MainSplitViewController: UISplitViewController {
         )
         command.wantsPriorityOverSystemBehavior = true
         return command
+    }
+
+    static func searchKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Search",
+            action: #selector(searchCommand),
+            input: "f",
+            modifierFlags: .command
+        )
+    }
+
+    static func toggleSidebarKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Toggle Sidebar",
+            action: #selector(toggleSidebarCommand),
+            input: "b",
+            modifierFlags: .command
+        )
+    }
+
+    static func editSnippetKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Edit Snippet",
+            action: #selector(editSnippetCommand),
+            input: "e",
+            modifierFlags: .command
+        )
+    }
+
+    static func nextFieldKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Next Field",
+            action: #selector(nextFieldCommand),
+            input: "\t"
+        )
+    }
+
+    static func previousFieldKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Previous Field",
+            action: #selector(previousFieldCommand),
+            input: "\t",
+            modifierFlags: .shift
+        )
+    }
+
+    static func shortcutsKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Toggle Shortcuts",
+            action: #selector(shortcutsCommand),
+            input: "k",
+            modifierFlags: .command
+        )
+    }
+
+    static func nextSnippetKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Next Snippet",
+            action: #selector(nextSnippetCommand),
+            input: "n",
+            modifierFlags: .control
+        )
+    }
+
+    static func previousSnippetKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Previous Snippet",
+            action: #selector(previousSnippetCommand),
+            input: "p",
+            modifierFlags: .control
+        )
+    }
+
+    private static func priorityKeyCommand(
+        title: String,
+        action: Selector,
+        input: String,
+        modifierFlags: UIKeyModifierFlags = []
+    ) -> UIKeyCommand {
+        let command = UIKeyCommand(
+            title: title,
+            action: action,
+            input: input,
+            modifierFlags: modifierFlags
+        )
+        command.wantsPriorityOverSystemBehavior = true
+        return command
+    }
+
+    var isSidebarVisible: Bool { displayMode != .secondaryOnly }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        updateShortcutPanelModifierState(event)
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        updateShortcutPanelModifierState(event)
+        super.pressesChanged(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesEnded(presses, with: event)
+        updateShortcutPanelModifierState(event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesCancelled(presses, with: event)
+        if shortcutPanel.isPresented {
+            shortcutPanel.setShowsAllShortcuts(false, animated: true)
+        }
     }
 
     func open(_ url: URL) {
@@ -150,9 +296,9 @@ final class MainSplitViewController: UISplitViewController {
         select(id: first, revealEditor: true)
     }
 
-    private func select(id: UUID, revealEditor: Bool) {
+    private func select(id: UUID, revealEditor: Bool, ensureListVisible: Bool = false) {
         selectedSnippetID = id
-        listController.select(id: id)
+        listController.select(id: id, ensureVisible: ensureListVisible)
         editorController.bind(to: id)
         if revealEditor || isCollapsed {
             show(.secondary)
@@ -286,17 +432,7 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     private func showShortcuts() {
-        let message = [
-            "⌘N  New snippet",
-            "⇧⌘N  New from Clipboard",
-            "⌘F  Search",
-            "⇧⌘I  Import",
-            "⇧⌘E  Export",
-            "⌘Z / ⇧⌘Z  Undo / Redo",
-            "⌘K  This list",
-            "⌘Return  Copy selected snippet",
-        ].joined(separator: "\n")
-        showMessage(title: "Keyboard Shortcuts", message: message)
+        presentShortcutPanel()
     }
 
     func showMessage(title: String, message: String) {
@@ -314,7 +450,75 @@ final class MainSplitViewController: UISplitViewController {
     @objc private func newClipboardCommand() { createFromClipboard() }
     @objc private func importCommand() { showImporter() }
     @objc private func exportCommand() { showExporter() }
-    @objc private func shortcutsCommand() { showShortcuts() }
+    @objc func searchCommand() {
+        dismissShortcutPanel(animated: false, restoreFocus: false)
+        show(.primary)
+        listController.focusSearch()
+        if let transitionCoordinator {
+            transitionCoordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.listController.focusSearch()
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.listController.focusSearch()
+            }
+        }
+    }
+
+    @objc func toggleSidebarCommand() {
+        dismissShortcutPanel(animated: false, restoreFocus: false)
+        if isSidebarVisible {
+            let shouldMoveFocus = listController.ownsFirstResponder
+            hide(.primary)
+            if shouldMoveFocus, !editorController.focusFirstEditorField() {
+                becomeFirstResponder()
+            }
+        } else {
+            show(.primary)
+        }
+    }
+
+    @objc func editSnippetCommand() {
+        dismissShortcutPanel(animated: false, restoreFocus: false)
+        guard selectedSnippetID != nil else { return }
+        show(.secondary)
+        editorController.focusBody()
+    }
+
+    @objc func nextFieldCommand() {
+        guard !shortcutPanel.isPresented else { return }
+        if editorController.moveEditorFocus(forward: true) { return }
+        show(.secondary)
+        editorController.focusFirstEditorField()
+    }
+
+    @objc func previousFieldCommand() {
+        guard !shortcutPanel.isPresented else { return }
+        if editorController.moveEditorFocus(forward: false) { return }
+        show(.primary)
+        listController.focusList()
+    }
+
+    @objc func nextSnippetCommand() {
+        selectAdjacentSnippet(forward: true)
+    }
+
+    @objc func previousSnippetCommand() {
+        selectAdjacentSnippet(forward: false)
+    }
+
+    @objc func shortcutsCommand() {
+        if shortcutPanel.isPresented {
+            dismissShortcutPanel(animated: true, restoreFocus: true)
+        } else {
+            presentShortcutPanel()
+        }
+    }
+
+    @objc private func dismissShortcutPanelCommand() {
+        dismissShortcutPanel(animated: true, restoreFocus: true)
+    }
+
     @objc func copySnippetCommand(_ sender: UIKeyCommand) {
         guard let name = editorController.copySelectedSnippet() else { return }
         listController.showStatus("Copied “\(name)”.")
@@ -328,6 +532,57 @@ final class MainSplitViewController: UISplitViewController {
     @objc private func redoCommand() {
         guard environment.store.redo() else { return }
         libraryChanged(source: .local)
+    }
+
+    private func configureShortcutPanel() {
+        shortcutPanel.onDismiss = { [weak self] in
+            self?.dismissShortcutPanel(animated: true, restoreFocus: true)
+        }
+        view.addSubview(shortcutPanel)
+        NSLayoutConstraint.activate([
+            shortcutPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            shortcutPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            shortcutPanel.topAnchor.constraint(equalTo: view.topAnchor),
+            shortcutPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    private func presentShortcutPanel() {
+        loadViewIfNeeded()
+        guard !shortcutPanel.isPresented else { return }
+        shortcutPanelPreviousFirstResponder = view.activeFirstResponder()
+        view.bringSubviewToFront(shortcutPanel)
+        shortcutPanel.present(animated: view.window != nil)
+        becomeFirstResponder()
+    }
+
+    private func dismissShortcutPanel(animated: Bool, restoreFocus: Bool) {
+        guard shortcutPanel.isPresented else { return }
+        let previousFirstResponder = restoreFocus ? shortcutPanelPreviousFirstResponder : nil
+        shortcutPanelPreviousFirstResponder = nil
+        let shouldAnimate = animated && UIView.areAnimationsEnabled && view.window != nil
+        shortcutPanel.dismiss(animated: shouldAnimate) {
+            if previousFirstResponder?.window != nil,
+               previousFirstResponder?.becomeFirstResponder() == true {
+                return
+            }
+            self.becomeFirstResponder()
+        }
+    }
+
+    private func updateShortcutPanelModifierState(_ event: UIPressesEvent?) {
+        guard shortcutPanel.isPresented else { return }
+        shortcutPanel.setShowsAllShortcuts(
+            event?.modifierFlags.contains(.alternate) == true,
+            animated: true
+        )
+    }
+
+    private func selectAdjacentSnippet(forward: Bool) {
+        guard !shortcutPanel.isPresented,
+              !listController.isSearchFocused,
+              let id = listController.adjacentSnippetID(forward: forward) else { return }
+        select(id: id, revealEditor: false, ensureListVisible: true)
     }
 }
 
@@ -363,5 +618,15 @@ extension MainSplitViewController: UIDocumentPickerDelegate {
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         documentPickerPurpose = nil
+    }
+}
+
+private extension UIView {
+    func activeFirstResponder() -> UIView? {
+        if isFirstResponder { return self }
+        for subview in subviews {
+            if let responder = subview.activeFirstResponder() { return responder }
+        }
+        return nil
     }
 }

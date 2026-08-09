@@ -18,6 +18,7 @@ final class SnippetListViewController: UIViewController {
     private var statusWorkItem: DispatchWorkItem?
 
     var firstVisibleSnippetID: UUID? { visibleSnippets.first?.id }
+    var selectedSnippetID: UUID? { selectedID }
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -53,10 +54,6 @@ final class SnippetListViewController: UIViewController {
 
     override var canBecomeFirstResponder: Bool { true }
 
-    override var keyCommands: [UIKeyCommand]? {
-        [UIKeyCommand(title: "Search", action: #selector(focusSearch), input: "f", modifierFlags: .command)]
-    }
-
     func reload(keepingSelection: Bool) {
         if !keepingSelection {
             selectedID = nil
@@ -91,10 +88,14 @@ final class SnippetListViewController: UIViewController {
         tableFadeContainer.setNeedsLayout()
     }
 
-    func select(id: UUID) {
+    func select(id: UUID, ensureVisible: Bool = false) {
         selectedID = id
         guard let row = visibleSnippets.firstIndex(where: { $0.id == id }) else { return }
-        tableView.selectRow(at: IndexPath(row: row, section: 0), animated: false, scrollPosition: .none)
+        let indexPath = IndexPath(row: row, section: 0)
+        tableView.selectRow(at: indexPath, animated: false, scrollPosition: .none)
+        if ensureVisible {
+            tableView.scrollToRow(at: indexPath, at: .none, animated: false)
+        }
     }
 
     func showStatus(_ message: String) {
@@ -375,11 +376,41 @@ final class SnippetListViewController: UIViewController {
         return UIMenu(children: actions)
     }
 
-    @objc private func focusSearch() {
-        searchController.isActive = true
-        DispatchQueue.main.async { [weak self] in
-            self?.searchController.searchBar.searchTextField.becomeFirstResponder()
+    func focusSearch() {
+        let searchField = searchController.searchBar.searchTextField
+        if !searchField.becomeFirstResponder() {
+            DispatchQueue.main.async { [weak searchField] in
+                searchField?.becomeFirstResponder()
+            }
         }
+    }
+
+    func focusList() {
+        searchController.isActive = false
+        if !tableView.becomeFirstResponder() {
+            becomeFirstResponder()
+        }
+    }
+
+    func adjacentSnippetID(forward: Bool) -> UUID? {
+        guard !visibleSnippets.isEmpty else { return nil }
+        let current = selectedID.flatMap { id in
+            visibleSnippets.firstIndex(where: { $0.id == id })
+        } ?? 0
+        let next = forward
+            ? min(current + 1, visibleSnippets.count - 1)
+            : max(current - 1, 0)
+        return visibleSnippets[next].id
+    }
+
+    var ownsFirstResponder: Bool {
+        isSearchFocused
+            || tableView.isFirstResponder
+            || isFirstResponder
+    }
+
+    var isSearchFocused: Bool {
+        searchController.searchBar.searchTextField.isFirstResponder
     }
 }
 
