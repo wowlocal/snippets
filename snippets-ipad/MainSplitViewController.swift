@@ -125,7 +125,7 @@ final class MainSplitViewController: UISplitViewController {
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         if action == #selector(escapeCommand) {
-            return shortcutPanel.isPresented || listController.isSearchFocused
+            return shortcutPanel.isPresented
         }
         if action == #selector(nextSnippetCommand)
             || action == #selector(previousSnippetCommand) {
@@ -716,11 +716,13 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     @objc func escapeCommand() {
-        if shortcutPanel.isPresented {
-            dismissShortcutPanel(animated: true, restoreFocus: true)
-        } else if listController.isSearchFocused {
-            listController.focusFilteredList()
-        }
+        dismissShortcutPanel(animated: true, restoreFocus: true)
+    }
+
+    func handleEscapeBeforeSystemSearch() -> Bool {
+        guard listController.isSearchFocused else { return false }
+        listController.focusFilteredList()
+        return true
     }
 
     @objc func copySnippetCommand(_ sender: UIKeyCommand) {

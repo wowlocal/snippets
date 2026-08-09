@@ -23,6 +23,14 @@ final class SnippetsIPadUITests: XCTestCase {
         #endif
     }
 
+    func testEscapeKeepsSearchQueryWhileMovingFocusToSnippetList() {
+        let (_, search) = createGreetingSnippetAndFocusSearch()
+
+        search.typeKey(.escape, modifierFlags: [])
+
+        XCTAssertEqual(search.value as? String, "Greeting")
+    }
+
     func testShortcutPanelShowsMacStyleOptionHint() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-reset", "--ui-testing-show-shortcuts"]

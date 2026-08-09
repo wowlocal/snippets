@@ -332,17 +332,8 @@ final class SnippetsIPadTests: XCTestCase {
         hosted.list.reload(keepingSelection: false)
 
         let escape = MainSplitViewController.escapeKeyCommand()
-        guard let escapeAction = escape.action else {
-            return XCTFail("Escape should have an action")
-        }
-        XCTAssertTrue(
-            searchField.target(forAction: escapeAction, withSender: escape) as AnyObject?
-                === hosted.controller
-        )
-
-        XCTAssertTrue(
-            UIApplication.shared.sendAction(escapeAction, to: nil, from: escape, for: nil)
-        )
+        XCTAssertNotNil(escape.action)
+        XCTAssertTrue(hosted.controller.handleEscapeBeforeSystemSearch())
 
         XCTAssertEqual(searchField.text, "Match")
         XCTAssertFalse(hosted.list.isSearchFocused)

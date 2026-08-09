@@ -1,5 +1,38 @@
 import UIKit
 
+/// UISearchController treats a hardware Escape press as Cancel and clears the
+/// query before responder-chain key commands run. Catch that one press at the
+/// window boundary so the app can move focus while preserving the filter.
+final class SnippetWindow: UIWindow {
+    var onEscapePress: (() -> Bool)?
+
+    private var isConsumingEscapePress = false
+
+    override func sendEvent(_ event: UIEvent) {
+        guard let pressesEvent = event as? UIPressesEvent,
+              let escapePress = pressesEvent.allPresses.first(where: {
+                  $0.key?.keyCode == .keyboardEscape
+              }) else {
+            super.sendEvent(event)
+            return
+        }
+
+        if isConsumingEscapePress {
+            if escapePress.phase == .ended || escapePress.phase == .cancelled {
+                isConsumingEscapePress = false
+            }
+            return
+        }
+
+        if escapePress.phase == .began, onEscapePress?() == true {
+            isConsumingEscapePress = true
+            return
+        }
+
+        super.sendEvent(event)
+    }
+}
+
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     let environment = AppEnvironment()
@@ -31,7 +64,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
               let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
 
         let root = MainSplitViewController(environment: appDelegate.environment)
-        let window = UIWindow(windowScene: windowScene)
+        let window = SnippetWindow(windowScene: windowScene)
+        window.onEscapePress = { [weak root] in
+            root?.handleEscapeBeforeSystemSearch() == true
+        }
         window.tintColor = AppTheme.tint
         window.rootViewController = root
         window.makeKeyAndVisible()
