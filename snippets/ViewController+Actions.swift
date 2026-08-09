@@ -279,7 +279,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         exportItem.keyEquivalent = "E"
 
         let backupItem = LiquidGlassDesign.menuItem(
-            title: "Encrypted Backup (Includes Secure Snippets)...",
+            title: "Export Encrypted Backup…",
             symbolName: "lock.doc",
             action: #selector(runEncryptedBackupExport),
             target: self
@@ -736,37 +736,56 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
                 ? "Protect Encrypted Backup"
                 : "Open Encrypted Backup"
             alert.informativeText = confirmingNewPassword
-                ? "This private backup includes secure snippets. Use a unique password of at least 12 characters and save it in a password manager; Snippets cannot recover it."
+                ? "This backup includes secure snippets. Use a unique password of at least 12 characters and save it in a password manager. Snippets cannot recover it."
                 : "Enter the password used when this backup was created. The file is authenticated before anything is imported."
             alert.addButton(withTitle: confirmingNewPassword ? "Create Backup" : "Open Backup")
             alert.addButton(withTitle: "Cancel")
 
-            let passwordField = NSSecureTextField(frame: .zero)
+            let fieldWidth: CGFloat = 280
+            let fieldHeight: CGFloat = 24
+            let fieldSpacing: CGFloat = 8
+            let passwordField = NSSecureTextField(
+                frame: NSRect(x: 0, y: 0, width: fieldWidth, height: fieldHeight))
             passwordField.placeholderString = "Backup password"
-            passwordField.widthAnchor.constraint(equalToConstant: 360).isActive = true
 
-            var views: [NSView] = [passwordField]
+            var fields: [NSSecureTextField] = [passwordField]
             var confirmationField: NSSecureTextField?
             if confirmingNewPassword {
-                let field = NSSecureTextField(frame: .zero)
+                let field = NSSecureTextField(
+                    frame: NSRect(x: 0, y: 0, width: fieldWidth, height: fieldHeight))
                 field.placeholderString = "Confirm password"
-                field.widthAnchor.constraint(equalToConstant: 360).isActive = true
                 confirmationField = field
-                views.append(field)
+                fields.append(field)
             }
+
+            let fieldsHeight = CGFloat(fields.count) * fieldHeight
+                + CGFloat(fields.count - 1) * fieldSpacing
+            let validationHeight: CGFloat = validationMessage == nil ? 0 : 34
+            let accessory = NSView(frame: NSRect(
+                x: 0,
+                y: 0,
+                width: fieldWidth,
+                height: fieldsHeight + validationHeight))
+
+            var y = accessory.bounds.maxY - fieldHeight
+            for field in fields {
+                field.frame.origin = NSPoint(x: 0, y: y)
+                accessory.addSubview(field)
+                y -= fieldHeight + fieldSpacing
+            }
+
             if let validationMessage {
                 let label = NSTextField(wrappingLabelWithString: validationMessage)
                 label.textColor = .systemRed
                 label.maximumNumberOfLines = 2
-                label.widthAnchor.constraint(equalToConstant: 360).isActive = true
-                views.append(label)
+                label.frame = NSRect(x: 0, y: 0, width: fieldWidth, height: 26)
+                accessory.addSubview(label)
             }
 
-            let stack = NSStackView(views: views)
-            stack.orientation = .vertical
-            stack.alignment = .leading
-            stack.spacing = 8
-            alert.accessoryView = stack
+            // NSAlert reads an accessory's explicit frame when reserving space for it.
+            // A constraint-only stack reports the wrong height on macOS 26 and is laid
+            // over the informative text instead.
+            alert.accessoryView = accessory
             alert.window.initialFirstResponder = passwordField
 
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }

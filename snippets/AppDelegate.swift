@@ -766,7 +766,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         LiquidGlassDesign.applyMenuSymbol("square.and.arrow.up", to: exportItem)
 
         let backupItem = NSMenuItem(
-            title: "Encrypted Backup (Includes Secure Snippets)…",
+            title: "Export Encrypted Backup…",
             action: #selector(exportEncryptedBackup(_:)),
             keyEquivalent: ""
         )
