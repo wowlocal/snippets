@@ -2,7 +2,7 @@
 
 How the snippet library survives being written by more than one thing at a time, how it will
 travel between devices, and how a snippet can hold a secret without that secret ending up in a
-clipboard manager, an export file, a log, or a backend operator's database.
+clipboard manager, a plaintext sharing export, a log, or a backend operator's database.
 
 Read `docs/frecency-ranking.md` first if you want the house style for this kind of document; the
 merge here reuses its join-semilattice reasoning, and its privacy boundary is one this design is
@@ -245,8 +245,8 @@ at all, so it can never type ciphertext into a chat window, and `exportSnippets(
 > before reading it. Say the consequence plainly rather than burying it: the guarantee now
 > rests on Apple's iCloud Keychain rather than on something only the user knows, so an attacker who
 > compromises the iCloud account *and* passes its device-approval step reaches the secrets. The
-> passphrase implementation below is retained for a future passphrase-protected export — it is
-> not on the primary path. Vault creation instead makes a printable recovery key and stores an
+> passphrase implementation below is used by the explicit password-protected encrypted-backup
+> action, but remains off the primary vault path. Vault creation instead makes a printable recovery key and stores an
 > authenticated recovery wrap only after the user confirms that they saved it.
 >
 > Note also that `kSecAttrSynchronizable` requires the *data-protection* keychain, which requires
@@ -277,8 +277,9 @@ Per-purpose subkeys come from HKDF-SHA256:
 way back when a migration or entitlement change loses the Keychain item: Settings accepts the
 printed key, authenticates the wrap against this vault's `kid`, and restores the item. Older vaults
 without a wrap are offered one whenever they are unlocked. The implemented passphrase format uses
-PBKDF2-HMAC-SHA512 with 600 000 pinned iterations, but no current UI creates a passphrase wrap;
-its `alg` field preserves the future upgrade path to Argon2id or passphrase-protected export.
+PBKDF2-HMAC-SHA512 with 600 000 pinned iterations. No UI creates a passphrase wrap inside the live
+vault; the encrypted-backup format reuses the KDF to wrap its own independent random export key.
+Its `alg` field preserves the future upgrade path to Argon2id.
 
 Every AEAD operation binds an AAD covering version, scope, record id, and the deleted flag, so a
 ciphertext cannot be replayed under another record's identity. There is deliberately no
@@ -334,7 +335,7 @@ deletes or inserts anything. Cancellation and every failed revalidation wipe the
 
 | Path | What stops a secret going through it |
 |---|---|
-| `snippets.json`, export, the undo stack | Secure records are never in `SnippetStore.snippets`. Structural — nothing to filter. |
+| `snippets.json`, share export, the undo stack | Secure records are never in `SnippetStore.snippets`. Structural — nothing to filter. The separate encrypted-backup action copies already-sealed vault records and wraps `K_lib`; it never writes a plaintext secure body. |
 | Share deep link | `SnippetDeepLink.url(for:isSecure:)` has **no default** for `isSecure`, so omitting the check does not compile. |
 | Auto-expansion from the keystroke buffer | Secure records are absent from `enabledSnippetsSorted()`. |
 | Authenticated suggestion expansion | Every explicit acceptance gets a fresh LocalAuthentication context. `VaultSession.withOneUseAuthentication` locks before prompting and on every exit; `SecurePlaintextLease` zeroes its owned byte allocation on success, refusal, cancellation, and deinit. |

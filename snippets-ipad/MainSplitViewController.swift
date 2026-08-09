@@ -1,6 +1,12 @@
 import UIKit
 import UniformTypeIdentifiers
 
+private extension UTType {
+    static let snippetsEncryptedBackup = UTType(
+        exportedAs: EncryptedSnippetBackup.formatIdentifier,
+        conformingTo: .data)
+}
+
 @MainActor
 protocol SnippetListViewControllerDelegate: AnyObject {
     func snippetList(_ controller: SnippetListViewController, selected id: UUID)
@@ -8,6 +14,7 @@ protocol SnippetListViewControllerDelegate: AnyObject {
     func snippetListRequestedClipboardSnippet(_ controller: SnippetListViewController)
     func snippetListRequestedImport(_ controller: SnippetListViewController)
     func snippetListRequestedExport(_ controller: SnippetListViewController)
+    func snippetListRequestedEncryptedBackup(_ controller: SnippetListViewController)
     func snippetListRequestedSettings(_ controller: SnippetListViewController)
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController)
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID)
@@ -34,8 +41,11 @@ final class MainSplitViewController: UISplitViewController {
     private let editorController: SnippetEditorViewController
     private let listNavigationController: UINavigationController
     private let editorNavigationController: UINavigationController
+    private let shortcutPanel = ShortcutPanelView()
+    private weak var shortcutPanelPreviousFirstResponder: UIView?
     private var selectedSnippetID: UUID?
     private var documentPickerPurpose: DocumentPickerPurpose?
+    private var exportedTemporaryURL: URL?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -74,6 +84,11 @@ final class MainSplitViewController: UISplitViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        configureShortcutPanel()
+    }
+
     override var canBecomeFirstResponder: Bool { true }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -85,16 +100,46 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        [
+        var commands = [
             Self.copySnippetKeyCommand(),
+            Self.searchKeyCommand(),
+            Self.toggleSidebarKeyCommand(),
+            Self.editSnippetKeyCommand(),
+            Self.nextFieldKeyCommand(),
+            Self.previousFieldKeyCommand(),
+            Self.nextSnippetKeyCommand(),
+            Self.previousSnippetKeyCommand(),
+            Self.nextSnippetArrowKeyCommand(),
+            Self.previousSnippetArrowKeyCommand(),
             UIKeyCommand(title: "New Snippet", action: #selector(newSnippetCommand), input: "n", modifierFlags: .command),
             UIKeyCommand(title: "New from Clipboard", action: #selector(newClipboardCommand), input: "n", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Import", action: #selector(importCommand), input: "i", modifierFlags: [.command, .shift]),
-            UIKeyCommand(title: "Export", action: #selector(exportCommand), input: "e", modifierFlags: [.command, .shift]),
-            UIKeyCommand(title: "Keyboard Shortcuts", action: #selector(shortcutsCommand), input: "k", modifierFlags: .command),
+            UIKeyCommand(title: "Export for Sharing", action: #selector(exportCommand), input: "e", modifierFlags: [.command, .shift]),
+            Self.shortcutsKeyCommand(),
             UIKeyCommand(title: "Undo", action: #selector(undoCommand), input: "z", modifierFlags: .command),
             UIKeyCommand(title: "Redo", action: #selector(redoCommand), input: "z", modifierFlags: [.command, .shift]),
         ]
+        commands.append(Self.escapeKeyCommand())
+        return commands
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(escapeCommand) {
+            return shortcutPanel.isPresented || listController.isSearchFocused
+        }
+        if action == #selector(nextSnippetCommand)
+            || action == #selector(previousSnippetCommand) {
+            return !shortcutPanel.isPresented
+                && !listController.isSearchFocused
+                && listController.firstVisibleSnippetID != nil
+        }
+        if action == #selector(nextSnippetFromListCommand)
+            || action == #selector(previousSnippetFromListCommand) {
+            return !shortcutPanel.isPresented
+                && listController.isListFocused
+                && listController.firstVisibleSnippetID != nil
+        }
+        return super.canPerformAction(action, withSender: sender)
     }
 
     static func copySnippetKeyCommand() -> UIKeyCommand {
@@ -106,6 +151,141 @@ final class MainSplitViewController: UISplitViewController {
         )
         command.wantsPriorityOverSystemBehavior = true
         return command
+    }
+
+    static func searchKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Search",
+            action: #selector(searchCommand),
+            input: "f",
+            modifierFlags: .command
+        )
+    }
+
+    static func toggleSidebarKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Toggle Sidebar",
+            action: #selector(toggleSidebarCommand),
+            input: "b",
+            modifierFlags: .command
+        )
+    }
+
+    static func editSnippetKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Edit Snippet",
+            action: #selector(editSnippetCommand),
+            input: "e",
+            modifierFlags: .command
+        )
+    }
+
+    static func nextFieldKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Next Field",
+            action: #selector(nextFieldCommand),
+            input: "\t"
+        )
+    }
+
+    static func previousFieldKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Previous Field",
+            action: #selector(previousFieldCommand),
+            input: "\t",
+            modifierFlags: .shift
+        )
+    }
+
+    static func shortcutsKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Toggle Shortcuts",
+            action: #selector(shortcutsCommand),
+            input: "k",
+            modifierFlags: .command
+        )
+    }
+
+    static func nextSnippetKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Next Snippet",
+            action: #selector(nextSnippetCommand),
+            input: "n",
+            modifierFlags: .control
+        )
+    }
+
+    static func previousSnippetKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Previous Snippet",
+            action: #selector(previousSnippetCommand),
+            input: "p",
+            modifierFlags: .control
+        )
+    }
+
+    static func nextSnippetArrowKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Next Snippet",
+            action: #selector(nextSnippetFromListCommand),
+            input: UIKeyCommand.inputDownArrow
+        )
+    }
+
+    static func previousSnippetArrowKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Previous Snippet",
+            action: #selector(previousSnippetFromListCommand),
+            input: UIKeyCommand.inputUpArrow
+        )
+    }
+
+    static func escapeKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Return to Snippet List",
+            action: #selector(escapeCommand),
+            input: UIKeyCommand.inputEscape
+        )
+    }
+
+    private static func priorityKeyCommand(
+        title: String,
+        action: Selector,
+        input: String,
+        modifierFlags: UIKeyModifierFlags = []
+    ) -> UIKeyCommand {
+        let command = UIKeyCommand(
+            title: title,
+            action: action,
+            input: input,
+            modifierFlags: modifierFlags
+        )
+        command.wantsPriorityOverSystemBehavior = true
+        return command
+    }
+
+    var isSidebarVisible: Bool { displayMode != .secondaryOnly }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        updateShortcutPanelModifierState(event)
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        updateShortcutPanelModifierState(event)
+        super.pressesChanged(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesEnded(presses, with: event)
+        updateShortcutPanelModifierState(event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesCancelled(presses, with: event)
+        if shortcutPanel.isPresented {
+            shortcutPanel.setShowsAllShortcuts(false, animated: true)
+        }
     }
 
     func open(_ url: URL) {
@@ -150,9 +330,9 @@ final class MainSplitViewController: UISplitViewController {
         select(id: first, revealEditor: true)
     }
 
-    private func select(id: UUID, revealEditor: Bool) {
+    private func select(id: UUID, revealEditor: Bool, ensureListVisible: Bool = false) {
         selectedSnippetID = id
-        listController.select(id: id)
+        listController.select(id: id, ensureVisible: ensureListVisible)
         editorController.bind(to: id)
         if revealEditor || isCollapsed {
             show(.secondary)
@@ -219,7 +399,9 @@ final class MainSplitViewController: UISplitViewController {
 
     private func showImporter() {
         editorController.prepareForModalPresentation()
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json, .data], asCopy: false)
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.json, .snippetsEncryptedBackup],
+            asCopy: false)
         picker.delegate = self
         picker.allowsMultipleSelection = false
         documentPickerPurpose = .importing
@@ -228,6 +410,7 @@ final class MainSplitViewController: UISplitViewController {
 
     private func showExporter() {
         editorController.prepareForModalPresentation()
+        removeTemporaryExport()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Snippets-Export.json", isDirectory: false)
         do {
@@ -235,16 +418,71 @@ final class MainSplitViewController: UISplitViewController {
             let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
             picker.delegate = self
             documentPickerPurpose = .exporting
+            exportedTemporaryURL = url
             present(picker, animated: true)
-            listController.showStatus("Exporting \(count) ordinary snippet\(count == 1 ? "" : "s")…")
+            listController.showStatus("Exporting \(count) ordinary snippet\(count == 1 ? "" : "s") for sharing… Secure snippets are not included.")
         } catch {
             showError(title: "Couldn’t Export Snippets", error: error)
+        }
+    }
+
+    private func showEncryptedBackupExporter() {
+        editorController.prepareForModalPresentation()
+        promptForNewBackupPassword { [weak self] passphrase in
+            guard let self, let passphrase else { return }
+            listController.showStatus("Preparing encrypted backup…")
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let backup = try await environment.secureStore.makeEncryptedBackup(
+                        store: environment.store,
+                        passphrase: passphrase)
+                    removeTemporaryExport()
+                    let url = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("Snippets-Backup.snippetsbackup", isDirectory: false)
+                    try AtomicFileWriter.write(
+                        backup.data,
+                        to: url,
+                        temporaryDirectory: FileManager.default.temporaryDirectory,
+                        permissions: 0o600)
+                    try FileManager.default.setAttributes(
+                        [.protectionKey: FileProtectionType.complete],
+                        ofItemAtPath: url.path)
+
+                    let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
+                    picker.delegate = self
+                    documentPickerPurpose = .exporting
+                    exportedTemporaryURL = url
+                    present(picker, animated: true)
+                    listController.showStatus(
+                        "Encrypted backup contains \(backup.ordinaryCount) ordinary and \(backup.secureCount) secure snippet\(backup.totalCount == 1 ? "" : "s").")
+                } catch {
+                    showError(title: "Couldn’t Create Encrypted Backup", error: error)
+                }
+            }
         }
     }
 
     private func importDocument(at url: URL) {
         let hasAccess = url.startAccessingSecurityScopedResource()
         let finish = { if hasAccess { url.stopAccessingSecurityScopedResource() } }
+
+        let encryptedData = try? Data(contentsOf: url)
+        let isEncryptedBackup = url.pathExtension.caseInsensitiveCompare(
+            EncryptedSnippetBackup.preferredFilenameExtension) == .orderedSame
+            || encryptedData.map(EncryptedSnippetBackup.isEncryptedBackup) == true
+        if isEncryptedBackup {
+            finish()
+            guard let encryptedData else {
+                showMessage(
+                    title: "Couldn’t Read Encrypted Backup",
+                    message: "The selected backup file could not be read.")
+                return
+            }
+            importEncryptedBackup(encryptedData)
+            return
+        }
 
         let runImport: (Bool) -> Void = { [weak self] preserveExclamation in
             guard let self else { finish(); return }
@@ -277,6 +515,106 @@ final class MainSplitViewController: UISplitViewController {
         present(alert, animated: true)
     }
 
+    private func importEncryptedBackup(_ data: Data) {
+        promptForBackupPassword { [weak self] passphrase in
+            guard let self, let passphrase else { return }
+            listController.showStatus("Opening encrypted backup…")
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let result = try await environment.secureStore.importEncryptedBackup(
+                        data,
+                        passphrase: passphrase,
+                        into: environment.store)
+                    listController.showStatus(
+                        "Imported \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet\(result.totalCount == 1 ? "" : "s").")
+                    selectInitialSnippetIfNeeded()
+                } catch {
+                    showError(title: "Couldn’t Import Encrypted Backup", error: error)
+                }
+            }
+        }
+    }
+
+    private func promptForNewBackupPassword(completion: @escaping (String?) -> Void) {
+        let alert = UIAlertController(
+            title: "Protect Encrypted Backup",
+            message: "This private backup includes secure snippets. Use a unique password of at least 12 characters and save it in a password manager; Snippets cannot recover it.",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            Self.configureBackupPasswordField(field, placeholder: "Backup password")
+            field.textContentType = .newPassword
+        }
+        alert.addTextField { field in
+            Self.configureBackupPasswordField(field, placeholder: "Confirm password")
+            field.textContentType = .newPassword
+        }
+
+        guard let passwordField = alert.textFields?.first,
+              let confirmationField = alert.textFields?.last else {
+            completion(nil)
+            return
+        }
+        let create = UIAlertAction(title: "Create Backup", style: .default) { _ in
+            completion(passwordField.text)
+        }
+        create.isEnabled = false
+        let updateValidation = UIAction { _ in
+            let password = passwordField.text ?? ""
+            create.isEnabled = password.count >= 12
+                && !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && confirmationField.text == password
+        }
+        passwordField.addAction(updateValidation, for: .editingChanged)
+        confirmationField.addAction(updateValidation, for: .editingChanged)
+
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completion(nil) })
+        alert.addAction(create)
+        present(alert, animated: true)
+    }
+
+    private func promptForBackupPassword(completion: @escaping (String?) -> Void) {
+        let alert = UIAlertController(
+            title: "Open Encrypted Backup",
+            message: "Enter the password used when this backup was created. The file is authenticated before anything is imported.",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            Self.configureBackupPasswordField(field, placeholder: "Backup password")
+            field.textContentType = .password
+        }
+
+        guard let passwordField = alert.textFields?.first else {
+            completion(nil)
+            return
+        }
+        let open = UIAlertAction(title: "Open Backup", style: .default) { _ in
+            completion(passwordField.text)
+        }
+        open.isEnabled = false
+        passwordField.addAction(UIAction { _ in
+            open.isEnabled = !(passwordField.text ?? "").isEmpty
+        }, for: .editingChanged)
+
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completion(nil) })
+        alert.addAction(open)
+        present(alert, animated: true)
+    }
+
+    private static func configureBackupPasswordField(_ field: UITextField, placeholder: String) {
+        field.placeholder = placeholder
+        field.isSecureTextEntry = true
+        field.autocorrectionType = .no
+        field.autocapitalizationType = .none
+        field.spellCheckingType = .no
+    }
+
+    private func removeTemporaryExport() {
+        guard let exportedTemporaryURL else { return }
+        try? FileManager.default.removeItem(at: exportedTemporaryURL)
+        self.exportedTemporaryURL = nil
+    }
+
     private func showSettings() {
         editorController.prepareForModalPresentation()
         let settings = SettingsViewController(environment: environment)
@@ -286,17 +624,7 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     private func showShortcuts() {
-        let message = [
-            "⌘N  New snippet",
-            "⇧⌘N  New from Clipboard",
-            "⌘F  Search",
-            "⇧⌘I  Import",
-            "⇧⌘E  Export",
-            "⌘Z / ⇧⌘Z  Undo / Redo",
-            "⌘K  This list",
-            "⌘Return  Copy selected snippet",
-        ].joined(separator: "\n")
-        showMessage(title: "Keyboard Shortcuts", message: message)
+        presentShortcutPanel()
     }
 
     func showMessage(title: String, message: String) {
@@ -314,7 +642,87 @@ final class MainSplitViewController: UISplitViewController {
     @objc private func newClipboardCommand() { createFromClipboard() }
     @objc private func importCommand() { showImporter() }
     @objc private func exportCommand() { showExporter() }
-    @objc private func shortcutsCommand() { showShortcuts() }
+    @objc func searchCommand() {
+        dismissShortcutPanel(animated: false, restoreFocus: false)
+        show(.primary)
+        listController.focusSearch()
+        if let transitionCoordinator {
+            transitionCoordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.listController.focusSearch()
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.listController.focusSearch()
+            }
+        }
+    }
+
+    @objc func toggleSidebarCommand() {
+        dismissShortcutPanel(animated: false, restoreFocus: false)
+        if isSidebarVisible {
+            let shouldMoveFocus = listController.ownsFirstResponder
+            hide(.primary)
+            if shouldMoveFocus, !editorController.focusFirstEditorField() {
+                becomeFirstResponder()
+            }
+        } else {
+            show(.primary)
+        }
+    }
+
+    @objc func editSnippetCommand() {
+        dismissShortcutPanel(animated: false, restoreFocus: false)
+        guard selectedSnippetID != nil else { return }
+        show(.secondary)
+        editorController.focusBody()
+    }
+
+    @objc func nextFieldCommand() {
+        guard !shortcutPanel.isPresented else { return }
+        if editorController.moveEditorFocus(forward: true) { return }
+        show(.secondary)
+        editorController.focusFirstEditorField()
+    }
+
+    @objc func previousFieldCommand() {
+        guard !shortcutPanel.isPresented else { return }
+        if editorController.moveEditorFocus(forward: false) { return }
+        show(.primary)
+        listController.focusList()
+    }
+
+    @objc func nextSnippetCommand() {
+        selectAdjacentSnippet(forward: true)
+    }
+
+    @objc func previousSnippetCommand() {
+        selectAdjacentSnippet(forward: false)
+    }
+
+    @objc func nextSnippetFromListCommand() {
+        selectAdjacentSnippet(forward: true)
+    }
+
+    @objc func previousSnippetFromListCommand() {
+        selectAdjacentSnippet(forward: false)
+    }
+
+    @objc func shortcutsCommand() {
+        if shortcutPanel.isPresented {
+            dismissShortcutPanel(animated: true, restoreFocus: true)
+        } else {
+            presentShortcutPanel()
+        }
+    }
+
+    @objc func escapeCommand() {
+        if shortcutPanel.isPresented {
+            dismissShortcutPanel(animated: true, restoreFocus: true)
+        } else if listController.isSearchFocused {
+            listController.focusFilteredList()
+        }
+    }
+
     @objc func copySnippetCommand(_ sender: UIKeyCommand) {
         guard let name = editorController.copySelectedSnippet() else { return }
         listController.showStatus("Copied “\(name)”.")
@@ -329,6 +737,57 @@ final class MainSplitViewController: UISplitViewController {
         guard environment.store.redo() else { return }
         libraryChanged(source: .local)
     }
+
+    private func configureShortcutPanel() {
+        shortcutPanel.onDismiss = { [weak self] in
+            self?.dismissShortcutPanel(animated: true, restoreFocus: true)
+        }
+        view.addSubview(shortcutPanel)
+        NSLayoutConstraint.activate([
+            shortcutPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            shortcutPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            shortcutPanel.topAnchor.constraint(equalTo: view.topAnchor),
+            shortcutPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    private func presentShortcutPanel() {
+        loadViewIfNeeded()
+        guard !shortcutPanel.isPresented else { return }
+        shortcutPanelPreviousFirstResponder = view.activeFirstResponder()
+        view.bringSubviewToFront(shortcutPanel)
+        shortcutPanel.present(animated: view.window != nil)
+        becomeFirstResponder()
+    }
+
+    private func dismissShortcutPanel(animated: Bool, restoreFocus: Bool) {
+        guard shortcutPanel.isPresented else { return }
+        let previousFirstResponder = restoreFocus ? shortcutPanelPreviousFirstResponder : nil
+        shortcutPanelPreviousFirstResponder = nil
+        let shouldAnimate = animated && UIView.areAnimationsEnabled && view.window != nil
+        shortcutPanel.dismiss(animated: shouldAnimate) {
+            if previousFirstResponder?.window != nil,
+               previousFirstResponder?.becomeFirstResponder() == true {
+                return
+            }
+            self.becomeFirstResponder()
+        }
+    }
+
+    private func updateShortcutPanelModifierState(_ event: UIPressesEvent?) {
+        guard shortcutPanel.isPresented else { return }
+        shortcutPanel.setShowsAllShortcuts(
+            event?.modifierFlags.contains(.alternate) == true,
+            animated: true
+        )
+    }
+
+    private func selectAdjacentSnippet(forward: Bool) {
+        guard !shortcutPanel.isPresented,
+              !listController.isSearchFocused,
+              let id = listController.adjacentSnippetID(forward: forward) else { return }
+        select(id: id, revealEditor: false, ensureListVisible: true)
+    }
 }
 
 extension MainSplitViewController: SnippetListViewControllerDelegate {
@@ -340,6 +799,9 @@ extension MainSplitViewController: SnippetListViewControllerDelegate {
     func snippetListRequestedClipboardSnippet(_ controller: SnippetListViewController) { createFromClipboard() }
     func snippetListRequestedImport(_ controller: SnippetListViewController) { showImporter() }
     func snippetListRequestedExport(_ controller: SnippetListViewController) { showExporter() }
+    func snippetListRequestedEncryptedBackup(_ controller: SnippetListViewController) {
+        showEncryptedBackupExporter()
+    }
     func snippetListRequestedSettings(_ controller: SnippetListViewController) { showSettings() }
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController) { showShortcuts() }
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID) { delete(id: id) }
@@ -357,11 +819,26 @@ extension MainSplitViewController: UIDocumentPickerDelegate {
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         let purpose = documentPickerPurpose
         documentPickerPurpose = nil
+        if purpose == .exporting {
+            removeTemporaryExport()
+            return
+        }
         guard purpose == .importing, let url = urls.first else { return }
         importDocument(at: url)
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         documentPickerPurpose = nil
+        removeTemporaryExport()
+    }
+}
+
+private extension UIView {
+    func activeFirstResponder() -> UIView? {
+        if isFirstResponder { return self }
+        for subview in subviews {
+            if let responder = subview.activeFirstResponder() { return responder }
+        }
+        return nil
     }
 }

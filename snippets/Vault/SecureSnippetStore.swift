@@ -60,6 +60,38 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }
     }
 
+    enum EncryptedBackupFailure: Error, LocalizedError {
+        case incompatibleVault
+        case vaultKeyMismatch
+        case conflicts([String])
+
+        var errorDescription: String? {
+            switch self {
+            case .incompatibleVault:
+                return "This backup belongs to a different secure-snippet vault. "
+                    + "Import it into a fresh Snippets library or a device already using the same vault."
+            case .vaultKeyMismatch:
+                return "The backup and this device have different keys for the same secure-snippet vault. Nothing was imported."
+            case .conflicts(let conflicts):
+                if conflicts.count == 1 { return "Import conflict: \(conflicts[0])" }
+                return "Import conflicts:\n" + conflicts.map { "- \($0)" }.joined(separator: "\n")
+            }
+        }
+    }
+
+    struct EncryptedBackupExport {
+        var data: Data
+        var ordinaryCount: Int
+        var secureCount: Int
+        var totalCount: Int { ordinaryCount + secureCount }
+    }
+
+    struct EncryptedBackupImportResult {
+        var ordinaryCount: Int
+        var secureCount: Int
+        var totalCount: Int { ordinaryCount + secureCount }
+    }
+
     private(set) var document: VaultDocument?
 
     /// Set when the vault on disk could not be read. **Everything that writes refuses
@@ -458,6 +490,94 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }
     }
 
+    // MARK: - Encrypted backup
+
+    /// Creates the portable all-library backup. The ordinary share export remains on
+    /// `SnippetStore`; keeping the entry points separate makes including secrets an
+    /// explicit user choice rather than a checkbox whose state could be remembered.
+    ///
+    /// A fresh user-presence check is required whenever the snapshot actually contains
+    /// secure records. The record bodies remain sealed throughout: only `K_lib` is read
+    /// from the authenticated session, then wrapped by `EncryptedSnippetBackup`.
+    func makeEncryptedBackup(
+        store: SnippetStore,
+        passphrase: String
+    ) async throws -> EncryptedBackupExport {
+        store.flushPendingWrites()
+        reload()
+
+        if document?.records.isEmpty == false {
+            return try await session.withOneUseAuthentication(
+                reason: "Export an encrypted backup including secure snippets"
+            ) {
+                try self.buildEncryptedBackup(passphrase: passphrase)
+            }
+        }
+        return try buildEncryptedBackup(passphrase: passphrase)
+    }
+
+    /// Opens and merges a backup without ever writing its decrypted payload to disk.
+    /// The two live library files are changed by one `LibraryTransaction`, so every
+    /// preflight error leaves both untouched. A backup may join a fresh device to its
+    /// vault or merge into the same vault; a rival vault is refused rather than silently
+    /// decrypting and re-encrypting an entire security domain.
+    func importEncryptedBackup(
+        _ data: Data,
+        passphrase: String,
+        into store: SnippetStore
+    ) async throws -> EncryptedBackupImportResult {
+        let opened = try EncryptedSnippetBackup.open(data, passphrase: passphrase)
+        store.flushPendingWrites()
+        reload()
+
+        guard let incomingVault = opened.vault else {
+            return try mergeEncryptedBackup(opened, into: store)
+        }
+        guard let incomingKey = opened.vaultKey else {
+            throw EncryptedSnippetBackup.Failure.damagedBackup
+        }
+        if let current = document, current.kid != incomingVault.kid {
+            throw EncryptedBackupFailure.incompatibleVault
+        }
+
+        let previousKeyID = document?.kid
+        var incomingKeyBytes = incomingKey.withUnsafeBytes { Data($0) }
+        defer { SecureMemory.wipe(&incomingKeyBytes) }
+        session.adopt(keyID: incomingVault.kid)
+
+        if keychain.hasKey(keyID: incomingVault.kid) {
+            do {
+                return try await session.withOneUseAuthentication(
+                    reason: "Import secure snippets from an encrypted backup"
+                ) {
+                    var currentKeyBytes = try self.session.currentKey().withUnsafeBytes { Data($0) }
+                    defer { SecureMemory.wipe(&currentKeyBytes) }
+                    guard currentKeyBytes == incomingKeyBytes else {
+                        throw EncryptedBackupFailure.vaultKeyMismatch
+                    }
+                    return try self.mergeEncryptedBackup(opened, into: store)
+                }
+            } catch {
+                // No vault was installed, so do not leave the session addressing a key
+                // which has no corresponding local document.
+                if self.document == nil { self.session.adopt(keyID: previousKeyID) }
+                throw error
+            }
+        }
+
+        // Restoring a missing key is safe before the files move: an orphaned Keychain
+        // item is harmless and recoverable, while deleting it on a failed transaction
+        // could propagate through iCloud Keychain if another device published the same
+        // `kid` between the check above and this write.
+        try keychain.store(incomingKeyBytes, keyID: incomingVault.kid)
+        do {
+            return try mergeEncryptedBackup(opened, into: store)
+        } catch {
+            if self.document == nil { self.session.adopt(keyID: previousKeyID) }
+            throw error
+        }
+    }
+
     // MARK: - Moving between the two files
 
     /// Makes a plaintext snippet secure: seal it into the vault, remove it from
@@ -723,6 +843,215 @@ final class SecureSnippetStore: SecureSnippetProviding {
         return outcome?.value ?? 0
     }
 
+    private func buildEncryptedBackup(passphrase: String) throws -> EncryptedBackupExport {
+        let snapshot = try runTransaction { contents in
+            (snippets: contents.snippets, vault: contents.vault)
+        }.value
+        // A zero-record vault contains no snippet data worth exporting. Omitting it also
+        // avoids asking for a key solely to preserve an unused security setup.
+        let exportedVault = snapshot.vault?.records.isEmpty == false ? snapshot.vault : nil
+        let libraryKey: SymmetricKey?
+        if let exportedVault {
+            guard document?.kid == exportedVault.kid else {
+                throw Failure.transaction("the vault changed while the backup was being prepared; try again")
+            }
+            libraryKey = try session.currentKey()
+        } else {
+            libraryKey = nil
+        }
+
+        let data = try EncryptedSnippetBackup.seal(
+            snippets: snapshot.snippets,
+            vault: exportedVault,
+            vaultKey: libraryKey,
+            passphrase: passphrase)
+        return EncryptedBackupExport(
+            data: data,
+            ordinaryCount: snapshot.snippets.count,
+            secureCount: exportedVault?.records.count ?? 0)
+    }
+
+    private func mergeEncryptedBackup(
+        _ opened: EncryptedSnippetBackup.Opened,
+        into store: SnippetStore
+    ) throws -> EncryptedBackupImportResult {
+        let incomingPlain = opened.snippets.map(Self.normalizedBackupSnippet)
+        let incomingVault = opened.vault
+        let importDate = now()
+        let importWallMs = UInt64(max(0, importDate.timeIntervalSince1970 * 1_000))
+        let importedClocks: [UUID: HLC] = Dictionary(uniqueKeysWithValues:
+            (incomingVault?.records ?? []).map { record in
+                (record.id, clock.send(atLeast: max(record.hlc.wallMs, importWallMs)))
+            })
+
+        let outcome = try runTransaction { contents in
+            var conflicts: [String] = []
+            let existingPlain = contents.snippets
+            let existingSecure = contents.vault?.records ?? []
+
+            if let incomingVault, let existingVault = contents.vault {
+                guard existingVault.schemaVersion == incomingVault.schemaVersion,
+                      existingVault.kid == incomingVault.kid,
+                      existingVault.vaultSalt == incomingVault.vaultSalt else {
+                    throw EncryptedBackupFailure.incompatibleVault
+                }
+            }
+
+            for incoming in incomingPlain {
+                if let secure = existingSecure.first(where: { $0.id == incoming.id }) {
+                    conflicts.append(
+                        "\(incoming.displayName) has the same ID as secure snippet \(Self.displayName(secure)).")
+                    continue
+                }
+                let keywordKey = Self.keywordKey(incoming.keyword)
+                if !keywordKey.isEmpty,
+                   let secure = existingSecure.first(where: { Self.keywordKey($0.keyword) == keywordKey }) {
+                    conflicts.append(
+                        "Keyword \\\(incoming.normalizedKeyword) belongs to secure snippet \(Self.displayName(secure)).")
+                    continue
+                }
+
+                if let idMatch = existingPlain.first(where: { $0.id == incoming.id }),
+                   !keywordKey.isEmpty,
+                   let keywordMatch = existingPlain.first(where: {
+                       $0.id != incoming.id && Self.keywordKey($0.keyword) == keywordKey
+                   }) {
+                    conflicts.append(
+                        "\(incoming.displayName) matches existing ID \(idMatch.displayName), but keyword "
+                        + "\\\(incoming.normalizedKeyword) belongs to \(keywordMatch.displayName).")
+                }
+            }
+
+            for incoming in incomingVault?.records ?? [] {
+                if let ordinary = existingPlain.first(where: { $0.id == incoming.id }) {
+                    conflicts.append(
+                        "\(Self.displayName(incoming)) has the same ID as ordinary snippet \(ordinary.displayName).")
+                    continue
+                }
+                let keywordKey = Self.keywordKey(incoming.keyword)
+                if !keywordKey.isEmpty,
+                   let ordinary = existingPlain.first(where: { Self.keywordKey($0.keyword) == keywordKey }) {
+                    conflicts.append(
+                        "Keyword \\\(Snippet.sanitizedKeyword(incoming.keyword)) belongs to ordinary snippet \(ordinary.displayName).")
+                    continue
+                }
+
+                if !keywordKey.isEmpty,
+                   let keywordMatch = existingSecure.first(where: {
+                       $0.id != incoming.id && Self.keywordKey($0.keyword) == keywordKey
+                   }) {
+                    conflicts.append(
+                        "Secure snippet \(Self.displayName(incoming)) uses keyword "
+                        + "\\\(Snippet.sanitizedKeyword(incoming.keyword)), which belongs to "
+                        + "\(Self.displayName(keywordMatch)).")
+                }
+            }
+
+            guard conflicts.isEmpty else {
+                throw EncryptedBackupFailure.conflicts(Array(conflicts.prefix(8)))
+            }
+
+            var mergedPlain = contents.snippets
+            for snippet in incomingPlain {
+                Self.upsertBackupSnippet(snippet, into: &mergedPlain)
+            }
+            contents.snippets = mergedPlain
+
+            if let incomingVault {
+                if contents.vault == nil {
+                    contents.vault = incomingVault
+                } else if var mergedVault = contents.vault {
+                    // Keep this device's local doors. The recovery wrap is portable and
+                    // safe to fill when absent; CLI/passphrase wraps belong to the device
+                    // that created them and must not hitch a ride through a backup import.
+                    if mergedVault.wrapRecovery == nil {
+                        mergedVault.wrapRecovery = incomingVault.wrapRecovery
+                    }
+                    for (key, value) in incomingVault.x where mergedVault.x[key] == nil {
+                        mergedVault.x[key] = value
+                    }
+
+                    for incoming in incomingVault.records {
+                        if let index = mergedVault.records.firstIndex(where: { $0.id == incoming.id }) {
+                            guard !Self.sameBackupRecord(mergedVault.records[index], incoming) else { continue }
+                            var replacement = incoming
+                            replacement.updatedAt = max(importDate, incoming.updatedAt)
+                            replacement.hlc = importedClocks[incoming.id] ?? incoming.hlc
+                            mergedVault.records[index] = replacement
+                        } else {
+                            var inserted = incoming
+                            inserted.updatedAt = max(importDate, incoming.updatedAt)
+                            inserted.hlc = importedClocks[incoming.id] ?? incoming.hlc
+                            mergedVault.records.append(inserted)
+                        }
+                    }
+                    contents.vault = mergedVault
+                }
+            }
+
+            return EncryptedBackupImportResult(
+                ordinaryCount: incomingPlain.count,
+                secureCount: incomingVault?.records.count ?? 0)
+        }
+
+        // The transaction wrote underneath both in-memory stores. Adopt the exact disk
+        // result immediately; waiting for folder notifications risks a stale editor write
+        // landing on top of the import.
+        store.reloadAfterExternalWrite()
+        reload()
+        return outcome.value
+    }
+
+    private static func normalizedBackupSnippet(_ item: Snippet) -> Snippet {
+        var snippet = item
+        snippet.keyword = snippet.normalizedKeyword
+        snippet.tags = SnippetTagging.normalizedTags(snippet.tags)
+        if snippet.updatedAt < snippet.createdAt { snippet.updatedAt = snippet.createdAt }
+        return snippet
+    }
+
+    private static func upsertBackupSnippet(_ incoming: Snippet, into merged: inout [Snippet]) {
+        if let index = merged.firstIndex(where: { $0.id == incoming.id }) {
+            merged[index] = incoming
+            return
+        }
+        let keyword = keywordKey(incoming.keyword)
+        if !keyword.isEmpty,
+           let index = merged.firstIndex(where: { keywordKey($0.keyword) == keyword }) {
+            var replacement = incoming
+            replacement.id = merged[index].id
+            replacement.createdAt = merged[index].createdAt
+            merged[index] = replacement
+            return
+        }
+        merged.insert(incoming, at: 0)
+    }
+
+    private static func keywordKey(_ keyword: String) -> String {
+        SnippetTagging.filterKey(for: Snippet.sanitizedKeyword(keyword))
+    }
+
+    private static func displayName(_ record: VaultRecord) -> String {
+        let name = record.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Untitled Snippet" : name
+    }
+
+    /// Ignore only merge clocks: the first import stamps those locally. Exact backup
+    /// ciphertext must match too, so importing a known-good backup can repair a live
+    /// record whose `sealed` field was damaged even when its stored hash survived.
+    private static func sameBackupRecord(_ lhs: VaultRecord, _ rhs: VaultRecord) -> Bool {
+        lhs.id == rhs.id
+            && lhs.name == rhs.name
+            && lhs.keyword == rhs.keyword
+            && lhs.tags == rhs.tags
+            && lhs.isEnabled == rhs.isEnabled
+            && lhs.isPinned == rhs.isPinned
+            && lhs.createdAt == rhs.createdAt
+            && lhs.contentHash == rhs.contentHash
+            && lhs.sealed == rhs.sealed
+            && lhs.x == rhs.x
+    }
+
     // MARK: - Plumbing
 
     private func requireDocument() throws -> VaultDocument {
@@ -768,6 +1097,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
             if changed { onChange?() }
         } catch let failure as Failure {
             throw failure
+        } catch let failure as EncryptedBackupFailure {
+            throw failure
         } catch {
             throw Failure.transaction("\(error)")
         }
@@ -782,6 +1113,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 temporaryDirectory: temporaryDirectory,
                 lockTimeout: lockTimeout, body: body)
         } catch let failure as Failure {
+            throw failure
+        } catch let failure as EncryptedBackupFailure {
             throw failure
         } catch {
             throw Failure.transaction("\(error)")

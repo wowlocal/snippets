@@ -16,7 +16,8 @@ Local text-expander app for macOS with a Raycast-style snippet list/editor and g
   - `{time}`
   - `{datetime}`
   - `{date:<DateFormatter pattern>}` (for example `{date:yyyy-MM-dd}`)
-- Import/export JSON snippets.
+- Share ordinary snippets as JSON, or explicitly create a password-protected encrypted backup
+  that also includes secure snippets.
 - Share a single snippet via a `snippets://share?...` deep link.
 - Menu bar item with quick open/quit.
 - Global `⌘\` shortcut that shows the app from any app and hides it again when it already has focus (on by default, switchable in Settings).
@@ -153,7 +154,7 @@ The in-app shortcuts panel shows essential shortcuts by default. Hold `Option` w
 - `Cmd+Delete`: delete selected snippet.
 - `Cmd+Shift+C`: copy a deep link for the selected snippet.
 - `Cmd+Shift+I`: import JSON.
-- `Cmd+Shift+E`: export JSON.
+- `Cmd+Shift+E`: export ordinary snippets as shareable JSON (secure snippets are excluded).
 - `Esc`: close action panel (or return focus to list).
 - `Ctrl+N` / `Ctrl+P`: move selection down/up in list context.
 
@@ -162,11 +163,20 @@ The in-app shortcuts panel shows essential shortcuts by default. Hold `Option` w
 - Import accepts:
   - A raw array of snippets: `[...]`
   - Wrapped payload: `{ "snippets": [...] }`
-- Export writes wrapped payload format: `{ "snippets": [...] }`
+  - Password-protected `.snippetsbackup` files created by **Encrypted Backup (Includes Secure Snippets)…**
+- **Export for Sharing…** is the default export and writes `{ "snippets": [...] }`; it structurally
+  excludes secure snippets.
+- **Encrypted Backup (Includes Secure Snippets)…** is a separate action with no shortcut. It seals
+  the whole library with a random AES-GCM key, wraps that key from a user password with
+  PBKDF2-HMAC-SHA512 (600,000 iterations), and writes the result with private file permissions.
+  Snippets cannot recover a forgotten backup password.
 - Import merge behavior:
   1. Match by `id` first (replace existing).
   2. Else match by `keyword` case-insensitively (replace existing, preserve existing `id` and `createdAt`).
   3. Else insert as new.
+  Importing the same export or encrypted backup repeatedly is therefore idempotent and does not
+  create duplicate rows. A secure backup may restore a fresh vault or merge into the same vault;
+  importing it over a different vault is refused.
 
 ## Deep Links
 

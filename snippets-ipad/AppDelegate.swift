@@ -39,6 +39,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         rootController = root
         appDelegate.environment.start()
 
+        if CommandLine.arguments.contains("--ui-testing-reset"),
+           CommandLine.arguments.contains("--ui-testing-show-shortcuts") {
+            DispatchQueue.main.async {
+                root.shortcutsCommand()
+            }
+        }
+
         for context in connectionOptions.urlContexts {
             root.open(context.url)
         }

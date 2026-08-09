@@ -6,6 +6,12 @@ private extension NSUserInterfaceItemIdentifier {
     static let snippetsMoreMenu = NSUserInterfaceItemIdentifier("SnippetsMoreMenu")
 }
 
+private extension UTType {
+    static let snippetsEncryptedBackup = UTType(
+        exportedAs: EncryptedSnippetBackup.formatIdentifier,
+        conformingTo: .data)
+}
+
 private enum SeededName {
     /// Matches the cap `Snippet.contentFirstLine` uses for a derived name.
     static let maxLength = 50
@@ -264,13 +270,20 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         importItem.keyEquivalent = "I"
 
         let exportItem = LiquidGlassDesign.menuItem(
-            title: "Export...",
+            title: "Export for Sharing...",
             symbolName: "square.and.arrow.up",
             action: #selector(runExport),
             target: self
         )
         exportItem.keyEquivalentModifierMask = [.command, .shift]
         exportItem.keyEquivalent = "E"
+
+        let backupItem = LiquidGlassDesign.menuItem(
+            title: "Encrypted Backup (Includes Secure Snippets)...",
+            symbolName: "lock.doc",
+            action: #selector(runEncryptedBackupExport),
+            target: self
+        )
 
         let shareItem = LiquidGlassDesign.menuItem(
             title: "Copy Share Link",
@@ -306,6 +319,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
         menu.addItem(importItem)
         menu.addItem(exportItem)
+        menu.addItem(backupItem)
         menu.addItem(shareItem)
         menu.addItem(secureItem)
         menu.addItem(shortcutsItem)
@@ -564,11 +578,11 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         commitActiveEditorState(endingEditing: true)
 
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
+        panel.allowedContentTypes = [.json, .snippetsEncryptedBackup]
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a snippets JSON file to import."
+        panel.message = "Choose a snippets JSON export or an encrypted backup."
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         performImport(from: url)
@@ -580,6 +594,13 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     /// one menu three levels deep.
     func performImport(from url: URL) {
         commitActiveEditorState(endingEditing: true)
+
+        if url.pathExtension.caseInsensitiveCompare(
+            EncryptedSnippetBackup.preferredFilenameExtension) == .orderedSame
+            || EncryptedSnippetBackup.isEncryptedBackup(at: url) {
+            performEncryptedBackupImport(from: url)
+            return
+        }
 
         var options = SnippetStore.ImportOptions()
 
@@ -613,7 +634,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         panel.allowedContentTypes = [UTType.json]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "snippets-export.json"
-        panel.message = "Choose where to save your snippets export."
+        panel.message = "Share ordinary snippets as JSON. Secure snippets are not included."
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -624,10 +645,149 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
         do {
             let count = try store.exportSnippets(to: url)
-            importExportMessage = "Exported \(count) snippet(s) to \(url.lastPathComponent)."
+            importExportMessage = "Exported \(count) ordinary snippet(s) for sharing to \(url.lastPathComponent)."
             requestFirstResponder(tableView)
         } catch {
             showErrorAlert(message: error.localizedDescription)
+        }
+    }
+
+    /// A separate action, with no keyboard shortcut, so the everyday share export can
+    /// never inherit a remembered "include secure" state. The only file written is the
+    /// authenticated encrypted container; no decrypted staging file exists.
+    @objc func runEncryptedBackupExport(_ sender: Any?) {
+        commitActiveEditorState(endingEditing: true)
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.snippetsEncryptedBackup]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = "Snippets-Backup.snippetsbackup"
+        panel.message = "Private encrypted backup of ordinary and secure snippets. Do not use this file for sharing."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        discardOpenBlankDraft()
+        guard let passphrase = promptForBackupPassword(confirmingNewPassword: true),
+              let app = NSApp.delegate as? AppDelegate else { return }
+
+        importExportMessage = "Preparing encrypted backup…"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let backup = try await app.secureStore.makeEncryptedBackup(
+                    store: store,
+                    passphrase: passphrase)
+                try AtomicFileWriter.write(
+                    backup.data,
+                    to: url,
+                    temporaryDirectory: url.deletingLastPathComponent(),
+                    permissions: 0o600)
+                importExportMessage = "Encrypted backup saved with \(backup.ordinaryCount) ordinary and \(backup.secureCount) secure snippet(s)."
+                requestFirstResponder(tableView)
+            } catch {
+                showErrorAlert(message: backupErrorDescription(error))
+            }
+        }
+    }
+
+    private func performEncryptedBackupImport(from url: URL) {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            showErrorAlert(message: "The encrypted backup could not be read.")
+            return
+        }
+
+        guard let passphrase = promptForBackupPassword(confirmingNewPassword: false),
+              let app = NSApp.delegate as? AppDelegate else { return }
+
+        importExportMessage = "Opening encrypted backup…"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await app.secureStore.importEncryptedBackup(
+                    data,
+                    passphrase: passphrase,
+                    into: store)
+                importExportMessage = "Imported encrypted backup with \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet(s)."
+                reloadVisibleSnippets(keepSelection: true)
+                if selectedSnippetID == nil, let id = visibleSnippets.first?.id {
+                    selectSnippet(id: id, focus: nil)
+                }
+                requestFirstResponder(tableView)
+            } catch {
+                showErrorAlert(message: backupErrorDescription(error))
+            }
+        }
+    }
+
+    private func backupErrorDescription(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+    }
+
+    private func promptForBackupPassword(confirmingNewPassword: Bool) -> String? {
+        var validationMessage: String?
+
+        while true {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = confirmingNewPassword
+                ? "Protect Encrypted Backup"
+                : "Open Encrypted Backup"
+            alert.informativeText = confirmingNewPassword
+                ? "This private backup includes secure snippets. Use a unique password of at least 12 characters and save it in a password manager; Snippets cannot recover it."
+                : "Enter the password used when this backup was created. The file is authenticated before anything is imported."
+            alert.addButton(withTitle: confirmingNewPassword ? "Create Backup" : "Open Backup")
+            alert.addButton(withTitle: "Cancel")
+
+            let passwordField = NSSecureTextField(frame: .zero)
+            passwordField.placeholderString = "Backup password"
+            passwordField.widthAnchor.constraint(equalToConstant: 360).isActive = true
+
+            var views: [NSView] = [passwordField]
+            var confirmationField: NSSecureTextField?
+            if confirmingNewPassword {
+                let field = NSSecureTextField(frame: .zero)
+                field.placeholderString = "Confirm password"
+                field.widthAnchor.constraint(equalToConstant: 360).isActive = true
+                confirmationField = field
+                views.append(field)
+            }
+            if let validationMessage {
+                let label = NSTextField(wrappingLabelWithString: validationMessage)
+                label.textColor = .systemRed
+                label.maximumNumberOfLines = 2
+                label.widthAnchor.constraint(equalToConstant: 360).isActive = true
+                views.append(label)
+            }
+
+            let stack = NSStackView(views: views)
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 8
+            alert.accessoryView = stack
+            alert.window.initialFirstResponder = passwordField
+
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+
+            let passphrase = passwordField.stringValue
+            if passphrase.isEmpty {
+                validationMessage = "Enter the backup password."
+                continue
+            }
+            if confirmingNewPassword {
+                guard passphrase.count >= 12,
+                      !passphrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    validationMessage = "Use at least 12 characters and not only spaces."
+                    continue
+                }
+                guard confirmationField?.stringValue == passphrase else {
+                    validationMessage = "The passwords do not match."
+                    continue
+                }
+            }
+            return passphrase
         }
     }
 

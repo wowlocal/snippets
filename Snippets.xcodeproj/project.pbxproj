@@ -12,6 +12,7 @@
 		28A200000000000000000001 /* AtomicFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000001 /* AtomicFileWriter.swift */; };
 		28A200000000000000000002 /* DeletionGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000002 /* DeletionGuard.swift */; };
 		28A200000000000000000003 /* HybridLogicalClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000003 /* HybridLogicalClock.swift */; };
+		28A200000000000000000028 /* EncryptedSnippetBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000028 /* EncryptedSnippetBackup.swift */; };
 		28A200000000000000000004 /* KeyWrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000004 /* KeyWrap.swift */; };
 		28A200000000000000000005 /* KeywordSuggestions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000005 /* KeywordSuggestions.swift */; };
 		28A200000000000000000006 /* LibraryGeneration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000006 /* LibraryGeneration.swift */; };
@@ -114,6 +115,7 @@
 		28A100000000000000000001 /* AtomicFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AtomicFileWriter.swift; path = snippets/Core/AtomicFileWriter.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000002 /* DeletionGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DeletionGuard.swift; path = snippets/Core/DeletionGuard.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000003 /* HybridLogicalClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HybridLogicalClock.swift; path = snippets/Core/HybridLogicalClock.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000028 /* EncryptedSnippetBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EncryptedSnippetBackup.swift; path = snippets/Core/EncryptedSnippetBackup.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000004 /* KeyWrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeyWrap.swift; path = snippets/Core/KeyWrap.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000005 /* KeywordSuggestions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeywordSuggestions.swift; path = snippets/Core/KeywordSuggestions.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000006 /* LibraryGeneration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryGeneration.swift; path = snippets/Core/LibraryGeneration.swift; sourceTree = SOURCE_ROOT; };
@@ -300,6 +302,7 @@
 			children = (
 				28A100000000000000000001 /* AtomicFileWriter.swift */,
 				28A100000000000000000002 /* DeletionGuard.swift */,
+				28A100000000000000000028 /* EncryptedSnippetBackup.swift */,
 				28A100000000000000000003 /* HybridLogicalClock.swift */,
 				28A100000000000000000004 /* KeyWrap.swift */,
 				28A100000000000000000005 /* KeywordSuggestions.swift */,
@@ -550,6 +553,7 @@
 			files = (
 				28A200000000000000000001 /* AtomicFileWriter.swift in Sources */,
 				28A200000000000000000002 /* DeletionGuard.swift in Sources */,
+				28A200000000000000000028 /* EncryptedSnippetBackup.swift in Sources */,
 				28A200000000000000000003 /* HybridLogicalClock.swift in Sources */,
 				28A200000000000000000004 /* KeyWrap.swift in Sources */,
 				28A200000000000000000005 /* KeywordSuggestions.swift in Sources */,

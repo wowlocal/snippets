@@ -67,6 +67,13 @@ final class TagTokenField: UIView, UITextFieldDelegate {
         return tags
     }
 
+    var isInputFirstResponder: Bool { textField.isFirstResponder }
+
+    @discardableResult
+    func focusInput() -> Bool {
+        textField.becomeFirstResponder()
+    }
+
     func textField(
         _ textField: UITextField,
         shouldChangeCharactersIn range: NSRange,

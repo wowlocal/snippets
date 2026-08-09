@@ -18,6 +18,8 @@ final class SnippetListViewController: UIViewController {
     private var statusWorkItem: DispatchWorkItem?
 
     var firstVisibleSnippetID: UUID? { visibleSnippets.first?.id }
+    var selectedSnippetID: UUID? { selectedID }
+    var searchTextField: UISearchTextField { searchController.searchBar.searchTextField }
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -53,10 +55,6 @@ final class SnippetListViewController: UIViewController {
 
     override var canBecomeFirstResponder: Bool { true }
 
-    override var keyCommands: [UIKeyCommand]? {
-        [UIKeyCommand(title: "Search", action: #selector(focusSearch), input: "f", modifierFlags: .command)]
-    }
-
     func reload(keepingSelection: Bool) {
         if !keepingSelection {
             selectedID = nil
@@ -91,10 +89,14 @@ final class SnippetListViewController: UIViewController {
         tableFadeContainer.setNeedsLayout()
     }
 
-    func select(id: UUID) {
+    func select(id: UUID, ensureVisible: Bool = false) {
         selectedID = id
         guard let row = visibleSnippets.firstIndex(where: { $0.id == id }) else { return }
-        tableView.selectRow(at: IndexPath(row: row, section: 0), animated: false, scrollPosition: .none)
+        let indexPath = IndexPath(row: row, section: 0)
+        tableView.selectRow(at: indexPath, animated: false, scrollPosition: .none)
+        if ensureVisible {
+            tableView.scrollToRow(at: indexPath, at: .none, animated: false)
+        }
     }
 
     func showStatus(_ message: String) {
@@ -144,9 +146,13 @@ final class SnippetListViewController: UIViewController {
                 guard let self else { return }
                 self.delegate?.snippetListRequestedImport(self)
             },
-            UIAction(title: "Export", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            UIAction(title: "Export for Sharing", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
                 guard let self else { return }
                 self.delegate?.snippetListRequestedExport(self)
+            },
+            UIAction(title: "Encrypted Backup (Includes Secure Snippets)", image: UIImage(systemName: "lock.doc")) { [weak self] _ in
+                guard let self else { return }
+                self.delegate?.snippetListRequestedEncryptedBackup(self)
             },
             UIAction(title: "Keyboard Shortcuts", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 guard let self else { return }
@@ -375,11 +381,51 @@ final class SnippetListViewController: UIViewController {
         return UIMenu(children: actions)
     }
 
-    @objc private func focusSearch() {
-        searchController.isActive = true
-        DispatchQueue.main.async { [weak self] in
-            self?.searchController.searchBar.searchTextField.becomeFirstResponder()
+    func focusSearch() {
+        let searchField = searchTextField
+        if !searchField.becomeFirstResponder() {
+            DispatchQueue.main.async { [weak searchField] in
+                searchField?.becomeFirstResponder()
+            }
         }
+    }
+
+    func focusList() {
+        searchController.isActive = false
+        focusFilteredList()
+    }
+
+    func focusFilteredList() {
+        searchTextField.resignFirstResponder()
+        if !tableView.becomeFirstResponder() {
+            becomeFirstResponder()
+        }
+    }
+
+    func adjacentSnippetID(forward: Bool) -> UUID? {
+        guard !visibleSnippets.isEmpty else { return nil }
+        guard let selectedID,
+              let current = visibleSnippets.firstIndex(where: { $0.id == selectedID }) else {
+            return visibleSnippets[0].id
+        }
+        let next = forward
+            ? min(current + 1, visibleSnippets.count - 1)
+            : max(current - 1, 0)
+        return visibleSnippets[next].id
+    }
+
+    var ownsFirstResponder: Bool {
+        isSearchFocused
+            || tableView.isFirstResponder
+            || isFirstResponder
+    }
+
+    var isSearchFocused: Bool {
+        searchTextField.isFirstResponder
+    }
+
+    var isListFocused: Bool {
+        tableView.isFirstResponder || isFirstResponder
     }
 }
 

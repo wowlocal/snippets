@@ -55,6 +55,64 @@ final class SnippetsIPadTests: XCTestCase {
         XCTAssertFalse(export.contains(secureID.uuidString))
     }
 
+    func testImportingTheSameNativeExportTwiceDoesNotCreateDuplicates() throws {
+        let store = SnippetStore(configuration: .iPad)
+        let snippet = Snippet(
+            id: UUID(),
+            name: "Imported Once",
+            keyword: "once",
+            content: "The same file can be imported repeatedly.")
+        let importURL = rootURL.appendingPathComponent("same-export.json")
+        try JSONEncoder().encode([snippet]).write(to: importURL, options: .atomic)
+
+        XCTAssertEqual(try store.importSnippets(from: importURL), 1)
+        XCTAssertEqual(try store.importSnippets(from: importURL), 1)
+
+        XCTAssertEqual(store.snippets.count, 1)
+        XCTAssertEqual(store.snippets.first?.id, snippet.id)
+        XCTAssertEqual(store.snippets.first?.content, snippet.content)
+    }
+
+    func testImportingTheSameEncryptedBackupTwiceDoesNotCreateDuplicates() async throws {
+        let defaultsKey = SyncCoordinator.enabledDefaultsKey
+        let previousSyncValue = UserDefaults.standard.object(forKey: defaultsKey)
+        UserDefaults.standard.set(false, forKey: defaultsKey)
+        defer {
+            if let previousSyncValue {
+                UserDefaults.standard.set(previousSyncValue, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+
+        let snippet = Snippet(
+            id: UUID(),
+            name: "Encrypted Import",
+            keyword: "encrypted-once",
+            content: "Still only one copy.")
+        let data = try EncryptedSnippetBackup.seal(
+            snippets: [snippet],
+            vault: nil,
+            vaultKey: nil,
+            passphrase: "correct horse battery staple",
+            iterations: 1)
+        let environment = AppEnvironment()
+
+        let first = try await environment.secureStore.importEncryptedBackup(
+            data,
+            passphrase: "correct horse battery staple",
+            into: environment.store)
+        let second = try await environment.secureStore.importEncryptedBackup(
+            data,
+            passphrase: "correct horse battery staple",
+            into: environment.store)
+
+        XCTAssertEqual(first.ordinaryCount, 1)
+        XCTAssertEqual(second.ordinaryCount, 1)
+        XCTAssertEqual(environment.store.snippets.count, 1)
+        XCTAssertEqual(environment.store.snippets.first?.id, snippet.id)
+    }
+
     func testIPadConfigurationDoesNotSeedStarterContentAfterCorruptFileRecovery() throws {
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: rootURL.appendingPathComponent("snippets.json"))
@@ -102,14 +160,230 @@ final class SnippetsIPadTests: XCTestCase {
         XCTAssertEqual(UIPasteboard.general.string, "Hello from iPad")
     }
 
+    func testAppWideKeyboardCommandsUseMacShortcutsAndWinTextInputPriority() {
+        let commands: [(UIKeyCommand, String, UIKeyModifierFlags)] = [
+            (MainSplitViewController.searchKeyCommand(), "f", .command),
+            (MainSplitViewController.toggleSidebarKeyCommand(), "b", .command),
+            (MainSplitViewController.editSnippetKeyCommand(), "e", .command),
+            (MainSplitViewController.nextFieldKeyCommand(), "\t", []),
+            (MainSplitViewController.previousFieldKeyCommand(), "\t", .shift),
+            (MainSplitViewController.shortcutsKeyCommand(), "k", .command),
+            (MainSplitViewController.nextSnippetKeyCommand(), "n", .control),
+            (MainSplitViewController.previousSnippetKeyCommand(), "p", .control),
+            (MainSplitViewController.nextSnippetArrowKeyCommand(), UIKeyCommand.inputDownArrow, []),
+            (MainSplitViewController.previousSnippetArrowKeyCommand(), UIKeyCommand.inputUpArrow, []),
+            (MainSplitViewController.escapeKeyCommand(), UIKeyCommand.inputEscape, []),
+        ]
+
+        for (command, input, modifiers) in commands {
+            XCTAssertEqual(command.input, input)
+            XCTAssertEqual(command.modifierFlags, modifiers)
+            XCTAssertTrue(command.wantsPriorityOverSystemBehavior)
+        }
+    }
+
+    func testSearchShortcutRevealsHiddenSidebarAndFocusesSearch() {
+        UIView.setAnimationsEnabled(false)
+        addTeardownBlock { UIView.setAnimationsEnabled(true) }
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Selected", content: "Search me")
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+
+        hosted.controller.hide(.primary)
+        hosted.controller.view.layoutIfNeeded()
+        XCTAssertFalse(hosted.controller.isSidebarVisible)
+
+        hosted.controller.searchCommand()
+        hosted.controller.view.layoutIfNeeded()
+
+        XCTAssertTrue(hosted.controller.isSidebarVisible)
+        XCTAssertTrue(waitUntil { hosted.list.isSearchFocused })
+    }
+
+    func testEditAndTabShortcutsFollowMacEditorFocusOrder() {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+        let body = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView
+        let keyword = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-keyword"
+        ) as? UITextField
+        let name = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-name"
+        ) as? UITextField
+        let tags = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "tags-input"
+        ) as? UITextField
+
+        hosted.controller.editSnippetCommand()
+        XCTAssertTrue(body?.isFirstResponder == true)
+        for command in [
+            MainSplitViewController.searchKeyCommand(),
+            MainSplitViewController.toggleSidebarKeyCommand(),
+            MainSplitViewController.editSnippetKeyCommand(),
+            MainSplitViewController.nextFieldKeyCommand(),
+            MainSplitViewController.nextSnippetKeyCommand(),
+            MainSplitViewController.shortcutsKeyCommand(),
+        ] {
+            guard let action = command.action else {
+                return XCTFail("\(command.title) should have an action")
+            }
+            let target = body?.target(forAction: action, withSender: command)
+            XCTAssertTrue(
+                target as AnyObject? === hosted.controller,
+                "\(command.title) should route from the editor to the split controller"
+            )
+        }
+
+        hosted.controller.nextFieldCommand()
+        XCTAssertTrue(keyword?.isFirstResponder == true)
+        hosted.controller.nextFieldCommand()
+        XCTAssertTrue(name?.isFirstResponder == true)
+        hosted.controller.nextFieldCommand()
+        XCTAssertTrue(tags?.isFirstResponder == true)
+        hosted.controller.nextFieldCommand()
+        XCTAssertTrue(body?.isFirstResponder == true)
+
+        hosted.controller.previousFieldCommand()
+        XCTAssertTrue(hosted.controller.isSidebarVisible)
+        XCTAssertTrue(hosted.list.ownsFirstResponder)
+    }
+
+    func testCommandBTogglesSidebarAndMovesSidebarFocusIntoEditor() {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+        hosted.list.focusSearch()
+
+        hosted.controller.toggleSidebarCommand()
+        hosted.controller.view.layoutIfNeeded()
+        let body = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView
+        XCTAssertFalse(hosted.controller.isSidebarVisible)
+        XCTAssertTrue(body?.isFirstResponder == true)
+
+        hosted.controller.toggleSidebarCommand()
+        hosted.controller.view.layoutIfNeeded()
+        XCTAssertTrue(hosted.controller.isSidebarVisible)
+    }
+
+    func testCommandKTogglesMacStyleShortcutPanelAndOptionHint() {
+        let environment = AppEnvironment()
+        let hosted = hostMainSplit(environment: environment)
+        UIView.setAnimationsEnabled(false)
+        addTeardownBlock { UIView.setAnimationsEnabled(true) }
+
+        hosted.controller.shortcutsCommand()
+        let panel = hosted.controller.view.descendant(
+            withAccessibilityIdentifier: "shortcut-panel"
+        ) as? ShortcutPanelView
+        let tip = panel?.descendant(
+            withAccessibilityIdentifier: "shortcut-panel-tip"
+        ) as? UILabel
+        XCTAssertTrue(panel?.isPresented == true)
+        XCTAssertEqual(tip?.text, "Hold ⌥ for all shortcuts.")
+
+        panel?.setShowsAllShortcuts(true, animated: false)
+        XCTAssertTrue(panel?.showsAllShortcuts == true)
+        XCTAssertEqual(tip?.text, "Release ⌥ for essentials.")
+
+        hosted.controller.shortcutsCommand()
+        XCTAssertFalse(panel?.isPresented == true)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        XCTAssertTrue(panel?.isHidden == true)
+    }
+
+    func testControlNAndControlPNavigateSnippetListWithoutMovingEditorFocus() {
+        let environment = AppEnvironment()
+        _ = environment.store.addSnippet(name: "First", content: "One")
+        _ = environment.store.addSnippet(name: "Second", content: "Two")
+        let hosted = hostMainSplit(environment: environment)
+        let firstID = hosted.list.firstVisibleSnippetID!
+        hosted.controller.snippetList(hosted.list, selected: firstID)
+        hosted.controller.editSnippetCommand()
+        let body = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView
+
+        hosted.controller.nextSnippetCommand()
+        let nextID = hosted.list.selectedSnippetID
+        XCTAssertNotEqual(nextID, firstID)
+        XCTAssertTrue(body?.isFirstResponder == true)
+
+        hosted.controller.previousSnippetCommand()
+        XCTAssertEqual(hosted.list.selectedSnippetID, firstID)
+        XCTAssertTrue(body?.isFirstResponder == true)
+    }
+
+    func testEscapeMovesFromSearchToFilteredListForArrowAndControlNavigation() {
+        let environment = AppEnvironment()
+        _ = environment.store.addSnippet(name: "Match One", content: "One")
+        _ = environment.store.addSnippet(name: "Match Two", content: "Two")
+        _ = environment.store.addSnippet(name: "Different", content: "Three")
+        let hosted = hostMainSplit(environment: environment)
+        let searchField = hosted.list.searchTextField
+
+        hosted.controller.searchCommand()
+        XCTAssertTrue(waitUntil { hosted.list.isSearchFocused })
+        searchField.text = "Match"
+        hosted.list.reload(keepingSelection: false)
+
+        let escape = MainSplitViewController.escapeKeyCommand()
+        guard let escapeAction = escape.action else {
+            return XCTFail("Escape should have an action")
+        }
+        XCTAssertTrue(
+            searchField.target(forAction: escapeAction, withSender: escape) as AnyObject?
+                === hosted.controller
+        )
+
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(escapeAction, to: nil, from: escape, for: nil)
+        )
+
+        XCTAssertEqual(searchField.text, "Match")
+        XCTAssertFalse(hosted.list.isSearchFocused)
+        XCTAssertTrue(hosted.list.isListFocused)
+
+        let firstMatch = hosted.list.firstVisibleSnippetID
+        let down = MainSplitViewController.nextSnippetArrowKeyCommand()
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(down.action!, to: nil, from: down, for: nil)
+        )
+        XCTAssertEqual(hosted.list.selectedSnippetID, firstMatch)
+
+        let secondMatch = hosted.list.adjacentSnippetID(forward: true)
+        let controlN = MainSplitViewController.nextSnippetKeyCommand()
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(controlN.action!, to: nil, from: controlN, for: nil)
+        )
+        XCTAssertEqual(hosted.list.selectedSnippetID, secondMatch)
+
+        let up = MainSplitViewController.previousSnippetArrowKeyCommand()
+        XCTAssertTrue(
+            UIApplication.shared.sendAction(up.action!, to: nil, from: up, for: nil)
+        )
+        XCTAssertEqual(hosted.list.selectedSnippetID, firstMatch)
+        XCTAssertTrue(hosted.list.isListFocused)
+    }
+
     func testSidebarKeepsProgrammaticSelectionVisibleAcrossReload() {
         let environment = AppEnvironment()
         let snippet = environment.store.addSnippet(name: "Selected", content: "Visible selection")
         let controller = SnippetListViewController(environment: environment)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 800))
+        let previousKeyWindow = currentKeyWindow()
+        let window = testWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 800))
         window.rootViewController = controller
-        window.isHidden = false
-        addTeardownBlock { window.isHidden = true }
+        window.makeKeyAndVisible()
+        addTeardownBlock {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
 
         controller.loadViewIfNeeded()
         controller.select(id: snippet.id)
@@ -224,6 +498,70 @@ final class SnippetsIPadTests: XCTestCase {
         container.updateFade()
         XCTAssertEqual(container.topFadeIntensity, 1, accuracy: 0.001)
         XCTAssertEqual(container.bottomFadeIntensity, 0, accuracy: 0.001)
+    }
+
+    private func hostMainSplit(
+        environment: AppEnvironment,
+        selecting snippetID: UUID? = nil
+    ) -> (
+        controller: MainSplitViewController,
+        list: SnippetListViewController,
+        editor: SnippetEditorViewController
+    ) {
+        let controller = MainSplitViewController(environment: environment)
+        let previousKeyWindow = currentKeyWindow()
+        let window = testWindow(frame: CGRect(x: 0, y: 0, width: 1180, height: 820))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        addTeardownBlock {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
+
+        controller.loadViewIfNeeded()
+        controller.view.layoutIfNeeded()
+        let listNavigation = controller.viewController(for: .primary) as! UINavigationController
+        let editorNavigation = controller.viewController(for: .secondary) as! UINavigationController
+        let list = listNavigation.topViewController as! SnippetListViewController
+        let editor = editorNavigation.topViewController as! SnippetEditorViewController
+        list.loadViewIfNeeded()
+        editor.loadViewIfNeeded()
+        if let snippetID {
+            controller.snippetList(list, selected: snippetID)
+        }
+        controller.view.layoutIfNeeded()
+        // Let the normal appearance callback establish the root responder before
+        // a test invokes a shortcut that intentionally moves focus elsewhere.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        return (controller, list, editor)
+    }
+
+    private func currentKeyWindow() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+    }
+
+    private func testWindow(frame: CGRect) -> UIWindow {
+        let scene = currentKeyWindow()?.windowScene
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene)
+        window.frame = frame
+        return window
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 1,
+        condition: () -> Bool
+    ) -> Bool {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition(), Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+        }
+        return condition()
     }
 }
 
