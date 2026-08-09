@@ -125,6 +125,10 @@ final class SnippetsIPadTests: XCTestCase {
             tableView?.cellForRow(at: IndexPath(row: 0, section: 0))?
                 .accessibilityTraits.contains(.selected) == true
         )
+        XCTAssertNil(
+            controller.view.descendant(withAccessibilityIdentifier: "delete-snippet"),
+            "Deletion is available from the row context menu and swipe action"
+        )
     }
 
     func testSidebarTagFiltersWrapAndExpandWithoutHorizontalScrolling() {

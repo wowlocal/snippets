@@ -7,7 +7,6 @@ final class SnippetListViewController: UIViewController {
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let tagFilterBar = SidebarTagFilterView()
     private let footerView = UIView()
-    private let deleteButton = UIButton(type: .system)
     private let statusLabel = UILabel()
     private let emptyView = EmptyLibraryView()
     private let searchController = UISearchController(searchResultsController: nil)
@@ -89,13 +88,11 @@ final class SnippetListViewController: UIViewController {
         } else if let selectedRow = tableView.indexPathForSelectedRow {
             tableView.deselectRow(at: selectedRow, animated: false)
         }
-        deleteButton.isEnabled = selectedID != nil
         tableFadeContainer.setNeedsLayout()
     }
 
     func select(id: UUID) {
         selectedID = id
-        deleteButton.isEnabled = true
         guard let row = visibleSnippets.firstIndex(where: { $0.id == id }) else { return }
         tableView.selectRow(at: IndexPath(row: row, section: 0), animated: false, scrollPosition: .none)
     }
@@ -194,22 +191,6 @@ final class SnippetListViewController: UIViewController {
 
     private func configureFooter() {
         footerView.translatesAutoresizingMaskIntoConstraints = false
-        deleteButton.translatesAutoresizingMaskIntoConstraints = false
-        deleteButton.configuration = {
-            var configuration = UIButton.Configuration.plain()
-            configuration.image = UIImage(systemName: "trash")
-            configuration.buttonSize = .small
-            configuration.baseForegroundColor = .secondaryLabel
-            return configuration
-        }()
-        deleteButton.accessibilityLabel = "Delete Snippet"
-        deleteButton.accessibilityIdentifier = "delete-snippet"
-        deleteButton.isEnabled = false
-        deleteButton.addAction(UIAction { [weak self] _ in
-            guard let self, let selectedID = self.selectedID else { return }
-            self.delegate?.snippetList(self, requestedDelete: selectedID)
-        }, for: .touchUpInside)
-
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = AppTheme.scaledFont(size: 11, textStyle: .caption1)
         statusLabel.adjustsFontForContentSizeCategory = true
@@ -218,22 +199,16 @@ final class SnippetListViewController: UIViewController {
         statusLabel.numberOfLines = 1
         statusLabel.isHidden = true
 
-        let stack = UIStackView(arrangedSubviews: [deleteButton, statusLabel])
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.axis = .horizontal
-        stack.alignment = .center
-        stack.spacing = 8
-        footerView.addSubview(stack)
+        footerView.addSubview(statusLabel)
         view.addSubview(footerView)
         NSLayoutConstraint.activate([
             footerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footerView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             footerView.heightAnchor.constraint(equalToConstant: 42),
-            stack.leadingAnchor.constraint(equalTo: footerView.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: footerView.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: footerView.topAnchor, constant: 4),
-            stack.bottomAnchor.constraint(equalTo: footerView.bottomAnchor, constant: -4),
+            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: footerView.leadingAnchor, constant: 12),
+            statusLabel.trailingAnchor.constraint(equalTo: footerView.trailingAnchor, constant: -12),
+            statusLabel.centerYAnchor.constraint(equalTo: footerView.centerYAnchor),
         ])
     }
 
@@ -436,7 +411,6 @@ extension SnippetListViewController: UITableViewDataSource, UITableViewDelegate 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         let snippet = snippet(at: indexPath)
         selectedID = snippet.id
-        deleteButton.isEnabled = true
         delegate?.snippetList(self, selected: snippet.id)
     }
 
