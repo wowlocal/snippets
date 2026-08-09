@@ -1,6 +1,12 @@
 import UIKit
 import UniformTypeIdentifiers
 
+private extension UTType {
+    static let snippetsEncryptedBackup = UTType(
+        exportedAs: EncryptedSnippetBackup.formatIdentifier,
+        conformingTo: .data)
+}
+
 @MainActor
 protocol SnippetListViewControllerDelegate: AnyObject {
     func snippetList(_ controller: SnippetListViewController, selected id: UUID)
@@ -8,6 +14,7 @@ protocol SnippetListViewControllerDelegate: AnyObject {
     func snippetListRequestedClipboardSnippet(_ controller: SnippetListViewController)
     func snippetListRequestedImport(_ controller: SnippetListViewController)
     func snippetListRequestedExport(_ controller: SnippetListViewController)
+    func snippetListRequestedEncryptedBackup(_ controller: SnippetListViewController)
     func snippetListRequestedSettings(_ controller: SnippetListViewController)
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController)
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID)
@@ -38,6 +45,7 @@ final class MainSplitViewController: UISplitViewController {
     private weak var shortcutPanelPreviousFirstResponder: UIView?
     private var selectedSnippetID: UUID?
     private var documentPickerPurpose: DocumentPickerPurpose?
+    private var exportedTemporaryURL: URL?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -106,7 +114,7 @@ final class MainSplitViewController: UISplitViewController {
             UIKeyCommand(title: "New Snippet", action: #selector(newSnippetCommand), input: "n", modifierFlags: .command),
             UIKeyCommand(title: "New from Clipboard", action: #selector(newClipboardCommand), input: "n", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Import", action: #selector(importCommand), input: "i", modifierFlags: [.command, .shift]),
-            UIKeyCommand(title: "Export", action: #selector(exportCommand), input: "e", modifierFlags: [.command, .shift]),
+            UIKeyCommand(title: "Export for Sharing", action: #selector(exportCommand), input: "e", modifierFlags: [.command, .shift]),
             Self.shortcutsKeyCommand(),
             UIKeyCommand(title: "Undo", action: #selector(undoCommand), input: "z", modifierFlags: .command),
             UIKeyCommand(title: "Redo", action: #selector(redoCommand), input: "z", modifierFlags: [.command, .shift]),
@@ -391,7 +399,9 @@ final class MainSplitViewController: UISplitViewController {
 
     private func showImporter() {
         editorController.prepareForModalPresentation()
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json, .data], asCopy: false)
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.json, .snippetsEncryptedBackup],
+            asCopy: false)
         picker.delegate = self
         picker.allowsMultipleSelection = false
         documentPickerPurpose = .importing
@@ -400,6 +410,7 @@ final class MainSplitViewController: UISplitViewController {
 
     private func showExporter() {
         editorController.prepareForModalPresentation()
+        removeTemporaryExport()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Snippets-Export.json", isDirectory: false)
         do {
@@ -407,16 +418,71 @@ final class MainSplitViewController: UISplitViewController {
             let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
             picker.delegate = self
             documentPickerPurpose = .exporting
+            exportedTemporaryURL = url
             present(picker, animated: true)
-            listController.showStatus("Exporting \(count) ordinary snippet\(count == 1 ? "" : "s")…")
+            listController.showStatus("Exporting \(count) ordinary snippet\(count == 1 ? "" : "s") for sharing… Secure snippets are not included.")
         } catch {
             showError(title: "Couldn’t Export Snippets", error: error)
+        }
+    }
+
+    private func showEncryptedBackupExporter() {
+        editorController.prepareForModalPresentation()
+        promptForNewBackupPassword { [weak self] passphrase in
+            guard let self, let passphrase else { return }
+            listController.showStatus("Preparing encrypted backup…")
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let backup = try await environment.secureStore.makeEncryptedBackup(
+                        store: environment.store,
+                        passphrase: passphrase)
+                    removeTemporaryExport()
+                    let url = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("Snippets-Backup.snippetsbackup", isDirectory: false)
+                    try AtomicFileWriter.write(
+                        backup.data,
+                        to: url,
+                        temporaryDirectory: FileManager.default.temporaryDirectory,
+                        permissions: 0o600)
+                    try FileManager.default.setAttributes(
+                        [.protectionKey: FileProtectionType.complete],
+                        ofItemAtPath: url.path)
+
+                    let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
+                    picker.delegate = self
+                    documentPickerPurpose = .exporting
+                    exportedTemporaryURL = url
+                    present(picker, animated: true)
+                    listController.showStatus(
+                        "Encrypted backup contains \(backup.ordinaryCount) ordinary and \(backup.secureCount) secure snippet\(backup.totalCount == 1 ? "" : "s").")
+                } catch {
+                    showError(title: "Couldn’t Create Encrypted Backup", error: error)
+                }
+            }
         }
     }
 
     private func importDocument(at url: URL) {
         let hasAccess = url.startAccessingSecurityScopedResource()
         let finish = { if hasAccess { url.stopAccessingSecurityScopedResource() } }
+
+        let encryptedData = try? Data(contentsOf: url)
+        let isEncryptedBackup = url.pathExtension.caseInsensitiveCompare(
+            EncryptedSnippetBackup.preferredFilenameExtension) == .orderedSame
+            || encryptedData.map(EncryptedSnippetBackup.isEncryptedBackup) == true
+        if isEncryptedBackup {
+            finish()
+            guard let encryptedData else {
+                showMessage(
+                    title: "Couldn’t Read Encrypted Backup",
+                    message: "The selected backup file could not be read.")
+                return
+            }
+            importEncryptedBackup(encryptedData)
+            return
+        }
 
         let runImport: (Bool) -> Void = { [weak self] preserveExclamation in
             guard let self else { finish(); return }
@@ -447,6 +513,106 @@ final class MainSplitViewController: UISplitViewController {
         alert.addAction(UIAlertAction(title: "Keep !", style: .default) { _ in runImport(true) })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in finish() })
         present(alert, animated: true)
+    }
+
+    private func importEncryptedBackup(_ data: Data) {
+        promptForBackupPassword { [weak self] passphrase in
+            guard let self, let passphrase else { return }
+            listController.showStatus("Opening encrypted backup…")
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let result = try await environment.secureStore.importEncryptedBackup(
+                        data,
+                        passphrase: passphrase,
+                        into: environment.store)
+                    listController.showStatus(
+                        "Imported \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet\(result.totalCount == 1 ? "" : "s").")
+                    selectInitialSnippetIfNeeded()
+                } catch {
+                    showError(title: "Couldn’t Import Encrypted Backup", error: error)
+                }
+            }
+        }
+    }
+
+    private func promptForNewBackupPassword(completion: @escaping (String?) -> Void) {
+        let alert = UIAlertController(
+            title: "Protect Encrypted Backup",
+            message: "This private backup includes secure snippets. Use a unique password of at least 12 characters and save it in a password manager; Snippets cannot recover it.",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            Self.configureBackupPasswordField(field, placeholder: "Backup password")
+            field.textContentType = .newPassword
+        }
+        alert.addTextField { field in
+            Self.configureBackupPasswordField(field, placeholder: "Confirm password")
+            field.textContentType = .newPassword
+        }
+
+        guard let passwordField = alert.textFields?.first,
+              let confirmationField = alert.textFields?.last else {
+            completion(nil)
+            return
+        }
+        let create = UIAlertAction(title: "Create Backup", style: .default) { _ in
+            completion(passwordField.text)
+        }
+        create.isEnabled = false
+        let updateValidation = UIAction { _ in
+            let password = passwordField.text ?? ""
+            create.isEnabled = password.count >= 12
+                && !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && confirmationField.text == password
+        }
+        passwordField.addAction(updateValidation, for: .editingChanged)
+        confirmationField.addAction(updateValidation, for: .editingChanged)
+
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completion(nil) })
+        alert.addAction(create)
+        present(alert, animated: true)
+    }
+
+    private func promptForBackupPassword(completion: @escaping (String?) -> Void) {
+        let alert = UIAlertController(
+            title: "Open Encrypted Backup",
+            message: "Enter the password used when this backup was created. The file is authenticated before anything is imported.",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            Self.configureBackupPasswordField(field, placeholder: "Backup password")
+            field.textContentType = .password
+        }
+
+        guard let passwordField = alert.textFields?.first else {
+            completion(nil)
+            return
+        }
+        let open = UIAlertAction(title: "Open Backup", style: .default) { _ in
+            completion(passwordField.text)
+        }
+        open.isEnabled = false
+        passwordField.addAction(UIAction { _ in
+            open.isEnabled = !(passwordField.text ?? "").isEmpty
+        }, for: .editingChanged)
+
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completion(nil) })
+        alert.addAction(open)
+        present(alert, animated: true)
+    }
+
+    private static func configureBackupPasswordField(_ field: UITextField, placeholder: String) {
+        field.placeholder = placeholder
+        field.isSecureTextEntry = true
+        field.autocorrectionType = .no
+        field.autocapitalizationType = .none
+        field.spellCheckingType = .no
+    }
+
+    private func removeTemporaryExport() {
+        guard let exportedTemporaryURL else { return }
+        try? FileManager.default.removeItem(at: exportedTemporaryURL)
+        self.exportedTemporaryURL = nil
     }
 
     private func showSettings() {
@@ -633,6 +799,9 @@ extension MainSplitViewController: SnippetListViewControllerDelegate {
     func snippetListRequestedClipboardSnippet(_ controller: SnippetListViewController) { createFromClipboard() }
     func snippetListRequestedImport(_ controller: SnippetListViewController) { showImporter() }
     func snippetListRequestedExport(_ controller: SnippetListViewController) { showExporter() }
+    func snippetListRequestedEncryptedBackup(_ controller: SnippetListViewController) {
+        showEncryptedBackupExporter()
+    }
     func snippetListRequestedSettings(_ controller: SnippetListViewController) { showSettings() }
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController) { showShortcuts() }
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID) { delete(id: id) }
@@ -650,12 +819,17 @@ extension MainSplitViewController: UIDocumentPickerDelegate {
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         let purpose = documentPickerPurpose
         documentPickerPurpose = nil
+        if purpose == .exporting {
+            removeTemporaryExport()
+            return
+        }
         guard purpose == .importing, let url = urls.first else { return }
         importDocument(at: url)
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         documentPickerPurpose = nil
+        removeTemporaryExport()
     }
 }
 

@@ -146,9 +146,13 @@ final class SnippetListViewController: UIViewController {
                 guard let self else { return }
                 self.delegate?.snippetListRequestedImport(self)
             },
-            UIAction(title: "Export", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            UIAction(title: "Export for Sharing", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
                 guard let self else { return }
                 self.delegate?.snippetListRequestedExport(self)
+            },
+            UIAction(title: "Encrypted Backup (Includes Secure Snippets)", image: UIImage(systemName: "lock.doc")) { [weak self] _ in
+                guard let self else { return }
+                self.delegate?.snippetListRequestedEncryptedBackup(self)
             },
             UIAction(title: "Keyboard Shortcuts", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 guard let self else { return }

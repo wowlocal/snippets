@@ -414,6 +414,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         showMainWindow()?.runExport(sender)
     }
 
+    @IBAction func exportEncryptedBackup(_ sender: Any?) {
+        showMainWindow()?.runEncryptedBackupExport(sender)
+    }
+
     @objc private func handleChromiumBundleIDsChanged() {
         expansionEngine.chromiumBundleIDSettingsDidChange()
     }
@@ -726,7 +730,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func configureFileMenuItems() {
         guard let fileMenu = NSApp.mainMenu?.items.first(where: { $0.title == "File" })?.submenu else { return }
         if fileMenu.items.contains(where: { $0.action == #selector(importSnippets(_:)) })
-            || fileMenu.items.contains(where: { $0.action == #selector(exportSnippets(_:)) }) {
+            || fileMenu.items.contains(where: { $0.action == #selector(exportSnippets(_:)) })
+            || fileMenu.items.contains(where: { $0.action == #selector(exportEncryptedBackup(_:)) }) {
             return
         }
 
@@ -740,13 +745,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         LiquidGlassDesign.applyMenuSymbol("square.and.arrow.down", to: importItem)
 
         let exportItem = NSMenuItem(
-            title: "Export Snippets…",
+            title: "Export for Sharing…",
             action: #selector(exportSnippets(_:)),
             keyEquivalent: "E"
         )
         exportItem.keyEquivalentModifierMask = [.command, .shift]
         exportItem.target = self
         LiquidGlassDesign.applyMenuSymbol("square.and.arrow.up", to: exportItem)
+
+        let backupItem = NSMenuItem(
+            title: "Encrypted Backup (Includes Secure Snippets)…",
+            action: #selector(exportEncryptedBackup(_:)),
+            keyEquivalent: ""
+        )
+        backupItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("lock.doc", to: backupItem)
 
         // Anchored on Close, and carrying its own separators. This used to point
         // at the first separator in the menu, and when the dead document commands
@@ -759,6 +772,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if closeIndex != nil {
             fileMenu.insertItem(.separator(), at: insertionIndex)
         }
+        fileMenu.insertItem(backupItem, at: insertionIndex)
         fileMenu.insertItem(exportItem, at: insertionIndex)
         fileMenu.insertItem(importItem, at: insertionIndex)
         if insertionIndex > 0 {

@@ -55,6 +55,64 @@ final class SnippetsIPadTests: XCTestCase {
         XCTAssertFalse(export.contains(secureID.uuidString))
     }
 
+    func testImportingTheSameNativeExportTwiceDoesNotCreateDuplicates() throws {
+        let store = SnippetStore(configuration: .iPad)
+        let snippet = Snippet(
+            id: UUID(),
+            name: "Imported Once",
+            keyword: "once",
+            content: "The same file can be imported repeatedly.")
+        let importURL = rootURL.appendingPathComponent("same-export.json")
+        try JSONEncoder().encode([snippet]).write(to: importURL, options: .atomic)
+
+        XCTAssertEqual(try store.importSnippets(from: importURL), 1)
+        XCTAssertEqual(try store.importSnippets(from: importURL), 1)
+
+        XCTAssertEqual(store.snippets.count, 1)
+        XCTAssertEqual(store.snippets.first?.id, snippet.id)
+        XCTAssertEqual(store.snippets.first?.content, snippet.content)
+    }
+
+    func testImportingTheSameEncryptedBackupTwiceDoesNotCreateDuplicates() async throws {
+        let defaultsKey = SyncCoordinator.enabledDefaultsKey
+        let previousSyncValue = UserDefaults.standard.object(forKey: defaultsKey)
+        UserDefaults.standard.set(false, forKey: defaultsKey)
+        defer {
+            if let previousSyncValue {
+                UserDefaults.standard.set(previousSyncValue, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+
+        let snippet = Snippet(
+            id: UUID(),
+            name: "Encrypted Import",
+            keyword: "encrypted-once",
+            content: "Still only one copy.")
+        let data = try EncryptedSnippetBackup.seal(
+            snippets: [snippet],
+            vault: nil,
+            vaultKey: nil,
+            passphrase: "correct horse battery staple",
+            iterations: 1)
+        let environment = AppEnvironment()
+
+        let first = try await environment.secureStore.importEncryptedBackup(
+            data,
+            passphrase: "correct horse battery staple",
+            into: environment.store)
+        let second = try await environment.secureStore.importEncryptedBackup(
+            data,
+            passphrase: "correct horse battery staple",
+            into: environment.store)
+
+        XCTAssertEqual(first.ordinaryCount, 1)
+        XCTAssertEqual(second.ordinaryCount, 1)
+        XCTAssertEqual(environment.store.snippets.count, 1)
+        XCTAssertEqual(environment.store.snippets.first?.id, snippet.id)
+    }
+
     func testIPadConfigurationDoesNotSeedStarterContentAfterCorruptFileRecovery() throws {
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: rootURL.appendingPathComponent("snippets.json"))
