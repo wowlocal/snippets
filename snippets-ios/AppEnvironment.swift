@@ -26,7 +26,23 @@ final class AppEnvironment {
         diagnostics = DiagnosticsService.shared
         store = SnippetStore(configuration: .iOS)
         keychain = KeychainSecretStore()
+        #if DEBUG
+        let usesDeterministicUITestAuthentication =
+            CommandLine.arguments.contains("--ui-testing-reset")
+            && CommandLine.arguments.contains("--ui-testing-authentication-succeeds")
+        let authenticationEvaluator: VaultSession.AuthenticationEvaluator?
+        if usesDeterministicUITestAuthentication {
+            authenticationEvaluator = { _ in true }
+        } else {
+            authenticationEvaluator = nil
+        }
+        vaultSession = VaultSession(
+            keychain: keychain,
+            authenticationEvaluator: authenticationEvaluator
+        )
+        #else
         vaultSession = VaultSession(keychain: keychain)
+        #endif
         secureStore = SecureSnippetStore(
             session: vaultSession,
             keychain: keychain,
