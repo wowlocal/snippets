@@ -1,210 +1,309 @@
 # Snippets
 
-Native snippets app for macOS, iPhone, and iPad. The Mac app provides system-wide text
-expansion; the universal iOS companion keeps the same encrypted library available on mobile.
+Native, local-first snippet apps for macOS, iPhone, and iPad. Snippets expands text
+system-wide on Mac, keeps an encrypted library available across devices, and provides
+native keyboard-first and touch-first ways to manage it.
+
+- **macOS:** global text expansion, a caret-side suggestion panel, menu bar access,
+  secure insertion, and the full library editor.
+- **iPhone:** a touch-first library and editor with tap-to-copy, swipe actions,
+  multi-tag filtering, and a short-lived secure clipboard.
+- **iPad:** a keyboard-oriented split view with the same library, editor, transfer,
+  security, and sync tools.
+
+The project is free and open source under the [MIT License](LICENSE).
 
 ## Features
 
-- Create, edit, delete, duplicate, enable/disable, and pin snippets.
-- Global expansion in other apps by typing `\` + keyword.
-- Suggestion panel near the caret with fuzzy matching on snippet name and keyword.
-- Secure snippets stay encrypted at rest, carry a lock marker in suggestions, never
-  auto-expand, and require a fresh Touch ID/login-password approval on every explicit insertion.
-- Usage-based ranking: snippets you expand often rise in the suggestion panel. Match quality and pinning always win over usage. Two toggles and a reset live in `Settings > General`; usage stays on this Mac and never travels in exports or share links.
-- Dynamic placeholders in snippet content:
-  - `{clipboard}`
-  - `{date}`
-  - `{time}`
-  - `{datetime}`
-  - `{date:<DateFormatter pattern>}` (for example `{date:yyyy-MM-dd}`)
-- Share ordinary snippets as JSON, or explicitly create a password-protected encrypted backup
-  that also includes secure snippets.
-- Share a single snippet via a `snippets://share?...` deep link.
-- Menu bar item with quick open/quit.
-- Global `⌘\` shortcut that shows the app from any app and hides it again when it already has focus (on by default, switchable in Settings).
-- Optional Launch at Login toggle.
-- Configurable extra Chromium bundle IDs in a dedicated `Snippets > Settings…` window (applies immediately, no relaunch).
-- On iPhone, tap a row to copy it, swipe to pin/edit/delete, filter by multiple tags, and
-  edit in touch-first Content and Details modes. Secure copies authenticate every time,
-  stay local to the device, and expire after 60 seconds.
-- On iPad, the keyboard-oriented split-view workflow and shortcuts remain available.
+### Fast expansion on macOS
+
+- Type `\` followed by a keyword in another app to open suggestions and insert a
+  snippet without switching windows.
+- Fuzzy matching searches names and keywords; use `↑` / `↓`, `Ctrl+N` / `Ctrl+P`,
+  `Tab`, or `Return` to choose a result.
+- An unambiguous exact keyword expands automatically. Prefix collisions are called out
+  in the editor so one keyword does not silently block another.
+- Pinned snippets and match quality lead the ranking. Optional on-device usage ranking
+  and per-prefix selection memory learn what you choose without syncing or exporting
+  that history.
+- The suggestion panel follows the caret when Accessibility geometry is available and
+  falls back safely when an app exposes less information.
+- Native text fields use an atomic Accessibility replacement. Compatible fallbacks
+  preserve the clipboard, avoid overwriting a newer copy, and include dedicated handling
+  for Chromium and Electron apps.
+- Secure Keyboard Entry suspends injection.
+
+### A complete snippet library
+
+- Create, edit, duplicate, delete, enable/disable, and pin snippets.
+- Create a snippet directly from the current clipboard.
+- Add multiple tags, filter by several tags at once, and search across names, keywords,
+  content, and tags. Secure snippet bodies remain excluded while locked.
+- Get keyword suggestions from the snippet name or first line, live collision warnings,
+  placeholder completion after typing `{`, and a rendered placeholder preview.
+- Undo and redo ordinary library changes. iPhone also offers an inline Undo action after
+  deleting an ordinary snippet.
+- Copy a snippet, paste it into the previously active Mac app, or share an ordinary
+  snippet through the system share sheet on iOS.
+
+### Dynamic placeholders
+
+Placeholders are resolved at insertion or copy time:
+
+| Placeholder | Result |
+|---|---|
+| `{clipboard}` | Current clipboard text |
+| `{date}` | Localized current date |
+| `{time}` | Localized current time |
+| `{datetime}` | Localized current date and time |
+| `{date:yyyy-MM-dd}` | Date using a compact `DateFormatter` pattern |
+| `{date format="EEEE, MMMM d"}` | Date using an explicit quoted pattern |
+| `{date locale="fr-FR"}` | Localized date for a chosen locale |
+| `{date offset=+1d}` | Date adjusted by minutes, hours, days, months, or years |
+
+The explicit `format`, `locale`, and `offset` syntax is compatible with current Raycast
+date placeholders. Offsets can contain several terms, for example
+`{datetime offset=+1d -2h}`.
+
+### Secure snippets
+
+- Make any snippet secure to move its body out of the ordinary JSON library and into an
+  AES-GCM encrypted vault.
+- Reveal, copy, edit, or insert secure content only after a fresh Touch ID, Face ID, or
+  device-owner password/passcode approval.
+- Secure snippets never auto-expand, never appear in ordinary exports or share links,
+  and show a lock marker wherever their searchable metadata appears.
+- A recovery key can restore the vault key if it is missing from Keychain.
+- On iPhone and iPad, secure copies are device-local and expire from the clipboard after
+  60 seconds.
+- Names, keywords, and tags remain visible locally so Snippets can find a secure snippet
+  while the vault is locked. The encrypted body is the protected part.
+
+### End-to-end encrypted iCloud sync
+
+- Sync is opt-in on every installation. With it off, Snippets does not create a
+  CloudKit transport or sync base.
+- Ordinary and secure snippets are encrypted on-device before upload to the app's
+  private CloudKit database. The wire encryption key is shared through iCloud Keychain;
+  Apple receives ciphertext, including encrypted names, keywords, and tags.
+- Field-aware three-way merging preserves edits from multiple devices. Concurrent body
+  edits retain the losing version as a disabled conflict copy instead of discarding it.
+- A deletion safety guard halts suspiciously large remote deletions for review.
+- Use **Sync Now** on Mac or pull to refresh on iPhone. Without push notifications,
+  background polling can take up to two minutes to notice a remote change.
+- Usage counts and learned prefix choices stay on the Mac where they were recorded.
+
+> A switched iCloud account is still a known edge case: the current sync base does not
+> bind itself to the CloudKit user record name.
+
+### Import, export, backup, and links
+
+- Import native raw arrays (`[...]`), wrapped JSON (`{ "snippets": [...] }`), and
+  Raycast snippet exports. Raycast date placeholders are preserved or converted to the
+  supported explicit syntax.
+- **Export for Sharing** writes ordinary snippets only.
+- **Encrypted Backup (Includes Secure Snippets)** protects the complete library with a
+  password and includes both ordinary and secure records. Forgotten backup passwords
+  cannot be recovered.
+- Native imports merge by ID first and then by case-insensitive keyword, making repeated
+  imports idempotent instead of creating duplicate rows.
+- Share one ordinary snippet with a `snippets://share?...` deep link. Opening the link
+  shows a preview and confirmation before applying the same merge rules.
+
+### Native platform workflows
+
+On macOS:
+
+- `⌘\` brings Snippets forward from any app and hides it again when already focused.
+- Run from the Dock, hide to a menu bar item, optionally launch at login, and choose
+  whether `⌘Q` hides or quits.
+- Collapse the sidebar for a focused editor; search results become a keyboard-navigable
+  overlay.
+- Built-in compatibility covers Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and Arc.
+  Additional Chromium/Electron bundle identifiers can be added in Settings without a
+  relaunch.
+- Configure matched-letter highlighting, usage ranking, selection memory, the global
+  shortcut, quit behavior, sync, secure storage, browsers, and diagnostics.
+- Install the bundled `snippets-cli` from Settings for scripts and agents.
+
+On iPhone:
+
+- Tap a row to copy it, swipe right to edit, swipe left to pin or delete, or long-press
+  for all actions.
+- Search the full library, filter by multiple tags, and keep pinned snippets in their
+  own section.
+- Edit in touch-first **Content** and **Details** modes with a keyboard-following mode
+  control, live keyword help, tags, enable/disable, secure conversion, and placeholder
+  preview.
+- Pull to sync, import documents and shared links, export JSON, create encrypted backups,
+  and create a new snippet from the clipboard.
+
+On iPad:
+
+- Use a two-column list and editor designed for a hardware keyboard.
+- Search, filter, navigate snippets, move between fields, copy, import/export, undo/redo,
+  and open the in-app shortcut reference without leaving the keyboard.
+
+### Automation and diagnostics
+
+`snippets-cli` reads and safely updates the same local Mac library. It supports JSON
+output for:
+
+- `list`, `search`, `get`, and `tags`;
+- `add`, `update`, and `delete`;
+- `secure-status`; and
+- `reveal`, which asks the running app for human approval instead of decrypting the
+  vault itself.
+
+Both apps keep bounded, structured diagnostic logs for troubleshooting. Settings can
+export one validated JSONL file or delete retained logs. The schema excludes snippet
+bodies, display names, tags, IDs, paths, ciphertext, and keys; secure keywords may be
+present after sanitization. See [docs/diagnostics.md](docs/diagnostics.md) for the exact
+privacy contract and retention limits.
 
 ## Requirements
 
-- macOS 15.5+ (project deployment target).
-- iOS/iPadOS 26.0+ for the universal companion.
-- Xcode with Swift 5 support.
+| Target | Minimum version | UI framework |
+|---|---:|---|
+| Snippets for Mac | macOS 15.5 | AppKit |
+| Snippets for iPhone and iPad | iOS/iPadOS 26.0 | UIKit |
 
-## Build and Run
+Building the iOS target requires an Xcode version with the iOS 26 SDK. The iOS app is a
+universal native target (`TARGETED_DEVICE_FAMILY = 1,2`), not Catalyst and not a wrapper
+around the Mac app.
+
+## Download or build
+
+Download the latest signed Mac release from
+[GitHub Releases](https://github.com/wowlocal/snippets/releases), or build from source:
 
 1. Open `Snippets.xcodeproj` in Xcode.
-2. Select the `Snippets` scheme.
-3. Build and run.
+2. Select **Snippets** for macOS or **Snippets iOS** for iPhone/iPad.
+3. Choose a destination and build.
 
-### Build or install the iOS companion
-
-Select the `Snippets iOS` scheme to run on an iPhone or iPad simulator. With a paired
-iPhone or iPad connected, run:
+For a paired iPhone or iPad, the repository helper performs a signed Release build,
+validates its entitlements and provisioning profile, installs it in place, and launches
+it without deleting the existing data sandbox:
 
 ```sh
 ./scripts/install-ios.sh
 ```
 
-The script discovers the device, performs an incremental signed Release build, verifies
-the finished app and its provisioning profile, installs it without deleting its data
-sandbox, and launches it. Use `--device <name>` when more than one iOS device is paired,
-`--no-build` to reinstall the existing derived-data artifact, or `--no-launch` to stop
-after installation. If the device is locked, an interactive run asks you to unlock it
-and retries the launch. Run `./scripts/install-ios.sh --help` for all options. The old
-`install-ipad.sh` command remains as a compatibility alias.
+Use `--device <name>` when more than one device is paired, `--no-build` to reuse the
+current device artifact, or `--no-launch` to stop after installation. Run
+`./scripts/install-ios.sh --help` for all options.
 
-## First Launch and Permissions
+## First launch on macOS
 
-The global expander uses Accessibility APIs. If expansion does not start:
+Global expansion uses Accessibility APIs:
 
-1. Click `Request Permission` in the app banner.
-2. Open `Accessibility` from the same banner and enable Snippets.
-3. Click `Refresh`.
+1. Click **Request Permission** in the app banner.
+2. Open **Accessibility** from the same banner and enable Snippets.
+3. Return to Snippets and click **Refresh**.
 
-Depending on macOS version/settings, Input Monitoring may also be needed for global keystroke capture.
+Input Monitoring may also be required on some macOS configurations. Library management,
+the `⌘\` global shortcut, and menu bar access do not depend on Accessibility permission.
 
-## How Expansion Works
+## Keyboard shortcuts on macOS
 
-- Type `\` in a text input field to open suggestions.
-- Keep typing to filter snippets (fuzzy match by name/keyword).
-- Use `↑/↓` or `Ctrl+N` / `Ctrl+P` to navigate suggestions.
-- Press `Tab` or `Return` to insert the selected snippet.
-- If your query exactly matches one keyword (and no longer keyword shares that prefix), it auto-expands.
-- If focused text-field detection fails in some apps, fallback auto-expansion still tries to trigger from typed text.
+The in-app shortcut panel shows essentials first; hold `Option` to reveal the complete
+list.
 
-Keyword notes:
+| Shortcut | Action |
+|---|---|
+| `⌘\` | Show or hide Snippets globally |
+| `Return` | Copy selected snippet |
+| `⌘Return` | Paste selected snippet into the frontmost app |
+| `⌘F` | Search |
+| `⌘B` | Toggle sidebar |
+| `⌘K` | Toggle shortcut panel |
+| `⌘N` | New snippet |
+| `⇧⌘N` | New snippet from clipboard |
+| `⌘E` | Edit selected snippet |
+| `⌘D` | Duplicate selected snippet |
+| `⌘/` | Enable or disable selected snippet |
+| `⌘.` | Pin or unpin selected snippet |
+| `⌘Delete` | Delete selected snippet |
+| `⇧⌘C` | Copy share link |
+| `⇧⌘I` / `⇧⌘E` | Import / export for sharing |
+| `⌘Z` / `⇧⌘Z` | Undo / redo |
+| `Ctrl+N` / `Ctrl+P` | Move selection down / up |
 
-- In the editor, the visible `\` is a prefix label. Store keywords without the leading slash.
-- Spaces in keywords are converted to `-`.
-- Overlapping keywords (prefix collisions) show a warning and prevent auto-expand disambiguation.
+## Storage and privacy boundaries
 
-## Under the Hood
+The normal storage root is:
 
-The app is organized around three main pieces:
+- macOS: `~/Library/Application Support/SnippetsClone`
+- iOS/iPadOS: `Library/Application Support/SnippetsClone` inside the app container
 
-- `SnippetStore`: owns snippet state in memory, debounces writes, persists JSON, and handles import/export merge rules.
-- `ViewController`: builds the app UI, binds controls to the store, and routes keyboard actions.
-- `SnippetExpansionEngine`: runs global key listening, suggestion mode, and text replacement in other apps.
-- `SnippetUsageStore`: records which snippets get used and supplies the ranking snapshot. Backed by `Usage/usage.json`, a sibling directory to `snippets.json` so its writes never trip the library's folder monitor. Pure math and file format live in `SnippetFrecency` and `SnippetUsageDocument`.
+Important contents include:
 
-Detailed deep dive:
+```text
+SnippetsClone/
+├── snippets.json          # ordinary snippets
+├── Vault/vault.json       # secure metadata and encrypted bodies
+├── Sync/                  # merge base, state, tombstones, and quarantine
+├── Usage/usage.json       # Mac-only ranking history; never synced
+├── Diagnostics/Logs/      # bounded structured JSONL logs
+└── Backups/               # safety snapshots made by the merge layer
+```
 
-- `docs/text-input-detection.md` explains cross-app text-input detection, Chromium/Electron workarounds, monitor quirks, and troubleshooting.
-- `docs/frecency-ranking.md` specifies usage-based ranking: the decay math, where usage sits in the precedence chain, the merge rules, and the privacy boundary.
-- `docs/cloud-sync.md` covers multi-writer safety and the sync/secure-snippet design: the three-way merge, why `snippets.json` is frozen, the vault's key hierarchy and threat model, and what still has to be verified before a backend can ship.
+The Mac app creates a starter snippet on first launch. The iOS app intentionally starts
+with an empty library so a fresh installation can fetch the remote library without
+looking like it authored a local record.
 
-Global expansion pipeline:
+## Architecture
 
-1. The expansion engine starts a session-level `CGEvent` tap plus a local `NSEvent` monitor.
-2. Typed characters are appended to an internal rolling buffer.
-3. On `\`, suggestion mode activates and `SuggestionPanelController` shows ranked matches.
-4. Ranking uses fuzzy scoring (`FuzzyMatch`) against snippet name and keyword, then keyword-match quality, then pinning, and only then how often you use each snippet.
-5. Selecting an ordinary snippet (or its unambiguous exact-match auto-expand) triggers expansion.
-   A secure suggestion must be selected explicitly and authenticates every time.
-6. The engine resolves placeholders with `PlaceholderResolver` and injects final text.
+- `snippets/` contains the AppKit app, expansion engine, Mac settings, CloudKit app
+  boundary, diagnostics backend, and platform integrations.
+- `snippets-ios/` contains the native UIKit universal app, including separate iPhone and
+  iPad workflows.
+- `snippets/Core/`, `snippets/Sync/`, `snippets/Vault/`, and
+  `snippets/SnippetStore.swift` hold the shared model, persistence, crypto, merge, sync,
+  and vault logic.
+- `snippets-cli/` contains the entitlement-free command-line client.
+- `CorePackage/` is a test overlay for the shared Foundation-only core.
 
-Text replacement strategy:
+The CloudKit implementation stays at the app boundary. The shared core does not import
+CloudKit, AppKit, UIKit, CocoaLumberjack, or MetricKit unconditionally.
 
-- Preferred path: one atomic Accessibility replacement. The engine proves the text before the caret
-  is the trigger it means to delete, then overwrites that range in place — no synthetic keys, and the
-  clipboard is never touched.
-- Fallback, for fields that expose no writable text: the engine borrows the pasteboard, deletes the
-  trigger with synthetic backspaces, and sends `Cmd+V`.
-- Chromium-family apps replace the field's whole value instead. Chrome's omnibox acknowledges a
-  selected-text write, redraws it, and keeps the old string in its edit model, so Return would
-  navigate to what the user typed instead of the snippet — and nothing in the Accessibility tree
-  reports that. A whole-value write does reach the model. It is allowed only in the browser's own
-  one-line fields, never in rendered page content, which keeps the fallback it already used.
-- The borrow is returned once there is evidence the host applied the paste, or on a bounded timeout —
-  never on a fixed delay, which is both too slow for a native field and too fast for a loaded Electron
-  host. A newer copy is never overwritten.
-- Every event the engine posts is tagged so its own injection cannot be mistaken for typing.
-- Nothing is injected while secure keyboard entry is on.
+More detail:
 
-Suggestion panel positioning:
+- [docs/text-input-detection.md](docs/text-input-detection.md) — cross-app text input
+  detection and replacement strategies.
+- [docs/frecency-ranking.md](docs/frecency-ranking.md) — usage ranking, decay, merging,
+  and privacy.
+- [docs/cloud-sync.md](docs/cloud-sync.md) — sync safety and secure-snippet design. Its
+  older phase/status table predates the shipping CloudKit transport and iOS target; the
+  current code is authoritative for implementation status.
+- [docs/diagnostics.md](docs/diagnostics.md) — persistent logging, exports, privacy, and
+  collection workflows.
 
-- The panel attempts to read caret bounds from Accessibility (`AXBoundsForRange`).
-- If that fails, it falls back to focused-element geometry.
-- Extra normalization avoids awkward placement in some apps (for example Safari/Chromium-style controls).
+## Verification
 
-Persistence and sync behavior:
+Run the checks that cover the changed layer. For cross-platform shared-code changes:
 
-- Snippet updates write through `SnippetStore` and are saved with a short debounce.
-- Immediate writes are used for operations like add/delete/import/export.
-- Pending writes are flushed on app termination.
+```sh
+swift test --package-path CorePackage
 
-## Global Shortcut
+xcodebuild \
+  -project Snippets.xcodeproj \
+  -scheme Snippets \
+  -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath /tmp/snippets-macos-derived \
+  CODE_SIGNING_ALLOWED=NO \
+  build
 
-- `⌘\` opens Snippets from any app, including while it is hidden in the menu bar.
-- Pressing `⌘\` again while Snippets is focused hides it. If the shortcut had pulled the app out of the menu bar, hiding returns it there (no Dock icon left behind); otherwise it hides like `⌘H`.
-- It is on by default and can be switched off in `Snippets > Settings… > General` (for example when another app needs `⌘\`).
-- The shortcut is registered with Carbon's `RegisterEventHotKey`, so it does not depend on Accessibility permissions and works before expansion is enabled.
-- If macOS refuses the registration because another app already owns `⌘\`, Settings says so; quit that app and reopen Settings to retry.
+xcodebuild \
+  -project Snippets.xcodeproj \
+  -scheme 'Snippets iOS' \
+  -configuration Debug \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/snippets-ios-derived \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
 
-## Keyboard Shortcuts (Main Window)
-
-The in-app shortcuts panel shows essential shortcuts by default. Hold `Option` while it is open to reveal the full list.
-
-- `Return`: copy selected snippet to clipboard.
-- `Cmd+Return`: paste selected snippet into frontmost app.
-- `Cmd+K`: open/close shortcuts panel.
-- `Cmd+F`: focus search.
-- `Cmd+N`: create snippet.
-- `Cmd+E`: edit selected snippet.
-- `Cmd+D`: duplicate selected snippet.
-- `Cmd+/`: enable/disable selected snippet.
-- `Cmd+.`: pin/unpin selected snippet.
-- `Cmd+Delete`: delete selected snippet.
-- `Cmd+Shift+C`: copy a deep link for the selected snippet.
-- `Cmd+Shift+I`: import JSON.
-- `Cmd+Shift+E`: export ordinary snippets as shareable JSON (secure snippets are excluded).
-- `Esc`: close action panel (or return focus to list).
-- `Ctrl+N` / `Ctrl+P`: move selection down/up in list context.
-
-## Import/Export Format and Merge Rules
-
-- Import accepts:
-  - A raw array of snippets: `[...]`
-  - Wrapped payload: `{ "snippets": [...] }`
-  - Password-protected `.snippetsbackup` files created by **Encrypted Backup (Includes Secure Snippets)…**
-- **Export for Sharing…** is the default export and writes `{ "snippets": [...] }`; it structurally
-  excludes secure snippets.
-- **Encrypted Backup (Includes Secure Snippets)…** is a separate action with no shortcut. It seals
-  the whole library with a random AES-GCM key, wraps that key from a user password with
-  PBKDF2-HMAC-SHA512 (600,000 iterations), and writes the result with private file permissions.
-  Snippets cannot recover a forgotten backup password.
-- Import merge behavior:
-  1. Match by `id` first (replace existing).
-  2. Else match by `keyword` case-insensitively (replace existing, preserve existing `id` and `createdAt`).
-  3. Else insert as new.
-  Importing the same export or encrypted backup repeatedly is therefore idempotent and does not
-  create duplicate rows. A secure backup may restore a fresh vault or merge into the same vault;
-  importing it over a different vault is refused.
-
-## Deep Links
-
-- `Cmd+Shift+C` copies a shareable deep link for the selected snippet.
-- Deep links use the custom scheme `snippets://share?data=...`.
-- Opening one of these links shows an import confirmation and then imports that single snippet using the same merge rules as JSON import.
-
-## Data Storage
-
-- Snippets are persisted locally at:
-  - `~/Library/Application Support/SnippetsClone/snippets.json`
-- On first launch (or load failure), a starter snippet is created:
-  - Name: `Temporary Password`
-  - Keyword: `tp`
-  - Content: `TP-{date:yyyyMMdd}-{clipboard}`
-
-## App Behavior Notes
-
-- App Sandbox is disabled so global key monitoring and synthetic paste can work.
-- `Cmd+Q` supports a one-time choice:
-  - Hide to menu bar (keep running), or
-  - Quit completely.
-  - If you choose "Remember choice", you can reset it later from Settings, the menu bar menu, or the main window's More menu.
+Run iOS unit and UI tests on available iPhone and iPad simulators as described in
+[AGENTS.md](AGENTS.md).
