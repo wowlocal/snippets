@@ -390,8 +390,10 @@ function profile_vouches_for_signature() {
 # thing — it is the check that cannot be fooled by a bundle that looks correct.
 #
 # SNIPPETS_SUPPORT_DIR is redirected so a release check can never touch the real snippet
-# library, and the process is killed the moment it has proven it survived. Set
-# SKIP_LAUNCH_SMOKE_TEST=1 to opt out on a machine where launching is not possible.
+# library. Sync is explicitly disabled in the argument domain: this Production-signed
+# process otherwise inherits the user's per-bundle preference, seeds `tp` into the fresh
+# support directory, and can upload it to the real CloudKit library before it is killed.
+# Set SKIP_LAUNCH_SMOKE_TEST=1 to opt out on a machine where launching is not possible.
 function assert_app_launches() {
     local app_path="$1"
 
@@ -432,7 +434,8 @@ function assert_app_launches() {
     (
         set +e
         SNIPPETS_SUPPORT_DIR="$scratch/support" \
-            "$app_path/Contents/MacOS/$executable_name" >"$output" 2>&1 &
+            "$app_path/Contents/MacOS/$executable_name" \
+            -SnippetsICloudSyncEnabled NO >"$output" 2>&1 &
         child=$!
         sleep 3
         if kill -0 "$child" 2>/dev/null; then
