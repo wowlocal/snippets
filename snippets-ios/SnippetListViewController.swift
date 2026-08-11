@@ -551,7 +551,8 @@ private final class SnippetListCell: UITableViewCell {
     private let keywordLabel = UILabel()
     private let previewLabel = UILabel()
     private let tagsStack = UIStackView()
-    private let tagBadges = (0..<3).map { _ in TagBadgeLabel() }
+    private let tagDots = (0..<6).map { _ in SnippetTagDotView() }
+    private let tagOverflowLabel = UILabel()
     private let stateImage = UIImageView()
     private var isPointerHovering = false
 
@@ -575,6 +576,8 @@ private final class SnippetListCell: UITableViewCell {
         titleLabel.font = AppTheme.scaledFont(size: 14, weight: .semibold, textStyle: .body)
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 1
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         keywordLabel.font = AppTheme.scaledFont(size: 11, weight: .medium, textStyle: .caption1)
         keywordLabel.adjustsFontForContentSizeCategory = true
@@ -597,21 +600,34 @@ private final class SnippetListCell: UITableViewCell {
         tagsStack.spacing = 4
         tagsStack.setContentHuggingPriority(.required, for: .horizontal)
         tagsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
-        tagBadges.forEach { badge in
-            badge.isHidden = true
-            tagsStack.addArrangedSubview(badge)
+        tagDots.forEach { dot in
+            dot.isHidden = true
+            tagsStack.addArrangedSubview(dot)
         }
+        tagOverflowLabel.font = AppTheme.scaledFont(
+            size: 9,
+            weight: .medium,
+            textStyle: .caption2
+        )
+        tagOverflowLabel.adjustsFontForContentSizeCategory = true
+        tagOverflowLabel.textColor = .tertiaryLabel
+        tagOverflowLabel.setContentHuggingPriority(.required, for: .horizontal)
+        tagOverflowLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        tagOverflowLabel.isHidden = true
+        tagsStack.addArrangedSubview(tagOverflowLabel)
 
-        let topRow = UIStackView(arrangedSubviews: [titleLabel, keywordLabel])
+        let topSpacer = UIView()
+        topSpacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        let topRow = UIStackView(arrangedSubviews: [titleLabel, topSpacer, tagsStack])
         topRow.axis = .horizontal
-        topRow.alignment = .firstBaseline
+        topRow.alignment = .center
         topRow.spacing = 6
 
-        let spacer = UIView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let bottomRow = UIStackView(arrangedSubviews: [previewLabel, spacer, tagsStack])
+        let bottomSpacer = UIView()
+        bottomSpacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        let bottomRow = UIStackView(arrangedSubviews: [previewLabel, bottomSpacer, keywordLabel])
         bottomRow.axis = .horizontal
-        bottomRow.alignment = .center
+        bottomRow.alignment = .firstBaseline
         bottomRow.spacing = 6
 
         let text = UIStackView(arrangedSubviews: [topRow, bottomRow])
@@ -718,22 +734,24 @@ private final class SnippetListCell: UITableViewCell {
     }
 
     private func rebuildTags(_ tags: [String], muted: Bool) {
-        let visibleTagCount = min(tags.count, 2)
-        for index in 0..<visibleTagCount {
-            let tag = tags[index]
-            let badge = tagBadges[index]
-            badge.configure(text: tag, color: AppTheme.tagColor(for: tag), muted: muted)
-            badge.isHidden = false
+        for (index, dot) in tagDots.enumerated() {
+            guard tags.indices.contains(index) else {
+                dot.isHidden = true
+                continue
+            }
+            dot.configure(tag: tags[index], muted: muted)
+            dot.isHidden = false
         }
 
-        let remainingTagCount = tags.count - visibleTagCount
+        let remainingTagCount = max(tags.count - tagDots.count, 0)
         if remainingTagCount > 0 {
-            let badge = tagBadges[visibleTagCount]
-            badge.configure(text: "+\(remainingTagCount)", color: .secondaryLabel, muted: muted)
-            badge.isHidden = false
-        }
-        for index in (visibleTagCount + min(remainingTagCount, 1))..<tagBadges.count {
-            tagBadges[index].isHidden = true
+            let hiddenTags = tags.dropFirst(tagDots.count)
+            tagOverflowLabel.text = "+\(remainingTagCount)"
+            tagOverflowLabel.accessibilityLabel = "\(remainingTagCount) more tags: "
+                + hiddenTags.joined(separator: ", ")
+            tagOverflowLabel.isHidden = false
+        } else {
+            tagOverflowLabel.isHidden = true
         }
         tagsStack.isHidden = tags.isEmpty
     }
@@ -810,36 +828,26 @@ private final class EmptyLibraryView: UIView {
     }
 }
 
-private final class TagBadgeLabel: UILabel {
-    private let insets = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
-
+private final class SnippetTagDotView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
-        font = AppTheme.scaledFont(size: 10, weight: .medium, textStyle: .caption2)
-        adjustsFontForContentSizeCategory = true
-        numberOfLines = 1
-        lineBreakMode = .byTruncatingTail
-        layer.cornerRadius = 7
-        layer.cornerCurve = .continuous
-        clipsToBounds = true
+        translatesAutoresizingMaskIntoConstraints = false
+        layer.cornerRadius = 3.5
         setContentHuggingPriority(.required, for: .horizontal)
         setContentCompressionResistancePriority(.required, for: .horizontal)
+        isAccessibilityElement = true
+        accessibilityTraits = .staticText
+
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 7),
+            heightAnchor.constraint(equalToConstant: 7),
+        ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var intrinsicContentSize: CGSize {
-        let size = super.intrinsicContentSize
-        return CGSize(width: size.width + insets.left + insets.right, height: size.height + insets.top + insets.bottom)
-    }
-
-    override func drawText(in rect: CGRect) {
-        super.drawText(in: rect.inset(by: insets))
-    }
-
-    func configure(text: String, color: UIColor, muted: Bool) {
-        self.text = text
-        textColor = muted ? .secondaryLabel : color
-        backgroundColor = (muted ? UIColor.secondaryLabel : color).withAlphaComponent(0.13)
+    func configure(tag: String, muted: Bool) {
+        backgroundColor = muted ? .tertiaryLabel : AppTheme.tagColor(for: tag)
+        accessibilityLabel = "Tag: \(tag)"
     }
 }
