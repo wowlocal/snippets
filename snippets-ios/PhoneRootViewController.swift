@@ -59,6 +59,14 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
     }
 
     private func libraryChanged(source: SnippetStore.ChangeSource) {
+        // The phone library is completely covered by the editor and reloads from the
+        // store in viewWillAppear. Rebuilding its search/filter sections here made
+        // every editor keystroke pay for hidden UITableView work. The editor publishes
+        // its own derived UI immediately after the store update returns.
+        if source == .local, environment.isPerformingLocalEditorChange {
+            return
+        }
+
         libraryController.reload()
         if let editor = topViewController as? PhoneSnippetEditorViewController {
             editor.refreshFromStore(preserveFirstResponder: source == .local)

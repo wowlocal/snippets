@@ -551,12 +551,16 @@ final class SnippetEditorViewController: UIViewController {
     private func refreshDerivedUI() {
         guard let id = selectedID,
               let snippet = environment.store.snippetForDisplay(id: id) else { return }
+        applyDerivedUI(for: snippet)
+    }
+
+    private func applyDerivedUI(for snippet: Snippet) {
         title = snippet.displayName
         updateNamePlaceholder(for: snippet)
         updatePreview()
         updateKeywordStatus(for: snippet)
         updateSuggestions(for: snippet)
-        footerStatusLabel.text = environment.store.isSecure(id)
+        footerStatusLabel.text = environment.store.isSecure(snippet.id)
             ? (secureContentIsRevealed ? "Secure content is revealed until the vault locks." : "Content is encrypted and hidden. Metadata remains searchable.")
             : (snippet.updatedAt.formatted(date: .abbreviated, time: .shortened))
         updateNavigationActions()
@@ -668,39 +672,32 @@ final class SnippetEditorViewController: UIViewController {
         if keywordField.text != sanitizedKeyword { keywordField.text = sanitizedKeyword }
 
         do {
-            if environment.store.isSecure(id) {
-                try environment.performLocalSecureChange {
-                    try environment.secureStore.updateMetadata(
-                        id: id,
-                        name: nameField.text ?? "",
-                        keyword: sanitizedKeyword,
-                        tags: tagField.currentTags(),
-                        isEnabled: enabledSwitch.isOn
-                    )
+            try environment.performLocalEditorChange {
+                if environment.store.isSecure(id) {
+                    try environment.performLocalSecureChange {
+                        try environment.secureStore.updateMetadata(
+                            id: id,
+                            name: nameField.text ?? "",
+                            keyword: sanitizedKeyword,
+                            tags: tagField.currentTags(),
+                            isEnabled: enabledSwitch.isOn
+                        )
+                    }
+                } else {
+                    guard var updated = environment.store.snippet(id: id) else { return }
+                    updated.name = nameField.text ?? ""
+                    updated.keyword = sanitizedKeyword
+                    updated.content = bodyTextView.text ?? ""
+                    updated.tags = tagField.currentTags()
+                    updated.isEnabled = enabledSwitch.isOn
+                    environment.store.update(updated)
                 }
-            } else {
-                guard var updated = environment.store.snippet(id: id) else { return }
-                updated.name = nameField.text ?? ""
-                updated.keyword = sanitizedKeyword
-                updated.content = bodyTextView.text ?? ""
-                updated.tags = tagField.currentTags()
-                updated.isEnabled = enabledSwitch.isOn
-                environment.store.update(updated)
             }
             let refreshed = environment.store.snippetForDisplay(id: id) ?? current
-            refreshDerivedUIForImmediateEdit(refreshed)
+            applyDerivedUI(for: refreshed)
         } catch {
             footerStatusLabel.text = "Couldn’t save: \(error)"
         }
-    }
-
-    private func refreshDerivedUIForImmediateEdit(_ snippet: Snippet) {
-        title = snippet.displayName
-        updateNamePlaceholder(for: snippet)
-        updatePreview()
-        updateKeywordStatus(for: snippet)
-        updateSuggestions(for: snippet)
-        updateToggleButtons()
     }
 
     private func beginPlainEditTransaction() {
@@ -865,8 +862,10 @@ final class SnippetEditorViewController: UIViewController {
               environment.store.isSecure(id),
               secureContentIsRevealed else { return }
         do {
-            try environment.performLocalSecureChange {
-                try environment.secureStore.setContent(bodyTextView.text ?? "", for: id)
+            try environment.performLocalEditorChange {
+                try environment.performLocalSecureChange {
+                    try environment.secureStore.setContent(bodyTextView.text ?? "", for: id)
+                }
             }
         } catch {
             footerStatusLabel.text = "Secure edit wasn’t saved: \(error)"

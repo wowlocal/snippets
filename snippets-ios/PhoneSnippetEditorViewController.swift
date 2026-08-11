@@ -507,6 +507,10 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     private func refreshDerivedUI() {
         guard let snippet = environment.store.snippetForDisplay(id: snippetID) else { return }
+        applyDerivedUI(for: snippet)
+    }
+
+    private func applyDerivedUI(for snippet: Snippet) {
         title = snippet.displayName
         updateNamePlaceholder(for: snippet)
         updateKeywordStatus(for: snippet)
@@ -666,40 +670,32 @@ final class PhoneSnippetEditorViewController: UIViewController {
         if keywordField.text != sanitizedKeyword { keywordField.text = sanitizedKeyword }
 
         do {
-            if environment.store.isSecure(snippetID) {
-                try environment.performLocalSecureChange {
-                    try environment.secureStore.updateMetadata(
-                        id: snippetID,
-                        name: nameField.text ?? "",
-                        keyword: sanitizedKeyword,
-                        tags: tagField.currentTags(),
-                        isEnabled: enabledSwitch.isOn
-                    )
+            try environment.performLocalEditorChange {
+                if environment.store.isSecure(snippetID) {
+                    try environment.performLocalSecureChange {
+                        try environment.secureStore.updateMetadata(
+                            id: snippetID,
+                            name: nameField.text ?? "",
+                            keyword: sanitizedKeyword,
+                            tags: tagField.currentTags(),
+                            isEnabled: enabledSwitch.isOn
+                        )
+                    }
+                } else {
+                    guard var updated = environment.store.snippet(id: snippetID) else { return }
+                    updated.name = nameField.text ?? ""
+                    updated.keyword = sanitizedKeyword
+                    updated.content = bodyTextView.text ?? ""
+                    updated.tags = tagField.currentTags()
+                    updated.isEnabled = enabledSwitch.isOn
+                    environment.store.update(updated)
                 }
-            } else {
-                guard var updated = environment.store.snippet(id: snippetID) else { return }
-                updated.name = nameField.text ?? ""
-                updated.keyword = sanitizedKeyword
-                updated.content = bodyTextView.text ?? ""
-                updated.tags = tagField.currentTags()
-                updated.isEnabled = enabledSwitch.isOn
-                environment.store.update(updated)
             }
-            refreshDerivedUIForImmediateEdit(
-                environment.store.snippetForDisplay(id: snippetID) ?? current
-            )
+            let refreshed = environment.store.snippetForDisplay(id: snippetID) ?? current
+            applyDerivedUI(for: refreshed)
         } catch {
             showSaveFailure("Couldn’t save: \(error)")
         }
-    }
-
-    private func refreshDerivedUIForImmediateEdit(_ snippet: Snippet) {
-        title = snippet.displayName
-        updateNamePlaceholder(for: snippet)
-        updateKeywordStatus(for: snippet)
-        updateSuggestions(for: snippet)
-        updatePreview()
-        updateNavigationActions(for: snippet)
     }
 
     private func beginPlainEditTransaction() {
@@ -858,8 +854,10 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private func saveSecureContentNow() {
         guard environment.store.isSecure(snippetID), secureContentIsRevealed else { return }
         do {
-            try environment.performLocalSecureChange {
-                try environment.secureStore.setContent(bodyTextView.text ?? "", for: snippetID)
+            try environment.performLocalEditorChange {
+                try environment.performLocalSecureChange {
+                    try environment.secureStore.setContent(bodyTextView.text ?? "", for: snippetID)
+                }
             }
         } catch {
             showSaveFailure("Secure edit wasn’t saved: \(error)")
