@@ -3,6 +3,10 @@ import Foundation
 
 @MainActor
 final class AppEnvironment {
+    #if DEBUG
+    static let emptyLibraryLaunchArgument = "--empty-library"
+    #endif
+
     let diagnostics: DiagnosticsService
     let store: SnippetStore
     let keychain: KeychainSecretStore
@@ -21,6 +25,16 @@ final class AppEnvironment {
             try? FileManager.default.removeItem(at: root)
             setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, root.path, 1)
             UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
+        } else if CommandLine.arguments.contains(Self.emptyLibraryLaunchArgument) {
+            // Device-only visual verification must never erase or overwrite the real
+            // Debug library. Redirect every store to a clean process-local root and
+            // override the sync preference in memory so a normal relaunch restores the
+            // user's existing Debug data and setting.
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Snippets-iOS-Empty-Library", isDirectory: true)
+            try? FileManager.default.removeItem(at: root)
+            setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, root.path, 1)
+            SyncCoordinator.runtimeEnabledOverride = false
         }
         #endif
         diagnostics = DiagnosticsService.shared

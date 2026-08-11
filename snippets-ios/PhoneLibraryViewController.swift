@@ -116,6 +116,7 @@ final class PhoneLibraryViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateSyncHeaderLayout()
+        pinEmptyLibraryToScrollEdge()
         updateMoreButtonPosition()
     }
 
@@ -422,14 +423,6 @@ final class PhoneLibraryViewController: UIViewController {
             guard let self else { return }
             self.delegate?.phoneLibraryRequestedSync(self)
         }
-        emptyView.onCreate = { [weak self] in
-            guard let self else { return }
-            self.delegate?.phoneLibraryRequestedNewSnippet(self)
-        }
-        emptyView.onImport = { [weak self] in
-            guard let self else { return }
-            self.delegate?.phoneLibraryRequestedImport(self)
-        }
         emptyView.onClearFilters = { [weak self] in
             guard let self else { return }
             self.activeTagKeys.removeAll()
@@ -458,9 +451,17 @@ final class PhoneLibraryViewController: UIViewController {
 
     private func updateEmptyState() {
         guard sections.isEmpty else {
+            tableView.isScrollEnabled = true
             tableView.backgroundView = nil
             return
         }
+
+        // With no rows, UITableView's only vertical movement is refresh-control bounce.
+        // That movement still collapses the navigation bar's large title, making an
+        // otherwise static empty screen appear to have scrollable content. The nested
+        // empty-state scroll view remains available for accessibility Dynamic Type.
+        tableView.isScrollEnabled = false
+        pinEmptyLibraryToScrollEdge()
 
         let libraryIsEmpty = environment.store.snippetsSortedForDisplay().isEmpty
         let hasQuery = !(searchController.searchBar.text ?? "")
@@ -493,6 +494,13 @@ final class PhoneLibraryViewController: UIViewController {
             )
         }
         tableView.backgroundView = emptyView
+    }
+
+    private func pinEmptyLibraryToScrollEdge() {
+        guard sections.isEmpty, !tableView.isScrollEnabled else { return }
+        let scrollEdgeY = -tableView.adjustedContentInset.top
+        guard abs(tableView.contentOffset.y - scrollEdgeY) > 0.5 else { return }
+        tableView.setContentOffset(CGPoint(x: 0, y: scrollEdgeY), animated: false)
     }
 
     private var isAwaitingFirstFetch: Bool {
@@ -1123,18 +1131,13 @@ private final class PhoneTagPillLabel: UILabel {
 private final class PhoneEmptyLibraryView: UIView {
     var onConnect: (() -> Void)?
     var onSync: (() -> Void)?
-    var onCreate: (() -> Void)?
-    var onImport: (() -> Void)?
     var onClearFilters: (() -> Void)?
 
     private let scrollView = UIScrollView()
     private let contentView = UIView()
-    private let imageView = UIImageView()
     private let titleLabel = UILabel()
     private let messageLabel = UILabel()
     private let connectButton = UIButton(type: .system)
-    private let createButton = UIButton(type: .system)
-    private let importButton = UIButton(type: .system)
     private let clearFiltersButton = UIButton(type: .system)
     private let actions = UIStackView()
     private let stack = UIStackView()
@@ -1146,12 +1149,6 @@ private final class PhoneEmptyLibraryView: UIView {
         scrollView.alwaysBounceVertical = false
         scrollView.contentInsetAdjustmentBehavior = .never
         contentView.translatesAutoresizingMaskIntoConstraints = false
-
-        imageView.image = UIImage(systemName: "text.page")
-        imageView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 36, weight: .regular)
-        imageView.tintColor = AppTheme.tint
-        imageView.contentMode = .scaleAspectFit
-        imageView.setContentHuggingPriority(.required, for: .vertical)
 
         titleLabel.font = AppTheme.scaledFont(size: 20, weight: .bold, textStyle: .title2)
         titleLabel.adjustsFontForContentSizeCategory = true
@@ -1175,13 +1172,6 @@ private final class PhoneEmptyLibraryView: UIView {
             }
         }
         connectButton.accessibilityIdentifier = "phone-connect-icloud"
-        configureButton(createButton, title: "Create Snippet", symbol: "plus", prominent: false) { [weak self] in
-            self?.onCreate?()
-        }
-        createButton.accessibilityIdentifier = "phone-empty-create"
-        configureButton(importButton, title: "Import", symbol: "square.and.arrow.down", prominent: false) { [weak self] in
-            self?.onImport?()
-        }
         configureButton(
             clearFiltersButton,
             title: "Clear Filters",
@@ -1194,20 +1184,23 @@ private final class PhoneEmptyLibraryView: UIView {
 
         actions.axis = .vertical
         actions.spacing = 10
-        actions.alignment = .fill
-        [connectButton, createButton, importButton, clearFiltersButton]
-            .forEach(actions.addArrangedSubview)
+        actions.alignment = .center
+        [connectButton, clearFiltersButton].forEach(actions.addArrangedSubview)
 
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.axis = .vertical
         stack.alignment = .fill
         stack.spacing = 14
-        [imageView, titleLabel, messageLabel, actions].forEach(stack.addArrangedSubview)
+        [titleLabel, messageLabel, actions].forEach(stack.addArrangedSubview)
         stack.setCustomSpacing(18, after: messageLabel)
 
         addSubview(scrollView)
         scrollView.addSubview(contentView)
         contentView.addSubview(stack)
+        let viewportHeight = contentView.heightAnchor.constraint(
+            equalTo: scrollView.frameLayoutGuide.heightAnchor
+        )
+        viewportHeight.priority = .defaultLow
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -1219,12 +1212,13 @@ private final class PhoneEmptyLibraryView: UIView {
             contentView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
             contentView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
             contentView.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.frameLayoutGuide.heightAnchor),
+            viewportHeight,
             stack.centerXAnchor.constraint(equalTo: centerXAnchor),
             stack.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -24),
             stack.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
             stack.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -24),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -24),
             actions.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
             actions.centerXAnchor.constraint(equalTo: stack.centerXAnchor),
         ])
@@ -1243,7 +1237,6 @@ private final class PhoneEmptyLibraryView: UIView {
 
     func configureEmptyLibrary(offersICloud: Bool, syncStatus: String) {
         primaryButtonStartsSync = false
-        imageView.image = UIImage(systemName: offersICloud ? "icloud.and.arrow.down" : "text.page")
         titleLabel.text = offersICloud ? "Bring Your Library to iPhone" : "Your Library Is Empty"
         messageLabel.text = offersICloud
             ? "Connect iCloud to fetch the library you already use on Mac and iPad."
@@ -1252,23 +1245,18 @@ private final class PhoneEmptyLibraryView: UIView {
         connectButton.configuration?.title = "Connect iCloud"
         connectButton.configuration?.image = UIImage(systemName: "icloud")
         connectButton.accessibilityIdentifier = "phone-connect-icloud"
-        createButton.isHidden = false
-        importButton.isHidden = false
         clearFiltersButton.isHidden = true
-        actions.isHidden = false
+        actions.isHidden = !offersICloud
     }
 
     func configureFirstFetch(syncStatus: String, canRetry: Bool) {
         primaryButtonStartsSync = true
-        imageView.image = UIImage(systemName: "icloud.and.arrow.down")
         titleLabel.text = canRetry ? "Library Hasn’t Been Fetched" : "Fetching Your Library"
         messageLabel.text = syncStatus
         connectButton.configuration?.title = "Try Again"
         connectButton.configuration?.image = UIImage(systemName: "arrow.clockwise")
         connectButton.accessibilityIdentifier = "phone-sync-now"
         connectButton.isHidden = !canRetry
-        createButton.isHidden = true
-        importButton.isHidden = true
         clearFiltersButton.isHidden = true
         actions.isHidden = !canRetry
     }
@@ -1279,19 +1267,15 @@ private final class PhoneEmptyLibraryView: UIView {
         offersClearFilters: Bool
     ) {
         primaryButtonStartsSync = false
-        imageView.image = UIImage(systemName: "magnifyingglass")
         titleLabel.text = title
         messageLabel.text = message
         connectButton.isHidden = true
-        createButton.isHidden = true
-        importButton.isHidden = true
         clearFiltersButton.isHidden = !offersClearFilters
         actions.isHidden = !offersClearFilters
     }
 
     private func updateForContentSizeCategory() {
         let isAccessibilitySize = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
-        imageView.isHidden = isAccessibilitySize
         stack.spacing = isAccessibilitySize ? 10 : 14
         scrollView.alwaysBounceVertical = isAccessibilitySize
     }

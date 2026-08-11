@@ -8,6 +8,7 @@ final class SyncLifecycleTests: XCTestCase {
     private var previousSyncPreference: Any?
 
     override func setUpWithError() throws {
+        SyncCoordinator.runtimeEnabledOverride = nil
         rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SyncLifecycleTests-\(UUID().uuidString)", isDirectory: true)
         setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, rootURL.path, 1)
@@ -17,6 +18,7 @@ final class SyncLifecycleTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        SyncCoordinator.runtimeEnabledOverride = nil
         unsetenv(SnippetStorageLocations.rootOverrideEnvironmentKey)
         if let previousSyncPreference {
             UserDefaults.standard.set(
@@ -48,6 +50,18 @@ final class SyncLifecycleTests: XCTestCase {
 
         XCTAssertEqual(disposition, .notStarted(.off))
         XCTAssertNil(environment.syncCoordinator.engine)
+    }
+
+    func testRuntimeSyncOverrideDoesNotChangePersistentPreference() {
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        SyncCoordinator.runtimeEnabledOverride = false
+        let environment = AppEnvironment()
+
+        environment.syncCoordinator.setEnabled(false)
+
+        XCTAssertFalse(SyncCoordinator.isEnabled)
+        XCTAssertEqual(SyncCoordinator.runtimeEnabledOverride, false)
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: SyncCoordinator.enabledDefaultsKey))
     }
 
     func testUnchangedForegroundReloadDoesNotPublishALibraryChange() {

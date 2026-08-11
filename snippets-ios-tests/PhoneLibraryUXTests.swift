@@ -37,7 +37,7 @@ final class PhoneLibraryUXTests: XCTestCase {
         rootURL = nil
     }
 
-    func testAccessibilityXXXLOnboardingReflowsIntoScrollableReadableActions() throws {
+    func testAccessibilityXXXLOnboardingReflowsIntoScrollableConnectAction() throws {
         let environment = AppEnvironment()
         let library = PhoneLibraryViewController(environment: environment)
         let navigation = UINavigationController(rootViewController: library)
@@ -52,19 +52,52 @@ final class PhoneLibraryUXTests: XCTestCase {
         let title = try XCTUnwrap(
             library.view.descendant(withAccessibilityIdentifier: "phone-empty-title") as? UILabel
         )
-        let create = try XCTUnwrap(
-            library.view.descendant(withAccessibilityIdentifier: "phone-empty-create") as? UIButton
+        let connect = try XCTUnwrap(
+            library.view.descendant(withAccessibilityIdentifier: "phone-connect-icloud") as? UIButton
         )
-        let scrollView = try XCTUnwrap(create.firstAncestor(ofType: UIScrollView.self))
+        let table = try XCTUnwrap(
+            library.view.descendant(withAccessibilityIdentifier: "phone-snippet-list") as? UITableView
+        )
+        let scrollView = try XCTUnwrap(connect.firstAncestor(ofType: UIScrollView.self))
         scrollView.layoutIfNeeded()
 
         let titleFrame = title.convert(title.bounds, to: scrollView)
-        let createFrame = create.convert(create.bounds, to: scrollView)
-        XCTAssertGreaterThan(createFrame.minY, titleFrame.maxY)
+        let connectFrame = connect.convert(connect.bounds, to: scrollView)
+        XCTAssertGreaterThan(connectFrame.minY, titleFrame.maxY)
         XCTAssertGreaterThan(title.bounds.width, 180, "The title must not collapse to one letter per line")
-        XCTAssertGreaterThan(create.bounds.width, 180, "Actions should use the available phone width")
-        XCTAssertEqual(create.titleLabel?.numberOfLines, 0)
+        XCTAssertGreaterThan(connect.bounds.width, 140, "The connect action must remain readable")
+        XCTAssertLessThan(connect.bounds.width, 300, "The connect action should remain compact")
+        XCTAssertEqual(connect.titleLabel?.numberOfLines, 0)
         XCTAssertGreaterThanOrEqual(scrollView.contentSize.height, scrollView.bounds.height)
+        XCTAssertFalse(table.isScrollEnabled, "An empty library must not collapse its large title")
+    }
+
+    func testOnboardingUsesCompactCenteredConnectActionWithoutDuplicateCreationAction() throws {
+        let environment = AppEnvironment()
+        let library = PhoneLibraryViewController(environment: environment)
+        let navigation = UINavigationController(rootViewController: library)
+        _ = host(navigation, size: CGSize(width: 390, height: 844))
+        library.reload()
+        library.view.layoutIfNeeded()
+
+        let title = try XCTUnwrap(
+            library.view.descendant(withAccessibilityIdentifier: "phone-empty-title") as? UILabel
+        )
+        let connect = try XCTUnwrap(
+            library.view.descendant(withAccessibilityIdentifier: "phone-connect-icloud") as? UIButton
+        )
+        let scrollView = try XCTUnwrap(connect.firstAncestor(ofType: UIScrollView.self))
+        scrollView.layoutIfNeeded()
+
+        let titleFrame = title.convert(title.bounds, to: scrollView)
+        let connectFrame = connect.convert(connect.bounds, to: scrollView)
+        let groupCenterY = (titleFrame.minY + connectFrame.maxY) / 2
+        XCTAssertEqual(groupCenterY, scrollView.bounds.midY - 20, accuracy: 50)
+        XCTAssertLessThan(connectFrame.maxY - titleFrame.minY, 220)
+        XCTAssertLessThan(connectFrame.width, 300)
+        XCTAssertNil(
+            library.view.descendant(withAccessibilityIdentifier: "phone-empty-create")
+        )
     }
 
     func testRowAccessibilityDescribesStatePinAndTagsAndOffersActions() throws {
@@ -199,6 +232,7 @@ final class PhoneLibraryUXTests: XCTestCase {
             "The expanded More control must follow the large-title row at the bar's lower edge"
         )
         XCTAssertEqual(table.style, .grouped)
+        XCTAssertTrue(table.isScrollEnabled)
         XCTAssertEqual(table.frame.minY, library.view.bounds.minY, accuracy: 0.5)
         XCTAssertEqual(table.frame.maxY, library.view.bounds.maxY, accuracy: 0.5)
         XCTAssertTrue(banner.isDescendant(of: syncHeader))

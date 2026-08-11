@@ -23,12 +23,13 @@ final class SnippetsIOSUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset"]
         app.launch()
 
-        let create = app.buttons["phone-empty-create"]
+        let create = app.buttons["phone-new-snippet"]
         try XCTSkipUnless(
             create.waitForExistence(timeout: 3),
             "This smoke test covers the iPhone root controller"
         )
         XCTAssertTrue(app.buttons["phone-connect-icloud"].exists)
+        XCTAssertFalse(app.buttons["phone-empty-create"].exists)
         XCTAssertTrue(app.buttons["phone-tag-filter"].exists)
         XCTAssertTrue(app.buttons["phone-new-snippet"].exists)
         XCTAssertTrue(app.searchFields["phone-snippet-search"].exists)
@@ -91,7 +92,7 @@ final class SnippetsIOSUITests: XCTestCase {
         app.launch()
 
         try XCTSkipIf(
-            app.buttons["phone-empty-create"].waitForExistence(timeout: 2),
+            app.buttons["phone-new-snippet"].waitForExistence(timeout: 2),
             "The touch-first iPhone interface intentionally has no shortcut panel"
         )
 
@@ -126,7 +127,7 @@ final class SnippetsIOSUITests: XCTestCase {
         ]
         app.launch()
 
-        let isPhone = app.buttons["phone-empty-create"].waitForExistence(timeout: 3)
+        let isPhone = app.buttons["phone-new-snippet"].waitForExistence(timeout: 3)
         if isPhone {
             try capturePhoneAppStoreScreenshots(in: app)
         } else {
@@ -139,7 +140,7 @@ final class SnippetsIOSUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset"]
         app.launch()
 
-        let phoneCreate = app.buttons["phone-empty-create"]
+        let phoneCreate = app.buttons["phone-new-snippet"]
         let isPhone = phoneCreate.waitForExistence(timeout: 2)
         if isPhone {
             phoneCreate.tap()
@@ -195,7 +196,7 @@ final class SnippetsIOSUITests: XCTestCase {
 
         for (index, sample) in samples.enumerated() {
             if index == 0 {
-                app.buttons["phone-empty-create"].tap()
+                app.buttons["phone-new-snippet"].tap()
             } else {
                 XCTAssertTrue(app.buttons["phone-new-snippet"].waitForExistence(timeout: 3))
                 app.buttons["phone-new-snippet"].tap()

@@ -70,6 +70,13 @@ final class SyncCoordinator {
     /// key and an explicit "off" behave identically, which is what we want.
     static let enabledDefaultsKey = "SnippetsICloudSyncEnabled"
 
+    #if DEBUG
+    /// Process-only preference used by explicit debug launch modes. Keeping this out of
+    /// UserDefaults makes a flagged verification launch unable to alter the next normal
+    /// launch of the same app sandbox.
+    static var runtimeEnabledOverride: Bool?
+    #endif
+
     /// Why sync is not running.
     ///
     /// Down from four cases to three, because two of them — "set up Secure Snippets
@@ -158,7 +165,20 @@ final class SyncCoordinator {
     // MARK: - The preference
 
     static var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: enabledDefaultsKey)
+        #if DEBUG
+        if let runtimeEnabledOverride { return runtimeEnabledOverride }
+        #endif
+        return UserDefaults.standard.bool(forKey: enabledDefaultsKey)
+    }
+
+    private static func storeEnabledPreference(_ enabled: Bool) {
+        #if DEBUG
+        if runtimeEnabledOverride != nil {
+            runtimeEnabledOverride = enabled
+            return
+        }
+        #endif
+        UserDefaults.standard.set(enabled, forKey: enabledDefaultsKey)
     }
 
     var readiness: Readiness {
@@ -188,7 +208,7 @@ final class SyncCoordinator {
     /// Writing the preference and starting are one call on purpose: two calls is how a
     /// checkbox ends up out of step with what is actually running.
     func setEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: Self.enabledDefaultsKey)
+        Self.storeEnabledPreference(enabled)
         if enabled {
             start()
         } else {
@@ -241,7 +261,7 @@ final class SyncCoordinator {
             // Independent fail-closed channel: if state.json or its lock is unavailable,
             // this process remains halted in memory and the next launch does not build a
             // sync engine at all. Re-enabling the checkbox is then an explicit user act.
-            UserDefaults.standard.set(false, forKey: Self.enabledDefaultsKey)
+            Self.storeEnabledPreference(false)
             _ = UserDefaults.standard.synchronize()
         }
         let generation = lifecycleGeneration
