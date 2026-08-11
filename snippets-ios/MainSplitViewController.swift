@@ -151,7 +151,7 @@ final class MainSplitViewController: UISplitViewController {
             title: "Copy Snippet",
             action: #selector(copySnippetCommand(_:)),
             input: "\r",
-            modifierFlags: .command
+            modifierFlags: []
         )
         command.wantsPriorityOverSystemBehavior = true
         return command
@@ -728,6 +728,14 @@ final class MainSplitViewController: UISplitViewController {
     func handleEscapeBeforeSystemSearch() -> Bool {
         guard listController.isSearchFocused else { return false }
         listController.focusFilteredList()
+        return true
+    }
+
+    func handleReturnBeforeSystemBehavior() -> Bool {
+        guard !shortcutPanel.isPresented,
+              listController.isListFocused,
+              selectedSnippetID != nil else { return false }
+        copySnippetCommand(Self.copySnippetKeyCommand())
         return true
     }
 

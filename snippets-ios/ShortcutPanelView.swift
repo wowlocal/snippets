@@ -12,7 +12,7 @@ final class ShortcutPanelView: UIView {
     private static let descriptors: [Descriptor] = [
         Descriptor(title: "Expand a Snippet", shortcut: "\\keyword", isEssential: true),
         Descriptor(title: "Insert a Placeholder", shortcut: "{", isEssential: true),
-        Descriptor(title: "Copy Snippet", shortcut: "⌘↩", isEssential: true),
+        Descriptor(title: "Copy Snippet", shortcut: "↩", isEssential: true),
         Descriptor(title: "Search", shortcut: "⌘F", isEssential: true),
         Descriptor(title: "Toggle Sidebar", shortcut: "⌘B", isEssential: true),
         Descriptor(title: "Create New Snippet", shortcut: "⌘N", isEssential: true),

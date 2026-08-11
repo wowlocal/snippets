@@ -322,15 +322,15 @@ final class SnippetsIOSTests: XCTestCase {
         environment.syncCoordinator.removeStateObserver(second)
     }
 
-    func testCopySnippetShortcutUsesCommandReturnWithTextInputPriority() {
+    func testCopySnippetShortcutUsesUnmodifiedReturnWithSystemPriority() {
         let command = MainSplitViewController.copySnippetKeyCommand()
 
         XCTAssertEqual(command.input, "\r")
-        XCTAssertEqual(command.modifierFlags, .command)
+        XCTAssertEqual(command.modifierFlags, [])
         XCTAssertTrue(command.wantsPriorityOverSystemBehavior)
     }
 
-    func testCopySnippetShortcutRoutesPastFocusedTextInputAndCopiesSelection() {
+    func testCopySnippetCommandCopiesSelection() {
         let pasteboard = TestSnippetPasteboard(string: nil)
         let environment = AppEnvironment(pasteboard: pasteboard)
         let snippet = environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
@@ -341,19 +341,26 @@ final class SnippetsIOSTests: XCTestCase {
         editorController?.loadViewIfNeeded()
         editorController?.bind(to: snippet.id)
 
-        let textField = UITextField()
-        rootController.view.addSubview(textField)
         let command = MainSplitViewController.copySnippetKeyCommand()
-        guard let action = command.action else {
-            return XCTFail("Copy snippet command should have an action")
-        }
-        let target = textField.target(forAction: action, withSender: command)
-
-        XCTAssertTrue(target as AnyObject? === rootController)
-        XCTAssertTrue(
-            UIApplication.shared.sendAction(action, to: target, from: command, for: nil)
-        )
+        rootController.copySnippetCommand(command)
         XCTAssertEqual(pasteboard.string, "Hello from iPad")
+    }
+
+    func testReturnHandlerCopiesOnlyWhenSnippetListOwnsFocus() {
+        let pasteboard = TestSnippetPasteboard(string: nil)
+        let environment = AppEnvironment(pasteboard: pasteboard)
+        let snippet = environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+
+        hosted.list.focusFilteredList()
+        XCTAssertTrue(hosted.controller.handleReturnBeforeSystemBehavior())
+        XCTAssertEqual(pasteboard.string, "Hello from iPad")
+
+        pasteboard.string = nil
+        hosted.controller.searchCommand()
+        XCTAssertTrue(waitUntil { hosted.list.isSearchFocused })
+        XCTAssertFalse(hosted.controller.handleReturnBeforeSystemBehavior())
+        XCTAssertNil(pasteboard.string)
     }
 
     func testAppWideKeyboardCommandsUseMacShortcutsAndWinTextInputPriority() {

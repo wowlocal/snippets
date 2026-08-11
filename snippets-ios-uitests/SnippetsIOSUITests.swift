@@ -60,17 +60,18 @@ final class SnippetsIOSUITests: XCTestCase {
         )
     }
 
-    func testCommandReturnCopiesSelectedSnippetWhileSearchIsFocused() throws {
+    func testReturnCopiesSelectedSnippetFromList() throws {
         #if targetEnvironment(simulator)
-        throw XCTSkip("The iOS Simulator does not dispatch synthesized modifier keys through UIKeyCommand")
+        throw XCTSkip("The iOS Simulator does not dispatch synthesized keys through the hardware-key press pipeline")
         #else
         let flow = try createGreetingSnippetAndFocusSearch()
         try XCTSkipIf(flow.isPhone, "Hardware keyboard parity belongs to the iPad interface")
 
-        flow.search.typeKey(.return, modifierFlags: .command)
+        flow.search.typeKey(.escape, modifierFlags: [])
+        flow.app.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(
             flow.app.staticTexts["Copied “iPad Greeting”."].waitForExistence(timeout: 3),
-            "⌘Return should copy the selected snippet even while Search owns focus"
+            "Return should copy the selected snippet when the list owns focus"
         )
         #endif
     }

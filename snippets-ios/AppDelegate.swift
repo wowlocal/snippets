@@ -4,39 +4,64 @@ import UIKit
 protocol SnippetsRootController: AnyObject {
     func open(_ url: URL)
     func handleEscapeBeforeSystemSearch() -> Bool
+    func handleReturnBeforeSystemBehavior() -> Bool
 }
 
 extension SnippetsRootController {
     func handleEscapeBeforeSystemSearch() -> Bool { false }
+    func handleReturnBeforeSystemBehavior() -> Bool { false }
 }
 
-/// UISearchController treats a hardware Escape press as Cancel and clears the
-/// query before responder-chain key commands run. Catch that one press at the
-/// window boundary so the app can move focus while preserving the filter.
+/// UISearchController and UITableView can consume unmodified hardware keys before
+/// responder-chain commands run. Catch Escape and Return at the window boundary
+/// so their Mac-style list behavior remains reliable.
 final class SnippetWindow: UIWindow {
     var onEscapePress: (() -> Bool)?
+    var onReturnPress: (() -> Bool)?
 
     private var isConsumingEscapePress = false
+    private var isConsumingReturnPress = false
 
     override func sendEvent(_ event: UIEvent) {
-        guard let pressesEvent = event as? UIPressesEvent,
-              let escapePress = pressesEvent.allPresses.first(where: {
-                  $0.key?.keyCode == .keyboardEscape
-              }) else {
+        guard let pressesEvent = event as? UIPressesEvent else {
             super.sendEvent(event)
             return
         }
 
-        if isConsumingEscapePress {
-            if escapePress.phase == .ended || escapePress.phase == .cancelled {
-                isConsumingEscapePress = false
+        if let escapePress = pressesEvent.allPresses.first(where: {
+            $0.key?.keyCode == .keyboardEscape
+        }) {
+            if isConsumingEscapePress {
+                if escapePress.phase == .ended || escapePress.phase == .cancelled {
+                    isConsumingEscapePress = false
+                }
+                return
             }
-            return
+
+            if escapePress.phase == .began, onEscapePress?() == true {
+                isConsumingEscapePress = true
+                return
+            }
         }
 
-        if escapePress.phase == .began, onEscapePress?() == true {
-            isConsumingEscapePress = true
-            return
+        let appModifiers: UIKeyModifierFlags = [.command, .alternate, .control, .shift]
+        if let returnPress = pressesEvent.allPresses.first(where: {
+            $0.key?.keyCode == .keyboardReturnOrEnter
+                || $0.key?.keyCode == .keypadEnter
+        }) {
+            if isConsumingReturnPress {
+                if returnPress.phase == .ended || returnPress.phase == .cancelled {
+                    isConsumingReturnPress = false
+                }
+                return
+            }
+
+            if pressesEvent.modifierFlags.intersection(appModifiers).isEmpty,
+               returnPress.phase == .began,
+               onReturnPress?() == true {
+                isConsumingReturnPress = true
+                return
+            }
         }
 
         super.sendEvent(event)
@@ -101,6 +126,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = SnippetWindow(windowScene: windowScene)
         window.onEscapePress = { [weak root] in
             root?.handleEscapeBeforeSystemSearch() == true
+        }
+        window.onReturnPress = { [weak root] in
+            root?.handleReturnBeforeSystemBehavior() == true
         }
         window.tintColor = AppTheme.tint
         window.rootViewController = root
