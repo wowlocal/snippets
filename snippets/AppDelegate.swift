@@ -176,6 +176,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // The plaintext store shows secure records in the list, counts their tags, and
         // enforces keyword uniqueness against them — but can never reach their content.
         store.secureProvider = secureStore
+        // Plaintext edits and external writers such as `snippets-cli` share one trailing
+        // outbound-sync debounce. Assign this before publishing the initial attachment.
+        store.syncDelegate = syncCoordinator
         secureStore.onChange = { [weak self] in
             guard let self else { return }
             // A vault change alters the merged display list, so the same channel a

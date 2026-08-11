@@ -25,6 +25,47 @@ nonisolated struct SyncRoundRequestCoalescer {
     }
 }
 
+/// A trailing-edge debounce for outbound library changes.
+///
+/// Editors publish on every keystroke, and a shell script may invoke `snippets-cli`
+/// once per input line. Starting a CloudKit round for every one of those mutations is
+/// both wasteful and more likely to hit backend throttling. Resetting one one-shot timer
+/// gives the whole burst a single round while keeping the ordinary interactive delay
+/// short. The timer runs in common modes so an open menu or editor tracking loop cannot
+/// strand a completed change until the next two-minute poll.
+@MainActor
+final class SyncTriggerDebouncer {
+    private let delay: TimeInterval
+    private let action: () -> Void
+    private var timer: Timer?
+
+    init(delay: TimeInterval, action: @escaping () -> Void) {
+        precondition(delay >= 0)
+        self.delay = delay
+        self.action = action
+    }
+
+    var isPending: Bool { timer != nil }
+
+    func request() {
+        cancel()
+        let next = Timer(timeInterval: delay, repeats: false) { [weak self] fired in
+            MainActor.assumeIsolated {
+                guard let self, self.timer === fired else { return }
+                self.timer = nil
+                self.action()
+            }
+        }
+        timer = next
+        RunLoop.main.add(next, forMode: .common)
+    }
+
+    func cancel() {
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
 /// Owns whether sync is running, and runs it.
 ///
 /// ## Off is structural, not filtered
@@ -69,6 +110,10 @@ final class SyncCoordinator {
     /// `false` for an absent key, so the default needs no registration — and an absent
     /// key and an explicit "off" behave identically, which is what we want.
     static let enabledDefaultsKey = "SnippetsICloudSyncEnabled"
+
+    /// Long enough to collapse a CLI loop or a run of editor keystrokes, while still
+    /// making a completed local change visible to another device almost immediately.
+    static let libraryChangeDebounceInterval: TimeInterval = 1
 
     #if DEBUG
     /// Process-only preference used by explicit debug launch modes. Keeping this out of
@@ -152,6 +197,13 @@ final class SyncCoordinator {
     private var activeKeyMaterial: Data?
     private var startFailure: String?
 
+    private lazy var libraryChangeDebouncer = SyncTriggerDebouncer(
+        delay: Self.libraryChangeDebounceInterval
+    ) { [weak self] in
+        guard let self else { return }
+        _ = self.syncNow(trigger: .localLibraryChange)
+    }
+
     init(
         library: any SyncLibraryAccess,
         keys: SyncKeyStore,
@@ -186,6 +238,10 @@ final class SyncCoordinator {
         if let startFailure { return .cannotStart(startFailure) }
         return .ready
     }
+
+    /// Observable for lifecycle checks and focused tests; the timer itself remains an
+    /// implementation detail.
+    var hasPendingLibraryChangeSync: Bool { libraryChangeDebouncer.isPending }
 
     /// Destructive local maintenance may proceed only after an old round has returned,
     /// not merely after the checkbox was switched off.
@@ -314,6 +370,7 @@ final class SyncCoordinator {
 
     func stop() {
         lifecycleGeneration &+= 1
+        libraryChangeDebouncer.cancel()
         startRetryTimer?.invalidate()
         startRetryTimer = nil
         pollTimer?.invalidate()
@@ -336,10 +393,25 @@ final class SyncCoordinator {
     /// after a vault was created or adopted, which adds records sync had nothing to say
     /// about a moment ago. Safe to call repeatedly; `start()` is a no-op once running.
     func libraryStructureChanged() {
+        scheduleLibraryChangeSync()
+    }
+
+    /// Receives ordinary store mutations, including changes adopted from
+    /// `snippets-cli`. CloudKit-applied writes deliberately use `.remoteSync`: the
+    /// current round already owns those bytes, so turning them into another outbound
+    /// request would create a fetch/replay loop.
+    func libraryDidChange(_ source: SnippetStore.ChangeSource) {
+        switch source {
+        case .local, .external:
+            scheduleLibraryChangeSync()
+        case .remoteSync:
+            break
+        }
+    }
+
+    private func scheduleLibraryChangeSync() {
         guard Self.isEnabled else { return }
-        // `syncNow` already starts a stopped engine, so there is one path rather than two
-        // that have to be kept saying the same thing.
-        _ = syncNow(trigger: .localLibraryChange)
+        libraryChangeDebouncer.request()
     }
 
     // MARK: - Running a round
@@ -371,6 +443,11 @@ final class SyncCoordinator {
         trigger: DiagnosticSyncTrigger,
         completion: RequestCompletion?
     ) -> RequestDisposition {
+        // Any round requested before the trailing timer fires includes the same current
+        // library state. Consume the pending debounce so it cannot manufacture a second,
+        // redundant round immediately afterwards.
+        libraryChangeDebouncer.cancel()
+
         guard Self.isEnabled else {
             let unavailable = Readiness.off
             completion?(.notStarted(unavailable))
@@ -700,3 +777,5 @@ final class SyncCoordinator {
         }
     }
 }
+
+extension SyncCoordinator: SnippetStoreSyncDelegate {}

@@ -84,6 +84,7 @@ final class AppEnvironment {
         )
 
         store.secureProvider = secureStore
+        store.syncDelegate = syncCoordinator
         secureStore.onChange = { [weak self] in
             guard let self else { return }
             self.store.onChange?(self.localSecureChangeDepth > 0 ? .local : .external)

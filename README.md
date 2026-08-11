@@ -157,6 +157,11 @@ output for:
 - `reveal`, which asks the running app for human approval instead of decrypting the
   vault itself.
 
+When iCloud sync is enabled and the Mac app is running, CLI mutations share a one-second
+trailing debounce and then request one outbound sync round. A script can therefore add or
+update many snippets without starting one CloudKit operation per command. If the app is
+closed, its normal startup round uploads those changes the next time it launches.
+
 Both apps keep bounded, structured diagnostic logs for troubleshooting. Settings can
 export one validated JSONL file or delete retained logs. The schema excludes snippet
 bodies, display names, tags, IDs, paths, ciphertext, and keys; secure keywords may be

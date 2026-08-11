@@ -487,6 +487,13 @@ first would rewrite local records before this device's own changes had left it, 
 between loses them with nothing to recover from. The worst case of pushing first is a duplicate
 round.
 
+Local app edits and filesystem changes adopted from `snippets-cli` request an outbound round on a
+one-second trailing debounce. The debounce resets across a burst, so an editor typing run or a
+script invoking the CLI once per input line produces one round after the burst rather than one
+CloudKit operation per mutation. A manual, startup, foreground, or polling round consumes any
+pending debounce because it already includes the current library. Changes written while applying
+a fetched CloudKit batch are marked as remote and refresh the UI without scheduling a replay.
+
 A record is recorded in the base only once the backend has *accepted* it. Recording it at submit
 time would make the next diff skip it, and a rejected record would never be pushed again.
 

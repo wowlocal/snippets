@@ -300,8 +300,12 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         })
 
         // Both stores re-read from disk, because the transaction wrote underneath them.
-        store.reloadAfterExternalWrite()
-        secureStore.reload()
+        // Suppress their independent callbacks and publish one explicitly remote change:
+        // UI still refreshes, but the outbound debounce must not replay a round merely
+        // because this round applied what it just fetched.
+        store.reloadAfterExternalWrite(notifyChange: false)
+        secureStore.reload(notifyChange: false)
+        store.coordinatedReloadDidFinish(.remoteSync)
         return ApplyOutcome(
             changedIDs: outcome.value.changedIDs,
             deferredIDs: outcome.value.deferredIDs,

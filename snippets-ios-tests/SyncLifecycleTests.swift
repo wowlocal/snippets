@@ -113,4 +113,39 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertTrue(coalescer.finishRound(generation: 7, currentGeneration: 8))
         XCTAssertFalse(coalescer.finishRound(generation: 8, currentGeneration: 8))
     }
+
+    func testLibraryChangeDebouncerCollapsesABurstIntoOneAction() async throws {
+        var fireCount = 0
+        let fired = expectation(description: "debounced action")
+        let debouncer = SyncTriggerDebouncer(delay: 0.02) {
+            fireCount += 1
+            fired.fulfill()
+        }
+
+        debouncer.request()
+        debouncer.request()
+        debouncer.request()
+
+        XCTAssertTrue(debouncer.isPending)
+        await fulfillment(of: [fired], timeout: 1)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(fireCount, 1)
+        XCTAssertFalse(debouncer.isPending)
+    }
+
+    func testStoreChangesUseDebounceButRemoteSyncWritesDoNot() {
+        SyncCoordinator.runtimeEnabledOverride = true
+        let environment = AppEnvironment()
+
+        XCTAssertTrue(environment.store.syncDelegate === environment.syncCoordinator)
+        environment.store.coordinatedReloadDidFinish(.remoteSync)
+        XCTAssertFalse(environment.syncCoordinator.hasPendingLibraryChangeSync)
+
+        _ = environment.store.addSnippet(name: "From CLI", content: "one")
+        _ = environment.store.addSnippet(name: "From CLI", content: "two")
+        XCTAssertTrue(environment.syncCoordinator.hasPendingLibraryChangeSync)
+
+        environment.syncCoordinator.stop()
+        XCTAssertFalse(environment.syncCoordinator.hasPendingLibraryChangeSync)
+    }
 }

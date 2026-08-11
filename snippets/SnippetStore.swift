@@ -251,8 +251,12 @@ final class SnippetStore {
     }
 
     enum ChangeSource {
+        /// A mutation made through this in-process store.
         case local
+        /// A mutation adopted from another local process or a filesystem writer.
         case external
+        /// A mutation written by the active CloudKit round itself.
+        case remoteSync
     }
 
     private(set) var snippets: [Snippet] = []
@@ -1351,6 +1355,14 @@ final class SnippetStore {
     @discardableResult
     func reloadAfterExternalWrite(notifyChange: Bool = true) -> Bool {
         reloadFromDiskIfNeeded(notifyChange: notifyChange)
+    }
+
+    /// Publishes one change after a coordinator has reloaded multiple on-disk
+    /// projections with their individual callbacks suppressed. The sync bridge uses
+    /// this after applying a CloudKit batch so UI observers refresh once while the sync
+    /// delegate can identify and ignore its own write.
+    func coordinatedReloadDidFinish(_ source: ChangeSource) {
+        notifyChanged(source)
     }
 
     private func rememberDiskBytes(_ data: Data, digest: String? = nil) {
