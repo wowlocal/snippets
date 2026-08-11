@@ -273,4 +273,98 @@ final class SnippetSearchIndexTests: XCTestCase {
             "the replaced pending library must never be normalized"
         )
     }
+
+    func testNewerCacheHitPreventsOlderBuildFromReplacingSnapshot() {
+        let gate = SnapshotBuildGate(blockingBuildNumber: 2)
+        let index = SnippetSearchIndex(beforeSnapshotBuildForTesting: {
+            gate.beforeBuild()
+        })
+        let original = Snippet(name: "Original", keyword: "original", content: "first body")
+        var changed = original
+        changed.content = "changed body"
+
+        _ = index.results(
+            in: [original],
+            searchText: "first",
+            activeTagKeys: [],
+            locale: locale
+        )
+        XCTAssertEqual(index.statistics.normalizedEntryBuildCount, 1)
+
+        let staleBuildFinished = DispatchSemaphore(value: 0)
+        let locale = self.locale
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = index.results(
+                in: [changed],
+                searchText: "changed",
+                activeTagKeys: [],
+                locale: locale
+            )
+            staleBuildFinished.signal()
+        }
+
+        XCTAssertEqual(gate.waitUntilBlocked(), .success)
+
+        // This is the newer logical request, but it is a hit on the currently
+        // committed snapshot. It must still supersede the in-flight changed build.
+        XCTAssertEqual(
+            index.results(
+                in: [original],
+                searchText: "first",
+                activeTagKeys: [],
+                locale: locale
+            ),
+            [original]
+        )
+
+        gate.release()
+        XCTAssertEqual(staleBuildFinished.wait(timeout: .now() + 1), .success)
+        let buildsAfterStaleWork = index.statistics.normalizedEntryBuildCount
+        XCTAssertEqual(buildsAfterStaleWork, 2)
+
+        XCTAssertEqual(
+            index.results(
+                in: [original],
+                searchText: "first",
+                activeTagKeys: [],
+                locale: locale
+            ),
+            [original]
+        )
+        XCTAssertEqual(
+            index.statistics.normalizedEntryBuildCount,
+            buildsAfterStaleWork,
+            "the stale changed snapshot must not force the original library to refold"
+        )
+    }
+}
+
+private final class SnapshotBuildGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let blockingBuildNumber: Int
+    private var buildCount = 0
+    private let blocked = DispatchSemaphore(value: 0)
+    private let releaseBuild = DispatchSemaphore(value: 0)
+
+    init(blockingBuildNumber: Int) {
+        self.blockingBuildNumber = blockingBuildNumber
+    }
+
+    func beforeBuild() {
+        lock.lock()
+        buildCount += 1
+        let shouldBlock = buildCount == blockingBuildNumber
+        lock.unlock()
+        guard shouldBlock else { return }
+        blocked.signal()
+        releaseBuild.wait()
+    }
+
+    func waitUntilBlocked() -> DispatchTimeoutResult {
+        blocked.wait(timeout: .now() + 1)
+    }
+
+    func release() {
+        releaseBuild.signal()
+    }
 }

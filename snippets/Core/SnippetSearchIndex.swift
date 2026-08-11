@@ -288,16 +288,21 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
     private static let defaultMaximumNormalizedBytes = 16 * 1_024 * 1_024
 
     private let maximumNormalizedBytes: Int
+    private let beforeSnapshotBuildForTesting: (@Sendable () -> Void)?
     private let lock = NSLock()
     private var latestSnapshot: SnippetSearchSnapshot?
     private var snapshotBuildCount = 0
     private var normalizedEntryBuildCount = 0
     private var lastSnapshotEntryBuildCount = 0
-    private var nextBuildSequence: UInt64 = 0
+    private var nextRequestSequence: UInt64 = 0
     private var committedBuildSequence: UInt64 = 0
 
-    init(maximumNormalizedBytes: Int = SnippetSearchIndex.defaultMaximumNormalizedBytes) {
+    init(
+        maximumNormalizedBytes: Int = SnippetSearchIndex.defaultMaximumNormalizedBytes,
+        beforeSnapshotBuildForTesting: (@Sendable () -> Void)? = nil
+    ) {
         self.maximumNormalizedBytes = max(0, maximumNormalizedBytes)
+        self.beforeSnapshotBuildForTesting = beforeSnapshotBuildForTesting
     }
 
     func results(
@@ -315,25 +320,29 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
         locale: Locale = .current
     ) -> SnippetSearchSnapshot {
         lock.lock()
+        nextRequestSequence &+= 1
+        let requestSequence = nextRequestSequence
         if let latestSnapshot,
            latestSnapshot.represents(
                snippets,
                locale: locale,
                maximumNormalizedBytes: maximumNormalizedBytes
            ) {
+            // A cache hit is still a newer request. Advancing the committed sequence
+            // prevents an older in-flight build from replacing this requested state.
+            committedBuildSequence = requestSequence
             lastSnapshotEntryBuildCount = 0
             lock.unlock()
             return latestSnapshot
         }
         let previous = latestSnapshot
-        nextBuildSequence &+= 1
-        let buildSequence = nextBuildSequence
         lock.unlock()
 
         // Normalization intentionally happens outside the lock. A synchronous UI
         // refresh can therefore supersede a stale background query without waiting
         // for that older scan. The sequence below prevents the older build from later
         // replacing the newer cache.
+        beforeSnapshotBuildForTesting?()
         let snapshot = SnippetSearchSnapshot.build(
             from: snippets,
             locale: locale,
@@ -344,9 +353,9 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
         lock.lock()
         snapshotBuildCount += 1
         normalizedEntryBuildCount += snapshot.normalizedEntryBuildCount
-        if buildSequence >= committedBuildSequence {
+        if requestSequence >= committedBuildSequence {
             latestSnapshot = snapshot
-            committedBuildSequence = buildSequence
+            committedBuildSequence = requestSequence
             lastSnapshotEntryBuildCount = snapshot.normalizedEntryBuildCount
         }
         lock.unlock()
