@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "snippets-development",
+  "version": "1.0.0",
+  "description": "Project-specific workflows for developing and releasing the Snippets apps.",
+  "repository": "https://github.com/wowlocal/snippets",
+  "keywords": [
+    "snippets",
+    "ios",
+    "ipad",
+    "testflight",
+    "app-store-connect"
+  ]
+}
