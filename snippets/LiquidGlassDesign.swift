@@ -435,11 +435,18 @@ private final class FloatingPanelSurfaceView: NSVisualEffectView {
 }
 
 private final class ScrollFadeMaskContainerView: NSView {
+    private struct MaskState: Equatable {
+        let bounds: CGRect
+        let topIntensity: CGFloat
+        let bottomIntensity: CGFloat
+    }
+
     private weak var scrollView: NSScrollView?
     private var boundsObserver: NSObjectProtocol?
     private let maskLayer = CAGradientLayer()
     private let topFadeHeight: CGFloat = 26
     private let bottomFadeHeight: CGFloat = 20
+    private var appliedMaskState: MaskState?
 
     init(scrollView: NSScrollView) {
         self.scrollView = scrollView
@@ -466,6 +473,12 @@ private final class ScrollFadeMaskContainerView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateMask()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        appliedMaskState = nil
         updateMask()
     }
 
@@ -528,6 +541,13 @@ private final class ScrollFadeMaskContainerView: NSView {
     }
 
     private func applyMask(topIntensity: CGFloat, bottomIntensity: CGFloat) {
+        let maskState = MaskState(
+            bounds: bounds,
+            topIntensity: topIntensity,
+            bottomIntensity: bottomIntensity
+        )
+        guard maskState != appliedMaskState else { return }
+
         let height = max(bounds.height, 1)
         let topFade = min(topFadeHeight / height, 0.45)
         let bottomFade = min(bottomFadeHeight / height, 0.45)
@@ -548,5 +568,6 @@ private final class ScrollFadeMaskContainerView: NSView {
             1
         ]
         CATransaction.commit()
+        appliedMaskState = maskState
     }
 }

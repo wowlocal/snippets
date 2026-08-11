@@ -41,6 +41,8 @@
 	<string>Snippets uses Face ID to reveal encrypted secure snippets.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>SnippetsKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.khm.snippets</string>
 	<key>UIApplicationSceneManifest</key>

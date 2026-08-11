@@ -274,8 +274,9 @@ final class PhoneLibraryViewController: UIViewController {
         // row, while the compact controls are vertically centered. Interpolate that
         // small optical correction as UIKit collapses the navigation bar.
         let expansion = min(max((navigationBar.bounds.height - 44) / 52, 0), 1)
-        moreButtonBottomConstraint.constant = -4 * expansion
-        navigationBar.bringSubviewToFront(moreButton)
+        let desiredConstant = -4 * expansion
+        guard moreButtonBottomConstraint.constant != desiredConstant else { return }
+        moreButtonBottomConstraint.constant = desiredConstant
     }
 
     private func configureToolbar() {
@@ -843,6 +844,14 @@ private final class PhoneSnippetCell: UITableViewCell {
     private let titleRow = UIStackView()
     private let tagsStack = UIStackView()
     private let tagsSpacer = UIView()
+    private let tagPillLabels = (0..<3).map { _ in PhoneTagPillLabel() }
+    private let moreTagsLabel: UILabel = {
+        let label = UILabel()
+        label.font = AppTheme.scaledFont(size: 11, weight: .medium, textStyle: .caption1)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = .secondaryLabel
+        return label
+    }()
     private let contentStack = UIStackView()
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -911,6 +920,13 @@ private final class PhoneSnippetCell: UITableViewCell {
         tagsStack.alignment = .center
         tagsSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         tagsSpacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        tagPillLabels.forEach { label in
+            label.isHidden = true
+            tagsStack.addArrangedSubview(label)
+        }
+        moreTagsLabel.isHidden = true
+        tagsStack.addArrangedSubview(moreTagsLabel)
+        tagsStack.addArrangedSubview(tagsSpacer)
 
         [statusSymbols, nameLabel, dateLabel].forEach(titleRow.addArrangedSubview)
         titleRow.axis = .horizontal
@@ -1016,23 +1032,17 @@ private final class PhoneSnippetCell: UITableViewCell {
         nameLabel.textColor = snippet.isEnabled ? .label : .secondaryLabel
         detailLabel.textColor = snippet.isEnabled ? .secondaryLabel : .tertiaryLabel
 
-        tagsStack.arrangedSubviews.forEach { view in
-            tagsStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
+        for (index, label) in tagPillLabels.enumerated() {
+            guard index < snippet.tags.count else {
+                label.isHidden = true
+                continue
+            }
+            label.configure(tag: snippet.tags[index])
+            label.isHidden = false
         }
-        for tag in snippet.tags.prefix(3) {
-            let label = PhoneTagPillLabel()
-            label.configure(tag: tag)
-            tagsStack.addArrangedSubview(label)
-        }
-        if snippet.tags.count > 3 {
-            let more = UILabel()
-            more.font = AppTheme.scaledFont(size: 11, weight: .medium, textStyle: .caption1)
-            more.textColor = .secondaryLabel
-            more.text = "+\(snippet.tags.count - 3)"
-            tagsStack.addArrangedSubview(more)
-        }
-        tagsStack.addArrangedSubview(tagsSpacer)
+        let additionalTagCount = max(snippet.tags.count - tagPillLabels.count, 0)
+        moreTagsLabel.text = additionalTagCount > 0 ? "+\(additionalTagCount)" : nil
+        moreTagsLabel.isHidden = additionalTagCount == 0
         tagsStack.isHidden = snippet.tags.isEmpty
         updateTagLayout()
 
@@ -1099,6 +1109,7 @@ private final class PhoneTagPillLabel: UILabel {
         super.init(frame: frame)
         accessibilityIdentifier = "phone-tag-pill"
         font = AppTheme.scaledFont(size: 11, weight: .medium, textStyle: .caption1)
+        adjustsFontForContentSizeCategory = true
         numberOfLines = 1
         layer.cornerRadius = 8
         layer.cornerCurve = .continuous

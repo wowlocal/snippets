@@ -689,6 +689,7 @@
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "snippets-ios/Info-iOS.plist";
+				INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Snippets;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -726,6 +727,7 @@
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "snippets-ios/Info-iOS.plist";
+				INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Snippets;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
