@@ -21,7 +21,7 @@ final class ShortcutPanelView: UIView {
         Descriptor(title: "Delete Snippet", shortcut: "⌘⌫", isEssential: true),
         Descriptor(title: "Next Field", shortcut: "⇥", isEssential: true),
         Descriptor(title: "Previous Field", shortcut: "⇧⇥", isEssential: true),
-        Descriptor(title: "Dismiss Panel", shortcut: "esc", isEssential: true),
+        Descriptor(title: "Return to Snippet List", shortcut: "esc", isEssential: true),
         Descriptor(title: "Import", shortcut: "⇧⌘I", isEssential: false),
         Descriptor(title: "Export", shortcut: "⇧⌘E", isEssential: false),
         Descriptor(title: "Undo", shortcut: "⌘Z", isEssential: false),

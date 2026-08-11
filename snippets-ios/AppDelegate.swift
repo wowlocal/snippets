@@ -3,12 +3,12 @@ import UIKit
 @MainActor
 protocol SnippetsRootController: AnyObject {
     func open(_ url: URL)
-    func handleEscapeBeforeSystemSearch() -> Bool
+    func handleEscapeBeforeSystemBehavior() -> Bool
     func handleReturnBeforeSystemBehavior() -> Bool
 }
 
 extension SnippetsRootController {
-    func handleEscapeBeforeSystemSearch() -> Bool { false }
+    func handleEscapeBeforeSystemBehavior() -> Bool { false }
     func handleReturnBeforeSystemBehavior() -> Bool { false }
 }
 
@@ -125,7 +125,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
         let window = SnippetWindow(windowScene: windowScene)
         window.onEscapePress = { [weak root] in
-            root?.handleEscapeBeforeSystemSearch() == true
+            root?.handleEscapeBeforeSystemBehavior() == true
         }
         window.onReturnPress = { [weak root] in
             root?.handleReturnBeforeSystemBehavior() == true

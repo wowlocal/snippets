@@ -343,15 +343,11 @@ final class SnippetsIOSTests: XCTestCase {
         let pasteboard = TestSnippetPasteboard(string: nil)
         let environment = AppEnvironment(pasteboard: pasteboard)
         let snippet = environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
-        let rootController = MainSplitViewController(environment: environment)
-        rootController.loadViewIfNeeded()
-        let editorNavigationController = rootController.viewController(for: .secondary) as? UINavigationController
-        let editorController = editorNavigationController?.topViewController as? SnippetEditorViewController
-        editorController?.loadViewIfNeeded()
-        editorController?.bind(to: snippet.id)
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+        hosted.list.focusFilteredList()
 
         let command = MainSplitViewController.copySnippetKeyCommand()
-        rootController.copySnippetCommand(command)
+        hosted.controller.copySnippetCommand(command)
         XCTAssertEqual(pasteboard.string, "Hello from iPad")
     }
 
@@ -372,11 +368,12 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertNil(pasteboard.string)
     }
 
-    func testAppWideKeyboardCommandsUseMacShortcutsAndWinTextInputPriority() {
+    func testKeyboardCommandsUseMacBindingsAndDeclareSystemPriority() {
         let commands: [(UIKeyCommand, String, UIKeyModifierFlags)] = [
             (MainSplitViewController.searchKeyCommand(), "f", .command),
             (MainSplitViewController.toggleSidebarKeyCommand(), "b", .command),
             (MainSplitViewController.editSnippetKeyCommand(), "e", .command),
+            (MainSplitViewController.deleteSnippetKeyCommand(), UIKeyCommand.inputDelete, .command),
             (MainSplitViewController.nextFieldKeyCommand(), "\t", []),
             (MainSplitViewController.previousFieldKeyCommand(), "\t", .shift),
             (MainSplitViewController.shortcutsKeyCommand(), "k", .command),
@@ -429,14 +426,13 @@ final class SnippetsIOSTests: XCTestCase {
             withAccessibilityIdentifier: "tags-input"
         ) as? UITextField
 
+        hosted.list.focusFilteredList()
         hosted.controller.editSnippetCommand()
         XCTAssertTrue(body?.isFirstResponder == true)
         for command in [
             MainSplitViewController.searchKeyCommand(),
             MainSplitViewController.toggleSidebarKeyCommand(),
-            MainSplitViewController.editSnippetKeyCommand(),
             MainSplitViewController.nextFieldKeyCommand(),
-            MainSplitViewController.nextSnippetKeyCommand(),
             MainSplitViewController.shortcutsKeyCommand(),
         ] {
             guard let action = command.action else {
@@ -448,7 +444,32 @@ final class SnippetsIOSTests: XCTestCase {
                 "\(command.title) should route from the editor to the split controller"
             )
         }
+        let listOnlyCommands = [
+            MainSplitViewController.copySnippetKeyCommand(),
+            MainSplitViewController.editSnippetKeyCommand(),
+            MainSplitViewController.deleteSnippetKeyCommand(),
+            MainSplitViewController.nextSnippetKeyCommand(),
+            MainSplitViewController.previousSnippetKeyCommand(),
+            MainSplitViewController.nextSnippetArrowKeyCommand(),
+            MainSplitViewController.previousSnippetArrowKeyCommand(),
+            MainSplitViewController.undoKeyCommand(),
+            MainSplitViewController.redoKeyCommand(),
+        ]
+        for field in [body, keyword, name, tags].compactMap({ $0 }) {
+            XCTAssertTrue(field.becomeFirstResponder())
+            for command in listOnlyCommands {
+                guard let action = command.action else {
+                    return XCTFail("\(command.title) should have an action")
+                }
+                let target = field.target(forAction: action, withSender: command)
+                XCTAssertFalse(
+                    target as AnyObject? === hosted.controller,
+                    "\(command.title) must stay out of every editor field's responder chain"
+                )
+            }
+        }
 
+        XCTAssertTrue(body?.becomeFirstResponder() == true)
         hosted.controller.nextFieldCommand()
         XCTAssertTrue(keyword?.isFirstResponder == true)
         hosted.controller.nextFieldCommand()
@@ -461,6 +482,127 @@ final class SnippetsIOSTests: XCTestCase {
         hosted.controller.previousFieldCommand()
         XCTAssertTrue(hosted.controller.isSidebarVisible)
         XCTAssertTrue(hosted.list.ownsFirstResponder)
+    }
+
+    func testEscapeLeavesEveryEditorFieldForSnippetList() {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+        let fields = [
+            hosted.editor.view.descendant(withAccessibilityIdentifier: "snippet-content"),
+            hosted.editor.view.descendant(withAccessibilityIdentifier: "snippet-keyword"),
+            hosted.editor.view.descendant(withAccessibilityIdentifier: "snippet-name"),
+            hosted.editor.view.descendant(withAccessibilityIdentifier: "tags-input"),
+        ].compactMap { $0 }
+
+        XCTAssertEqual(fields.count, 4)
+        for field in fields {
+            XCTAssertTrue(field.becomeFirstResponder())
+            XCTAssertTrue(hosted.editor.isEditorFocused)
+
+            XCTAssertTrue(hosted.controller.handleEscapeBeforeSystemBehavior())
+
+            XCTAssertFalse(field.isFirstResponder)
+            XCTAssertFalse(hosted.editor.isEditorFocused)
+            XCTAssertTrue(hosted.list.isListFocused)
+        }
+    }
+
+    func testDeleteShortcutIsTextEditingSafeAndOnlyRunsFromList() {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Delete me", content: "Still here")
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+        let body = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView
+        let command = MainSplitViewController.deleteSnippetKeyCommand()
+
+        hosted.list.focusFilteredList()
+        hosted.controller.editSnippetCommand()
+        XCTAssertTrue(body?.isFirstResponder == true)
+        XCTAssertFalse(
+            body?.target(forAction: command.action!, withSender: command) as AnyObject?
+                === hosted.controller,
+            "Command-Delete must remain a text-editing command while an editor owns focus"
+        )
+
+        hosted.controller.deleteSnippetCommand()
+        XCTAssertNil(hosted.controller.presentedViewController)
+        XCTAssertNotNil(environment.store.snippet(id: snippet.id))
+
+        XCTAssertTrue(hosted.controller.handleEscapeBeforeSystemBehavior())
+        XCTAssertTrue(hosted.list.isListFocused)
+        XCTAssertTrue(
+            hosted.list.view.target(forAction: command.action!, withSender: command) as AnyObject?
+                === hosted.controller
+        )
+        hosted.controller.deleteSnippetCommand()
+
+        let alert = hosted.controller.presentedViewController as? UIAlertController
+        XCTAssertEqual(alert?.title, "Delete “Delete me” ?")
+        XCTAssertNotNil(environment.store.snippet(id: snippet.id))
+    }
+
+    func testIPadLeavingBlankDraftForListDiscardsItAndSelectsExistingSnippet() {
+        let environment = AppEnvironment()
+        let existing = environment.store.addSnippet(name: "Existing", content: "Keep me")
+        let draft = environment.store.addSnippet()
+        let hosted = hostMainSplit(environment: environment, selecting: draft.id)
+        let body = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView
+
+        hosted.list.focusFilteredList()
+        hosted.controller.editSnippetCommand()
+        XCTAssertTrue(body?.isFirstResponder == true)
+        XCTAssertTrue(hosted.controller.handleEscapeBeforeSystemBehavior())
+
+        XCTAssertTrue(waitUntil { environment.store.snippet(id: draft.id) == nil })
+        XCTAssertEqual(hosted.list.selectedSnippetID, existing.id)
+        XCTAssertTrue(hosted.list.isListFocused)
+    }
+
+    func testIPadSelectionChangeKeepsDraftAfterPendingTextIsCommitted() {
+        let environment = AppEnvironment()
+        let existing = environment.store.addSnippet(name: "Existing", content: "Keep me")
+        let draft = environment.store.addSnippet()
+        let hosted = hostMainSplit(environment: environment, selecting: draft.id)
+        let body = hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView
+
+        hosted.list.focusFilteredList()
+        hosted.controller.editSnippetCommand()
+        body?.text = "Started"
+        hosted.controller.snippetList(hosted.list, selected: existing.id)
+
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+        XCTAssertEqual(environment.store.snippet(id: draft.id)?.content, "Started")
+    }
+
+    func testTappingAnotherSnippetLeavesEditorFocusInTheList() {
+        let environment = AppEnvironment()
+        _ = environment.store.addSnippet(name: "First", content: "One")
+        _ = environment.store.addSnippet(name: "Second", content: "Two")
+        let hosted = hostMainSplit(environment: environment)
+        let tableView = hosted.list.view.descendant(
+            withAccessibilityIdentifier: "snippet-list"
+        ) as? UITableView
+        let firstID = hosted.list.firstVisibleSnippetID
+
+        XCTAssertNotNil(tableView)
+        XCTAssertNotNil(firstID)
+        hosted.list.focusFilteredList()
+        hosted.controller.snippetList(hosted.list, selected: firstID!)
+        let secondID = hosted.list.adjacentSnippetID(forward: true)
+        hosted.controller.editSnippetCommand()
+        XCTAssertTrue(hosted.editor.isEditorFocused)
+
+        hosted.list.tableView(tableView!, didSelectRowAt: IndexPath(row: 1, section: 0))
+
+        XCTAssertEqual(hosted.list.selectedSnippetID, secondID)
+        XCTAssertFalse(hosted.editor.isEditorFocused)
+        XCTAssertTrue(hosted.list.isListFocused)
     }
 
     func testCommandBTogglesSidebarAndMovesSidebarFocusIntoEditor() {
@@ -508,12 +650,13 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(panel?.isHidden == true)
     }
 
-    func testControlNAndControlPNavigateSnippetListWithoutMovingEditorFocus() {
+    func testControlNAndControlPOnlyNavigateWhenSnippetListOwnsFocus() {
         let environment = AppEnvironment()
         _ = environment.store.addSnippet(name: "First", content: "One")
         _ = environment.store.addSnippet(name: "Second", content: "Two")
         let hosted = hostMainSplit(environment: environment)
         let firstID = hosted.list.firstVisibleSnippetID!
+        hosted.list.focusFilteredList()
         hosted.controller.snippetList(hosted.list, selected: firstID)
         hosted.controller.editSnippetCommand()
         let body = hosted.editor.view.descendant(
@@ -521,13 +664,19 @@ final class SnippetsIOSTests: XCTestCase {
         ) as? UITextView
 
         hosted.controller.nextSnippetCommand()
-        let nextID = hosted.list.selectedSnippetID
-        XCTAssertNotEqual(nextID, firstID)
-        XCTAssertTrue(body?.isFirstResponder == true)
-
         hosted.controller.previousSnippetCommand()
         XCTAssertEqual(hosted.list.selectedSnippetID, firstID)
         XCTAssertTrue(body?.isFirstResponder == true)
+
+        XCTAssertTrue(hosted.controller.handleEscapeBeforeSystemBehavior())
+        XCTAssertTrue(hosted.list.isListFocused)
+        hosted.controller.nextSnippetCommand()
+        let nextID = hosted.list.selectedSnippetID
+        XCTAssertNotEqual(nextID, firstID)
+
+        hosted.controller.previousSnippetCommand()
+        XCTAssertEqual(hosted.list.selectedSnippetID, firstID)
+        XCTAssertTrue(hosted.list.isListFocused)
     }
 
     func testEscapeMovesFromSearchToFilteredListForArrowAndControlNavigation() {
@@ -543,9 +692,37 @@ final class SnippetsIOSTests: XCTestCase {
         searchField.text = "Match"
         hosted.list.reload(keepingSelection: false)
 
+        let selectionBeforeNavigation = hosted.list.selectedSnippetID
+        let listOnlyCommands = [
+            MainSplitViewController.copySnippetKeyCommand(),
+            MainSplitViewController.editSnippetKeyCommand(),
+            MainSplitViewController.deleteSnippetKeyCommand(),
+            MainSplitViewController.nextSnippetKeyCommand(),
+            MainSplitViewController.previousSnippetKeyCommand(),
+            MainSplitViewController.nextSnippetArrowKeyCommand(),
+            MainSplitViewController.previousSnippetArrowKeyCommand(),
+            MainSplitViewController.undoKeyCommand(),
+            MainSplitViewController.redoKeyCommand(),
+        ]
+        for command in listOnlyCommands {
+            XCTAssertFalse(
+                searchField.target(forAction: command.action!, withSender: command) as AnyObject?
+                    === hosted.controller,
+                "\(command.title) must stay out of the search field's responder chain"
+            )
+        }
+        let controlN = MainSplitViewController.nextSnippetKeyCommand()
+        hosted.controller.nextSnippetCommand()
+        hosted.controller.previousSnippetCommand()
+        hosted.controller.editSnippetCommand()
+        hosted.controller.deleteSnippetCommand()
+        XCTAssertEqual(hosted.list.selectedSnippetID, selectionBeforeNavigation)
+        XCTAssertNil(hosted.controller.presentedViewController)
+        XCTAssertTrue(hosted.list.isSearchFocused)
+
         let escape = MainSplitViewController.escapeKeyCommand()
         XCTAssertNotNil(escape.action)
-        XCTAssertTrue(hosted.controller.handleEscapeBeforeSystemSearch())
+        XCTAssertTrue(hosted.controller.handleEscapeBeforeSystemBehavior())
 
         XCTAssertEqual(searchField.text, "Match")
         XCTAssertFalse(hosted.list.isSearchFocused)
@@ -559,7 +736,6 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(hosted.list.selectedSnippetID, firstMatch)
 
         let secondMatch = hosted.list.adjacentSnippetID(forward: true)
-        let controlN = MainSplitViewController.nextSnippetKeyCommand()
         XCTAssertTrue(
             UIApplication.shared.sendAction(controlN.action!, to: nil, from: controlN, for: nil)
         )

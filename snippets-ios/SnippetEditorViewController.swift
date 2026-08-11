@@ -64,12 +64,6 @@ final class SnippetEditorViewController: UIViewController {
 
     override var canBecomeFirstResponder: Bool { true }
 
-    override var keyCommands: [UIKeyCommand]? {
-        [
-            UIKeyCommand(title: "Delete Snippet", action: #selector(deleteSnippet), input: UIKeyCommand.inputDelete, modifierFlags: .command),
-        ]
-    }
-
     func bind(to id: UUID?, preserveFirstResponder: Bool = false) {
         guard isViewLoaded else {
             selectedID = id
@@ -151,6 +145,17 @@ final class SnippetEditorViewController: UIViewController {
         view.endEditing(true)
         flushPendingSecureContent()
         commitPlainEditTransaction()
+    }
+
+    func prepareForSelectionChange() {
+        guard isViewLoaded else { return }
+        view.endEditing(true)
+        flushPendingSecureContent()
+        commitPlainEditTransaction()
+    }
+
+    var isEditorFocused: Bool {
+        isViewLoaded && view.findFirstResponder() != nil
     }
 
     private func configureForm() {

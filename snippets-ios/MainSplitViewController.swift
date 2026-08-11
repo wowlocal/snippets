@@ -35,6 +35,22 @@ final class MainSplitViewController: UISplitViewController {
         case exporting
     }
 
+    private enum KeyboardFocusContext {
+        case modal
+        case shortcutPanel
+        case search
+        case editor
+        case list
+        case none
+    }
+
+    private enum KeyboardCommandScope {
+        case global
+        case list
+        case focusTraversal
+        case escape
+    }
+
     let environment: AppEnvironment
     private let incomingLinkCoordinator: IncomingSnippetLinkCoordinator
 
@@ -76,6 +92,9 @@ final class MainSplitViewController: UISplitViewController {
 
         listController.delegate = self
         editorController.delegate = self
+        listController.onFocusEntered = { [weak self] in
+            self?.discardBlankDraftAfterLeaving(self?.selectedSnippetID)
+        }
         setViewController(listNavigationController, for: .primary)
         setViewController(editorNavigationController, for: .secondary)
 
@@ -111,6 +130,7 @@ final class MainSplitViewController: UISplitViewController {
             Self.searchKeyCommand(),
             Self.toggleSidebarKeyCommand(),
             Self.editSnippetKeyCommand(),
+            Self.deleteSnippetKeyCommand(),
             Self.nextFieldKeyCommand(),
             Self.previousFieldKeyCommand(),
             Self.nextSnippetKeyCommand(),
@@ -122,30 +142,89 @@ final class MainSplitViewController: UISplitViewController {
             UIKeyCommand(title: "Import", action: #selector(importCommand), input: "i", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Export for Sharing", action: #selector(exportCommand), input: "e", modifierFlags: [.command, .shift]),
             Self.shortcutsKeyCommand(),
-            UIKeyCommand(title: "Undo", action: #selector(undoCommand), input: "z", modifierFlags: .command),
-            UIKeyCommand(title: "Redo", action: #selector(redoCommand), input: "z", modifierFlags: [.command, .shift]),
+            Self.undoKeyCommand(),
+            Self.redoKeyCommand(),
         ]
         commands.append(Self.escapeKeyCommand())
         return commands
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-        if action == #selector(escapeCommand) {
-            return shortcutPanel.isPresented
+        guard let scope = keyboardCommandScope(for: action) else {
+            return super.canPerformAction(action, withSender: sender)
         }
-        if action == #selector(nextSnippetCommand)
-            || action == #selector(previousSnippetCommand) {
-            return !shortcutPanel.isPresented
-                && !listController.isSearchFocused
-                && listController.firstVisibleSnippetID != nil
+
+        let context = keyboardFocusContext
+        if context == .modal { return false }
+        if context == .shortcutPanel {
+            return action == #selector(escapeCommand)
+                || action == #selector(shortcutsCommand)
         }
-        if action == #selector(nextSnippetFromListCommand)
-            || action == #selector(previousSnippetFromListCommand) {
-            return !shortcutPanel.isPresented
-                && listController.isListFocused
-                && listController.firstVisibleSnippetID != nil
+
+        switch scope {
+        case .global:
+            return true
+        case .list:
+            guard context == .list else { return false }
+            if isSnippetNavigationAction(action) {
+                return listController.firstVisibleSnippetID != nil
+            }
+            if action == #selector(copySnippetCommand(_:))
+                || action == #selector(editSnippetCommand)
+                || action == #selector(deleteSnippetCommand) {
+                return selectedSnippetID != nil
+            }
+            return true
+        case .focusTraversal:
+            return context == .editor || context == .list
+        case .escape:
+            return context == .search || context == .editor
         }
-        return super.canPerformAction(action, withSender: sender)
+    }
+
+    private var keyboardFocusContext: KeyboardFocusContext {
+        if presentedViewController != nil { return .modal }
+        if shortcutPanel.isPresented { return .shortcutPanel }
+        if listController.isSearchFocused { return .search }
+        if editorController.isEditorFocused { return .editor }
+        if listController.isListFocused { return .list }
+        return .none
+    }
+
+    private func keyboardCommandScope(for action: Selector) -> KeyboardCommandScope? {
+        if action == #selector(copySnippetCommand(_:))
+            || action == #selector(editSnippetCommand)
+            || action == #selector(deleteSnippetCommand)
+            || action == #selector(nextSnippetCommand)
+            || action == #selector(previousSnippetCommand)
+            || action == #selector(nextSnippetFromListCommand)
+            || action == #selector(previousSnippetFromListCommand)
+            || action == #selector(undoCommand)
+            || action == #selector(redoCommand) {
+            return .list
+        }
+        if action == #selector(nextFieldCommand)
+            || action == #selector(previousFieldCommand) {
+            return .focusTraversal
+        }
+        if action == #selector(escapeCommand) { return .escape }
+        if action == #selector(newSnippetCommand)
+            || action == #selector(newClipboardCommand)
+            || action == #selector(importCommand)
+            || action == #selector(exportCommand)
+            || action == #selector(searchCommand)
+            || action == #selector(toggleSidebarCommand)
+            || action == #selector(shortcutsCommand) {
+            return .global
+        }
+        return nil
+    }
+
+    private func isSnippetNavigationAction(_ action: Selector) -> Bool {
+        action == #selector(nextSnippetCommand)
+            || action == #selector(previousSnippetCommand)
+            || action == #selector(nextSnippetFromListCommand)
+            || action == #selector(previousSnippetFromListCommand)
     }
 
     static func copySnippetKeyCommand() -> UIKeyCommand {
@@ -186,6 +265,15 @@ final class MainSplitViewController: UISplitViewController {
         )
     }
 
+    static func deleteSnippetKeyCommand() -> UIKeyCommand {
+        priorityKeyCommand(
+            title: "Delete Snippet",
+            action: #selector(deleteSnippetCommand),
+            input: UIKeyCommand.inputDelete,
+            modifierFlags: .command
+        )
+    }
+
     static func nextFieldKeyCommand() -> UIKeyCommand {
         priorityKeyCommand(
             title: "Next Field",
@@ -209,6 +297,24 @@ final class MainSplitViewController: UISplitViewController {
             action: #selector(shortcutsCommand),
             input: "k",
             modifierFlags: .command
+        )
+    }
+
+    static func undoKeyCommand() -> UIKeyCommand {
+        UIKeyCommand(
+            title: "Undo Snippet Change",
+            action: #selector(undoCommand),
+            input: "z",
+            modifierFlags: .command
+        )
+    }
+
+    static func redoKeyCommand() -> UIKeyCommand {
+        UIKeyCommand(
+            title: "Redo Snippet Change",
+            action: #selector(redoCommand),
+            input: "z",
+            modifierFlags: [.command, .shift]
         )
     }
 
@@ -353,11 +459,32 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     private func select(id: UUID, revealEditor: Bool, ensureListVisible: Bool = false) {
+        let outgoingSnippetID = selectedSnippetID
+        if outgoingSnippetID != id {
+            editorController.prepareForSelectionChange()
+        }
         selectedSnippetID = id
         listController.select(id: id, ensureVisible: ensureListVisible)
         editorController.bind(to: id)
+        if outgoingSnippetID != id {
+            discardBlankDraftAfterLeaving(outgoingSnippetID)
+        }
         if revealEditor || isCollapsed {
             show(.secondary)
+        }
+    }
+
+    /// Mirrors the Mac editor's draft lifecycle: leaving a still-empty new row
+    /// removes it on the next run-loop turn, after every UIKit editing-ended
+    /// callback has had a chance to publish pending text or a trailing tag.
+    private func discardBlankDraftAfterLeaving(_ snippetID: UUID?) {
+        guard let snippetID,
+              environment.store.blankDraftSnippet?.id == snippetID else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  environment.store.blankDraftSnippet?.id == snippetID else { return }
+            environment.store.discardBlankDraft(id: snippetID)
         }
     }
 
@@ -706,20 +833,23 @@ final class MainSplitViewController: UISplitViewController {
 
     @objc func editSnippetCommand() {
         dismissShortcutPanel(animated: false, restoreFocus: false)
-        guard selectedSnippetID != nil else { return }
+        guard keyboardFocusContext == .list,
+              selectedSnippetID != nil else { return }
         show(.secondary)
         editorController.focusBody()
     }
 
     @objc func nextFieldCommand() {
-        guard !shortcutPanel.isPresented else { return }
+        guard keyboardFocusContext == .editor
+                || keyboardFocusContext == .list else { return }
         if editorController.moveEditorFocus(forward: true) { return }
         show(.secondary)
         editorController.focusFirstEditorField()
     }
 
     @objc func previousFieldCommand() {
-        guard !shortcutPanel.isPresented else { return }
+        guard keyboardFocusContext == .editor
+                || keyboardFocusContext == .list else { return }
         if editorController.moveEditorFocus(forward: false) { return }
         show(.primary)
         listController.focusList()
@@ -750,12 +880,29 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     @objc func escapeCommand() {
-        dismissShortcutPanel(animated: true, restoreFocus: true)
+        _ = handleEscapeBeforeSystemBehavior()
     }
 
-    func handleEscapeBeforeSystemSearch() -> Bool {
-        guard listController.isSearchFocused else { return false }
+    func handleEscapeBeforeSystemBehavior() -> Bool {
+        guard presentedViewController == nil else { return false }
+        if shortcutPanel.isPresented {
+            dismissShortcutPanel(animated: true, restoreFocus: true)
+            return true
+        }
+        guard keyboardFocusContext == .search
+                || keyboardFocusContext == .editor else { return false }
+
+        show(.primary)
         listController.focusFilteredList()
+        if let transitionCoordinator {
+            transitionCoordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                self?.listController.focusFilteredList()
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.listController.focusFilteredList()
+            }
+        }
         return true
     }
 
@@ -768,16 +915,25 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     @objc func copySnippetCommand(_ sender: UIKeyCommand) {
+        guard keyboardFocusContext == .list else { return }
         guard let name = editorController.copySelectedSnippet() else { return }
         listController.showStatus("Copied “\(name)”.")
     }
 
+    @objc func deleteSnippetCommand() {
+        guard keyboardFocusContext == .list,
+              let selectedSnippetID else { return }
+        delete(id: selectedSnippetID)
+    }
+
     @objc private func undoCommand() {
+        guard keyboardFocusContext == .list else { return }
         guard environment.store.undo() else { return }
         libraryChanged(source: .local)
     }
 
     @objc private func redoCommand() {
+        guard keyboardFocusContext == .list else { return }
         guard environment.store.redo() else { return }
         libraryChanged(source: .local)
     }
@@ -827,8 +983,7 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     private func selectAdjacentSnippet(forward: Bool) {
-        guard !shortcutPanel.isPresented,
-              !listController.isSearchFocused,
+        guard keyboardFocusContext == .list,
               let id = listController.adjacentSnippetID(forward: forward) else { return }
         select(id: id, revealEditor: false, ensureListVisible: true)
     }

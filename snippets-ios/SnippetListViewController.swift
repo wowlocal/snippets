@@ -2,6 +2,7 @@ import UIKit
 
 final class SnippetListViewController: UIViewController {
     weak var delegate: SnippetListViewControllerDelegate?
+    var onFocusEntered: (() -> Void)?
 
     private let environment: AppEnvironment
     private let tableView = UITableView(frame: .zero, style: .plain)
@@ -180,6 +181,11 @@ final class SnippetListViewController: UIViewController {
         searchController.searchBar.placeholder = "Search"
         searchController.searchBar.accessibilityIdentifier = "snippet-search"
         searchController.searchBar.searchTextField.accessibilityIdentifier = "snippet-search"
+        searchController.searchBar.searchTextField.addTarget(
+            self,
+            action: #selector(searchFocusEntered),
+            for: .editingDidBegin
+        )
         navigationItem.searchController = searchController
         navigationItem.hidesSearchBarWhenScrolling = false
         navigationItem.preferredSearchBarPlacement = .stacked
@@ -441,6 +447,7 @@ final class SnippetListViewController: UIViewController {
     }
 
     func focusSearch() {
+        onFocusEntered?()
         let searchField = searchTextField
         if !searchField.becomeFirstResponder() {
             DispatchQueue.main.async { [weak searchField] in
@@ -455,6 +462,7 @@ final class SnippetListViewController: UIViewController {
     }
 
     func focusFilteredList() {
+        onFocusEntered?()
         searchTextField.resignFirstResponder()
         if !tableView.becomeFirstResponder() {
             becomeFirstResponder()
@@ -486,6 +494,10 @@ final class SnippetListViewController: UIViewController {
     var isListFocused: Bool {
         tableView.isFirstResponder || isFirstResponder
     }
+
+    @objc private func searchFocusEntered() {
+        onFocusEntered?()
+    }
 }
 
 extension SnippetListViewController: UISearchResultsUpdating {
@@ -515,6 +527,7 @@ extension SnippetListViewController: UITableViewDataSource, UITableViewDelegate 
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         let snippet = snippet(at: indexPath)
+        focusFilteredList()
         selectedID = snippet.id
         delegate?.snippetList(self, selected: snippet.id)
     }
