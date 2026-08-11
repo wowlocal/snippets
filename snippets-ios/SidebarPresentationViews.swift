@@ -345,10 +345,17 @@ private final class SidebarTagChipButton: UIButton {
 
 /// Masks a scroll view only at edges that have more content behind them.
 final class ScrollFadeContainerView: UIView {
+    private struct MaskState: Equatable {
+        let bounds: CGRect
+        let topIntensity: CGFloat
+        let bottomIntensity: CGFloat
+    }
+
     private weak var scrollView: UIScrollView?
     private let maskLayer = CAGradientLayer()
     private let topFadeHeight: CGFloat = 24
     private let bottomFadeHeight: CGFloat = 20
+    private var appliedMaskState: MaskState?
 
     private(set) var topFadeIntensity: CGFloat = 0
     private(set) var bottomFadeIntensity: CGFloat = 0
@@ -365,6 +372,11 @@ final class ScrollFadeContainerView: UIView {
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+            (view: ScrollFadeContainerView, _: UITraitCollection) in
+            view.appliedMaskState = nil
+            view.updateFade()
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -405,6 +417,13 @@ final class ScrollFadeContainerView: UIView {
         self.topFadeIntensity = topIntensity
         self.bottomFadeIntensity = bottomIntensity
 
+        let maskState = MaskState(
+            bounds: bounds,
+            topIntensity: topIntensity,
+            bottomIntensity: bottomIntensity
+        )
+        guard maskState != appliedMaskState else { return }
+
         let height = max(bounds.height, 1)
         let topFade = min(topFadeHeight / height, 0.45)
         let bottomFade = min(bottomFadeHeight / height, 0.45)
@@ -425,5 +444,6 @@ final class ScrollFadeContainerView: UIView {
             1,
         ]
         CATransaction.commit()
+        appliedMaskState = maskState
     }
 }

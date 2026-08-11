@@ -33,6 +33,15 @@ final class SnippetsIOSTests: XCTestCase {
         rootURL = nil
     }
 
+    func testBuiltAppAllowsProMotionFrameRatesOnIPhone() {
+        XCTAssertEqual(
+            Bundle.main.object(
+                forInfoDictionaryKey: "CADisableMinimumFrameDurationOnPhone"
+            ) as? Bool,
+            true
+        )
+    }
+
     func testFreshIOSLibraryStartsEmptyAndPersistsCRUD() throws {
         var store: SnippetStore? = SnippetStore(configuration: .iOS)
         XCTAssertTrue(store?.snippets.isEmpty == true)

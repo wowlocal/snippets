@@ -492,6 +492,7 @@ private final class SnippetListCell: UITableViewCell {
     private let keywordLabel = UILabel()
     private let previewLabel = UILabel()
     private let tagsStack = UIStackView()
+    private let tagBadges = (0..<3).map { _ in TagBadgeLabel() }
     private let stateImage = UIImageView()
     private var isPointerHovering = false
 
@@ -537,6 +538,10 @@ private final class SnippetListCell: UITableViewCell {
         tagsStack.spacing = 4
         tagsStack.setContentHuggingPriority(.required, for: .horizontal)
         tagsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        tagBadges.forEach { badge in
+            badge.isHidden = true
+            tagsStack.addArrangedSubview(badge)
+        }
 
         let topRow = UIStackView(arrangedSubviews: [titleLabel, keywordLabel])
         topRow.axis = .horizontal
@@ -654,21 +659,22 @@ private final class SnippetListCell: UITableViewCell {
     }
 
     private func rebuildTags(_ tags: [String], muted: Bool) {
-        tagsStack.arrangedSubviews.forEach { view in
-            tagsStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
+        let visibleTagCount = min(tags.count, 2)
+        for index in 0..<visibleTagCount {
+            let tag = tags[index]
+            let badge = tagBadges[index]
+            badge.configure(text: tag, color: AppTheme.tagColor(for: tag), muted: muted)
+            badge.isHidden = false
         }
 
-        let visible = Array(tags.prefix(2))
-        for tag in visible {
-            let badge = TagBadgeLabel()
-            badge.configure(text: tag, color: AppTheme.tagColor(for: tag), muted: muted)
-            tagsStack.addArrangedSubview(badge)
+        let remainingTagCount = tags.count - visibleTagCount
+        if remainingTagCount > 0 {
+            let badge = tagBadges[visibleTagCount]
+            badge.configure(text: "+\(remainingTagCount)", color: .secondaryLabel, muted: muted)
+            badge.isHidden = false
         }
-        if tags.count > visible.count {
-            let badge = TagBadgeLabel()
-            badge.configure(text: "+\(tags.count - visible.count)", color: .secondaryLabel, muted: muted)
-            tagsStack.addArrangedSubview(badge)
+        for index in (visibleTagCount + min(remainingTagCount, 1))..<tagBadges.count {
+            tagBadges[index].isHidden = true
         }
         tagsStack.isHidden = tags.isEmpty
     }

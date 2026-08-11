@@ -319,12 +319,42 @@ nonisolated extension Snippet {
     /// made of blanks paints an empty row, which reads as a broken app rather
     /// than as a snippet nobody named.
     var contentFirstLineUntruncated: String {
-        for rawLine in content.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !line.isEmpty { return line }
+        let newlineCharacters = CharacterSet.newlines
+        let trimCharacters = CharacterSet.whitespacesAndNewlines
+        let scalars = content.unicodeScalars
+
+        func trimmedLine(from start: String.Index, to end: String.Index) -> String? {
+            var trimmedStart = start
+            while trimmedStart < end, trimCharacters.contains(scalars[trimmedStart]) {
+                trimmedStart = scalars.index(after: trimmedStart)
+            }
+            guard trimmedStart < end else { return nil }
+
+            var trimmedEnd = end
+            while trimmedEnd > trimmedStart {
+                let previous = scalars.index(before: trimmedEnd)
+                guard trimCharacters.contains(scalars[previous]) else { break }
+                trimmedEnd = previous
+            }
+            return String(content[trimmedStart..<trimmedEnd])
         }
 
-        return ""
+        var lineStart = scalars.startIndex
+        var index = lineStart
+        while index < scalars.endIndex {
+            guard newlineCharacters.contains(scalars[index]) else {
+                index = scalars.index(after: index)
+                continue
+            }
+
+            if let line = trimmedLine(from: lineStart, to: index) {
+                return line
+            }
+            index = scalars.index(after: index)
+            lineStart = index
+        }
+
+        return trimmedLine(from: lineStart, to: scalars.endIndex) ?? ""
     }
 
     /// The same line cut to a name's length, with the "…" baked in because these
