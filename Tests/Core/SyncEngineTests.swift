@@ -212,6 +212,63 @@ struct SyncEngineTests {
         #expect(tombstone.fields == nil, "a tombstone must carry no content")
     }
 
+    /// The local library can change while CloudKit is accepting the snapshot captured
+    /// at the start of a round. When that snapshot contains a newly created record and
+    /// the user deletes it during the submit, the fetch immediately echoes the accepted
+    /// live record back. The agreed base now proves the local absence is a deletion; it
+    /// must not be mistaken for a fresh install that simply has not seen the record yet.
+    @Test func deletingWhileCreateUploadIsInFlightDoesNotResurrectTheSnippet() async throws {
+        let entered = AsyncStream<Void>.makeStream()
+        let released = AsyncStream<Void>.makeStream()
+        let transport = InMemoryTransport(sleeper: { _ in
+            entered.continuation.yield()
+            var iterator = released.stream.makeAsyncIterator()
+            _ = await iterator.next()
+        })
+        transport.configure { $0.latency = .seconds(1) }
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("engine-delete-race-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let library = FakeLibrary()
+        let id = UUID()
+        library.envelopes[id] = envelope(id, name: "delete while uploading")
+        let sealer = SnippetCryptoSealer(
+            keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test")
+        let engine = SyncEngine(
+            transport: transport, library: library, sealer: sealer, device: "aaaaaaa1",
+            baseURL: dir.appendingPathComponent("base.json"),
+            stateURL: dir.appendingPathComponent("state.json"),
+            lockURL: dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: dir)
+
+        var enteredIterator = entered.stream.makeAsyncIterator()
+        let round = Task { await engine.sync() }
+        _ = await enteredIterator.next()       // submit captured the live record
+        library.envelopes[id] = nil            // the user deletes it during the await
+        released.continuation.yield()
+        _ = await enteredIterator.next()       // fetch is about to echo the accepted live record
+        released.continuation.yield()
+        _ = await round.value
+
+        #expect(library.envelopes[id] == nil,
+                "the submit echo must not resurrect a record deleted during the round")
+        #expect(library.applied.last?.first?.deleted == true,
+                "the agreed ancestor must turn the local absence into an explicit tombstone")
+
+        // The backend still holds the live version accepted by the first submit. The
+        // next round must therefore carry the deletion outward, not merely hide it in
+        // this process.
+        transport.configure { $0.latency = .zero }
+        _ = await engine.sync()
+        let batches = transport.submittedBatches
+        let tombstone = try WireCodec.open(try #require(batches.last?.first), using: sealer)
+        #expect(tombstone.deleted)
+        #expect(library.envelopes[id] == nil)
+    }
+
     // MARK: - Ordering
 
     /// Push must happen before apply. Fetching first and applying would rewrite local

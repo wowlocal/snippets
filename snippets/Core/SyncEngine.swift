@@ -389,7 +389,25 @@ final class SyncEngine {
         // would actually be applied rather than what arrived. A remote tombstone that
         // loses to a local edit is not a deletion, and counting it as one would trip the
         // breaker on a library that was never in danger.
-        let localNow = try library.currentEnvelopes(agreedBase: base)
+        let projectedLocal = try library.currentEnvelopes(agreedBase: base)
+        var localNow = projectedLocal
+
+        // `currentEnvelopes` contains live records only. Ordinarily that is exactly the
+        // safe representation: absence without an ancestor means "not seen yet", never
+        // "deleted". At this point, however, `base` is the ancestor and may have moved
+        // during the submit above. In particular, CloudKit can accept a newly created
+        // live record while the user deletes it locally during that await. The fetch then
+        // echoes the accepted live record back; leaving the local side as `nil` makes the
+        // merge treat this device as fresh and resurrect it.
+        //
+        // Materialize only deletions that the agreed base proves. This is the same
+        // derived-outbox operation used for the push leg, so the merge and the next
+        // round agree on what the local absence means. Records absent from both the base
+        // and the projection remain absent and a fresh install still cannot manufacture
+        // tombstones for records it has never seen.
+        for deletion in base.pendingChanges(from: projectedLocal) where deletion.deleted {
+            localNow[deletion.id] = deletion
+        }
         var merged: [SyncEnvelope] = []
         for envelope in incoming {
             guard let resolved = SyncMerge.mergeEnvelope(
