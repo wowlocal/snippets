@@ -119,6 +119,34 @@ final class EditorInvalidationTests: XCTestCase {
         XCTAssertEqual(hosted.list.selectedSnippetID, snippet.id)
     }
 
+    func testIPadEditorMutationRefreshesAnActiveSearchAfterTheDelay() throws {
+        let environment = makeEnvironment()
+        let snippet = environment.store.addSnippet(name: "Before", content: "Body")
+        let hosted = try hostSplit(environment: environment, selecting: snippet.id)
+        let searchField = hosted.list.searchTextField
+        let nameField = try XCTUnwrap(
+            hosted.editor.view.invalidationDescendant(identifier: "snippet-name") as? UITextField
+        )
+
+        searchField.text = "Before"
+        hosted.list.reload(keepingSelection: true)
+        XCTAssertEqual(hosted.list.firstVisibleSnippetID, snippet.id)
+
+        nameField.text = "After"
+        nameField.sendActions(for: .editingChanged)
+
+        XCTAssertEqual(
+            hosted.list.firstVisibleSnippetID,
+            snippet.id,
+            "The active search must not rebuild inside the editor callback"
+        )
+        XCTAssertTrue(waitUntil {
+            hosted.list.firstVisibleSnippetID == nil
+        })
+        XCTAssertEqual(hosted.list.selectedSnippetID, snippet.id)
+        XCTAssertEqual(hosted.editor.title, "After")
+    }
+
     func testNonEditorLocalChangeStillRefreshesIPadListSynchronously() throws {
         let environment = makeEnvironment()
         let snippet = environment.store.addSnippet(name: "Before", content: "Body")

@@ -86,6 +86,18 @@ final class SnippetListViewController: UIViewController {
         )
     }
 
+    /// An editor mutation is deliberately coalesced by the split controller. Cancel
+    /// any query over the pre-edit snapshot immediately, then let the trailing refresh
+    /// use the worker when a search is active. Empty searches stay on the cheap,
+    /// synchronous tag-only path in `reload(keepingSelection:)`.
+    func prepareForDeferredEditorReload() {
+        searchPipeline.cancelPending()
+    }
+
+    func reloadAfterEditorChanges() {
+        reloadSearchResults()
+    }
+
     private func reloadSearchResults() {
         let searchText = searchController.searchBar.text ?? ""
         let existingTagKeys = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))

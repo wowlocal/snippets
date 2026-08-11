@@ -326,6 +326,7 @@ final class MainSplitViewController: UISplitViewController {
 
     private func scheduleEditorListReload() {
         editorListReloadWorkItem?.cancel()
+        listController.prepareForDeferredEditorReload()
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -333,7 +334,7 @@ final class MainSplitViewController: UISplitViewController {
             // The editor already refreshed its derived presentation from the exact
             // mutation that scheduled this work. Only the visible list needs the
             // coalesced update.
-            self.listController.reload(keepingSelection: true)
+            self.listController.reloadAfterEditorChanges()
         }
         editorListReloadWorkItem = workItem
         DispatchQueue.main.asyncAfter(
