@@ -598,6 +598,16 @@ extension ViewController {
         tableView.headerView = nil
         tableView.focusRingType = .none
         tableView.usesAlternatingRowBackgroundColors = false
+        // `.automatic` becomes `.sourceList` only after this table is installed in
+        // the sidebar. That transition changes `selectionHighlightStyle` as a side
+        // effect, undoing an earlier `.none`, and paints AppKit's inset selection
+        // underneath `SnippetTableRowView`'s pill. The two translucent fills are
+        // especially obvious on the pre-Liquid-Glass visual-effect surface.
+        //
+        // Resolve the intended style now, before disabling its selection. This
+        // preserves the existing source-list row padding while leaving the custom
+        // pill as the only selection drawn after the hierarchy is installed.
+        tableView.style = .sourceList
         tableView.selectionHighlightStyle = .none
         tableView.backgroundColor = .clear
         tableView.allowsEmptySelection = true
