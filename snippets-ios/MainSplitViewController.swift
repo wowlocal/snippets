@@ -47,6 +47,8 @@ final class MainSplitViewController: UISplitViewController {
     private var selectedSnippetID: UUID?
     private var documentPickerPurpose: DocumentPickerPurpose?
     private var exportedTemporaryURL: URL?
+    private var editorListReloadWorkItem: DispatchWorkItem?
+    private let editorListReloadDelay: TimeInterval = 0.12
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -306,6 +308,13 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     private func libraryChanged(source: SnippetStore.ChangeSource) {
+        if source == .local, environment.isPerformingLocalEditorChange {
+            scheduleEditorListReload()
+            return
+        }
+
+        editorListReloadWorkItem?.cancel()
+        editorListReloadWorkItem = nil
         listController.reload(keepingSelection: true)
         if let selectedSnippetID,
            environment.store.snippetForDisplay(id: selectedSnippetID) != nil {
@@ -313,6 +322,24 @@ final class MainSplitViewController: UISplitViewController {
         } else {
             selectInitialSnippetIfNeeded()
         }
+    }
+
+    private func scheduleEditorListReload() {
+        editorListReloadWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.editorListReloadWorkItem = nil
+            // The editor already refreshed its derived presentation from the exact
+            // mutation that scheduled this work. Only the visible list needs the
+            // coalesced update.
+            self.listController.reload(keepingSelection: true)
+        }
+        editorListReloadWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + editorListReloadDelay,
+            execute: workItem
+        )
     }
 
     private func selectInitialSnippetIfNeeded() {

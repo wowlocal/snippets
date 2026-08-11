@@ -16,6 +16,14 @@ final class AppEnvironment {
     let syncCoordinator: SyncCoordinator
     let snippetActions: SnippetActionService
     private var localSecureChangeDepth = 0
+    private var localEditorChangeDepth = 0
+
+    /// True only while an editor is synchronously publishing its own UI state.
+    ///
+    /// Store and sync notifications still run normally. The iOS roots use this
+    /// narrow context to avoid immediately feeding the same values back through the
+    /// editor and to defer list work that does not need to block a keystroke.
+    var isPerformingLocalEditorChange: Bool { localEditorChangeDepth > 0 }
 
     init(pasteboard: (any SnippetPasteboard)? = nil) {
         #if DEBUG
@@ -123,6 +131,12 @@ final class AppEnvironment {
     func performLocalSecureChange<T>(_ change: () throws -> T) rethrows -> T {
         localSecureChangeDepth += 1
         defer { localSecureChangeDepth -= 1 }
+        return try change()
+    }
+
+    func performLocalEditorChange<T>(_ change: () throws -> T) rethrows -> T {
+        localEditorChangeDepth += 1
+        defer { localEditorChangeDepth -= 1 }
         return try change()
     }
 }
