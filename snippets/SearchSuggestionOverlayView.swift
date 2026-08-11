@@ -142,6 +142,7 @@ final class SearchSuggestionOverlayView: NSView {
 }
 
 private final class SearchSuggestionRowView: NSView {
+    private let highlightView = RowHighlightView(frame: .zero)
     private let dotView = DotView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
@@ -152,7 +153,7 @@ private final class SearchSuggestionRowView: NSView {
     private var isHovering = false {
         didSet {
             guard oldValue != isHovering else { return }
-            needsDisplay = true
+            updateHighlight()
         }
     }
 
@@ -161,7 +162,7 @@ private final class SearchSuggestionRowView: NSView {
     var isSelected = false {
         didSet {
             guard oldValue != isSelected else { return }
-            needsDisplay = true
+            updateHighlight()
             applyTextColors()
         }
     }
@@ -203,7 +204,7 @@ private final class SearchSuggestionRowView: NSView {
         tagChipsStack.setContentHuggingPriority(.required, for: .horizontal)
         tagChipsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        [dotView, nameLabel, keywordLabel, tagChipsStack, contentPreviewLabel].forEach(addSubview)
+        [highlightView, dotView, nameLabel, keywordLabel, tagChipsStack, contentPreviewLabel].forEach(addSubview)
 
         NSLayoutConstraint.activate([
             dotView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -264,33 +265,17 @@ private final class SearchSuggestionRowView: NSView {
         onClick?()
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-
-        guard isSelected || isHovering else { return }
-
-        let rect = LiquidGlassDesign.rowHighlightRect(
+    override func layout() {
+        super.layout()
+        highlightView.frame = LiquidGlassDesign.rowHighlightRect(
             in: bounds,
             horizontalInset: 8,
             verticalInset: 3
         )
-        let path = NSBezierPath(
-            roundedRect: rect,
-            xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
-            yRadius: LiquidGlassDesign.rowHighlightCornerRadius
-        )
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: isSelected, isDark: isDark)
-        color.setFill()
-        path.fill()
+    }
 
-        // Selection and hover are both neutral washes a few percent apart, and here
-        // the fill is the only cue there is — these rows never restyle their text for
-        // selection. The edge is what tells them apart, and hover never gets one.
-        guard isSelected else { return }
-        LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark).setStroke()
-        path.lineWidth = 1
-        path.stroke()
+    private func updateHighlight() {
+        highlightView.update(isSelected: isSelected, isHovering: isHovering)
     }
 
     func configure(with snippet: Snippet) {

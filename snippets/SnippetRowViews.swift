@@ -252,11 +252,12 @@ final class SnippetRowCellView: NSTableCellView {
 }
 
 class SnippetTableRowView: NSTableRowView {
+    private let highlightView = RowHighlightView(frame: .zero)
     private var hoverTrackingArea: NSTrackingArea?
     private var isHovering = false {
         didSet {
             if oldValue != isHovering {
-                needsDisplay = true
+                updateHighlight()
             }
         }
     }
@@ -278,9 +279,28 @@ class SnippetTableRowView: NSTableRowView {
     override var isSelected: Bool {
         didSet {
             if oldValue != isSelected {
-                needsDisplay = true
+                updateHighlight()
             }
         }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        addSubview(highlightView, positioned: .below, relativeTo: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        highlightView.frame = LiquidGlassDesign.rowHighlightRect(
+            in: bounds,
+            horizontalInset: highlightHorizontalInset,
+            verticalInset: highlightVerticalInset
+        )
     }
 
     override func updateTrackingAreas() {
@@ -326,34 +346,17 @@ class SnippetTableRowView: NSTableRowView {
     }
 
     override func drawBackground(in dirtyRect: NSRect) {
-        guard isSelected || isHovering else { return }
-        drawHighlight(isSelected: isSelected)
+        // The layer-backed highlight subview paints this without the jagged legacy
+        // `NSBezierPath.stroke()` edge.
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
-        // Selection is drawn in drawBackground so hover and selected states share the same footprint.
+        // The highlight subview paints selection, so AppKit never adds its own
+        // full-width bar over the rounded shape.
     }
 
-    private func drawHighlight(isSelected: Bool) {
-        let path = NSBezierPath(
-            roundedRect: LiquidGlassDesign.rowHighlightRect(
-                in: bounds,
-                horizontalInset: highlightHorizontalInset,
-                verticalInset: highlightVerticalInset
-            ),
-            xRadius: LiquidGlassDesign.rowHighlightCornerRadius,
-            yRadius: LiquidGlassDesign.rowHighlightCornerRadius
-        )
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let color = LiquidGlassDesign.rowHighlightFillColor(isSelected: isSelected, isDark: isDark)
-        color.setFill()
-        path.fill()
-
-        if isSelected {
-            LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark).setStroke()
-            path.lineWidth = 1
-            path.stroke()
-        }
+    private func updateHighlight() {
+        highlightView.update(isSelected: isSelected, isHovering: isHovering)
     }
 }
 

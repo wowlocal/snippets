@@ -331,6 +331,79 @@ enum LiquidGlassDesign {
     }
 }
 
+/// Layer-backed row highlight shared by the library, search overlay, and floating
+/// suggestion panel.
+///
+/// Drawing the selected edge with `NSBezierPath.stroke()` leaves the one-point
+/// stroke centred on the path. On the pre-Liquid-Glass AppKit renderer its outer
+/// half is rasterized independently from the translucent fill, which makes a
+/// small rounded corner look visibly stepped. `CALayer` draws its border inside
+/// the bounds and gives both the fill and edge one continuous-corner mask.
+final class RowHighlightView: NSView {
+    private(set) var isSelected = false
+    private(set) var isHovering = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = LiquidGlassDesign.rowHighlightCornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyStyle()
+    }
+
+    func update(isSelected: Bool, isHovering: Bool) {
+        guard self.isSelected != isSelected || self.isHovering != isHovering else { return }
+        self.isSelected = isSelected
+        self.isHovering = isHovering
+        applyStyle()
+    }
+
+    private func applyStyle() {
+        let isVisible = isSelected || isHovering
+        isHidden = !isVisible
+        guard isVisible else { return }
+
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let fillColor = LiquidGlassDesign.rowHighlightFillColor(
+            isSelected: isSelected,
+            isDark: isDark
+        )
+        layer?.backgroundColor = resolvedCGColor(fillColor)
+
+        if isSelected {
+            let strokeColor = LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark)
+            layer?.borderWidth = LiquidGlassDesign.Metrics.hairlineWidth
+            layer?.borderColor = resolvedCGColor(strokeColor)
+        } else {
+            layer?.borderWidth = 0
+            layer?.borderColor = nil
+        }
+    }
+
+    private func resolvedCGColor(_ color: NSColor) -> CGColor {
+        var result = color.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            result = color.cgColor
+        }
+        return result
+    }
+}
+
 /// The pre-26 surface of the floating suggestion panel.
 ///
 /// Exists only to own the rim. Over a light host application an `NSVisualEffectView`
