@@ -68,6 +68,62 @@ enum TagColorPalette {
     }
 }
 
+/// Compact tag marker used where a full text chip would crowd the row.
+///
+/// The color is the same deterministic color used by `TagChipView`; the tag's
+/// text remains available as a tooltip and an accessibility label.
+final class TagDotView: NSView {
+    private let color: NSColor
+
+    init(tag: String, muted: Bool, diameter: CGFloat = 7) {
+        color = muted ? .tertiaryLabelColor : TagColorPalette.color(for: tag)
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: diameter),
+            heightAnchor.constraint(equalToConstant: diameter),
+        ])
+
+        toolTip = tag
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("Tag: \(tag)")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        NSBezierPath(ovalIn: bounds).fill()
+    }
+
+    static func makeMarkers(
+        for tags: [String],
+        maxCount: Int,
+        muted: Bool
+    ) -> [NSView] {
+        var markers: [NSView] = tags.prefix(maxCount).map {
+            TagDotView(tag: $0, muted: muted)
+        }
+        let hiddenTags = tags.dropFirst(maxCount)
+        guard !hiddenTags.isEmpty else { return markers }
+
+        let overflowLabel = NSTextField(labelWithString: "+\(hiddenTags.count)")
+        overflowLabel.font = .systemFont(ofSize: 9, weight: .medium)
+        overflowLabel.textColor = .tertiaryLabelColor
+        overflowLabel.toolTip = hiddenTags.joined(separator: ", ")
+        overflowLabel.setAccessibilityLabel(
+            "\(hiddenTags.count) more tags: \(hiddenTags.joined(separator: ", "))"
+        )
+        markers.append(overflowLabel)
+        return markers
+    }
+}
+
 final class TagChipView: NSView {
     enum Style {
         case tinted

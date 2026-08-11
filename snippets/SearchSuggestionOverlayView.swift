@@ -147,9 +147,10 @@ private final class SearchSuggestionRowView: NSView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let keywordLabel = NSTextField(labelWithString: "")
     private let contentPreviewLabel = NSTextField(labelWithString: "")
-    private let tagChipsStack = NSStackView()
+    private let tagDotsStack = NSStackView()
     private var trackingArea: NSTrackingArea?
     private var status = SnippetRowStatus.unconfigured
+    private static let maxVisibleTagDots = 6
     private var isHovering = false {
         didSet {
             guard oldValue != isHovering else { return }
@@ -197,14 +198,14 @@ private final class SearchSuggestionRowView: NSView {
         contentPreviewLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         contentPreviewLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        tagChipsStack.orientation = .horizontal
-        tagChipsStack.spacing = 4
-        tagChipsStack.alignment = .centerY
-        tagChipsStack.translatesAutoresizingMaskIntoConstraints = false
-        tagChipsStack.setContentHuggingPriority(.required, for: .horizontal)
-        tagChipsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        tagDotsStack.orientation = .horizontal
+        tagDotsStack.spacing = 4
+        tagDotsStack.alignment = .centerY
+        tagDotsStack.translatesAutoresizingMaskIntoConstraints = false
+        tagDotsStack.setContentHuggingPriority(.required, for: .horizontal)
+        tagDotsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        [highlightView, dotView, nameLabel, keywordLabel, tagChipsStack, contentPreviewLabel].forEach(addSubview)
+        [highlightView, dotView, nameLabel, keywordLabel, tagDotsStack, contentPreviewLabel].forEach(addSubview)
 
         NSLayoutConstraint.activate([
             dotView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -214,20 +215,19 @@ private final class SearchSuggestionRowView: NSView {
 
             nameLabel.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 14),
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: tagDotsStack.leadingAnchor, constant: -8),
 
-            keywordLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 8),
-            keywordLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
-            keywordLabel.firstBaselineAnchor.constraint(equalTo: nameLabel.firstBaselineAnchor),
-
-            tagChipsStack.leadingAnchor.constraint(greaterThanOrEqualTo: keywordLabel.trailingAnchor, constant: 8),
-            tagChipsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            tagChipsStack.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            tagDotsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            tagDotsStack.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
 
             contentPreviewLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            contentPreviewLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            contentPreviewLabel.trailingAnchor.constraint(lessThanOrEqualTo: keywordLabel.leadingAnchor, constant: -8),
             contentPreviewLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 2),
-            contentPreviewLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8)
+            contentPreviewLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
+
+            keywordLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            keywordLabel.firstBaselineAnchor.constraint(equalTo: contentPreviewLabel.firstBaselineAnchor),
+            keywordLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
         ])
     }
 
@@ -300,17 +300,17 @@ private final class SearchSuggestionRowView: NSView {
         dotView.style = status.dotStyle
         dotView.color = status.dotColor
 
-        tagChipsStack.arrangedSubviews.forEach { view in
-            tagChipsStack.removeArrangedSubview(view)
+        tagDotsStack.arrangedSubviews.forEach { view in
+            tagDotsStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
-        let chips = TagChipView.makeChips(
+        let markers = TagDotView.makeMarkers(
             for: snippet.tags,
-            maxCount: 3,
+            maxCount: Self.maxVisibleTagDots,
             muted: !snippet.isEnabled
         )
-        chips.forEach(tagChipsStack.addArrangedSubview)
-        tagChipsStack.isHidden = chips.isEmpty
+        markers.forEach(tagDotsStack.addArrangedSubview)
+        tagDotsStack.isHidden = markers.isEmpty
 
         applyTextColors()
     }
