@@ -115,6 +115,8 @@ final class ViewController: NSViewController {
     let permissionButtonsStack = NSStackView()
 
     let searchField = NSSearchField()
+    let searchIndex = SnippetSearchIndex()
+    lazy var searchPipeline = SnippetSearchPipeline(index: searchIndex)
     let tableView = SnippetListTableView()
     let tagFilterBar = TagFilterBarView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
@@ -452,12 +454,19 @@ final class ViewController: NSViewController {
 
     func scheduleEditorListReload() {
         editorListReloadWorkItem?.cancel()
+        // A previous query may be scanning the pre-keystroke library. It must not
+        // repaint the list while this newer edit is waiting for its coalesced refresh.
+        searchPipeline.cancelPending()
 
         let workItem = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.editorListReloadWorkItem = nil
-                self.reloadVisibleSnippets(keepSelection: true)
+                if SnippetSearchSnapshot.normalizedQuery(self.searchField.stringValue).isEmpty {
+                    self.reloadVisibleSnippets(keepSelection: true)
+                } else {
+                    self.reloadVisibleSnippetsForSearch()
+                }
             }
         }
         editorListReloadWorkItem = workItem

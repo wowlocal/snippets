@@ -5,10 +5,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         guard let field = obj.object as? NSTextField else { return }
 
         if field == searchField {
-            reloadVisibleSnippets(keepSelection: true)
-            if selectedSnippetID == nil, let firstID = visibleSnippets.first?.id {
-                selectSnippet(id: firstID, focus: nil)
-            }
+            reloadVisibleSnippetsForSearch()
             updateSearchSuggestionOverlay()
             return
         }

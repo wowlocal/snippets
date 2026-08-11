@@ -16,6 +16,8 @@ final class SnippetListViewController: UIViewController {
     private var activeTagKeys = Set<String>()
     private var selectedID: UUID?
     private var statusWorkItem: DispatchWorkItem?
+    private let searchIndex = SnippetSearchIndex()
+    private lazy var searchPipeline = SnippetSearchPipeline(index: searchIndex)
 
     var firstVisibleSnippetID: UUID? { visibleSnippets.first?.id }
     var selectedSnippetID: UUID? { selectedID }
@@ -56,29 +58,74 @@ final class SnippetListViewController: UIViewController {
     override var canBecomeFirstResponder: Bool { true }
 
     func reload(keepingSelection: Bool) {
-        if !keepingSelection {
-            selectedID = nil
-        }
-        let query = searchController.searchBar.text?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
+        searchPipeline.cancelPending()
+        let searchText = searchController.searchBar.text ?? ""
 
         let existingTagKeys = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
         activeTagKeys.formIntersection(existingTagKeys)
 
-        visibleSnippets = environment.store.snippetsSortedForDisplay().filter { snippet in
-            let matchesSearch = query.isEmpty
-                || snippet.displayName.lowercased().contains(query)
-                || snippet.normalizedKeyword.lowercased().contains(query)
-                || snippet.content.lowercased().contains(query)
-                || snippet.tags.contains { $0.lowercased().contains(query) }
-            let matchesTags = activeTagKeys.allSatisfy { snippet.hasTag(withKey: $0) }
-            return matchesSearch && matchesTags
+        let snippets = environment.store.snippetsSortedForDisplay()
+        let normalizedQuery = SnippetSearchSnapshot.normalizedQuery(searchText)
+        let matches: [Snippet]
+        if normalizedQuery.isEmpty {
+            matches = SnippetSearchSnapshot.resultsForEmptySearch(
+                in: snippets,
+                activeTagKeys: activeTagKeys
+            )
+        } else {
+            matches = searchIndex.results(
+                in: snippets,
+                searchText: searchText,
+                activeTagKeys: activeTagKeys
+            )
         }
+        applySearchMatches(
+            matches,
+            keepingSelection: keepingSelection,
+            normalizedQuery: normalizedQuery
+        )
+    }
+
+    private func reloadSearchResults() {
+        let searchText = searchController.searchBar.text ?? ""
+        let existingTagKeys = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
+        activeTagKeys.formIntersection(existingTagKeys)
+
+        let snippets = environment.store.snippetsSortedForDisplay()
+        guard !SnippetSearchSnapshot.normalizedQuery(searchText).isEmpty else {
+            reload(keepingSelection: true)
+            return
+        }
+        let tagKeys = activeTagKeys
+        searchPipeline.submit(
+            snippets: snippets,
+            searchText: searchText,
+            activeTagKeys: tagKeys
+        ) { [weak self] response in
+            Task { @MainActor [weak self] in
+                guard let self, self.searchPipeline.isCurrent(response.generation) else { return }
+                self.applySearchMatches(
+                    response.snippets,
+                    keepingSelection: true,
+                    normalizedQuery: SnippetSearchSnapshot.normalizedQuery(searchText)
+                )
+            }
+        }
+    }
+
+    private func applySearchMatches(
+        _ matches: [Snippet],
+        keepingSelection: Bool,
+        normalizedQuery: String
+    ) {
+        if !keepingSelection {
+            selectedID = nil
+        }
+        visibleSnippets = matches
 
         rebuildTagFilters()
         tableView.reloadData()
-        updateEmptyState(query: query)
+        updateEmptyState(query: normalizedQuery)
 
         if keepingSelection, let selectedID,
            let row = visibleSnippets.firstIndex(where: { $0.id == selectedID }) {
@@ -431,7 +478,7 @@ final class SnippetListViewController: UIViewController {
 
 extension SnippetListViewController: UISearchResultsUpdating {
     func updateSearchResults(for searchController: UISearchController) {
-        reload(keepingSelection: true)
+        reloadSearchResults()
     }
 }
 

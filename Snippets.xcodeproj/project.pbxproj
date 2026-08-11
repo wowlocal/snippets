@@ -24,6 +24,7 @@
 		28A20000000000000000000C /* RecoveryKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000C /* RecoveryKey.swift */; };
 		28A20000000000000000000D /* SecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000D /* SecretStore.swift */; };
 		28A20000000000000000000E /* Snippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000E /* Snippet.swift */; };
+		28A20000000000000000002A /* SnippetSearchIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000002A /* SnippetSearchIndex.swift */; };
 		28A20000000000000000000F /* SnippetCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000000F /* SnippetCrypto.swift */; };
 		28A200000000000000000010 /* SnippetDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000010 /* SnippetDeepLink.swift */; };
 		28A200000000000000000011 /* SnippetLibraryCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000011 /* SnippetLibraryCodec.swift */; };
@@ -132,6 +133,7 @@
 		28A10000000000000000000C /* RecoveryKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RecoveryKey.swift; path = snippets/Core/RecoveryKey.swift; sourceTree = SOURCE_ROOT; };
 		28A10000000000000000000D /* SecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SecretStore.swift; path = snippets/Core/SecretStore.swift; sourceTree = SOURCE_ROOT; };
 		28A10000000000000000000E /* Snippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Snippet.swift; path = snippets/Core/Snippet.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000002A /* SnippetSearchIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetSearchIndex.swift; path = snippets/Core/SnippetSearchIndex.swift; sourceTree = SOURCE_ROOT; };
 		28A10000000000000000000F /* SnippetCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetCrypto.swift; path = snippets/Core/SnippetCrypto.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000010 /* SnippetDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetDeepLink.swift; path = snippets/Core/SnippetDeepLink.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000011 /* SnippetLibraryCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetLibraryCodec.swift; path = snippets/Core/SnippetLibraryCodec.swift; sourceTree = SOURCE_ROOT; };
@@ -327,6 +329,7 @@
 				28A10000000000000000000C /* RecoveryKey.swift */,
 				28A10000000000000000000D /* SecretStore.swift */,
 				28A10000000000000000000E /* Snippet.swift */,
+				28A10000000000000000002A /* SnippetSearchIndex.swift */,
 				28A10000000000000000000F /* SnippetCrypto.swift */,
 				28A100000000000000000010 /* SnippetDeepLink.swift */,
 				28A100000000000000000011 /* SnippetLibraryCodec.swift */,
@@ -584,6 +587,7 @@
 				28A20000000000000000000C /* RecoveryKey.swift in Sources */,
 				28A20000000000000000000D /* SecretStore.swift in Sources */,
 				28A20000000000000000000E /* Snippet.swift in Sources */,
+				28A20000000000000000002A /* SnippetSearchIndex.swift in Sources */,
 				28A20000000000000000000F /* SnippetCrypto.swift in Sources */,
 				28A200000000000000000010 /* SnippetDeepLink.swift in Sources */,
 				28A200000000000000000011 /* SnippetLibraryCodec.swift in Sources */,
