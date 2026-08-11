@@ -63,6 +63,8 @@ final class PhoneLibraryViewController: UIViewController {
     private var hasCompletedSync: Bool
     private weak var moreButtonNavigationBar: UINavigationBar?
     private var moreButtonBottomConstraint: NSLayoutConstraint?
+    private let searchIndex = SnippetSearchIndex()
+    private lazy var searchPipeline = SnippetSearchPipeline(index: searchIndex)
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -129,20 +131,60 @@ final class PhoneLibraryViewController: UIViewController {
     }
 
     func reload() {
+        searchPipeline.cancelPending()
         let existingTags = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
         activeTagKeys.formIntersection(existingTags)
 
-        let results = SnippetLibraryQuery.results(
-            in: environment.store.snippetsSortedForDisplay(),
-            searchText: searchController.searchBar.text ?? "",
-            activeTagKeys: activeTagKeys
-        )
-        sections = []
-        if !results.pinned.isEmpty {
-            sections.append(Section(title: "Pinned", snippets: results.pinned))
+        let snippets = environment.store.snippetsSortedForDisplay()
+        let searchText = searchController.searchBar.text ?? ""
+        let matches: [Snippet]
+        if SnippetSearchSnapshot.normalizedQuery(searchText).isEmpty {
+            matches = SnippetSearchSnapshot.resultsForEmptySearch(
+                in: snippets,
+                activeTagKeys: activeTagKeys
+            )
+        } else {
+            matches = searchIndex.results(
+                in: snippets,
+                searchText: searchText,
+                activeTagKeys: activeTagKeys
+            )
         }
-        if !results.snippets.isEmpty {
-            sections.append(Section(title: nil, snippets: results.snippets))
+        applySearchMatches(matches)
+    }
+
+    private func reloadSearchResults() {
+        let existingTags = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
+        activeTagKeys.formIntersection(existingTags)
+
+        let snippets = environment.store.snippetsSortedForDisplay()
+        let searchText = searchController.searchBar.text ?? ""
+        guard !SnippetSearchSnapshot.normalizedQuery(searchText).isEmpty else {
+            reload()
+            return
+        }
+        let tagKeys = activeTagKeys
+        searchPipeline.submit(
+            snippets: snippets,
+            searchText: searchText,
+            activeTagKeys: tagKeys
+        ) { [weak self] response in
+            Task { @MainActor [weak self] in
+                guard let self, self.searchPipeline.isCurrent(response.generation) else { return }
+                self.applySearchMatches(response.snippets)
+            }
+        }
+    }
+
+    private func applySearchMatches(_ matches: [Snippet]) {
+        sections = []
+        let pinned = matches.filter(\.isPinned)
+        let unpinned = matches.filter { !$0.isPinned }
+        if !pinned.isEmpty {
+            sections.append(Section(title: "Pinned", snippets: pinned))
+        }
+        if !unpinned.isEmpty {
+            sections.append(Section(title: nil, snippets: unpinned))
         }
 
         tableView.reloadData()
@@ -646,7 +688,7 @@ final class PhoneLibraryViewController: UIViewController {
 
 extension PhoneLibraryViewController: UISearchResultsUpdating {
     func updateSearchResults(for searchController: UISearchController) {
-        reload()
+        reloadSearchResults()
     }
 }
 

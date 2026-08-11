@@ -115,6 +115,8 @@ final class ViewController: NSViewController {
     let permissionButtonsStack = NSStackView()
 
     let searchField = NSSearchField()
+    let searchIndex = SnippetSearchIndex()
+    lazy var searchPipeline = SnippetSearchPipeline(index: searchIndex)
     let tableView = SnippetListTableView()
     let tagFilterBar = TagFilterBarView()
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)

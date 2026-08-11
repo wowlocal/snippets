@@ -25,13 +25,12 @@ extension ViewController {
     }
 
     func reloadVisibleSnippets(keepSelection: Bool) {
+        searchPipeline.cancelPending()
         if editorListReloadWorkItem != nil {
             cancelEditorListReload()
         }
 
-        let query = searchField.stringValue
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        let searchText = searchField.stringValue
 
         pruneStaleTagFilters()
         updateTagFilterBar()
@@ -41,24 +40,85 @@ extension ViewController {
         lastAppliedTagFilterKeys = tagFilterKeys
 
         let sorted = store.snippetsSortedForDisplay()
+        let normalizedQuery = SnippetSearchSnapshot.normalizedQuery(searchText)
         let searchMatches: [Snippet]
-        if query.isEmpty {
+        let newSnippets: [Snippet]
+        if normalizedQuery.isEmpty {
             searchMatches = sorted
+            newSnippets = SnippetSearchSnapshot.resultsForEmptySearch(
+                in: sorted,
+                activeTagKeys: tagFilterKeys
+            )
         } else {
-            searchMatches = sorted.filter { snippet in
-                snippet.displayName.lowercased().contains(query)
-                    || snippet.normalizedKeyword.lowercased().contains(query)
-                    || snippet.content.lowercased().contains(query)
-                    || snippet.tags.contains { $0.lowercased().contains(query) }
-            }
+            let evaluation = searchIndex.snapshot(for: sorted).evaluate(
+                searchText: searchText,
+                activeTagKeys: tagFilterKeys
+            )
+            searchMatches = evaluation.searchMatches
+            newSnippets = evaluation.snippets
+        }
+        applySearchEvaluation(
+            searchMatches: searchMatches,
+            newSnippets: newSnippets,
+            normalizedQuery: normalizedQuery,
+            tagFilterKeys: tagFilterKeys,
+            didTagFilterChange: didTagFilterChange,
+            keepSelection: keepSelection
+        )
+    }
+
+    func reloadVisibleSnippetsForSearch() {
+        if editorListReloadWorkItem != nil {
+            cancelEditorListReload()
         }
 
-        var newSnippets = searchMatches
-        if !tagFilterKeys.isEmpty {
-            newSnippets = newSnippets.filter { snippet in
-                tagFilterKeys.allSatisfy { snippet.hasTag(withKey: $0) }
+        let searchText = searchField.stringValue
+        guard !SnippetSearchSnapshot.normalizedQuery(searchText).isEmpty else {
+            reloadVisibleSnippets(keepSelection: true)
+            if selectedSnippetID == nil, let firstID = visibleSnippets.first?.id {
+                selectSnippet(id: firstID, focus: nil)
+            }
+            return
+        }
+        pruneStaleTagFilters()
+        updateTagFilterBar()
+
+        let tagFilterKeys = activeTagFilterKeys
+        let didTagFilterChange = lastAppliedTagFilterKeys != tagFilterKeys
+        lastAppliedTagFilterKeys = tagFilterKeys
+        let sorted = store.snippetsSortedForDisplay()
+
+        searchPipeline.submit(
+            snippets: sorted,
+            searchText: searchText,
+            activeTagKeys: tagFilterKeys,
+            includeSearchMatches: true
+        ) { [weak self] response in
+            Task { @MainActor [weak self] in
+                guard let self, self.searchPipeline.isCurrent(response.generation) else { return }
+                self.applySearchEvaluation(
+                    searchMatches: response.searchMatches,
+                    newSnippets: response.snippets,
+                    normalizedQuery: SnippetSearchSnapshot.normalizedQuery(searchText),
+                    tagFilterKeys: tagFilterKeys,
+                    didTagFilterChange: didTagFilterChange,
+                    keepSelection: true
+                )
+                if self.selectedSnippetID == nil, let firstID = self.visibleSnippets.first?.id {
+                    self.selectSnippet(id: firstID, focus: nil)
+                }
             }
         }
+    }
+
+    private func applySearchEvaluation(
+        searchMatches: [Snippet],
+        newSnippets: [Snippet],
+        normalizedQuery: String,
+        tagFilterKeys: Set<String>,
+        didTagFilterChange: Bool,
+        keepSelection: Bool
+    ) {
 
         if !keepSelection {
             selectedSnippetID = newSnippets.first?.id
@@ -94,7 +154,7 @@ extension ViewController {
             applyAnimatedListUpdate(oldIDs: oldIDs, newIDs: newIDs)
         }
 
-        updateListEmptyState(query: query)
+        updateListEmptyState(query: normalizedQuery)
         syncTableSelectionWithSelectedSnippet()
         deleteButton.isEnabled = selectedSnippetID != nil
         updateSearchSuggestionOverlay()
