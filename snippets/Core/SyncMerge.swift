@@ -33,7 +33,7 @@ import CryptoKit
 ///    So when one side deleted and the other edited, the edit survives.
 nonisolated enum SyncMerge {
 
-    struct Outcome {
+    struct Outcome: Sendable {
         /// The merged library, in a stable order: surviving records in their local
         /// order, then records only the other side had.
         var snippets: [Snippet]

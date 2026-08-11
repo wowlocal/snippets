@@ -1,6 +1,212 @@
 import Darwin
 import Foundation
 
+/// An immutable persistence transaction captured from `SnippetStore` on MainActor.
+///
+/// The worker must never reach back into the store: a write can outlive the debounce
+/// that created it, and waiting for a worker that in turn needs MainActor deadlocks
+/// backgrounding and termination. Everything the locked read/merge/write needs is
+/// therefore carried by value here.
+nonisolated struct SnippetPersistenceRequest: Sendable {
+    let id: UInt64
+    let stateVersion: UInt64
+    let diskObservationVersion: UInt64
+    let local: [Snippet]
+    let ancestorData: Data?
+    let expectedDigest: String?
+    let libraryURL: URL
+    let stateURL: URL
+    let lockURL: URL
+    let temporaryDirectory: URL
+    let lockTimeout: TimeInterval
+}
+
+nonisolated struct SnippetPersistenceSuccess: Sendable {
+    let snippets: [Snippet]
+    let data: Data
+    let digest: String
+    let foldedInForeignWrite: Bool
+    let wroteWithoutLock: Bool
+    let attempts: Int
+    let merge: SyncMerge.Outcome?
+    let recreatedMissingFile: Bool
+}
+
+nonisolated enum SnippetPersistenceFailure: Sendable {
+    case busy
+    case other(DiagnosticFailure)
+}
+
+nonisolated enum SnippetPersistenceResult: Sendable {
+    case success(SnippetPersistenceSuccess)
+    case failure(SnippetPersistenceFailure)
+}
+
+/// A one-shot, thread-safe result inbox.
+///
+/// An asynchronous completion normally applies this on MainActor. An immediate write
+/// or lifecycle flush can instead wait for the same inbox and apply it synchronously;
+/// the already-enqueued callback then observes that the store no longer owns this
+/// operation and becomes a no-op. The worker never waits for MainActor.
+nonisolated final class SnippetPersistenceOperation: @unchecked Sendable {
+    let request: SnippetPersistenceRequest
+
+    private let condition = NSCondition()
+    private var storedResult: SnippetPersistenceResult?
+
+    init(request: SnippetPersistenceRequest) {
+        self.request = request
+    }
+
+    func finish(with result: SnippetPersistenceResult) {
+        condition.lock()
+        precondition(storedResult == nil, "A persistence operation may finish only once")
+        storedResult = result
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func wait() -> SnippetPersistenceResult {
+        condition.lock()
+        while storedResult == nil {
+            condition.wait()
+        }
+        let result = storedResult!
+        condition.unlock()
+        return result
+    }
+
+    func resultIfReady() -> SnippetPersistenceResult? {
+        condition.lock()
+        let result = storedResult
+        condition.unlock()
+        return result
+    }
+}
+
+/// Serial executor for the heavyweight portion of library persistence.
+///
+/// Hooks are dependency-injection seams for deterministic concurrency tests. Shipping
+/// callers use the empty defaults; no environment variable or global mutable test mode
+/// can accidentally affect a real library.
+nonisolated final class SnippetPersistenceWorker: @unchecked Sendable {
+    struct Hooks: Sendable {
+        var willPerform: (@Sendable (SnippetPersistenceRequest) -> Void)?
+        var didPerform: (@Sendable (SnippetPersistenceRequest, SnippetPersistenceResult) -> Void)?
+        var overrideResult: (@Sendable (SnippetPersistenceRequest) -> SnippetPersistenceResult?)?
+        var willWaitForResult: (@Sendable () -> Void)?
+
+        init(
+            willPerform: (@Sendable (SnippetPersistenceRequest) -> Void)? = nil,
+            didPerform: (@Sendable (SnippetPersistenceRequest, SnippetPersistenceResult) -> Void)? = nil,
+            overrideResult: (@Sendable (SnippetPersistenceRequest) -> SnippetPersistenceResult?)? = nil,
+            willWaitForResult: (@Sendable () -> Void)? = nil
+        ) {
+            self.willPerform = willPerform
+            self.didPerform = didPerform
+            self.overrideResult = overrideResult
+            self.willWaitForResult = willWaitForResult
+        }
+    }
+
+    private let queue: DispatchQueue
+    private let hooks: Hooks
+
+    init(
+        label: String = "com.khm.snippets.persistence",
+        hooks: Hooks = Hooks()
+    ) {
+        queue = DispatchQueue(label: label, qos: .utility)
+        self.hooks = hooks
+    }
+
+    func submit(
+        _ request: SnippetPersistenceRequest,
+        completion: (@Sendable (SnippetPersistenceOperation) -> Void)? = nil
+    ) -> SnippetPersistenceOperation {
+        let operation = SnippetPersistenceOperation(request: request)
+        queue.async { [hooks] in
+            hooks.willPerform?(request)
+            let result = hooks.overrideResult?(request) ?? Self.perform(request)
+            hooks.didPerform?(request, result)
+            operation.finish(with: result)
+            guard let completion else { return }
+            DispatchQueue.main.async {
+                completion(operation)
+            }
+        }
+        return operation
+    }
+
+    /// Waits behind the submitted operation on its own serial queue. `sync` donates
+    /// the caller's QoS while a lifecycle/immediate path is blocked, avoiding a
+    /// user-interactive MainActor waiting on an unboosted utility worker. The result
+    /// itself was published before the queue block can finish, so no MainActor callback
+    /// participates in this handoff.
+    func wait(for operation: SnippetPersistenceOperation) -> SnippetPersistenceResult {
+        hooks.willWaitForResult?()
+        queue.sync {}
+        return operation.wait()
+    }
+
+    private static func perform(_ request: SnippetPersistenceRequest) -> SnippetPersistenceResult {
+        let ancestor = request.ancestorData.flatMap {
+            try? SnippetLibraryCodec.decode($0)
+        } ?? []
+        var pendingMerge: SyncMerge.Outcome?
+        var recreatedMissingFile = false
+
+        do {
+            let outcome = try LibraryWriter.update(
+                libraryURL: request.libraryURL,
+                stateURL: request.stateURL,
+                lockURL: request.lockURL,
+                temporaryDirectory: request.temporaryDirectory,
+                lockTimeout: request.lockTimeout,
+                expectedDigest: request.expectedDigest
+            ) { onDisk in
+                guard onDisk.digest != request.expectedDigest else {
+                    pendingMerge = nil
+                    recreatedMissingFile = false
+                    return request.local
+                }
+
+                guard onDisk.fileExisted else {
+                    pendingMerge = nil
+                    recreatedMissingFile = request.expectedDigest != nil
+                    return request.local
+                }
+
+                let merged = SyncMerge.mergeLocal(
+                    base: ancestor,
+                    local: request.local,
+                    remote: onDisk.snippets
+                )
+                pendingMerge = merged
+                recreatedMissingFile = false
+                return merged.snippets
+            }
+
+            return .success(SnippetPersistenceSuccess(
+                snippets: outcome.snippets,
+                data: outcome.data,
+                digest: outcome.digest,
+                foldedInForeignWrite: outcome.foldedInForeignWrite,
+                wroteWithoutLock: outcome.wroteWithoutLock,
+                attempts: outcome.attempts,
+                merge: pendingMerge,
+                recreatedMissingFile: recreatedMissingFile
+            ))
+        } catch {
+            if let failure = error as? LibraryWriter.Failure,
+               case .busy = failure {
+                return .failure(.busy)
+            }
+            return .failure(.other(DiagnosticFailure(error)))
+        }
+    }
+}
+
 /// The second observer of library changes, alongside `SnippetStore.onChange`.
 ///
 /// Two named channels rather than an observer registry: `onChange` is a
@@ -58,15 +264,22 @@ final class SnippetStore {
     ///
     /// The two stores stay separate on disk and in memory; only the *display* and
     /// *uniqueness* views below merge them. `snippets` itself remains plaintext-only,
-    /// which is what keeps export, the undo stack, and `writeToDisk` structurally
+    /// which is what keeps export, the undo stack, and plaintext persistence structurally
     /// incapable of touching a secret.
     weak var secureProvider: SecureSnippetProviding?
 
     private let saveURL: URL
     private let saveFolderURL: URL
     private let encoder = JSONEncoder()
+    private let persistenceWorker: SnippetPersistenceWorker
     private var persistWorkItem: DispatchWorkItem?
-    private let persistDelay: TimeInterval = 0.3
+    private let persistDelay: TimeInterval
+    private let persistenceRetryBaseDelay: TimeInterval
+    private var inFlightWrite: SnippetPersistenceOperation?
+    private var persistenceStateVersion: UInt64 = 0
+    private var nextPersistenceRequestID: UInt64 = 0
+    private var diskObservationVersion: UInt64 = 0
+    private var needsPersistence = false
     private let externalReloadDelay: TimeInterval = 0.05
     private var externalReloadWorkItem: DispatchWorkItem?
     private var saveDirectoryMonitor: DispatchSourceFileSystemObject?
@@ -90,21 +303,12 @@ final class SnippetStore {
     /// escalating retry rather than a dropped write.
     private var lockFailureCount = 0
 
-    /// Set by `writeToDisk` when a write genuinely lands. Only `flushPendingWrites`
-    /// reads it, because on the terminate path "did it work?" cannot be answered by
-    /// scheduling anything.
-    private var didWriteDuringTerminate = false
-
     /// How long to wait for the library lock on the ordinary debounced write path.
     ///
-    /// Deliberately small. This runs on the main thread, which also hosts a
-    /// head-inserted `CGEventTap` for `keyDown` — every millisecond spent polling here
-    /// is a millisecond of the user's typing held up system-wide. It also holds a
-    /// cross-process lock for its whole duration, against a CLI that gives up after
-    /// five seconds. An uncontended acquire is immediate and a CLI write holds the
-    /// lock for single-digit milliseconds, so 250 ms is many times the realistic
-    /// worst case; anything beyond that is a stuck peer, and the right answer then is
-    /// to back off and retry rather than to wait.
+    /// Deliberately small even though polling now happens on the serial worker. The
+    /// app holds the same cross-process lock as a CLI that gives up after five seconds;
+    /// an ordinary edit should back off behind a stuck peer instead of occupying that
+    /// worker indefinitely and delaying a lifecycle flush queued behind it.
     private let lockTimeout: TimeInterval = 0.25
     /// The terminate path has nothing left to reschedule onto, so it waits longer.
     private let terminateLockTimeout: TimeInterval = 5.0
@@ -195,8 +399,16 @@ final class SnippetStore {
         let snippets: [Snippet]
     }
 
-    init(configuration: Configuration = .macOSDefault) {
+    init(
+        configuration: Configuration = .macOSDefault,
+        persistenceWorker: SnippetPersistenceWorker = SnippetPersistenceWorker(),
+        persistDelay: TimeInterval = 0.3,
+        persistenceRetryBaseDelay: TimeInterval = 0.25
+    ) {
         self.configuration = configuration
+        self.persistenceWorker = persistenceWorker
+        self.persistDelay = persistDelay
+        self.persistenceRetryBaseDelay = persistenceRetryBaseDelay
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
         let folder = SnippetStorageLocations.supportFolderURL
@@ -903,99 +1115,180 @@ final class SnippetStore {
     private func persist(immediately: Bool = false, notifyChange: Bool = true) {
         restartEditTransactionIfNeeded()
         if notifyChange { notifyChanged(.local) }
+        persistenceStateVersion &+= 1
+        needsPersistence = true
         persistWorkItem?.cancel()
         persistWorkItem = nil
 
         if immediately {
-            writeToDisk()
+            // A prior debounced write may still be running. Its result must be folded
+            // into current memory before this action snapshots, otherwise two worker
+            // operations are serialized on disk but applied to the store out of order.
+            _ = drainInFlightWrite(scheduleRetryOnFailure: false)
+            persistWorkItem?.cancel()
+            persistWorkItem = nil
+            guard needsPersistence else { return }
+            if !performWriteSynchronously(lockTimeout: lockTimeout) {
+                schedulePersistRetry()
+            }
             return
         }
 
+        schedulePersistence(after: persistDelay)
+    }
+
+    private func schedulePersistence(after delay: TimeInterval) {
         let workItem = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                // Clear the reference before writing: a non-nil persistWorkItem
-                // must always mean a write is still pending.
                 self.persistWorkItem = nil
-                self.writeToDisk()
+                self.startAsynchronousWriteIfNeeded()
             }
         }
         persistWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + persistDelay, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
-    /// The single write funnel, and the place the library's oldest data-loss bug is fixed.
-    ///
-    /// Two processes used to read-modify-write the whole file with no coordination,
-    /// which loses roughly two thirds of concurrent writes outright. Serializing them
-    /// is necessary but not sufficient, because of a race that survives correct
-    /// locking entirely:
-    ///
-    /// 1. `t=0.00` the user types; a debounced write is scheduled for `t=0.30`.
-    /// 2. `t=0.28` the CLI writes, correctly, under the lock.
-    /// 3. `t=0.30` this method writes, correctly, under the lock — from an in-memory
-    ///    array that never saw step 2 — and records its own bytes as "what is on disk".
-    /// 4. `t=0.33` the folder monitor fires, sees bytes matching what we last wrote,
-    ///    and short-circuits. The CLI's edit is gone, silently.
-    ///
-    /// Everyone behaved correctly and an edit still vanished. So the writer re-reads
-    /// *inside* the lock and merges when the bytes moved, instead of trusting its own
-    /// snapshot to still be current.
-    private func writeToDisk(lockTimeout timeout: TimeInterval? = nil, isTerminating: Bool = false) {
-        let previousDigest = lastKnownDigest
-        let ancestor = lastKnownDiskData.flatMap { try? SnippetLibraryCodec.decode($0) } ?? []
-
-        // The transform below may run more than once: `LibraryWriter` retries it when a
-        // peer writes inside the critical section. It must therefore be free of side
-        // effects — the merge result is stashed here and applied only once, after the
-        // write is confirmed. Mutating `snippets` or the undo stacks from inside would
-        // apply them once per attempt.
-        var pendingMerge: (outcome: SyncMerge.Outcome, preMergeLocal: [Snippet])?
-
-        do {
-            let outcome = try LibraryWriter.update(
-                libraryURL: saveURL,
-                lockTimeout: timeout ?? lockTimeout,
-                expectedDigest: previousDigest
-            ) { onDisk in
-                // Fast path: nobody moved the file, so there is nothing to reconcile.
-                guard onDisk.digest != previousDigest else {
-                    pendingMerge = nil
-                    return self.snippets
-                }
-
-                // The file is GONE, not empty. Nobody deleted these records — there is
-                // simply no remote side to merge against, so merging would read every
-                // untouched record as "the peer deleted this" and write one snippet
-                // over the whole library, durably, with the undo stacks rebased onto
-                // the wreckage. Recreate the file from what we have, which is exactly
-                // what the plain atomic write this replaced always did.
-                guard onDisk.fileExisted else {
-                    // Only alarming if we had previously seen a file. On a genuine first
-                    // launch there is nothing there yet and "disappeared" is both wrong
-                    // and frightening.
-                    if previousDigest != nil {
-                        Diagnostics.record(.storageState(
-                            area: .library,
-                            state: .recreated,
-                            value: nil))
-                    }
-                    pendingMerge = nil
-                    return self.snippets
-                }
-
-                let merged = SyncMerge.mergeLocal(
-                    base: ancestor, local: self.snippets, remote: onDisk.snippets)
-                pendingMerge = (merged, self.snippets)
-                return merged.snippets
+    /// Starts the heavyweight write without doing JSON, digest, lock, or filesystem
+    /// work in the debounce callback. Only one operation is owned at a time. If the
+    /// trailing debounce expires behind an existing operation, that operation's
+    /// completion observes `needsPersistence` and starts the newer snapshot next.
+    private func startAsynchronousWriteIfNeeded() {
+        guard needsPersistence, inFlightWrite == nil else { return }
+        let request = makePersistenceRequest(lockTimeout: lockTimeout)
+        let operation = persistenceWorker.submit(request) { [weak self] operation in
+            MainActor.assumeIsolated {
+                self?.finishAsynchronousWrite(operation)
             }
+        }
+        inFlightWrite = operation
+    }
 
+    private func finishAsynchronousWrite(_ operation: SnippetPersistenceOperation) {
+        // A synchronous immediate/flush drain may already have consumed this inbox.
+        // Its callback was enqueued before MainActor became available again, so identity
+        // is the exactly-once guard rather than another mutable completion flag.
+        guard inFlightWrite === operation,
+              let result = operation.resultIfReady() else { return }
+        inFlightWrite = nil
+
+        if applyPersistenceResult(result, for: operation.request) {
+            if needsPersistence, persistWorkItem == nil {
+                startAsynchronousWriteIfNeeded()
+            }
+        } else {
+            schedulePersistRetry()
+        }
+    }
+
+    @discardableResult
+    private func drainInFlightWrite(scheduleRetryOnFailure: Bool) -> Bool? {
+        guard let operation = inFlightWrite else { return nil }
+        let result = persistenceWorker.wait(for: operation)
+        guard inFlightWrite === operation else { return nil }
+        inFlightWrite = nil
+        let succeeded = applyPersistenceResult(result, for: operation.request)
+        if !succeeded, scheduleRetryOnFailure {
+            schedulePersistRetry()
+        }
+        return succeeded
+    }
+
+    @discardableResult
+    private func performWriteSynchronously(lockTimeout: TimeInterval) -> Bool {
+        let request = makePersistenceRequest(lockTimeout: lockTimeout)
+        let operation = persistenceWorker.submit(request)
+        let result = persistenceWorker.wait(for: operation)
+        return applyPersistenceResult(result, for: request)
+    }
+
+    private func makePersistenceRequest(lockTimeout: TimeInterval) -> SnippetPersistenceRequest {
+        nextPersistenceRequestID &+= 1
+        return SnippetPersistenceRequest(
+            id: nextPersistenceRequestID,
+            stateVersion: persistenceStateVersion,
+            diskObservationVersion: diskObservationVersion,
+            local: snippets,
+            ancestorData: lastKnownDiskData,
+            expectedDigest: lastKnownDigest,
+            libraryURL: saveURL,
+            stateURL: SnippetStorageLocations.syncStateFileURL,
+            lockURL: SnippetStorageLocations.libraryLockFileURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL,
+            lockTimeout: lockTimeout
+        )
+    }
+
+    /// Applies one worker result, in submission order, on MainActor.
+    ///
+    /// The request snapshot is the merge base for a completion that arrives after a
+    /// newer edit. Treating the worker's actual written result as the remote side folds
+    /// in foreign edits/deletes without reverting the newer in-memory fields. The
+    /// resulting newer state remains dirty and is submitted by the trailing debounce.
+    ///
+    /// `diskObservationVersion` prevents an older callback from replacing a cache that
+    /// an external reload observed while the worker ran. In the ordinary case the
+    /// returned bytes become byte-exact authority without rehashing them on MainActor.
+    private func applyPersistenceResult(
+        _ result: SnippetPersistenceResult,
+        for request: SnippetPersistenceRequest
+    ) -> Bool {
+        switch result {
+        case .success(let outcome):
             lockFailureCount = 0
-            didWriteDuringTerminate = true
-            if let pendingMerge {
-                adoptMergedLibrary(pendingMerge.outcome, preMergeLocal: pendingMerge.preMergeLocal)
+            let diskWasObservedWhileWriting =
+                diskObservationVersion != request.diskObservationVersion
+            let preCompletionLocal = snippets
+
+            if preCompletionLocal == request.local, let merge = outcome.merge {
+                adoptMergedLibrary(merge, preMergeLocal: preCompletionLocal)
+            } else if preCompletionLocal != outcome.snippets {
+                let reconciled = SyncMerge.mergeLocal(
+                    base: request.local,
+                    local: preCompletionLocal,
+                    remote: outcome.snippets
+                )
+                if reconciled.snippets != preCompletionLocal {
+                    adoptMergedLibrary(reconciled, preMergeLocal: preCompletionLocal)
+                }
             }
-            rememberDiskBytes(outcome.data)
+
+            if !diskWasObservedWhileWriting {
+                rememberDiskBytes(outcome.data, digest: outcome.digest)
+            }
+
+            let completionChangedMemory = snippets != preCompletionLocal
+
+            // Settle ownership before publishing callbacks. `onChange` and the sync
+            // delegate are deliberately synchronous and may re-enter the store with a
+            // newer edit. Finalizing this request after such a callback could clear the
+            // dirty bit that the callback just set. Once published, only the re-entrant
+            // mutation is allowed to change this decision.
+            if persistenceStateVersion == request.stateVersion,
+               !diskWasObservedWhileWriting,
+               snippets == outcome.snippets {
+                needsPersistence = false
+            } else {
+                needsPersistence = true
+            }
+
+            let reloadChangedMemory: Bool
+            if diskWasObservedWhileWriting {
+                // Re-read against the newer cache observation rather than letting this
+                // completion claim byte authority. If the observed bytes are still the
+                // latest, the comparison is a cheap no-op; if another writer moved them,
+                // the normal external merge path folds that state in.
+                reloadChangedMemory = reloadFromDiskIfNeeded()
+            } else {
+                reloadChangedMemory = false
+            }
+
+            if outcome.recreatedMissingFile {
+                Diagnostics.record(.storageState(
+                    area: .library,
+                    state: .recreated,
+                    value: nil))
+            }
 
             let health: WriteHealth =
                 outcome.wroteWithoutLock ? .unlocked
@@ -1014,37 +1307,24 @@ final class SnippetStore {
                 syncDelegate?.libraryDidChange(.local)
             }
 
-            if outcome.foldedInForeignWrite {
-                // Someone else's edit just became part of our state. The UI has to be
-                // told, or it keeps rendering a library that no longer exists.
+            if outcome.foldedInForeignWrite,
+               (!diskWasObservedWhileWriting
+                || (completionChangedMemory && !reloadChangedMemory)) {
                 notifyChanged(.external)
             }
+            return true
 
-        } catch {
-            // NEVER return silently here, for ANY error. `persist()` has already
-            // cleared `persistWorkItem`, so nothing else would reschedule this write —
-            // and by this point the transform may already have mutated `snippets` and
-            // the undo stacks. A disk-full or permissions failure would leave the
-            // user's edit existing only in RAM, with no indication anything was wrong,
-            // until the process exits.
-            //
-            // `.busy` is the ordinary case and retries quickly. Everything else is
-            // probably persistent, so it backs off further but still keeps trying:
-            // disks get emptied and permissions get repaired, and the alternative is
-            // discarding work the user can see on screen.
+        case .failure(let failure):
             lockFailureCount += 1
-            if case LibraryWriter.Failure.busy = error {} else {
+            needsPersistence = true
+            if case .other(let diagnosticFailure) = failure {
                 Diagnostics.record(.storageFailure(
                     area: .library,
                     operation: .write,
-                    failure: DiagnosticFailure(error),
+                    failure: diagnosticFailure,
                     attempt: lockFailureCount))
             }
-            // On the terminate path the run loop will never spin again, so an
-            // asyncAfter retry would silently never run. `flushPendingWrites` retries
-            // inline instead and falls back to a recovery file.
-            guard !isTerminating else { return }
-            schedulePersistRetry()
+            return false
         }
     }
 
@@ -1052,16 +1332,8 @@ final class SnippetStore {
     /// silently discards whatever the user just typed.
     private func schedulePersistRetry() {
         persistWorkItem?.cancel()
-        let delay = min(0.25 * Double(lockFailureCount), 2.0)
-        let workItem = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.persistWorkItem = nil
-                self.writeToDisk()
-            }
-        }
-        persistWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        let delay = min(persistenceRetryBaseDelay * Double(lockFailureCount), 2.0)
+        schedulePersistence(after: delay)
 
         // Two failures in a row is no longer a hiccup; let the UI say so.
         if lockFailureCount >= 2 { syncDelegate?.libraryDidChange(.local) }
@@ -1081,9 +1353,10 @@ final class SnippetStore {
         reloadFromDiskIfNeeded(notifyChange: notifyChange)
     }
 
-    private func rememberDiskBytes(_ data: Data) {
+    private func rememberDiskBytes(_ data: Data, digest: String? = nil) {
         lastKnownDiskData = data
-        lastKnownDigest = SnippetLibraryCodec.digest(of: data)
+        lastKnownDigest = digest ?? SnippetLibraryCodec.digest(of: data)
+        diskObservationVersion &+= 1
     }
 
     private func notifyChanged(_ source: ChangeSource) {
@@ -1099,15 +1372,23 @@ final class SnippetStore {
     /// `asyncAfter` would simply never fire. Retrying has to happen inline, and if it
     /// still cannot land, the edit has to go *somewhere* rather than evaporate.
     func flushPendingWrites() {
-        guard persistWorkItem != nil else { return }
+        guard persistWorkItem != nil || inFlightWrite != nil || needsPersistence else { return }
         persistWorkItem?.cancel()
         persistWorkItem = nil
 
-        let pending = snippets
+        // Waiting is safe: the worker publishes into a thread-safe inbox before it
+        // enqueues MainActor completion. Applying here consumes that inbox, and the
+        // callback becomes an identity-guarded no-op when the run loop resumes.
+        _ = drainInFlightWrite(scheduleRetryOnFailure: false)
+        persistWorkItem?.cancel()
+        persistWorkItem = nil
+        guard needsPersistence else { return }
+
         for attempt in 0..<3 {
-            didWriteDuringTerminate = false
-            writeToDisk(lockTimeout: terminateLockTimeout, isTerminating: true)
-            if didWriteDuringTerminate { return }
+            if performWriteSynchronously(lockTimeout: terminateLockTimeout),
+               !needsPersistence {
+                return
+            }
             if attempt < 2 { Thread.sleep(forTimeInterval: 0.1) }
         }
 
@@ -1120,6 +1401,7 @@ final class SnippetStore {
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let rescue = SnippetStorageLocations.backupsFolderURL.appendingPathComponent(
             "unsaved-\(formatter.string(from: Date())).json", isDirectory: false)
+        let pending = snippets
         if let data = try? SnippetLibraryCodec.encode(pending) {
             do {
                 try AtomicFileWriter.write(data, to: rescue)
