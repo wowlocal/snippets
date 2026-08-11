@@ -30,6 +30,7 @@
 		28A200000000000000000011 /* SnippetLibraryCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000011 /* SnippetLibraryCodec.swift */; };
 		28A200000000000000000029 /* SnippetImportParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000029 /* SnippetImportParser.swift */; };
 		28A200000000000000000012 /* SyncBase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000012 /* SyncBase.swift */; };
+		28A20000000000000000002B /* SyncJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000002B /* SyncJournal.swift */; };
 		28A200000000000000000013 /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000013 /* SyncEngine.swift */; };
 		28A200000000000000000014 /* SyncEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000014 /* SyncEnvelope.swift */; };
 		28A200000000000000000015 /* SyncLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000015 /* SyncLibraryProjection.swift */; };
@@ -139,6 +140,7 @@
 		28A100000000000000000011 /* SnippetLibraryCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetLibraryCodec.swift; path = snippets/Core/SnippetLibraryCodec.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000029 /* SnippetImportParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetImportParser.swift; path = snippets/Core/SnippetImportParser.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000012 /* SyncBase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncBase.swift; path = snippets/Core/SyncBase.swift; sourceTree = SOURCE_ROOT; };
+		28A10000000000000000002B /* SyncJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncJournal.swift; path = snippets/Core/SyncJournal.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000013 /* SyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncEngine.swift; path = snippets/Core/SyncEngine.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000014 /* SyncEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncEnvelope.swift; path = snippets/Core/SyncEnvelope.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000015 /* SyncLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncLibraryProjection.swift; path = snippets/Core/SyncLibraryProjection.swift; sourceTree = SOURCE_ROOT; };
@@ -335,6 +337,7 @@
 				28A100000000000000000011 /* SnippetLibraryCodec.swift */,
 				28A100000000000000000029 /* SnippetImportParser.swift */,
 				28A100000000000000000012 /* SyncBase.swift */,
+				28A10000000000000000002B /* SyncJournal.swift */,
 				28A100000000000000000013 /* SyncEngine.swift */,
 				28A100000000000000000014 /* SyncEnvelope.swift */,
 				28A100000000000000000015 /* SyncLibraryProjection.swift */,
@@ -593,6 +596,7 @@
 				28A200000000000000000011 /* SnippetLibraryCodec.swift in Sources */,
 				28A200000000000000000029 /* SnippetImportParser.swift in Sources */,
 				28A200000000000000000012 /* SyncBase.swift in Sources */,
+				28A20000000000000000002B /* SyncJournal.swift in Sources */,
 				28A200000000000000000013 /* SyncEngine.swift in Sources */,
 				28A200000000000000000014 /* SyncEnvelope.swift in Sources */,
 				28A200000000000000000015 /* SyncLibraryProjection.swift in Sources */,

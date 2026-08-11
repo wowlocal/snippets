@@ -218,8 +218,8 @@ monitor on every sync tick and collapse the editor's write debounce.
 ├── snippets.json          FROZEN. Nine keys. Plaintext snippets only.
 ├── Usage/usage.json       UNCHANGED. Never syncs. See §7.
 ├── Vault/vault.json       Secure snippets: metadata plaintext, content sealed.
-├── Sync/                  state.json, base.json, library-metadata.json, tombstones.json,
-│                          library.lock, Quarantine/
+├── Sync/                  state.json, base.json, journal.json, library-metadata.json,
+│                          tombstones.json, library.lock, Quarantine/
 ├── Backups/               pre-sync-<iso>.json and rolling pre-merge snapshots
 └── Tmp/                   mkstemp staging, so an atomic write is ONE monitor event
 ```
@@ -474,18 +474,31 @@ lie: iCloud is reachable, the round is fine, and the user's problem is a key.
 so two processes on one Mac cannot mint two wire keys. Two *Macs* that both mint before iCloud
 Keychain has propagated either can — which needs a user enabling sync on two Macs within about a
 minute, ever, and only the first time. iCloud Keychain converges on one; `SyncCoordinator` notices
-the stored key no longer matches the one its engine holds, rebuilds on the winner, and discards the
-agreed base so every local record is offered again under that key. The projection sidecar is kept:
+the stored key no longer matches the one its engine holds, durably stages every confirmed envelope
+as an offer, then clears only the confirmed envelopes while retaining the change cursor. That cursor
+preserves the ancestor a compare-and-swap-capable transport needs when replacing old-key records.
+The current CloudKit transport does not yet carry `recordChangeTag` system fields and still saves
+with `.allKeys`, so retaining the cursor alone does **not** yet prevent an independent remote write
+from being overwritten; the system-field/CAS transport step must close that boundary. The projection
+sidecar is kept:
 its HLC/origin and unknown extension fields are independent of the wire key, and deleting it would
 strip forward-compatible metadata on the replacement upload. Stale losing-key records still
 need the planned zone wipe, but they no longer suppress readable replacements.
 
 ### The loop
 
-`SyncEngine` runs one round: push, then fetch, then apply. **Push first** — fetching and applying
-first would rewrite local records before this device's own changes had left it, and a crash in
-between loses them with nothing to recover from. The worst case of pushing first is a duplicate
-round.
+`SyncEngine` runs one round: journal, push, fetch, then apply. **Push first** — fetching and applying
+first would rewrite local records before this device's own changes had left it. Before any network
+operation, `Sync/journal.json` stores both the latest `desired` envelope and the exact immutable
+`offered` snapshot. If the backend commits and its acknowledgement is lost, restart retries those
+exact bytes and a fetched echo becomes a tentative ancestor; a later edit or tombstone therefore
+cannot be mistaken for an unrelated conflict and silently discarded.
+
+Before deriving that snapshot, the bridge synchronously makes pending ordinary edits durable in
+the primary `snippets.json`. A termination rescue copy is not sufficient: restart projects the
+primary file, so sync stops before journaling or transport if that file cannot accept the current
+in-memory value. The store marks this dirty ownership before notifying observers, which also closes
+a synchronous **Sync Now** request from inside a change callback.
 
 Local app edits and filesystem changes adopted from `snippets-cli` request an outbound round on a
 one-second trailing debounce. The debounce resets across a burst, so an editor typing run or a
@@ -494,8 +507,16 @@ CloudKit operation per mutation. A manual, startup, foreground, or polling round
 pending debounce because it already includes the current library. Changes written while applying
 a fetched CloudKit batch are marked as remote and refresh the UI without scheduling a replay.
 
-A record is recorded in the base only once the backend has *accepted* it. Recording it at submit
-time would make the next diff skip it, and a rejected record would never be pushed again.
+A record is recorded in the base only once the backend has *accepted* it or a fetched value has
+been applied. Base and journal are durable protocol state, not disposable caches. Confirmation is
+written before an exact offer is acknowledged. For a different fetched value, its envelope is first
+written with the old cursor, then journal ambiguity is resolved, and only then is the cursor
+advanced. This preserves the engine-level ancestor and makes a CAS-capable transport refetch a
+conflict instead of accepting a stale offer over the fetched value. The journal still prevents lost
+local intent with today's CloudKit transport, but `.allKeys` cannot reject the stale write until
+CloudKit system fields are persisted and submitted conditionally. An additive `journalEstablished`
+marker distinguishes a legacy pre-journal base from a later missing journal and makes the latter a
+sticky safety stop.
 
 `Sync/library-metadata.json` is the local projection sidecar. The frozen `snippets.json` format
 cannot hold an HLC, origin, or forward-compatible wire extensions, so the bridge retains those
@@ -527,7 +548,7 @@ the running process knows were accepted.
 
 Turning sync off cancels and drains the retained round task before local vault removal is allowed.
 Cancellation checks bracket every awaited backend operation, so a CloudKit request that finishes
-after cancellation cannot rewrite local derived state or begin an apply. A synchronizable vault key
+after cancellation cannot rewrite local protocol state or begin an apply. A synchronizable vault key
 is not evidence that its records ever uploaded; the removal confirmation therefore warns that a
 record which exists only on this Mac is permanently lost and promises restoration only for records
 the backend actually received.

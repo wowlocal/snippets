@@ -358,11 +358,13 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             // never syncs. Partial acceptance is not an error here; it is the common case
             // under a rate limit, and `SyncSubmission` exists to express it.
             //
-            // `savePolicy: .allKeys` is the other half. It does not compare change tags,
-            // so the transport needs no cached per-record system fields — no sidecar file
-            // to keep, corrupt, or migrate. Conflicts are not lost by this: the engine
-            // resolves them with a three-way merge on the *fetch* leg, and never reads
-            // `SyncRejection.conflict`'s `remoteRev`.
+            // `savePolicy: .allKeys` is the current compatibility boundary. It does not
+            // compare change tags and therefore cannot reject a stale offer before that
+            // offer overwrites an independent remote write. Fetch-side three-way merge
+            // is too late for the overwritten value. Persisting CKRecord system fields
+            // and switching to `.ifServerRecordUnchanged` is the required CAS migration;
+            // until then this adapter does not provide the concurrency guarantee exercised
+            // by `InMemoryTransport`.
             let (saveResults, _) = try await database.modifyRecords(
                 saving: toSave, deleting: [], savePolicy: .allKeys, atomically: false)
 

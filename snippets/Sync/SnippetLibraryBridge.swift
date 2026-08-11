@@ -51,6 +51,19 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     // MARK: - Reading
 
     func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {
+        do {
+            try store.flushPendingWritesForSync()
+        } catch {
+            // Journal desired/offered state is allowed to outlive the process. It may not
+            // get ahead of the primary ordinary-library file that a restart will project,
+            // or an older on-disk value can be restamped as a fresh edit and undo a server-
+            // accepted change. Stop before metadata, journal, sealing, or transport.
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "the latest ordinary snippet edits could not be made durable; "
+                    + "sync stopped before offering them to iCloud")
+        }
+
         let metadata = loadMetadata(fallingBackTo: agreedBase)
         try refuseToSpeakForAnUnreadableVault(against: agreedBase, metadata: metadata)
 

@@ -168,8 +168,11 @@ nonisolated enum SnippetStorageLocations {
     // time. Nothing outside this type may ever put a file directly in
     // `supportFolderURL`.
 
-    /// Sync bookkeeping: device identity, the merge ancestor, tombstones, and the
-    /// lock file. None of it is user data; all of it is derived or regenerable.
+    /// Sync protocol state and ancillary bookkeeping. `base.json` and `journal.json`
+    /// are durable correctness state: deleting either can lose the only evidence of an
+    /// acknowledged or in-flight user change, so reset/cleanup code must handle them as
+    /// a coordinated protocol migration. Other files here (for example caches and
+    /// projection metadata) may be derived, but the directory as a whole is not.
     static var syncFolderURL: URL {
         supportFolderURL.appendingPathComponent("Sync", isDirectory: true)
     }
@@ -178,10 +181,17 @@ nonisolated enum SnippetStorageLocations {
         syncFolderURL.appendingPathComponent("state.json", isDirectory: false)
     }
 
-    /// The last-synced snapshot of the library — the common ancestor every
-    /// three-way merge is resolved against.
+    /// The confirmed snapshot of the library — the common ancestor every three-way
+    /// merge is resolved against. This is durable protocol state, not a disposable cache.
     static var syncBaseFileURL: URL {
         syncFolderURL.appendingPathComponent("base.json", isDirectory: false)
+    }
+
+    /// Durable desired/offered sync state. Unlike the projection metadata, losing this
+    /// file can erase the only evidence of a delete after an ambiguous server commit,
+    /// so sync treats an unreadable journal as a safety stop rather than regenerating it.
+    static var syncJournalFileURL: URL {
+        syncFolderURL.appendingPathComponent("journal.json", isDirectory: false)
     }
 
     /// The last envelope projected into the frozen local library files.

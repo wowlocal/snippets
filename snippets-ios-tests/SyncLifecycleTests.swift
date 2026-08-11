@@ -4,8 +4,11 @@ import XCTest
 
 @MainActor
 final class SyncLifecycleTests: XCTestCase {
+    private static let wireKeyFingerprintDefaultsKey = "SnippetsSyncWireKeyFingerprint"
+
     private var rootURL: URL!
     private var previousSyncPreference: Any?
+    private var previousWireKeyFingerprint: Any?
 
     override func setUpWithError() throws {
         SyncCoordinator.runtimeEnabledOverride = nil
@@ -14,6 +17,8 @@ final class SyncLifecycleTests: XCTestCase {
         setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, rootURL.path, 1)
         previousSyncPreference = UserDefaults.standard.object(
             forKey: SyncCoordinator.enabledDefaultsKey)
+        previousWireKeyFingerprint = UserDefaults.standard.object(
+            forKey: Self.wireKeyFingerprintDefaultsKey)
         UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
     }
 
@@ -28,6 +33,15 @@ final class SyncLifecycleTests: XCTestCase {
             UserDefaults.standard.removeObject(forKey: SyncCoordinator.enabledDefaultsKey)
         }
         previousSyncPreference = nil
+        if let previousWireKeyFingerprint {
+            UserDefaults.standard.set(
+                previousWireKeyFingerprint,
+                forKey: Self.wireKeyFingerprintDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(
+                forKey: Self.wireKeyFingerprintDefaultsKey)
+        }
+        previousWireKeyFingerprint = nil
         if let rootURL { try? FileManager.default.removeItem(at: rootURL) }
         rootURL = nil
     }
@@ -147,5 +161,157 @@ final class SyncLifecycleTests: XCTestCase {
 
         environment.syncCoordinator.stop()
         XCTAssertFalse(environment.syncCoordinator.hasPendingLibraryChangeSync)
+    }
+
+    func testTransportRekeyRefusesMissingBaseWhenJournalExists() throws {
+        SnippetStorageLocations.createAllDirectories()
+        try SyncJournalFile.write(SyncJournal())
+        let journalBytes = try Data(contentsOf: SnippetStorageLocations.syncJournalFileURL)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        UserDefaults.standard.set(
+            "stale-fingerprint", forKey: Self.wireKeyFingerprintDefaultsKey)
+        let transport = SyncLifecycleTransport()
+        let coordinator = makeCoordinatorForRekeyTests(transport: transport)
+        defer { coordinator.setEnabled(false) }
+
+        coordinator.start()
+
+        XCTAssertNil(coordinator.engine,
+                     "rekey must fail before constructing a transport over missing confirmation")
+        guard case .cannotStart(let detail) = coordinator.readiness else {
+            XCTFail("missing base plus existing journal must be a start prerequisite failure")
+            return
+        }
+        XCTAssertTrue(detail.contains("confirmed sync state is missing"))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.syncJournalFileURL),
+            journalBytes)
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: Self.wireKeyFingerprintDefaultsKey),
+            "stale-fingerprint",
+            "failed rekey must remain retryable instead of recording completion")
+    }
+
+    func testTransportRekeyRefusesMarkedBaseWhenJournalIsMissing() throws {
+        SnippetStorageLocations.createAllDirectories()
+        try SyncBaseFile.write(SyncBase(journalEstablished: true))
+        let baseBytes = try Data(contentsOf: SnippetStorageLocations.syncBaseFileURL)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        UserDefaults.standard.set(
+            "stale-fingerprint", forKey: Self.wireKeyFingerprintDefaultsKey)
+        let transport = SyncLifecycleTransport()
+        let coordinator = makeCoordinatorForRekeyTests(transport: transport)
+        defer { coordinator.setEnabled(false) }
+
+        coordinator.start()
+
+        XCTAssertNil(coordinator.engine)
+        guard case .cannotStart(let detail) = coordinator.readiness else {
+            XCTFail("marked base plus missing journal must prevent rekey startup")
+            return
+        }
+        XCTAssertTrue(detail.contains("pending sync state is missing"))
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.syncBaseFileURL),
+            baseBytes)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: Self.wireKeyFingerprintDefaultsKey),
+            "stale-fingerprint")
+    }
+
+    func testFreshTransportRekeyDoesNotManufactureProtocolFiles() {
+        SnippetStorageLocations.createAllDirectories()
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        UserDefaults.standard.set(
+            "stale-fingerprint", forKey: Self.wireKeyFingerprintDefaultsKey)
+        let transport = SyncLifecycleTransport()
+        let coordinator = makeCoordinatorForRekeyTests(transport: transport)
+
+        // This method is intentionally synchronous. The startup round is enqueued on
+        // MainActor but cannot run until this test yields, so these assertions isolate
+        // the rekey migration itself; stop then cancels that not-yet-started round.
+        coordinator.start()
+        XCTAssertNotNil(coordinator.engine)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+        XCTAssertNotEqual(
+            UserDefaults.standard.string(forKey: Self.wireKeyFingerprintDefaultsKey),
+            "stale-fingerprint")
+        XCTAssertEqual(transport.fetchAttempts, 0)
+        XCTAssertEqual(transport.submitAttempts, 0)
+        coordinator.setEnabled(false)
+    }
+
+    private func makeCoordinatorForRekeyTests(
+        transport: SyncLifecycleTransport = SyncLifecycleTransport()
+    ) -> SyncCoordinator {
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.sync-lifecycle-tests.\(UUID().uuidString.lowercased())",
+            inMemory: true)
+        return SyncCoordinator(
+            library: EmptySyncLibrary(),
+            keys: SyncKeyStore(keychain: keychain),
+            device: "aaaaaaa1",
+            transportFactory: { transport })
+    }
+}
+
+@MainActor
+private final class EmptySyncLibrary: SyncLibraryAccess {
+    func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] { [:] }
+
+    func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification {
+        RemoteClassification(
+            applicable: envelopes, deferredIDs: [], incompatibleVaultIDs: [])
+    }
+
+    func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome {
+        ApplyOutcome(changedIDs: envelopes.map(\.id))
+    }
+
+    func liveIDs() -> Set<UUID> { [] }
+}
+
+/// A deliberately inert transport for coordinator lifecycle tests. It proves the
+/// transport factory seam is used without asking CloudKit to validate entitlements in
+/// an unsigned simulator test process. Any accidentally scheduled call fails before it
+/// can advance protocol files, and the counters keep the synchronous rekey assertion
+/// honest.
+nonisolated final class SyncLifecycleTransport: SyncTransport, @unchecked Sendable {
+    let identifier = "lifecycle-test"
+    let supportsPush = true
+    let pollInterval: TimeInterval = 3_600
+    let events = AsyncStream<SyncTransportEvent> { _ in }
+
+    private let lock = NSLock()
+    private var fetchAttemptCount = 0
+    private var submitAttemptCount = 0
+
+    var fetchAttempts: Int { lock.withLock { fetchAttemptCount } }
+    var submitAttempts: Int { lock.withLock { submitAttemptCount } }
+
+    func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+        lock.withLock { fetchAttemptCount += 1 }
+        throw SyncTransportFailure.unreachable(detail: "lifecycle test transport is inert")
+    }
+
+    func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
+        lock.withLock { submitAttemptCount += 1 }
+        throw SyncTransportFailure.unreachable(detail: "lifecycle test transport is inert")
     }
 }

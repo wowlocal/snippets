@@ -221,6 +221,10 @@ protocol SnippetStoreSyncDelegate: AnyObject {
 
 @MainActor
 final class SnippetStore {
+    enum DurableSnapshotFailure: Error {
+        case primaryLibraryWriteFailed
+    }
+
     /// An opaque, process-local handle for restoring one specific deletion.
     ///
     /// Unlike the store's global undo stack, this token never represents a whole
@@ -1118,11 +1122,15 @@ final class SnippetStore {
 
     private func persist(immediately: Bool = false, notifyChange: Bool = true) {
         restartEditTransactionIfNeeded()
-        if notifyChange { notifyChanged(.local) }
         persistenceStateVersion &+= 1
         needsPersistence = true
         persistWorkItem?.cancel()
         persistWorkItem = nil
+        // Publish only after the dirty bit and its write/retry ownership are established.
+        // A synchronous observer is allowed to request Sync Now; it must never see new
+        // in-memory bytes while `flushPendingWritesForSync()` still believes there is
+        // nothing to make durable.
+        defer { if notifyChange { notifyChanged(.local) } }
 
         if immediately {
             // A prior debounced write may still be running. Its result must be folded
@@ -1429,6 +1437,41 @@ final class SnippetStore {
                     attempt: 3))
             }
         }
+    }
+
+    /// Makes the exact in-memory ordinary library durable before sync may describe it
+    /// as desired or offered state.
+    ///
+    /// This is intentionally stricter than the lifecycle `flushPendingWrites()` above.
+    /// A termination rescue file preserves text for a human, but it is not the primary
+    /// library a restarted sync engine projects. Treating that backup as success would
+    /// let the server accept edit B while `snippets.json` still contains A; after a crash
+    /// A could then be mistaken for a newer edit and overwrite B. This method therefore
+    /// returns only after the current snapshot is in the primary file, or throws before
+    /// the journal/network boundary.
+    func flushPendingWritesForSync() throws {
+        guard persistWorkItem != nil || inFlightWrite != nil || needsPersistence else { return }
+        persistWorkItem?.cancel()
+        persistWorkItem = nil
+
+        // Fold any older worker result into memory first. It may have merged a concurrent
+        // CLI write, in which case the resulting current snapshot is what must be flushed.
+        _ = drainInFlightWrite(scheduleRetryOnFailure: false)
+        persistWorkItem?.cancel()
+        persistWorkItem = nil
+        guard needsPersistence else { return }
+
+        // A short bounded retry absorbs ordinary lock handoff without turning outbound
+        // sync into an unbounded MainActor stall. Failure keeps the store dirty and its
+        // normal retry scheduled, but sync itself must stop before journaling these bytes.
+        for _ in 0..<3 {
+            if performWriteSynchronously(lockTimeout: lockTimeout), !needsPersistence {
+                return
+            }
+        }
+
+        schedulePersistRetry()
+        throw DurableSnapshotFailure.primaryLibraryWriteFailed
     }
 
     // MARK: - Undo / Redo

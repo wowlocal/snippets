@@ -151,6 +151,41 @@ import Darwin
                 "the destination directory picked up a staging file, which doubles the folder monitor's events")
     }
 
+    /// A successful rename is not yet a successful durable write. The destination may
+    /// already contain the replacement when the directory fsync fails, but protocol
+    /// callers must still receive the failed fence instead of advancing base/journal
+    /// ordering as though the directory entry were stable across power loss.
+    @Test func aDirectorySyncFailurePropagatesAfterTheRename() throws {
+        let sandbox = try Sandbox("directory-sync-failure")
+        defer { sandbox.destroy() }
+        let replacement = Data("replacement already renamed into place".utf8)
+        let parent = sandbox.library.deletingLastPathComponent()
+        var synchronizedDirectory: URL?
+
+        let failure = #expect(throws: AtomicFileWriter.Failure.self) {
+            try AtomicFileWriter.write(
+                replacement,
+                to: sandbox.library,
+                temporaryDirectory: sandbox.tmpFolder,
+                directorySync: { directory in
+                    synchronizedDirectory = directory
+                    throw AtomicFileWriter.Failure.directorySyncFailed(
+                        path: directory.path, errno: EIO)
+                })
+        }
+
+        guard case .directorySyncFailed(let path, let code) = try #require(failure) else {
+            Issue.record("expected the injected directory durability fence to fail")
+            return
+        }
+        #expect(synchronizedDirectory?.standardizedFileURL == parent.standardizedFileURL)
+        #expect(path == parent.path)
+        #expect(code == EIO)
+        #expect(try Data(contentsOf: sandbox.library) == replacement,
+                "rename may precede the failed directory fsync; the error is still mandatory")
+        #expect(entries(of: sandbox.tmpFolder).isEmpty)
+    }
+
     /// The `defer { if shouldUnlink { unlink(temporaryPath) } }` in the writer is the
     /// only thing standing between a failing write and an ever-growing `Tmp/`. The
     /// failure is induced past `mkstemp`, `write`, and `fsync` — the destination is a

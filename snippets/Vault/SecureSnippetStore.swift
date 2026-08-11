@@ -191,8 +191,15 @@ final class SecureSnippetStore: SecureSnippetProviding {
     private let lockURL: URL
     private let temporaryDirectory: URL
     private let syncBaseURL: URL
+    private let syncJournalURL: URL
     private let syncMetadataURL: URL
     private let lockTimeout: TimeInterval
+    /// Injected durability operations let transaction tests fail after a rename/unlink
+    /// became visible. Production defaults are the real atomic writers.
+    private let syncBaseWriter: (SyncBase, URL, URL) throws -> Void
+    private let syncJournalWriter: (SyncJournal, URL, URL) throws -> Void
+    private let durableFileRemover: (URL) throws -> Void
+    private let vaultKeyRemover: (String) throws -> Void
 
     /// Injected so tests can drive timestamps and clocks deterministically.
     var now: () -> Date = { Date() }
@@ -207,8 +214,19 @@ final class SecureSnippetStore: SecureSnippetProviding {
         lockURL: URL = SnippetStorageLocations.libraryLockFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
         syncBaseURL: URL = SnippetStorageLocations.syncBaseFileURL,
+        syncJournalURL: URL = SnippetStorageLocations.syncJournalFileURL,
         syncMetadataURL: URL = SnippetStorageLocations.syncLibraryMetadataFileURL,
-        lockTimeout: TimeInterval = 2.0
+        lockTimeout: TimeInterval = 2.0,
+        syncBaseWriter: @escaping (SyncBase, URL, URL) throws -> Void = {
+            try SyncBaseFile.write($0, to: $1, temporaryDirectory: $2)
+        },
+        syncJournalWriter: @escaping (SyncJournal, URL, URL) throws -> Void = {
+            try SyncJournalFile.write($0, to: $1, temporaryDirectory: $2)
+        },
+        durableFileRemover: @escaping (URL) throws -> Void = {
+            try AtomicFileWriter.removeDurablyIfPresent($0)
+        },
+        vaultKeyRemover: ((String) throws -> Void)? = nil
     ) {
         let resolvedKeychain = keychain ?? KeychainSecretStore()
         self.session = session
@@ -219,8 +237,15 @@ final class SecureSnippetStore: SecureSnippetProviding {
         self.lockURL = lockURL
         self.temporaryDirectory = temporaryDirectory
         self.syncBaseURL = syncBaseURL
+        self.syncJournalURL = syncJournalURL
         self.syncMetadataURL = syncMetadataURL
         self.lockTimeout = lockTimeout
+        self.syncBaseWriter = syncBaseWriter
+        self.syncJournalWriter = syncJournalWriter
+        self.durableFileRemover = durableFileRemover
+        self.vaultKeyRemover = vaultKeyRemover ?? {
+            try resolvedKeychain.deleteKey(keyID: $0)
+        }
         self.clock = HLCGenerator(device: deviceID)
         reload()
     }
@@ -912,34 +937,113 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
         let rollbackDocument = onDisk ?? document
         let kid = rollbackDocument?.kid
+        let forgottenIDs = Set(rollbackDocument?.records.map(\.id) ?? [])
+
+        // Prepare the post-forget protocol state before destroying the vault. Ordinary
+        // pending intent must survive, while secure confirmations/offers must not turn
+        // the deliberately absent local vault into outbound tombstones later.
+        var retainedBase: SyncBase
+        let baseWasMissing: Bool
+        switch SyncBaseFile.load(from: syncBaseURL) {
+        case .loaded(let loaded):
+            retainedBase = loaded
+            baseWasMissing = false
+        case .missing:
+            retainedBase = SyncBase()
+            baseWasMissing = true
+        case .tooNew(let version):
+            throw Failure.transaction(
+                "sync base schemaVersion \(version) is newer than this build; refusing "
+                    + "to forget the vault until sync bookkeeping can be preserved")
+        case .unreadable:
+            throw Failure.transaction(
+                "sync bookkeeping could not be read; refusing to forget the vault "
+                    + "without preserving ordinary pending changes")
+        }
+        var retainedJournal: SyncJournal
+        let journalWasMissing: Bool
+        switch SyncJournalFile.load(from: syncJournalURL) {
+        case .missing(let empty):
+            retainedJournal = empty
+            journalWasMissing = true
+        case .loaded(let loaded):
+            retainedJournal = loaded
+            journalWasMissing = false
+        case .tooNew(let version):
+            throw Failure.transaction(
+                "sync journal schemaVersion \(version) is newer than this build; refusing "
+                    + "to forget the vault until pending changes can be preserved")
+        case .unreadable:
+            throw Failure.transaction(
+                "pending sync changes could not be read; refusing to forget the vault "
+                    + "without preserving ordinary edits")
+        }
+
+        guard !baseWasMissing || journalWasMissing else {
+            throw Failure.transaction(
+                "confirmed sync state is missing while pending changes still exist; "
+                    + "refusing to hide the loss while forgetting the vault")
+        }
+        guard !journalWasMissing || !retainedBase.journalEstablished else {
+            throw Failure.transaction(
+                "pending sync state is missing even though the confirmed base records "
+                    + "that its journal was established; restore it or reset both files "
+                    + "before forgetting the vault")
+        }
+
+        let originalBase: SyncBase? = baseWasMissing ? nil : retainedBase
+        let originalJournal: SyncJournal? = journalWasMissing ? nil : retainedJournal
+
+        retainedBase.envelopes = retainedBase.envelopes.filter { _, envelope in
+            !envelope.secure && !forgottenIDs.contains(envelope.id)
+        }
+        // A later opt-in deliberately performs a full fetch, allowing the remote vault
+        // to return without forgetting ordinary confirmed ancestors.
+        retainedBase.cursor = nil
+        retainedJournal.forgetSecureIntent()
+
+        // Establish the post-forget protocol state before destroying either ciphertext
+        // or its device-only key. If either write fails the vault is still intact and a
+        // retry can reconstruct secure projection state from the live records. When
+        // both files were absent, sync has never initialized and must stay structurally
+        // off instead of this maintenance operation creating empty protocol files.
+        if !baseWasMissing || !journalWasMissing {
+            do {
+                try syncBaseWriter(retainedBase, syncBaseURL, temporaryDirectory)
+                try syncJournalWriter(retainedJournal, syncJournalURL, temporaryDirectory)
+            } catch {
+                let rollback = rollbackForgetState(
+                    vault: nil, base: originalBase, journal: originalJournal)
+                throw Failure.transaction(
+                    "could not durably preserve ordinary sync state before forgetting "
+                        + "the vault: \(error)\(rollback)")
+            }
+        }
+
         do {
             // The directory fsync is load-bearing: the removal must survive a crash
             // before any device-only key is deleted.
-            try AtomicFileWriter.removeDurablyIfPresent(vaultURL)
+            try durableFileRemover(vaultURL)
         } catch {
-            throw Failure.transaction("could not durably delete the vault: \(error)")
+            let rollback = rollbackForgetState(
+                vault: rollbackDocument, base: originalBase, journal: originalJournal)
+            throw Failure.transaction(
+                "could not durably delete the vault: \(error)\(rollback)")
         }
 
         if let kid, !preserveSharedKey {
             do {
-                try keychain.deleteKey(keyID: kid)
+                try vaultKeyRemover(kid)
             } catch let keychainError {
-                // Treat a Keychain refusal as a failed transaction. Restore the exact
-                // locked snapshot so the user can retry and the key is not orphaned.
-                if let rollbackDocument {
-                    do {
-                        try VaultFile.write(
-                            rollbackDocument, to: vaultURL,
-                            temporaryDirectory: temporaryDirectory)
-                        document = rollbackDocument
-                    } catch let restoreError {
-                        throw Failure.transaction(
-                            "the keychain kept the vault key (\(keychainError)), but the vault could not be restored: \(restoreError)")
-                    }
-                }
+                // Treat a Keychain refusal as a failed transaction. Restore both the
+                // locked vault and the exact protocol snapshots; restoring only the
+                // ciphertext would leave a reported failure with its offered/desired
+                // history silently discarded.
+                let rollback = rollbackForgetState(
+                    vault: rollbackDocument, base: originalBase, journal: originalJournal)
                 let recovery = rollbackDocument == nil ? "no vault file needed restoring" : "the vault was restored"
                 throw Failure.transaction(
-                    "the keychain kept the vault key; \(recovery): \(keychainError)")
+                    "the keychain kept the vault key; \(recovery): \(keychainError)\(rollback)")
             }
         }
 
@@ -947,21 +1051,6 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // identity must remain: deleting it would propagate, and it is what lets this Mac
         // rejoin the same vault later instead of minting a rival one.
         if !preserveSharedKey { identityStore.forget() }
-
-        // The agreed base still lists every secure record this Mac ever synced. Clear it
-        // so a later opt-in reconciles from the backend rather than manufacturing local
-        // tombstones for the removed vault.
-        do {
-            try AtomicFileWriter.removeDurablyIfPresent(syncBaseURL)
-        } catch {
-            // Safe failure: the bridge receives this exact ancestor from the engine and
-            // refuses to project a missing vault as deletions.
-            Diagnostics.record(.storageFailure(
-                area: .syncBase,
-                operation: .remove,
-                failure: DiagnosticFailure(error),
-                attempt: nil))
-        }
 
         // The projection sidecar is key-independent and carries unknown extension fields
         // for ordinary snippets. Deleting the whole file would strip forward-compatible
@@ -988,6 +1077,71 @@ final class SecureSnippetStore: SecureSnippetProviding {
         session.adopt(keyID: nil)
         Diagnostics.record(.vaultAction(.forgotLocalVault, count: nil))
         onChange?()
+    }
+
+    /// Best-effort rollback for every failure after protocol pruning begins.
+    ///
+    /// The vault is restored first so a crash cannot expose secure journal intent while
+    /// its local ciphertext is still absent. All requested restorations are attempted
+    /// even after one fails; the returned suffix makes an incomplete rollback explicit
+    /// while sync remains structurally off.
+    private func rollbackForgetState(
+        vault: VaultDocument?,
+        base: SyncBase?,
+        journal: SyncJournal?
+    ) -> String {
+        var failures: [String] = []
+
+        if let vault {
+            do {
+                try VaultFile.write(
+                    vault, to: vaultURL, temporaryDirectory: temporaryDirectory)
+                document = vault
+            } catch {
+                failures.append("vault restore failed: \(error)")
+            }
+        }
+
+        if let base {
+            // Restore the journal first. Both paths already exist at this point, and
+            // the conservative crash state is "pruned base + original intent": that can
+            // conflict/refetch. The inverse would look fully valid while silently
+            // retaining the pruned journal and losing the only ambiguous offer.
+            if let journal {
+                do {
+                    try syncJournalWriter(journal, syncJournalURL, temporaryDirectory)
+                } catch {
+                    failures.append("sync journal restore failed: \(error)")
+                }
+            } else {
+                do {
+                    try durableFileRemover(syncJournalURL)
+                } catch {
+                    failures.append("new sync journal removal failed: \(error)")
+                }
+            }
+            do {
+                try syncBaseWriter(base, syncBaseURL, temporaryDirectory)
+            } catch {
+                failures.append("sync base restore failed: \(error)")
+            }
+        } else {
+            // The validated original shape cannot contain a journal without a base.
+            // Remove in the reverse establishment order to preserve that invariant.
+            do {
+                try durableFileRemover(syncJournalURL)
+            } catch {
+                failures.append("new sync journal removal failed: \(error)")
+            }
+            do {
+                try durableFileRemover(syncBaseURL)
+            } catch {
+                failures.append("new sync base removal failed: \(error)")
+            }
+        }
+
+        guard !failures.isEmpty else { return "; original state was restored" }
+        return "; rollback incomplete (" + failures.joined(separator: "; ") + ")"
     }
 
     // MARK: - Crash recovery

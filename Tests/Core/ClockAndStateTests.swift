@@ -845,6 +845,7 @@ struct ClockAndStateTests {
             ("Usage/usage.lock", SnippetStorageLocations.usageLockFileURL),
             ("Sync/state.json", SnippetStorageLocations.syncStateFileURL),
             ("Sync/base.json", SnippetStorageLocations.syncBaseFileURL),
+            ("Sync/journal.json", SnippetStorageLocations.syncJournalFileURL),
             ("Sync/library-metadata.json", SnippetStorageLocations.syncLibraryMetadataFileURL),
             ("Sync/tombstones.json", SnippetStorageLocations.tombstonesFileURL),
             ("Sync/library.lock", SnippetStorageLocations.libraryLockFileURL),

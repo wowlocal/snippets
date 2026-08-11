@@ -155,6 +155,7 @@ final class SyncCoordinator {
     private let library: any SyncLibraryAccess
     private let keys: SyncKeyStore
     private let device: String
+    private let transportFactory: () -> any SyncTransport
 
     private(set) var engine: SyncEngine?
     private(set) var state: SyncEngine.State = .disabled
@@ -166,7 +167,7 @@ final class SyncCoordinator {
     /// independently instead of replacing one another's callback.
     private var stateObservers: [UUID: (SyncEngine.State) -> Void] = [:]
 
-    private var transport: CloudKitTransport?
+    private var transport: (any SyncTransport)?
     private var pollTimer: Timer?
     private var startRetryTimer: Timer?
     private var eventTask: Task<Void, Never>?
@@ -207,11 +208,13 @@ final class SyncCoordinator {
     init(
         library: any SyncLibraryAccess,
         keys: SyncKeyStore,
-        device: String
+        device: String,
+        transportFactory: @escaping () -> any SyncTransport = { CloudKitTransport() }
     ) {
         self.library = library
         self.keys = keys
         self.device = device
+        self.transportFactory = transportFactory
     }
 
     // MARK: - The preference
@@ -310,7 +313,7 @@ final class SyncCoordinator {
         startFailure = nil
         activeKeyMaterial = material
 
-        let transport = CloudKitTransport()
+        let transport = transportFactory()
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: device)
         engine.onSafetyHaltPersistenceFailure = {
@@ -525,15 +528,21 @@ final class SyncCoordinator {
 
     /// Where the fingerprint of the wire key the base was built against is kept.
     ///
-    /// `UserDefaults` rather than `Sync/state.json`, because this is local derived state
-    /// whose worst failure is one extra reconcile — the same reasoning that lets the base
-    /// itself be disposable — and because putting it in the state file would invite
-    /// someone to source the crypto scope from there, which that file's own documentation
-    /// spends a paragraph forbidding.
+    /// `UserDefaults` rather than `Sync/state.json`, because this is a key-selection hint,
+    /// not a merge ancestor or pending user intent. Keeping it separate also avoids
+    /// inviting anyone to source the crypto scope from mutable bookkeeping; the keychain
+    /// remains the sole authority for the actual key material.
     private static let wireKeyFingerprintDefaultsKey = "SnippetsSyncWireKeyFingerprint"
 
-    /// Throws away the agreed base when the key that sealed it is no longer the key we
-    /// hold, so everything is re-pushed under the new one.
+    private struct ProtocolResetFailure: Error, CustomStringConvertible {
+        var description: String
+    }
+
+    /// Clears the agreed envelopes when the key that sealed them is no longer the key we
+    /// hold, so everything is re-pushed under the new one. The change cursor is retained
+    /// as transport ancestry; a CAS-capable transport can use it while replacing those
+    /// same remote records. CloudKit's current `.allKeys` adapter cannot yet enforce that
+    /// comparison, which is why record system fields are the next transport migration.
     ///
     /// Without this, changing the sealing key is a silent, one-way data loss. `base.json`
     /// records each record as *agreed with the backend*, so `pendingChanges` skips them
@@ -563,13 +572,77 @@ final class SyncCoordinator {
             atPath: SnippetStorageLocations.syncBaseFileURL.path) {
             Diagnostics.record(.syncTriggered(.keyChanged))
         }
-        // Only the agreed ancestor belongs to the old wire key. The projection sidecar
-        // contains forward-compatible `x` fields and local HLC/origin metadata; deleting
-        // it would make the next upload strip fields this build does not understand.
-        try AtomicFileWriter.removeDurablyIfPresent(
-            SnippetStorageLocations.syncBaseFileURL)
-        // Record the winner only after the stale base is durably absent. If removal
-        // fails, the next start retries rather than blessing a base sealed by another key.
+        // Journal offers are plaintext application envelopes, not the ciphertext handed
+        // to CloudKit. Preserve them exactly: retrying the same offer under the winner
+        // key both reseals the remote blob and retains the tentative ancestor needed for
+        // a delete/newer edit that followed a lost acknowledgement.
+        let confirmed: SyncBase
+        let baseWasMissing: Bool
+        switch SyncBaseFile.load(from: SnippetStorageLocations.syncBaseFileURL) {
+        case .loaded(let loaded):
+            confirmed = loaded
+            baseWasMissing = false
+        case .missing:
+            confirmed = SyncBase()
+            baseWasMissing = true
+        case .tooNew(let version):
+            throw ProtocolResetFailure(
+                description: "sync base schemaVersion \(version) is newer than this build")
+        case .unreadable:
+            throw ProtocolResetFailure(
+                description: "confirmed sync state could not be read during transport rekey")
+        }
+
+        var journal: SyncJournal
+        let journalWasMissing: Bool
+        switch SyncJournalFile.load(from: SnippetStorageLocations.syncJournalFileURL) {
+        case .missing(let empty):
+            journal = empty
+            journalWasMissing = true
+        case .loaded(let loaded):
+            journal = loaded
+            journalWasMissing = false
+        case .tooNew(let version):
+            throw ProtocolResetFailure(
+                description: "sync journal schemaVersion \(version) is newer than this build")
+        case .unreadable:
+            throw ProtocolResetFailure(
+                description: "pending sync changes could not be read during transport rekey")
+        }
+
+        guard !baseWasMissing || journalWasMissing else {
+            throw ProtocolResetFailure(
+                description: "confirmed sync state is missing while pending changes "
+                    + "still exist; refusing to hide the loss during transport rekey")
+        }
+        guard !journalWasMissing || !confirmed.journalEstablished else {
+            throw ProtocolResetFailure(
+                description: "pending sync state is missing even though the confirmed "
+                    + "base records that its journal was established; refusing transport rekey")
+        }
+
+        // Truly fresh sync has nothing to reseal. Do not manufacture journal.json here:
+        // the engine establishes base.json before journal.json on its first round.
+        if baseWasMissing, journalWasMissing {
+            defaults.set(fingerprint, forKey: Self.wireKeyFingerprintDefaultsKey)
+            return
+        }
+
+        journal.stageConfirmedForTransportRekey(confirmed, now: Date())
+        try SyncJournalFile.write(journal)
+
+        // Journal first is intentional. A crash here leaves the old base in place and
+        // the fingerprint unchanged, so start repeats the reset. Once its envelopes are
+        // empty, base-before-journal remains valid even if the fingerprint write is
+        // delayed. Keep the cursor rather than discarding transport ancestry; it is
+        // consumed by CAS-capable adapters and will be paired with CloudKit system fields
+        // once that adapter stops using `.allKeys`.
+        try SyncBaseFile.write(SyncBase(
+            cursor: confirmed.cursor,
+            journalEstablished: true))
+
+        // The projection sidecar remains untouched: it contains forward-compatible `x`
+        // fields and local HLC/origin metadata independent of the transport key.
         defaults.set(fingerprint, forKey: Self.wireKeyFingerprintDefaultsKey)
     }
 
@@ -581,9 +654,11 @@ final class SyncCoordinator {
     /// no other device holds would make this Mac's uploads permanently unreadable, so it
     /// rebuilds on the winner instead.
     ///
-    /// `start()` fingerprints the new material and clears `base.json` before constructing
-    /// the replacement engine, so records accepted under the losing key are re-pushed
-    /// rather than remaining permanently suppressed by a stale agreed base.
+    /// `start()` fingerprints the new material and clears the confirmed envelopes before
+    /// constructing the replacement engine, so records accepted under the losing key are
+    /// re-pushed rather than remaining permanently suppressed by a stale agreed base. Its
+    /// cursor remains available as ancestry for transports that enforce compare-and-swap;
+    /// CloudKit additionally needs its per-record system fields before it can do so.
     ///
     /// Skipped mid-round, so a rebuild can never race the engine it is replacing.
     ///
@@ -681,7 +756,7 @@ final class SyncCoordinator {
         pollTimer = timer
     }
 
-    private func startEventPump(for transport: CloudKitTransport) {
+    private func startEventPump(for transport: any SyncTransport) {
         // One consumer, because `AsyncStream` has a single continuation — a second
         // iteration would steal events rather than duplicate them.
         eventTask = Task { @MainActor [weak self] in

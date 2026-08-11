@@ -16,10 +16,10 @@ import Darwin
 /// still half-written. Staging in `Tmp/` halves the events and makes every one of
 /// them correspond to a complete file.
 ///
-/// The `fsync` before the rename is what makes the write durable rather than merely
-/// atomic. Without it a power loss can leave the rename visible while the data
-/// blocks are not, which presents as a truncated or zero-length library — precisely
-/// the failure mode the quarantine path exists to survive, but far better avoided.
+/// The file `fsync` before the rename and directory `fsync` afterwards are what make
+/// the write durable rather than merely atomic. Without both, a power loss can leave
+/// either missing data blocks or a rolled-back directory entry — precisely the failure
+/// modes the sync journal's ordering fences must not mistake for a committed write.
 nonisolated enum AtomicFileWriter {
 
     enum Failure: Error, CustomStringConvertible {
@@ -55,7 +55,8 @@ nonisolated enum AtomicFileWriter {
         _ data: Data,
         to url: URL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
-        permissions: mode_t = 0o600
+        permissions: mode_t = 0o600,
+        directorySync: ((URL) throws -> Void)? = nil
     ) throws {
         try? FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
 
@@ -92,13 +93,19 @@ nonisolated enum AtomicFileWriter {
 
         guard rename(temporaryPath, url.path) == 0 else {
             let code = errno
-            // EXDEV means the temp directory landed on a different filesystem than the
-            // destination. Fall back to Foundation's atomic write, which stages inside
-            // the destination directory: noisier for the folder monitor, but correct.
-            if code == EXDEV {
-                try data.write(to: url, options: .atomic)
-                try? FileManager.default.setAttributes(
-                    [.posixPermissions: NSNumber(value: permissions)], ofItemAtPath: url.path)
+            // EXDEV means the configured staging directory landed on a different
+            // filesystem. Retry by staging beside the destination. This is noisier for
+            // the folder monitor, but it retains both durability barriers; Foundation's
+            // `.atomic` API does not give us a directory-fsync success to verify.
+            let parent = url.deletingLastPathComponent()
+            if code == EXDEV,
+               temporaryDirectory.standardizedFileURL != parent.standardizedFileURL {
+                try write(
+                    data,
+                    to: url,
+                    temporaryDirectory: parent,
+                    permissions: permissions,
+                    directorySync: directorySync)
                 return
             }
             throw Failure.renameFailed(destination: url.path, errno: code)
@@ -111,11 +118,7 @@ nonisolated enum AtomicFileWriter {
         // the data blocks survive — which presents as the old file, or as no file at
         // all, and makes the durability claim above untrue.
         let parent = url.deletingLastPathComponent()
-        let directory = open(parent.path, O_RDONLY | O_CLOEXEC)
-        if directory >= 0 {
-            fsync(directory)
-            close(directory)
-        }
+        try (directorySync ?? synchronizeDirectory)(parent)
     }
 
     /// Removes a file and makes the missing directory entry durable before returning.
@@ -132,14 +135,19 @@ nonisolated enum AtomicFileWriter {
             // but its directory fsync failed; absence is not yet a durable fact.
         }
 
-        let parent = url.deletingLastPathComponent()
-        let directory = open(parent.path, O_RDONLY | O_CLOEXEC)
+        try synchronizeDirectory(url.deletingLastPathComponent())
+    }
+
+    /// Shared durability barrier for rename and unlink. Kept as a throwing operation:
+    /// callers use successful return as a protocol fence before network I/O or key loss.
+    private static func synchronizeDirectory(_ directoryURL: URL) throws {
+        let directory = open(directoryURL.path, O_RDONLY | O_CLOEXEC)
         guard directory >= 0 else {
-            throw Failure.directorySyncFailed(path: parent.path, errno: errno)
+            throw Failure.directorySyncFailed(path: directoryURL.path, errno: errno)
         }
         defer { close(directory) }
         guard fsync(directory) == 0 else {
-            throw Failure.directorySyncFailed(path: parent.path, errno: errno)
+            throw Failure.directorySyncFailed(path: directoryURL.path, errno: errno)
         }
     }
 

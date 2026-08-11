@@ -305,6 +305,286 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertEqual(result.ordinaryCount, 1)
     }
 
+    func testForgetEverythingPreservesOrdinarySyncStateAcrossRestart() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        let components = makeComponents()
+        let pendingVault = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pendingVault)
+
+        let ordinary = components.store.addSnippet(
+            name: "Ordinary survivor", content: "confirmed ordinary body")
+        let toSecure = components.store.addSnippet(
+            name: "Secure removal", content: "secure body")
+        components.store.flushPendingWrites()
+        _ = try await components.session.unlock(reason: "Prepare secure forget regression")
+        try SecureSnippetTransitionCoordinator.promote(
+            snippetID: toSecure.id,
+            store: components.store,
+            secureStore: components.secureStore)
+
+        let vault = try XCTUnwrap(components.secureStore.document)
+        let confirmedProjection = SyncLibraryProjection.currentEnvelopes(
+            snippets: components.store.snippets,
+            records: vault.records,
+            deviceID: components.store.deviceID,
+            metadata: SyncBase(),
+            vaultKID: vault.kid)
+        let ordinaryConfirmed = try XCTUnwrap(confirmedProjection[ordinary.id])
+        let secureConfirmed = try XCTUnwrap(confirmedProjection[toSecure.id])
+        XCTAssertFalse(ordinaryConfirmed.secure)
+        XCTAssertTrue(secureConfirmed.secure)
+
+        var confirmedBase = SyncBase(cursor: SyncCursor("73"))
+        confirmedBase.record(ordinaryConfirmed)
+        confirmedBase.record(secureConfirmed)
+
+        var editedOrdinary = ordinary
+        editedOrdinary.content = "ordinary pending edit"
+        editedOrdinary.updatedAt = ordinary.updatedAt.addingTimeInterval(10)
+        components.store.update(editedOrdinary)
+        components.store.flushPendingWrites()
+        let desiredProjection = SyncLibraryProjection.currentEnvelopes(
+            snippets: components.store.snippets,
+            records: vault.records,
+            deviceID: components.store.deviceID,
+            metadata: confirmedBase,
+            agreedBase: confirmedBase,
+            vaultKID: vault.kid)
+        let ordinaryDesired = try XCTUnwrap(desiredProjection[ordinary.id])
+        XCTAssertNotEqual(ordinaryDesired, ordinaryConfirmed)
+
+        let ordinaryEntry = SyncJournal.Entry(
+            desired: ordinaryDesired,
+            offered: nil,
+            generation: 2,
+            modifiedAt: Date(timeIntervalSinceReferenceDate: 20))
+        let secureEntry = SyncJournal.Entry(
+            desired: secureConfirmed,
+            offered: SyncJournal.Offered(envelope: secureConfirmed, generation: 1),
+            generation: 1,
+            modifiedAt: Date(timeIntervalSinceReferenceDate: 10))
+        let journal = SyncJournal(entries: [
+            SyncBase.key(ordinary.id): ordinaryEntry,
+            SyncBase.key(toSecure.id): secureEntry,
+        ])
+        try SyncBaseFile.write(confirmedBase)
+        try SyncJournalFile.write(journal)
+
+        try components.secureStore.forgetEverything(syncIsQuiescent: true)
+
+        XCTAssertFalse(components.secureStore.hasVault)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.vaultFileURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path),
+            "forget must rewrite base.json, not remove the ordinary confirmation fence")
+
+        let retainedBase: SyncBase
+        switch SyncBaseFile.load() {
+        case .loaded(let loaded): retainedBase = loaded
+        default:
+            XCTFail("expected retained base.json to remain readable")
+            return
+        }
+        XCTAssertEqual(retainedBase.envelope(ordinary.id), ordinaryConfirmed)
+        XCTAssertNil(retainedBase.envelope(toSecure.id))
+        XCTAssertNil(retainedBase.cursor,
+                     "the next opt-in must fetch remote secure state from the beginning")
+
+        let retainedJournal: SyncJournal
+        switch SyncJournalFile.load() {
+        case .loaded(let loaded): retainedJournal = loaded
+        default:
+            XCTFail("expected retained journal.json to remain readable")
+            return
+        }
+        XCTAssertEqual(retainedJournal.entry(ordinary.id), ordinaryEntry)
+        XCTAssertNil(retainedJournal.entry(toSecure.id))
+        XCTAssertEqual(retainedJournal.pending(confirmed: retainedBase), [ordinaryDesired])
+
+        // Recreate both stores as a process restart would. Overlaying the retained
+        // journal onto the retained base must recover the exact pending ordinary edit,
+        // while the forgotten secure id no longer blocks projection or becomes a delete.
+        let restartedSession = VaultSession(
+            keychain: components.keychain,
+            authenticationEvaluator: { _ in true })
+        let restartedStore = SnippetStore(configuration: .iOS)
+        let restartedSecureStore = SecureSnippetStore(
+            session: restartedSession,
+            keychain: components.keychain,
+            deviceID: restartedStore.deviceID)
+        restartedStore.secureProvider = restartedSecureStore
+        XCTAssertFalse(restartedSecureStore.hasVault)
+        let restartedBridge = SnippetLibraryBridge(
+            store: restartedStore,
+            secureStore: restartedSecureStore)
+        let restartedProjection = try restartedBridge.currentEnvelopes(
+            agreedBase: retainedJournal.projectionKnowledge(over: retainedBase))
+        XCTAssertEqual(restartedProjection[ordinary.id], ordinaryDesired)
+        XCTAssertNil(restartedProjection[toSecure.id])
+    }
+
+    func testForgetEverythingRefusesMissingBaseWhenJournalExists() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let components = makeComponents()
+        let pendingVault = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        let vault = try components.secureStore.commitVaultCreation(pendingVault)
+        try SyncJournalFile.write(SyncJournal())
+        let vaultBytes = try Data(contentsOf: SnippetStorageLocations.vaultFileURL)
+        let journalBytes = try Data(contentsOf: SnippetStorageLocations.syncJournalFileURL)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+
+        XCTAssertThrowsError(
+            try components.secureStore.forgetEverything(syncIsQuiescent: true)
+        ) { error in
+            guard case SecureSnippetStore.Failure.transaction(let detail) = error else {
+                return XCTFail("expected fail-closed sync transaction error, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("confirmed sync state is missing"))
+        }
+
+        XCTAssertTrue(components.secureStore.hasVault)
+        XCTAssertTrue(components.keychain.hasKey(keyID: vault.kid))
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.vaultFileURL), vaultBytes)
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.syncJournalFileURL), journalBytes)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+    }
+
+    func testForgetEverythingRefusesMarkedBaseWhenJournalIsMissing() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let components = makeComponents()
+        let pendingVault = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        let vault = try components.secureStore.commitVaultCreation(pendingVault)
+        try SyncBaseFile.write(SyncBase(journalEstablished: true))
+        let vaultBytes = try Data(contentsOf: SnippetStorageLocations.vaultFileURL)
+        let baseBytes = try Data(contentsOf: SnippetStorageLocations.syncBaseFileURL)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+
+        XCTAssertThrowsError(
+            try components.secureStore.forgetEverything(syncIsQuiescent: true)
+        ) { error in
+            guard case SecureSnippetStore.Failure.transaction(let detail) = error else {
+                return XCTFail("expected fail-closed sync transaction error, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("pending sync state is missing"))
+        }
+
+        XCTAssertTrue(components.secureStore.hasVault)
+        XCTAssertTrue(components.keychain.hasKey(keyID: vault.kid))
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.vaultFileURL), vaultBytes)
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.syncBaseFileURL), baseBytes)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+    }
+
+    func testForgetEverythingOnFreshSyncDoesNotManufactureProtocolFiles() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let components = makeComponents()
+        let pendingVault = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        let vault = try components.secureStore.commitVaultCreation(pendingVault)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+
+        try components.secureStore.forgetEverything(syncIsQuiescent: true)
+
+        XCTAssertFalse(components.secureStore.hasVault)
+        XCTAssertFalse(components.keychain.hasKey(keyID: vault.kid))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+    }
+
+    func testForgetRollbackAfterKeychainRefusalRestoresExactVaultBaseAndJournal() async throws {
+        var removalAttempts = 0
+        let components = makeComponents(vaultKeyRemover: { _ in
+            removalAttempts += 1
+            throw InjectedForgetFailure.keychainDelete
+        })
+        let snapshot = try await prepareForgetRollbackSnapshot(components)
+
+        XCTAssertThrowsError(
+            try components.secureStore.forgetEverything(syncIsQuiescent: true)
+        ) { error in
+            guard case SecureSnippetStore.Failure.transaction(let detail) = error else {
+                return XCTFail("expected rollback transaction error, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("keychain kept the vault key"))
+            XCTAssertTrue(detail.contains("original state was restored"))
+        }
+
+        XCTAssertEqual(removalAttempts, 1)
+        try assertForgetSnapshotRestored(snapshot, components: components)
+    }
+
+    func testForgetRollbackAfterJournalPostRenameFailureRestoresExactProtocolState() async throws {
+        var journalWriteCount = 0
+        let components = makeComponents(syncJournalWriter: { journal, url, temporary in
+            journalWriteCount += 1
+            try SyncJournalFile.write(journal, to: url, temporaryDirectory: temporary)
+            if journalWriteCount == 1 {
+                throw InjectedForgetFailure.journalDirectoryFence
+            }
+        })
+        let snapshot = try await prepareForgetRollbackSnapshot(components)
+
+        XCTAssertThrowsError(
+            try components.secureStore.forgetEverything(syncIsQuiescent: true)
+        ) { error in
+            guard case SecureSnippetStore.Failure.transaction(let detail) = error else {
+                return XCTFail("expected rollback transaction error, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("could not durably preserve ordinary sync state"))
+            XCTAssertTrue(detail.contains("original state was restored"))
+        }
+
+        XCTAssertEqual(journalWriteCount, 2,
+                       "first write publishes pruned state; rollback rewrites the original journal")
+        try assertForgetSnapshotRestored(snapshot, components: components)
+    }
+
+    func testForgetRollbackAfterPostUnlinkFailureRestoresExactVaultAndProtocolState() async throws {
+        var removalCount = 0
+        var observedVaultAbsentAfterUnlink = false
+        let components = makeComponents(durableFileRemover: { url in
+            removalCount += 1
+            try AtomicFileWriter.removeDurablyIfPresent(url)
+            if removalCount == 1 {
+                observedVaultAbsentAfterUnlink = !FileManager.default.fileExists(atPath: url.path)
+                throw InjectedForgetFailure.vaultDirectoryFence
+            }
+        })
+        let snapshot = try await prepareForgetRollbackSnapshot(components)
+
+        XCTAssertThrowsError(
+            try components.secureStore.forgetEverything(syncIsQuiescent: true)
+        ) { error in
+            guard case SecureSnippetStore.Failure.transaction(let detail) = error else {
+                return XCTFail("expected rollback transaction error, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("could not durably delete the vault"))
+            XCTAssertTrue(detail.contains("original state was restored"))
+        }
+
+        XCTAssertEqual(removalCount, 1)
+        XCTAssertTrue(observedVaultAbsentAfterUnlink,
+                      "the injected failure must occur after unlink became visible")
+        try assertForgetSnapshotRestored(snapshot, components: components)
+    }
+
     func testNotificationObserversDoNotRetainEditors() {
         let environment = AppEnvironment()
         let snippet = environment.store.addSnippet(name: "Lifecycle", content: "body")
@@ -330,7 +610,17 @@ final class SecureRemediationTests: XCTestCase {
 
     private func makeComponents(
         duration: TimeInterval = VaultSession.defaultDuration,
-        authenticationEvaluator: @escaping VaultSession.AuthenticationEvaluator = { _ in true }
+        authenticationEvaluator: @escaping VaultSession.AuthenticationEvaluator = { _ in true },
+        syncBaseWriter: @escaping (SyncBase, URL, URL) throws -> Void = {
+            try SyncBaseFile.write($0, to: $1, temporaryDirectory: $2)
+        },
+        syncJournalWriter: @escaping (SyncJournal, URL, URL) throws -> Void = {
+            try SyncJournalFile.write($0, to: $1, temporaryDirectory: $2)
+        },
+        durableFileRemover: @escaping (URL) throws -> Void = {
+            try AtomicFileWriter.removeDurablyIfPresent($0)
+        },
+        vaultKeyRemover: ((String) throws -> Void)? = nil
     ) -> Components {
         let keychain = makeKeychain()
         let session = VaultSession(
@@ -341,13 +631,121 @@ final class SecureRemediationTests: XCTestCase {
         let secureStore = SecureSnippetStore(
             session: session,
             keychain: keychain,
-            deviceID: store.deviceID)
+            deviceID: store.deviceID,
+            syncBaseWriter: syncBaseWriter,
+            syncJournalWriter: syncJournalWriter,
+            durableFileRemover: durableFileRemover,
+            vaultKeyRemover: vaultKeyRemover)
         store.secureProvider = secureStore
         return Components(
             store: store,
             secureStore: secureStore,
             session: session,
             keychain: keychain)
+    }
+
+    private func prepareForgetRollbackSnapshot(
+        _ components: Components
+    ) async throws -> ForgetRollbackSnapshot {
+        SnippetStorageLocations.createAllDirectories()
+        let pendingVault = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pendingVault)
+        let snippet = components.store.addSnippet(
+            name: "Rollback secure", content: "confirmed secure content")
+        components.store.flushPendingWrites()
+        _ = try await components.session.unlock(reason: "Prepare forget rollback")
+        try SecureSnippetTransitionCoordinator.promote(
+            snippetID: snippet.id,
+            store: components.store,
+            secureStore: components.secureStore)
+
+        func projectedSecure() throws -> SyncEnvelope {
+            let vault = try XCTUnwrap(components.secureStore.document)
+            let projection = SyncLibraryProjection.currentEnvelopes(
+                snippets: components.store.snippets,
+                records: vault.records,
+                deviceID: components.store.deviceID,
+                metadata: SyncBase(),
+                vaultKID: vault.kid)
+            return try XCTUnwrap(projection[snippet.id])
+        }
+
+        let confirmed = try projectedSecure()
+        _ = try await components.session.unlock(reason: "Prepare offered secure state")
+        try components.secureStore.setContent("offered secure content", for: snippet.id)
+        let offered = try projectedSecure()
+        _ = try await components.session.unlock(reason: "Prepare desired secure state")
+        try components.secureStore.setContent("newer desired secure content", for: snippet.id)
+        let desired = try projectedSecure()
+        XCTAssertNotEqual(confirmed, offered)
+        XCTAssertNotEqual(offered, desired)
+
+        var base = SyncBase(cursor: SyncCursor("111"), journalEstablished: true)
+        base.record(confirmed)
+        let journal = SyncJournal(entries: [
+            SyncBase.key(snippet.id): SyncJournal.Entry(
+                desired: desired,
+                offered: SyncJournal.Offered(envelope: offered, generation: 1),
+                generation: 2,
+                modifiedAt: Date(timeIntervalSinceReferenceDate: 123.456)),
+        ])
+        try SyncBaseFile.write(base)
+        try SyncJournalFile.write(journal)
+        let vault = try XCTUnwrap(components.secureStore.document)
+
+        return ForgetRollbackSnapshot(
+            keyID: vault.kid,
+            snippetID: snippet.id,
+            base: base,
+            journal: journal,
+            vaultBytes: try Data(contentsOf: SnippetStorageLocations.vaultFileURL),
+            baseBytes: try Data(contentsOf: SnippetStorageLocations.syncBaseFileURL),
+            journalBytes: try Data(contentsOf: SnippetStorageLocations.syncJournalFileURL))
+    }
+
+    private func assertForgetSnapshotRestored(
+        _ snapshot: ForgetRollbackSnapshot,
+        components: Components,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        XCTAssertTrue(components.secureStore.hasVault, file: file, line: line)
+        XCTAssertTrue(components.keychain.hasKey(keyID: snapshot.keyID), file: file, line: line)
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.vaultFileURL),
+            snapshot.vaultBytes,
+            file: file,
+            line: line)
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.syncBaseFileURL),
+            snapshot.baseBytes,
+            file: file,
+            line: line)
+        XCTAssertEqual(
+            try Data(contentsOf: SnippetStorageLocations.syncJournalFileURL),
+            snapshot.journalBytes,
+            file: file,
+            line: line)
+
+        guard case .loaded(let base) = SyncBaseFile.load() else {
+            return XCTFail("restored base is unreadable", file: file, line: line)
+        }
+        guard case .loaded(let journal) = SyncJournalFile.load() else {
+            return XCTFail("restored journal is unreadable", file: file, line: line)
+        }
+        XCTAssertEqual(base, snapshot.base, file: file, line: line)
+        XCTAssertEqual(journal, snapshot.journal, file: file, line: line)
+        XCTAssertEqual(
+            journal.entry(snapshot.snippetID)?.offered,
+            snapshot.journal.entry(snapshot.snippetID)?.offered,
+            file: file,
+            line: line)
+        XCTAssertEqual(
+            journal.entry(snapshot.snippetID)?.desired,
+            snapshot.journal.entry(snapshot.snippetID)?.desired,
+            file: file,
+            line: line)
     }
 
     private func makeComponentsWithVaultMissingRecovery(
@@ -398,6 +796,22 @@ private struct Components {
     let secureStore: SecureSnippetStore
     let session: VaultSession
     let keychain: KeychainSecretStore
+}
+
+private struct ForgetRollbackSnapshot {
+    let keyID: String
+    let snippetID: UUID
+    let base: SyncBase
+    let journal: SyncJournal
+    let vaultBytes: Data
+    let baseBytes: Data
+    let journalBytes: Data
+}
+
+private enum InjectedForgetFailure: Error {
+    case keychainDelete
+    case journalDirectoryFence
+    case vaultDirectoryFence
 }
 
 @MainActor

@@ -4,19 +4,14 @@ import Foundation
 
 /// The last state this device and the backend agreed on.
 ///
-/// It does double duty, and that is the point of having it:
+/// This is the confirmed merge ancestor. Local changes are still discovered by deriving
+/// `diff(base, current)`, so a stale CLI, an old app build, `vim`, or a Time Machine
+/// restore cannot bypass sync. The derived difference is then recorded in
+/// `SyncJournal` before transport begins; that separate desired/offered state closes the
+/// acknowledgement ambiguity which a base-only outbox cannot represent.
 ///
-/// - **The merge ancestor.** Three-way merge against the backend needs a common
-///   ancestor exactly as the local one does, and this is it.
-/// - **The outbox.** What needs pushing is *derived* — `diff(base, current)` — rather
-///   than recorded when a change happens. That matters because plenty of changes never
-///   pass through code that could record them: a stale CLI, an old app build, `vim`, a
-///   Time Machine restore. An outbox would miss every one of those and quietly stop
-///   syncing them. A derived diff cannot miss anything, and it survives a crash
-///   mid-push for free.
-///
-/// Losing this file is not data loss. It costs one full reconcile, which is why it
-/// carries no recovery machinery of its own.
+/// Once a journal offer is acknowledged, this file is its durability fence: base.json
+/// must reach disk before the exact offer can be removed from journal.json.
 nonisolated struct SyncBase: Equatable {
 
     static let currentSchemaVersion = 1
@@ -27,15 +22,21 @@ nonisolated struct SyncBase: Equatable {
     var envelopes: [String: SyncEnvelope]
     /// The backend cursor these envelopes correspond to.
     var cursor: SyncCursor?
+    /// Once true, a missing journal is evidence of lost protocol state rather than a
+    /// pre-journal installation. The engine sets it only after journal.json is durable
+    /// and before the first network operation that can create an ambiguous offer.
+    var journalEstablished: Bool
 
     init(
         schemaVersion: Int = SyncBase.currentSchemaVersion,
         envelopes: [String: SyncEnvelope] = [:],
-        cursor: SyncCursor? = nil
+        cursor: SyncCursor? = nil,
+        journalEstablished: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.envelopes = envelopes
         self.cursor = cursor
+        self.journalEstablished = journalEstablished
     }
 
     static func key(_ id: UUID) -> String { id.uuidString.lowercased() }
@@ -85,23 +86,43 @@ nonisolated struct SyncBase: Equatable {
 /// definition of "what an envelope looks like" instead of two that can drift.
 nonisolated extension SyncBase: Codable {
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, envelopes, cursor
+        case schemaVersion, envelopes, cursor, journalEstablished
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
-            ?? SyncBase.currentSchemaVersion
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard (1...SyncBase.currentSchemaVersion).contains(schemaVersion) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "unsupported sync-base schema version")
+        }
         cursor = try container.decodeIfPresent(SyncCursor.self, forKey: .cursor)
+        // Additive and optional for downgrade safety. Shipped builds decoding schema 1
+        // ignore this unknown key; bumping the version would make them discard the base
+        // as too new and destroy the ancestor semantics this marker exists to protect.
+        // Absence therefore means a genuinely legacy base and is upgraded before network.
+        journalEstablished = if container.contains(.journalEstablished) {
+            try container.decode(Bool.self, forKey: .journalEstablished)
+        } else {
+            false
+        }
 
-        let raw = try container.decodeIfPresent([String: String].self, forKey: .envelopes) ?? [:]
+        let raw = try container.decode([String: String].self, forKey: .envelopes)
         var decoded: [String: SyncEnvelope] = [:]
         for (key, text) in raw {
-            // A single unparseable entry drops that record from the ancestor rather than
-            // failing the whole file. The cost is one spurious push; failing the load
-            // would cost a full reconcile.
+            // Confirmation is now the durability fence for journal acknowledgements.
+            // Dropping one malformed entry would turn a known remote record into an
+            // unknown one and can reinterpret local absence as a fresh install.
             guard let data = Data(base64Encoded: text),
-                  let envelope = try? SyncEnvelope.parse(data) else { continue }
+                  let envelope = try? SyncEnvelope.parse(data),
+                  SyncBase.key(envelope.id) == key else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .envelopes,
+                    in: container,
+                    debugDescription: "invalid confirmed sync-base envelope")
+            }
             decoded[key] = envelope
         }
         envelopes = decoded
@@ -111,6 +132,7 @@ nonisolated extension SyncBase: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encodeIfPresent(cursor, forKey: .cursor)
+        try container.encode(journalEstablished, forKey: .journalEstablished)
         var raw: [String: String] = [:]
         for (key, envelope) in envelopes {
             raw[key] = try envelope.canonicalData().base64EncodedString()
@@ -123,23 +145,31 @@ nonisolated enum SyncBaseFile {
 
     enum Outcome {
         case loaded(SyncBase)
-        /// Missing, unreadable, or from a newer build. All three are the same response:
-        /// start from nothing and do a full reconcile. There is no user data here to
-        /// protect, so there is no reason to refuse.
-        case unavailable
+        case missing
+        case tooNew(version: Int)
+        case unreadable
     }
 
     static func load(from url: URL = SnippetStorageLocations.syncBaseFileURL) -> Outcome {
-        guard let data = try? Data(contentsOf: url) else { return .unavailable }
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return .unreadable
+        }
 
         if let probe = try? JSONDecoder().decode(SchemaVersionProbe.self, from: data),
            let version = probe.schemaVersion, version > SyncBase.currentSchemaVersion {
-            return .unavailable
+            return .tooNew(version: version)
         }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let base = try? decoder.decode(SyncBase.self, from: data) else { return .unavailable }
+        guard let base = try? decoder.decode(SyncBase.self, from: data) else {
+            return .unreadable
+        }
         return .loaded(base)
     }
 
