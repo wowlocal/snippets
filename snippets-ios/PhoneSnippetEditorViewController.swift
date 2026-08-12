@@ -278,11 +278,15 @@ final class PhoneSnippetEditorViewController: UIViewController {
         bodyTextView.font = AppTheme.scaledFont(size: 16, textStyle: .body, monospaced: true)
         bodyTextView.adjustsFontForContentSizeCategory = true
         bodyTextView.backgroundColor = .clear
+        bodyTextView.secureCaptureBackgroundColor = AppTheme.editorSurface
         bodyTextView.textContainerInset = UIEdgeInsets(top: 14, left: 11, bottom: 14, right: 11)
         bodyTextView.smartDashesType = .no
         bodyTextView.smartQuotesType = .no
         bodyTextView.delegate = self
         bodyTextView.accessibilityIdentifier = "snippet-content"
+        bodyTextView.onSecureCaptureForcedRedaction = { [weak self] plaintext, reason in
+            self?.secureCaptureForcedRedaction(plaintext: plaintext, reason: reason)
+        }
 
         bodyPlaceholderLabel.translatesAutoresizingMaskIntoConstraints = false
         bodyPlaceholderLabel.text = "Paste or type"
@@ -312,6 +316,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
         bodyContainer.addSubview(bodyTextView)
         bodyTextView.addSubview(bodyPlaceholderLabel)
+        bodyContainer.addSubview(bodyTextView.secureCaptureSurfaceView)
         bodyContainer.addSubview(lockedOverlay)
         lockedOverlay.addSubview(lockStack)
         NSLayoutConstraint.activate([
@@ -320,6 +325,10 @@ final class PhoneSnippetEditorViewController: UIViewController {
             bodyTextView.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             bodyTextView.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
             bodyTextView.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+            bodyTextView.secureCaptureSurfaceView.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
+            bodyTextView.secureCaptureSurfaceView.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
+            bodyTextView.secureCaptureSurfaceView.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            bodyTextView.secureCaptureSurfaceView.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
             bodyPlaceholderLabel.leadingAnchor.constraint(equalTo: bodyTextView.leadingAnchor, constant: 16),
             bodyPlaceholderLabel.topAnchor.constraint(equalTo: bodyTextView.topAnchor, constant: 14),
             lockedOverlay.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
@@ -424,7 +433,11 @@ final class PhoneSnippetEditorViewController: UIViewController {
         tagField.setTags(snippet.tags)
         enabledSwitch.isOn = snippet.isEnabled
         secureSwitch.isOn = environment.store.isSecure(snippetID)
-        bodyTextView.text = environment.store.isSecure(snippetID) ? "" : snippet.content
+        if environment.store.isSecure(snippetID) {
+            _ = bodyTextView.bindSecureRedacted()
+        } else {
+            bodyTextView.bindOrdinaryText(snippet.content)
+        }
         secureContentIsRevealed = false
         previewIsExpanded = false
         isBinding = false
@@ -496,7 +509,9 @@ final class PhoneSnippetEditorViewController: UIViewController {
         let secure = environment.store.isSecure(snippetID)
         lockedOverlay.isHidden = !secure || secureContentIsRevealed
         bodyTextView.isEditable = !secure || secureContentIsRevealed
-        bodyTextView.isSecureContentMode = secure
+        if !secure, bodyTextView.secureCapturePhase != .ordinary {
+            bodyTextView.bindOrdinaryText(bodyTextView.text ?? "")
+        }
         bodyTextView.accessibilityLabel = secure && !secureContentIsRevealed
             ? "Secure content locked"
             : "Snippet content"
@@ -824,7 +839,10 @@ final class PhoneSnippetEditorViewController: UIViewController {
             do {
                 let name = environment.store.snippetForDisplay(id: snippetID)?.displayName ?? "secure snippet"
                 _ = try await environment.vaultSession.unlock(reason: "Reveal “\(name)”")
-                bodyTextView.text = try environment.secureStore.content(for: snippetID)
+                guard environment.store.isSecure(snippetID),
+                      bodyTextView.canAcceptSecurePlaintext else { return }
+                let plaintext = try environment.secureStore.content(for: snippetID)
+                guard bodyTextView.displaySecurePlaintext(plaintext) else { return }
                 secureContentIsRevealed = true
                 updateSecurePresentation()
                 refreshDerivedUI()
@@ -853,14 +871,36 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     private func saveSecureContentNow() {
         guard environment.store.isSecure(snippetID), secureContentIsRevealed else { return }
+        saveSecureContent(bodyTextView.text ?? "")
+    }
+
+    private func saveSecureContent(_ plaintext: String) {
         do {
             try environment.performLocalEditorChange {
                 try environment.performLocalSecureChange {
-                    try environment.secureStore.setContent(bodyTextView.text ?? "", for: snippetID)
+                    try environment.secureStore.setContent(plaintext, for: snippetID)
                 }
             }
         } catch {
             showSaveFailure("Secure edit wasn’t saved: \(error)")
+        }
+    }
+
+    private func secureCaptureForcedRedaction(
+        plaintext: String?,
+        reason: SecureSnippetForcedRedactionReason
+    ) {
+        secureSaveWorkItem?.cancel()
+        secureSaveWorkItem = nil
+        if let plaintext, environment.store.isSecure(snippetID) {
+            saveSecureContent(plaintext)
+        }
+        secureContentIsRevealed = false
+        bodyTextView.resignFirstResponder()
+        updateSecurePresentation()
+        refreshDerivedUI()
+        if reason == .rendererFailure {
+            showSaveFailure("Secure content was hidden because protected display failed.")
         }
     }
 
@@ -1019,7 +1059,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
         secureContentIsRevealed = false
-        bodyTextView.text = ""
+        bodyTextView.redactAndClearSecurePlaintext()
         updateSecurePresentation()
         refreshDerivedUI()
     }
@@ -1062,6 +1102,7 @@ extension PhoneSnippetEditorViewController: UITextViewDelegate {
 
     func textViewDidChange(_ textView: UITextView) {
         guard !isBinding else { return }
+        bodyTextView.invalidateSecureCaptureRenderer()
         updateBodyPlaceholder()
         if environment.store.isSecure(snippetID) {
             scheduleSecureContentSave()
@@ -1069,6 +1110,10 @@ extension PhoneSnippetEditorViewController: UITextViewDelegate {
         } else {
             editorChanged()
         }
+    }
+
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        bodyTextView.secureSelectionDidChange()
     }
 
     func textViewDidEndEditing(_ textView: UITextView) {

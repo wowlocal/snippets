@@ -92,7 +92,11 @@ final class SnippetEditorViewController: UIViewController {
         tagField.setTags(snippet.tags)
         enabledSwitch.isOn = snippet.isEnabled
         secureSwitch.isOn = environment.store.isSecure(id)
-        bodyTextView.text = environment.store.isSecure(id) ? "" : snippet.content
+        if environment.store.isSecure(id) {
+            _ = bodyTextView.bindSecureRedacted()
+        } else {
+            bodyTextView.bindOrdinaryText(snippet.content)
+        }
         isBinding = false
 
         scrollView.isHidden = false
@@ -231,11 +235,15 @@ final class SnippetEditorViewController: UIViewController {
         bodyTextView.font = AppTheme.scaledFont(size: 14, textStyle: .body, monospaced: true)
         bodyTextView.adjustsFontForContentSizeCategory = true
         bodyTextView.backgroundColor = .clear
+        bodyTextView.secureCaptureBackgroundColor = AppTheme.editorSurface
         bodyTextView.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
         bodyTextView.delegate = self
         bodyTextView.accessibilityIdentifier = "snippet-content"
         bodyTextView.smartDashesType = .no
         bodyTextView.smartQuotesType = .no
+        bodyTextView.onSecureCaptureForcedRedaction = { [weak self] plaintext, reason in
+            self?.secureCaptureForcedRedaction(plaintext: plaintext, reason: reason)
+        }
 
         bodyPlaceholderLabel.translatesAutoresizingMaskIntoConstraints = false
         bodyPlaceholderLabel.text = "Paste or type"
@@ -263,6 +271,7 @@ final class SnippetEditorViewController: UIViewController {
 
         bodyContainer.addSubview(bodyTextView)
         bodyTextView.addSubview(bodyPlaceholderLabel)
+        bodyContainer.addSubview(bodyTextView.secureCaptureSurfaceView)
         bodyContainer.addSubview(lockedOverlay)
         lockedOverlay.addSubview(lockStack)
         NSLayoutConstraint.activate([
@@ -271,6 +280,10 @@ final class SnippetEditorViewController: UIViewController {
             bodyTextView.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             bodyTextView.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
             bodyTextView.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+            bodyTextView.secureCaptureSurfaceView.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
+            bodyTextView.secureCaptureSurfaceView.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
+            bodyTextView.secureCaptureSurfaceView.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            bodyTextView.secureCaptureSurfaceView.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
             lockedOverlay.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
             lockedOverlay.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             lockedOverlay.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
@@ -454,6 +467,7 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     private func showEmptyEditor() {
+        bodyTextView.bindOrdinaryText("")
         selectedID = nil
         title = "Snippets"
         scrollView.isHidden = true
@@ -508,7 +522,9 @@ final class SnippetEditorViewController: UIViewController {
         let secure = environment.store.isSecure(selectedID)
         lockedOverlay.isHidden = !secure || secureContentIsRevealed
         bodyTextView.isEditable = !secure || secureContentIsRevealed
-        bodyTextView.isSecureContentMode = secure
+        if !secure, bodyTextView.secureCapturePhase != .ordinary {
+            bodyTextView.bindOrdinaryText(bodyTextView.text ?? "")
+        }
         bodyTextView.accessibilityLabel = secure && !secureContentIsRevealed
             ? "Secure content locked"
             : "Snippet content"
@@ -835,7 +851,11 @@ final class SnippetEditorViewController: UIViewController {
                 _ = try await environment.vaultSession.unlock(
                     reason: "Reveal “\(environment.store.snippetForDisplay(id: id)?.displayName ?? "secure snippet")”"
                 )
-                bodyTextView.text = try environment.secureStore.content(for: id)
+                guard selectedID == id,
+                      environment.store.isSecure(id),
+                      bodyTextView.canAcceptSecurePlaintext else { return }
+                let plaintext = try environment.secureStore.content(for: id)
+                guard bodyTextView.displaySecurePlaintext(plaintext) else { return }
                 secureContentIsRevealed = true
                 updateSecurePresentation()
                 refreshDerivedUI()
@@ -866,14 +886,36 @@ final class SnippetEditorViewController: UIViewController {
         guard let id = selectedID,
               environment.store.isSecure(id),
               secureContentIsRevealed else { return }
+        saveSecureContent(bodyTextView.text ?? "", id: id)
+    }
+
+    private func saveSecureContent(_ plaintext: String, id: UUID) {
         do {
             try environment.performLocalEditorChange {
                 try environment.performLocalSecureChange {
-                    try environment.secureStore.setContent(bodyTextView.text ?? "", for: id)
+                    try environment.secureStore.setContent(plaintext, for: id)
                 }
             }
         } catch {
             footerStatusLabel.text = "Secure edit wasn’t saved: \(error)"
+        }
+    }
+
+    private func secureCaptureForcedRedaction(
+        plaintext: String?,
+        reason: SecureSnippetForcedRedactionReason
+    ) {
+        secureSaveWorkItem?.cancel()
+        secureSaveWorkItem = nil
+        if let plaintext, let id = selectedID, environment.store.isSecure(id) {
+            saveSecureContent(plaintext, id: id)
+        }
+        secureContentIsRevealed = false
+        bodyTextView.resignFirstResponder()
+        updateSecurePresentation()
+        refreshDerivedUI()
+        if reason == .rendererFailure {
+            footerStatusLabel.text = "Secure content was hidden because protected display failed."
         }
     }
 
@@ -965,7 +1007,7 @@ final class SnippetEditorViewController: UIViewController {
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
         secureContentIsRevealed = false
-        bodyTextView.text = ""
+        bodyTextView.redactAndClearSecurePlaintext()
         updateSecurePresentation()
         refreshDerivedUI()
     }
@@ -1007,6 +1049,7 @@ extension SnippetEditorViewController: UITextViewDelegate {
 
     func textViewDidChange(_ textView: UITextView) {
         guard !isBinding else { return }
+        bodyTextView.invalidateSecureCaptureRenderer()
         updateBodyPlaceholder()
         if let selectedID, environment.store.isSecure(selectedID) {
             scheduleSecureContentSave()
@@ -1014,6 +1057,10 @@ extension SnippetEditorViewController: UITextViewDelegate {
         } else {
             editorChanged()
         }
+    }
+
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        bodyTextView.secureSelectionDidChange()
     }
 
     func textViewDidEndEditing(_ textView: UITextView) {
