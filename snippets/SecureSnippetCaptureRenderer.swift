@@ -289,7 +289,15 @@ final class SecureSnippetCaptureRenderer {
 
         context.saveGState()
         defer { context.restoreGState() }
-        context.scaleBy(x: geometry.backingScale, y: geometry.backingScale)
+
+        // CVPixelBuffer video rows are top-down, while a bitmap CGContext starts
+        // with Quartz's bottom-left coordinate system. TextKit supplies geometry in
+        // this flipped NSTextView's top-left coordinate system, so map the viewport's
+        // top edge to the bitmap's top edge before applying the backing scale. Without
+        // this explicit Y inversion AVSampleBufferDisplayLayer presents the complete
+        // secure text raster upside down.
+        context.translateBy(x: 0, y: CGFloat(geometry.pixelHeight))
+        context.scaleBy(x: geometry.backingScale, y: -geometry.backingScale)
         context.translateBy(x: -geometry.viewport.origin.x, y: -geometry.viewport.origin.y)
 
         let graphicsContext = NSGraphicsContext(cgContext: context, flipped: true)

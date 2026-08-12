@@ -11,6 +11,64 @@ private func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
+private struct RasterDifference {
+    let firstRow: Int
+    let lastRow: Int
+    let changedPixelsByRow: [Int]
+}
+
+@MainActor
+private func rasterDifference(
+    plaintext: CVPixelBuffer,
+    redaction: CVPixelBuffer
+) -> RasterDifference? {
+    guard CVPixelBufferGetWidth(plaintext) == CVPixelBufferGetWidth(redaction),
+          CVPixelBufferGetHeight(plaintext) == CVPixelBufferGetHeight(redaction),
+          CVPixelBufferLockBaseAddress(plaintext, .readOnly) == kCVReturnSuccess
+    else { return nil }
+    defer { CVPixelBufferUnlockBaseAddress(plaintext, .readOnly) }
+
+    guard CVPixelBufferLockBaseAddress(redaction, .readOnly) == kCVReturnSuccess else {
+        return nil
+    }
+    defer { CVPixelBufferUnlockBaseAddress(redaction, .readOnly) }
+
+    guard let plaintextBase = CVPixelBufferGetBaseAddress(plaintext),
+          let redactionBase = CVPixelBufferGetBaseAddress(redaction) else { return nil }
+
+    let width = CVPixelBufferGetWidth(plaintext)
+    let height = CVPixelBufferGetHeight(plaintext)
+    let plaintextBytesPerRow = CVPixelBufferGetBytesPerRow(plaintext)
+    let redactionBytesPerRow = CVPixelBufferGetBytesPerRow(redaction)
+    var changedPixelsByRow = Array(repeating: 0, count: height)
+
+    for row in 0 ..< height {
+        let plaintextRow = plaintextBase
+            .advanced(by: row * plaintextBytesPerRow)
+            .assumingMemoryBound(to: UInt8.self)
+        let redactionRow = redactionBase
+            .advanced(by: row * redactionBytesPerRow)
+            .assumingMemoryBound(to: UInt8.self)
+        for column in 0 ..< width {
+            let offset = column * 4
+            let colorDelta = (0 ..< 3).reduce(0) { partial, channel in
+                partial + abs(Int(plaintextRow[offset + channel]) - Int(redactionRow[offset + channel]))
+            }
+            if colorDelta > 12 {
+                changedPixelsByRow[row] += 1
+            }
+        }
+    }
+
+    guard let firstRow = changedPixelsByRow.firstIndex(where: { $0 > 0 }),
+          let lastRow = changedPixelsByRow.lastIndex(where: { $0 > 0 }) else { return nil }
+    return RasterDifference(
+        firstRow: firstRow,
+        lastRow: lastRow,
+        changedPixelsByRow: changedPixelsByRow
+    )
+}
+
 @MainActor
 private func checksum(_ buffer: CVPixelBuffer) -> UInt64 {
     guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return 0 }
@@ -43,6 +101,55 @@ private func unprotectedViewChecksum(_ view: NSView) -> UInt64 {
 @MainActor
 private func run() {
     _ = NSApplication.shared
+
+    let orientationView = SnippetContentTextView(
+        frame: NSRect(x: 0, y: 0, width: 180, height: 400)
+    )
+    orientationView.font = .monospacedSystemFont(ofSize: 72, weight: .black)
+    orientationView.textColor = .black
+    orientationView.appearance = NSAppearance(named: .aqua)
+    orientationView.drawsBackground = false
+    orientationView.isRichText = false
+    orientationView.textContainerInset = NSSize(width: 12, height: 112)
+    orientationView.textContainer?.lineFragmentPadding = 0
+    orientationView.string = "F"
+    let orientationScrollView = NSScrollView(
+        frame: NSRect(x: 0, y: 0, width: 180, height: 200)
+    )
+    orientationScrollView.documentView = orientationView
+    orientationScrollView.contentView.scroll(to: NSPoint(x: 0, y: 100))
+    orientationScrollView.reflectScrolledClipView(orientationScrollView.contentView)
+    let orientationPlaintext = orientationView.secureCaptureFrameForInspection(plaintext: true)!
+    let orientationRedaction = orientationView.secureCaptureFrameForInspection(plaintext: false)!
+    require(
+        orientationPlaintext.geometry.viewport.origin.y == 100,
+        "shipping orientation fixture must exercise a nonzero viewport origin"
+    )
+    let orientationDifference = rasterDifference(
+        plaintext: orientationPlaintext.pixelBuffer,
+        redaction: orientationRedaction.pixelBuffer
+    )!
+    require(
+        orientationDifference.firstRow < orientationPlaintext.geometry.pixelHeight / 4,
+        "shipping glyph must begin near the top of the top-down video raster"
+    )
+    require(
+        orientationDifference.lastRow < orientationPlaintext.geometry.pixelHeight / 2,
+        "shipping glyph must not be vertically mirrored into the raster bottom"
+    )
+    let orientationGlyphHeight = orientationDifference.lastRow - orientationDifference.firstRow + 1
+    let orientationBandHeight = max(1, orientationGlyphHeight / 3)
+    let orientationUpperBand = orientationDifference.changedPixelsByRow[
+        orientationDifference.firstRow ..< orientationDifference.firstRow + orientationBandHeight
+    ].reduce(0, +)
+    let orientationLowerBand = orientationDifference.changedPixelsByRow[
+        orientationDifference.lastRow - orientationBandHeight + 1 ... orientationDifference.lastRow
+    ].reduce(0, +)
+    require(
+        orientationUpperBand > orientationLowerBand,
+        "shipping asymmetric glyph must be upright rather than vertically mirrored"
+    )
+
     let textView = SnippetContentTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 600))
     textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
     textView.textColor = .textColor
@@ -165,7 +272,7 @@ private func run() {
     textView.isSecureContentMode = false
     require(textView.secureCapturePolicy.phase == .ordinary, "teardown must restore ordinary mode")
     require(!textView.secureHoverTracksPointerForInspection, "teardown must remove hover tracking")
-    print("PASS: shipping protected layer, IOSurface pixels, selection/caret/scroll/hover-redaction/clear")
+    print("PASS: shipping protected layer, upright IOSurface pixels, selection/caret/scroll/hover-redaction/clear")
 }
 
 MainActor.assumeIsolated {
