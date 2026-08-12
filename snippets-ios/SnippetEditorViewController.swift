@@ -1347,11 +1347,24 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     private func resumeAuthenticatedRevealIfNeeded() {
+        recoverProtectedDisplayIfNeeded()
         if secureRevealPolicy.state == .authenticatedRedacted {
             handleSecureRevealTransition(secureRevealPolicy.beginAuthenticatedReveal())
         } else {
             updateSecurePresentation()
         }
+    }
+
+    private func recoverProtectedDisplayIfNeeded() {
+        guard secureRevealEnvironmentIsActive,
+              let selectedID,
+              environment.store.isSecure(selectedID),
+              secureRevealPolicy.state == .failedClosed else { return }
+        let rendererIsHealthy = bodyTextView.recoverSecureRedactionAfterRendererFailure()
+        secureRevealPolicy.bindSecure(
+            rendererIsHealthy: rendererIsHealthy,
+            appAndSceneAreActive: true,
+            sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
     }
 
     private var secureRevealEnvironmentIsActive: Bool {

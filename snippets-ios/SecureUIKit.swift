@@ -572,6 +572,24 @@ final class SecureSnippetTextView: UITextView {
         return secureCaptureRenderer.arm()
     }
 
+    /// Replaces a terminally failed AV renderer while keeping the secure body
+    /// redacted. The owner may offer authentication again only after this returns
+    /// true and the app and scene are active.
+    @discardableResult
+    func recoverSecureRedactionAfterRendererFailure() -> Bool {
+        guard isSecureContentMode,
+              secureCapturePhase == .failedClosed,
+              !securePlaintextIsLoaded else { return false }
+        secureEditingIsAuthorized = false
+        securePlaintextAcceptanceIsAuthorized = false
+        secureRevealSessionIsAuthorized = false
+        isEditable = false
+        replaceTextStorage(with: "")
+        let recovered = secureCaptureRenderer.recoverAfterFailure()
+        secureCapturePhase = recovered ? .protectedRedaction : .failedClosed
+        return recovered
+    }
+
     /// Restores ordinary UIKit drawing only after old secure storage and every
     /// protected frame have been removed.
     func bindOrdinaryText(_ ordinaryText: String) {

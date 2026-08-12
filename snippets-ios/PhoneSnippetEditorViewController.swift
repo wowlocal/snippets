@@ -1403,11 +1403,23 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func resumeAuthenticatedRevealIfNeeded() {
+        recoverProtectedDisplayIfNeeded()
         if secureRevealPolicy.state == .authenticatedRedacted {
             handleSecureRevealTransition(secureRevealPolicy.beginAuthenticatedReveal())
         } else {
             updateSecurePresentation()
         }
+    }
+
+    private func recoverProtectedDisplayIfNeeded() {
+        guard secureRevealEnvironmentIsActive,
+              environment.store.isSecure(snippetID),
+              secureRevealPolicy.state == .failedClosed else { return }
+        let rendererIsHealthy = bodyTextView.recoverSecureRedactionAfterRendererFailure()
+        secureRevealPolicy.bindSecure(
+            rendererIsHealthy: rendererIsHealthy,
+            appAndSceneAreActive: true,
+            sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
     }
 
     private var secureRevealEnvironmentIsActive: Bool {

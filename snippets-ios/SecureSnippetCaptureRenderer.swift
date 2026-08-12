@@ -51,7 +51,7 @@ final class SecureSnippetCaptureRenderer {
 
     private unowned let textView: SecureSnippetTextView
     private unowned let surfaceView: SecureSnippetCaptureSurfaceView
-    private let displayLayer: AVSampleBufferDisplayLayer
+    private var displayLayer: AVSampleBufferDisplayLayer
     private let fallbackLayer: CALayer
     private var frameGeneration: UInt64 = 0
     private var isRendering = false
@@ -69,15 +69,7 @@ final class SecureSnippetCaptureRenderer {
         self.textView = textView
         self.surfaceView = surfaceView
 
-        let displayLayer = AVSampleBufferDisplayLayer()
-        // Security-critical ordering: all capture/display properties are set before
-        // the layer is attached or can receive a plaintext frame.
-        displayLayer.preventsCapture = true
-        displayLayer.isOpaque = true
-        displayLayer.videoGravity = .resize
-        displayLayer.preventsDisplaySleepDuringVideoPlayback = false
-        displayLayer.actions = Self.disabledLayerActions
-        displayLayer.isHidden = true
+        let displayLayer = Self.makeDisplayLayer()
         self.displayLayer = displayLayer
 
         let fallbackLayer = CALayer()
@@ -90,6 +82,10 @@ final class SecureSnippetCaptureRenderer {
         surfaceView.layer.addSublayer(displayLayer)
         surfaceView.onLayout = { [weak self] in self?.surfaceDidLayout() }
 
+        installDisplayLayerObservers()
+    }
+
+    private func installDisplayLayerObservers() {
         decodeFailureObserver = NotificationCenter.default.addObserver(
             forName: AVSampleBufferVideoRenderer.didFailToDecodeNotification,
             object: displayLayer.sampleBufferRenderer,
@@ -107,6 +103,17 @@ final class SecureSnippetCaptureRenderer {
                       self.displayLayer.isOutputObscuredDueToInsufficientExternalProtection else { return }
                 self.failClosed()
             }
+        }
+    }
+
+    private func removeDisplayLayerObservers() {
+        if let decodeFailureObserver {
+            NotificationCenter.default.removeObserver(decodeFailureObserver)
+            self.decodeFailureObserver = nil
+        }
+        if let outputProtectionObserver {
+            NotificationCenter.default.removeObserver(outputProtectionObserver)
+            self.outputProtectionObserver = nil
         }
     }
 
@@ -133,6 +140,21 @@ final class SecureSnippetCaptureRenderer {
         updateLayerGeometry()
         updateFallbackColor()
         return true
+    }
+
+    /// A display renderer can enter a terminal failed state while the app is
+    /// suspended. Rebuild only the protected AV surface after foregrounding;
+    /// the opaque fallback stays visible throughout and no plaintext survives
+    /// into the replacement renderer.
+    func recoverAfterFailure() -> Bool {
+        clear(keepFallbackVisible: true)
+        removeDisplayLayerObservers()
+        displayLayer.removeFromSuperlayer()
+
+        displayLayer = Self.makeDisplayLayer()
+        surfaceView.layer.addSublayer(displayLayer)
+        installDisplayLayerObservers()
+        return arm()
     }
 
     func renderPlaintext() -> Bool {
@@ -272,6 +294,19 @@ final class SecureSnippetCaptureRenderer {
     private enum FrameKind {
         case redaction
         case plaintext
+    }
+
+    private static func makeDisplayLayer() -> AVSampleBufferDisplayLayer {
+        let displayLayer = AVSampleBufferDisplayLayer()
+        // Security-critical ordering: all capture/display properties are set before
+        // the layer is attached or can receive a plaintext frame.
+        displayLayer.preventsCapture = true
+        displayLayer.isOpaque = true
+        displayLayer.videoGravity = .resize
+        displayLayer.preventsDisplaySleepDuringVideoPlayback = false
+        displayLayer.actions = disabledLayerActions
+        displayLayer.isHidden = true
+        return displayLayer
     }
 
     /// Allocation-free synchronous redaction boundary. The AV layer stays hidden

@@ -236,6 +236,26 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
     }
 
+    func testFailedRendererCanBeReplacedWithRedactedSurfaceForFreshReveal() {
+        let textView = makeTextView()
+        textView.text = "stale body"
+        textView.setSecureCaptureRendererFailedForTesting(true)
+        XCTAssertFalse(textView.bindSecureRedacted())
+        textView.setSecureCaptureRendererFailedForTesting(false)
+
+        XCTAssertTrue(textView.recoverSecureRedactionAfterRendererFailure())
+
+        XCTAssertEqual(textView.secureCapturePhase, .protectedRedaction)
+        XCTAssertEqual(textView.text, "")
+        XCTAssertTrue(textView.isSecureContentMode)
+        XCTAssertTrue(textView.nativePlaintextLayerSuppressedForInspection)
+        XCTAssertTrue(textView.secureCaptureProtectionEnabledForInspection)
+        XCTAssertTrue(textView.secureCaptureLayerAttachedForInspection)
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
+        XCTAssertFalse(textView.permitsSecureTextMutation)
+    }
+
     private func makeTextView() -> SecureSnippetTextView {
         let textView = SecureSnippetTextView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
         textView.setSecureForegroundActiveForTesting(true)
