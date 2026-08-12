@@ -14,7 +14,10 @@ import Foundation
 /// must reach disk before the exact offer can be removed from journal.json.
 nonisolated struct SyncBase: Equatable {
 
-    static let currentSchemaVersion = 1
+    /// Schema 2 makes the account binding downgrade-safe. A schema-1 reader must not
+    /// ignore that field, reuse this cursor under another private database, and then
+    /// write the checkpoint back without the only evidence that detects the switch.
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     /// Every record as last agreed, keyed by lowercase uuid string so the file is
@@ -31,19 +34,25 @@ nonisolated struct SyncBase: Equatable {
     /// pre-journal installation. The engine sets it only after journal.json is durable
     /// and before the first network operation that can create an ambiguous offer.
     var journalEstablished: Bool
+    /// The account/database scope that issued `cursor` and `recordVersions`.
+    /// `nil` is valid for an accountless backend and identifies a legacy CloudKit base
+    /// that requires migration before any data-plane operation.
+    var accountIdentity: SyncAccountIdentity?
 
     init(
         schemaVersion: Int = SyncBase.currentSchemaVersion,
         envelopes: [String: SyncEnvelope] = [:],
         recordVersions: [String: SyncRecordVersion] = [:],
         cursor: SyncCursor? = nil,
-        journalEstablished: Bool = false
+        journalEstablished: Bool = false,
+        accountIdentity: SyncAccountIdentity? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.envelopes = envelopes
         self.recordVersions = recordVersions
         self.cursor = cursor
         self.journalEstablished = journalEstablished
+        self.accountIdentity = accountIdentity
     }
 
     static func key(_ id: UUID) -> String { id.uuidString.lowercased() }
@@ -117,6 +126,7 @@ nonisolated struct SyncBase: Equatable {
 nonisolated extension SyncBase: Codable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, envelopes, recordVersions, cursor, journalEstablished
+        case accountIdentity
     }
 
     init(from decoder: Decoder) throws {
@@ -129,14 +139,28 @@ nonisolated extension SyncBase: Codable {
                 debugDescription: "unsupported sync-base schema version")
         }
         cursor = try container.decodeIfPresent(SyncCursor.self, forKey: .cursor)
-        // Additive and optional for downgrade safety. Shipped builds decoding schema 1
-        // ignore this unknown key; bumping the version would make them discard the base
-        // as too new and destroy the ancestor semantics this marker exists to protect.
-        // Absence therefore means a genuinely legacy base and is upgraded before network.
+        // Missing only on a pre-journal schema-1 checkpoint. Schema 2 is intentionally
+        // a downgrade fence: an older build must stop on the version before it can
+        // erase either this marker or the account binding added beside it.
         journalEstablished = if container.contains(.journalEstablished) {
             try container.decode(Bool.self, forKey: .journalEstablished)
         } else {
             false
+        }
+
+        // Missing is either the pre-binding schema-1 migration shape or a deliberately
+        // accountless backend. Explicit null is not equivalent: our encoder omits nil,
+        // so null can only be a damaged or foreign rewrite and must fail closed.
+        accountIdentity = if container.contains(.accountIdentity) {
+            try container.decode(SyncAccountIdentity.self, forKey: .accountIdentity)
+        } else {
+            nil
+        }
+        if schemaVersion < 2, accountIdentity != nil {
+            throw DecodingError.dataCorruptedError(
+                forKey: .accountIdentity,
+                in: container,
+                debugDescription: "sync account identity requires sync-base schema 2")
         }
 
         let raw = try container.decode([String: String].self, forKey: .envelopes)
@@ -183,6 +207,7 @@ nonisolated extension SyncBase: Codable {
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encodeIfPresent(cursor, forKey: .cursor)
         try container.encode(journalEstablished, forKey: .journalEstablished)
+        try container.encodeIfPresent(accountIdentity, forKey: .accountIdentity)
         var raw: [String: String] = [:]
         for (key, envelope) in envelopes {
             raw[key] = try envelope.canonicalData().base64EncodedString()

@@ -639,7 +639,8 @@ final class SyncCoordinator {
         try SyncBaseFile.write(SyncBase(
             recordVersions: confirmed.recordVersions,
             cursor: confirmed.cursor,
-            journalEstablished: true))
+            journalEstablished: true,
+            accountIdentity: confirmed.accountIdentity))
 
         // The projection sidecar remains untouched: it contains forward-compatible `x`
         // fields and local HLC/origin metadata independent of the transport key.
@@ -803,7 +804,7 @@ final class SyncCoordinator {
         guard case .halted(let reason, _) = state else { return nil }
         return switch reason {
         case .massDeletion: .destructiveChange
-        case .backendRefused: .accountRequiresReview
+        case .backendRefused, .accountChanged: .accountRequiresReview
         case .schemaTooNew, .manifestIntegrityFailed,
              .localLibraryQuarantined, .vaultUnreadable: .incompatibleState
         }

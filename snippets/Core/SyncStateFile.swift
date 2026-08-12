@@ -10,7 +10,10 @@ import Foundation
 /// identity and one full reconcile; it can never lose a snippet.
 nonisolated struct SyncState: Codable, Equatable {
 
-    static let currentSchemaVersion = 1
+    /// Schema 2 adds the sticky `accountChanged` halt. Older builds must see a future
+    /// state and stop, rather than fail enum decoding and regenerate a state that has
+    /// silently cleared this safety boundary.
+    static let currentSchemaVersion = 2
 
     /// Why sync stopped and refuses to resume without the user looking at it.
     ///
@@ -31,6 +34,10 @@ nonisolated struct SyncState: Codable, Equatable {
         /// because retrying on a timer cannot fix any of these and a sticky stop is what
         /// gets a human to look — but a halt that says what it means.
         case backendRefused
+        /// The confirmed cursor/system fields belong to another (or, for a legacy
+        /// checkpoint, an unknown) iCloud account. Continuing would either mix private
+        /// libraries or silently suppress every local record as already agreed.
+        case accountChanged
         /// The manifest HMAC did not match — the backend was rolled back, truncated,
         /// or tampered with.
         ///
@@ -59,6 +66,7 @@ nonisolated struct SyncState: Codable, Equatable {
             switch self {
             case .massDeletion: return "an unusually large deletion arrived"
             case .backendRefused: return "iCloud refused a snippet"
+            case .accountChanged: return "the iCloud account changed"
             case .manifestIntegrityFailed: return "the backend failed an integrity check"
             case .localLibraryQuarantined: return "the snippet library could not be read"
             case .vaultUnreadable: return "the secure vault could not be read"
@@ -75,6 +83,11 @@ nonisolated struct SyncState: Codable, Equatable {
                 return "Usually the iCloud container's schema has not been deployed to "
                     + "Production, the account is out of space, or one snippet is too "
                     + "large. None of them is fixed by waiting."
+            case .accountChanged:
+                return "If you intended to switch accounts, Resume will keep this "
+                    + "device's current library and merge it into the newly signed-in "
+                    + "account from a fresh checkpoint. Otherwise, switch back before "
+                    + "resuming."
             case .massDeletion:
                 return "Check another device still has your snippets before resuming."
             case .schemaTooNew:
@@ -87,7 +100,7 @@ nonisolated struct SyncState: Codable, Equatable {
         var isUserRecoverable: Bool {
             switch self {
             case .massDeletion, .backendRefused, .manifestIntegrityFailed,
-                 .localLibraryQuarantined, .vaultUnreadable:
+                 .localLibraryQuarantined, .vaultUnreadable, .accountChanged:
                 return true
             case .schemaTooNew:
                 return false
@@ -208,6 +221,8 @@ nonisolated enum SyncStateFile {
         to url: URL = SnippetStorageLocations.syncStateFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL
     ) throws {
+        var state = state
+        state.schemaVersion = SyncState.currentSchemaVersion
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601

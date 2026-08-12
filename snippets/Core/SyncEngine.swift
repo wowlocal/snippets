@@ -126,6 +126,11 @@ final class SyncEngine {
     /// explicit Resume can proceed. Otherwise Resume would overwrite the only remaining
     /// evidence of an ambiguous server commit with a fresh empty journal.
     private var journalRequiresReload = false
+    /// One process-local authorization granted only by clearing an `accountChanged`
+    /// halt. It is consumed before the journal-first reset begins. A crash therefore
+    /// loses the authorization and asks for review again rather than guessing that the
+    /// account migration completed.
+    private var approvedAccountReset = false
     private var consecutiveFailures = 0
     /// The exact halt value read from or written to disk. It is a compare-and-swap
     /// token: Resume may clear only this halt, never a newer stop written by a peer.
@@ -274,19 +279,23 @@ final class SyncEngine {
         case .written:
             durableHalt = nil
             consecutiveFailures = 0
+            approvedAccountReset = reason == .accountChanged
             transition(to: .idle(lastSync: nil))
         case .superseded(let newer):
+            approvedAccountReset = false
             // A peer stopped for a different reason after this pane was drawn. The
             // user's review covered the old stop, not this one; adopt it and ask again.
             durableHalt = newer
             transition(to: .halted(newer.reason, detail: newer.detail))
         case .tooNew(let version):
+            approvedAccountReset = false
             durableHalt = nil
             transition(to: .halted(
                 .schemaTooNew,
                 detail: "Sync/state.json is version \(version); update Snippets before "
                     + "sync can resume."))
         case .failed:
+            approvedAccountReset = false
             transition(to: .halted(
                 reason,
                 detail: detail + " The reviewed stop could not be cleared from disk; "
@@ -461,6 +470,23 @@ final class SyncEngine {
         // frozen offer forever and prevent a later local fix from being submitted.
         var terminalEngineFailureAfterFetch: SyncEngineFailure?
 
+        // ACCOUNT SCOPE FIRST, before reading local user data and before either network
+        // data-plane leg. A cursor and CKRecord system fields are credentials issued by
+        // one private database; using them under another Apple ID is never a migration.
+        let roundAccountIdentity: SyncAccountIdentity?
+        do {
+            roundAccountIdentity = try await transport.resolveAccountIdentity()
+            try Task.checkCancellation()
+            try reconcileAccountIdentity(roundAccountIdentity)
+        } catch {
+            // Review authorizes exactly this immediate account-resolution attempt. If
+            // iCloud is unavailable (or the task is cancelled) before a scope can be
+            // fixed, carrying that permission into a later round could silently apply
+            // it to an entirely different account.
+            approvedAccountReset = false
+            throw error
+        }
+
         // Establish the base-before-journal invariant before deriving or offering any
         // change. A later restart can therefore distinguish a truly fresh install
         // (both missing) from lost confirmation (journal exists, base missing).
@@ -525,6 +551,12 @@ final class SyncEngine {
             try Task.checkCancellation()
             let submission = try await transport.submit(records, at: base.cursor)
             try Task.checkCancellation()
+            guard submission.accountIdentity == roundAccountIdentity else {
+                throw SyncEngineFailure(
+                    reason: .accountChanged,
+                    detail: "the iCloud account changed while pending snippets were "
+                        + "being submitted; no acknowledgement was trusted")
+            }
 
             // Matched by id, never by position.
             //
@@ -647,6 +679,12 @@ final class SyncEngine {
             try Task.checkCancellation()
             let fetch = try await transport.fetchChanges(since: cursor)
             try Task.checkCancellation()
+            guard fetch.accountIdentity == roundAccountIdentity else {
+                throw SyncEngineFailure(
+                    reason: .accountChanged,
+                    detail: "the iCloud account changed while remote snippets were "
+                        + "being fetched; no records or cursor were trusted")
+            }
             isFullResync = isFullResync || fetch.isFullResync
             round.downloaded += fetch.records.count
             rawIncoming.append(contentsOf: fetch.records.map {
@@ -882,6 +920,79 @@ final class SyncEngine {
         return round
     }
 
+    /// Establishes or verifies the account component of the confirmed checkpoint.
+    ///
+    /// A truly pristine legacy pair can be bound directly. Any meaningful unbound
+    /// checkpoint may already straddle an account switch that happened before this
+    /// version existed, and an explicit mismatch is equally ambiguous; both require the
+    /// sticky review path before local data is even projected.
+    private func reconcileAccountIdentity(
+        _ resolved: SyncAccountIdentity?
+    ) throws {
+        if base.accountIdentity == resolved {
+            approvedAccountReset = false
+            return
+        }
+
+        let meaningfulCheckpoint = base.cursor != nil
+            || !base.envelopes.isEmpty
+            || !base.recordVersions.isEmpty
+            || !journal.entries.isEmpty
+        let isPristineLegacy = base.accountIdentity == nil
+            && resolved != nil
+            && !meaningfulCheckpoint
+
+        if isPristineLegacy {
+            var bound = base
+            bound.schemaVersion = SyncBase.currentSchemaVersion
+            bound.accountIdentity = resolved
+            try persistBase(bound)
+            approvedAccountReset = false
+            return
+        }
+
+        guard approvedAccountReset else {
+            let detail: String
+            if base.accountIdentity == nil {
+                detail = "the confirmed iCloud checkpoint predates account binding; review "
+                    + "the signed-in account before starting a fresh merge"
+            } else if resolved == nil {
+                detail = "the selected sync backend has no account scope but the confirmed "
+                    + "checkpoint belongs to an iCloud account"
+            } else {
+                detail = "the signed-in iCloud account no longer owns the confirmed sync "
+                    + "checkpoint; review the account before starting a fresh merge"
+            }
+            throw SyncEngineFailure(
+                reason: .accountChanged,
+                detail: detail)
+        }
+
+        // Consume before the first fallible write. Failure or process death must not
+        // leave a reusable authorization that can later target a different account.
+        approvedAccountReset = false
+
+        // Capture primary storage against the OLD projection before erasing its base.
+        // This is the only point where an unjournaled local deletion can still be
+        // distinguished from a fresh install.
+        let current = try library.currentEnvelopes(
+            agreedBase: journal.projectionKnowledge(over: base))
+        var resetJournal = journal
+        resetJournal.prepareForAccountChange(
+            current: current,
+            confirmed: base,
+            deviceID: device,
+            now: now())
+
+        // Journal first is the crash fence. If the next write fails, restart still sees
+        // the old account-bound base plus complete latest local intent and asks for
+        // review again. No old offered generation survives into the new account.
+        try persistJournal(resetJournal)
+        try persistBase(SyncBase(
+            journalEstablished: true,
+            accountIdentity: resolved))
+    }
+
     // MARK: - Failure handling
 
     private func handle(_ failure: SyncTransportFailure) {
@@ -901,6 +1012,11 @@ final class SyncEngine {
             enterHalt(.backendRefused, detail: detail)
         case .pushUnsupported:
             transition(to: .needsAuthentication("this backend does not accept pushes"))
+        case .accountChanged:
+            enterHalt(
+                .accountChanged,
+                detail: "the iCloud account changed during an active sync operation; "
+                    + "no response from that operation was trusted")
         case .unreachable, .rejected:
             consecutiveFailures += 1
             let delay = min(pow(2, Double(consecutiveFailures)), Self.maxBackoff)

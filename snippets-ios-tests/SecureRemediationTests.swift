@@ -337,7 +337,10 @@ final class SecureRemediationTests: XCTestCase {
 
         let ordinaryVersion = SyncRecordVersion(Data("ordinary-system-fields".utf8))
         let secureVersion = SyncRecordVersion(Data("secure-system-fields".utf8))
-        var confirmedBase = SyncBase(cursor: SyncCursor("73"))
+        let accountIdentity = SyncAccountIdentity(Data(repeating: 0x73, count: 32))
+        var confirmedBase = SyncBase(
+            cursor: SyncCursor("73"),
+            accountIdentity: accountIdentity)
         confirmedBase.recordConfirmed(
             ordinaryConfirmed, recordVersion: ordinaryVersion)
         confirmedBase.recordConfirmed(
@@ -400,6 +403,8 @@ final class SecureRemediationTests: XCTestCase {
                        "forget must retain ordinary CloudKit replacement authority")
         XCTAssertNil(retainedBase.recordVersion(toSecure.id),
                      "forgotten secure ciphertext must not leave replacement authority behind")
+        XCTAssertEqual(retainedBase.accountIdentity, accountIdentity,
+                       "secure forget must keep ordinary ancestry bound to its iCloud account")
         XCTAssertNil(retainedBase.cursor,
                      "the next opt-in must fetch remote secure state from the beginning")
 
@@ -693,7 +698,11 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertNotEqual(offered, desired)
 
         let rollbackVersion = SyncRecordVersion(Data("rollback-system-fields".utf8))
-        var base = SyncBase(cursor: SyncCursor("111"), journalEstablished: true)
+        let rollbackAccountIdentity = SyncAccountIdentity(Data(repeating: 0x11, count: 32))
+        var base = SyncBase(
+            cursor: SyncCursor("111"),
+            journalEstablished: true,
+            accountIdentity: rollbackAccountIdentity)
         base.recordConfirmed(
             confirmed,
             recordVersion: rollbackVersion)
@@ -752,6 +761,12 @@ final class SecureRemediationTests: XCTestCase {
             return XCTFail("restored journal is unreadable", file: file, line: line)
         }
         XCTAssertEqual(base, snapshot.base, file: file, line: line)
+        XCTAssertEqual(
+            base.accountIdentity,
+            snapshot.base.accountIdentity,
+            "rollback must restore the exact account binding",
+            file: file,
+            line: line)
         XCTAssertEqual(journal, snapshot.journal, file: file, line: line)
         XCTAssertEqual(
             journal.entry(snapshot.snippetID)?.offered,

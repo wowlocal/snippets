@@ -26,6 +26,87 @@ nonisolated struct SyncCursor: Hashable, Sendable, Codable, CustomStringConverti
     var description: String { rawValue }
 }
 
+/// An opaque identity for the account/database scope that owns a confirmed checkpoint.
+///
+/// A change token and per-record generation are meaningful only inside the private
+/// database that issued them. Core therefore persists this digest beside those values
+/// but never interprets or renders it. In particular this type deliberately has no
+/// `description`: stable account identifiers and hashes derived from them must not leak
+/// into diagnostics or user-facing error text.
+nonisolated struct SyncAccountIdentity: Equatable, Hashable, Sendable, Codable {
+    static let currentSchemaVersion = 1
+    static let maximumDataBytes = 1_024
+
+    let schemaVersion: Int
+    let data: Data
+
+    init(_ data: Data) {
+        precondition(!data.isEmpty && data.count <= Self.maximumDataBytes)
+        schemaVersion = Self.currentSchemaVersion
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion, data
+    }
+
+    private struct AnyCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            intValue = nil
+        }
+
+        init?(intValue: Int) {
+            stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let allFields = try decoder.container(keyedBy: AnyCodingKey.self)
+        let actual = Set(allFields.allKeys.map(\.stringValue))
+        let expected = Set(CodingKeys.allCases.map(\.rawValue))
+        guard actual == expected else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath,
+                      debugDescription: "unexpected sync-account-identity fields"))
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "unsupported sync-account-identity schema version")
+        }
+        data = try container.decode(Data.self, forKey: .data)
+        guard !data.isEmpty, data.count <= Self.maximumDataBytes else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .data,
+                in: container,
+                debugDescription: "invalid sync-account-identity data")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        guard schemaVersion == Self.currentSchemaVersion,
+              !data.isEmpty,
+              data.count <= Self.maximumDataBytes else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "invalid sync-account-identity value"))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(data, forKey: .data)
+    }
+}
+
 /// A backend-owned optimistic-concurrency token for one record.
 ///
 /// `WireRecord.rev` cannot fill this role: it is derived from the encrypted application
@@ -194,12 +275,16 @@ nonisolated enum SyncTransportFailure: Error, Sendable, Equatable, CustomStringC
     /// The backend does not accept pushes and one was attempted anyway. A programming
     /// error, surfaced rather than silently ignored.
     case pushUnsupported
+    /// The backend account changed after the round established its scope. Any response
+    /// may belong to a different private database and must be ignored wholesale.
+    case accountChanged
 
     var description: String {
         switch self {
         case .unreachable(let detail): return "the sync backend could not be reached: \(detail)"
         case .rejected(let rejection): return rejection.description
         case .pushUnsupported: return "this sync backend does not accept pushes"
+        case .accountChanged: return "the sync backend account changed during the operation"
         }
     }
 }
@@ -221,12 +306,23 @@ nonisolated struct SyncFetch: Sendable, Equatable {
     /// must not infer deletions from absence, which is the fastest known way to wipe a
     /// library.
     var isFullResync: Bool
+    /// Account scope that produced this page. For an account-scoped round this must
+    /// match the identity resolved before any data-plane call; otherwise the engine
+    /// discards the response before applying records or advancing its cursor.
+    var accountIdentity: SyncAccountIdentity?
 
-    init(records: [WireRecord], cursor: SyncCursor?, hasMore: Bool = false, isFullResync: Bool = false) {
+    init(
+        records: [WireRecord],
+        cursor: SyncCursor?,
+        hasMore: Bool = false,
+        isFullResync: Bool = false,
+        accountIdentity: SyncAccountIdentity? = nil
+    ) {
         self.records = records
         self.cursor = cursor
         self.hasMore = hasMore
         self.isFullResync = isFullResync
+        self.accountIdentity = accountIdentity
     }
 }
 
@@ -256,10 +352,17 @@ nonisolated struct SyncSubmission: Sendable, Equatable {
     /// The cursor after this submission. A backend that echoes our own writes back on
     /// the next fetch uses this to let us skip them.
     var cursor: SyncCursor?
+    /// Account scope that accepted/rejected this batch. See `SyncFetch.accountIdentity`.
+    var accountIdentity: SyncAccountIdentity?
 
-    init(results: [SyncSubmitResult], cursor: SyncCursor?) {
+    init(
+        results: [SyncSubmitResult],
+        cursor: SyncCursor?,
+        accountIdentity: SyncAccountIdentity? = nil
+    ) {
         self.results = results
         self.cursor = cursor
+        self.accountIdentity = accountIdentity
     }
 
     var acceptedIDs: [UUID] {
@@ -305,6 +408,14 @@ nonisolated protocol SyncTransport: Sendable {
     /// events rather than duplicate them.
     var events: AsyncStream<SyncTransportEvent> { get }
 
+    /// Resolves and establishes the account/database scope for the next round.
+    ///
+    /// `nil` is reserved for transports whose data is not user-account scoped. An
+    /// account-aware transport must return a stable opaque identity and must scope each
+    /// subsequent data-plane response to it. Authentication/availability failures
+    /// throw; they are never represented as a different or missing identity.
+    func resolveAccountIdentity() async throws -> SyncAccountIdentity?
+
     /// Changes since `cursor`; everything the backend has when `cursor` is `nil`.
     func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch
 
@@ -322,4 +433,8 @@ nonisolated protocol SyncTransport: Sendable {
     /// others were not comes back as a normal `SyncSubmission` with mixed outcomes,
     /// because that is not an error — it is the common case under a rate limit.
     func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission
+}
+
+nonisolated extension SyncTransport {
+    func resolveAccountIdentity() async throws -> SyncAccountIdentity? { nil }
 }

@@ -639,7 +639,12 @@ struct SyncEngineTests {
         var future = SyncState.fresh(deviceID: "aaaaaaa1", now: Date(timeIntervalSince1970: 0))
         future.schemaVersion = SyncState.currentSchemaVersion + 1
         let stateURL = h.dir.appendingPathComponent("future-state.json")
-        try SyncStateFile.write(future, to: stateURL, temporaryDirectory: h.dir)
+        // The production writer always stamps the schema implemented by this build.
+        // Encode directly to model bytes written by a genuinely newer build.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try AtomicFileWriter.write(
+            encoder.encode(future), to: stateURL, temporaryDirectory: h.dir)
 
         let engine = SyncEngine(
             transport: h.transport, library: h.library, sealer: h.sealer,

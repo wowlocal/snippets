@@ -1,5 +1,9 @@
 import CloudKit
+import CryptoKit
 import Foundation
+#if os(macOS)
+import Security
+#endif
 
 // App target only. `snippets/Core/` is compiled three ways — app, `snippets-cli`, and
 // the test package — and the CLI is a bare Mach-O that holds no iCloud entitlement, so
@@ -69,6 +73,367 @@ nonisolated enum CloudKitSchema {
     /// is required. Enforced here so an oversized record produces a sentence a human can
     /// act on instead of an opaque `limitExceeded` after three batch splits.
     static let maxBlobBytes = 900_000
+}
+
+/// The server environment selected by the running app's signed entitlement.
+///
+/// Development and Production are separate CloudKit routing coordinates. Apple does
+/// not promise that a user-record name differs between them, so that name alone can
+/// never scope a change token or archived `CKRecord` generation safely.
+nonisolated enum CloudKitContainerEnvironment: String, Sendable {
+    case development
+    case production
+    case unrecognized
+}
+
+/// Turns CloudKit's stable user record name into the opaque Core checkpoint identity.
+///
+/// The raw name never crosses this helper. Every backend-routing coordinate is a
+/// separately length-prefixed field: container, database, environment, and user. That
+/// prevents either an accidental concatenation collision or a Development checkpoint
+/// from looking compatible with Production.
+nonisolated enum CloudKitAccountIdentity {
+    static func derive(
+        containerIdentifier: String,
+        databaseScope: CKDatabase.Scope,
+        environment: CloudKitContainerEnvironment,
+        userRecordID: CKRecord.ID
+    ) -> SyncAccountIdentity {
+        let database: String
+        switch databaseScope {
+        case .public: database = "public"
+        case .private: database = "private"
+        case .shared: database = "shared"
+        @unknown default: database = "unrecognized-\(databaseScope.rawValue)"
+        }
+
+        var material = Data()
+        append(Data("snippets-cloudkit-account-v1".utf8), to: &material)
+        append(Data(containerIdentifier.utf8), to: &material)
+        append(Data(database.utf8), to: &material)
+        append(Data(environment.rawValue.utf8), to: &material)
+        append(Data(userRecordID.recordName.utf8), to: &material)
+        return SyncAccountIdentity(Data(SHA256.hash(data: material)))
+    }
+
+    private static func append(_ field: Data, to material: inout Data) {
+        var count = UInt64(field.count).bigEndian
+        withUnsafeBytes(of: &count) { material.append(contentsOf: $0) }
+        material.append(field)
+    }
+}
+
+/// Reads the CloudKit environment from the running binary, not from the source plist.
+///
+/// The selected server is a code-signing fact. Reading a build setting would recreate
+/// the exact false-success this binding prevents: an artifact can be configured as
+/// Release while its actual signature still routes CloudKit to Development. macOS and
+/// iOS expose no common public entitlement API, so the implementation reads the
+/// executable's standard Mach-O code-signature entitlement blob directly. The parser is
+/// deliberately small, bounds-checked, and fail-closed.
+nonisolated enum CloudKitRuntimeEnvironment {
+    private static let environmentKey =
+        "com.apple.developer.icloud-container-environment"
+    private static let containerIdentifiersKey =
+        "com.apple.developer.icloud-container-identifiers"
+    private static let servicesKey = "com.apple.developer.icloud-services"
+
+    static func current(
+        containerIdentifier: String,
+        bundle: Bundle = .main
+    ) -> CloudKitContainerEnvironment {
+        #if targetEnvironment(simulator)
+        // Apple routes Simulator CloudKit only to Development, irrespective of the
+        // device entitlement used by the same target. Simulator code signing exposes
+        // only host/simulated entitlements, so container authorization remains a
+        // CloudKit preflight concern there rather than something this process can prove.
+        return .development
+        #elseif os(macOS)
+        // Read the entitlement of the running task. Reading Bundle.executableURL would
+        // be a TOCTOU bug during an in-place Sparkle update: the old process can keep
+        // running after that path starts naming the new app binary.
+        guard let task = SecTaskCreateFromSelf(nil),
+              let values = SecTaskCopyValuesForEntitlements(
+                task,
+                [servicesKey, containerIdentifiersKey, environmentKey] as CFArray,
+                nil) as? [String: Any] else {
+            return .unrecognized
+        }
+        return environment(
+            fromSignedEntitlements: values,
+            containerIdentifier: containerIdentifier)
+        #else
+        guard let executableURL = bundle.executableURL,
+              let executable = try? Data(contentsOf: executableURL, options: .mappedIfSafe),
+              let entitlements = signedEntitlements(fromMachO: executable) else {
+            return .unrecognized
+        }
+        return environment(
+            fromSignedEntitlements: entitlements,
+            containerIdentifier: containerIdentifier)
+        #endif
+    }
+
+    static func environment(
+        fromSignedEntitlements entitlements: [String: Any],
+        containerIdentifier: String
+    ) -> CloudKitContainerEnvironment {
+        guard let services = entitlements[servicesKey] as? [String],
+              services.contains("CloudKit"),
+              let containers = entitlements[containerIdentifiersKey] as? [String],
+              containers.contains(containerIdentifier) else {
+            return .unrecognized
+        }
+
+        guard let raw = entitlements[environmentKey] else {
+            // CloudKit's documented default when this entitlement is absent is the
+            // Development server. This is the normal directly-run macOS Debug shape.
+            return .development
+        }
+        guard let value = raw as? String else { return .unrecognized }
+        switch value.lowercased() {
+        case "development": return .development
+        case "production": return .production
+        default: return .unrecognized
+        }
+    }
+
+    /// Extracts the XML entitlement dictionary from the current architecture's Mach-O
+    /// code signature. DER-only or malformed signatures intentionally return nil.
+    static func signedEntitlements(fromMachO data: Data) -> [String: Any]? {
+        guard let slice = currentArchitectureSlice(in: data) else { return nil }
+        return signedEntitlements(in: data, slice: slice)
+    }
+
+    private struct Slice {
+        var offset: Int
+        var size: Int
+    }
+
+    private enum ByteOrder {
+        case little
+        case big
+    }
+
+    private static var currentCPUType: UInt32 {
+        #if arch(arm64)
+        return 0x0100_000C
+        #elseif arch(x86_64)
+        return 0x0100_0007
+        #else
+        return 0
+        #endif
+    }
+
+    private static func currentArchitectureSlice(in data: Data) -> Slice? {
+        guard let magic = uint32(data, at: 0, order: .big) else { return nil }
+        let order: ByteOrder
+        let is64BitFat: Bool
+        switch magic {
+        case 0xCAFE_BABE:
+            order = .big
+            is64BitFat = false
+        case 0xBEBA_FECA:
+            order = .little
+            is64BitFat = false
+        case 0xCAFE_BABF:
+            order = .big
+            is64BitFat = true
+        case 0xBFBA_FECA:
+            order = .little
+            is64BitFat = true
+        default:
+            return Slice(offset: 0, size: data.count)
+        }
+
+        guard let countValue = uint32(data, at: 4, order: order),
+              countValue <= 64,
+              currentCPUType != 0 else { return nil }
+        let count = Int(countValue)
+        let stride = is64BitFat ? 32 : 20
+        var selected: Slice?
+        for index in 0..<count {
+            let entry = 8 + index * stride
+            guard let cpu = uint32(data, at: entry, order: order) else { return nil }
+            let offset: UInt64?
+            let size: UInt64?
+            if is64BitFat {
+                offset = uint64(data, at: entry + 8, order: order)
+                size = uint64(data, at: entry + 16, order: order)
+            } else {
+                offset = uint32(data, at: entry + 8, order: order).map(UInt64.init)
+                size = uint32(data, at: entry + 12, order: order).map(UInt64.init)
+            }
+            guard let offset, let size,
+                  offset <= UInt64(Int.max), size <= UInt64(Int.max) else { return nil }
+            let slice = Slice(offset: Int(offset), size: Int(size))
+            guard valid(rangeAt: slice.offset, length: slice.size, in: data.count) else {
+                return nil
+            }
+            if cpu == currentCPUType {
+                // CPU subtype is not available as a compile-time Swift condition, and
+                // arm64/arm64e slices are signed independently. A duplicate cputype is
+                // therefore ambiguous; selecting the first could inspect a signature
+                // that does not belong to the running image.
+                guard selected == nil else { return nil }
+                selected = slice
+            }
+        }
+        return selected
+    }
+
+    private static func signedEntitlements(
+        in data: Data,
+        slice: Slice
+    ) -> [String: Any]? {
+        guard let magic = uint32(data, at: slice.offset, order: .big) else { return nil }
+        let order: ByteOrder
+        let headerSize: Int
+        switch magic {
+        case 0xCFFA_EDFE:
+            order = .little
+            headerSize = 32
+        case 0xFEED_FACF:
+            order = .big
+            headerSize = 32
+        case 0xCEFA_EDFE:
+            order = .little
+            headerSize = 28
+        case 0xFEED_FACE:
+            order = .big
+            headerSize = 28
+        default:
+            return nil
+        }
+
+        guard let commandCountValue = uint32(data, at: slice.offset + 16, order: order),
+              let commandBytesValue = uint32(data, at: slice.offset + 20, order: order),
+              commandCountValue <= 16_384 else { return nil }
+        let commandCount = Int(commandCountValue)
+        let commandsStart = slice.offset + headerSize
+        let commandBytes = Int(commandBytesValue)
+        guard valid(rangeAt: commandsStart, length: commandBytes, in: data.count),
+              commandsStart + commandBytes <= slice.offset + slice.size else { return nil }
+
+        var commandOffset = commandsStart
+        for _ in 0..<commandCount {
+            guard commandOffset + 8 <= commandsStart + commandBytes,
+                  let command = uint32(data, at: commandOffset, order: order),
+                  let sizeValue = uint32(data, at: commandOffset + 4, order: order) else {
+                return nil
+            }
+            let commandSize = Int(sizeValue)
+            guard commandSize >= 8,
+                  commandOffset + commandSize <= commandsStart + commandBytes else { return nil }
+
+            if command == 0x1D {
+                guard commandSize >= 16,
+                      let relativeOffset = uint32(
+                        data, at: commandOffset + 8, order: order),
+                      let signatureSize = uint32(
+                        data, at: commandOffset + 12, order: order) else { return nil }
+                let signatureOffset = slice.offset + Int(relativeOffset)
+                guard signatureOffset >= slice.offset,
+                      valid(
+                        rangeAt: signatureOffset,
+                        length: Int(signatureSize),
+                        in: data.count),
+                      signatureOffset + Int(signatureSize) <= slice.offset + slice.size else {
+                    return nil
+                }
+                return entitlementDictionary(
+                    in: data,
+                    signatureOffset: signatureOffset,
+                    signatureSize: Int(signatureSize))
+            }
+            commandOffset += commandSize
+        }
+        return nil
+    }
+
+    private static func entitlementDictionary(
+        in data: Data,
+        signatureOffset: Int,
+        signatureSize: Int
+    ) -> [String: Any]? {
+        guard uint32(data, at: signatureOffset, order: .big) == 0xFADE_0CC0,
+              let totalLengthValue = uint32(data, at: signatureOffset + 4, order: .big),
+              let countValue = uint32(data, at: signatureOffset + 8, order: .big) else {
+            return nil
+        }
+        let totalLength = Int(totalLengthValue)
+        let count = Int(countValue)
+        guard totalLength <= signatureSize, count <= 4_096,
+              valid(rangeAt: signatureOffset, length: totalLength, in: data.count),
+              valid(rangeAt: signatureOffset + 12, length: count * 8, in: data.count),
+              signatureOffset + 12 + count * 8 <= signatureOffset + totalLength else {
+            return nil
+        }
+        let blobsStart = signatureOffset + 12 + count * 8
+
+        for index in 0..<count {
+            let entry = signatureOffset + 12 + index * 8
+            guard let slot = uint32(data, at: entry, order: .big),
+                  let relativeOffset = uint32(data, at: entry + 4, order: .big) else {
+                return nil
+            }
+            guard slot == 5 else { continue }
+            let blobOffset = signatureOffset + Int(relativeOffset)
+            guard blobOffset >= blobsStart,
+                  blobOffset + 8 <= signatureOffset + totalLength,
+                  uint32(data, at: blobOffset, order: .big) == 0xFADE_7171,
+                  let blobLengthValue = uint32(data, at: blobOffset + 4, order: .big) else {
+                return nil
+            }
+            let blobLength = Int(blobLengthValue)
+            guard blobLength >= 8,
+                  blobOffset + blobLength <= signatureOffset + totalLength else { return nil }
+            var payload = data.subdata(in: (blobOffset + 8)..<(blobOffset + blobLength))
+            while payload.last == 0 { payload.removeLast() }
+            guard let value = try? PropertyListSerialization.propertyList(
+                from: payload, options: [], format: nil),
+                  let dictionary = value as? [String: Any] else { return nil }
+            return dictionary
+        }
+        return nil
+    }
+
+    private static func uint32(
+        _ data: Data,
+        at offset: Int,
+        order: ByteOrder
+    ) -> UInt32? {
+        guard valid(rangeAt: offset, length: 4, in: data.count) else { return nil }
+        let bytes = (0..<4).map { UInt32(data[offset + $0]) }
+        switch order {
+        case .big:
+            return (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]
+        case .little:
+            return bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)
+        }
+    }
+
+    private static func uint64(
+        _ data: Data,
+        at offset: Int,
+        order: ByteOrder
+    ) -> UInt64? {
+        guard valid(rangeAt: offset, length: 8, in: data.count) else { return nil }
+        var value: UInt64 = 0
+        switch order {
+        case .big:
+            for index in 0..<8 { value = (value << 8) | UInt64(data[offset + index]) }
+        case .little:
+            for index in (0..<8).reversed() {
+                value = (value << 8) | UInt64(data[offset + index])
+            }
+        }
+        return value
+    }
+
+    private static func valid(rangeAt offset: Int, length: Int, in count: Int) -> Bool {
+        offset >= 0 && length >= 0 && offset <= count && length <= count - offset
+    }
 }
 
 // MARK: - WireRecord <-> CKRecord

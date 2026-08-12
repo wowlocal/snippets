@@ -496,6 +496,39 @@ cannot be mistaken for an unrelated conflict and silently discarded. Binding the
 the offer rather than only its UUID is essential: after fetch persists B/V2 but before it clears
 older offer A/V1, a crash must retry A with V1, never with V2 that would authorize overwriting B.
 
+Before even reading the local library, a CloudKit round binds that protocol state to the current
+private database. `base.json` schema 2 stores an opaque SHA-256 account identity derived from four
+separately length-prefixed routing coordinates: the explicit container, private-database scope,
+the CloudKit environment selected by the running binary's actual code-signing entitlement, and
+`CKContainer.userRecordID()`. Development and Production are distinct even if CloudKit returns the
+same user record name; that raw name is neither persisted nor logged. macOS reads the running
+task's code-signing entitlements, avoiding a bundle-path race during an in-place app update. An
+iOS device build reads the signed Mach-O entitlement blob once when the transport is created.
+Neither path trusts a source plist, scheme, or build configuration, and the resulting environment
+is immutable for that process lifetime. Missing authorization, malformed entitlements, or an
+environment that cannot be verified fails closed before account lookup or data-plane access.
+Simulator is the documented exception: it can address only Development, its code signature does
+not expose the device authorization shape, and CloudKit itself rejects an unauthorized container
+when the account/data operation is attempted. The transport then verifies the complete identity
+before and after every awaited data-plane operation, scopes its zone cache to it, and labels every
+submit/fetch response with the identity that produced it. The engine refuses a response from a
+different or unknown scope before accepting an acknowledgement, applying a record, or advancing
+a cursor.
+
+A meaningful legacy checkpoint with no binding, or any binding mismatch, enters a sticky review
+halt before projection or network access. A temporary account-status, authentication, or network
+failure is only a retryable failure: it never masquerades as a new account and never mutates the
+checkpoint. A truly empty legacy checkpoint can be bound directly. After an intentional account
+switch, **Resume** performs a journal-first reset: it reconciles current primary storage against
+the old base, clears all old-account offers and CAS generations, durably preserves the latest local
+intent, then writes an empty confirmed base bound to the new account. `snippets.json` and the
+projection sidecar are not erased, so the next round merges this device's library into the new
+private database instead of treating either account as authoritative. The one-shot review is
+consumed before fallible work and cannot survive a crash or failed account-resolution attempt.
+Rekey, secure-snippet forget, and rollback preserve the binding. Schema 2 is also a downgrade
+fence: an older binary stops at the future base/state version rather than silently stripping the
+account boundary.
+
 Before deriving that snapshot, the bridge synchronously makes pending ordinary edits durable in
 the primary `snippets.json`. A termination rescue copy is not sufficient: restart projects the
 primary file, so sync stops before journaling or transport if that file cannot accept the current

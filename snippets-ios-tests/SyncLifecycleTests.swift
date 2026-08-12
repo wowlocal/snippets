@@ -284,8 +284,11 @@ final class SyncLifecycleTests: XCTestCase {
         let secure = envelope(secureID, secure: true)
         let ordinaryVersion = SyncRecordVersion(Data("ordinary-system-fields".utf8))
         let secureVersion = SyncRecordVersion(Data("secure-system-fields".utf8))
+        let accountIdentity = SyncAccountIdentity(Data(repeating: 0x56, count: 32))
         var confirmed = SyncBase(
-            cursor: SyncCursor("rekey-cursor"), journalEstablished: true)
+            cursor: SyncCursor("rekey-cursor"),
+            journalEstablished: true,
+            accountIdentity: accountIdentity)
         confirmed.recordConfirmed(ordinary, recordVersion: ordinaryVersion)
         confirmed.recordConfirmed(secure, recordVersion: secureVersion)
         try SyncBaseFile.write(confirmed)
@@ -308,6 +311,8 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertTrue(reset.envelopes.isEmpty,
                       "payload ancestry is staged into the journal for resealing")
         XCTAssertEqual(reset.cursor, confirmed.cursor)
+        XCTAssertEqual(reset.accountIdentity, accountIdentity,
+                       "transport rekey must not detach CloudKit ancestry from its account")
         XCTAssertEqual(reset.recordVersion(ordinaryID), ordinaryVersion)
         XCTAssertEqual(reset.recordVersion(secureID), secureVersion)
 

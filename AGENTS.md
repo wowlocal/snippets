@@ -146,9 +146,19 @@ For a Production-connected iOS build, the second command must show all of:
   preference absent, no CloudKit transport is created and `Sync/base.json` is absent.
 - There is currently no APNs entitlement or CloudKit subscription. Remote changes arrive
   through the two-minute polling interval or an explicit **Sync Now** action.
-- A switched iCloud account is a known edge case: the current base does not record the
-  CloudKit user record name. Do not claim account-switch handling is complete without
-  adding and testing that binding.
+- `Sync/base.json` schema 2 binds every confirmed checkpoint to an opaque hash of the
+  explicit container, private-database scope, actual signed CloudKit environment, and
+  current `CKContainer.userRecordID()`. The raw user record name is never persisted or
+  logged. Resolve that binding before reading local library state or entering the data
+  plane, and revalidate it around awaited CloudKit operations.
+- A binding mismatch, or a meaningful legacy checkpoint with no binding, must enter the
+  sticky account-review halt. The explicit resume path performs the journal-first reset
+  that preserves current local intent while discarding old-scope cursors, offers, and CAS
+  generations. An unrecognized signed CloudKit environment fails closed; never infer it
+  from a scheme, configuration, bundle identifier, or source entitlement file. macOS
+  reads the running task's entitlements and iOS device builds inspect the signed Mach-O
+  once per transport lifetime. Simulator is the documented exception: its CloudKit
+  environment is always Development and CloudKit itself enforces container authorization.
 
 ### Production versus Development
 
@@ -162,11 +172,14 @@ This distinction is easy to miss and produces a convincing false success:
 - Always diagnose this by reading the signed app's actual entitlements. Do not infer the
   environment from scheme name, configuration name, container identifier, or UI status.
 
-Do not switch an installed app sandbox from Development to Production while reusing its
-`Sync/base.json`: that file can contain a Development change token. The safe recovery is
-a fresh Production Release sandbox, followed by a first fetch. Before removing any old
-installation, inspect it structurally and confirm it contains no local-only snippets or
-vault records. Never reset the Production CloudKit environment as a troubleshooting step.
+Changing an installed app sandbox from Development to Production makes its schema-2
+binding mismatch before a Development change token can be used against Production. First
+verify the artifact's actual signed entitlements, then use the explicit account-review
+resume path; it keeps local intent but clears the old environment's cursor, offers, and CAS
+generations. For a legacy unbound base, inspect it structurally before choosing the same
+recovery. Before removing any old installation, confirm it contains no local-only snippets
+or vault records. Never reset the Production CloudKit environment as a troubleshooting
+step.
 
 When diagnosing device data, avoid printing snippet bodies, names, ciphertext, keys, or
 stable device identifiers. File sizes and JSON counts are normally enough. Relevant files

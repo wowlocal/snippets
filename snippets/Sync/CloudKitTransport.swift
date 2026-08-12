@@ -64,9 +64,17 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     private let container: CKContainer
     private let database: CKDatabase
     private let zoneID: CKRecordZone.ID
+    private let containerIdentifier: String
+    private let accountStatusProvider: @Sendable () async throws -> CKAccountStatus
+    private let userRecordIDProvider: @Sendable () async throws -> CKRecord.ID
+    /// A code-signing coordinate is immutable for the lifetime of the running image.
+    /// Capture it once so an in-place app update cannot make this process inspect the
+    /// replacement file while its existing CloudKit connection still uses the old one.
+    private let environment: CloudKitContainerEnvironment
 
     private let lock = NSLock()
-    private var hasEnsuredZone = false
+    private var preparedAccountIdentity: SyncAccountIdentity?
+    private var ensuredZoneAccountIdentity: SyncAccountIdentity?
     private var accountObserver: (any NSObjectProtocol)?
 
     /// CloudKit documents 400 records and 2 MB per request as prose, not as API — there
@@ -79,12 +87,29 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     init(
         containerIdentifier: String = CloudKitSchema.containerIdentifier,
         zoneName: String = CloudKitSchema.zoneName,
-        identifier: String = "icloud"
+        identifier: String = "icloud",
+        accountStatusProvider: (@Sendable () async throws -> CKAccountStatus)? = nil,
+        userRecordIDProvider: (@Sendable () async throws -> CKRecord.ID)? = nil,
+        environmentProvider: (@Sendable () -> CloudKitContainerEnvironment)? = nil
     ) {
         self.identifier = identifier
-        container = CKContainer(identifier: containerIdentifier)
-        database = container.privateCloudDatabase
+        self.containerIdentifier = containerIdentifier
+        let cloudContainer = CKContainer(identifier: containerIdentifier)
+        container = cloudContainer
+        database = cloudContainer.privateCloudDatabase
         zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+        self.accountStatusProvider = accountStatusProvider ?? {
+            try await cloudContainer.accountStatus()
+        }
+        self.userRecordIDProvider = userRecordIDProvider ?? {
+            try await cloudContainer.userRecordID()
+        }
+        if let environmentProvider {
+            environment = environmentProvider()
+        } else {
+            environment = CloudKitRuntimeEnvironment.current(
+                containerIdentifier: containerIdentifier)
+        }
 
         // `.unbounded` for the same reason the fake uses it: a dropped event would be
         // indistinguishable from a transport that quietly discards them.
@@ -108,30 +133,45 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     ///
     /// Yielded as `.changesAvailable` rather than as a considered verdict, deliberately.
     /// An event is documented as "a *hint* that costs nothing to be wrong about", and the
-    /// engine reacts to this one by scheduling a fetch — which begins with
-    /// `preflightAccount()`, which is where the account state is actually established. So
-    /// the nudge needs no opinion of its own, and cannot be wrong in a direction that
-    /// matters.
+    /// engine reacts to this one by scheduling a round — which begins with
+    /// `resolveAccountIdentity()`, where the account state is actually established. The
+    /// nudge therefore needs no opinion of its own and cannot be wrong in a direction
+    /// that matters.
     ///
-    /// **What this does not do**, and must not be mistaken for: a switched Apple ID makes
-    /// `Sync/base.json` describe a different account's records. The library survives
-    /// (absence is never a delete) but every local envelope compares equal to the stale
-    /// base, so `pendingChanges` returns nothing and sync becomes a permanent silent
-    /// no-op that reports `.idle`. Fixing that means recording the container's user
-    /// record name in `SyncBase` and discarding it on mismatch — engine state, not
-    /// transport state, and not done here.
+    /// The hint also invalidates the operation gate and zone cache immediately. A data
+    /// call already in flight may still complete, but its postflight check then throws
+    /// `accountChanged` and the engine trusts none of its records or acknowledgements.
     private func observeAccountChanges() {
         accountObserver = NotificationCenter.default.addObserver(
             forName: .CKAccountChanged, object: nil, queue: nil
-        ) { [eventContinuation] _ in
+        ) { [weak self, eventContinuation] _ in
+            self?.invalidateAccountScope()
             eventContinuation.yield(.changesAvailable)
         }
     }
 
-    private func preflightAccount() async throws {
+    func resolveAccountIdentity() async throws -> SyncAccountIdentity? {
+        let identity = try await currentAccountIdentity()
+        lock.withLock {
+            if preparedAccountIdentity != identity {
+                ensuredZoneAccountIdentity = nil
+            }
+            preparedAccountIdentity = identity
+        }
+        return identity
+    }
+
+    private func currentAccountIdentity() async throws -> SyncAccountIdentity {
+        guard environment != .unrecognized else {
+            // Guessing here can make a Development change token look like Production
+            // state. This is a build/signing failure, not a transient account status.
+            throw SyncTransportFailure.rejected(.permanent(
+                detail: "the signed app's CloudKit environment could not be verified"))
+        }
+
         let status: CKAccountStatus
         do {
-            status = try await container.accountStatus()
+            status = try await accountStatusProvider()
         } catch {
             Diagnostics.record(.cloudKitFailure(
                 operation: .accountStatus,
@@ -140,6 +180,47 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         }
         if let failure = status.syncBlockingFailure {
             throw failure
+        }
+        do {
+            let userRecordID = try await userRecordIDProvider()
+            return CloudKitAccountIdentity.derive(
+                containerIdentifier: containerIdentifier,
+                databaseScope: .private,
+                environment: environment,
+                userRecordID: userRecordID)
+        } catch {
+            Diagnostics.record(.cloudKitFailure(
+                operation: .accountStatus,
+                failure: DiagnosticFailure(error)))
+            throw CloudKitErrorMapping.failure(for: error)
+        }
+    }
+
+    private func beginAccountOperation() async throws -> SyncAccountIdentity {
+        guard let expected = lock.withLock({ preparedAccountIdentity }) else {
+            throw SyncTransportFailure.unreachable(
+                detail: "the iCloud account checkpoint has not been established")
+        }
+        try await verifyAccountIdentity(expected)
+        return expected
+    }
+
+    private func verifyAccountIdentity(_ expected: SyncAccountIdentity) async throws {
+        guard lock.withLock({ preparedAccountIdentity == expected }) else {
+            throw SyncTransportFailure.accountChanged
+        }
+        let current = try await currentAccountIdentity()
+        guard current == expected,
+              lock.withLock({ preparedAccountIdentity == expected }) else {
+            invalidateAccountScope()
+            throw SyncTransportFailure.accountChanged
+        }
+    }
+
+    private func invalidateAccountScope() {
+        lock.withLock {
+            preparedAccountIdentity = nil
+            ensuredZoneAccountIdentity = nil
         }
     }
 
@@ -151,8 +232,10 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     /// redundant request and nothing else. That is why there is no single-flight `Task`
     /// and no lock held across the `await`: the cheap wrong thing is genuinely harmless
     /// and the expensive right thing could deadlock.
-    private func ensureZone() async throws {
-        let alreadyDone = lock.withLock { hasEnsuredZone }
+    private func ensureZone(for accountIdentity: SyncAccountIdentity) async throws {
+        let alreadyDone = lock.withLock {
+            ensuredZoneAccountIdentity == accountIdentity
+        }
         if alreadyDone { return }
 
         do {
@@ -165,18 +248,23 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             throw CloudKitErrorMapping.failure(for: error)
         }
 
-        lock.withLock { hasEnsuredZone = true }
+        lock.withLock {
+            if preparedAccountIdentity == accountIdentity {
+                ensuredZoneAccountIdentity = accountIdentity
+            }
+        }
     }
 
     private func forgetZone() {
-        lock.withLock { hasEnsuredZone = false }
+        lock.withLock { ensuredZoneAccountIdentity = nil }
     }
 
     // MARK: - Fetch
 
     func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
-        try await preflightAccount()
-        try await ensureZone()
+        let accountIdentity = try await beginAccountOperation()
+        try await ensureZone(for: accountIdentity)
+        try await verifyAccountIdentity(accountIdentity)
 
         let token = CloudKitCursor.decode(cursor)
 
@@ -191,7 +279,12 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         }
 
         do {
-            return try await page(since: token, isFullResync: cursorWasUnreadable)
+            let fetched = try await page(
+                since: token,
+                isFullResync: cursorWasUnreadable,
+                accountIdentity: accountIdentity)
+            try await verifyAccountIdentity(accountIdentity)
+            return fetched
         } catch let error where CloudKitErrorMapping.isCursorLost(error) {
             // `changeTokenExpired` means the server pruned our place in the feed.
             // `zoneNotFound` / `userDeletedZone` mean the zone itself is gone — which is
@@ -202,8 +295,16 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                 failure: DiagnosticFailure(error)))
             forgetZone()
             eventContinuation.yield(.cursorInvalidated(reason: describe(error)))
-            try await ensureZone()
-            return try await page(since: nil, isFullResync: true)
+            try await ensureZone(for: accountIdentity)
+            try await verifyAccountIdentity(accountIdentity)
+            let fetched = try await page(
+                since: nil,
+                isFullResync: true,
+                accountIdentity: accountIdentity)
+            try await verifyAccountIdentity(accountIdentity)
+            return fetched
+        } catch let failure as SyncTransportFailure {
+            throw failure
         } catch {
             Diagnostics.record(.cloudKitFailure(
                 operation: .fetchChanges,
@@ -212,7 +313,11 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         }
     }
 
-    private func page(since token: CKServerChangeToken?, isFullResync: Bool) async throws -> SyncFetch {
+    private func page(
+        since token: CKServerChangeToken?,
+        isFullResync: Bool,
+        accountIdentity: SyncAccountIdentity
+    ) async throws -> SyncFetch {
         let result = try await database.recordZoneChanges(inZoneWith: zoneID, since: token)
 
         // CloudKit hands back a *dictionary*, so there is no backend order to forward.
@@ -269,7 +374,8 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             records: records,
             cursor: CloudKitCursor.encode(result.changeToken),
             hasMore: result.moreComing,
-            isFullResync: isFullResync)
+            isFullResync: isFullResync,
+            accountIdentity: accountIdentity)
     }
 
     // MARK: - Submit
@@ -284,16 +390,23 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     /// came in — this call learned nothing about the feed position, and the engine is in
     /// any case documented never to adopt a submit's cursor as a fetch position.
     func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
-        guard !records.isEmpty else { return SyncSubmission(results: [], cursor: cursor) }
+        let accountIdentity = try await beginAccountOperation()
+        guard !records.isEmpty else {
+            return SyncSubmission(
+                results: [], cursor: cursor, accountIdentity: accountIdentity)
+        }
 
-        try await preflightAccount()
-        try await ensureZone()
+        try await ensureZone(for: accountIdentity)
+        try await verifyAccountIdentity(accountIdentity)
 
         var outcomes: [UUID: SyncSubmitOutcome] = [:]
         for chunk in Self.chunk(records) {
-            let chunkOutcomes = try await submit(chunk: chunk)
+            let chunkOutcomes = try await submit(
+                chunk: chunk,
+                accountIdentity: accountIdentity)
             outcomes.merge(chunkOutcomes) { _, newer in newer }
         }
+        try await verifyAccountIdentity(accountIdentity)
 
         // Re-projected onto the submitted array, in the submitted order.
         //
@@ -308,10 +421,17 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                 outcome: outcomes[wire.id] ?? .rejected(.rateLimited(
                     retryAfter: 5)))
         }
-        return SyncSubmission(results: results, cursor: cursor)
+        return SyncSubmission(
+            results: results,
+            cursor: cursor,
+            accountIdentity: accountIdentity)
     }
 
-    private func submit(chunk: [WireRecord]) async throws -> [UUID: SyncSubmitOutcome] {
+    private func submit(
+        chunk: [WireRecord],
+        accountIdentity: SyncAccountIdentity
+    ) async throws -> [UUID: SyncSubmitOutcome] {
+        try await verifyAccountIdentity(accountIdentity)
         var outcomes: [UUID: SyncSubmitOutcome] = [:]
         var toSave: [CKRecord] = []
 
@@ -349,6 +469,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                 deleting: [],
                 savePolicy: .ifServerRecordUnchanged,
                 atomically: false)
+            try await verifyAccountIdentity(accountIdentity)
 
             var firstItemFailure: DiagnosticFailure?
             for wire in chunk where outcomes[wire.id] == nil {
@@ -369,13 +490,20 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             }
             return outcomes
 
+        } catch let failure as SyncTransportFailure {
+            throw failure
+
         } catch let error where CloudKitErrorMapping.isBatchTooLarge(error) && chunk.count > 1 {
             // The documented limits are prose; this is the empirical one. Halve and
             // recurse, so a request that was too big becomes two that are not.
             let middle = chunk.count / 2
             Diagnostics.record(.cloudKitBatchSplit(recordCount: chunk.count))
-            let first = try await submit(chunk: Array(chunk[..<middle]))
-            let second = try await submit(chunk: Array(chunk[middle...]))
+            let first = try await submit(
+                chunk: Array(chunk[..<middle]),
+                accountIdentity: accountIdentity)
+            let second = try await submit(
+                chunk: Array(chunk[middle...]),
+                accountIdentity: accountIdentity)
             return outcomes
                 .merging(first) { _, newer in newer }
                 .merging(second) { _, newer in newer }
@@ -403,6 +531,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                         result: item,
                         expectedZoneID: zoneID)
                 }
+                try await verifyAccountIdentity(accountIdentity)
                 return outcomes
             }
             throw CloudKitErrorMapping.failure(for: error)

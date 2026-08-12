@@ -233,7 +233,7 @@ struct SyncEngineJournalSafetyTests {
         #expect(FileManager.default.fileExists(atPath: journalURL.path))
     }
 
-    @Test func additiveJournalMarkerRemainsReadableByLegacyShape() throws {
+    @Test func accountBindingForcesADowngradeSafeBaseSchemaBump() throws {
         let scratch = try ScratchDirectory("marker-downgrade")
         defer { scratch.remove() }
         let baseURL = scratch.file("base.json")
@@ -248,8 +248,9 @@ struct SyncEngineJournalSafetyTests {
         let legacy = try decoder.decode(
             LegacyBaseDecoder.self, from: Data(contentsOf: baseURL))
 
-        #expect(legacy.schemaVersion == 1,
-                "the additive marker must not force a schema bump on older builds")
+        #expect(legacy.schemaVersion == SyncBase.currentSchemaVersion)
+        #expect(legacy.schemaVersion == 2,
+                "an older build must stop instead of dropping the account binding and reusing its cursor under another private database")
         #expect(legacy.cursor == current.cursor)
         #expect(Set(legacy.envelopes.keys) == [SyncBase.key(snippetID)])
     }

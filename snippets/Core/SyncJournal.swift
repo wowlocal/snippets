@@ -253,6 +253,44 @@ nonisolated struct SyncJournal: Equatable {
         }
     }
 
+    /// Rebuilds pending intent at an explicitly reviewed backend-account boundary.
+    ///
+    /// First reconcile against the old checkpoint so an edit or deletion that existed
+    /// only in primary storage becomes durable. Then discard every old-account offer:
+    /// neither its acknowledgement ambiguity nor its per-record CAS generation has any
+    /// meaning in the new private database. All live local values are materialized as
+    /// desired entries because the replacement base will intentionally be empty.
+    mutating func prepareForAccountChange(
+        current: [UUID: SyncEnvelope],
+        confirmed: SyncBase,
+        deviceID: String,
+        now: Date
+    ) {
+        reconcile(
+            current: current,
+            confirmed: confirmed,
+            deviceID: deviceID,
+            now: now)
+
+        for key in Array(entries.keys) {
+            guard var entry = entries[key] else { continue }
+            entry.offered = nil
+            entries[key] = entry
+        }
+
+        for envelope in current.values.sorted(by: {
+            $0.id.uuidString < $1.id.uuidString
+        }) {
+            let key = SyncBase.key(envelope.id)
+            guard entries[key] == nil else { continue }
+            entries[key] = Entry(
+                desired: envelope,
+                offered: nil,
+                generation: 1,
+                modifiedAt: now)
+        }
+    }
+
     /// Removes intent owned by a vault deliberately forgotten on this device while
     /// retaining ordinary pending edits. A secure offer followed by an ordinary desired
     /// value is a demotion; only its now-invalid offer is cleared so the ordinary intent
