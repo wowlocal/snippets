@@ -26,6 +26,9 @@ private enum SecureCopyWarning {
         "Copy blocked. Secure snippets can\u{2019}t be copied. The clipboard was not changed."
     static let displayDuration: TimeInterval = 8
     static let fadeDuration: TimeInterval = 0.25
+    static let preferredWidthPriority = NSLayoutConstraint.Priority(
+        rawValue: NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 20
+    )
 }
 
 private enum ClipboardPreviewRefresh {
@@ -679,7 +682,7 @@ final class ViewController: NSViewController {
         // must also stay below AppKit's window-resize priorities: at 500 or above
         // the layout engine grows the window instead of yielding the toast.
         let preferredWidth = container.widthAnchor.constraint(equalToConstant: 652)
-        preferredWidth.priority = EditorVerticalMetrics.editorFitsViewportPriority
+        preferredWidth.priority = SecureCopyWarning.preferredWidthPriority
 
         NSLayoutConstraint.activate([
             secureCopyWarningLabel.leadingAnchor.constraint(
