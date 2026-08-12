@@ -313,6 +313,95 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertNotNil(editor.view.descendant(withAccessibilityIdentifier: "snippet-keyword"))
     }
 
+    func testPhoneAndIPadSecureEditorsExposeSafeSiblingInsteadOfBodyToAccessibility() throws {
+        let environment = AppEnvironment()
+        let secureID = UUID()
+        let secureProvider = SecureProviderStub(
+            shell: Snippet(
+                id: secureID,
+                name: "NAME-PRIVATE-SENTINEL",
+                keyword: "KEYWORD-PRIVATE-SENTINEL",
+                content: ""
+            )
+        )
+        environment.store.secureProvider = secureProvider
+
+        let phone = PhoneSnippetEditorViewController(
+            environment: environment,
+            snippetID: secureID)
+        phone.loadViewIfNeeded()
+        let tablet = SnippetEditorViewController(environment: environment)
+        tablet.loadViewIfNeeded()
+        tablet.bind(to: secureID)
+
+        for editorView in [phone.view!, tablet.view!] {
+            let body = try XCTUnwrap(
+                editorView.descendant(withAccessibilityIdentifier: "snippet-content")
+                    as? SecureSnippetTextView)
+            let notice = try XCTUnwrap(
+                editorView.descendant(
+                    withAccessibilityIdentifier: "secure-body-protection")
+                    as? SecureBodyAccessibilityNoticeView)
+
+            XCTAssertTrue(body.isSecureContentMode)
+            XCTAssertFalse(body.isAccessibilityElement)
+            XCTAssertTrue(body.accessibilityElementsHidden)
+            XCTAssertNil(body.accessibilityLabel)
+            XCTAssertNil(body.accessibilityValue)
+            XCTAssertTrue(notice.isAccessibilityElement)
+            XCTAssertEqual(
+                notice.accessibilityLabel,
+                SecureBodyAccessibilityNoticeView.protectedLabel)
+            XCTAssertEqual(
+                notice.accessibilityValue,
+                SecureBodyAccessibilityNoticeView.lockedValue)
+
+            let externallyVisible = editorView.accessibilityElementViews()
+            XCTAssertFalse(externallyVisible.contains { $0 === body })
+            XCTAssertTrue(externallyVisible.contains { $0 === notice })
+
+            let safeCopy = [
+                notice.accessibilityLabel,
+                notice.accessibilityValue,
+                notice.accessibilityHint,
+            ].compactMap { $0 }.joined(separator: " ")
+            XCTAssertFalse(safeCopy.contains("NAME-PRIVATE-SENTINEL"))
+            XCTAssertFalse(safeCopy.contains("KEYWORD-PRIVATE-SENTINEL"))
+        }
+    }
+
+    func testPhoneAndIPadOrdinaryEditorsRetainTextViewAccessibility() throws {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(
+            name: "Ordinary",
+            content: "ORDINARY-BODY-AX-SENTINEL")
+
+        let phone = PhoneSnippetEditorViewController(
+            environment: environment,
+            snippetID: snippet.id)
+        phone.loadViewIfNeeded()
+        let tablet = SnippetEditorViewController(environment: environment)
+        tablet.loadViewIfNeeded()
+        tablet.bind(to: snippet.id)
+
+        for editorView in [phone.view!, tablet.view!] {
+            let body = try XCTUnwrap(
+                editorView.descendant(withAccessibilityIdentifier: "snippet-content")
+                    as? SecureSnippetTextView)
+            let notice = try XCTUnwrap(
+                editorView.descendant(
+                    withAccessibilityIdentifier: "secure-body-protection")
+                    as? SecureBodyAccessibilityNoticeView)
+
+            XCTAssertFalse(body.isSecureContentMode)
+            XCTAssertFalse(body.accessibilityElementsHidden)
+            XCTAssertEqual(body.accessibilityLabel, "Snippet content")
+            XCTAssertEqual(body.text, "ORDINARY-BODY-AX-SENTINEL")
+            XCTAssertFalse(notice.isAccessibilityElement)
+            XCTAssertTrue(notice.accessibilityElementsHidden)
+        }
+    }
+
     func testSyncStateObserversDoNotReplaceEachOther() {
         let environment = AppEnvironment()
         var firstStates: [SyncEngine.State] = []
@@ -1167,5 +1256,13 @@ private extension UIView {
     func containsDescendant<T: UIView>(ofType type: T.Type) -> Bool {
         if self is T { return true }
         return subviews.contains { $0.containsDescendant(ofType: type) }
+    }
+
+    /// Mirrors UIKit's containment rule closely enough for a hosted hierarchy
+    /// regression: hidden accessibility subtrees cannot contribute descendants.
+    func accessibilityElementViews() -> [UIView] {
+        guard !isHidden, alpha > 0, !accessibilityElementsHidden else { return [] }
+        let ownElement = isAccessibilityElement ? [self] : []
+        return ownElement + subviews.flatMap { $0.accessibilityElementViews() }
     }
 }

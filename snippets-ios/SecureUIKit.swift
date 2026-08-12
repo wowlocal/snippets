@@ -24,9 +24,26 @@ enum SecureSnippetForcedRedactionReason: Equatable {
 final class SecureSnippetTextView: UITextView {
     let secureCaptureSurfaceView = SecureSnippetCaptureSurfaceView()
 
-    var isSecureContentMode = false {
-        didSet {
-            guard oldValue != isSecureContentMode else { return }
+    private var secureContentMode = false
+    private var ordinaryIsAccessibilityElement = false
+    private var ordinaryAccessibilityElementsHidden = false
+
+    var isSecureContentMode: Bool {
+        get { secureContentMode }
+        set {
+            guard secureContentMode != newValue else { return }
+
+            if !secureContentMode && newValue {
+                ordinaryIsAccessibilityElement = super.isAccessibilityElement
+                ordinaryAccessibilityElementsHidden = super.accessibilityElementsHidden
+            }
+            if secureContentMode && !newValue {
+                // Keep the view outside the accessibility tree until the last secure
+                // characters have left UIKit's text storage. This also makes every
+                // controller rebind/teardown fail closed if it merely switches modes.
+                replaceTextStorage(with: "")
+            }
+            secureContentMode = newValue
             applyContentMode()
         }
     }
@@ -89,6 +106,68 @@ final class SecureSnippetTextView: UITextView {
         ) { (view: SecureSnippetTextView, _) in
             view.reevaluateSceneCaptureState()
         }
+    }
+
+    // UIKit has no public equivalent of AppKit's protected-content accessibility
+    // client filtering. Exclude the complete UITextView subtree and redact every
+    // textual accessibility property while secure mode is active. Overriding the
+    // accessors prevents a later visual-reveal update from accidentally re-exposing
+    // plaintext through VoiceOver, Voice Control, Switch Control, or UI automation.
+    override var isAccessibilityElement: Bool {
+        get { isSecureContentMode ? false : super.isAccessibilityElement }
+        set { super.isAccessibilityElement = isSecureContentMode ? false : newValue }
+    }
+
+    override var accessibilityElementsHidden: Bool {
+        get { isSecureContentMode ? true : super.accessibilityElementsHidden }
+        set { super.accessibilityElementsHidden = isSecureContentMode ? true : newValue }
+    }
+
+    override var accessibilityLabel: String? {
+        get { isSecureContentMode ? nil : super.accessibilityLabel }
+        set { super.accessibilityLabel = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityValue: String? {
+        get { isSecureContentMode ? nil : super.accessibilityValue }
+        set { super.accessibilityValue = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityHint: String? {
+        get { isSecureContentMode ? nil : super.accessibilityHint }
+        set { super.accessibilityHint = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityAttributedLabel: NSAttributedString? {
+        get { isSecureContentMode ? nil : super.accessibilityAttributedLabel }
+        set { super.accessibilityAttributedLabel = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityAttributedValue: NSAttributedString? {
+        get { isSecureContentMode ? nil : super.accessibilityAttributedValue }
+        set { super.accessibilityAttributedValue = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityAttributedHint: NSAttributedString? {
+        get { isSecureContentMode ? nil : super.accessibilityAttributedHint }
+        set { super.accessibilityAttributedHint = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityUserInputLabels: [String]? {
+        get { isSecureContentMode ? [] : super.accessibilityUserInputLabels }
+        set { super.accessibilityUserInputLabels = isSecureContentMode ? [] : newValue }
+    }
+
+    override var accessibilityAttributedUserInputLabels: [NSAttributedString]? {
+        get { isSecureContentMode ? [] : super.accessibilityAttributedUserInputLabels }
+        set {
+            super.accessibilityAttributedUserInputLabels = isSecureContentMode ? [] : newValue
+        }
+    }
+
+    override var accessibilityTextualContext: UIAccessibilityTextualContext? {
+        get { isSecureContentMode ? nil : super.accessibilityTextualContext }
+        set { super.accessibilityTextualContext = isSecureContentMode ? nil : newValue }
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
@@ -319,6 +398,17 @@ final class SecureSnippetTextView: UITextView {
 
     private func applyContentMode() {
         if isSecureContentMode {
+            super.isAccessibilityElement = false
+            super.accessibilityElementsHidden = true
+            super.accessibilityLabel = nil
+            super.accessibilityValue = nil
+            super.accessibilityHint = nil
+            super.accessibilityAttributedLabel = nil
+            super.accessibilityAttributedValue = nil
+            super.accessibilityAttributedHint = nil
+            super.accessibilityUserInputLabels = []
+            super.accessibilityAttributedUserInputLabels = []
+            super.accessibilityTextualContext = nil
             autocapitalizationType = .none
             autocorrectionType = .no
             spellCheckingType = .no
@@ -337,6 +427,10 @@ final class SecureSnippetTextView: UITextView {
                 undoManagerWithDisabledRegistration = manager
             }
         } else {
+            super.isAccessibilityElement = ordinaryIsAccessibilityElement
+            super.accessibilityElementsHidden = ordinaryAccessibilityElementsHidden
+            super.accessibilityUserInputLabels = nil
+            super.accessibilityAttributedUserInputLabels = nil
             autocapitalizationType = .sentences
             autocorrectionType = .default
             spellCheckingType = .default
@@ -356,6 +450,71 @@ final class SecureSnippetTextView: UITextView {
             }
         }
         if isFirstResponder { reloadInputViews() }
+    }
+}
+
+/// A metadata-free accessibility sibling for a protected secure body.
+///
+/// The secure text view itself is intentionally unavailable to assistive technology,
+/// including while pixels are visible. This element communicates that limitation
+/// without ever receiving the snippet body, name, keyword, or tags.
+final class SecureBodyAccessibilityNoticeView: UIView {
+    enum State {
+        case hidden
+        case locked
+        case visuallyRevealed
+    }
+
+    static let protectedLabel = "Protected secure snippet body"
+    static let lockedValue =
+        "Use Reveal Secure Content to show it visually. The text is unavailable to accessibility."
+    static let revealedValue =
+        "Content is shown visually. The text remains unavailable to accessibility."
+
+    var state: State = .hidden {
+        didSet { applyState() }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        translatesAutoresizingMaskIntoConstraints = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        accessibilityIdentifier = "secure-body-protection"
+        accessibilityTraits = .staticText
+        applyState()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        accessibilityIdentifier = "secure-body-protection"
+        accessibilityTraits = .staticText
+        applyState()
+    }
+
+    private func applyState() {
+        switch state {
+        case .hidden:
+            isAccessibilityElement = false
+            accessibilityElementsHidden = true
+            accessibilityLabel = nil
+            accessibilityValue = nil
+            accessibilityHint = nil
+        case .locked:
+            isAccessibilityElement = true
+            accessibilityElementsHidden = false
+            accessibilityLabel = Self.protectedLabel
+            accessibilityValue = Self.lockedValue
+            accessibilityHint = nil
+        case .visuallyRevealed:
+            isAccessibilityElement = true
+            accessibilityElementsHidden = false
+            accessibilityLabel = Self.protectedLabel
+            accessibilityValue = Self.revealedValue
+            accessibilityHint = nil
+        }
     }
 }
 

@@ -10,6 +10,7 @@ final class SnippetEditorViewController: UIViewController {
     private let bodyTextView = SecureSnippetTextView()
     private let bodyContainer = UIView()
     private let bodyPlaceholderLabel = UILabel()
+    private let secureBodyAccessibilityNotice = SecureBodyAccessibilityNoticeView()
     private let lockedOverlay = UIView()
     private let revealButton = UIButton(type: .system)
     private let previewSection = UIStackView()
@@ -91,11 +92,14 @@ final class SnippetEditorViewController: UIViewController {
         keywordField.text = snippet.normalizedKeyword
         tagField.setTags(snippet.tags)
         enabledSwitch.isOn = snippet.isEnabled
-        secureSwitch.isOn = environment.store.isSecure(id)
-        if environment.store.isSecure(id) {
+        let isSecure = environment.store.isSecure(id)
+        secureSwitch.isOn = isSecure
+        if isSecure {
             _ = bodyTextView.bindSecureRedacted()
+            secureBodyAccessibilityNotice.state = .locked
         } else {
             bodyTextView.bindOrdinaryText(snippet.content)
+            secureBodyAccessibilityNotice.state = .hidden
         }
         isBinding = false
 
@@ -274,6 +278,7 @@ final class SnippetEditorViewController: UIViewController {
         bodyContainer.addSubview(bodyTextView.secureCaptureSurfaceView)
         bodyContainer.addSubview(lockedOverlay)
         lockedOverlay.addSubview(lockStack)
+        bodyContainer.addSubview(secureBodyAccessibilityNotice)
         NSLayoutConstraint.activate([
             bodyContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
             bodyTextView.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
@@ -290,6 +295,10 @@ final class SnippetEditorViewController: UIViewController {
             lockedOverlay.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
             lockStack.centerXAnchor.constraint(equalTo: lockedOverlay.centerXAnchor),
             lockStack.centerYAnchor.constraint(equalTo: lockedOverlay.centerYAnchor),
+            secureBodyAccessibilityNotice.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
+            secureBodyAccessibilityNotice.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
+            secureBodyAccessibilityNotice.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
+            secureBodyAccessibilityNotice.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
             bodyPlaceholderLabel.leadingAnchor.constraint(equalTo: bodyTextView.leadingAnchor, constant: 15),
             bodyPlaceholderLabel.topAnchor.constraint(equalTo: bodyTextView.topAnchor, constant: 12),
             bodyPlaceholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: bodyTextView.trailingAnchor, constant: -15),
@@ -468,6 +477,9 @@ final class SnippetEditorViewController: UIViewController {
 
     private func showEmptyEditor() {
         bodyTextView.bindOrdinaryText("")
+        secureContentIsRevealed = false
+        bodyTextView.accessibilityLabel = "Snippet content"
+        secureBodyAccessibilityNotice.state = .hidden
         selectedID = nil
         title = "Snippets"
         scrollView.isHidden = true
@@ -520,14 +532,21 @@ final class SnippetEditorViewController: UIViewController {
     private func updateSecurePresentation() {
         guard let selectedID else { return }
         let secure = environment.store.isSecure(selectedID)
+        // Protection is independent from visual reveal. A revealed secure body must
+        // remain absent from VoiceOver, Voice Control, and UI-automation queries.
+        bodyTextView.isSecureContentMode = secure
+        bodyTextView.accessibilityLabel = secure ? nil : "Snippet content"
+        secureBodyAccessibilityNotice.state = secure
+            ? (secureContentIsRevealed ? .visuallyRevealed : .locked)
+            : .hidden
         lockedOverlay.isHidden = !secure || secureContentIsRevealed
         bodyTextView.isEditable = !secure || secureContentIsRevealed
+        if secure, bodyTextView.secureCapturePhase == .ordinary {
+            _ = bodyTextView.bindSecureRedacted()
+        }
         if !secure, bodyTextView.secureCapturePhase != .ordinary {
             bodyTextView.bindOrdinaryText(bodyTextView.text ?? "")
         }
-        bodyTextView.accessibilityLabel = secure && !secureContentIsRevealed
-            ? "Secure content locked"
-            : "Snippet content"
         updateBodyPlaceholder()
         updateToggleButtons()
     }

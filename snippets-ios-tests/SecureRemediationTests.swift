@@ -440,8 +440,42 @@ final class SecureRemediationTests: XCTestCase {
 
     func testSecureTextViewBlocksAmbientDisclosureAndRecoveryClipboardIsLocalAndExpiring() {
         let textView = SecureSnippetTextView()
-        textView.text = "secure body"
+        let ordinaryIsAccessibilityElement = textView.isAccessibilityElement
+        let ordinaryAccessibilityElementsHidden = textView.accessibilityElementsHidden
+        textView.accessibilityLabel = "Ordinary snippet content"
+        textView.accessibilityUserInputLabels = ["Ordinary body input"]
         textView.isSecureContentMode = true
+        textView.text = "SECURE-BODY-AX-SENTINEL"
+
+        // A visual reveal must not make the UIKit text storage queryable through
+        // accessibility. Later assignments are redacted as well as the transition.
+        textView.isAccessibilityElement = true
+        textView.accessibilityElementsHidden = false
+        textView.accessibilityLabel = "SECURE-BODY-AX-SENTINEL"
+        textView.accessibilityValue = "SECURE-BODY-AX-SENTINEL"
+        textView.accessibilityHint = "SECURE-BODY-AX-SENTINEL"
+        textView.accessibilityAttributedLabel = NSAttributedString(
+            string: "SECURE-BODY-AX-SENTINEL")
+        textView.accessibilityAttributedValue = NSAttributedString(
+            string: "SECURE-BODY-AX-SENTINEL")
+        textView.accessibilityAttributedHint = NSAttributedString(
+            string: "SECURE-BODY-AX-SENTINEL")
+        textView.accessibilityUserInputLabels = ["SECURE-BODY-AX-SENTINEL"]
+        textView.accessibilityAttributedUserInputLabels = [NSAttributedString(
+            string: "SECURE-BODY-AX-SENTINEL")]
+        textView.accessibilityTextualContext = .sourceCode
+
+        XCTAssertFalse(textView.isAccessibilityElement)
+        XCTAssertTrue(textView.accessibilityElementsHidden)
+        XCTAssertNil(textView.accessibilityLabel)
+        XCTAssertNil(textView.accessibilityValue)
+        XCTAssertNil(textView.accessibilityHint)
+        XCTAssertNil(textView.accessibilityAttributedLabel)
+        XCTAssertNil(textView.accessibilityAttributedValue)
+        XCTAssertNil(textView.accessibilityAttributedHint)
+        XCTAssertEqual(textView.accessibilityUserInputLabels ?? [], [])
+        XCTAssertEqual(textView.accessibilityAttributedUserInputLabels ?? [], [])
+        XCTAssertNil(textView.accessibilityTextualContext)
 
         for selectorName in [
             "copy:", "cut:", "undo:", "redo:", "_share:", "_define:", "translate:"
@@ -459,6 +493,18 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertFalse(AppDelegate.allowsExtensionPoint(.keyboard))
 
         textView.isSecureContentMode = false
+        XCTAssertEqual(
+            textView.text,
+            "",
+            "secure text storage must be cleared before ordinary accessibility returns")
+        XCTAssertEqual(textView.isAccessibilityElement, ordinaryIsAccessibilityElement)
+        XCTAssertEqual(
+            textView.accessibilityElementsHidden,
+            ordinaryAccessibilityElementsHidden)
+        textView.text = "ordinary body"
+        textView.accessibilityLabel = "Snippet content"
+        XCTAssertEqual(textView.text, "ordinary body")
+        XCTAssertEqual(textView.accessibilityLabel, "Snippet content")
         XCTAssertEqual(textView.autocorrectionType, .default)
         XCTAssertEqual(textView.spellCheckingType, .default)
         XCTAssertEqual(textView.writingToolsBehavior, .default)
@@ -470,6 +516,45 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertEqual(
             options[.expirationDate] as? Date,
             instant.addingTimeInterval(RecoveryKeyPasteboard.lifetime))
+    }
+
+    func testSecureBodyAccessibilityNoticeContainsOnlyFixedSafeCopy() {
+        let notice = SecureBodyAccessibilityNoticeView()
+        let privateSentinels = [
+            "BODY-PRIVATE-SENTINEL",
+            "NAME-PRIVATE-SENTINEL",
+            "KEYWORD-PRIVATE-SENTINEL",
+            "TAG-PRIVATE-SENTINEL",
+        ]
+
+        notice.state = .locked
+        XCTAssertTrue(notice.isAccessibilityElement)
+        XCTAssertFalse(notice.accessibilityElementsHidden)
+        XCTAssertEqual(
+            notice.accessibilityLabel,
+            SecureBodyAccessibilityNoticeView.protectedLabel)
+        XCTAssertEqual(
+            notice.accessibilityValue,
+            SecureBodyAccessibilityNoticeView.lockedValue)
+
+        notice.state = .visuallyRevealed
+        XCTAssertEqual(
+            notice.accessibilityValue,
+            SecureBodyAccessibilityNoticeView.revealedValue)
+        let exposedCopy = [
+            notice.accessibilityLabel,
+            notice.accessibilityValue,
+            notice.accessibilityHint,
+        ].compactMap { $0 }.joined(separator: " ")
+        for sentinel in privateSentinels {
+            XCTAssertFalse(exposedCopy.contains(sentinel))
+        }
+
+        notice.state = .hidden
+        XCTAssertFalse(notice.isAccessibilityElement)
+        XCTAssertTrue(notice.accessibilityElementsHidden)
+        XCTAssertNil(notice.accessibilityLabel)
+        XCTAssertNil(notice.accessibilityValue)
     }
 
     func testEncryptedBackupKDFYieldsMainActorAndStillRoundTrips() async throws {
