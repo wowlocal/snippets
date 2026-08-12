@@ -335,9 +335,8 @@ final class SnippetsIOSTests: XCTestCase {
         tablet.bind(to: secureID)
 
         for editorView in [phone.view!, tablet.view!] {
-            let body = try XCTUnwrap(
-                editorView.descendant(withAccessibilityIdentifier: "snippet-content")
-                    as? SecureSnippetTextView)
+            let body = try XCTUnwrap(editorView.firstDescendant(
+                ofType: SecureSnippetTextView.self))
             let notice = try XCTUnwrap(
                 editorView.descendant(
                     withAccessibilityIdentifier: "secure-body-protection")
@@ -370,6 +369,48 @@ final class SnippetsIOSTests: XCTestCase {
         }
     }
 
+    func testSecureBodyNeverEntersOrdinaryPreviewLabels() throws {
+        let environment = AppEnvironment()
+        let secureID = UUID()
+        let secureProvider = SecureProviderStub(
+            shell: Snippet(id: secureID, name: "Secure", keyword: "secure", content: ""))
+        environment.store.secureProvider = secureProvider
+        let sentinel = "SECURE-PREVIEW-{date:yyyy}-SENTINEL"
+
+        let phone = PhoneSnippetEditorViewController(
+            environment: environment,
+            snippetID: secureID)
+        phone.loadViewIfNeeded()
+        let tablet = SnippetEditorViewController(environment: environment)
+        tablet.loadViewIfNeeded()
+        tablet.bind(to: secureID)
+
+        for (editor, editorView) in [
+            (phone as any UITextViewDelegate, phone.view!),
+            (tablet as any UITextViewDelegate, tablet.view!),
+        ] {
+            let body = try XCTUnwrap(editorView.firstDescendant(
+                ofType: SecureSnippetTextView.self))
+            let preview = try XCTUnwrap(
+                editorView.descendant(withAccessibilityIdentifier: "snippet-preview")
+                    as? UILabel)
+            body.setSceneCaptureStateForTesting(.inactive)
+            body.setSecureForegroundActiveForTesting(true)
+            XCTAssertTrue(body.bindSecureRedacted())
+            body.setSecurePlaintextAcceptanceAuthorized(true)
+            body.text = sentinel
+
+            editor.textViewDidChange?(body)
+            XCTAssertNil(preview.text)
+            XCTAssertNil(preview.attributedText)
+
+            _ = body.redactAndClearSecurePlaintext()
+            editor.textViewDidChange?(body)
+            XCTAssertNil(preview.text)
+            XCTAssertNil(preview.attributedText)
+        }
+    }
+
     func testPhoneAndIPadOrdinaryEditorsRetainTextViewAccessibility() throws {
         let environment = AppEnvironment()
         let snippet = environment.store.addSnippet(
@@ -399,6 +440,44 @@ final class SnippetsIOSTests: XCTestCase {
             XCTAssertEqual(body.text, "ORDINARY-BODY-AX-SENTINEL")
             XCTAssertFalse(notice.isAccessibilityElement)
             XCTAssertTrue(notice.accessibilityElementsHidden)
+        }
+    }
+
+    func testSecureToOrdinaryControllerRebindRestoresStoreBodyAfterSecureClear() throws {
+        let environment = AppEnvironment()
+        let snippetID = UUID()
+        let secureProvider = SecureProviderStub(
+            shell: Snippet(
+                id: snippetID,
+                name: "Secure shell",
+                keyword: "secure-shell",
+                content: ""))
+        environment.store.secureProvider = secureProvider
+
+        let phone = PhoneSnippetEditorViewController(
+            environment: environment,
+            snippetID: snippetID)
+        phone.loadViewIfNeeded()
+        let tablet = SnippetEditorViewController(environment: environment)
+        tablet.loadViewIfNeeded()
+        tablet.bind(to: snippetID)
+
+        let ordinarySentinel = "ORDINARY-AFTER-SECURE-REBIND"
+        secureProvider.isActive = false
+        _ = try environment.store.importSharedSnippet(Snippet(
+            id: snippetID,
+            name: "Ordinary",
+            keyword: "ordinary",
+            content: ordinarySentinel))
+        phone.refreshFromStore(preserveFirstResponder: false)
+        tablet.bind(to: snippetID)
+
+        for editorView in [phone.view!, tablet.view!] {
+            let body = try XCTUnwrap(editorView.firstDescendant(
+                ofType: SecureSnippetTextView.self))
+            XCTAssertFalse(body.isSecureContentMode)
+            XCTAssertEqual(body.secureCapturePhase, .ordinary)
+            XCTAssertEqual(body.text, ordinarySentinel)
         }
     }
 
@@ -1212,10 +1291,11 @@ final class SnippetsIOSTests: XCTestCase {
 @MainActor
 private final class SecureProviderStub: SecureSnippetProviding {
     let shell: Snippet
+    var isActive = true
 
     init(shell: Snippet) { self.shell = shell }
-    func secureShellsForDisplay() -> [Snippet] { [shell] }
-    func isSecure(_ id: UUID) -> Bool { id == shell.id }
+    func secureShellsForDisplay() -> [Snippet] { isActive ? [shell] : [] }
+    func isSecure(_ id: UUID) -> Bool { isActive && id == shell.id }
 }
 
 @MainActor
@@ -1243,6 +1323,14 @@ private final class TestSnippetPasteboard: SnippetPasteboard {
 
 @MainActor
 private extension UIView {
+    func firstDescendant<T: UIView>(ofType type: T.Type) -> T? {
+        if let match = self as? T { return match }
+        for subview in subviews {
+            if let match = subview.firstDescendant(ofType: type) { return match }
+        }
+        return nil
+    }
+
     func descendant(withAccessibilityIdentifier identifier: String) -> UIView? {
         if accessibilityIdentifier == identifier { return self }
         for subview in subviews {

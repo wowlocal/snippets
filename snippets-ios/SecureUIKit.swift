@@ -27,6 +27,7 @@ final class SecureSnippetTextView: UITextView {
     private var secureContentMode = false
     private var ordinaryIsAccessibilityElement = false
     private var ordinaryAccessibilityElementsHidden = false
+    private var ordinaryAccessibilityIdentifier: String?
 
     var isSecureContentMode: Bool {
         get { secureContentMode }
@@ -36,6 +37,7 @@ final class SecureSnippetTextView: UITextView {
             if !secureContentMode && newValue {
                 ordinaryIsAccessibilityElement = super.isAccessibilityElement
                 ordinaryAccessibilityElementsHidden = super.accessibilityElementsHidden
+                ordinaryAccessibilityIdentifier = super.accessibilityIdentifier
             }
             if secureContentMode && !newValue {
                 // Keep the view outside the accessibility tree until the last secure
@@ -53,6 +55,7 @@ final class SecureSnippetTextView: UITextView {
     /// a revealed secure body, so the owner can persist it without rereading the
     /// now-empty UITextView.
     var onSecureCaptureForcedRedaction: ((String?, SecureSnippetForcedRedactionReason) -> Void)?
+    var onSecureSceneCaptureStateChanged: ((UISceneCaptureState) -> Void)?
 
     var secureCaptureBackgroundColor: UIColor = .secondarySystemBackground {
         didSet { invalidateSecureCaptureRenderer() }
@@ -60,10 +63,13 @@ final class SecureSnippetTextView: UITextView {
 
     private(set) var secureCapturePhase: SecureSnippetCapturePhase = .ordinary
     private var securePlaintextIsLoaded = false
+    private var secureEditingIsAuthorized = false
+    private var securePlaintextAcceptanceIsAuthorized = false
     private var isChangingSecureStorage = false
     private var savedNativeLayerOpacity: Float?
     private var savedTintColor: UIColor?
     private var sceneCaptureStateOverrideForTesting: UISceneCaptureState?
+    private var secureForegroundActiveOverrideForTesting: Bool?
     private var sceneCaptureTraitRegistration: (any UITraitChangeRegistration)?
     private lazy var secureCaptureRenderer: SecureSnippetCaptureRenderer = {
         let renderer = SecureSnippetCaptureRenderer(
@@ -138,6 +144,142 @@ final class SecureSnippetTextView: UITextView {
         set { super.accessibilityHint = isSecureContentMode ? nil : newValue }
     }
 
+    override var accessibilityIdentifier: String? {
+        get { isSecureContentMode ? nil : super.accessibilityIdentifier }
+        set { super.accessibilityIdentifier = isSecureContentMode ? nil : newValue }
+    }
+
+    override var isAccessibilityElementBlock: AXBoolReturnBlock? {
+        get { isSecureContentMode ? { false } : super.isAccessibilityElementBlock }
+        set { super.isAccessibilityElementBlock = isSecureContentMode ? { false } : newValue }
+    }
+
+    override var accessibilityLabelBlock: AXStringReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityLabelBlock }
+        set { super.accessibilityLabelBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityValueBlock: AXStringReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityValueBlock }
+        set { super.accessibilityValueBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityHintBlock: AXStringReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityHintBlock }
+        set { super.accessibilityHintBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityIdentifierBlock: AXStringReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityIdentifierBlock }
+        set { super.accessibilityIdentifierBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityAttributedLabelBlock: AXAttributedStringReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityAttributedLabelBlock }
+        set { super.accessibilityAttributedLabelBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityAttributedValueBlock: AXAttributedStringReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityAttributedValueBlock }
+        set { super.accessibilityAttributedValueBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityAttributedHintBlock: AXAttributedStringReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityAttributedHintBlock }
+        set { super.accessibilityAttributedHintBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityTextualContextBlock: AXTextualContextReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityTextualContextBlock }
+        set { super.accessibilityTextualContextBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityUserInputLabelsBlock: AXStringArrayReturnBlock? {
+        get { isSecureContentMode ? { [] } : super.accessibilityUserInputLabelsBlock }
+        set { super.accessibilityUserInputLabelsBlock = isSecureContentMode ? { [] } : newValue }
+    }
+
+    override var accessibilityAttributedUserInputLabelsBlock: AXAttributedStringArrayReturnBlock? {
+        get { isSecureContentMode ? { [] } : super.accessibilityAttributedUserInputLabelsBlock }
+        set {
+            super.accessibilityAttributedUserInputLabelsBlock = isSecureContentMode ? { [] } : newValue
+        }
+    }
+
+    override var accessibilityElementsHiddenBlock: AXBoolReturnBlock? {
+        get { isSecureContentMode ? { true } : super.accessibilityElementsHiddenBlock }
+        set { super.accessibilityElementsHiddenBlock = isSecureContentMode ? { true } : newValue }
+    }
+
+    override var accessibilityElementsBlock: AXArrayReturnBlock? {
+        get { isSecureContentMode ? { [] } : super.accessibilityElementsBlock }
+        set { super.accessibilityElementsBlock = isSecureContentMode ? { [] } : newValue }
+    }
+
+    override var automationElementsBlock: AXArrayReturnBlock? {
+        get { isSecureContentMode ? { [] } : super.automationElementsBlock }
+        set { super.automationElementsBlock = isSecureContentMode ? { [] } : newValue }
+    }
+
+    override var accessibilityPreviousTextNavigationElement: Any? {
+        get { isSecureContentMode ? nil : super.accessibilityPreviousTextNavigationElement }
+        set { super.accessibilityPreviousTextNavigationElement = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityNextTextNavigationElement: Any? {
+        get { isSecureContentMode ? nil : super.accessibilityNextTextNavigationElement }
+        set { super.accessibilityNextTextNavigationElement = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityPreviousTextNavigationElementBlock: AXObjectReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityPreviousTextNavigationElementBlock }
+        set { super.accessibilityPreviousTextNavigationElementBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityNextTextNavigationElementBlock: AXObjectReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityNextTextNavigationElementBlock }
+        set { super.accessibilityNextTextNavigationElementBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override var accessibilityTextInputResponder: (any UITextInput)? {
+        get { isSecureContentMode ? nil : super.accessibilityTextInputResponder }
+        set { super.accessibilityTextInputResponder = isSecureContentMode ? nil : newValue }
+    }
+
+    override var accessibilityTextInputResponderBlock: AXUITextInputReturnBlock? {
+        get { isSecureContentMode ? { nil } : super.accessibilityTextInputResponderBlock }
+        set { super.accessibilityTextInputResponderBlock = isSecureContentMode ? { nil } : newValue }
+    }
+
+    override func accessibilityHitTest(_ point: CGPoint, event: UIEvent?) -> Any? {
+        guard !isSecureContentMode else { return nil }
+        return super.accessibilityHitTest(point, event: event)
+    }
+
+    override func accessibilityElementCount() -> Int {
+        isSecureContentMode ? 0 : super.accessibilityElementCount()
+    }
+
+    override func accessibilityElement(at index: Int) -> Any? {
+        guard !isSecureContentMode else { return nil }
+        return super.accessibilityElement(at: index)
+    }
+
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        guard !isSecureContentMode else { return NSNotFound }
+        return super.index(ofAccessibilityElement: element)
+    }
+
+    override var accessibilityElements: [Any]? {
+        get { isSecureContentMode ? [] : super.accessibilityElements }
+        set { super.accessibilityElements = isSecureContentMode ? [] : newValue }
+    }
+
+    override var automationElements: [Any]? {
+        get { isSecureContentMode ? [] : super.automationElements }
+        set { super.automationElements = isSecureContentMode ? [] : newValue }
+    }
+
     override var accessibilityAttributedLabel: NSAttributedString? {
         get { isSecureContentMode ? nil : super.accessibilityAttributedLabel }
         set { super.accessibilityAttributedLabel = isSecureContentMode ? nil : newValue }
@@ -174,6 +316,7 @@ final class SecureSnippetTextView: UITextView {
         guard isSecureContentMode else {
             return super.canPerformAction(action, withSender: sender)
         }
+        guard permitsSecureTextMutation else { return false }
         let name = NSStringFromSelector(action)
         guard Self.secureAllowedActions.contains(name) else { return false }
         return super.canPerformAction(action, withSender: sender)
@@ -187,6 +330,88 @@ final class SecureSnippetTextView: UITextView {
     override func cut(_ sender: Any?) {
         guard !isSecureContentMode else { return }
         super.cut(sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard permitsSecureTextMutation else { return }
+        super.paste(sender)
+    }
+
+    override func delete(_ sender: Any?) {
+        guard permitsSecureTextMutation else { return }
+        super.delete(sender)
+    }
+
+    override func insertText(_ text: String) {
+        guard permitsSecureTextMutation else { return }
+        super.insertText(text)
+    }
+
+    override func deleteBackward() {
+        guard permitsSecureTextMutation else { return }
+        super.deleteBackward()
+    }
+
+    override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+        guard permitsSecureTextMutation else { return }
+        super.setMarkedText(markedText, selectedRange: selectedRange)
+    }
+
+    override func replace(_ range: UITextRange, withText text: String) {
+        guard permitsSecureTextMutation else { return }
+        super.replace(range, withText: text)
+    }
+
+    override func insertDictationResult(_ dictationResult: [UIDictationPhrase]) {
+        guard permitsSecureTextMutation else { return }
+        super.insertDictationResult(dictationResult)
+    }
+
+    override func insertText(
+        _ text: String,
+        alternatives: [String],
+        style: UITextAlternativeStyle
+    ) {
+        guard permitsSecureTextMutation else { return }
+        super.insertText(text, alternatives: alternatives, style: style)
+    }
+
+    override func setAttributedMarkedText(
+        _ markedText: NSAttributedString?,
+        selectedRange: NSRange
+    ) {
+        guard permitsSecureTextMutation else { return }
+        super.setAttributedMarkedText(markedText, selectedRange: selectedRange)
+    }
+
+    override func insertAttributedText(_ string: NSAttributedString) {
+        guard permitsSecureTextMutation else { return }
+        super.insertAttributedText(string)
+    }
+
+    override func replace(
+        _ range: UITextRange,
+        withAttributedText attributedText: NSAttributedString
+    ) {
+        guard permitsSecureTextMutation else { return }
+        super.replace(range, withAttributedText: attributedText)
+    }
+
+    override func insertTextPlaceholder(with size: CGSize) -> UITextPlaceholder {
+        // There is no nullable result. When secure mutation is paused, create the
+        // framework placeholder and immediately remove it before returning the
+        // now-inert token so no placeholder reaches text storage.
+        let placeholder = super.insertTextPlaceholder(with: size)
+        guard permitsSecureTextMutation else {
+            super.remove(placeholder)
+            return placeholder
+        }
+        return placeholder
+    }
+
+    override func remove(_ textPlaceholder: UITextPlaceholder) {
+        guard permitsSecureTextMutation else { return }
+        super.remove(textPlaceholder)
     }
 
     override func didMoveToWindow() {
@@ -212,6 +437,10 @@ final class SecureSnippetTextView: UITextView {
     override var text: String! {
         didSet {
             guard !isChangingSecureStorage else { return }
+            if isSecureContentMode, !permitsSecureTextMutation {
+                replaceTextStorage(with: "")
+                return
+            }
             invalidateSecureCaptureRenderer()
         }
     }
@@ -219,6 +448,10 @@ final class SecureSnippetTextView: UITextView {
     override var attributedText: NSAttributedString! {
         didSet {
             guard !isChangingSecureStorage else { return }
+            if isSecureContentMode, !permitsSecureTextMutation {
+                replaceTextStorage(with: "")
+                return
+            }
             invalidateSecureCaptureRenderer()
         }
     }
@@ -239,6 +472,8 @@ final class SecureSnippetTextView: UITextView {
         isSecureContentMode = true
         secureCapturePhase = .protectedRedaction
         securePlaintextIsLoaded = false
+        secureEditingIsAuthorized = false
+        securePlaintextAcceptanceIsAuthorized = false
 
         guard secureCaptureRenderer.arm() else { return false }
         replaceTextStorage(with: "")
@@ -254,6 +489,8 @@ final class SecureSnippetTextView: UITextView {
         }
         replaceTextStorage(with: "")
         securePlaintextIsLoaded = false
+        secureEditingIsAuthorized = false
+        securePlaintextAcceptanceIsAuthorized = false
         secureCaptureRenderer.clear(keepFallbackVisible: false)
         secureCapturePhase = .ordinary
         isSecureContentMode = false
@@ -266,9 +503,28 @@ final class SecureSnippetTextView: UITextView {
     /// healthy, already-attached protected renderer.
     var canAcceptSecurePlaintext: Bool {
         secureCapturePhase == .protectedRedaction
+            && securePlaintextAcceptanceIsAuthorized
+            && attachedSceneIsForegroundActive
             && currentSceneCaptureState == .inactive
             && secureCaptureRenderer.captureProtectionEnabledForInspection
             && secureCaptureRenderer.displayLayerIsAttachedForInspection
+    }
+
+    var permitsSecureTextMutation: Bool {
+        !isSecureContentMode
+            || (secureCapturePhase == .protectedPlaintext && secureEditingIsAuthorized)
+    }
+
+    var secureSceneCaptureState: UISceneCaptureState { currentSceneCaptureState }
+
+    func setSecureEditingAuthorized(_ authorized: Bool) {
+        secureEditingIsAuthorized = authorized
+            && isSecureContentMode
+            && secureCapturePhase == .protectedPlaintext
+    }
+
+    func setSecurePlaintextAcceptanceAuthorized(_ authorized: Bool) {
+        securePlaintextAcceptanceIsAuthorized = authorized && isSecureContentMode
     }
 
     @discardableResult
@@ -283,11 +539,14 @@ final class SecureSnippetTextView: UITextView {
 
     /// Redacts and clears a revealed body. `notifyOwner` is false when the owner
     /// has already persisted it, such as the vault-will-lock path.
-    func redactAndClearSecurePlaintext(notifyOwner: Bool = false) {
-        guard isSecureContentMode else { return }
+    @discardableResult
+    func redactAndClearSecurePlaintext(notifyOwner: Bool = false) -> String? {
+        guard isSecureContentMode else { return nil }
         let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
+        secureEditingIsAuthorized = false
+        securePlaintextAcceptanceIsAuthorized = false
         if secureCapturePhase == .protectedPlaintext {
-            guard secureCaptureRenderer.renderRedaction() else { return }
+            guard secureCaptureRenderer.renderRedaction() else { return nil }
         }
         secureCapturePhase = .protectedRedaction
         securePlaintextIsLoaded = false
@@ -295,6 +554,7 @@ final class SecureSnippetTextView: UITextView {
         if notifyOwner, let plaintext {
             onSecureCaptureForcedRedaction?(plaintext, .sceneCapture)
         }
+        return plaintext
     }
 
     func invalidateSecureCaptureRenderer() {
@@ -320,6 +580,10 @@ final class SecureSnippetTextView: UITextView {
     func setSceneCaptureStateForTesting(_ state: UISceneCaptureState?) {
         sceneCaptureStateOverrideForTesting = state
         reevaluateSceneCaptureState()
+    }
+
+    func setSecureForegroundActiveForTesting(_ active: Bool?) {
+        secureForegroundActiveOverrideForTesting = active
     }
 
     func renderSecureFrameForInspection(
@@ -348,15 +612,27 @@ final class SecureSnippetTextView: UITextView {
         sceneCaptureStateOverrideForTesting ?? traitCollection.sceneCaptureState
     }
 
+    private var attachedSceneIsForegroundActive: Bool {
+        if let secureForegroundActiveOverrideForTesting {
+            return secureForegroundActiveOverrideForTesting
+        }
+        return window?.windowScene?.activationState == .foregroundActive
+            && UIApplication.shared.applicationState == .active
+    }
+
     private func reevaluateSceneCaptureState() {
-        guard secureCapturePhase == .protectedPlaintext,
-              currentSceneCaptureState != .inactive else { return }
-        let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
-        guard secureCaptureRenderer.renderRedaction() else { return }
-        secureCapturePhase = .protectedRedaction
-        securePlaintextIsLoaded = false
-        replaceTextStorage(with: "")
-        onSecureCaptureForcedRedaction?(plaintext, .sceneCapture)
+        let state = currentSceneCaptureState
+        if secureCapturePhase == .protectedPlaintext, state != .inactive {
+            let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
+            secureEditingIsAuthorized = false
+            securePlaintextAcceptanceIsAuthorized = false
+            guard secureCaptureRenderer.renderRedaction() else { return }
+            secureCapturePhase = .protectedRedaction
+            securePlaintextIsLoaded = false
+            replaceTextStorage(with: "")
+            onSecureCaptureForcedRedaction?(plaintext, .sceneCapture)
+        }
+        onSecureSceneCaptureStateChanged?(state)
     }
 
     private func secureCaptureRendererDidFail() {
@@ -364,6 +640,8 @@ final class SecureSnippetTextView: UITextView {
         let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
         secureCapturePhase = .failedClosed
         securePlaintextIsLoaded = false
+        secureEditingIsAuthorized = false
+        securePlaintextAcceptanceIsAuthorized = false
         replaceTextStorage(with: "")
         onSecureCaptureForcedRedaction?(plaintext, .rendererFailure)
     }
@@ -403,12 +681,35 @@ final class SecureSnippetTextView: UITextView {
             super.accessibilityLabel = nil
             super.accessibilityValue = nil
             super.accessibilityHint = nil
+            super.accessibilityIdentifier = nil
             super.accessibilityAttributedLabel = nil
             super.accessibilityAttributedValue = nil
             super.accessibilityAttributedHint = nil
             super.accessibilityUserInputLabels = []
             super.accessibilityAttributedUserInputLabels = []
             super.accessibilityTextualContext = nil
+            super.isAccessibilityElementBlock = { false }
+            super.accessibilityLabelBlock = { nil }
+            super.accessibilityValueBlock = { nil }
+            super.accessibilityHintBlock = { nil }
+            super.accessibilityIdentifierBlock = { nil }
+            super.accessibilityAttributedLabelBlock = { nil }
+            super.accessibilityAttributedValueBlock = { nil }
+            super.accessibilityAttributedHintBlock = { nil }
+            super.accessibilityTextualContextBlock = { nil }
+            super.accessibilityUserInputLabelsBlock = { [] }
+            super.accessibilityAttributedUserInputLabelsBlock = { [] }
+            super.accessibilityElementsHiddenBlock = { true }
+            super.accessibilityElements = []
+            super.automationElements = []
+            super.accessibilityElementsBlock = { [] }
+            super.automationElementsBlock = { [] }
+            super.accessibilityPreviousTextNavigationElement = nil
+            super.accessibilityNextTextNavigationElement = nil
+            super.accessibilityPreviousTextNavigationElementBlock = { nil }
+            super.accessibilityNextTextNavigationElementBlock = { nil }
+            super.accessibilityTextInputResponder = nil
+            super.accessibilityTextInputResponderBlock = { nil }
             autocapitalizationType = .none
             autocorrectionType = .no
             spellCheckingType = .no
@@ -429,8 +730,28 @@ final class SecureSnippetTextView: UITextView {
         } else {
             super.isAccessibilityElement = ordinaryIsAccessibilityElement
             super.accessibilityElementsHidden = ordinaryAccessibilityElementsHidden
+            super.accessibilityIdentifier = ordinaryAccessibilityIdentifier
             super.accessibilityUserInputLabels = nil
             super.accessibilityAttributedUserInputLabels = nil
+            super.isAccessibilityElementBlock = nil
+            super.accessibilityLabelBlock = nil
+            super.accessibilityValueBlock = nil
+            super.accessibilityHintBlock = nil
+            super.accessibilityIdentifierBlock = nil
+            super.accessibilityAttributedLabelBlock = nil
+            super.accessibilityAttributedValueBlock = nil
+            super.accessibilityAttributedHintBlock = nil
+            super.accessibilityTextualContextBlock = nil
+            super.accessibilityUserInputLabelsBlock = nil
+            super.accessibilityAttributedUserInputLabelsBlock = nil
+            super.accessibilityElementsHiddenBlock = nil
+            super.accessibilityElements = nil
+            super.automationElements = nil
+            super.accessibilityElementsBlock = nil
+            super.automationElementsBlock = nil
+            super.accessibilityPreviousTextNavigationElementBlock = nil
+            super.accessibilityNextTextNavigationElementBlock = nil
+            super.accessibilityTextInputResponderBlock = nil
             autocapitalizationType = .sentences
             autocorrectionType = .default
             spellCheckingType = .default
@@ -462,12 +783,15 @@ final class SecureBodyAccessibilityNoticeView: UIView {
     enum State {
         case hidden
         case locked
+        case authenticatedRedacted
         case visuallyRevealed
     }
 
     static let protectedLabel = "Protected secure snippet body"
     static let lockedValue =
         "Use Reveal Secure Content to show it visually. The text is unavailable to accessibility."
+    static let authenticatedValue =
+        "Authenticated. Hover over the editor or hold to show it visually. The text is unavailable to accessibility."
     static let revealedValue =
         "Content is shown visually. The text remains unavailable to accessibility."
 
@@ -507,6 +831,12 @@ final class SecureBodyAccessibilityNoticeView: UIView {
             accessibilityElementsHidden = false
             accessibilityLabel = Self.protectedLabel
             accessibilityValue = Self.lockedValue
+            accessibilityHint = nil
+        case .authenticatedRedacted:
+            isAccessibilityElement = true
+            accessibilityElementsHidden = false
+            accessibilityLabel = Self.protectedLabel
+            accessibilityValue = Self.authenticatedValue
             accessibilityHint = nil
         case .visuallyRevealed:
             isAccessibilityElement = true

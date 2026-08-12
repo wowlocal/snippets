@@ -439,13 +439,33 @@ final class SecureRemediationTests: XCTestCase {
     }
 
     func testSecureTextViewBlocksAmbientDisclosureAndRecoveryClipboardIsLocalAndExpiring() {
-        let textView = SecureSnippetTextView()
+        let textView = SecureSnippetTextView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 180))
         let ordinaryIsAccessibilityElement = textView.isAccessibilityElement
         let ordinaryAccessibilityElementsHidden = textView.accessibilityElementsHidden
         textView.accessibilityLabel = "Ordinary snippet content"
         textView.accessibilityUserInputLabels = ["Ordinary body input"]
-        textView.isSecureContentMode = true
-        textView.text = "SECURE-BODY-AX-SENTINEL"
+        textView.accessibilityIdentifier = "ordinary-snippet-content"
+        let forwardingTextInput = UITextView()
+        textView.accessibilityValueBlock = { "SECURE-BODY-AX-SENTINEL" }
+        textView.accessibilityAttributedValueBlock = {
+            NSAttributedString(string: "SECURE-BODY-AX-SENTINEL")
+        }
+        textView.accessibilityUserInputLabelsBlock = { ["SECURE-BODY-AX-SENTINEL"] }
+        textView.accessibilityTextualContextBlock = { .sourceCode }
+        textView.accessibilityElementsBlock = { [forwardingTextInput] }
+        textView.automationElementsBlock = { [forwardingTextInput] }
+        textView.accessibilityTextInputResponder = forwardingTextInput
+        textView.accessibilityTextInputResponderBlock = { forwardingTextInput }
+        textView.accessibilityPreviousTextNavigationElement = forwardingTextInput
+        textView.accessibilityNextTextNavigationElement = forwardingTextInput
+        textView.accessibilityPreviousTextNavigationElementBlock = { forwardingTextInput }
+        textView.accessibilityNextTextNavigationElementBlock = { forwardingTextInput }
+        textView.setSceneCaptureStateForTesting(.inactive)
+        textView.setSecureForegroundActiveForTesting(true)
+        XCTAssertTrue(textView.bindSecureRedacted())
+        textView.setSecurePlaintextAcceptanceAuthorized(true)
+        XCTAssertTrue(textView.displaySecurePlaintext("SECURE-BODY-AX-SENTINEL"))
 
         // A visual reveal must not make the UIKit text storage queryable through
         // accessibility. Later assignments are redacted as well as the transition.
@@ -470,12 +490,41 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertNil(textView.accessibilityLabel)
         XCTAssertNil(textView.accessibilityValue)
         XCTAssertNil(textView.accessibilityHint)
+        XCTAssertNil(textView.accessibilityIdentifier)
         XCTAssertNil(textView.accessibilityAttributedLabel)
         XCTAssertNil(textView.accessibilityAttributedValue)
         XCTAssertNil(textView.accessibilityAttributedHint)
         XCTAssertEqual(textView.accessibilityUserInputLabels ?? [], [])
         XCTAssertEqual(textView.accessibilityAttributedUserInputLabels ?? [], [])
         XCTAssertNil(textView.accessibilityTextualContext)
+        XCTAssertFalse(textView.isAccessibilityElementBlock?() ?? true)
+        XCTAssertNil(textView.accessibilityLabelBlock?())
+        XCTAssertNil(textView.accessibilityValueBlock?())
+        XCTAssertNil(textView.accessibilityHintBlock?())
+        XCTAssertNil(textView.accessibilityIdentifierBlock?())
+        XCTAssertNil(textView.accessibilityAttributedLabelBlock?())
+        XCTAssertNil(textView.accessibilityAttributedValueBlock?())
+        XCTAssertNil(textView.accessibilityAttributedHintBlock?())
+        XCTAssertNil(textView.accessibilityTextualContextBlock?())
+        XCTAssertEqual(textView.accessibilityUserInputLabelsBlock?() ?? [], [])
+        XCTAssertEqual(textView.accessibilityAttributedUserInputLabelsBlock?() ?? [], [])
+        XCTAssertTrue(textView.accessibilityElementsHiddenBlock?() ?? false)
+        XCTAssertTrue((textView.accessibilityElementsBlock?() ?? []).isEmpty)
+        XCTAssertTrue((textView.automationElementsBlock?() ?? []).isEmpty)
+        XCTAssertTrue((textView.accessibilityElements ?? []).isEmpty)
+        XCTAssertTrue((textView.automationElements ?? []).isEmpty)
+        XCTAssertEqual(textView.accessibilityElementCount(), 0)
+        XCTAssertNil(textView.accessibilityElement(at: 0))
+        XCTAssertEqual(
+            textView.index(ofAccessibilityElement: forwardingTextInput),
+            NSNotFound)
+        XCTAssertNil(textView.accessibilityPreviousTextNavigationElement)
+        XCTAssertNil(textView.accessibilityNextTextNavigationElement)
+        XCTAssertNil(textView.accessibilityPreviousTextNavigationElementBlock?())
+        XCTAssertNil(textView.accessibilityNextTextNavigationElementBlock?())
+        XCTAssertNil(textView.accessibilityTextInputResponder)
+        XCTAssertNil(textView.accessibilityTextInputResponderBlock?())
+        XCTAssertNil(textView.accessibilityHitTest(.zero, event: nil))
 
         for selectorName in [
             "copy:", "cut:", "undo:", "redo:", "_share:", "_define:", "translate:"
@@ -492,7 +541,7 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertFalse(textView.isFindInteractionEnabled)
         XCTAssertFalse(AppDelegate.allowsExtensionPoint(.keyboard))
 
-        textView.isSecureContentMode = false
+        textView.bindOrdinaryText("")
         XCTAssertEqual(
             textView.text,
             "",
@@ -501,6 +550,7 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertEqual(
             textView.accessibilityElementsHidden,
             ordinaryAccessibilityElementsHidden)
+        XCTAssertEqual(textView.accessibilityIdentifier, "ordinary-snippet-content")
         textView.text = "ordinary body"
         textView.accessibilityLabel = "Snippet content"
         XCTAssertEqual(textView.text, "ordinary body")
@@ -536,6 +586,11 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertEqual(
             notice.accessibilityValue,
             SecureBodyAccessibilityNoticeView.lockedValue)
+
+        notice.state = .authenticatedRedacted
+        XCTAssertEqual(
+            notice.accessibilityValue,
+            SecureBodyAccessibilityNoticeView.authenticatedValue)
 
         notice.state = .visuallyRevealed
         XCTAssertEqual(

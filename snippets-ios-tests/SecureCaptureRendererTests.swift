@@ -33,6 +33,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertTrue(textView.secureCaptureLayerAttachedForInspection)
         XCTAssertFalse(textView.secureCapturePreventsDisplaySleepForInspection)
 
+        textView.setSecurePlaintextAcceptanceAuthorized(true)
         XCTAssertTrue(textView.displaySecurePlaintext("upright secure raster"))
         XCTAssertEqual(textView.secureCapturePhase, .protectedPlaintext)
         let frame = try XCTUnwrap(textView.renderSecureFrameForInspection(plaintext: true))
@@ -46,6 +47,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         let textView = makeTextView()
         textView.setSceneCaptureStateForTesting(.inactive)
         XCTAssertTrue(textView.bindSecureRedacted())
+        textView.setSecurePlaintextAcceptanceAuthorized(true)
         XCTAssertTrue(textView.displaySecurePlaintext("old secure body"))
 
         textView.bindOrdinaryText("ordinary body")
@@ -63,6 +65,7 @@ final class SecureCaptureRendererTests: XCTestCase {
             textView.setSceneCaptureStateForTesting(.inactive)
             XCTAssertTrue(textView.bindSecureRedacted())
             let sentinel = "secure-\(state.rawValue)"
+            textView.setSecurePlaintextAcceptanceAuthorized(true)
             XCTAssertTrue(textView.displaySecurePlaintext(sentinel))
 
             var callback: (String?, SecureSnippetForcedRedactionReason)?
@@ -81,6 +84,7 @@ final class SecureCaptureRendererTests: XCTestCase {
 
     private func makeTextView() -> SecureSnippetTextView {
         let textView = SecureSnippetTextView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        textView.setSecureForegroundActiveForTesting(true)
         textView.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
         textView.backgroundColor = .clear
         textView.secureCaptureBackgroundColor = .black
