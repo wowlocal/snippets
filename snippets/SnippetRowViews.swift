@@ -274,6 +274,10 @@ class SnippetTableRowView: NSTableRowView {
     /// Vertical inset of the highlight pill inside the row.
     var highlightVerticalInset: CGFloat { 1 }
 
+    /// The floating suggestion panel never becomes key, but its selected row still
+    /// needs an outline because it has no inactive-window state of its own.
+    var drawsSelectionBorderWhenWindowInactive: Bool { false }
+
     override var isEmphasized: Bool {
         get { false }
         set {}
@@ -293,11 +297,33 @@ class SnippetTableRowView: NSTableRowView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         addSubview(highlightView, positioned: .below, relativeTo: nil)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowKeyStatusDidChange(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowKeyStatusDidChange(_:)),
+            name: NSWindow.didResignKeyNotification,
+            object: nil
+        )
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateHighlight()
     }
 
     override func layout() {
@@ -351,6 +377,12 @@ class SnippetTableRowView: NSTableRowView {
         isHovering = bounds.contains(mouseInView)
     }
 
+    @objc private func windowKeyStatusDidChange(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        syncHoverWithMouseLocation()
+        updateHighlight()
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
         // The layer-backed highlight subview paints this without the jagged legacy
         // `NSBezierPath.stroke()` edge.
@@ -362,7 +394,12 @@ class SnippetTableRowView: NSTableRowView {
     }
 
     private func updateHighlight() {
-        highlightView.update(isSelected: isSelected, isHovering: isHovering)
+        let windowIsActive = window?.isKeyWindow != false
+        highlightView.update(
+            isSelected: isSelected,
+            isHovering: isHovering,
+            drawsSelectionBorder: windowIsActive || drawsSelectionBorderWhenWindowInactive
+        )
     }
 }
 
@@ -373,6 +410,8 @@ class SnippetTableRowView: NSTableRowView {
 /// paint the unemphasized grey bar — a flat opaque smear across translucent glass.
 /// The table runs `selectionHighlightStyle = .none` and this view paints instead.
 final class SuggestionTableRowView: SnippetTableRowView {
+    override var drawsSelectionBorderWhenWindowInactive: Bool { true }
+
     /// Concentric with the glass surface: the pill's corner arc and the panel's
     /// share a centre, so the gap around the pill is even on every side.
     override var highlightHorizontalInset: CGFloat {

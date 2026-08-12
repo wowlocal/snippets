@@ -342,6 +342,7 @@ enum LiquidGlassDesign {
 final class RowHighlightView: NSView {
     private(set) var isSelected = false
     private(set) var isHovering = false
+    private(set) var drawsSelectionBorder = true
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -366,10 +367,17 @@ final class RowHighlightView: NSView {
         applyStyle()
     }
 
-    func update(isSelected: Bool, isHovering: Bool) {
-        guard self.isSelected != isSelected || self.isHovering != isHovering else { return }
+    func update(
+        isSelected: Bool,
+        isHovering: Bool,
+        drawsSelectionBorder: Bool = true
+    ) {
+        guard self.isSelected != isSelected
+            || self.isHovering != isHovering
+            || self.drawsSelectionBorder != drawsSelectionBorder else { return }
         self.isSelected = isSelected
         self.isHovering = isHovering
+        self.drawsSelectionBorder = drawsSelectionBorder
         applyStyle()
     }
 
@@ -385,7 +393,7 @@ final class RowHighlightView: NSView {
         )
         layer?.backgroundColor = resolvedCGColor(fillColor)
 
-        if isSelected {
+        if isSelected && drawsSelectionBorder {
             let strokeColor = LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark)
             layer?.borderWidth = LiquidGlassDesign.Metrics.hairlineWidth
             layer?.borderColor = resolvedCGColor(strokeColor)
