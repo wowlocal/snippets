@@ -398,7 +398,9 @@ final class SyncLifecycleTests: XCTestCase {
         UserDefaults.standard.set(
             "stale-fingerprint", forKey: Self.wireKeyFingerprintDefaultsKey)
         let transport = SyncLifecycleTransport(accountIdentity: accountIdentity)
-        let coordinator = makeCoordinatorForRekeyTests(transport: transport)
+        let coordinator = makeCoordinatorForRekeyTests(
+            transport: transport,
+            liveEnvelopes: [ordinary, secure])
         defer { coordinator.setEnabled(false) }
 
         // `requestSync` owns the startup round completion. The transport reset is async;
@@ -495,7 +497,9 @@ final class SyncLifecycleTests: XCTestCase {
                     for: account,
                     allowsZoneBootstrap: false)
             })
-        let coordinator = makeCoordinatorForRekeyTests(transport: transport)
+        let coordinator = makeCoordinatorForRekeyTests(
+            transport: transport,
+            liveEnvelopes: [confirmed])
         defer { coordinator.setEnabled(false) }
 
         let result = await coordinator.requestSync(trigger: .manual)
@@ -677,14 +681,15 @@ final class SyncLifecycleTests: XCTestCase {
     }
 
     private func makeCoordinatorForRekeyTests(
-        transport: SyncLifecycleTransport = SyncLifecycleTransport()
+        transport: SyncLifecycleTransport = SyncLifecycleTransport(),
+        liveEnvelopes: [SyncEnvelope] = []
     ) -> SyncCoordinator {
         let keychain = KeychainSecretStore(
             tier: .deviceOnly,
             service: "com.khm.snippets.sync-lifecycle-tests.\(UUID().uuidString.lowercased())",
             inMemory: true)
         return SyncCoordinator(
-            library: EmptySyncLibrary(),
+            library: SnapshotSyncLibrary(liveEnvelopes),
             keys: SyncKeyStore(keychain: keychain),
             device: "aaaaaaa1",
             transportFactory: { transport })
@@ -697,6 +702,37 @@ final class SyncLifecycleTests: XCTestCase {
         }
         return condition()
     }
+}
+
+@MainActor
+private final class SnapshotSyncLibrary: SyncLibraryAccess {
+    private var envelopes: [UUID: SyncEnvelope]
+
+    init(_ envelopes: [SyncEnvelope]) {
+        self.envelopes = Dictionary(uniqueKeysWithValues: envelopes.map { ($0.id, $0) })
+    }
+
+    func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {
+        envelopes
+    }
+
+    func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification {
+        RemoteClassification(
+            applicable: envelopes, deferredIDs: [], incompatibleVaultIDs: [])
+    }
+
+    func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome {
+        for envelope in envelopes {
+            if envelope.deleted {
+                self.envelopes[envelope.id] = nil
+            } else {
+                self.envelopes[envelope.id] = envelope
+            }
+        }
+        return ApplyOutcome(changedIDs: envelopes.map(\.id))
+    }
+
+    func liveIDs() -> Set<UUID> { Set(envelopes.keys) }
 }
 
 @MainActor

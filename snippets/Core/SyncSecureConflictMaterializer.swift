@@ -18,6 +18,9 @@ nonisolated enum SyncSecureConflictMaterializer {
     struct Result: Equatable {
         var records: [VaultRecord]
         var materializedIDs: [UUID]
+        /// Exact carrier-derived C0 records. Unlike `records`, this is independent of a
+        /// later local C1/tombstone occupant and can be frozen in the dependency journal.
+        var evidenceRecords: [VaultRecord]
     }
 
     static let provenanceExtensionKey = "conflictCopy.v1"
@@ -38,6 +41,7 @@ nonisolated enum SyncSecureConflictMaterializer {
         }
         var records = existingRecords
         var materialized: [UUID] = []
+        var evidenceRecords: [VaultRecord] = []
 
         for variant in variants {
             guard variant.sourceExtensions[SyncEnvelope.vaultKeyIDExtensionKey]?.text
@@ -74,7 +78,6 @@ nonisolated enum SyncSecureConflictMaterializer {
                     recordID: existing.id,
                     vaultKID: vaultKID,
                     keyring: keyring)
-                continue
             }
 
             var plaintext = try SnippetCrypto.open(
@@ -106,13 +109,44 @@ nonisolated enum SyncSecureConflictMaterializer {
                 contentHash: expectedHash,
                 sealed: resealed,
                 x: [provenanceExtensionKey: provenance])
-            records.append(copy)
-            materialized.append(copy.id)
+            evidenceRecords.append(copy)
+            if existingCopies.isEmpty {
+                records.append(copy)
+                materialized.append(copy.id)
+            }
         }
 
         return Result(
             records: records,
-            materializedIDs: materialized.sorted { $0.uuidString < $1.uuidString })
+            materializedIDs: materialized.sorted { $0.uuidString < $1.uuidString },
+            evidenceRecords: evidenceRecords.sorted { $0.id.uuidString < $1.id.uuidString })
+    }
+
+    /// Authenticates carrier snapshots and creates exact C0 records without consulting
+    /// or mutating primary copy occupants. The returned random-nonce ciphertext is the
+    /// one the engine must freeze before the later apply transaction.
+    static func prepareEvidenceRecords(
+        envelopes: [SyncEnvelope],
+        keyring: SnippetCrypto.Keyring,
+        vaultKID: String
+    ) throws -> [VaultRecord] {
+        var evidence: [VaultRecord] = []
+        for envelope in envelopes {
+            let result = try materialize(
+                envelope: envelope,
+                keyring: keyring,
+                vaultKID: vaultKID,
+                existingSnippets: [],
+                existingRecords: [])
+            evidence.append(contentsOf: result.evidenceRecords)
+        }
+        var unique: [UUID: VaultRecord] = [:]
+        for record in evidence {
+            guard unique.updateValue(record, forKey: record.id) == nil else {
+                throw Failure.identifierCollision
+            }
+        }
+        return unique.values.sorted { $0.id.uuidString < $1.id.uuidString }
     }
 
     /// Matching provenance proves which deterministic conflict this id belongs to; it
@@ -122,11 +156,13 @@ nonisolated enum SyncSecureConflictMaterializer {
     static func validateIncomingSecureCopy(
         _ envelope: SyncEnvelope,
         keyring: SnippetCrypto.Keyring,
-        vaultKID: String
+        vaultKID: String,
+        requireVaultStamp: Bool = true
     ) throws {
         guard !envelope.deleted,
               envelope.secure,
-              envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == vaultKID,
+              (!requireVaultStamp
+                || envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == vaultKID),
               let fields = envelope.fields,
               let sealed = String(data: fields.content, encoding: .utf8),
               let expectedHash = envelope.x[
@@ -139,6 +175,41 @@ nonisolated enum SyncSecureConflictMaterializer {
             recordID: envelope.id,
             vaultKID: vaultKID,
             keyring: keyring)
+    }
+
+    /// Verifies that authenticated prepared evidence is the immutable C0 described by
+    /// a carrier variant, not a later valid C1 which copied the same provenance marker.
+    /// Ciphertext is intentionally not compared (C0 sealing uses a random nonce); the
+    /// keyed plaintext hash plus exact derived metadata bind the logical snapshot.
+    static func validatePreparedEvidence(
+        _ evidence: SyncEnvelope,
+        for variant: SyncMerge.SecureContentConflictVariant,
+        keyring: SnippetCrypto.Keyring,
+        vaultKID: String
+    ) throws {
+        try validateIncomingSecureCopy(
+            evidence, keyring: keyring, vaultKID: vaultKID)
+        guard evidence.hlc == variant.sourceHLC,
+              evidence.origin == variant.sourceOrigin,
+              evidence.x[SyncEnvelope.vaultContentHashExtensionKey]
+                == variant.sourceExtensions[SyncEnvelope.vaultContentHashExtensionKey],
+              let fields = evidence.fields else { throw Failure.malformedVariant }
+        let source = variant.fields
+        guard fields.name == conflictName(
+                name: source.name, updatedAt: source.updatedAt),
+              fields.keyword.isEmpty,
+              SnippetTagging.normalizedTags(fields.tags)
+                == SnippetTagging.normalizedTags(source.tags + ["conflict"]),
+              !fields.isEnabled,
+              !fields.isPinned,
+              fields.createdAt == source.createdAt,
+              fields.updatedAt == source.updatedAt,
+              Set(evidence.x.keys) == [
+                SyncEnvelope.vaultContentHashExtensionKey,
+                SyncEnvelope.vaultKeyIDExtensionKey,
+                SyncMerge.plainConflictCopyExtensionKey,
+              ]
+        else { throw Failure.malformedVariant }
     }
 
     private static func authenticate(

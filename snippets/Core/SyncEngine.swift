@@ -2,6 +2,30 @@ import Foundation
 
 // Compiled into the app and the test package — see `Snippet.swift`.
 
+nonisolated extension VaultDocument {
+    /// Sync-aware validation wrapper around the Foundation-only receipt storage. Keep
+    /// this out of VaultDocument.swift: that file also builds in snippets-cli, whose
+    /// safety boundary deliberately excludes SyncEnvelope and CloudKit/sync code.
+    mutating func recordLocalConflictInstallReceipts(
+        for evidence: [SyncEnvelope]
+    ) throws {
+        var additions: [UUID: String] = [:]
+        for envelope in evidence {
+            guard !envelope.deleted,
+                  envelope.secure,
+                  SyncMerge.hasValidConflictCopyIdentity(envelope),
+                  additions.updateValue(
+                    try envelope.envelopeHash(), forKey: envelope.id) == nil
+            else { throw SyncMerge.EnvelopeFailure.malformedContentConflict }
+        }
+        do {
+            try recordLocalConflictInstallReceiptHashes(additions)
+        } catch {
+            throw SyncMerge.EnvelopeFailure.malformedContentConflict
+        }
+    }
+}
+
 /// What `applyRemote` managed to do.
 ///
 /// `deferredIDs` exists because "this Mac cannot file this record *yet*" is a real state
@@ -21,14 +45,54 @@ nonisolated struct ApplyOutcome: Equatable {
     /// Ids whose ciphertext is bound to a different vault and cannot become applicable
     /// without the user resolving the vault identity conflict.
     var incompatibleVaultIDs: [UUID]
+    /// Ids whose primary representation changed after the engine captured its merge
+    /// input. They need a fresh three-way merge, not a vault-key wait or a sticky halt.
+    var retryIDs: [UUID]
+    /// Exact authenticated C0 envelopes derived from secure carrier snapshots. These
+    /// bytes are journal evidence, never fetched/backend confirmation. The engine must
+    /// fsync them before it can advance base or cursor past the carrier batch.
+    var conflictCopyEvidence: [SyncEnvelope]
 
     init(
         changedIDs: [UUID] = [], deferredIDs: [UUID] = [],
-        incompatibleVaultIDs: [UUID] = []
+        incompatibleVaultIDs: [UUID] = [], retryIDs: [UUID] = [],
+        conflictCopyEvidence: [SyncEnvelope] = []
     ) {
         self.changedIDs = changedIDs
         self.deferredIDs = deferredIDs
         self.incompatibleVaultIDs = incompatibleVaultIDs
+        self.retryIDs = retryIDs
+        self.conflictCopyEvidence = conflictCopyEvidence
+    }
+}
+
+/// Exact primary-storage comparison token captured alongside the envelope projection.
+/// Derived sync metadata is deliberately absent: a stale sidecar must never authorize
+/// overwriting a newer snippet/vault write which landed during a network await.
+nonisolated enum SyncPrimaryState: Equatable {
+    case absent
+    case plain(Snippet)
+    case secure(record: VaultRecord, vaultKID: String, vaultSalt: String)
+    case duplicate(
+        snippet: Snippet,
+        record: VaultRecord,
+        vaultKID: String,
+        vaultSalt: String)
+    /// Value-only test libraries do not expose primary files. Their default protocol
+    /// implementation uses this token and retains their existing apply semantics.
+    case projected(SyncEnvelope)
+}
+
+nonisolated struct SyncLibrarySnapshot: Equatable {
+    var envelopes: [UUID: SyncEnvelope]
+    var primaryStates: [UUID: SyncPrimaryState]
+    /// Device-local, primary-atomic receipt keyed by deterministic copy id. The value
+    /// is the exact immutable C0 envelope hash which reached this device's vault file.
+    /// Value-only libraries leave this empty.
+    var installedConflictPrerequisiteHashes: [UUID: String] = [:]
+
+    func primaryState(for id: UUID) -> SyncPrimaryState {
+        primaryStates[id] ?? .absent
     }
 }
 
@@ -48,12 +112,18 @@ nonisolated struct RemoteClassification: Equatable {
 /// this.
 @MainActor
 protocol SyncLibraryAccess: AnyObject {
+    /// Whether this boundary can turn an authenticated secure carrier into a separately
+    /// sealed deterministic vault record. Value-only Core fakes cannot do that safely;
+    /// the production bridge can and opts in explicitly.
+    var supportsSecureConflictMaterialization: Bool { get }
     /// Everything syncable, plaintext and secure, as envelopes ready to seal.
     ///
     /// The engine passes its live ancestor rather than asking the library to re-read
     /// `base.json`. A failed derived-state write must not make the projection forget
     /// secure records the running engine already knows the backend accepted.
     func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope]
+    /// Captures projection and exact primary comparison tokens as one logical read.
+    func currentSnapshot(agreedBase: SyncBase) throws -> SyncLibrarySnapshot
     /// Partitions records before the deletion guard. A deletion the library cannot file
     /// must not count toward a mass-deletion halt, and must not be passed to `applyRemote`.
     func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification
@@ -61,16 +131,115 @@ protocol SyncLibraryAccess: AnyObject {
     /// can replace its source representation. A locked vault may defer the affected
     /// records; it may never apply them and hope a best-effort sidecar survives.
     func prepareRemote(_ envelopes: [SyncEnvelope]) throws -> RemoteClassification
+    /// Pure/key-aware preparation of immutable carrier-derived C0 bytes. The caller
+    /// persists these in the dependency journal before any primary mutation.
+    func prepareConflictCopyEvidence(
+        from envelopes: [SyncEnvelope]
+    ) throws -> [SyncEnvelope]
     /// Applies merged remote state, reporting what changed and what had to wait.
     func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome
+    /// Applies only if every affected primary record still equals the merge input.
+    func applyRemote(
+        _ envelopes: [SyncEnvelope],
+        expectedPrimary: [UUID: SyncPrimaryState]
+    ) throws -> ApplyOutcome
+    /// Applies dependency-held local copy intent after implicit carrier materialization,
+    /// without treating that local value as fetched or backend-confirmed.
+    func applyRemote(
+        _ envelopes: [SyncEnvelope],
+        expectedPrimary: [UUID: SyncPrimaryState],
+        heldConflictCopyIntents: [UUID: SyncEnvelope],
+        preparedConflictCopyEvidence: [SyncEnvelope]
+    ) throws -> ApplyOutcome
+    /// Removes only exact, already-preserved v1 carrier members from the latest primary
+    /// representation. Implementations must preserve every user field and unrelated
+    /// extension, and report a no-op when the expected value no longer matches.
+    func resolveConflictCarriers(
+        _ resolutions: [SyncJournal.ConflictCarrierResolution]
+    ) throws -> ApplyOutcome
+    /// Recovers dependency-owned secure copies from durable carrier snapshots without
+    /// applying or releasing their source. Used before an account/checkpoint reset,
+    /// when the old backend inbox may no longer be available to replay materialisation.
+    func materializeConflictPrerequisites(
+        from sources: [SyncEnvelope],
+        preparedConflictCopyEvidence: [SyncEnvelope],
+        heldConflictCopyIntents: [UUID: SyncEnvelope],
+        expectedPrimary: [UUID: SyncPrimaryState]
+    ) throws -> ApplyOutcome
+    /// Prunes device-local primary-install receipts after (and only after) the journal
+    /// retaining exactly these dependency ids has been made durable.
+    func retainConflictPrerequisiteInstallReceipts(for ids: Set<UUID>) throws
     /// Live ids, for the deletion guard.
     func liveIDs() -> Set<UUID>
 }
 
 @MainActor extension SyncLibraryAccess {
+    var supportsSecureConflictMaterialization: Bool { false }
     func prepareRemote(_ envelopes: [SyncEnvelope]) throws -> RemoteClassification {
         classifyRemote(envelopes)
     }
+
+    func prepareConflictCopyEvidence(
+        from envelopes: [SyncEnvelope]
+    ) throws -> [SyncEnvelope] { [] }
+
+    func currentSnapshot(agreedBase: SyncBase) throws -> SyncLibrarySnapshot {
+        let envelopes = try currentEnvelopes(agreedBase: agreedBase)
+        return SyncLibrarySnapshot(
+            envelopes: envelopes,
+            primaryStates: envelopes.mapValues(SyncPrimaryState.projected),
+            installedConflictPrerequisiteHashes: [:])
+    }
+
+    func applyRemote(
+        _ envelopes: [SyncEnvelope],
+        expectedPrimary: [UUID: SyncPrimaryState]
+    ) throws -> ApplyOutcome {
+        try applyRemote(envelopes)
+    }
+
+    func applyRemote(
+        _ envelopes: [SyncEnvelope],
+        expectedPrimary: [UUID: SyncPrimaryState],
+        heldConflictCopyIntents: [UUID: SyncEnvelope]
+    ) throws -> ApplyOutcome {
+        // Value-only libraries do not materialize implicit secure copies, so there is
+        // no protocol-created primary value for a held intent to supersede here.
+        try applyRemote(envelopes, expectedPrimary: expectedPrimary)
+    }
+
+    func applyRemote(
+        _ envelopes: [SyncEnvelope],
+        expectedPrimary: [UUID: SyncPrimaryState],
+        heldConflictCopyIntents: [UUID: SyncEnvelope],
+        preparedConflictCopyEvidence: [SyncEnvelope]
+    ) throws -> ApplyOutcome {
+        try applyRemote(
+            envelopes,
+            expectedPrimary: expectedPrimary,
+            heldConflictCopyIntents: heldConflictCopyIntents)
+    }
+
+    func resolveConflictCarriers(
+        _ resolutions: [SyncJournal.ConflictCarrierResolution]
+    ) throws -> ApplyOutcome {
+        // Value-only test libraries do not have a frozen primary representation. Apply
+        // the already-conditional latest envelope through their ordinary boundary.
+        try applyRemote(resolutions.map(\.resolvedEnvelope))
+    }
+
+    func materializeConflictPrerequisites(
+        from sources: [SyncEnvelope],
+        preparedConflictCopyEvidence: [SyncEnvelope] = [],
+        heldConflictCopyIntents: [UUID: SyncEnvelope] = [:],
+        expectedPrimary: [UUID: SyncPrimaryState] = [:]
+    ) throws -> ApplyOutcome {
+        // Value-only libraries already hold independent copy envelopes or cannot safely
+        // interpret a secure carrier. Production opts in and overrides this boundary.
+        ApplyOutcome(deferredIDs: sources.map(\.id))
+    }
+
+    func retainConflictPrerequisiteInstallReceipts(for ids: Set<UUID>) throws {}
 }
 
 /// Drives one backend, whatever it is.
@@ -426,6 +595,7 @@ final class SyncEngine {
         var deferred = 0
         var quarantined = 0
         var fullResync = false
+        var retryNeeded = false
     }
 
     @discardableResult
@@ -444,7 +614,25 @@ final class SyncEngine {
         }
         transition(to: .syncing)
         do {
-            let outcome = try await performRound()
+            var outcome = try await performRound()
+            // A primary CAS miss means a writer committed after our merge snapshot.
+            // Re-read and re-merge once immediately so convergence does not depend on
+            // an observer notification surviving/coalescing during this very round.
+            // Bound this to one replay: a continuously active writer must not spin the
+            // main actor, and the normal scheduler will retry the remaining race.
+            if outcome.retryNeeded {
+                let retry = try await performRound()
+                outcome.uploaded += retry.uploaded
+                outcome.downloaded += retry.downloaded
+                outcome.merged += retry.merged
+                // Deferred describes the final retryable state, not work accumulated
+                // across attempts. A key/CAS condition healed by replay must not leave
+                // the UI stuck in waitingForVault.
+                outcome.deferred = retry.deferred
+                outcome.quarantined += retry.quarantined
+                outcome.fullResync = outcome.fullResync || retry.fullResync
+                outcome.retryNeeded = retry.retryNeeded
+            }
             diagnosticRound.uploaded = outcome.uploaded
             diagnosticRound.downloaded = outcome.downloaded
             diagnosticRound.merged = outcome.merged
@@ -523,6 +711,25 @@ final class SyncEngine {
         // independent of payload encryption. Reset the transport-private scheduler
         // before any offer/fetch can observe its old encrypted inbox.
         if base.requiresTransportFullResync {
+            // Maintenance can crash after scrubbing projection/base but before the old
+            // carrier dependency is rewritten. Recover its deterministic copy from the
+            // durable journal before replacing the scheduler that owns the replayable
+            // inbox. This is the same fence used by reviewed resets, but an ordinary
+            // locked-vault state waits rather than creating a sticky safety halt.
+            let recovery = try recoverConflictPrerequisitesBeforeSchedulerReset()
+            guard recovery.deferredIDs.isEmpty,
+                  recovery.incompatibleVaultIDs.isEmpty,
+                  recovery.retryIDs.isEmpty else {
+                round.deferred += recovery.deferredIDs.count
+                round.retryNeeded = !recovery.retryIDs.isEmpty
+                if !recovery.incompatibleVaultIDs.isEmpty {
+                    throw SyncEngineFailure(
+                        reason: .vaultUnreadable,
+                        detail: "a pending conflict prerequisite belongs to a different "
+                            + "secure vault; the local scheduler was not reset")
+                }
+                return round
+            }
             try await transport.resetForLocalFullResync()
             var resetComplete = base
             resetComplete.requiresTransportFullResync = false
@@ -549,6 +756,23 @@ final class SyncEngine {
             try persistBase(established)
         }
 
+        // A previous round may have durably frozen random-nonce C0 evidence and then
+        // crashed before the primary transaction installed it. Repair that boundary
+        // before generic reconciliation can interpret primary absence as user intent,
+        // and before push-first ordering can publish a copy which this device does not
+        // itself retain. Reset paths call the same helper before discarding a scheduler.
+        let preparedRecovery = try recoverFrozenConflictPrerequisitesInPrimary()
+        guard preparedRecovery.deferredIDs.isEmpty,
+              preparedRecovery.incompatibleVaultIDs.isEmpty else {
+            round.deferred += preparedRecovery.deferredIDs.count
+            if !preparedRecovery.incompatibleVaultIDs.isEmpty {
+                throw SyncEngineFailure(
+                    reason: .vaultUnreadable,
+                    detail: "a frozen conflict prerequisite belongs to a different vault")
+            }
+            return round
+        }
+
         // PUSH FIRST, deliberately.
         //
         // Fetching first and applying would rewrite local records before this device's
@@ -558,9 +782,65 @@ final class SyncEngine {
         let current = try library.currentEnvelopes(
             agreedBase: journal.projectionKnowledge(over: base))
         var reconciled = journal
+        do {
+            // A prior conditional source release may have conflicted with an
+            // independently written, byte-identical generation which was persisted to
+            // base before the process died. Retrying the stale CAS forever cannot make
+            // progress; rebase the same immutable release bytes to that authoritative
+            // generation, while keeping the dependency edge until a fresh acceptance.
+            reconciled.rebaseIdenticalSourceOffers(confirmed: base)
+            reconciled.recoverAcceptedPrerequisiteOffers(confirmed: base)
+            try reconciled.reconcileDependencies(
+                current: current,
+                confirmed: base,
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a deterministic conflict-copy identifier is occupied by "
+                    + "unrelated or malformed data; sync stopped without overwriting it")
+        }
         reconciled.reconcile(
             current: current, confirmed: base, deviceID: device, now: now())
         try persistJournal(reconciled)
+
+        let resolutions = journal.carrierResolutions(current: current, confirmed: base)
+        if !resolutions.isEmpty {
+            // Publish the exact cleanup intent before touching primary storage. A crash
+            // before/inside the conditional bridge operation is conservative: the next
+            // primary reread sees the still-present member and reopens the requirement.
+            // Publishing afterwards leaves a crash window in which the stale journal is
+            // the only projection owner and resurrects an already-removed plain carrier.
+            var cleaningJournal = journal
+            try cleaningJournal.beginCarrierResolutions(resolutions)
+            try persistJournal(cleaningJournal)
+            let resolutionOutcome = try library.resolveConflictCarriers(resolutions)
+            guard resolutionOutcome.deferredIDs.isEmpty,
+                  resolutionOutcome.incompatibleVaultIDs.isEmpty else {
+                round.deferred += resolutionOutcome.deferredIDs.count
+                return round
+            }
+            let resolvedCurrent = try library.currentEnvelopes(
+                agreedBase: journal.projectionKnowledge(over: base))
+            var resolvedJournal = journal
+            do {
+                try resolvedJournal.reconcileDependencies(
+                    current: resolvedCurrent,
+                    confirmed: base,
+                    discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+            } catch {
+                throw SyncEngineFailure(
+                    reason: .localLibraryQuarantined,
+                    detail: "resolved conflict dependency state no longer matches its "
+                        + "primary records; sync stopped without overwriting them")
+            }
+            resolvedJournal.reconcile(
+                current: resolvedCurrent,
+                confirmed: base,
+                deviceID: device,
+                now: now())
+            try persistJournal(resolvedJournal)
+        }
         let pending = journal.pending(confirmed: base)
 
         if !pending.isEmpty {
@@ -581,8 +861,7 @@ final class SyncEngine {
                 // The generation belongs to this immutable offer, not merely this id.
                 // A later fetched base may already contain B/V2 while crash replay still
                 // owes old offer A; attaching V2 to A would authorize it to overwrite B.
-                guard let offered = journal.entry(envelope.id)?.offered,
-                      Self.sameVersion(offered.envelope, envelope) else {
+                guard let offered = journal.offeredSnapshot(for: envelope) else {
                     throw SyncEngineFailure(
                         reason: .localLibraryQuarantined,
                         detail: "pending sync state lost its compare-and-swap snapshot")
@@ -685,11 +964,41 @@ final class SyncEngine {
 
             if !acceptedIDs.isEmpty {
                 // Ordering is load-bearing: confirmation reaches durable base.json
-                // before the journal is allowed to forget the offered snapshot.
+                // before the journal is allowed to forget the offered snapshot. A
+                // dependency-owned source is stronger: only this submit response is
+                // an acceptance receipt. A byte-identical value learned by fetch (even
+                // with a newer generation) must never close its copy-before-source edge.
                 try persistBase(nextBase)
                 var acknowledged = journal
                 acknowledged.acknowledge(Array(acceptedIDs), confirmed: base)
                 try persistJournal(acknowledged)
+
+                // Re-read primary storage after the awaited submit. If a carrier was
+                // restored or another conflict enlarged the graph meanwhile, this
+                // receipt belongs to the old epoch and reconcile keeps/reopens it. If
+                // this step crashes, no receipt is persisted: restart retries the exact
+                // source CAS conservatively, which is safe and eventually idempotent.
+                let afterAcceptance = try library.currentEnvelopes(
+                    agreedBase: journal.projectionKnowledge(over: base))
+                var finalized = journal
+                do {
+                    try finalized.reconcileDependencies(
+                        current: afterAcceptance,
+                        confirmed: base,
+                        acceptedSourceIDs: acceptedIDs,
+                        discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+                } catch {
+                    throw SyncEngineFailure(
+                        reason: .localLibraryQuarantined,
+                        detail: "accepted conflict dependency state no longer matches "
+                            + "its primary records; sync stopped without releasing it")
+                }
+                finalized.reconcile(
+                    current: afterAcceptance,
+                    confirmed: base,
+                    deviceID: device,
+                    now: now())
+                try persistJournal(finalized)
             }
 
             // Preserve an accepted prefix before surfacing a terminal result from a
@@ -792,9 +1101,21 @@ final class SyncEngine {
         // Capture edits — especially an absence that means delete — which happened
         // while submit/fetch was suspended. This write precedes remote apply so a crash
         // cannot let the apply erase the only remaining evidence of local intent.
-        let projectedLocal = try library.currentEnvelopes(
+        let localSnapshot = try library.currentSnapshot(
             agreedBase: journal.projectionKnowledge(over: base))
+        let projectedLocal = localSnapshot.envelopes
         var beforeApply = journal
+        do {
+            try beforeApply.reconcileDependencies(
+                current: projectedLocal,
+                confirmed: base,
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a dependency-owned conflict copy changed identity while sync "
+                    + "was waiting for iCloud; no remote value was applied")
+        }
         beforeApply.reconcile(
             current: projectedLocal, confirmed: base, deviceID: device, now: now())
         try persistJournal(beforeApply)
@@ -839,6 +1160,31 @@ final class SyncEngine {
         var localNow = projectedLocal
         let authoritativeIncomingByID = Dictionary(
             uniqueKeysWithValues: incoming.map { ($0.envelope.id, $0.envelope) })
+        do {
+            try journal.validateDependencyOccupants(authoritativeIncomingByID)
+            // A completed dependency can be pruned, but its live deterministic copy
+            // identity remains reserved. Without this guard an unrelated remote value
+            // could inherit the local provenance during merge and become legitimized.
+            let reservedCopies = Array(projectedLocal.values)
+                + journal.entries.values.map(\.desired)
+                + Array(base.envelopes.values)
+            for localCopy in reservedCopies where
+                SyncMerge.hasValidConflictCopyIdentity(localCopy) {
+                guard let remote = authoritativeIncomingByID[localCopy.id],
+                      !remote.deleted else { continue }
+                guard SyncMerge.isMatchingPlainConflictCopy(
+                    remote,
+                    candidate: localCopy)
+                else {
+                    throw SyncMerge.EnvelopeFailure.malformedContentConflict
+                }
+            }
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "an iCloud record occupies a deterministic conflict-copy "
+                    + "identifier; sync stopped before changing either local record")
+        }
 
         // The local files contain live records only. The journal supplies explicit
         // tombstones and may also contain a restamped recreation that the frozen local
@@ -850,6 +1196,7 @@ final class SyncEngine {
             }
         }
         var mergedByID: [UUID: SyncEnvelope] = [:]
+        var dependencyStages: [(source: SyncEnvelope, copies: [SyncEnvelope])] = []
         for remote in incoming {
             let envelope = remote.envelope
             let offered = journal.entry(envelope.id)?.offered?.envelope
@@ -879,6 +1226,12 @@ final class SyncEngine {
             if let resolved = merge.survivor {
                 mergedByID[resolved.id] = resolved
                 localNow[resolved.id] = resolved
+                let hasSecureVariants = try SyncMerge
+                    .secureContentConflictVariants(in: resolved).isEmpty == false
+                if !merge.conflictCopies.isEmpty
+                    || (hasSecureVariants && library.supportsSecureConflictMaterialization) {
+                    dependencyStages.append((resolved, merge.conflictCopies))
+                }
             }
             for copy in merge.conflictCopies {
                 let authoritative = authoritativeIncomingByID[copy.id]
@@ -927,6 +1280,16 @@ final class SyncEngine {
         }
         let merged = mergedByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
 
+        if !dependencyStages.isEmpty {
+            var stagedJournal = journal
+            for stage in dependencyStages {
+                try stagedJournal.stageConflictDependency(
+                    source: stage.source,
+                    conflictCopies: stage.copies)
+            }
+            try persistJournal(stagedJournal)
+        }
+
         // Classify before the circuit breaker: a rival-vault tombstone is not a deletion
         // this library can apply and must not trip a sticky mass-deletion halt.
         let classification = try library.prepareRemote(merged)
@@ -939,14 +1302,75 @@ final class SyncEngine {
         }
 
         try Task.checkCancellation()
-        let outcome = try library.applyRemote(classification.applicable)
+        var expectedPrimary = Dictionary(
+            uniqueKeysWithValues: classification.applicable.map {
+                ($0.id, localSnapshot.primaryState(for: $0.id))
+            })
+        // A carrier source implicitly reads and may create each deterministic copy.
+        // Those derived ids are part of the transaction's read/write set even when no
+        // standalone copy envelope was fetched in this batch. Otherwise a local edit or
+        // deletion between snapshot and apply could be overwritten outside the CAS.
+        for envelope in classification.applicable {
+            for variant in try SyncMerge.secureContentConflictVariants(in: envelope) {
+                expectedPrimary[variant.copyID] = localSnapshot.primaryState(
+                    for: variant.copyID)
+            }
+        }
+        // A dependency may owe immutable C0 to the backend while ordinary local intent
+        // has already advanced to C1 or T. Pass that later value as an explicitly local
+        // post-materialization operation: the bridge applies it inside the SAME primary
+        // transaction, after creating C0 but before explicit fetched C records. It is
+        // never recorded as fetched/confirmed merely because it participated here.
+        let carrierSourceIDs = Set(classification.applicable.compactMap { envelope in
+            (try? SyncMerge.secureContentConflictVariants(in: envelope)).map {
+                $0.isEmpty ? nil : envelope.id
+            } ?? nil
+        })
+        let freshlyPreparedConflictCopyEvidence = try library.prepareConflictCopyEvidence(
+            from: classification.applicable)
+        var preparedConflictCopyEvidence = freshlyPreparedConflictCopyEvidence
+        if !freshlyPreparedConflictCopyEvidence.isEmpty {
+            var evidenceJournal = journal
+            do {
+                try evidenceJournal.recordConflictCopyEvidence(
+                    freshlyPreparedConflictCopyEvidence)
+                // The carrier may arrive alone while primary already contains a
+                // confirmed C1 (notably a plaintext demotion). Now that immutable C0
+                // exists, retain that exact later local generation behind it even when
+                // generic reconciliation had correctly pruned it as base-equal earlier.
+                try evidenceJournal.holdPostPrerequisiteCopyIntents(
+                    Array(projectedLocal.values),
+                    now: now())
+            } catch {
+                throw SyncEngineFailure(
+                    reason: .localLibraryQuarantined,
+                    detail: "prepared conflict-copy evidence did not match its durable dependency")
+            }
+            // This is the critical ordering boundary: exact random-nonce C0 bytes are
+            // durable before the bridge can atomically apply a later C1/tombstone.
+            try persistJournal(evidenceJournal)
+            preparedConflictCopyEvidence = try journal.frozenConflictCopyEvidence(
+                matching: freshlyPreparedConflictCopyEvidence)
+        }
+        // The dependency may have been staged only a few lines above by this fetch.
+        // Compute C1/T from the now-durable graph/evidence, not from the pre-stage
+        // journal which did not yet know that the deterministic id was dependency-owned.
+        let heldConflictCopyIntents = journal.heldConflictCopyIntents(
+            forSourceIDs: carrierSourceIDs)
+        let outcome = try library.applyRemote(
+            classification.applicable,
+            expectedPrimary: expectedPrimary,
+            heldConflictCopyIntents: heldConflictCopyIntents,
+            preparedConflictCopyEvidence: preparedConflictCopyEvidence)
         let deferred = Set(classification.deferredIDs).union(outcome.deferredIDs)
         let incompatible = Set(classification.incompatibleVaultIDs)
             .union(outcome.incompatibleVaultIDs)
-        let unapplied = deferred.union(incompatible)
+        let retry = Set(outcome.retryIDs)
+        let unapplied = deferred.union(incompatible).union(retry)
         round.merged = outcome.changedIDs.count
         round.deferred = deferred.count
         round.fullResync = isFullResync
+        round.retryNeeded = !retry.isEmpty
 
         // The base records what the BACKEND said, not what we merged to. Recording the
         // merged value would make the next diff believe the backend has already seen our
@@ -974,6 +1398,20 @@ final class SyncEngine {
         // `applyRemote` above has already durably written the merged local result M;
         // storing server B here therefore rebases M onto B. On restart the pre-push
         // reconcile derives M-vs-B again before the frozen old journal offer can run.
+        // Preserve explicit C1/tombstone from the same fetched batch before advancing
+        // the base. The dependency is about to overwrite that backend generation with
+        // C0, so equality with the fetched base cannot make the later intent disposable.
+        var postApplyJournal = journal
+        do {
+            try postApplyJournal.holdPostPrerequisiteCopyIntents(
+                classification.applicable,
+                now: now())
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a later conflict-copy generation did not match its durable lineage")
+        }
+        try persistJournal(postApplyJournal)
         try persistBase(nextBase)
 
         // A fetched server value resolves ambiguity for that record. A matching offer
@@ -1008,6 +1446,17 @@ final class SyncEngine {
         // next durable desired state before this round is considered complete.
         let afterApply = try library.currentEnvelopes(
             agreedBase: resolvedJournal.projectionKnowledge(over: base))
+        do {
+            try resolvedJournal.reconcileDependencies(
+                current: afterApply,
+                confirmed: base,
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "applied conflict dependency state no longer matches its primary "
+                    + "records; sync stopped without overwriting them")
+        }
         resolvedJournal.reconcile(
             current: afterApply, confirmed: base, deviceID: device, now: now())
         try persistJournal(resolvedJournal)
@@ -1083,6 +1532,7 @@ final class SyncEngine {
             || !base.envelopes.isEmpty
             || !base.recordVersions.isEmpty
             || !journal.entries.isEmpty
+            || !journal.conflictDependencies.isEmpty
         let isPristineLegacy = base.accountIdentity == nil
             && resolved != nil
             && !meaningfulCheckpoint
@@ -1117,17 +1567,44 @@ final class SyncEngine {
         // leave a reusable authorization that can later target a different account.
         approvedTransportReset = nil
 
+        // A crash can leave the durable dependency in the post-stage/pre-apply window:
+        // the encrypted losing body exists only in its authenticated source carrier and
+        // has not reached the vault copy yet. The old inbox may disappear as soon as the
+        // account scheduler is reset, so recover that prerequisite from the journal's
+        // frozen source before deriving replacement-account intent.
+        let recovery = try recoverConflictPrerequisitesBeforeSchedulerReset()
+        guard recovery.deferredIDs.isEmpty else {
+            throw SyncEngineFailure(
+                reason: .vaultUnreadable,
+                detail: "unlock the secure vault and review the sync reset again; "
+                    + "the old checkpoint was retained because it still owns a "
+                    + "conflict-copy prerequisite")
+        }
+        guard recovery.incompatibleVaultIDs.isEmpty else {
+            throw SyncEngineFailure(
+                reason: .vaultUnreadable,
+                detail: "the secure vault identity does not match a pending conflict "
+                    + "copy; the old checkpoint was retained")
+        }
+        guard recovery.retryIDs.isEmpty else {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "primary conflict-copy state changed during reviewed recovery; "
+                    + "the old checkpoint was retained for another review")
+        }
+
         // Capture primary storage against the OLD projection before erasing its base.
         // This is the only point where an unjournaled local deletion can still be
         // distinguished from a fresh install.
         let current = try library.currentEnvelopes(
             agreedBase: journal.projectionKnowledge(over: base))
         var resetJournal = journal
-        resetJournal.prepareForAccountChange(
+        try resetJournal.prepareForAccountChange(
             current: current,
             confirmed: base,
             deviceID: device,
-            now: now())
+            now: now(),
+            discoverSecureCarriers: library.supportsSecureConflictMaterialization)
 
         // Journal first is the crash fence. If the next write fails, restart still sees
         // the old account-bound base plus complete latest local intent and asks for
@@ -1150,19 +1627,172 @@ final class SyncEngine {
         resolved: SyncAccountIdentity?,
         reset: () async throws -> Void
     ) async throws {
+        // Replacing a poisoned scheduler can discard the only replayable inbox event in
+        // exactly the same way as an account reset. Materialise journal-owned carriers
+        // while the old checkpoint is still intact, then persist their copy snapshots.
+        let recovery = try recoverConflictPrerequisitesBeforeSchedulerReset()
+        guard recovery.deferredIDs.isEmpty else {
+            throw SyncEngineFailure(
+                reason: .vaultUnreadable,
+                detail: "unlock the secure vault and review the sync reset again; "
+                    + "the old checkpoint was retained because it still owns a "
+                    + "conflict-copy prerequisite")
+        }
+        guard recovery.incompatibleVaultIDs.isEmpty else {
+            throw SyncEngineFailure(
+                reason: .vaultUnreadable,
+                detail: "the secure vault identity does not match a pending conflict "
+                    + "copy; the old checkpoint was retained")
+        }
+        guard recovery.retryIDs.isEmpty else {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "primary conflict-copy state changed during reviewed recovery; "
+                    + "the old checkpoint was retained for another review")
+        }
         let current = try library.currentEnvelopes(
             agreedBase: journal.projectionKnowledge(over: base))
         var resetJournal = journal
-        resetJournal.prepareForAccountChange(
+        try resetJournal.prepareForAccountChange(
             current: current,
             confirmed: base,
             deviceID: device,
-            now: now())
+            now: now(),
+            discoverSecureCarriers: library.supportsSecureConflictMaterialization)
         try persistJournal(resetJournal)
         try await reset()
         try persistBase(SyncBase(
             journalEstablished: true,
             accountIdentity: resolved))
+    }
+
+    /// Closes stage/evidence/apply crash windows before a reviewed scheduler reset.
+    /// Exact random-nonce C0 bytes become journal-durable before primary installation;
+    /// a later C1/tombstone is held and reapplied atomically with that installation.
+    private func recoverConflictPrerequisitesBeforeSchedulerReset() throws -> ApplyOutcome {
+        // First let already-present primary copies satisfy their requirements. A stale
+        // crash-shaped journal may still say every sibling is missing even though one
+        // has since been materialized or demoted; feeding that sibling back through the
+        // materializer can collide with legitimate representation/user changes.
+        let current = try library.currentEnvelopes(
+            agreedBase: journal.projectionKnowledge(over: base))
+        var recoveredJournal = journal
+        do {
+            try recoveredJournal.reconcileDependencies(
+                current: current,
+                confirmed: base,
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a pending conflict-copy prerequisite no longer matched its "
+                    + "primary record; the reviewed reset was not performed")
+        }
+        // Capture existing C1/plain demotions before freezing missing C0. They are real
+        // later local intent and must remain primary after the recovery transaction.
+        recoveredJournal.reconcile(
+            current: current,
+            confirmed: base,
+            deviceID: device,
+            now: now())
+        let sources = recoveredJournal.carrierSourcesAwaitingMaterialization
+        if !sources.isEmpty {
+            let freshlyPrepared = try library.prepareConflictCopyEvidence(from: sources)
+            guard !freshlyPrepared.isEmpty else {
+                try persistJournal(recoveredJournal)
+                return ApplyOutcome(deferredIDs: sources.map(\.id))
+            }
+            do {
+                try recoveredJournal.recordConflictCopyEvidence(freshlyPrepared)
+            } catch {
+                throw SyncEngineFailure(
+                    reason: .localLibraryQuarantined,
+                    detail: "prepared reset evidence did not match its durable carrier")
+            }
+        }
+        // Critical fence: a process death from here on leaves enough exact evidence to
+        // finish primary installation on ordinary restart without the old inbox.
+        try persistJournal(recoveredJournal)
+
+        let outcome = try recoverFrozenConflictPrerequisitesInPrimary()
+        guard outcome.deferredIDs.isEmpty,
+              outcome.incompatibleVaultIDs.isEmpty,
+              outcome.retryIDs.isEmpty else {
+            return outcome
+        }
+
+        // Recovery may have converted a receipt-proven primary absence into T and
+        // persisted it. Continue from that published journal; writing the pre-helper
+        // local copy here would resurrect its stale C1 intent.
+        recoveredJournal = journal
+        let recoveredCurrent = try library.currentEnvelopes(
+            agreedBase: journal.projectionKnowledge(over: base))
+        do {
+            try recoveredJournal.reconcileDependencies(
+                current: recoveredCurrent,
+                confirmed: base,
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a recovered conflict-copy prerequisite did not match its "
+                    + "durable source; the reviewed reset was not performed")
+        }
+        recoveredJournal.reconcile(
+            current: recoveredCurrent,
+            confirmed: base,
+            deviceID: device,
+            now: now())
+        let recoveredPrimary = try library.currentSnapshot(
+            agreedBase: recoveredJournal.projectionKnowledge(over: base))
+        guard recoveredJournal.conflictPrerequisiteRecovery(
+            primaryStates: recoveredPrimary.primaryStates,
+            installedHashes: recoveredPrimary.installedConflictPrerequisiteHashes)
+            .sources.isEmpty else {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a conflict-copy prerequisite remained incomplete after "
+                    + "recovery; the reviewed reset was not performed")
+        }
+        try persistJournal(recoveredJournal)
+        return outcome
+    }
+
+    /// Installs already-frozen C0 evidence which is absent from primary storage. The
+    /// bridge authenticates the retained carrier and exact evidence and reapplies any
+    /// dependency-held later C1/T inside one library transaction.
+    private func recoverFrozenConflictPrerequisitesInPrimary() throws -> ApplyOutcome {
+        guard journal.hasFrozenConflictPrerequisitesAwaitingPrimaryCheck else {
+            return ApplyOutcome()
+        }
+        let snapshot = try library.currentSnapshot(
+            agreedBase: journal.projectionKnowledge(over: base))
+        var stabilized = journal
+        do {
+            try stabilized.reconcileInstalledConflictPrerequisiteAbsence(
+                current: snapshot.envelopes,
+                installedHashes: snapshot.installedConflictPrerequisiteHashes,
+                confirmed: base,
+                deviceID: device,
+                now: now())
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a local conflict-install receipt did not match its durable "
+                    + "dependency; sync stopped without replaying the copy")
+        }
+        // This journal write is the crash fence for a user deletion observed after C0
+        // reached primary. Only after T is durable may recovery decide not to replay C0.
+        try persistJournal(stabilized)
+        let recovery = journal.conflictPrerequisiteRecovery(
+            primaryStates: snapshot.primaryStates,
+            installedHashes: snapshot.installedConflictPrerequisiteHashes)
+        guard !recovery.sources.isEmpty else { return ApplyOutcome() }
+        return try library.materializeConflictPrerequisites(
+            from: recovery.sources,
+            preparedConflictCopyEvidence: recovery.evidence,
+            heldConflictCopyIntents: recovery.heldIntents,
+            expectedPrimary: recovery.expectedPrimary)
     }
 
     // MARK: - Failure handling
@@ -1240,12 +1870,19 @@ final class SyncEngine {
 
     /// Same publish-after-durability rule for desired/offered state.
     private func persistJournal(_ candidate: SyncJournal) throws {
-        guard candidate != journal
-                || !FileManager.default.fileExists(atPath: journalURL.path) else { return }
+        let needsWrite = candidate != journal
+            || !FileManager.default.fileExists(atPath: journalURL.path)
         do {
-            try SyncJournalFile.write(
-                candidate, to: journalURL, temporaryDirectory: temporaryDirectory)
-            journal = candidate
+            if needsWrite {
+                try SyncJournalFile.write(
+                    candidate, to: journalURL, temporaryDirectory: temporaryDirectory)
+                journal = candidate
+            }
+            // Journal first: a crash may leave an obsolete exact-hash receipt, which is
+            // harmless. The inverse order could erase the only proof distinguishing a
+            // real deletion from a pre-install crash.
+            try library.retainConflictPrerequisiteInstallReceipts(
+                for: journal.activeConflictPrerequisiteCopyIDs)
         } catch {
             Diagnostics.record(.storageFailure(
                 area: .syncBase,

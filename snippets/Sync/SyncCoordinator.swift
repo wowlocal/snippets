@@ -722,8 +722,94 @@ final class SyncCoordinator {
             return
         }
 
-        journal.stageConfirmedForTransportRekey(confirmed, now: Date())
+        // Reconcile every journal generation before rewriting transport state. Besides
+        // upgrading schema 1, this validates that deterministic prerequisite ids in an
+        // active schema-2 dependency have not been occupied by an unrelated record.
+        // Failing before either file is written is essential: retaining a frozen copy
+        // snapshot and pairing it with the occupant's CAS generation could otherwise
+        // overwrite that unrelated record after the scheduler reset.
+        var current = try library.currentEnvelopes(
+            agreedBase: journal.projectionKnowledge(over: confirmed))
+        try journal.reconcileDependencies(current: current, confirmed: confirmed)
+        journal.reconcile(
+            current: current,
+            confirmed: confirmed,
+            deviceID: device,
+            now: Date())
+        // Publish later C1/T intent before any frozen C0 recovery can touch primary.
         try SyncJournalFile.write(journal)
+        // The scheduler reset below can discard an old inbox. Carrier-only dependency
+        // snapshots must first become deterministic primary vault copies, exactly like
+        // reviewed account/checkpoint resets. This maintenance path runs before a
+        // SyncEngine exists, so perform the same materialise→reproject→journal fence
+        // here and refuse rekey while the vault is locked/incompatible.
+        let carrierSources = journal.carrierSourcesAwaitingMaterialization
+        if !carrierSources.isEmpty {
+            let freshlyPrepared = try library.prepareConflictCopyEvidence(
+                from: carrierSources)
+            guard !freshlyPrepared.isEmpty else {
+                throw ProtocolResetFailure(
+                    description: "secure conflict copies must be unlocked before "
+                        + "resetting the transport key")
+            }
+            try journal.recordConflictCopyEvidence(freshlyPrepared)
+            // Publish exact random-nonce C0 before primary mutation. A crash here is
+            // repaired by SyncEngine before its next push/reset attempt.
+            try SyncJournalFile.write(journal)
+        }
+        if journal.hasFrozenConflictPrerequisitesAwaitingPrimaryCheck {
+            let primary = try library.currentSnapshot(
+                agreedBase: journal.projectionKnowledge(over: confirmed))
+            try journal.reconcileInstalledConflictPrerequisiteAbsence(
+                current: primary.envelopes,
+                installedHashes: primary.installedConflictPrerequisiteHashes,
+                confirmed: confirmed,
+                deviceID: device,
+                now: Date())
+            // Publish a receipt-proven deletion before replaying any frozen C0/C1.
+            try SyncJournalFile.write(journal)
+            let batch = journal.conflictPrerequisiteRecovery(
+                primaryStates: primary.primaryStates,
+                installedHashes: primary.installedConflictPrerequisiteHashes)
+            let recovery = try library.materializeConflictPrerequisites(
+                from: batch.sources,
+                preparedConflictCopyEvidence: batch.evidence,
+                heldConflictCopyIntents: batch.heldIntents,
+                expectedPrimary: batch.expectedPrimary)
+            guard recovery.deferredIDs.isEmpty,
+                  recovery.incompatibleVaultIDs.isEmpty,
+                  recovery.retryIDs.isEmpty else {
+                throw ProtocolResetFailure(
+                    description: "secure conflict copies must be unlocked and recovered "
+                        + "before resetting the transport key")
+            }
+            let recovered = try library.currentEnvelopes(
+                agreedBase: journal.projectionKnowledge(over: confirmed))
+            try journal.reconcileDependencies(current: recovered, confirmed: confirmed)
+            journal.reconcile(
+                current: recovered,
+                confirmed: confirmed,
+                deviceID: device,
+                now: Date())
+            let recoveredPrimary = try library.currentSnapshot(
+                agreedBase: journal.projectionKnowledge(over: confirmed))
+            guard journal.conflictPrerequisiteRecovery(
+                primaryStates: recoveredPrimary.primaryStates,
+                installedHashes: recoveredPrimary.installedConflictPrerequisiteHashes)
+                .sources.isEmpty else {
+                throw ProtocolResetFailure(
+                    description: "secure conflict-copy recovery did not complete before "
+                        + "the transport-key reset")
+            }
+            current = recovered
+        }
+        try journal.prepareForTransportRekey(
+            current: current,
+            confirmed: confirmed,
+            now: Date())
+        try SyncJournalFile.write(journal)
+        try library.retainConflictPrerequisiteInstallReceipts(
+            for: journal.activeConflictPrerequisiteCopyIDs)
 
         // Journal first is intentional. A crash here leaves the old base in place and
         // the fingerprint unchanged, so start repeats the reset. The CKSyncEngine

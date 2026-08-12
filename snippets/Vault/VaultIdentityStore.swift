@@ -78,7 +78,11 @@ final class VaultIdentityStore {
             return nil
         }
         do {
-            return try VaultFile.decode(data)
+            var identity = try VaultFile.decode(data)
+            // Device-local primary-install receipts must never be adopted from another
+            // Mac, including from a historical build which accidentally published one.
+            identity.removeLocalConflictInstallReceipts()
+            return identity
         } catch {
             Diagnostics.record(.storageFailure(
                 area: .vaultIdentity,
@@ -101,6 +105,7 @@ final class VaultIdentityStore {
         // The records are what sync carries. A keychain item is not a database, and a
         // vault's worth of ciphertext does not belong in one.
         identity.records = []
+        identity.removeLocalConflictInstallReceipts()
         // `wrapPass` is the one field that must not go, and the reason is the field's
         // entire purpose: `VaultDocument` calls a passphrase "the only thing that keeps
         // the secrets out of reach of the iCloud account itself". Publishing a wrap

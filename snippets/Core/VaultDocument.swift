@@ -228,6 +228,20 @@ private nonisolated enum JSONPassthroughBag {
 /// rather than buried here.
 nonisolated struct VaultDocument: Equatable {
 
+    /// Device-local receipts for exact secure conflict prerequisites which reached
+    /// primary storage. The value is an object keyed by the SHA-256 envelope hash of
+    /// the immutable C0 snapshot; its value is the deterministic copy UUID. Binding
+    /// both values prevents a stale receipt for an older nonce/epoch from authorizing
+    /// absence. Reusing a deterministic copy UUID replaces its prior epoch; dependency
+    /// completion prunes inactive receipts through the sync bridge.
+    ///
+    /// This lives in the same file transaction as the vault record and deliberately
+    /// survives deletion of that record. It must never travel through the shared
+    /// Keychain identity or an encrypted library backup: another device's receipt says
+    /// nothing about this device's primary files.
+    static let localConflictInstallReceiptsPrefix = "local.syncConflictC0Receipts."
+    static let localConflictInstallReceiptsKey = localConflictInstallReceiptsPrefix + "v1"
+
     /// Bumped only for a change an older build cannot safely write back. Additive
     /// fields do **not** bump it — that is what the `x` bags are for.
     static let currentSchemaVersion = 1
@@ -321,6 +335,86 @@ nonisolated struct VaultDocument: Equatable {
         records.first { $0.id == id }
     }
 
+    var localConflictInstallReceipts: [UUID: String]? {
+        let reservedKeys = Set(x.keys.filter {
+            $0.hasPrefix(Self.localConflictInstallReceiptsPrefix)
+        })
+        // A newer local writer may change the semantics or representation of this
+        // device-only proof. Treating an unknown reserved version as empty would let
+        // this build replay C0 over a real deletion and then overwrite the newer proof.
+        guard reservedKeys.isEmpty
+                || reservedKeys == [Self.localConflictInstallReceiptsKey] else {
+            return nil
+        }
+        guard let value = x[Self.localConflictInstallReceiptsKey] else { return [:] }
+        guard case .object(let object) = value,
+              object.allSatisfy({ hash, marker in
+                  guard case .string(let rawID) = marker else { return false }
+                  return Self.isLowercaseSHA256(hash)
+                    && UUID(uuidString: rawID) != nil
+              }) else { return nil }
+        var receipts: [UUID: String] = [:]
+        for (hash, marker) in object {
+            guard case .string(let rawID) = marker,
+                  let id = UUID(uuidString: rawID),
+                  rawID == id.uuidString.lowercased(),
+                  receipts.updateValue(hash, forKey: id) == nil
+            else { return nil }
+        }
+        return receipts
+    }
+
+    enum LocalConflictInstallReceiptFailure: Error { case malformed }
+
+    /// Foundation-only storage primitive. Envelope authentication and hashing live in
+    /// the sync layer because this document also builds in the entitlement-free CLI,
+    /// which intentionally has no wire/sync types.
+    mutating func recordLocalConflictInstallReceiptHashes(
+        _ additions: [UUID: String]
+    ) throws {
+        guard var receipts = localConflictInstallReceipts else {
+            throw LocalConflictInstallReceiptFailure.malformed
+        }
+        for (id, hash) in additions {
+            guard Self.isLowercaseSHA256(hash) else {
+                throw LocalConflictInstallReceiptFailure.malformed
+            }
+            receipts[id] = hash
+        }
+        x[Self.localConflictInstallReceiptsKey] = .object(
+            Dictionary(uniqueKeysWithValues: receipts.map { id, hash in
+                (hash, .string(id.uuidString.lowercased()))
+            }))
+    }
+
+    mutating func removeLocalConflictInstallReceipts() {
+        for key in x.keys where key.hasPrefix(Self.localConflictInstallReceiptsPrefix) {
+            x[key] = nil
+        }
+    }
+
+    mutating func retainLocalConflictInstallReceipts(for ids: Set<UUID>) throws {
+        guard let receipts = localConflictInstallReceipts else {
+            throw LocalConflictInstallReceiptFailure.malformed
+        }
+        let retained = receipts.filter { ids.contains($0.key) }
+        if retained.isEmpty {
+            removeLocalConflictInstallReceipts()
+        } else {
+            x[Self.localConflictInstallReceiptsKey] = .object(
+                Dictionary(uniqueKeysWithValues: retained.map { id, hash in
+                    (hash, .string(id.uuidString.lowercased()))
+                }))
+        }
+    }
+
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        return bytes.count == 64 && bytes.allSatisfy {
+            (0x30...0x39).contains($0) || (0x61...0x66).contains($0)
+        }
+    }
+
     /// Every record as a content-free `Snippet`. See `VaultRecord.shell`.
     var shells: [Snippet] {
         records.map(\.shell)
@@ -343,13 +437,16 @@ nonisolated struct VaultDocument: Equatable {
         else { return nil }
 
         var merged = existing
+        merged.removeLocalConflictInstallReceipts()
+        var shareableCandidate = candidate
+        shareableCandidate.removeLocalConflictInstallReceipts()
         merged.records = []
         // A passphrase wrap exists specifically outside the iCloud account and must
         // never enter its synchronizable identity item, even if an older writer did so.
         merged.wrapPass = nil
-        if merged.wrapRecovery == nil { merged.wrapRecovery = candidate.wrapRecovery }
-        if merged.wrapCLI == nil { merged.wrapCLI = candidate.wrapCLI }
-        for (key, value) in candidate.x where merged.x[key] == nil {
+        if merged.wrapRecovery == nil { merged.wrapRecovery = shareableCandidate.wrapRecovery }
+        if merged.wrapCLI == nil { merged.wrapCLI = shareableCandidate.wrapCLI }
+        for (key, value) in shareableCandidate.x where merged.x[key] == nil {
             merged.x[key] = value
         }
         return merged

@@ -1039,6 +1039,52 @@ nonisolated extension SyncMerge {
             == conflictCopyProvenance(sourceID: sourceID, fingerprint: fingerprint)
     }
 
+    /// Strict provenance parser shared by the dependency journal. Returning `nil` for a
+    /// malformed/future value is conservative: it can never prove that a deterministic
+    /// copy is durable, so the source remains fenced.
+    static func conflictCopyProvenance(
+        in envelope: SyncEnvelope
+    ) -> (sourceID: UUID, fingerprint: String)? {
+        guard let object = envelope.x[plainConflictCopyExtensionKey]?.object,
+              Set(object.keys) == ["version", "sourceID", "fingerprint"],
+              object["version"]?.int == 1,
+              let sourceText = object["sourceID"]?.text,
+              let sourceID = UUID(uuidString: sourceText),
+              sourceText == sourceID.uuidString.lowercased(),
+              let fingerprint = object["fingerprint"]?.text,
+              isLowercaseSHA256(fingerprint)
+        else { return nil }
+        return (sourceID, fingerprint)
+    }
+
+    /// Strict identity check for the reserved conflict-copy marker. Provenance names
+    /// the losing source/fingerprint, while the deterministic id prevents an arbitrary
+    /// record from acquiring conflict-copy semantics by copying that small metadata
+    /// object. Callers still have to authenticate secure body bytes separately.
+    static func hasValidConflictCopyIdentity(_ envelope: SyncEnvelope) -> Bool {
+        guard let provenance = conflictCopyProvenance(in: envelope) else { return false }
+        return envelope.id == deterministicUUID(
+            namespace: provenance.sourceID,
+            name: "sync-content-conflict-v1|\(provenance.fingerprint)")
+    }
+
+    /// Removes only understood v1 carrier members. Unknown versions stay opaque and
+    /// keep the source unresolved until a newer binary can preserve them safely.
+    static func resolvingContentConflicts(
+        in envelope: SyncEnvelope,
+        expected: [String: CanonicalJSON.Value]
+    ) -> SyncEnvelope? {
+        guard !envelope.deleted,
+              expected.allSatisfy({ key, value in
+                  key.hasPrefix(contentConflictV1ExtensionPrefix)
+                      && envelope.x[key] == value
+              })
+        else { return nil }
+        var resolved = envelope
+        for key in expected.keys { resolved.x[key] = nil }
+        return resolved
+    }
+
     private static func refuseDeletionIfConflictIsUnresolved(
         _ envelope: SyncEnvelope?
     ) throws {
@@ -1049,6 +1095,13 @@ nonisolated extension SyncMerge {
 
     static func isContentConflictExtension(_ key: String) -> Bool {
         key.hasPrefix(contentConflictExtensionPrefix)
+    }
+
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        return bytes.count == 64 && bytes.allSatisfy {
+            (0x30...0x39).contains($0) || (0x61...0x66).contains($0)
+        }
     }
 
     private static func hex(_ digest: SHA256.Digest) -> String {

@@ -198,6 +198,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// became visible. Production defaults are the real atomic writers.
     private let syncBaseWriter: (SyncBase, URL, URL) throws -> Void
     private let syncJournalWriter: (SyncJournal, URL, URL) throws -> Void
+    private let syncMetadataWriter: (SyncBase, URL, URL) throws -> Void
     private let durableFileRemover: (URL) throws -> Void
     private let vaultKeyRemover: (String) throws -> Void
 
@@ -223,6 +224,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
         syncJournalWriter: @escaping (SyncJournal, URL, URL) throws -> Void = {
             try SyncJournalFile.write($0, to: $1, temporaryDirectory: $2)
         },
+        syncMetadataWriter: @escaping (SyncBase, URL, URL) throws -> Void = {
+            try SyncBaseFile.write($0, to: $1, temporaryDirectory: $2)
+        },
         durableFileRemover: @escaping (URL) throws -> Void = {
             try AtomicFileWriter.removeDurablyIfPresent($0)
         },
@@ -242,6 +246,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         self.lockTimeout = lockTimeout
         self.syncBaseWriter = syncBaseWriter
         self.syncJournalWriter = syncJournalWriter
+        self.syncMetadataWriter = syncMetadataWriter
         self.durableFileRemover = durableFileRemover
         self.vaultKeyRemover = vaultKeyRemover ?? {
             try resolvedKeychain.deleteKey(keyID: $0)
@@ -262,6 +267,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
             // before identity sharing existed, and heals a slot another Mac cleared,
             // without either needing a migration step of its own.
             identityStore.publish(loaded)
+            healLegacyPlainSyncMetadata(for: loaded)
             Diagnostics.record(.vaultAction(.loaded, count: loaded.records.count))
         case .missing:
             document = nil
@@ -289,6 +295,90 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 attempt: nil))
         }
         if notifyChange { onChange?() }
+    }
+
+    /// Old promotion builds could leave a plaintext projection envelope beside a now-
+    /// secure primary record. This repair runs at vault startup even while sync is off,
+    /// preserves safe opaque extensions, and never rewrites unknown/newer sidecar bytes.
+    private func healLegacyPlainSyncMetadata(for vault: VaultDocument) {
+        guard !vault.records.isEmpty else { return }
+        switch SyncBaseFile.load(from: syncMetadataURL) {
+        case .loaded(var metadata):
+            let affected = vault.records.filter { record in
+                guard let envelope = metadata.envelope(record.id) else { return false }
+                return !envelope.secure && !envelope.deleted
+            }
+            guard !affected.isEmpty else { return }
+            // Do not let the projection inspect protocol-owned `x` from a plaintext
+            // shadow. Some legacy opaque-carrier spellings are intentionally decoded
+            // into current conflict keys by the projection, so filtering only after it
+            // returns would be too late.
+            var sanitizedInput = metadata
+            for record in affected {
+                guard var stale = sanitizedInput.envelope(record.id) else { continue }
+                stale.x = stale.x.filter { key, _ in
+                    !SyncMerge.isContentConflictExtension(key)
+                        && !key.hasPrefix(SyncMerge.contentConflictOpaqueCarrierPrefix)
+                        && key != SyncMerge.plainConflictCopyExtensionKey
+                        && key != SyncEnvelope.vaultKeyIDExtensionKey
+                        && key != SyncEnvelope.vaultContentHashExtensionKey
+                }
+                sanitizedInput.record(stale)
+            }
+            let projected = SyncLibraryProjection.currentEnvelopes(
+                snippets: [],
+                records: affected,
+                deviceID: clock.device,
+                metadata: sanitizedInput,
+                agreedBase: SyncBase(),
+                vaultKID: vault.kid)
+            for record in affected {
+                guard var secure = projected[record.id],
+                      let stale = metadata.envelope(record.id) else { continue }
+                // The stale value described a plaintext representation. Preserve only
+                // genuinely opaque application metadata from it: protocol-owned secure
+                // fields and conflict carriers must come exclusively from vault.json.
+                // Otherwise a long-resolved/forged plaintext sidecar can become causal
+                // evidence for a secure record merely because this repair copied `x`.
+                for (key, value) in stale.x where
+                    secure.x[key] == nil
+                        && !SyncMerge.isContentConflictExtension(key)
+                        && !key.hasPrefix(SyncMerge.contentConflictOpaqueCarrierPrefix)
+                        && key != SyncMerge.plainConflictCopyExtensionKey
+                        && key != SyncEnvelope.vaultKeyIDExtensionKey
+                        && key != SyncEnvelope.vaultContentHashExtensionKey {
+                    secure.x[key] = value
+                }
+                metadata.record(secure)
+            }
+            do {
+                try syncMetadataWriter(metadata, syncMetadataURL, temporaryDirectory)
+            } catch {
+                Diagnostics.record(.storageFailure(
+                    area: .syncMetadata,
+                    operation: .write,
+                    failure: DiagnosticFailure(error),
+                    attempt: nil))
+                // This is derived state and the known-schema input contains plaintext
+                // for records whose primary representation is secure. If an atomic
+                // sanitized rewrite cannot commit, removing the derived file is the
+                // only fail-safe outcome; the next projection rebuilds it from vault,
+                // base, and journal knowledge without retaining the plaintext leak.
+                do {
+                    try durableFileRemover(syncMetadataURL)
+                } catch {
+                    Diagnostics.record(.storageFailure(
+                        area: .syncMetadata,
+                        operation: .remove,
+                        failure: DiagnosticFailure(error),
+                        attempt: nil))
+                }
+            }
+        case .missing, .tooNew, .unreadable:
+            // Missing has no leak. Unknown bytes are intentionally fail-closed and
+            // byte-identical; a newer build remains their only authorized writer.
+            return
+        }
     }
 
     // MARK: - Metadata, available while locked
@@ -801,39 +891,70 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// Requires an unlocked vault, because sealing needs the key.
     func promote(snippetID: UUID, notifyChange: Bool = true) throws {
         let document = try requireDocument()
-        let ring = try keyring(document)
 
         let outcome = try runTransaction { contents in
             guard let index = contents.snippets.firstIndex(where: { $0.id == snippetID }) else {
                 throw Failure.noSuchRecord
             }
             var vault = contents.vault ?? document
+            guard vault.kid == document.kid,
+                  vault.vaultSalt == document.vaultSalt else {
+                // `VaultSession` owns the key adopted for `document`. Sealing into a
+                // concurrently replaced vault with that old key but the new kid would
+                // create ciphertext that no device can open.
+                throw Failure.setupChanged
+            }
             guard vault.record(snippetID) == nil else { throw Failure.alreadySecure }
+            let ring = try self.keyring(vault)
 
             let snippet = contents.snippets[index]
             let plaintext = Data(snippet.content.utf8)
-            let record = VaultRecord(
+            let timestamp = self.now()
+            let sealed = try SnippetCrypto.seal(
+                plaintext,
+                for: SnippetCrypto.RecordContext(scopeID: vault.kid, recordID: snippet.id),
+                keyring: ring)
+            let contentHash = SnippetCrypto.contentHash(of: plaintext, keyring: ring)
+            let source = try self.transitionEnvelope(
+                snippets: contents.snippets,
+                records: vault.records,
+                vaultKID: vault.kid,
+                id: snippet.id)
+            let hlc = self.clock.stamp(
+                updatedAt: timestamp,
+                baseHLC: source.hlc)
+            var extensions = source.x
+            extensions[SyncEnvelope.vaultContentHashExtensionKey] = .string(contentHash)
+            extensions[SyncEnvelope.vaultKeyIDExtensionKey] = .string(vault.kid)
+            let target = SyncEnvelope(
                 id: snippet.id,
-                // Fix the name now, not later. `Snippet.displayName` falls back to the
-                // first line of the content, and a secure shell has no content — so an
-                // unnamed snippet that was recognisable in the list becomes one of
-                // several identical "Untitled Snippet" rows the moment it is encrypted.
-                // This is the last instant the text is still available to name it from.
-                name: snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? snippet.displayName
-                    : snippet.name,
-                keyword: snippet.normalizedKeyword,
-                tags: snippet.tags,
-                isEnabled: snippet.isEnabled,
-                isPinned: snippet.isPinned,
-                createdAt: snippet.createdAt,
-                updatedAt: self.now(),
-                hlc: self.clock.send(),
-                contentHash: SnippetCrypto.contentHash(of: plaintext, keyring: ring),
-                sealed: try SnippetCrypto.seal(
-                    plaintext,
-                    for: SnippetCrypto.RecordContext(scopeID: vault.kid, recordID: snippet.id),
-                    keyring: ring))
+                hlc: hlc,
+                origin: self.clock.device,
+                secure: true,
+                deleted: false,
+                fields: SyncEnvelope.Fields(
+                    // Fix the name now, not later. `Snippet.displayName` falls back to
+                    // the first content line, which a secure shell no longer carries.
+                    name: snippet.name.trimmingCharacters(
+                        in: .whitespacesAndNewlines).isEmpty
+                        ? snippet.displayName : snippet.name,
+                    keyword: snippet.normalizedKeyword,
+                    content: Data(sealed.utf8),
+                    tags: snippet.tags,
+                    isEnabled: snippet.isEnabled,
+                    isPinned: snippet.isPinned,
+                    createdAt: snippet.createdAt,
+                    updatedAt: timestamp),
+                x: extensions)
+            guard let record = try SyncLibraryProjection.vaultRecord(from: target) else {
+                throw Failure.transaction("could not preserve sync metadata during promotion")
+            }
+            // Prewrite the destination, whose body is ciphertext. If the primary move
+            // fails, the still-plain Snippet remains authoritative and projection treats
+            // this non-exact sidecar as metadata only (stripping secure-only hash/scope).
+            // If it succeeds, no plaintext copy of the old source can remain indefinitely
+            // in library-metadata.json while sync is disabled.
+            try self.persistTransitionMetadata(target)
 
             vault.records.append(record)
             contents.vault = vault
@@ -855,6 +976,11 @@ final class SecureSnippetStore: SecureSnippetProviding {
             else { throw Failure.notSecure }
 
             let record = vault.records[index]
+            guard Self.supportsDemotion(record.x) else {
+                throw Failure.transaction(
+                    "this secure snippet contains metadata from a newer build; update "
+                        + "Snippets before making it non-secure")
+            }
             // Decrypt the same locked snapshot that will be removed. Decrypting the
             // in-memory copy before acquiring this transaction can overwrite a
             // concurrent secure-content edit with stale plaintext.
@@ -866,18 +992,131 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 throw Failure.invalidUTF8
             }
 
+            let snippet = Snippet(
+                id: record.id, name: record.name, keyword: record.keyword,
+                content: content,
+                tags: record.tags, isEnabled: record.isEnabled, isPinned: record.isPinned,
+                createdAt: record.createdAt, updatedAt: self.now())
+            let source = try self.transitionEnvelope(
+                snippets: contents.snippets,
+                records: vault.records,
+                vaultKID: vault.kid,
+                id: record.id)
+            // Never prewrite the decrypted destination. A crash or transaction failure
+            // after that write would leave secure primary storage intact while leaking
+            // its plaintext body into the sync sidecar. The encrypted source is a safe,
+            // conservative handoff; authoritative plain primary heals it on projection.
+            try self.persistTransitionMetadata(source)
+
             vault.records.remove(at: index)
             contents.vault = vault
-            contents.snippets.insert(
-                Snippet(
-                    id: record.id, name: record.name, keyword: record.keyword,
-                    content: content,
-                    tags: record.tags, isEnabled: record.isEnabled, isPinned: record.isPinned,
-                    createdAt: record.createdAt, updatedAt: self.now()),
-                at: 0)
+            contents.snippets.insert(snippet, at: 0)
             contents.marker = .demoting(recordID)
         }
         adopt(outcome, notifyChange: notifyChange)
+    }
+
+    /// Representation changes move safety metadata between two frozen primary models.
+    /// The transition sidecar lands before source ownership changes, but the prewrite is
+    /// always ciphertext-bearing: promotion writes its secure destination and demotion
+    /// writes its secure source. A crash can leave stale metadata, never plaintext secret
+    /// material outside the authoritative ordinary library.
+    private func persistTransitionMetadata(_ envelope: SyncEnvelope) throws {
+        var metadata = try transitionMetadata()
+        metadata.record(envelope)
+        do {
+            try syncMetadataWriter(metadata, syncMetadataURL, temporaryDirectory)
+        } catch {
+            throw Failure.transaction("could not preserve sync metadata before moving snippet")
+        }
+    }
+
+    private func transitionEnvelope(
+        snippets: [Snippet],
+        records: [VaultRecord],
+        vaultKID: String,
+        id: UUID
+    ) throws -> SyncEnvelope {
+        let metadata = try transitionMetadata()
+        let journal: SyncJournal
+        let journalWasMissing: Bool
+        switch SyncJournalFile.load(from: syncJournalURL) {
+        case .missing(let empty):
+            journal = empty
+            journalWasMissing = true
+        case .loaded(let loaded):
+            journal = loaded
+            journalWasMissing = false
+        case .tooNew(let version):
+            throw Failure.transaction(
+                "sync journal schemaVersion \(version) is newer than this build")
+        case .unreadable:
+            throw Failure.transaction("pending sync metadata could not be read")
+        }
+        let base: SyncBase
+        let baseWasMissing: Bool
+        switch SyncBaseFile.load(from: syncBaseURL) {
+        case .loaded(let loaded):
+            base = loaded
+            baseWasMissing = false
+        case .missing:
+            base = SyncBase()
+            baseWasMissing = true
+        case .tooNew(let version):
+            throw Failure.transaction(
+                "sync base schemaVersion \(version) is newer than this build")
+        case .unreadable:
+            throw Failure.transaction("confirmed sync metadata could not be read")
+        }
+        guard !baseWasMissing || journalWasMissing else {
+            throw Failure.transaction(
+                "confirmed sync state is missing while pending changes still exist")
+        }
+        guard !journalWasMissing || !base.journalEstablished else {
+            throw Failure.transaction(
+                "pending sync state is missing after its durability marker was established")
+        }
+        let projected = SyncLibraryProjection.currentEnvelopes(
+            snippets: snippets,
+            records: records,
+            deviceID: clock.device,
+            metadata: metadata,
+            agreedBase: journal.projectionKnowledge(over: base),
+            vaultKID: vaultKID)
+        guard let envelope = projected[id] else {
+            throw Failure.transaction("snippet changed while preparing its secure move")
+        }
+        do {
+            try SyncMerge.validateContentConflictExtensions(in: envelope)
+            if envelope.x[SyncMerge.plainConflictCopyExtensionKey] != nil,
+               !SyncMerge.hasValidConflictCopyIdentity(envelope) {
+                throw SyncMerge.EnvelopeFailure.malformedContentConflict
+            }
+        } catch {
+            throw Failure.transaction(
+                "conflict metadata is malformed; refusing to move the snippet")
+        }
+        return envelope
+    }
+
+    private func transitionMetadata() throws -> SyncBase {
+        switch SyncBaseFile.load(from: syncMetadataURL) {
+        case .loaded(let loaded): return loaded
+        case .missing: return SyncBase()
+        case .tooNew(let version):
+            throw Failure.transaction(
+                "sync metadata schemaVersion \(version) is newer than this build")
+        case .unreadable:
+            throw Failure.transaction("sync metadata could not be read")
+        }
+    }
+
+    private static func supportsDemotion(_ values: [String: JSONValue]) -> Bool {
+        values.keys.allSatisfy { key in
+            key == SyncMerge.plainConflictCopyExtensionKey
+                || key.hasPrefix(SyncMerge.contentConflictOpaqueCarrierPrefix)
+                || SyncMerge.isContentConflictExtension(key)
+        }
     }
 
     /// Removes every secure snippet from this Mac.
@@ -993,15 +1232,70 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
         let originalBase: SyncBase? = baseWasMissing ? nil : retainedBase
         let originalJournal: SyncJournal? = journalWasMissing ? nil : retainedJournal
+        let originalMetadata: SyncBase?
+        switch SyncBaseFile.load(from: syncMetadataURL) {
+        case .loaded(let loaded): originalMetadata = loaded
+        case .missing: originalMetadata = nil
+        case .tooNew(let version):
+            throw Failure.transaction(
+                "sync metadata schemaVersion \(version) is newer than this build; refusing "
+                    + "to forget the vault until its conflict carriers can be preserved")
+        case .unreadable:
+            throw Failure.transaction(
+                "sync metadata could not be read; refusing to forget the vault until "
+                    + "its conflict carriers can be preserved")
+        }
 
-        retainedBase.envelopes = retainedBase.envelopes.filter { _, envelope in
-            !envelope.secure && !forgottenIDs.contains(envelope.id)
+        if retainedJournal.requiresDependencyMigration {
+            // Vault forget is also a journal maintenance writer and may run while sync
+            // is disabled. Reconstruct schema-1 plain conflict edges from frozen files,
+            // journal intent and the agreed base before publishing schema 2; the encoder
+            // deliberately refuses to let this evidence be skipped.
+            let snippets: [Snippet]
+            do {
+                snippets = try LibraryWriter.read(from: libraryURL).snippets
+            } catch {
+                throw Failure.transaction(
+                    "the snippet library could not be read; refusing to forget the vault "
+                        + "before sync intent is preserved")
+            }
+            let metadata = originalMetadata ?? retainedBase
+            let current = SyncLibraryProjection.currentEnvelopes(
+                snippets: snippets,
+                records: rollbackDocument?.records ?? [],
+                deviceID: clock.device,
+                metadata: retainedJournal.projectionKnowledge(over: metadata),
+                agreedBase: retainedBase,
+                vaultKID: rollbackDocument?.kid)
+            do {
+                try retainedJournal.reconcileDependencies(
+                    current: current, confirmed: retainedBase)
+            } catch {
+                throw Failure.transaction(
+                    "legacy sync conflict intent could not be reconstructed; refusing "
+                        + "to forget the vault without preserving ordinary copies")
+            }
+        }
+
+        retainedBase.envelopes = retainedBase.envelopes.compactMapValues { envelope in
+            guard !envelope.secure, !forgottenIDs.contains(envelope.id) else { return nil }
+            return Self.scrubbingUnderstoodSecureConflictCarriers(envelope)
         }
         // A later opt-in deliberately performs a full fetch, allowing the remote vault
         // to return without forgetting ordinary confirmed ancestors.
         retainedBase.adoptCursor(nil, kind: nil)
         retainedBase.requiresTransportFullResync = !baseWasMissing
-        retainedJournal.forgetSecureIntent()
+        retainedJournal.forgetSecureIntent(forgottenIDs: forgottenIDs)
+        var retainedMetadata = originalMetadata
+        if var metadata = retainedMetadata {
+            metadata.envelopes = metadata.envelopes.compactMapValues { envelope in
+                guard !envelope.secure,
+                      !forgottenIDs.contains(envelope.id) else { return nil }
+                return Self.scrubbingUnderstoodSecureConflictCarriers(envelope)
+            }
+            metadata.adoptCursor(nil, kind: nil)
+            retainedMetadata = metadata
+        }
         // System fields are credentials to replace the corresponding remote record.
         // Keep them for every ordinary confirmation or surviving ordinary desired
         // change (including a secure-to-plain demotion), and discard credentials owned
@@ -1013,22 +1307,30 @@ final class SecureSnippetStore: SecureSnippetProviding {
             retainedVersionKeys.contains(key)
         }
 
-        // Establish the post-forget protocol state before destroying either ciphertext
-        // or its device-only key. If either write fails the vault is still intact and a
-        // retry can reconstruct secure projection state from the live records. When
-        // both files were absent, sync has never initialized and must stay structurally
-        // off instead of this maintenance operation creating empty protocol files.
-        if !baseWasMissing || !journalWasMissing {
-            do {
+        // Establish the post-forget projection/protocol state before destroying either
+        // ciphertext or its device-only key. The metadata sidecar comes first: a crash
+        // after that scrub still has the vault and complete protocol evidence, whereas
+        // deleting the vault with an old sidecar could make this process speak for
+        // forgotten ciphertext on a later opt-in. Base/journal remain structurally off
+        // when both were absent, but an independently surviving metadata file must still
+        // be scrubbed durably. Any failure leaves the vault intact and rolls every file
+        // back to its exact pre-transaction state.
+        do {
+            if let retainedMetadata {
+                try syncMetadataWriter(
+                    retainedMetadata, syncMetadataURL, temporaryDirectory)
+            }
+            if !baseWasMissing || !journalWasMissing {
                 try syncBaseWriter(retainedBase, syncBaseURL, temporaryDirectory)
                 try syncJournalWriter(retainedJournal, syncJournalURL, temporaryDirectory)
-            } catch {
-                let rollback = rollbackForgetState(
-                    vault: nil, base: originalBase, journal: originalJournal)
-                throw Failure.transaction(
-                    "could not durably preserve ordinary sync state before forgetting "
-                        + "the vault: \(error)\(rollback)")
             }
+        } catch {
+            let rollback = rollbackForgetState(
+                vault: nil, base: originalBase, journal: originalJournal,
+                metadata: originalMetadata)
+            throw Failure.transaction(
+                "could not durably preserve ordinary sync state before forgetting "
+                    + "the vault: \(error)\(rollback)")
         }
 
         do {
@@ -1037,7 +1339,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
             try durableFileRemover(vaultURL)
         } catch {
             let rollback = rollbackForgetState(
-                vault: rollbackDocument, base: originalBase, journal: originalJournal)
+                vault: rollbackDocument, base: originalBase, journal: originalJournal,
+                metadata: originalMetadata)
             throw Failure.transaction(
                 "could not durably delete the vault: \(error)\(rollback)")
         }
@@ -1051,7 +1354,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 // ciphertext would leave a reported failure with its offered/desired
                 // history silently discarded.
                 let rollback = rollbackForgetState(
-                    vault: rollbackDocument, base: originalBase, journal: originalJournal)
+                    vault: rollbackDocument, base: originalBase, journal: originalJournal,
+                    metadata: originalMetadata)
                 let recovery = rollbackDocument == nil ? "no vault file needed restoring" : "the vault was restored"
                 throw Failure.transaction(
                     "the keychain kept the vault key; \(recovery): \(keychainError)\(rollback)")
@@ -1062,26 +1366,6 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // identity must remain: deleting it would propagate, and it is what lets this Mac
         // rejoin the same vault later instead of minting a rival one.
         if !preserveSharedKey { identityStore.forget() }
-
-        // The projection sidecar is key-independent and carries unknown extension fields
-        // for ordinary snippets. Deleting the whole file would strip forward-compatible
-        // metadata on the next upload, so remove only entries owned by the deleted vault.
-        if case .loaded(var metadata) = SyncBaseFile.load(from: syncMetadataURL) {
-            metadata.envelopes = metadata.envelopes.filter { !$0.value.secure }
-            metadata.adoptCursor(nil, kind: nil)
-            do {
-                try SyncBaseFile.write(
-                    metadata, to: syncMetadataURL, temporaryDirectory: temporaryDirectory)
-            } catch {
-                // Leaving secure entries is fail-closed: the next bridge projection sees
-                // them and halts rather than emitting tombstones.
-                Diagnostics.record(.storageFailure(
-                    area: .syncMetadata,
-                    operation: .write,
-                    failure: DiagnosticFailure(error),
-                    attempt: nil))
-            }
-        }
 
         document = nil
         isUnreadable = false
@@ -1099,7 +1383,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
     private func rollbackForgetState(
         vault: VaultDocument?,
         base: SyncBase?,
-        journal: SyncJournal?
+        journal: SyncJournal?,
+        metadata: SyncBase? = nil
     ) -> String {
         var failures: [String] = []
 
@@ -1151,8 +1436,33 @@ final class SecureSnippetStore: SecureSnippetProviding {
             }
         }
 
+        if let metadata {
+            do {
+                try syncMetadataWriter(metadata, syncMetadataURL, temporaryDirectory)
+            } catch {
+                failures.append("sync metadata restore failed: \(error)")
+            }
+        } else {
+            do {
+                try durableFileRemover(syncMetadataURL)
+            } catch {
+                failures.append("new sync metadata removal failed: \(error)")
+            }
+        }
+
         guard !failures.isEmpty else { return "; original state was restored" }
         return "; rollback incomplete (" + failures.joined(separator: "; ") + ")"
+    }
+
+    private static func scrubbingUnderstoodSecureConflictCarriers(
+        _ envelope: SyncEnvelope
+    ) -> SyncEnvelope {
+        var retained = envelope
+        for key in retained.x.keys where key.hasPrefix(
+            SyncMerge.contentConflictV1ExtensionPrefix) {
+            retained.x[key] = nil
+        }
+        return retained
     }
 
     // MARK: - Crash recovery
@@ -1215,7 +1525,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }.value
         // A zero-record vault contains no snippet data worth exporting. Omitting it also
         // avoids asking for a key solely to preserve an unused security setup.
-        let exportedVault = snapshot.vault?.records.isEmpty == false ? snapshot.vault : nil
+        var exportedVault = snapshot.vault?.records.isEmpty == false ? snapshot.vault : nil
+        // Receipts describe this device's primary-file history, not user data and not
+        // portable recovery state. Importing one could suppress a required C0 install.
+        exportedVault?.removeLocalConflictInstallReceipts()
         let libraryKey: SymmetricKey?
         if let exportedVault {
             guard document?.kid == exportedVault.kid else {
@@ -1237,7 +1550,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
         into store: SnippetStore
     ) throws -> EncryptedBackupImportResult {
         let incomingPlain = opened.snippets.map(Self.normalizedBackupSnippet)
-        let incomingVault = opened.vault
+        var incomingVault = opened.vault
+        incomingVault?.removeLocalConflictInstallReceipts()
         let importDate = now()
         let importWallMs = UInt64(max(0, importDate.timeIntervalSince1970 * 1_000))
         let importedClocks: [UUID: HLC] = Dictionary(uniqueKeysWithValues:

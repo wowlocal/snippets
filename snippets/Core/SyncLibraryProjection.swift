@@ -55,14 +55,21 @@ nonisolated enum SyncLibraryProjection {
             let projected = metadata.envelope(snippet.id)
             let agreed = agreedBase.envelope(snippet.id)
 
-            if let known = exactPlain(projected, snippet: snippet)
-                ?? exactPlain(agreed, snippet: snippet) {
+            let exactProjected = exactPlain(projected, snippet: snippet)
+            let exactAgreed = exactPlain(agreed, snippet: snippet)
+            if let known = mergedKnowledge(
+                weaker: exactProjected,
+                stronger: exactAgreed
+            ) {
                 // The frozen local model cannot hold the rest of the envelope. The
-                // agreed ancestor can, and equality of every persisted field proves
-                // this is still that exact version.
-                out[snippet.id] = known
+                // sidecar and durable journal/base can each own disjoint unknown
+                // extensions. Equality of every persisted field proves both describe
+                // this exact primary version, so preserve their union.
+                out[snippet.id] = strippingSecureOnlyExtensions(from: known)
             } else {
-                let known = newest(projected, agreed)
+                let known = mergedKnowledge(weaker: projected, stronger: agreed)
+                let extensions = strippingSecureOnlyExtensions(
+                    from: known)?.x ?? [:]
                 out[snippet.id] = SyncEnvelope(
                     id: snippet.id,
                     hlc: localClock(
@@ -74,7 +81,7 @@ nonisolated enum SyncLibraryProjection {
                     fields: fields,
                     // Unknown extensions belong to the record, not to whichever
                     // version of the app happens to edit it.
-                    x: known?.x ?? [:])
+                    x: extensions)
             }
         }
 
@@ -89,12 +96,17 @@ nonisolated enum SyncLibraryProjection {
             let projected = metadata.envelope(record.id)
             let agreed = agreedBase.envelope(record.id)
 
-            if let known = exactSecure(projected, record: record, vaultKID: vaultKID) {
-                out[record.id] = known
-            } else if let known = exactSecure(agreed, record: record, vaultKID: vaultKID) {
+            let exactProjected = exactSecure(
+                projected, record: record, vaultKID: vaultKID)
+            let exactAgreed = exactSecure(
+                agreed, record: record, vaultKID: vaultKID)
+            if let known = mergedKnowledge(
+                weaker: exactProjected,
+                stronger: exactAgreed
+            ) {
                 out[record.id] = known
             } else {
-                let known = newest(projected, agreed)
+                let known = mergedKnowledge(weaker: projected, stronger: agreed)
                 // Primary storage is authoritative for resolution. Derived metadata
                 // may still carry a variant/provenance from before the transaction
                 // removed it, so replace (including with the empty set) rather than
@@ -136,9 +148,19 @@ nonisolated enum SyncLibraryProjection {
                         // importantly it can never look like a resolved/deletable record.
                         extensions[SyncMerge.contentConflictExtensionPrefix + "invalid"] =
                             .null
-                    } else if key == SyncMerge.plainConflictCopyExtensionKey,
-                              let provenance = conflictCopyProvenance(value) {
-                        extensions[key] = provenance
+                    } else if key == SyncMerge.plainConflictCopyExtensionKey {
+                        if let provenance = conflictCopyProvenance(value) {
+                            extensions[key] = provenance
+                        } else {
+                            // The reserved key is itself causal evidence. Silently
+                            // dropping a value from a newer/corrupt writer would turn a
+                            // deterministic preservation copy into an ordinary record.
+                            // Emit the same invalid sentinel used for malformed carrier
+                            // values so the bridge and transition boundaries fail closed.
+                            extensions[
+                                SyncMerge.contentConflictExtensionPrefix + "invalid"
+                            ] = .null
+                        }
                     }
                 }
                 extensions[SyncEnvelope.vaultContentHashExtensionKey] =
@@ -320,6 +342,13 @@ nonisolated enum SyncLibraryProjection {
     private static func exactSecure(
         _ candidate: SyncEnvelope?, record: VaultRecord, vaultKID: String?
     ) -> SyncEnvelope? {
+        let storedProvenance: CanonicalJSON.Value?
+        if let value = record.x[SyncMerge.plainConflictCopyExtensionKey] {
+            guard let parsed = conflictCopyProvenance(value) else { return nil }
+            storedProvenance = parsed
+        } else {
+            storedProvenance = nil
+        }
         guard let candidate, !candidate.deleted, candidate.secure,
               let fields = candidate.fields,
               fields.name == record.name,
@@ -337,10 +366,36 @@ nonisolated enum SyncLibraryProjection {
               let storedConflicts = conflictExtensions(record.x),
               conflictExtensions(candidate.x) == storedConflicts,
               candidate.x[SyncMerge.plainConflictCopyExtensionKey]
-                == record.x[SyncMerge.plainConflictCopyExtensionKey]
-                    .flatMap(conflictCopyProvenance)
+                == storedProvenance
         else { return nil }
         return candidate
+    }
+
+    /// True only when a live secure envelope is an exact echo of the primary vault
+    /// record for all persisted fields and safety-critical extension state. This lets
+    /// an already-authenticated conflict copy pass through sync while the vault session
+    /// is locked; changed ciphertext/provenance still requires a fresh key validation.
+    static func matchesExactSecurePrimary(
+        _ envelope: SyncEnvelope,
+        record: VaultRecord,
+        vaultKID: String
+    ) -> Bool {
+        exactSecure(envelope, record: record, vaultKID: vaultKID) != nil
+            && envelope.hlc == record.hlc
+    }
+
+    /// Legacy wire records predate the vault scope stamp. They are safe to accept while
+    /// locked only when adding this vault's stamp makes them an exact primary echo;
+    /// every changed/absent legacy body still requires fresh AEAD/HMAC validation.
+    static func matchesExactLegacyUnstampedSecurePrimary(
+        _ envelope: SyncEnvelope,
+        record: VaultRecord,
+        vaultKID: String
+    ) -> Bool {
+        guard envelope.x[SyncEnvelope.vaultKeyIDExtensionKey] == nil else { return false }
+        var stamped = envelope
+        stamped.x[SyncEnvelope.vaultKeyIDExtensionKey] = .string(vaultKID)
+        return matchesExactSecurePrimary(stamped, record: record, vaultKID: vaultKID)
     }
 
     private static func conflictExtensions(
@@ -383,6 +438,61 @@ nonisolated enum SyncLibraryProjection {
         case (nil, .some(let second)): return second
         case (nil, nil): return nil
         }
+    }
+
+    /// A representation transition can leave the strongest durable knowledge as the
+    /// prior secure envelope while primary storage is already plain. Hash and vault kid
+    /// describe sealed bytes, so carrying them onto plaintext would lie about content
+    /// identity and can wedge the next three-way merge. All other extension knowledge
+    /// remains record metadata and survives the transition.
+    private static func strippingSecureOnlyExtensions(
+        from envelope: SyncEnvelope?
+    ) -> SyncEnvelope? {
+        guard var envelope else { return nil }
+        envelope.x[SyncEnvelope.vaultContentHashExtensionKey] = nil
+        envelope.x[SyncEnvelope.vaultKeyIDExtensionKey] = nil
+        return envelope
+    }
+
+    /// Combines extension knowledge from a derived sidecar and a durable ancestor or
+    /// journal snapshot. The second source is authoritative on a same-key disagreement;
+    /// disjoint keys are causal metadata and must never be lost merely because one file
+    /// was stale when the other was written.
+    ///
+    /// Reserved conflict members are stricter than ordinary forward-compatible fields:
+    /// disagreement cannot be resolved by LWW without potentially dropping the sole
+    /// losing body. Install an unmistakably invalid sentinel so the bridge's validator
+    /// quarantines the projection before transport.
+    private static func mergedKnowledge(
+        weaker: SyncEnvelope?, stronger: SyncEnvelope?
+    ) -> SyncEnvelope? {
+        guard var result = newest(weaker, stronger) else { return nil }
+        if let weaker {
+            mergeExtensions(from: weaker, into: &result, authoritative: false)
+        }
+        if let stronger {
+            mergeExtensions(from: stronger, into: &result, authoritative: true)
+        }
+        return result
+    }
+
+    private static func mergeExtensions(
+        from source: SyncEnvelope,
+        into result: inout SyncEnvelope,
+        authoritative: Bool
+    ) {
+            for (key, value) in source.x {
+                guard let existing = result.x[key], existing != value else {
+                    result.x[key] = value
+                    continue
+                }
+                if SyncMerge.isContentConflictExtension(key)
+                    || key == SyncMerge.plainConflictCopyExtensionKey {
+                    result.x[SyncMerge.contentConflictExtensionPrefix + "invalid"] = .null
+                } else if authoritative {
+                    result.x[key] = value
+                }
+            }
     }
 
     /// Deterministic because `currentEnvelopes()` may be called twice before a push.

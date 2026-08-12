@@ -397,6 +397,10 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
                         syncIsQuiescent: self.environment.syncCoordinator.isQuiescent
                     )
                 }
+                // `SecureSnippetStore` scrubbed the sidecar on disk before deleting the
+                // vault. Drop the bridge's same-process cache as the matching publication
+                // step; otherwise a later opt-in can still project forgotten secure IDs.
+                self.environment.syncLibrary.forgetSecureProjectionMetadata()
                 self.tableView.reloadData()
             } catch {
                 self.showError(title: "Couldn’t Remove Secure Snippets", error: error)
