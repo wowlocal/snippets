@@ -8,6 +8,24 @@ import AppKit
 /// "Placeholder" already means a `{clipboard}`-style token everywhere else in
 /// this app, hence `emptyStatePrompt`.
 final class SnippetContentTextView: NSTextView {
+    /// True only across the interval in which this view may hold plaintext
+    /// decrypted from a secure snippet. The controller flips this before
+    /// assigning the plaintext and after clearing it; ordinary snippets retain
+    /// NSTextView's normal accessibility behavior.
+    private(set) var mayContainSecurePlaintext = false
+
+    func prepareForSecurePlaintextAccessibility() {
+        assert(isAccessibilityProtectedContent(), "Set AppKit AX protection before secure presentation")
+        mayContainSecurePlaintext = true
+    }
+
+    func securePlaintextWasClearedFromAccessibility() {
+        // The ordering is part of the security boundary. In Debug, catch a new
+        // caller that tries to make the value public while the secret remains.
+        assert(string.isEmpty, "Clear secure plaintext before removing AX protection")
+        mayContainSecurePlaintext = false
+    }
+
     var emptyStatePrompt: String = "" {
         didSet { needsDisplay = true }
     }

@@ -344,12 +344,13 @@ extension ViewController {
         guard let snippet = selectedSnippet else {
             isApplyingSnippetToEditor = true
             editingSnippetID = nil
-            if !nameField.stringValue.isEmpty {
-                nameField.stringValue = ""
-            }
+            clearSecurePlaintextPresentation()
             if !snippetTextView.string.isEmpty {
                 resetContentUndoHistory()
                 snippetTextView.string = ""
+            }
+            if !nameField.stringValue.isEmpty {
+                nameField.stringValue = ""
             }
             if !keywordField.stringValue.isEmpty {
                 keywordField.stringValue = ""
@@ -376,6 +377,10 @@ extension ViewController {
     func applySnippetToEditor(_ snippet: Snippet) {
         isApplyingSnippetToEditor = true
         editingSnippetID = snippet.id
+        // A rebind replaces the old editor and preview values before their
+        // protected-content attributes are made public again. This is needed
+        // even when the destination is an ordinary snippet.
+        clearSecurePlaintextPresentation()
         if nameField.stringValue != snippet.name {
             nameField.stringValue = snippet.name
         }
@@ -532,9 +537,19 @@ extension ViewController {
     /// guard: it is a placeholder on a fixed-height single-line field, so nothing
     /// reflows, but there is no reason to redraw it for an unchanged string.
     func updateNameFieldPlaceholder() {
-        let firstLine = snippetTextView.string
-            .prefix(while: { !$0.isNewline })
-            .trimmingCharacters(in: .whitespaces)
+        // For an ordinary snippet this is useful derived UI. For a secure one it
+        // would create a third plaintext-bearing accessibility element: AX can
+        // expose a text field's placeholder even while its visible value (the
+        // intentionally non-private secure name) is non-empty. Never derive
+        // metadata/UI from the vault body.
+        let firstLine: String
+        if let editingSnippetID, store.isSecure(editingSnippetID) {
+            firstLine = ""
+        } else {
+            firstLine = snippetTextView.string
+                .prefix(while: { !$0.isNewline })
+                .trimmingCharacters(in: .whitespaces)
+        }
 
         let placeholder: String
         if firstLine.isEmpty {
@@ -933,7 +948,10 @@ extension ViewController {
         func mask(_ message: String, action: String? = nil) {
             secureContentEditableForID = nil
             resetContentUndoHistory()
-            snippetTextView.string = ""
+            clearSecurePlaintextPresentation()
+            if !snippetTextView.string.isEmpty {
+                snippetTextView.string = ""
+            }
             snippetTextView.isEditable = false
             secureLockOverlayLabel.stringValue = message
             secureLockOverlayButton.isEnabled = action != nil
@@ -960,7 +978,12 @@ extension ViewController {
             mask("Hidden while Snippets is in the background.")
             return
         }
+        guard app.secureContentAccessibilityProtection.canPresentSecurePlaintext else {
+            mask("Protected-content accessibility is unavailable, so this snippet stays hidden.")
+            return
+        }
         guard app.vaultSession.state.isUnlocked,
+              beginSecurePlaintextPresentation(),
               let text = try? app.secureStore.content(for: snippet.id) else {
             mask("Locked. Click to unlock with Touch ID or your login password.", action: "unlock")
             return
@@ -972,6 +995,51 @@ extension ViewController {
         secureLockOverlay.isHidden = true
         secureContentEditableForID = snippet.id
         updatePreview(withTemplate: text)
+    }
+
+    /// Opens the accessibility side of the secure presentation boundary. This
+    /// is deliberately a small ViewController API: screen-capture and
+    /// exfiltration defenses can join the same reveal/mask transition without
+    /// duplicating AX calls or weakening their ordering.
+    @discardableResult
+    func beginSecurePlaintextPresentation() -> Bool {
+        guard let app = NSApp.delegate as? AppDelegate,
+              app.secureContentAccessibilityProtection.beginProtecting(
+                  [snippetTextView, previewValueField]
+              ) else { return false }
+        snippetTextView.prepareForSecurePlaintextAccessibility()
+        return true
+    }
+
+    /// Clears every current UI copy before making either AX element ordinary.
+    /// Safe to call redundantly from selection, lock, activation and teardown
+    /// paths.
+    func clearSecurePlaintextPresentation() {
+        let wasProtected = snippetTextView.mayContainSecurePlaintext
+            || snippetTextView.isAccessibilityProtectedContent()
+            || previewValueField.isAccessibilityProtectedContent()
+        guard wasProtected else { return }
+
+        if !snippetTextView.string.isEmpty {
+            resetContentUndoHistory()
+            snippetTextView.string = ""
+        }
+        updatePreview(withTemplate: "")
+
+        if let app = NSApp.delegate as? AppDelegate {
+            snippetTextView.securePlaintextWasClearedFromAccessibility()
+            app.secureContentAccessibilityProtection.endProtecting(
+                [snippetTextView, previewValueField]
+            )
+        } else {
+            // A controller instantiated outside the production application
+            // graph must still leave no stale protected state behind.
+            snippetTextView.securePlaintextWasClearedFromAccessibility()
+            assert(snippetTextView.string.isEmpty)
+            assert(previewValueField.stringValue.isEmpty)
+            snippetTextView.setAccessibilityProtectedContent(false)
+            previewValueField.setAccessibilityProtectedContent(false)
+        }
     }
 
     /// Drops the content editor's undo history.
@@ -988,6 +1056,7 @@ extension ViewController {
     /// previously selected secure snippet would stay over the next one.
     func clearSecureEditorChrome() {
         secureContentEditableForID = nil
+        clearSecurePlaintextPresentation()
         secureLockOverlay.isHidden = true
         secureCaptionLabel.isHidden = true
         secureDemoteStrip.isHidden = true

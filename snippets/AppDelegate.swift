@@ -47,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let diagnostics = DiagnosticsService.shared
     let usageStore = SnippetUsageStore()
     let store = SnippetStore()
+    /// AppKit ignores per-view protected-content attributes unless the process
+    /// first opts into the application-wide contract. Kept as a separate,
+    /// injectable object so the fail-closed path is deterministic in tests.
+    let secureContentAccessibilityProtection = SecureContentAccessibilityProtection()
     /// Constructed eagerly but does nothing until a vault exists: with no key it settles
     /// into `.noKey` without ever touching the keychain, so there is no prompt and no
     /// cost for the vast majority of users who never create a secure snippet.
@@ -137,6 +141,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         else { return false }
         let code = reason.enumCodeValue
         return code == kAEShutDown || code == kAERestart || code == kAEReallyLogOut
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // This must precede storyboard-driven editor population. If AppKit
+        // refuses the protected-content contract, secure metadata remains
+        // usable but the editor will refuse to decrypt and reveal the body.
+        // Do not log the body (or include it in an error) on this path.
+        secureContentAccessibilityProtection.registerApplication()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
