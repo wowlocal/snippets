@@ -3,6 +3,27 @@ import Foundation
 
 // App target only — CloudKit never crosses into CorePackage or snippets-cli.
 
+/// Transfers cancellation ownership out of the live driver state. Each scheduler epoch
+/// belongs to one cancellation drain, so later shutdown/recovery passes cannot re-enter
+/// CloudKit with the same instance.
+nonisolated enum CloudKitEngineCancellationDrain {
+    static func take<Engine: AnyObject>(
+        active: inout Engine?,
+        retired: inout [Engine]
+    ) -> [Engine] {
+        if let current = active {
+            retired.append(current)
+            active = nil
+        }
+
+        var seen: Set<ObjectIdentifier> = []
+        let drained = retired.filter { seen.insert(ObjectIdentifier($0)).inserted }
+        retired.removeAll(keepingCapacity: false)
+        return drained
+    }
+
+}
+
 /// Thin CKSyncEngine delegate/driver. It translates Apple callback values into neutral
 /// DTOs; durable ordering, inbox replay, journal ownership, and account policy live in
 /// `CloudKitSyncTransportAdapter` and Core's existing `SyncEngine`.
@@ -168,6 +189,18 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
         do {
             try await engine.sendChanges()
         } catch {
+            if CloudKitErrorMapping.containsZoneInvalidation(error, for: zoneID) {
+                poison(engine)
+                await deliver(.remoteDataLoss(.zoneDeleted))
+                return
+            }
+            // CKSyncEngine has already awaited and delivered the per-record outcomes.
+            // Let the adapter consume them; any item absent from those callbacks remains
+            // retryable in `finishSubmit()` and is never mistaken for an acceptance.
+            if CloudKitErrorMapping.isIncompleteOperationResult(error) { return }
+            Diagnostics.record(.cloudKitFailure(
+                operation: .modifyRecords,
+                failure: DiagnosticFailure(error)))
             throw CloudKitErrorMapping.failure(for: error)
         }
     }
@@ -182,7 +215,17 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
             options.scope = .zoneIDs([zoneID])
             try await engine.fetchChanges(options)
         } catch {
-            throw CloudKitErrorMapping.failure(for: error)
+            if CloudKitErrorMapping.containsZoneInvalidation(error, for: zoneID) {
+                poison(engine)
+                await deliver(.remoteDataLoss(.zoneDeleted))
+                return
+            }
+            let scopedError = CloudKitErrorMapping.zoneError(in: error, for: zoneID)
+                ?? error
+            Diagnostics.record(.cloudKitFailure(
+                operation: .fetchChanges,
+                failure: DiagnosticFailure(scopedError)))
+            throw CloudKitErrorMapping.failure(for: scopedError)
         }
     }
 
@@ -191,11 +234,15 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
         // transport shutdown may arrive concurrently. Serialize the whole drain + await
         // operation: a later shutdown must join the in-flight cancellation instead of
         // observing an already-drained retiredEngines array and returning too early.
+        // Taking the active engine also detaches it, which makes a second cancellation
+        // drain a no-op instead of re-entering CloudKit with the same scheduler epoch.
         await cancellationBarrier.perform { [self] in
             let toCancel = lock.withLock { () -> [CKSyncEngine] in
-                var engines = retiredEngines
-                retiredEngines.removeAll(keepingCapacity: false)
-                if let engine { engines.append(engine) }
+                let engines = CloudKitEngineCancellationDrain.take(
+                    active: &engine,
+                    retired: &retiredEngines)
+                activeBatchProvider = nil
+                issuedRecords.removeAll(keepingCapacity: false)
                 return engines
             }
             for engine in toCancel {
@@ -266,12 +313,18 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
                 return
             }
             if let error = finished.error {
-                if CloudKitErrorMapping.isZoneInvalidated(error) {
+                Diagnostics.record(.cloudKitFailure(
+                    operation: .fetchChanges,
+                    failure: DiagnosticFailure(error)))
+                if CloudKitErrorMapping.containsZoneInvalidation(error, for: zoneID) {
                     poison(syncEngine)
                     await deliver(.remoteDataLoss(.zoneDeleted))
                 } else {
+                    let scopedError = CloudKitErrorMapping.zoneError(
+                        in: error,
+                        for: zoneID) ?? error
                     await deliver(.operationFailed(
-                        CloudKitErrorMapping.failure(for: error)))
+                        CloudKitErrorMapping.failure(for: scopedError)))
                 }
             }
 
@@ -288,7 +341,10 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
                 return
             }
             if sent.failedRecordSaves.contains(where: {
-                CloudKitErrorMapping.isZoneInvalidated($0.error)
+                Self.failedSaveInvalidatesZone(
+                    failedRecord: $0.record,
+                    error: $0.error,
+                    zoneID: zoneID)
             }) {
                 poison(syncEngine)
                 await deliver(.remoteDataLoss(.zoneDeleted))
@@ -315,13 +371,19 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
 
         case .sentDatabaseChanges(let sent):
             if let failed = sent.failedZoneSaves.first(where: { $0.zone.zoneID == zoneID }) {
-                if CloudKitErrorMapping.isZoneInvalidated(failed.error) {
+                if CloudKitErrorMapping.containsZoneInvalidation(
+                    failed.error,
+                    for: zoneID
+                ) {
                     poison(syncEngine)
                     await deliver(.remoteDataLoss(.zoneDeleted))
                     return
                 } else {
+                    let scopedError = CloudKitErrorMapping.zoneError(
+                        in: failed.error,
+                        for: zoneID) ?? failed.error
                     await deliver(.operationFailed(
-                        CloudKitErrorMapping.failure(for: failed.error)))
+                        CloudKitErrorMapping.failure(for: scopedError)))
                 }
             }
             if sent.deletedZoneIDs.contains(zoneID) || sent.failedZoneDeletes[zoneID] != nil {
@@ -484,9 +546,16 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
             matching: failedRecord.recordID,
             issued: issued,
             zoneID: zoneID) else { return nil }
+        guard let recordError = CloudKitErrorMapping.recordError(
+            in: error,
+            for: failedRecord.recordID) else {
+            return .rejected(
+                id: offered.id,
+                rejection: .rateLimited(retryAfter: 5))
+        }
         let outcome = CloudKitTransport.submissionOutcome(
             for: offered,
-            result: .failure(error),
+            result: .failure(recordError),
             expectedZoneID: zoneID)
         switch outcome {
         case .accepted(let rev, let version):
@@ -494,6 +563,18 @@ nonisolated final class CloudKitSyncEngineDriver: NSObject,
         case .rejected(let rejection):
             return .rejected(id: offered.id, rejection: rejection)
         }
+    }
+
+    static func failedSaveInvalidatesZone(
+        failedRecord: CKRecord,
+        error: any Error,
+        zoneID: CKRecordZone.ID
+    ) -> Bool {
+        guard failedRecord.recordID.zoneID == zoneID,
+              let recordError = CloudKitErrorMapping.recordError(
+                in: error,
+                for: failedRecord.recordID) else { return false }
+        return CloudKitErrorMapping.isZoneInvalidated(recordError)
     }
 
     static func savedSentResult(
@@ -564,7 +645,11 @@ actor CloudKitSingleFlightCancellationBarrier {
         generation &+= 1
         let ownGeneration = generation
         let prior = tail
-        let task = Task {
+        // CKSyncEngine marks its delegate callback task with private task-local state and
+        // traps if a callback-capable API inherits that context. The barrier may itself be
+        // entered by callback maintenance, so this boundary must be detached rather than
+        // merely delayed until `handleEvent` returns.
+        let task = Task.detached {
             if let prior { await prior.value }
             await operation()
         }

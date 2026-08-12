@@ -292,15 +292,11 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     }
 
     private func confirmResumeAfterReview() {
-        let alert = UIAlertController(
-            title: "Resume iCloud Sync?",
-            message: "This clears the safety halt and immediately attempts another sync round.",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Resume", style: .default) { [weak self] _ in
+        let alert = SyncResumeConfirmation.makeAlert(
+            statusDescription: environment.syncCoordinator.statusDescription
+        ) { [weak self] in
             self?.environment.syncCoordinator.clearHaltAfterUserReview()
-        })
+        }
         present(alert, animated: true)
     }
 

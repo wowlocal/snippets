@@ -381,6 +381,46 @@ final class PhoneLibraryUXTests: XCTestCase {
         XCTAssertFalse(table.refreshControl?.isRefreshing == true)
     }
 
+    func testRecoverableSafetyHaltBannerOffersResumeButRemoteResetDoesNot() {
+        let banner = PhoneSyncStatusBanner()
+        var resumeRequests = 0
+        banner.onRequestResume = { resumeRequests += 1 }
+
+        banner.configure(
+            state: .halted(.accountChanged, detail: "Account review is required."),
+            status: "Stopped because the iCloud account changed.",
+            isFirstFetch: false
+        )
+
+        XCTAssertTrue(banner.isUserInteractionEnabled)
+        XCTAssertTrue(banner.accessibilityTraits.contains(.button))
+        XCTAssertTrue(banner.accessibilityActivate())
+        XCTAssertEqual(resumeRequests, 1)
+
+        banner.configure(
+            state: .halted(.remoteDataReset, detail: "The remote library was reset."),
+            status: "Stopped because the remote library was reset.",
+            isFirstFetch: false
+        )
+
+        XCTAssertFalse(banner.isUserInteractionEnabled)
+        XCTAssertFalse(banner.accessibilityTraits.contains(.button))
+        XCTAssertFalse(banner.accessibilityActivate())
+        XCTAssertEqual(resumeRequests, 1)
+    }
+
+    func testResumeConfirmationExplainsTheSafetyStopBeforeOfferingResume() {
+        let alert = SyncResumeConfirmation.makeAlert(
+            statusDescription: "Stopped because the iCloud account changed."
+        ) {}
+
+        XCTAssertEqual(alert.title, "Resume iCloud Sync?")
+        XCTAssertTrue(alert.message?.contains("iCloud account changed") == true)
+        XCTAssertTrue(alert.message?.contains("clear the safety stop") == true)
+        XCTAssertEqual(alert.actions.map(\.title), ["Cancel", "Resume"])
+        XCTAssertEqual(alert.actions.map(\.style), [.cancel, .default])
+    }
+
     @discardableResult
     private func host(
         _ controller: UIViewController,

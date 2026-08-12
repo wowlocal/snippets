@@ -402,6 +402,9 @@ final class PhoneLibraryViewController: UIViewController {
             bottom: 0,
             trailing: PhoneLibraryLayout.headerHorizontalInset
         )
+        syncStatusBanner.onRequestResume = { [weak self] in
+            self?.confirmResumeAfterReview()
+        }
         syncStatusHeader.addSubview(syncStatusBanner)
         NSLayoutConstraint.activate([
             syncStatusBanner.leadingAnchor.constraint(
@@ -579,6 +582,19 @@ final class PhoneLibraryViewController: UIViewController {
         // State changes are visual only. Pull-to-refresh owns the haptic for an explicit
         // user gesture; background polling must never manufacture one by moving insets.
         view.setNeedsLayout()
+    }
+
+    private func confirmResumeAfterReview() {
+        guard case .halted(let reason, _) = environment.syncCoordinator.state,
+              reason.isUserRecoverable,
+              presentedViewController == nil else { return }
+
+        let alert = SyncResumeConfirmation.makeAlert(
+            statusDescription: environment.syncCoordinator.statusDescription
+        ) { [weak self] in
+            self?.environment.syncCoordinator.clearHaltAfterUserReview()
+        }
+        present(alert, animated: true)
     }
 
     private func requestedRefresh() {
@@ -1449,10 +1465,16 @@ private final class PhoneTagFilterViewController: UITableViewController {
     }
 }
 
-private final class PhoneSyncStatusBanner: UIVisualEffectView {
+final class PhoneSyncStatusBanner: UIVisualEffectView {
     private let symbolView = UIImageView()
     private let activityIndicator = UIActivityIndicatorView(style: .medium)
     private let statusLabel = UILabel()
+    private let resumeLabel = UILabel()
+    private let resumeSymbolView = UIImageView()
+    private let resumeGroup = UIStackView()
+    private var isResumeAvailable = false
+
+    var onRequestResume: (() -> Void)?
 
     init() {
         let glass = UIGlassEffect(style: .regular)
@@ -1464,6 +1486,7 @@ private final class PhoneSyncStatusBanner: UIVisualEffectView {
         clipsToBounds = true
         accessibilityIdentifier = "phone-sync-status"
         isAccessibilityElement = true
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(requestResume)))
 
         symbolView.translatesAutoresizingMaskIntoConstraints = false
         symbolView.tintColor = AppTheme.tint
@@ -1476,12 +1499,36 @@ private final class PhoneSyncStatusBanner: UIVisualEffectView {
         statusLabel.textColor = .secondaryLabel
         statusLabel.numberOfLines = 1
         statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        resumeLabel.font = AppTheme.scaledFont(size: 12, weight: .semibold, textStyle: .footnote)
+        resumeLabel.adjustsFontForContentSizeCategory = true
+        resumeLabel.textColor = AppTheme.tint
+        resumeLabel.text = "Resume"
+        resumeLabel.accessibilityIdentifier = "phone-sync-resume-label"
+
+        resumeSymbolView.image = UIImage(systemName: "chevron.right")
+        resumeSymbolView.tintColor = AppTheme.tint
+        resumeSymbolView.contentMode = .scaleAspectFit
+        resumeSymbolView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            resumeSymbolView.widthAnchor.constraint(equalToConstant: 8),
+            resumeSymbolView.heightAnchor.constraint(equalToConstant: 12),
+        ])
+
+        resumeGroup.addArrangedSubview(resumeLabel)
+        resumeGroup.addArrangedSubview(resumeSymbolView)
+        resumeGroup.axis = .horizontal
+        resumeGroup.alignment = .center
+        resumeGroup.spacing = 4
+        resumeGroup.isHidden = true
+        resumeGroup.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let leadingStatus = UIView()
         leadingStatus.translatesAutoresizingMaskIntoConstraints = false
         leadingStatus.addSubview(symbolView)
         leadingStatus.addSubview(activityIndicator)
-        let row = UIStackView(arrangedSubviews: [leadingStatus, statusLabel])
+        let row = UIStackView(arrangedSubviews: [leadingStatus, statusLabel, resumeGroup])
         row.translatesAutoresizingMaskIntoConstraints = false
         row.axis = .horizontal
         row.alignment = .center
@@ -1544,11 +1591,23 @@ private final class PhoneSyncStatusBanner: UIVisualEffectView {
         }
 
         statusLabel.text = text
+        isResumeAvailable = if case .halted(let reason, _) = state {
+            reason.isUserRecoverable
+        } else {
+            false
+        }
+        resumeGroup.isHidden = !isResumeAvailable
+        isUserInteractionEnabled = isResumeAvailable
         accessibilityLabel = "iCloud Sync"
         accessibilityValue = state.requiresSyncAttention ? status : text
-        accessibilityHint = state.requiresSyncAttention
-            ? "Open Settings for details and recovery actions"
-            : nil
+        accessibilityTraits = isResumeAvailable ? .button : .staticText
+        if isResumeAvailable {
+            accessibilityHint = "Review the safety stop and choose whether to resume sync"
+        } else {
+            accessibilityHint = state.requiresSyncAttention
+                ? "Open Settings for details and recovery actions"
+                : nil
+        }
 
         let isSyncing = state.isSyncing
         symbolView.isHidden = isSyncing
@@ -1559,6 +1618,20 @@ private final class PhoneSyncStatusBanner: UIVisualEffectView {
             activityIndicator.stopAnimating()
             symbolView.image = UIImage(systemName: symbolName)
         }
+    }
+
+    override func accessibilityActivate() -> Bool {
+        performResumeRequestIfAvailable()
+    }
+
+    @objc private func requestResume() {
+        _ = performResumeRequestIfAvailable()
+    }
+
+    private func performResumeRequestIfAvailable() -> Bool {
+        guard isResumeAvailable else { return false }
+        onRequestResume?()
+        return true
     }
 }
 

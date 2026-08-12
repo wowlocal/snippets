@@ -4,6 +4,10 @@ import XCTest
 
 @testable import Snippets
 
+private nonisolated enum CloudKitCancellationTaskContext {
+    @TaskLocal static var insideDelegateCallback = false
+}
+
 /// Deterministic tests for the project-owned adapter around `CKSyncEngine`.
 ///
 /// The fake driver never creates a `CKContainer`.  It models delegate callbacks and
@@ -255,6 +259,85 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         XCTAssertEqual(
             generations.map(\.serialization),
             [Data("S1".utf8), Data("S2".utf8)])
+    }
+
+    func testScheduledAndManualFetchOverlapCommitsTheirUnionAtFinalWatermark() async throws {
+        try store().saveStateSerialization(Data("old-state".utf8), for: account)
+        let fixture = try makeAdapter()
+        let r1 = wire(id: "41414141-4141-4141-8141-414141414141", rev: "R1")
+        let r2 = wire(id: "42424242-4242-4242-8242-424242424242", rev: "R2")
+
+        await fixture.driver.deliver(.willFetch)
+        fixture.driver.onFetch = { [driver = fixture.driver] in
+            await driver.deliver(.willFetch)
+            await driver.deliver(.fetchedRecords([r1], physicalDeletionCount: 0))
+            await driver.deliver(.stateUpdate(Data("S1".utf8)))
+            await driver.deliver(.didFetch)
+        }
+
+        let manualResult = try await fixture.adapter.fetchChanges(since: nil)
+        XCTAssertTrue(manualResult.records.isEmpty)
+        XCTAssertEqual(try loadedCheckpoint().serialization, Data("old-state".utf8))
+
+        await fixture.driver.deliver(.fetchedRecords([r2], physicalDeletionCount: 0))
+        await fixture.driver.deliver(.stateUpdate(Data("S2".utf8)))
+        await fixture.driver.deliver(.didFetch)
+
+        let checkpoint = try loadedCheckpoint()
+        XCTAssertEqual(checkpoint.serialization, Data("S2".utf8))
+        XCTAssertEqual(checkpoint.generations.count, 1)
+        XCTAssertEqual(checkpoint.generations.first?.records, [r1, r2])
+        XCTAssertEqual(checkpoint.generations.first?.serialization, Data("S2".utf8))
+    }
+
+    func testTransientFailureDuringOverlapRetiresSchedulerBeforeSurvivorCallbacks() async throws {
+        let durableState = Data("overlap-S0".utf8)
+        try store().saveStateSerialization(durableState, for: account)
+        let fixture = try makeAdapter()
+        let cancellationGate = TransportReplacementGate()
+        let cancellationStarted = LockedBox(false)
+        defer { cancellationGate.open() }
+        fixture.driver.onCancel = {
+            cancellationStarted.set(true)
+            await cancellationGate.wait()
+        }
+
+        await fixture.driver.deliver(.willFetch)
+        await fixture.driver.deliver(.willFetch)
+        await fixture.driver.deliver(
+            .operationFailed(.unreachable(detail: "one overlapping fetch failed")))
+
+        let didStartCancellation = await eventually { cancellationStarted.value }
+        XCTAssertTrue(didStartCancellation)
+        await fixture.driver.deliver(.stateUpdate(Data("unsafe-late-state".utf8)))
+        await fixture.driver.deliver(.didFetch)
+
+        XCTAssertEqual(try loadedCheckpoint().serialization, durableState)
+        XCTAssertGreaterThanOrEqual(fixture.driver.ignoredLateEventCount, 2)
+
+        cancellationGate.open()
+        let didRestart = await eventually {
+            fixture.driver.restartSerializations == [durableState]
+        }
+        XCTAssertTrue(didRestart)
+    }
+
+    func testThrownManualFetchDuringScheduledFetchRestartsFromDurableState() async throws {
+        let durableState = Data("throw-overlap-S0".utf8)
+        try store().saveStateSerialization(durableState, for: account)
+        let fixture = try makeAdapter()
+        await fixture.driver.deliver(.willFetch)
+        fixture.driver.onFetch = {
+            throw SyncTransportFailure.unreachable(detail: "manual fetch failed")
+        }
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await fixture.adapter.fetchChanges(since: nil)
+        }
+
+        XCTAssertEqual(try loadedCheckpoint().serialization, durableState)
+        XCTAssertEqual(fixture.driver.cancelCount, 1)
+        XCTAssertEqual(fixture.driver.restartSerializations, [durableState])
     }
 
     func testRecordsArrivingAfterStateRequireANewerWatermarkBeforeCommit() async throws {
@@ -1554,6 +1637,70 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
             order.value,
             ["terminal-start", "terminal-finish", "shutdown-start", "shutdown-finish"],
             "cancellation maintenance must complete in FIFO order")
+    }
+
+    func testCancellationDrainDetachesEachEngineEpochExactlyOnce() {
+        let original = NSObject()
+        var active: NSObject? = original
+        var retired: [NSObject] = []
+
+        let first = CloudKitEngineCancellationDrain.take(
+            active: &active,
+            retired: &retired)
+        let repeated = CloudKitEngineCancellationDrain.take(
+            active: &active,
+            retired: &retired)
+
+        XCTAssertNil(active)
+        XCTAssertTrue(retired.isEmpty)
+        XCTAssertEqual(first.count, 1)
+        XCTAssertTrue(first[0] === original)
+        XCTAssertTrue(
+            repeated.isEmpty,
+            "a second cancellation pass must not re-enter CloudKit with the same engine")
+
+        let replacement = NSObject()
+        active = replacement
+        retired.append(replacement)
+        let replacementDrain = CloudKitEngineCancellationDrain.take(
+            active: &active,
+            retired: &retired)
+
+        XCTAssertEqual(replacementDrain.count, 1)
+        XCTAssertTrue(replacementDrain[0] === replacement)
+    }
+
+    func testCancellationBarrierDoesNotInheritDelegateTaskContext() async {
+        let barrier = CloudKitSingleFlightCancellationBarrier()
+        let inheritedMarker = LockedBox<Bool?>(nil)
+
+        await CloudKitCancellationTaskContext.$insideDelegateCallback.withValue(true) {
+            await barrier.perform {
+                inheritedMarker.set(CloudKitCancellationTaskContext.insideDelegateCallback)
+            }
+        }
+
+        XCTAssertEqual(
+            inheritedMarker.value,
+            false,
+            "CKSyncEngine APIs must run outside the task-local context of its delegate")
+    }
+
+    func testMaintenanceQueueDoesNotInheritDelegateTaskContext() async {
+        let queue = CloudKitAdapterMaintenanceQueue()
+        let inheritedMarker = LockedBox<Bool?>(nil)
+
+        CloudKitCancellationTaskContext.$insideDelegateCallback.withValue(true) {
+            queue.schedule {
+                inheritedMarker.set(CloudKitCancellationTaskContext.insideDelegateCallback)
+            }
+        }
+        await queue.waitUntilIdle()
+
+        XCTAssertEqual(
+            inheritedMarker.value,
+            false,
+            "callback maintenance must leave CKSyncEngine's delegate task-local context")
     }
 
     func testAdapterShutdownJoinsFireAndForgetTerminalCancellation() async throws {

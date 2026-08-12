@@ -738,7 +738,10 @@ nonisolated final class CloudKitAdapterMaintenanceQueue: @unchecked Sendable {
         }
         let prior = tail
         activeCount += 1
-        let task = Task { [self] in
+        // This queue is registered from inside CKSyncEngine's delegate callback. A plain
+        // Task inherits CloudKit's private callback task-local marker even if it waits for
+        // the handler to return; calling back into CKSyncEngine from that task then traps.
+        let task = Task.detached { [self] in
             if let prior { await prior.value }
             await operation()
             finishCurrentTask()
@@ -795,12 +798,8 @@ private nonisolated final class State: @unchecked Sendable {
         var records: [WireRecord] = []
         var physicalDeletionCount = 0
         var serialization: Data?
-        var didFetch = false
+        var activeFetchCount = 1
         var durableSerialization: Data?
-
-        var advancedSchedulerState: Bool {
-            !records.isEmpty || physicalDeletionCount > 0 || serialization != nil
-        }
     }
 
     private struct SubmitLease {
@@ -870,18 +869,15 @@ private nonisolated final class State: @unchecked Sendable {
             manualFetchDepth -= 1
             guard let stage = fetchStage else { return }
 
-            // A no-op fetch is allowed to leave the scheduler state unchanged. Any
-            // fetched record, physical deletion, or unfinished lifecycle without a
-            // following state update cannot be made crash-safe and therefore fails
-            // closed instead of advancing from an older serialization.
-            if stage.didFetch,
-               stage.records.isEmpty,
-               stage.physicalDeletionCount == 0,
-               stage.serialization == nil {
-                fetchStage = nil
-                return
-            }
+            // The explicit fetch can finish while a scheduler-owned fetch remains open.
+            // Its later didFetch/stateUpdate will commit and notify Core; returning the
+            // current durable inbox now is safe and avoids turning legal overlap into a
+            // sticky protocol halt.
+            guard stage.activeFetchCount == 0 else { return }
 
+            // Empty completed fetches and completed fetches with a durable state update
+            // remove their stage in the callback path. A zero-depth stage left here has
+            // data that cannot be paired with a restorable scheduler state.
             let failure = SyncTransportFailure.rejected(.permanent(
                 detail: "CloudKit finished fetching before a restorable scheduler state was persisted"))
             terminalFailure = failure
@@ -895,9 +891,12 @@ private nonisolated final class State: @unchecked Sendable {
     func abortManualFetch() -> RestartRequest? {
         lock.withLock {
             manualFetchDepth = max(0, manualFetchDepth - 1)
-            let rollback = fetchStage?.advancedSchedulerState == true
-                ? RestartRequest(serialization: fetchStage?.durableSerialization)
-                : nil
+            // Another scheduler-owned fetch may still be alive even if this stage has
+            // not delivered records or state yet. Retire the whole scheduler epoch so
+            // its later callbacks cannot advance the durable watermark outside a stage.
+            let rollback = fetchStage.map {
+                RestartRequest(serialization: $0.durableSerialization)
+            }
             fetchStage = nil
             return rollback
         }
@@ -1011,9 +1010,15 @@ private nonisolated final class State: @unchecked Sendable {
 
         switch event {
         case .willFetch:
-            guard fetchStage == nil else {
-                throw SyncTransportFailure.rejected(.permanent(
-                    detail: "CloudKit started an overlapping fetch transaction"))
+            if var stage = fetchStage {
+                // Automatic scheduling and an explicit startup/foreground fetch may
+                // overlap. CKSyncEngine serializes callbacks but can nest their fetch
+                // lifecycles, and its record callbacks do not identify the originating
+                // operation. Aggregate the nested lifecycles and commit their union only
+                // after the last didFetch under one sufficiently new state serialization.
+                stage.activeFetchCount += 1
+                fetchStage = stage
+                return HandleOutcome()
             }
             let durableSerialization: Data?
             switch checkpointStore.load(for: accountIdentity) {
@@ -1050,7 +1055,7 @@ private nonisolated final class State: @unchecked Sendable {
             if var stage = fetchStage {
                 stage.serialization = serialization
                 fetchStage = stage
-                if stage.didFetch {
+                if stage.activeFetchCount == 0 {
                     try commitFetch(stage)
                     fetchStage = nil
                     return HandleOutcome(notifyCore: manualFetchDepth == 0)
@@ -1063,7 +1068,15 @@ private nonisolated final class State: @unchecked Sendable {
 
         case .didFetch:
             guard var stage = fetchStage else { return HandleOutcome() }
-            stage.didFetch = true
+            guard stage.activeFetchCount > 0 else {
+                throw SyncTransportFailure.rejected(.permanent(
+                    detail: "CloudKit completed an unpaired fetch transaction"))
+            }
+            stage.activeFetchCount -= 1
+            if stage.activeFetchCount > 0 {
+                fetchStage = stage
+                return HandleOutcome()
+            }
             if stage.serialization == nil {
                 if stage.records.isEmpty, stage.physicalDeletionCount == 0 {
                     fetchStage = nil
@@ -1095,7 +1108,7 @@ private nonisolated final class State: @unchecked Sendable {
 
     private func recordFailureUnlocked(_ failure: SyncTransportFailure) -> HandleOutcome {
         guard terminalFailure == nil else { return HandleOutcome() }
-        let interruptedAdvancedFetch = fetchStage?.advancedSchedulerState == true
+        let interruptedFetch = fetchStage != nil
         let durableSerialization = fetchStage?.durableSerialization
         fetchStage = nil
         switch failure {
@@ -1111,7 +1124,7 @@ private nonisolated final class State: @unchecked Sendable {
                 cancelAfterCallback: true)
         case .unreachable, .pushUnsupported, .rejected:
             operationFailure = failure
-            if interruptedAdvancedFetch {
+            if interruptedFetch {
                 pendingRestart = RestartRequest(serialization: durableSerialization)
                 return HandleOutcome(
                     notifyCore: true,

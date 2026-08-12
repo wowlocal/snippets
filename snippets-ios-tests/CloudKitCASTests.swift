@@ -316,6 +316,201 @@ final class CloudKitCASTests: XCTestCase {
         XCTAssertNotNil(remote.recordVersion)
     }
 
+    func testPartialFailureUnwrapsIssuedRecordConflict() throws {
+        let zoneID = zone()
+        let offered = wire(version: nil, rev: "fresh-create")
+        let failedRecord = try CloudKitRecordMapping.makeRecord(from: offered, in: zoneID)
+        let authoritativeWire = wire(version: nil, rev: "remote-winner")
+        let authoritativeRecord = try CloudKitRecordMapping.makeRecord(
+            from: authoritativeWire,
+            in: zoneID)
+        try assignServerChangeTag("nested-authoritative-conflict", to: authoritativeRecord)
+        let conflict = CKError(
+            .serverRecordChanged,
+            userInfo: [CKRecordChangedErrorServerRecordKey: authoritativeRecord])
+        let partial = CKError(
+            .partialFailure,
+            userInfo: [CKPartialErrorsByItemIDKey: [failedRecord.recordID: conflict]])
+
+        let result = CloudKitSyncEngineDriver.failedSentResult(
+            failedRecord: failedRecord,
+            error: partial,
+            issued: [offered.id: offered],
+            zoneID: zoneID)
+
+        guard case .rejected(let id, .conflict(remote: let remote?))? = result else {
+            return XCTFail("the partial-failure envelope must preserve its record conflict")
+        }
+        XCTAssertEqual(id, offered.id)
+        XCTAssertEqual(remote.rev, authoritativeWire.rev)
+        XCTAssertNotNil(remote.recordVersion)
+    }
+
+    func testPartialFailureWithoutMatchingItemRemainsRetryable() throws {
+        let zoneID = zone()
+        let offered = wire(version: nil, rev: "issued")
+        let failedRecord = try CloudKitRecordMapping.makeRecord(from: offered, in: zoneID)
+        let unrelatedID = CloudKitRecordMapping.recordID(for: UUID(), in: zoneID)
+        let partial = CKError(
+            .partialFailure,
+            userInfo: [CKPartialErrorsByItemIDKey: [unrelatedID: CKError(.unknownItem)]])
+
+        let result = CloudKitSyncEngineDriver.failedSentResult(
+            failedRecord: failedRecord,
+            error: partial,
+            issued: [offered.id: offered],
+            zoneID: zoneID)
+
+        guard case .rejected(_, let rejection)? = result else {
+            return XCTFail("an incomplete item result must be retried, not omitted")
+        }
+        XCTAssertTrue(rejection.isRetryable)
+    }
+
+    func testOnlyIncompleteSendEnvelopesUseDelegateItemOutcomes() {
+        XCTAssertTrue(CloudKitErrorMapping.isIncompleteOperationResult(
+            CKError(.partialFailure)))
+        XCTAssertFalse(CloudKitErrorMapping.isIncompleteOperationResult(
+            CKError(.serverRecordChanged)))
+
+        guard case .unreachable = CloudKitErrorMapping.failure(
+            for: CKError(.partialFailure)) else {
+            return XCTFail("an incomplete fetch result must remain retryable")
+        }
+    }
+
+    func testNestedZoneLossStillUsesNonResumableSafetyPolicy() throws {
+        let zoneID = zone()
+        let offered = wire(version: nil, rev: "zone-loss")
+        let failedRecord = try CloudKitRecordMapping.makeRecord(from: offered, in: zoneID)
+
+        for code in [CKError.Code.zoneNotFound, .userDeletedZone] {
+            let partial = CKError(
+                .partialFailure,
+                userInfo: [
+                    CKPartialErrorsByItemIDKey: [failedRecord.recordID: CKError(code)],
+                ])
+            XCTAssertTrue(CloudKitSyncEngineDriver.failedSaveInvalidatesZone(
+                failedRecord: failedRecord,
+                error: partial,
+                zoneID: zoneID))
+        }
+
+        let unrelatedID = CloudKitRecordMapping.recordID(for: UUID(), in: zoneID)
+        let unrelated = CKError(
+            .partialFailure,
+            userInfo: [
+                CKPartialErrorsByItemIDKey: [unrelatedID: CKError(.zoneNotFound)],
+            ])
+        XCTAssertFalse(CloudKitSyncEngineDriver.failedSaveInvalidatesZone(
+            failedRecord: failedRecord,
+            error: unrelated,
+            zoneID: zoneID))
+    }
+
+    func testOuterSendPartialFailureStillDetectsNestedZoneLoss() {
+        let zoneID = zone()
+        let recordID = CloudKitRecordMapping.recordID(for: snippetID, in: zoneID)
+
+        for code in [CKError.Code.zoneNotFound, .userDeletedZone] {
+            let partial = CKError(
+                .partialFailure,
+                userInfo: [
+                    CKPartialErrorsByItemIDKey: [recordID: CKError(code)],
+                ])
+            XCTAssertTrue(CloudKitErrorMapping.containsZoneInvalidation(
+                partial,
+                for: zoneID))
+        }
+
+        let foreignZoneID = zone("ForeignZone")
+        let foreignRecordID = CloudKitRecordMapping.recordID(
+            for: UUID(),
+            in: foreignZoneID)
+        let unrelated = CKError(
+            .partialFailure,
+            userInfo: [
+                CKPartialErrorsByItemIDKey: [foreignRecordID: CKError(.zoneNotFound)],
+            ])
+        XCTAssertFalse(CloudKitErrorMapping.containsZoneInvalidation(
+            unrelated,
+            for: zoneID))
+
+        let zoneEnvelope = CKError(
+            .partialFailure,
+            userInfo: [
+                CKPartialErrorsByItemIDKey: [zoneID: CKError(.userDeletedZone)],
+            ])
+        XCTAssertTrue(CloudKitErrorMapping.containsZoneInvalidation(
+            zoneEnvelope,
+            for: zoneID),
+            "fetch and zone-save envelopes must use the same reset policy")
+    }
+
+    func testFetchPartialFailurePreservesScopedAuthenticationAndPermanentPolicy() {
+        let zoneID = zone()
+        let cases: [(CKError.Code, (SyncTransportFailure) -> Bool)] = [
+            (.notAuthenticated, { failure in
+                guard case .rejected(.authenticationRequired) = failure else { return false }
+                return true
+            }),
+            (.badContainer, { failure in
+                guard case .rejected(.permanent) = failure else { return false }
+                return true
+            }),
+        ]
+
+        for (code, matchesExpectedPolicy) in cases {
+            let envelope = CKError(
+                .partialFailure,
+                userInfo: [
+                    CKPartialErrorsByItemIDKey: [zoneID: CKError(code)],
+                ])
+            guard let scoped = CloudKitErrorMapping.zoneError(
+                in: envelope,
+                for: zoneID) else {
+                XCTFail("expected a scoped error for \(code)")
+                continue
+            }
+            XCTAssertTrue(matchesExpectedPolicy(CloudKitErrorMapping.failure(for: scoped)))
+        }
+    }
+
+    func testFetchPartialFailurePolicyDoesNotDependOnDictionaryOrder() {
+        let zoneID = zone()
+        let firstID = CloudKitRecordMapping.recordID(for: UUID(), in: zoneID)
+        let secondID = CloudKitRecordMapping.recordID(for: UUID(), in: zoneID)
+
+        for decisiveCode in [CKError.Code.notAuthenticated, .badContainer] {
+            for decisiveFirst in [true, false] {
+                var partials: [CKRecord.ID: any Error] = [:]
+                let ordered: [(CKRecord.ID, CKError)] = decisiveFirst
+                    ? [(firstID, CKError(decisiveCode)),
+                       (secondID, CKError(.networkFailure))]
+                    : [(firstID, CKError(.networkFailure)),
+                       (secondID, CKError(decisiveCode))]
+                for (recordID, error) in ordered { partials[recordID] = error }
+                let envelope = CKError(
+                    .partialFailure,
+                    userInfo: [CKPartialErrorsByItemIDKey: partials])
+
+                guard let scoped = CloudKitErrorMapping.zoneError(
+                    in: envelope,
+                    for: zoneID) else {
+                    XCTFail("expected a scoped error for \(decisiveCode)")
+                    continue
+                }
+                switch (decisiveCode, CloudKitErrorMapping.failure(for: scoped)) {
+                case (.notAuthenticated, .rejected(.authenticationRequired)),
+                     (.badContainer, .rejected(.permanent)):
+                    break
+                default:
+                    XCTFail("transient failure masked \(decisiveCode)")
+                }
+            }
+        }
+    }
+
     func testFailedSendCallbackOutsideIssuedLeaseOrZoneIsIgnored() throws {
         let zoneID = zone()
         let offered = wire(version: nil, rev: "issued")
@@ -355,7 +550,9 @@ final class CloudKitCASTests: XCTestCase {
             }
         }
 
-        let recoverableCodes: [CKError.Code] = [.changeTokenExpired, .unknownItem]
+        let recoverableCodes: [CKError.Code] = [
+            .changeTokenExpired, .unknownItem, .partialFailure,
+        ]
         for code in recoverableCodes {
             let rejection = CloudKitErrorMapping.rejection(for: CKError(code))
             XCTAssertTrue(rejection.isRetryable, "\(code) remains recoverable in the mapper")

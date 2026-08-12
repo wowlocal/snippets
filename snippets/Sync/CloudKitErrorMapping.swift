@@ -92,9 +92,15 @@ nonisolated enum CloudKitErrorMapping {
         // is not what this build thinks it is.
         case .alreadyShared, .tooManyParticipants, .participantMayNeedVerification,
              .participantAlreadyInvited,
-             .assetFileNotFound, .assetFileModified, .assetNotAvailable,
-             .resultsTruncated, .partialFailure:
+             .assetFileNotFound, .assetFileModified, .assetNotAvailable:
             return .permanent(detail: permanentDetail(for: ckError.code))
+
+        // These describe the envelope, not a permanent rejection of this record. A
+        // partial failure normally carries the actual per-item CKError; callers with an
+        // item identity unwrap it through `recordError(in:for:)`. Without that identity,
+        // retry rather than turn an incomplete response into a sticky account-review halt.
+        case .resultsTruncated, .partialFailure:
+            return .rateLimited(retryAfter: retryAfter(from: ckError))
 
         @unknown default:
             // A code Apple added since this was written. Retryable on purpose: refusing
@@ -112,7 +118,8 @@ nonisolated enum CloudKitErrorMapping {
         }
 
         switch ckError.code {
-        case .networkUnavailable, .networkFailure, .serverResponseLost, .internalError:
+        case .networkUnavailable, .networkFailure, .serverResponseLost, .internalError,
+             .resultsTruncated, .partialFailure:
             return .unreachable(detail: "CloudKit is temporarily unreachable")
         default:
             return .rejected(rejection(for: ckError))
@@ -145,10 +152,114 @@ nonisolated enum CloudKitErrorMapping {
         }
     }
 
+    /// Finds zone loss inside CloudKit's batch-level partial-failure envelopes while
+    /// ignoring failures explicitly attributed to another zone. `sendChanges()` can
+    /// throw this envelope after its delegate callbacks have completed, so checking only
+    /// the outer code would incorrectly turn a destructive reset into an ordinary retry.
+    static func containsZoneInvalidation(
+        _ error: any Error,
+        for zoneID: CKRecordZone.ID
+    ) -> Bool {
+        containsZoneInvalidation(error, for: zoneID, remainingDepth: 4)
+    }
+
+    private static func containsZoneInvalidation(
+        _ error: any Error,
+        for zoneID: CKRecordZone.ID,
+        remainingDepth: Int
+    ) -> Bool {
+        if isZoneInvalidated(error) { return true }
+        guard remainingDepth > 0,
+              let ckError = error as? CKError,
+              ckError.code == .partialFailure,
+              let partialErrors = ckError.partialErrorsByItemID else { return false }
+
+        return partialErrors.contains { itemID, nestedError in
+            let belongsToZone: Bool
+            if let recordID = itemID as? CKRecord.ID {
+                belongsToZone = recordID.zoneID == zoneID
+            } else if let failedZoneID = itemID as? CKRecordZone.ID {
+                belongsToZone = failedZoneID == zoneID
+            } else {
+                // Unknown item identities have no authority to reset this transport's
+                // established zone. Known direct zone-loss errors are handled above.
+                belongsToZone = false
+            }
+            return belongsToZone && containsZoneInvalidation(
+                nestedError,
+                for: zoneID,
+                remainingDepth: remainingDepth - 1)
+        }
+    }
+
+    /// Extracts the failure attributed to this transport's zone from a batch envelope.
+    /// Fetch APIs do not have per-record acceptance semantics, so their caller should map
+    /// this scoped error directly (authentication stays authentication, configuration
+    /// stays permanent) instead of flattening every partial failure into a network retry.
+    static func zoneError(
+        in error: any Error,
+        for zoneID: CKRecordZone.ID
+    ) -> (any Error)? {
+        scopedErrors(in: error, for: zoneID, remainingDepth: 4).max {
+            policyPriority(of: $0) < policyPriority(of: $1)
+        }
+    }
+
+    private static func scopedErrors(
+        in error: any Error,
+        for zoneID: CKRecordZone.ID,
+        remainingDepth: Int
+    ) -> [any Error] {
+        guard let ckError = error as? CKError,
+              ckError.code == .partialFailure else { return [error] }
+        guard remainingDepth > 0,
+              let partialErrors = ckError.partialErrorsByItemID else { return [] }
+
+        return partialErrors.flatMap { itemID, nestedError -> [any Error] in
+            let belongsToZone: Bool
+            if let recordID = itemID as? CKRecord.ID {
+                belongsToZone = recordID.zoneID == zoneID
+            } else if let failedZoneID = itemID as? CKRecordZone.ID {
+                belongsToZone = failedZoneID == zoneID
+            } else {
+                belongsToZone = false
+            }
+            guard belongsToZone else { return [] }
+            return scopedErrors(
+                in: nestedError,
+                for: zoneID,
+                remainingDepth: remainingDepth - 1)
+        }
+    }
+
+    private static func policyPriority(of error: any Error) -> Int {
+        if isZoneInvalidated(error) { return 4 }
+        switch failure(for: error) {
+        case .rejected(let rejection):
+            switch rejection {
+            case .authenticationRequired: return 3
+            case .permanent: return 2
+            case .conflict, .rateLimited: return 1
+            }
+        case .accountChanged, .checkpointUnreadable, .remoteDataReset:
+            return 3
+        case .unreachable, .pushUnsupported:
+            return 1
+        }
+    }
+
     /// Whether a batch should be split and retried rather than reported.
     static func isBatchTooLarge(_ error: any Error) -> Bool {
         guard let ckError = error as? CKError else { return false }
         return ckError.code == .limitExceeded
+    }
+
+    /// CKSyncEngine reports a partially accepted send both through per-record delegate
+    /// events and by throwing from `sendChanges()`. The delegate events are the
+    /// authoritative item outcomes; the outer error only says that not every item won.
+    static func isIncompleteOperationResult(_ error: any Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        return ckError.code == .partialFailure
     }
 
     // MARK: - userInfo
@@ -175,6 +286,26 @@ nonisolated enum CloudKitErrorMapping {
             return nil
         }
         return ckError.partialErrorsByItemID as? [CKRecord.ID: any Error]
+    }
+
+    /// Extracts the actual rejection for one failed record from CloudKit's batch-level
+    /// `.partialFailure` envelope. The SDK can surface that envelope on an individual
+    /// `failedRecordSaves` entry; treating the envelope itself as permanent loses the
+    /// embedded conflict/rate-limit policy and can strand account-review recovery.
+    static func recordError(
+        in error: any Error,
+        for recordID: CKRecord.ID
+    ) -> (any Error)? {
+        var current: any Error = error
+        for _ in 0..<4 {
+            guard let ckError = current as? CKError,
+                  ckError.code == .partialFailure else { return current }
+            guard let nested = ckError.partialErrorsByItemID?[recordID] else {
+                return nil
+            }
+            current = nested
+        }
+        return nil
     }
 
     // MARK: - Durable, privacy-safe details
@@ -212,8 +343,6 @@ nonisolated enum CloudKitErrorMapping {
             return "the CloudKit sharing state is unsupported"
         case .assetFileNotFound, .assetFileModified, .assetNotAvailable:
             return "the CloudKit asset state is invalid"
-        case .resultsTruncated, .partialFailure:
-            return "CloudKit returned an incomplete record result"
         default:
             return "CloudKit permanently rejected this snippet record"
         }
