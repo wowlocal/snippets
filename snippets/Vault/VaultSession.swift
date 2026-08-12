@@ -149,8 +149,9 @@ final class VaultSession {
         guard let keyID else { throw Failure.noKey }
 
         if case .unlocked(let until) = state, let libraryKey {
-            if until > now() {
-                guard extendWindow() else { throw Failure.locked }
+            let currentTime = now()
+            if until > currentTime {
+                guard extendWindow(at: currentTime) else { throw Failure.locked }
                 return libraryKey
             }
             // The timer can be delayed while the main run loop is busy. The deadline,
@@ -209,8 +210,9 @@ final class VaultSession {
         libraryKey = key
         // Set BEFORE extendWindow, which reads it to compute the ceiling. A fresh touch
         // is what restarts the half-hour, so this is the one place it may move.
-        authenticatedAt = now()
-        guard extendWindow() else { throw Failure.locked }
+        let authenticationTime = now()
+        authenticatedAt = authenticationTime
+        guard extendWindow(at: authenticationTime) else { throw Failure.locked }
         return key
     }
 
@@ -244,6 +246,18 @@ final class VaultSession {
     /// suggestion selection. `SnippetExpansionEngine` owns that authenticated path and
     /// revalidates the target and trigger after the prompt before inserting anything.
     func currentKey() throws -> SymmetricKey {
+        try checkedCurrentKey(extendingIdleDeadline: true)
+    }
+
+    /// Returns the already-unlocked key without treating background maintenance as
+    /// user activity. Sync uses this for opportunistic conflict materialization: a
+    /// busy transport must never keep an unattended vault open by repeatedly reading
+    /// its key. This still enforces the stored deadline and never prompts.
+    func currentKeyWithoutExtendingSession() throws -> SymmetricKey {
+        try checkedCurrentKey(extendingIdleDeadline: false)
+    }
+
+    private func checkedCurrentKey(extendingIdleDeadline: Bool) throws -> SymmetricKey {
         guard case .unlocked(let until) = state, let libraryKey else {
             throw Failure.locked
         }
@@ -254,24 +268,33 @@ final class VaultSession {
         // This flag exists only while `.snippetsVaultWillLock` observers are running;
         // no later run-loop turn can reuse it.
         if isDeliveringPreLock { return libraryKey }
-        guard until > now() else {
+        let currentTime = now()
+        guard until > currentTime else {
             // As in `unlock`, the deadline is authoritative even if the main run loop
             // has delayed delivery of the expiry timer. Drop the bytes and correct the
             // published state before refusing the read.
             lock()
             throw Failure.locked
         }
-        // Reading or changing secure content is actual vault use. Keep the short idle
+        // User-facing reads and changes are actual vault use. Keep the short idle
         // window sliding while that work continues, but never beyond the fixed ceiling
-        // measured from the authentication above. Merely keeping the app/process alive
-        // does not call this method and therefore does not keep the vault open.
-        guard extendWindow() else { throw Failure.locked }
+        // measured from authentication. Background callers deliberately take the
+        // non-extending path above so process activity alone cannot keep the vault open.
+        if extendingIdleDeadline {
+            guard extendWindow(at: currentTime) else { throw Failure.locked }
+        }
         return libraryKey
     }
 
     /// A keyring for the vault, valid only while unlocked.
     func keyring(vaultSalt: Data) throws -> SnippetCrypto.Keyring {
         SnippetCrypto.Keyring(libraryKey: try currentKey(), salt: vaultSalt)
+    }
+
+    func keyringWithoutExtendingSession(vaultSalt: Data) throws -> SnippetCrypto.Keyring {
+        SnippetCrypto.Keyring(
+            libraryKey: try currentKeyWithoutExtendingSession(),
+            salt: vaultSalt)
     }
 
     // MARK: - Locking
@@ -312,13 +335,12 @@ final class VaultSession {
     }
 
     @discardableResult
-    private func extendWindow() -> Bool {
+    private func extendWindow(at currentTime: Date) -> Bool {
         // The five-minute window slides on every use, so a session that is merely
         // *active* never expires — leave a Mac unattended with the app busy and the
         // vault stays open indefinitely. The absolute cap is measured from the touch
         // that actually authenticated, so no amount of subsequent activity can extend
         // the vault beyond half an hour without the user proving presence again.
-        let currentTime = now()
         let ceiling = (authenticatedAt ?? currentTime).addingTimeInterval(Self.maximumWindow)
         let deadline = min(currentTime.addingTimeInterval(duration), ceiling)
         let remaining = deadline.timeIntervalSince(currentTime)

@@ -341,6 +341,27 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertEqual(components.session.state, .locked)
     }
 
+    func testBackgroundKeyReadChecksButDoesNotSlideIdleDeadline() async throws {
+        let components = makeComponents(duration: VaultSession.defaultDuration)
+        let pending = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pending)
+
+        let authenticatedAt = Date(timeIntervalSince1970: 25_000)
+        var currentTime = authenticatedAt
+        components.session.now = { currentTime }
+        _ = try await components.session.unlock(reason: "Test non-extending key read")
+        let originalDeadline = unlockedDeadline(components.session.state)
+
+        currentTime = authenticatedAt.addingTimeInterval(4 * 60)
+        _ = try components.session.currentKeyWithoutExtendingSession()
+        XCTAssertEqual(unlockedDeadline(components.session.state), originalDeadline)
+
+        currentTime = originalDeadline
+        XCTAssertThrowsError(try components.session.currentKeyWithoutExtendingSession())
+        XCTAssertEqual(components.session.state, .locked)
+    }
+
     func testExpiredDeadlineIsAuthoritativeWhenTimerDeliveryIsDelayed() async throws {
         let components = makeComponents(duration: 60)
         let pending = try XCTUnwrap(

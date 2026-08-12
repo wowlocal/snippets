@@ -1429,10 +1429,15 @@ final class SecureSnippetStore: SecureSnippetProviding {
     }
 
     /// Sync may opportunistically materialise an encrypted conflict only while the
-    /// user has already unlocked this vault. This never prompts and never extends the
-    /// authentication window beyond the ordinary `currentKey()` semantics.
+    /// user has already unlocked this vault. This never prompts and, unlike an explicit
+    /// reveal/edit, does not slide the idle deadline: background traffic must not keep
+    /// an unattended vault open.
     func unlockedKeyringForSync() throws -> SnippetCrypto.Keyring {
-        try keyring(requireDocument())
+        let document = try requireDocument()
+        guard let salt = document.vaultSaltBytes else {
+            throw Failure.vaultUnreadable("the vault's salt could not be decoded")
+        }
+        return try session.keyringWithoutExtendingSession(vaultSalt: salt)
     }
 
     /// The crypto scope is the vault's own `kid` — **never** `SyncState.scopeID`, which
