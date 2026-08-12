@@ -35,7 +35,12 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
         XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
 
-        textView.setSecurePlaintextAcceptanceAuthorized(true)
+        authorizePresentation(in: textView)
+        var presentedCount = 0
+        textView.onSecurePlaintextPresented = {
+            presentedCount += 1
+            textView.setSecureEditingAuthorized(true)
+        }
         var flushCompletion: (() -> Void)?
         textView.setSecureCaptureFlushCompletionOverrideForTesting { completion in
             flushCompletion = completion
@@ -44,7 +49,10 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertEqual(textView.secureCapturePhase, .protectedPlaintext)
         XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
         XCTAssertNotNil(textView.secureCapturePendingGenerationForInspection)
+        textView.insertText(" blocked-before-frame")
+        XCTAssertEqual(textView.text, "upright secure raster")
         flushCompletion?()
+        XCTAssertEqual(presentedCount, 1)
         XCTAssertFalse(textView.secureCaptureDisplayLayerHiddenForInspection)
         XCTAssertNil(textView.secureCapturePendingGenerationForInspection)
         let frame = try XCTUnwrap(textView.renderSecureFrameForInspection(plaintext: true))
@@ -58,7 +66,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         let textView = makeTextView()
         textView.setSceneCaptureStateForTesting(.inactive)
         XCTAssertTrue(textView.bindSecureRedacted())
-        textView.setSecurePlaintextAcceptanceAuthorized(true)
+        authorizePresentation(in: textView)
         XCTAssertTrue(textView.displaySecurePlaintext("old secure body"))
 
         textView.bindOrdinaryText("ordinary body")
@@ -76,7 +84,7 @@ final class SecureCaptureRendererTests: XCTestCase {
             textView.setSceneCaptureStateForTesting(.inactive)
             XCTAssertTrue(textView.bindSecureRedacted())
             let sentinel = "secure-\(state.rawValue)"
-            textView.setSecurePlaintextAcceptanceAuthorized(true)
+            authorizePresentation(in: textView)
             XCTAssertTrue(textView.displaySecurePlaintext(sentinel))
 
             var callback: (String?, SecureSnippetForcedRedactionReason)?
@@ -104,6 +112,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         textView.setSecureCaptureFlushCompletionOverrideForTesting { completion in
             staleCompletion = completion
         }
+        authorizePresentation(in: textView)
         XCTAssertTrue(textView.displaySecurePlaintext("must never return"))
         let pendingGeneration = try XCTUnwrap(
             textView.secureCapturePendingGenerationForInspection
@@ -130,6 +139,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         textView.setSceneCaptureStateForTesting(.inactive)
         XCTAssertTrue(textView.bindSecureRedacted())
         textView.setForegroundPresentationAllowedForTesting(false)
+        authorizePresentation(in: textView)
 
         XCTAssertFalse(textView.displaySecurePlaintext("background secret"))
 
@@ -137,6 +147,77 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertEqual(textView.text, "")
         XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
         XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
+    }
+
+    func testCurrentCompletionRejectedByLifecycleGateClearsPlaintextAndNotifiesOwner() {
+        let textView = makeTextView()
+        textView.setSceneCaptureStateForTesting(.inactive)
+        XCTAssertTrue(textView.bindSecureRedacted())
+        authorizePresentation(in: textView)
+
+        var completion: (() -> Void)?
+        textView.setSecureCaptureFlushCompletionOverrideForTesting { completion = $0 }
+        XCTAssertTrue(textView.displaySecurePlaintext("background transition secret"))
+
+        var callback: (String?, SecureSnippetForcedRedactionReason)?
+        textView.onSecureCaptureForcedRedaction = { callback = ($0, $1) }
+        textView.setForegroundPresentationAllowedForTesting(false)
+        completion?()
+
+        XCTAssertEqual(callback?.0, "background transition secret")
+        XCTAssertEqual(callback?.1, .presentationRevoked)
+        XCTAssertEqual(textView.text, "")
+        XCTAssertEqual(textView.secureCapturePhase, .protectedRedaction)
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
+    }
+
+    func testCurrentCompletionWithUnhealthyRendererFailsClosedAndClearsPlaintext() {
+        let textView = makeTextView()
+        textView.setSceneCaptureStateForTesting(.inactive)
+        XCTAssertTrue(textView.bindSecureRedacted())
+        authorizePresentation(in: textView)
+
+        var completion: (() -> Void)?
+        textView.setSecureCaptureFlushCompletionOverrideForTesting { completion = $0 }
+        XCTAssertTrue(textView.displaySecurePlaintext("renderer failure secret"))
+
+        var callback: (String?, SecureSnippetForcedRedactionReason)?
+        textView.onSecureCaptureForcedRedaction = { callback = ($0, $1) }
+        textView.setSecureCaptureRendererFailedForTesting(true)
+        completion?()
+
+        XCTAssertEqual(callback?.0, "renderer failure secret")
+        XCTAssertEqual(callback?.1, .rendererFailure)
+        XCTAssertEqual(textView.text, "")
+        XCTAssertEqual(textView.secureCapturePhase, .failedClosed)
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
+    }
+
+    func testSubsequentProtectedRedrawReportsPresentationWithoutFailingClosed() {
+        let textView = makeTextView()
+        textView.setSceneCaptureStateForTesting(.inactive)
+        XCTAssertTrue(textView.bindSecureRedacted())
+        authorizePresentation(in: textView)
+
+        var completions: [() -> Void] = []
+        textView.setSecureCaptureFlushCompletionOverrideForTesting { completions.append($0) }
+        var presentedCount = 0
+        textView.onSecurePlaintextPresented = { presentedCount += 1 }
+        XCTAssertTrue(textView.displaySecurePlaintext("refresh secret"))
+        XCTAssertEqual(completions.count, 1)
+        completions.removeFirst()()
+        XCTAssertEqual(presentedCount, 1)
+
+        textView.invalidateSecureCaptureRenderer()
+        XCTAssertEqual(completions.count, 1)
+        completions.removeFirst()()
+
+        XCTAssertEqual(presentedCount, 2)
+        XCTAssertEqual(textView.text, "refresh secret")
+        XCTAssertEqual(textView.secureCapturePhase, .protectedPlaintext)
+        XCTAssertFalse(textView.secureCaptureDisplayLayerHiddenForInspection)
     }
 
     func testDecodeFailedRendererCannotReportHealthyWhenRearmed() {
@@ -156,6 +237,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         let textView = SecureSnippetTextView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
         textView.setSecureForegroundActiveForTesting(true)
         textView.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
+        textView.textColor = .white
         textView.backgroundColor = .clear
         textView.secureCaptureBackgroundColor = .black
         textView.setForegroundPresentationAllowedForTesting(true)
@@ -163,6 +245,11 @@ final class SecureCaptureRendererTests: XCTestCase {
         textView.secureCaptureSurfaceView.frame = textView.bounds
         textView.layoutIfNeeded()
         return textView
+    }
+
+    private func authorizePresentation(in textView: SecureSnippetTextView) {
+        textView.setSecurePlaintextAcceptanceAuthorized(true)
+        textView.setSecureContinuousRevealAuthorized(true)
     }
 
     private func pixelBufferContainsNonBackgroundPixels(_ pixelBuffer: CVPixelBuffer) -> Bool {

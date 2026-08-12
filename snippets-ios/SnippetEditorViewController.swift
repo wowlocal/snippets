@@ -271,6 +271,9 @@ final class SnippetEditorViewController: UIViewController {
         bodyTextView.onSecureSceneCaptureStateChanged = { [weak self] state in
             self?.secureSceneCaptureStateChanged(state)
         }
+        bodyTextView.onSecurePlaintextPresented = { [weak self] in
+            self?.securePlaintextDidPresent()
+        }
 
         bodyPlaceholderLabel.translatesAutoresizingMaskIntoConstraints = false
         bodyPlaceholderLabel.text = "Paste or type"
@@ -630,7 +633,7 @@ final class SnippetEditorViewController: UIViewController {
             secureRevealOverlay.presentation = .captureBlocked
         } else {
             switch secureRevealPolicy.state {
-            case .authenticatedRedacted:
+            case .authenticatedRedacted, .presentingPlaintext:
                 secureRevealOverlay.presentation = .authenticatedRedacted
             case .protectedPlaintext:
                 secureRevealOverlay.presentation = .protectedPlaintext
@@ -1087,11 +1090,13 @@ final class SnippetEditorViewController: UIViewController {
                 return
             }
             bodyTextView.setSecurePlaintextAcceptanceAuthorized(true)
+            bodyTextView.setSecureContinuousRevealAuthorized(true)
             guard bodyTextView.canAcceptSecurePlaintext,
-                  bodyTextView.displaySecurePlaintext(plaintext),
-                  secureRevealPolicy.confirmProtectedPlaintext()
+                  secureRevealPolicy.beginPlaintextPresentation(),
+                  bodyTextView.displaySecurePlaintext(plaintext)
             else {
                 bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
+                bodyTextView.setSecureContinuousRevealAuthorized(false)
                 bodyTextView.setSecureEditingAuthorized(false)
                 _ = bodyTextView.redactAndClearSecurePlaintext()
                 secureRevealPolicy.revealAttemptFailed(
@@ -1101,7 +1106,6 @@ final class SnippetEditorViewController: UIViewController {
                 return
             }
             bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
-            bodyTextView.setSecureEditingAuthorized(secureRevealPolicy.permitsTextMutation)
             updateSecurePresentation()
             refreshDerivedUI()
         } catch {
@@ -1113,10 +1117,41 @@ final class SnippetEditorViewController: UIViewController {
         }
     }
 
+    private func securePlaintextDidPresent() {
+        switch secureRevealPolicy.state {
+        case .presentingPlaintext:
+            guard secureRevealPolicy.confirmProtectedPlaintext() else {
+                failClosedAfterRejectedPlaintextPresentation()
+                return
+            }
+        case .protectedPlaintext:
+            // A redraw callback confirms a newer protected raster while the same
+            // continuous source remains active; it is not a second state change.
+            guard secureRevealPolicy.permitsTextMutation else {
+                failClosedAfterRejectedPlaintextPresentation()
+                return
+            }
+        default:
+            failClosedAfterRejectedPlaintextPresentation()
+            return
+        }
+        bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
+        bodyTextView.setSecureEditingAuthorized(secureRevealPolicy.permitsTextMutation)
+        updateSecurePresentation()
+        refreshDerivedUI()
+    }
+
+    private func failClosedAfterRejectedPlaintextPresentation() {
+        secureRevealPolicy.revealAttemptFailed(
+            vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+        redactSecurePlaintextAndPersist()
+    }
+
     private func redactSecurePlaintextAndPersist() {
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
         bodyTextView.setSecureEditingAuthorized(false)
+        bodyTextView.setSecureContinuousRevealAuthorized(false)
         bodyTextView.unmarkText()
         bodyTextView.resignFirstResponder()
         let plaintext = bodyTextView.redactAndClearSecurePlaintext()
@@ -1175,6 +1210,8 @@ final class SnippetEditorViewController: UIViewController {
         switch reason {
         case .sceneCapture:
             _ = secureRevealPolicy.setSceneCaptureIsInactive(false)
+        case .presentationRevoked:
+            _ = secureRevealPolicy.cancelContinuousReveal()
         case .rendererFailure:
             _ = secureRevealPolicy.rendererFailed()
         }

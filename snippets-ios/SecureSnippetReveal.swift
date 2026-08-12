@@ -25,6 +25,7 @@ struct SecureSnippetRevealPolicy {
         case locked
         case authenticating
         case authenticatedRedacted
+        case presentingPlaintext
         case protectedPlaintext
         case failedClosed
     }
@@ -41,7 +42,9 @@ struct SecureSnippetRevealPolicy {
     var isSecure: Bool { state != .ordinary }
     var isProtectedPlaintext: Bool { state == .protectedPlaintext }
     var isAuthenticated: Bool {
-        state == .authenticatedRedacted || state == .protectedPlaintext
+        state == .authenticatedRedacted
+            || state == .presentingPlaintext
+            || state == .protectedPlaintext
     }
     var isAuthenticating: Bool { state == .authenticating }
     var isCaptureBlocked: Bool { isSecure && !sceneCaptureIsInactive }
@@ -111,7 +114,9 @@ struct SecureSnippetRevealPolicy {
     }
 
     mutating func begin(source: SecureSnippetRevealSource) -> SecureSnippetRevealTransition {
-        guard state == .authenticatedRedacted || state == .protectedPlaintext else {
+        guard state == .authenticatedRedacted
+                || state == .presentingPlaintext
+                || state == .protectedPlaintext else {
             return .none
         }
         activeSources.insert(source)
@@ -122,16 +127,27 @@ struct SecureSnippetRevealPolicy {
 
     mutating func end(source: SecureSnippetRevealSource) -> SecureSnippetRevealTransition {
         activeSources.remove(source)
-        guard state == .protectedPlaintext, activeSources.isEmpty else { return .none }
+        guard (state == .presentingPlaintext || state == .protectedPlaintext),
+              activeSources.isEmpty else { return .none }
         state = .authenticatedRedacted
         return .redact
     }
 
-    /// Called only after plaintext was successfully placed in the protected
-    /// renderer. Revalidating here closes the window between decrypt and display.
+    /// Called after plaintext has entered protected text storage and its AV
+    /// presentation was scheduled, but before those pixels can become visible.
+    @discardableResult
+    mutating func beginPlaintextPresentation() -> Bool {
+        guard state == .authenticatedRedacted, environmentPermitsReveal else {
+            return false
+        }
+        state = .presentingPlaintext
+        return true
+    }
+
+    /// Called only from the renderer's generation-guarded presentation callback.
     @discardableResult
     mutating func confirmProtectedPlaintext() -> Bool {
-        guard state == .authenticatedRedacted, environmentPermitsReveal else {
+        guard state == .presentingPlaintext, environmentPermitsReveal else {
             return false
         }
         state = .protectedPlaintext
@@ -165,7 +181,7 @@ struct SecureSnippetRevealPolicy {
 
     mutating func rendererFailed() -> SecureSnippetRevealTransition {
         guard state != .ordinary else { return .none }
-        let needsRedaction = state == .protectedPlaintext
+        let needsRedaction = state == .presentingPlaintext || state == .protectedPlaintext
         activeSources.removeAll()
         rendererIsHealthy = false
         state = .failedClosed
@@ -174,7 +190,7 @@ struct SecureSnippetRevealPolicy {
 
     mutating func lock() -> SecureSnippetRevealTransition {
         guard state != .ordinary else { return .none }
-        let needsRedaction = state == .protectedPlaintext
+        let needsRedaction = state == .presentingPlaintext || state == .protectedPlaintext
         bindingGeneration &+= 1
         authenticationRequestGeneration &+= 1
         activeSources.removeAll()
@@ -198,7 +214,9 @@ struct SecureSnippetRevealPolicy {
 
     private mutating func transitionProtectedPlaintextToRedacted()
         -> SecureSnippetRevealTransition {
-        guard state == .protectedPlaintext else { return .none }
+        guard state == .presentingPlaintext || state == .protectedPlaintext else {
+            return .none
+        }
         state = .authenticatedRedacted
         return .redact
     }
@@ -254,6 +272,7 @@ final class SecureSnippetRevealOverlayView: UIView {
     private let symbolView = UIImageView()
     private let messageLabel = UILabel()
     private let messageStack = UIStackView()
+    private var holdButtonConstraints: [NSLayoutConstraint] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -333,14 +352,35 @@ final class SecureSnippetRevealOverlayView: UIView {
             messageStack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -24),
             messageStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 22),
             messageStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -22),
+        ])
+        holdButtonConstraints = [
             holdButton.centerXAnchor.constraint(equalTo: centerXAnchor),
             holdButton.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 20),
             holdButton.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20),
             holdButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
             holdButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
             holdButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
-        ])
+        ]
+        NSLayoutConstraint.activate(holdButtonConstraints)
         applyPresentation()
+    }
+
+    func detachHoldButtonForParking() {
+        NSLayoutConstraint.deactivate(holdButtonConstraints)
+        holdButton.removeFromSuperview()
+        holdButton.translatesAutoresizingMaskIntoConstraints = true
+    }
+
+    func reattachHoldButtonFromParking() {
+        guard holdButton.superview !== self else { return }
+        holdButton.removeFromSuperview()
+        holdButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(holdButton)
+        NSLayoutConstraint.activate(holdButtonConstraints)
+    }
+
+    var activeHoldButtonConstraintCountForInspection: Int {
+        holdButtonConstraints.lazy.filter(\.isActive).count
     }
 
     private func applyPresentation() {
@@ -408,5 +448,26 @@ final class SecureSnippetRevealOverlayView: UIView {
 
     @objc private func holdEnded() {
         onHoldChanged?(false)
+    }
+}
+
+/// Window-level host used while a phone hold gesture is active. Only the parked
+/// hold control participates in hit testing; every other touch passes through to
+/// the editor beneath it so a second finger can position the caret or scroll.
+final class SecureHoldParkingView: UIView {
+    weak var holdControl: UIView?
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard let holdControl,
+              !holdControl.isHidden,
+              holdControl.isUserInteractionEnabled else { return false }
+        let controlPoint = holdControl.convert(point, from: self)
+        return holdControl.point(inside: controlPoint, with: event)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard self.point(inside: point, with: event), let holdControl else { return nil }
+        let controlPoint = holdControl.convert(point, from: self)
+        return holdControl.hitTest(controlPoint, with: event)
     }
 }

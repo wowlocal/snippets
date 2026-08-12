@@ -19,6 +19,9 @@ final class SecureSnippetRevealTests: XCTestCase {
         XCTAssertFalse(policy.permitsTextMutation)
 
         XCTAssertEqual(policy.begin(source: .touchHold), .reveal)
+        XCTAssertTrue(policy.beginPlaintextPresentation())
+        XCTAssertEqual(policy.state, .presentingPlaintext)
+        XCTAssertFalse(policy.permitsTextMutation)
         XCTAssertTrue(policy.confirmProtectedPlaintext())
         XCTAssertEqual(policy.state, .protectedPlaintext)
         XCTAssertTrue(policy.permitsTextMutation)
@@ -66,6 +69,25 @@ final class SecureSnippetRevealTests: XCTestCase {
         XCTAssertEqual(policy.end(source: .touchHold), .none)
         XCTAssertTrue(policy.permitsTextMutation)
         XCTAssertEqual(policy.end(source: .hover), .redact)
+        XCTAssertFalse(policy.permitsTextMutation)
+    }
+
+    func testReleaseWhilePresentationIsPendingForcesRedaction() throws {
+        var policy = SecureSnippetRevealPolicy()
+        policy.bindSecure(
+            rendererIsHealthy: true,
+            appAndSceneAreActive: true,
+            sceneCaptureIsInactive: true)
+        let token = try XCTUnwrap(policy.beginAuthentication())
+        XCTAssertTrue(policy.authenticationSucceeded(token: token))
+        XCTAssertEqual(policy.begin(source: .touchHold), .reveal)
+        XCTAssertTrue(policy.beginPlaintextPresentation())
+        XCTAssertEqual(policy.state, .presentingPlaintext)
+        XCTAssertFalse(policy.permitsTextMutation)
+
+        XCTAssertEqual(policy.end(source: .touchHold), .redact)
+        XCTAssertEqual(policy.state, .authenticatedRedacted)
+        XCTAssertFalse(policy.confirmProtectedPlaintext())
         XCTAssertFalse(policy.permitsTextMutation)
     }
 
@@ -118,6 +140,7 @@ final class SecureSnippetRevealTests: XCTestCase {
         XCTAssertEqual(textView.text, "")
 
         textView.setSecurePlaintextAcceptanceAuthorized(true)
+        textView.setSecureContinuousRevealAuthorized(true)
         XCTAssertTrue(textView.displaySecurePlaintext("body"))
         textView.insertText(" blocked")
         XCTAssertEqual(textView.text, "body")
@@ -141,6 +164,41 @@ final class SecureSnippetRevealTests: XCTestCase {
         textView.insertText("!")
         XCTAssertEqual(textView.text, "body!")
         XCTAssertTrue(textView.permitsSecureTextMutation)
+    }
+
+    func testParkingViewPassesTouchesThroughOutsideHoldControl() {
+        let parkingView = SecureHoldParkingView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+        let button = UIButton(frame: CGRect(x: 60, y: 520, width: 200, height: 52))
+        parkingView.addSubview(button)
+        parkingView.holdControl = button
+
+        XCTAssertNil(parkingView.hitTest(CGPoint(x: 30, y: 200), with: nil))
+        XCTAssertFalse(parkingView.point(inside: CGPoint(x: 30, y: 200), with: nil))
+        XCTAssertTrue(parkingView.point(inside: CGPoint(x: 100, y: 540), with: nil))
+        XCTAssertTrue(parkingView.hitTest(CGPoint(x: 100, y: 540), with: nil) === button)
+    }
+
+    func testRepeatedParkingReusesOneHoldConstraintSet() {
+        let overlay = SecureSnippetRevealOverlayView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        let parkingView = SecureHoldParkingView(frame: overlay.bounds)
+        let expectedConstraintCount = overlay.activeHoldButtonConstraintCountForInspection
+        XCTAssertGreaterThan(expectedConstraintCount, 0)
+
+        for _ in 0..<3 {
+            overlay.detachHoldButtonForParking()
+            parkingView.addSubview(overlay.holdButton)
+            parkingView.holdControl = overlay.holdButton
+            XCTAssertEqual(overlay.activeHoldButtonConstraintCountForInspection, 0)
+
+            parkingView.holdControl = nil
+            overlay.reattachHoldButtonFromParking()
+            XCTAssertEqual(
+                overlay.activeHoldButtonConstraintCountForInspection,
+                expectedConstraintCount)
+            XCTAssertTrue(overlay.holdButton.superview === overlay)
+        }
     }
 
     func testDetachedAndInactiveTextViewsRejectSecurePlaintext() {
@@ -171,6 +229,7 @@ final class SecureSnippetRevealTests: XCTestCase {
         let token = try XCTUnwrap(policy.beginAuthentication())
         XCTAssertTrue(policy.authenticationSucceeded(token: token))
         XCTAssertEqual(policy.begin(source: .touchHold), .reveal)
+        XCTAssertTrue(policy.beginPlaintextPresentation())
         XCTAssertTrue(policy.confirmProtectedPlaintext())
         return policy
     }

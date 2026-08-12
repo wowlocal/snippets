@@ -63,6 +63,7 @@ final class SecureSnippetCaptureRenderer {
     private var outputProtectionObserver: NSObjectProtocol?
 
     var onFailure: (() -> Void)?
+    var onPlaintextPresented: (() -> Void)?
 
     init(textView: SecureSnippetTextView, surfaceView: SecureSnippetCaptureSurfaceView) {
         self.textView = textView
@@ -283,28 +284,48 @@ final class SecureSnippetCaptureRenderer {
         _ sampleBuffer: CMSampleBuffer,
         generation: UInt64
     ) {
+        // A stale completion belongs to a generation that has already been
+        // synchronously hidden/flushed, so it must be an inert no-op. A current
+        // completion is different: failure of either renderer health or the
+        // lifecycle/source gate must actively fail closed and clear plaintext.
         guard generation == frameGeneration,
-              pendingPresentationGeneration == generation,
-              isReadyForHiddenPlaintextPresentation,
-              textView.secureCaptureMayPresentPlaintextNow else {
+              pendingPresentationGeneration == generation else { return }
+        guard isReadyForHiddenPlaintextPresentation else {
+            failClosed()
+            return
+        }
+        guard textView.secureCaptureMayPresentPlaintextNow else {
+            textView.secureCapturePresentationWasRevoked()
             return
         }
 
         displayLayer.sampleBufferRenderer.enqueue(sampleBuffer)
         guard generation == frameGeneration,
-              pendingPresentationGeneration == generation,
-              !rendererHasFailed,
-              isHealthyForPlaintextPresentation,
-              textView.secureCaptureMayPresentPlaintextNow else {
-            if rendererHasFailed
-                || !isHealthyForPlaintextPresentation {
-                failClosed()
-            }
+              pendingPresentationGeneration == generation else { return }
+        guard !rendererHasFailed, isHealthyForPlaintextPresentation else {
+            failClosed()
+            return
+        }
+        guard textView.secureCaptureMayPresentPlaintextNow else {
+            textView.secureCapturePresentationWasRevoked()
             return
         }
 
         pendingPresentationGeneration = nil
         displayLayer.isHidden = false
+        CATransaction.flush()
+        guard generation == frameGeneration else { return }
+        guard !rendererHasFailed,
+              isHealthyForPlaintextPresentation,
+              !displayLayer.isHidden else {
+            failClosed()
+            return
+        }
+        guard textView.secureCaptureMayPresentPlaintextNow else {
+            textView.secureCapturePresentationWasRevoked()
+            return
+        }
+        onPlaintextPresented?()
     }
 
     private var isHealthyForPlaintextPresentation: Bool {

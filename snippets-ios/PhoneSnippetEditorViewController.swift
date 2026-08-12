@@ -51,7 +51,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private var detailsModeBottomConstraint: NSLayoutConstraint!
     private var displayedModeIndex = 0
     private var modeTransitionAnimator: UIViewPropertyAnimator?
-    private weak var secureHoldParkingView: UIView?
+    private var secureHoldParkingView: SecureHoldParkingView?
 
     init(environment: AppEnvironment, snippetID: UUID) {
         self.environment = environment
@@ -93,6 +93,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
         handleSecureRevealTransition(secureRevealPolicy.lock())
+        restoreSecureHoldControlToOverlay()
         view.endEditing(true)
         flushPendingSecureContent()
         commitPlainEditTransaction()
@@ -304,6 +305,9 @@ final class PhoneSnippetEditorViewController: UIViewController {
         bodyTextView.onSecureSceneCaptureStateChanged = { [weak self] state in
             self?.secureSceneCaptureStateChanged(state)
         }
+        bodyTextView.onSecurePlaintextPresented = { [weak self] in
+            self?.securePlaintextDidPresent()
+        }
 
         bodyPlaceholderLabel.translatesAutoresizingMaskIntoConstraints = false
         bodyPlaceholderLabel.text = "Paste or type"
@@ -472,6 +476,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func bindFromStore() {
+        restoreSecureHoldControlToOverlay()
         guard let snippet = environment.store.snippetForDisplay(id: snippetID) else {
             // A disappearing secure record must not leave its former text storage
             // queryable during the navigation-controller teardown animation.
@@ -627,7 +632,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
             secureRevealOverlay.presentation = .captureBlocked
         } else {
             switch secureRevealPolicy.state {
-            case .authenticatedRedacted:
+            case .authenticatedRedacted, .presentingPlaintext:
                 secureRevealOverlay.presentation = .authenticatedRedacted
             case .protectedPlaintext:
                 secureRevealOverlay.presentation = .protectedPlaintext
@@ -1020,41 +1025,25 @@ final class PhoneSnippetEditorViewController: UIViewController {
         guard secureHoldParkingView == nil, let window = view.window else { return }
         let button = secureRevealOverlay.holdButton
         let frame = button.convert(button.bounds, to: window)
-        let parkingView = UIView(frame: window.bounds)
+        let parkingView = SecureHoldParkingView(frame: window.bounds)
         parkingView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         parkingView.backgroundColor = .clear
         parkingView.isMultipleTouchEnabled = true
         parkingView.accessibilityViewIsModal = false
         window.addSubview(parkingView)
-        button.removeFromSuperview()
-        button.translatesAutoresizingMaskIntoConstraints = true
+        secureRevealOverlay.detachHoldButtonForParking()
         button.frame = frame
         parkingView.addSubview(button)
+        parkingView.holdControl = button
         secureHoldParkingView = parkingView
     }
 
     private func restoreSecureHoldControlToOverlay() {
         guard let parkingView = secureHoldParkingView else { return }
-        let button = secureRevealOverlay.holdButton
-        button.removeFromSuperview()
+        parkingView.holdControl = nil
         parkingView.removeFromSuperview()
         secureHoldParkingView = nil
-        button.translatesAutoresizingMaskIntoConstraints = false
-        secureRevealOverlay.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.centerXAnchor.constraint(equalTo: secureRevealOverlay.centerXAnchor),
-            button.leadingAnchor.constraint(
-                greaterThanOrEqualTo: secureRevealOverlay.leadingAnchor,
-                constant: 20),
-            button.trailingAnchor.constraint(
-                lessThanOrEqualTo: secureRevealOverlay.trailingAnchor,
-                constant: -20),
-            button.bottomAnchor.constraint(
-                equalTo: secureRevealOverlay.bottomAnchor,
-                constant: -16),
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
-            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
-        ])
+        secureRevealOverlay.reattachHoldButtonFromParking()
     }
 
     private func synchronizeSecureRevealEnvironment() {
@@ -1106,11 +1095,13 @@ final class PhoneSnippetEditorViewController: UIViewController {
                 return
             }
             bodyTextView.setSecurePlaintextAcceptanceAuthorized(true)
+            bodyTextView.setSecureContinuousRevealAuthorized(true)
             guard bodyTextView.canAcceptSecurePlaintext,
-                  bodyTextView.displaySecurePlaintext(plaintext),
-                  secureRevealPolicy.confirmProtectedPlaintext()
+                  secureRevealPolicy.beginPlaintextPresentation(),
+                  bodyTextView.displaySecurePlaintext(plaintext)
             else {
                 bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
+                bodyTextView.setSecureContinuousRevealAuthorized(false)
                 bodyTextView.setSecureEditingAuthorized(false)
                 _ = bodyTextView.redactAndClearSecurePlaintext()
                 secureRevealPolicy.revealAttemptFailed(
@@ -1120,7 +1111,6 @@ final class PhoneSnippetEditorViewController: UIViewController {
                 return
             }
             bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
-            bodyTextView.setSecureEditingAuthorized(secureRevealPolicy.permitsTextMutation)
             updateSecurePresentation()
             refreshDerivedUI()
         } catch {
@@ -1132,10 +1122,43 @@ final class PhoneSnippetEditorViewController: UIViewController {
         }
     }
 
+    private func securePlaintextDidPresent() {
+        switch secureRevealPolicy.state {
+        case .presentingPlaintext:
+            guard secureRevealPolicy.confirmProtectedPlaintext() else {
+                failClosedAfterRejectedPlaintextPresentation()
+                return
+            }
+        case .protectedPlaintext:
+            // Selection, typing, scrolling, and layout each re-rasterize. Their
+            // generation-guarded callbacks are refresh confirmations, not a new
+            // policy transition.
+            guard secureRevealPolicy.permitsTextMutation else {
+                failClosedAfterRejectedPlaintextPresentation()
+                return
+            }
+        default:
+            failClosedAfterRejectedPlaintextPresentation()
+            return
+        }
+        bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
+        bodyTextView.setSecureEditingAuthorized(secureRevealPolicy.permitsTextMutation)
+        updateSecurePresentation()
+        refreshDerivedUI()
+    }
+
+    private func failClosedAfterRejectedPlaintextPresentation() {
+        secureRevealPolicy.revealAttemptFailed(
+            vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+        redactSecurePlaintextAndPersist()
+    }
+
     private func redactSecurePlaintextAndPersist() {
+        restoreSecureHoldControlToOverlay()
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
         bodyTextView.setSecureEditingAuthorized(false)
+        bodyTextView.setSecureContinuousRevealAuthorized(false)
         bodyTextView.unmarkText()
         bodyTextView.resignFirstResponder()
         let plaintext = bodyTextView.redactAndClearSecurePlaintext()
@@ -1192,9 +1215,12 @@ final class PhoneSnippetEditorViewController: UIViewController {
         switch reason {
         case .sceneCapture:
             _ = secureRevealPolicy.setSceneCaptureIsInactive(false)
+        case .presentationRevoked:
+            _ = secureRevealPolicy.cancelContinuousReveal()
         case .rendererFailure:
             _ = secureRevealPolicy.rendererFailed()
         }
+        restoreSecureHoldControlToOverlay()
         bodyTextView.setSecureEditingAuthorized(false)
         bodyTextView.resignFirstResponder()
         updateSecurePresentation()
@@ -1266,6 +1292,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func deleteSnippet() {
+        restoreSecureHoldControlToOverlay()
         delegate?.phoneSnippetEditor(self, requestedDelete: snippetID)
     }
 
@@ -1358,6 +1385,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         guard let session = notification.object as? VaultSession,
               session === environment.vaultSession else { return }
         handleSecureRevealTransition(secureRevealPolicy.cancelContinuousReveal())
+        restoreSecureHoldControlToOverlay()
         flushPendingSecureContent()
     }
 
@@ -1367,6 +1395,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
         handleSecureRevealTransition(secureRevealPolicy.lock())
+        restoreSecureHoldControlToOverlay()
         _ = bodyTextView.redactAndClearSecurePlaintext()
         updateSecurePresentation()
         refreshDerivedUI()
@@ -1376,6 +1405,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
         handleSecureRevealTransition(secureRevealPolicy.lock())
+        restoreSecureHoldControlToOverlay()
         flushPendingSecureContent()
         view.endEditing(true)
     }
@@ -1390,6 +1420,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
         handleSecureRevealTransition(secureRevealPolicy.lock())
+        restoreSecureHoldControlToOverlay()
         flushPendingSecureContent()
         view.endEditing(true)
     }
