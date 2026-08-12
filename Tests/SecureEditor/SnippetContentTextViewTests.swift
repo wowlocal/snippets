@@ -129,6 +129,10 @@ struct SnippetContentTextViewTests {
     @Test func secureModeRefusesEveryPasteboardAndServicesWriteBoundary() throws {
         let sentinel = "vault-sentinel"
         let view = editor(sentinel)
+        var explicitCopyRefusalCount = 0
+        view.setSecureCopyRefusalHandler {
+            explicitCopyRefusalCount += 1
+        }
         let ordinaryWritableType = try #require(view.writablePasteboardTypes.last)
         view.isSecureContentMode = true
 
@@ -143,14 +147,20 @@ struct SnippetContentTextViewTests {
         #expect(board.string(forType: .string) == "unchanged")
 
         view.copy(nil)
+        #expect(explicitCopyRefusalCount == 1)
         #expect(NSPasteboard.general.changeCount == beforeGeneralPasteboard)
         view.cut(nil)
+        #expect(explicitCopyRefusalCount == 1, "Cut is a separate refused action")
         #expect(NSPasteboard.general.changeCount == beforeGeneralPasteboard)
         #expect(view.string == sentinel)
 
         #expect(view.validRequestor(forSendType: .string, returnType: nil) == nil)
         #expect(view.validRequestor(forSendType: nil, returnType: .string) == nil)
         #expect(view.validRequestor(forSendType: nil, returnType: nil) == nil)
+        #expect(
+            explicitCopyRefusalCount == 1,
+            "speculative pasteboard and Services queries must not show a warning"
+        )
 
         let dragEvent = try #require(NSEvent.mouseEvent(
             with: .leftMouseDragged,

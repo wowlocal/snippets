@@ -865,6 +865,9 @@ extension ViewController {
         snippetTextView.setSecureHoverHintVisibilityHandler { [weak self] isVisible in
             self?.secureHoverHintOverlay.isHidden = !isVisible
         }
+        snippetTextView.setSecureCopyRefusalHandler { [weak self] in
+            self?.presentSecureCopyWarning()
+        }
 
         // Above the scroll view, filling the container. A full-bleed transparent button
         // is the frontmost hit-test target so a click anywhere on the area — including

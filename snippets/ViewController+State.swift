@@ -343,6 +343,7 @@ extension ViewController {
     func applySelectedSnippetToEditor() {
         guard let snippet = selectedSnippet else {
             isApplyingSnippetToEditor = true
+            dismissSecureCopyWarning()
             // A table click can move selection before the secure editor's
             // debounce fires. Persist the outgoing body while its identity
             // latch and vault key are still valid.
@@ -388,6 +389,7 @@ extension ViewController {
         isApplyingSnippetToEditor = true
         let previousEditingSnippetID = editingSnippetID
         if previousEditingSnippetID != snippet.id {
+            dismissSecureCopyWarning()
             // Preserve an outgoing secure edit before rebinding the identity
             // latch or clearing its protected text storage.
             flushPendingSecureEdit()
@@ -499,6 +501,16 @@ extension ViewController {
     func refuseSecureCommand(_ id: UUID?, _ what: String) -> Bool {
         guard let id, store.isSecure(id) else { return false }
         importExportMessage = "Secure snippets can\u{2019}t be \(what). Type \\ and pick it from the list to use it."
+        closeActionPanel()
+        return true
+    }
+
+    /// Copy needs a dedicated full-width bottom toast because the sidebar footer
+    /// truncates the reason beside Delete at ordinary widths. Duplicate and Paste
+    /// keep their generic refusal; only an explicit Copy gets the longer-lived toast.
+    func refuseSecureCopyCommand(_ id: UUID?) -> Bool {
+        guard let id, store.isSecure(id) else { return false }
+        presentSecureCopyWarning()
         closeActionPanel()
         return true
     }
@@ -1189,6 +1201,7 @@ extension ViewController {
     /// Clears the secure chrome for an ordinary snippet. Without this the overlay from a
     /// previously selected secure snippet would stay over the next one.
     func clearSecureEditorChrome() {
+        dismissSecureCopyWarning()
         secureContentEditableForID = nil
         assert(!snippetTextView.secureCapturePolicy.suppressesUnprotectedDrawing)
         assert(!snippetTextView.mayContainSecurePlaintext)

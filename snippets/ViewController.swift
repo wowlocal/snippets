@@ -21,6 +21,13 @@ private enum ActionStatusMessage {
     static let fadeDuration: TimeInterval = 0.25
 }
 
+private enum SecureCopyWarning {
+    static let message =
+        "Copy blocked. Secure snippets can\u{2019}t be copied. The clipboard was not changed."
+    static let displayDuration: TimeInterval = 8
+    static let fadeDuration: TimeInterval = 0.25
+}
+
 private enum ClipboardPreviewRefresh {
     static let interval: TimeInterval = 0.5
 }
@@ -34,6 +41,12 @@ private enum EditorListReload {
 /// eats a click on the Enabled checkbox for being in the way is worse than the
 /// silence it is there to fix.
 private final class StatusMessageOverlayView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// The bottom toast must not steal an editor, unlock, or list click while it is
+/// explaining why the explicit Copy action was refused.
+final class SecureCopyWarningOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
@@ -90,6 +103,8 @@ final class ViewController: NSViewController {
     /// message during its fade would pass the old task's guard and get
     /// dismissed almost immediately.
     private var importExportMessageGeneration = 0
+    private var secureCopyWarningDismissWorkItem: DispatchWorkItem?
+    private var secureCopyWarningGeneration = 0
     var editorListReloadWorkItem: DispatchWorkItem?
     var clipboardPreviewTimer: Timer?
     var observedPasteboardChangeCount = NSPasteboard.general.changeCount
@@ -107,6 +122,8 @@ final class ViewController: NSViewController {
     /// reflow while someone is typing in it.
     private let statusMessageOverlayLabel = NSTextField(labelWithString: "")
     private var statusMessageOverlayView: NSView?
+    private let secureCopyWarningLabel = NSTextField(wrappingLabelWithString: "")
+    private var secureCopyWarningOverlay: SecureCopyWarningOverlayView?
 
     let permissionBannerContainer = NSView()
     let permissionBannerDivider = NSBox()
@@ -239,6 +256,7 @@ final class ViewController: NSViewController {
 
         buildUI()
         buildStatusMessageOverlay()
+        buildSecureCopyWarningOverlay()
         bindState()
         configureSnippetDropTarget()
 
@@ -384,6 +402,7 @@ final class ViewController: NSViewController {
 
     deinit {
         importExportMessageDismissWorkItem?.cancel()
+        secureCopyWarningDismissWorkItem?.cancel()
         editorListReloadWorkItem?.cancel()
         if let localKeyMonitor {
             NSEvent.removeMonitor(localKeyMonitor)
@@ -597,6 +616,81 @@ final class ViewController: NSViewController {
         ])
     }
 
+    /// The secure-Copy refusal uses the same blue transient glass as the existing
+    /// bottom status overlay, but it is independent of the sidebar: the footer is
+    /// too narrow beside Delete and truncates the reason in the normal layout.
+    private func buildSecureCopyWarningOverlay() {
+        secureCopyWarningLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        secureCopyWarningLabel.textColor = .labelColor
+        secureCopyWarningLabel.alignment = .center
+        secureCopyWarningLabel.lineBreakMode = .byWordWrapping
+        secureCopyWarningLabel.maximumNumberOfLines = 0
+        secureCopyWarningLabel.isSelectable = false
+        secureCopyWarningLabel.translatesAutoresizingMaskIntoConstraints = false
+        secureCopyWarningLabel.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
+        secureCopyWarningLabel.setContentCompressionResistancePriority(
+            .required,
+            for: .vertical
+        )
+        secureCopyWarningLabel.setAccessibilityHelp(
+            "Nothing from the secure snippet was placed on the clipboard."
+        )
+        // Give the toast a normal single-line ideal width. At narrower windows
+        // the required edge inequalities squeeze it and the label wraps instead
+        // of truncating or widening the window.
+        secureCopyWarningLabel.preferredMaxLayoutWidth = 620
+
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(secureCopyWarningLabel)
+
+        let surface = LiquidGlassDesign.makeTransientSurface(
+            containing: contentView,
+            cornerRadius: LiquidGlassDesign.Metrics.controlCornerRadius,
+            fallbackMaterial: .popover
+        )
+
+        let container = SecureCopyWarningOverlayView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.isHidden = true
+        container.alphaValue = 0
+        container.setAccessibilityElement(false)
+        container.addSubview(surface)
+        view.addSubview(container)
+        secureCopyWarningOverlay = container
+
+        NSLayoutConstraint.activate([
+            secureCopyWarningLabel.leadingAnchor.constraint(
+                equalTo: contentView.leadingAnchor,
+                constant: 16
+            ),
+            secureCopyWarningLabel.trailingAnchor.constraint(
+                equalTo: contentView.trailingAnchor,
+                constant: -16
+            ),
+            secureCopyWarningLabel.topAnchor.constraint(
+                equalTo: contentView.topAnchor,
+                constant: 9
+            ),
+            secureCopyWarningLabel.bottomAnchor.constraint(
+                equalTo: contentView.bottomAnchor,
+                constant: -9
+            ),
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            container.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            container.widthAnchor.constraint(lessThanOrEqualToConstant: 652),
+            container.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            container.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
+        ])
+    }
+
     /// `importExportMessageLabel` is the only surface this app has for a status
     /// message and it sits in the sidebar footer, which ⌘B removes from the
     /// window outright. Everything routed through here was therefore invisible
@@ -637,6 +731,12 @@ final class ViewController: NSViewController {
         importExportMessageDismissWorkItem?.cancel()
         importExportMessageDismissWorkItem = nil
 
+        if let newValue, !newValue.isEmpty {
+            // Whichever action happened most recently owns the single bottom
+            // feedback surface; never stack a generic status over this toast.
+            dismissSecureCopyWarning()
+        }
+
         presentStatusMessageOverlay(newValue)
 
         guard let newValue, !newValue.isEmpty else {
@@ -670,6 +770,71 @@ final class ViewController: NSViewController {
             deadline: .now() + ActionStatusMessage.displayDuration,
             execute: workItem
         )
+    }
+
+    /// Makes a refused secure Copy unmistakable without duplicating the same text
+    /// in the sidebar footer. The safe bottom toast stays visible long enough to
+    /// read and is announced to assistive technology. It never contains snippet
+    /// metadata or plaintext.
+    func presentSecureCopyWarning() {
+        let message = SecureCopyWarning.message
+        // Secure Copy has exactly one visual response. Clear an older peripheral
+        // status rather than leaving it visible beside this dedicated toast.
+        importExportMessage = nil
+
+        secureCopyWarningGeneration += 1
+        let generation = secureCopyWarningGeneration
+        secureCopyWarningDismissWorkItem?.cancel()
+        secureCopyWarningDismissWorkItem = nil
+
+        secureCopyWarningLabel.stringValue = message
+        secureCopyWarningLabel.setAccessibilityLabel(message)
+        guard let secureCopyWarningOverlay else { return }
+        secureCopyWarningOverlay.isHidden = false
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            secureCopyWarningOverlay.animator().alphaValue = 1
+        }
+
+        NSAccessibility.post(
+            element: secureCopyWarningLabel,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
+
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.secureCopyWarningGeneration == generation else { return }
+                await NSAnimationContext.runAnimationGroup { context in
+                    context.duration = SecureCopyWarning.fadeDuration
+                    self.secureCopyWarningOverlay?.animator().alphaValue = 0
+                }
+                guard self.secureCopyWarningGeneration == generation else { return }
+                self.secureCopyWarningOverlay?.isHidden = true
+                self.secureCopyWarningDismissWorkItem = nil
+            }
+        }
+        secureCopyWarningDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + SecureCopyWarning.displayDuration,
+            execute: workItem
+        )
+    }
+
+    /// Later generic feedback and selection/rebind teardown retire the dedicated
+    /// Copy toast so it cannot float over unrelated content.
+    func dismissSecureCopyWarning() {
+        secureCopyWarningGeneration += 1
+        secureCopyWarningDismissWorkItem?.cancel()
+        secureCopyWarningDismissWorkItem = nil
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            secureCopyWarningOverlay?.animator().alphaValue = 0
+        }
+        secureCopyWarningOverlay?.isHidden = true
     }
 
     private func shouldPresentEngineStatusMessage(_ message: String) -> Bool {

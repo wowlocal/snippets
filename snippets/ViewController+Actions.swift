@@ -535,7 +535,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
 
     func copySelectedSnippet() {
         let targetSnippetID = activeCommandSnippetID()
-        if refuseSecureCommand(targetSnippetID, "copied") { return }
+        if refuseSecureCopyCommand(targetSnippetID) { return }
         commitActiveEditorState(endingEditing: true)
 
         guard let targetSnippetID,

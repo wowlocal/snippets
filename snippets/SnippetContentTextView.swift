@@ -97,6 +97,7 @@ final class SnippetContentTextView: NSTextView {
     private(set) var isClearingSecurePlaintextStorageForTeardown = false
     private var secureHoverValidationTimer: Timer?
     private var secureHoverHintVisibilityHandler: ((Bool) -> Void)?
+    private var secureCopyRefusalHandler: (() -> Void)?
     private(set) var isSecureHoverHintVisible = false
 
     deinit {
@@ -216,6 +217,14 @@ final class SnippetContentTextView: NSTextView {
     func setSecureHoverHintVisibilityHandler(_ handler: @escaping (Bool) -> Void) {
         secureHoverHintVisibilityHandler = handler
         handler(isSecureHoverHintVisible)
+    }
+
+    /// Reports only the explicit responder-chain Copy action. The lower-level
+    /// pasteboard, Services, drag, and sharing boundaries below keep failing
+    /// silently: AppKit can query them speculatively, and such a capability check
+    /// is not a user-visible copy attempt.
+    func setSecureCopyRefusalHandler(_ handler: @escaping () -> Void) {
+        secureCopyRefusalHandler = handler
     }
 
     func secureCaptureRendererDidFail() {
@@ -607,7 +616,10 @@ final class SnippetContentTextView: NSTextView {
     /// points (Edit menu, Services, dragging, and callers invoking these methods
     /// directly). Every one is guarded; hiding Copy in a menu is not a boundary.
     override func copy(_ sender: Any?) {
-        guard !isSecureContentMode else { return }
+        guard !isSecureContentMode else {
+            secureCopyRefusalHandler?()
+            return
+        }
         super.copy(sender)
     }
 
