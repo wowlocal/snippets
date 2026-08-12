@@ -105,6 +105,26 @@ final class SnippetsIOSUITests: XCTestCase {
         )
     }
 
+    func testIPadMoreMenuOffersICloudSync() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset"]
+        app.launch()
+
+        try XCTSkipIf(
+            app.buttons["phone-new-snippet"].waitForExistence(timeout: 2),
+            "The iPhone Library has its own iCloud action"
+        )
+
+        let more = app.buttons["More"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 5))
+        more.tap()
+        XCTAssertTrue(
+            app.buttons[
+                "Connect iCloud, Off. Your snippets stay on this device."
+            ].waitForExistence(timeout: 3)
+        )
+    }
+
     /// Captures deterministic, real-device-size App Store screenshots when explicitly
     /// requested by the release workflow. Ordinary verification runs skip this test so
     /// adding marketing assets does not make the smoke suite slower or stateful.

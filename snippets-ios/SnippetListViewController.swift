@@ -17,6 +17,7 @@ final class SnippetListViewController: UIViewController {
     private var activeTagKeys = Set<String>()
     private var selectedID: UUID?
     private var statusWorkItem: DispatchWorkItem?
+    private var syncObservation: UUID?
     private let searchIndex = SnippetSearchIndex()
     private lazy var searchPipeline = SnippetSearchPipeline(index: searchIndex)
 
@@ -33,6 +34,14 @@ final class SnippetListViewController: UIViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        guard let syncObservation else { return }
+        let coordinator = environment.syncCoordinator
+        Task { @MainActor in
+            coordinator.removeStateObserver(syncObservation)
+        }
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = nil
@@ -46,6 +55,11 @@ final class SnippetListViewController: UIViewController {
         configureFooter()
         configureTable()
         configureEmptyView()
+        syncObservation = environment.syncCoordinator.addStateObserver { [weak self] _ in
+            // Rebuild the menu so its subtitle follows Syncing / Last synced / error
+            // transitions even while this long-lived split-view controller stays open.
+            self?.configureToolbar()
+        }
         reload(keepingSelection: selectedID != nil)
     }
 
@@ -193,6 +207,7 @@ final class SnippetListViewController: UIViewController {
     }
 
     private func configureToolbar() {
+        let syncEnabled = SyncCoordinator.isEnabled
         let addMenu = UIMenu(children: [
             UIAction(title: "New Snippet", image: UIImage(systemName: "plus")) { [weak self] _ in
                 guard let self else { return }
@@ -218,6 +233,20 @@ final class SnippetListViewController: UIViewController {
             UIAction(title: "Encrypted Backup (Includes Secure Snippets)", image: UIImage(systemName: "lock.doc")) { [weak self] _ in
                 guard let self else { return }
                 self.delegate?.snippetListRequestedEncryptedBackup(self)
+            },
+            UIAction(
+                title: syncEnabled ? "Sync Now" : "Connect iCloud",
+                subtitle: environment.syncCoordinator.statusDescription,
+                image: UIImage(systemName: syncEnabled ? "arrow.triangle.2.circlepath" : "icloud")
+            ) { [weak self] _ in
+                guard let self else { return }
+                if SyncCoordinator.isEnabled {
+                    self.showStatus("Syncing\u{2026}")
+                    self.environment.syncCoordinator.syncNow()
+                } else {
+                    self.showStatus("Connecting to iCloud\u{2026}")
+                    self.environment.syncCoordinator.setEnabled(true)
+                }
             },
             UIAction(title: "Keyboard Shortcuts", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 guard let self else { return }

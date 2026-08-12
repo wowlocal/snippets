@@ -285,28 +285,20 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             target: self
         )
 
-        let shareItem = LiquidGlassDesign.menuItem(
-            title: "Copy Share Link",
-            symbolName: "link",
-            action: #selector(copySelectedSnippetShareLink),
+        let syncEnabled = SyncCoordinator.isEnabled
+        let syncItem = LiquidGlassDesign.menuItem(
+            title: syncEnabled ? "Sync Now" : "Connect iCloud",
+            symbolName: syncEnabled ? "arrow.triangle.2.circlepath" : "icloud",
+            action: #selector(syncFromMoreMenu),
             target: self
         )
-        shareItem.keyEquivalentModifierMask = [.command, .shift]
-        shareItem.keyEquivalent = "C"
-        shareItem.isEnabled = selectedSnippet != nil
-
-        // Placed next to Share deliberately: they are the two actions that decide where a
-        // snippet's text is allowed to go, and seeing "cannot be shared" beside "make
-        // secure" is what makes the trade legible at the moment of choosing.
-        let secureItem = LiquidGlassDesign.menuItem(
-            title: selectedSnippet.map { store.isSecure($0.id) } == true
-                ? "Make Ordinary\u{2026}" : "Make Secure",
-            symbolName: selectedSnippet.map { store.isSecure($0.id) } == true
-                ? "lock.open" : "lock",
-            action: #selector(toggleSelectedSnippetSecurity),
-            target: self
-        )
-        secureItem.isEnabled = selectedSnippet != nil
+        if let app = NSApp.delegate as? AppDelegate {
+            // NSMenuItem renders this below the title using the system's smaller,
+            // secondary menu typography on the deployment target.
+            syncItem.subtitle = app.syncCoordinator.statusDescription
+        } else {
+            syncItem.isEnabled = false
+        }
 
         let shortcutsItem = LiquidGlassDesign.menuItem(
             title: "Keyboard Shortcuts",
@@ -320,8 +312,7 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         menu.addItem(importItem)
         menu.addItem(exportItem)
         menu.addItem(backupItem)
-        menu.addItem(shareItem)
-        menu.addItem(secureItem)
+        menu.addItem(syncItem)
         menu.addItem(shortcutsItem)
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -338,6 +329,17 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
                 target: self
             )
             menu.addItem(resetQuitItem)
+        }
+    }
+
+    /// Sync remains opt-in: while it is off the explicit Connect iCloud title is the
+    /// consent that enables it; subsequent presses request an immediate round.
+    @objc private func syncFromMoreMenu() {
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        if SyncCoordinator.isEnabled {
+            app.syncCoordinator.syncNow()
+        } else {
+            app.syncCoordinator.setEnabled(true)
         }
     }
 

@@ -138,6 +138,11 @@ extension ViewController: NSTableViewDataSource, NSTableViewDelegate {
             contextMenuItem(title: "Copy Snippet", symbolName: "doc.on.doc", action: #selector(copySelectedSnippetFromContextMenu(_:))),
             contextMenuItem(title: "Paste Snippet", symbolName: "arrow.down.doc", action: #selector(pasteSelectedSnippetFromContextMenu(_:))),
             contextMenuItem(title: "Copy Share Link", symbolName: "link", action: #selector(copySelectedSnippetShareLink)),
+            contextMenuItem(
+                title: store.isSecure(snippet.id) ? "Make Ordinary\u{2026}" : "Make Secure",
+                symbolName: store.isSecure(snippet.id) ? "lock.open" : "lock",
+                action: #selector(toggleSelectedSnippetSecurity)
+            ),
             .separator(),
             contextMenuItem(title: "Duplicate Snippet", symbolName: "plus.square.on.square", action: #selector(duplicateSelectedSnippetFromContextMenu(_:))),
             contextMenuItem(

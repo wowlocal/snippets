@@ -1016,6 +1016,38 @@ final class SnippetsIOSTests: XCTestCase {
         )
     }
 
+    func testIPadMoreMenuOffersCloudSyncWithStatusSubtitle() throws {
+        let environment = AppEnvironment()
+        let disconnected = SnippetListViewController(environment: environment)
+        disconnected.loadViewIfNeeded()
+
+        let disconnectedMenu = try XCTUnwrap(
+            disconnected.navigationItem.rightBarButtonItems?.last?.menu
+        )
+        let connect = try XCTUnwrap(
+            disconnectedMenu.children
+                .compactMap { $0 as? UIAction }
+                .first { $0.title == "Connect iCloud" }
+        )
+        XCTAssertEqual(connect.subtitle, "Off. Your snippets stay on this device.")
+
+        // Change only the preference after constructing the environment so this UI
+        // test can exercise the enabled presentation without starting CloudKit.
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let connected = SnippetListViewController(environment: environment)
+        connected.loadViewIfNeeded()
+
+        let connectedMenu = try XCTUnwrap(
+            connected.navigationItem.rightBarButtonItems?.last?.menu
+        )
+        let syncNow = try XCTUnwrap(
+            connectedMenu.children
+                .compactMap { $0 as? UIAction }
+                .first { $0.title == "Sync Now" }
+        )
+        XCTAssertEqual(syncNow.subtitle, "Starting\u{2026}")
+    }
+
     func testSidebarTagFiltersWrapAndExpandWithoutHorizontalScrolling() {
         let filter = SidebarTagFilterView()
         let tags = [
