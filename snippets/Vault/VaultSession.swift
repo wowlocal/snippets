@@ -121,6 +121,16 @@ final class VaultSession {
 
     /// Points the session at a vault. Call whenever the vault is created or reloaded.
     func adopt(keyID: String?) {
+        // Foreground activation reloads the vault after LocalAuthentication returns.
+        // Face ID temporarily deactivates the scene, so that reload can race both an
+        // in-flight prompt and the freshly unlocked session. Re-adopting the exact same,
+        // still-present key is not a security boundary and must not invalidate either.
+        // A changed or missing key still takes the destructive path below.
+        if self.keyID == keyID,
+           let keyID,
+           keychain.hasKey(keyID: keyID) {
+            return
+        }
         self.keyID = keyID
         lock()
         refreshAvailability()

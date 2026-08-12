@@ -1355,11 +1355,7 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     @objc private func willResignActive() {
-        secureAuthenticationTask?.cancel()
-        secureAuthenticationTask = nil
-        handleSecureRevealTransition(secureRevealPolicy.lock())
-        flushPendingSecureContent()
-        view.endEditing(true)
+        prepareSecureContentForLifecycleDeactivation()
     }
 
     @objc private func didBecomeActive() {
@@ -1369,9 +1365,24 @@ final class SnippetEditorViewController: UIViewController {
 
     @objc private func sceneWillDeactivate(_ notification: Notification) {
         guard notification.object as? UIScene === view.window?.windowScene else { return }
-        secureAuthenticationTask?.cancel()
-        secureAuthenticationTask = nil
-        handleSecureRevealTransition(secureRevealPolicy.lock())
+        prepareSecureContentForLifecycleDeactivation()
+    }
+
+    private func prepareSecureContentForLifecycleDeactivation() {
+        // LocalAuthentication temporarily deactivates the app and its scene while
+        // Face ID is on screen. Preserve only that in-flight, still-redacted request;
+        // didEnterBackground invalidates its LAContext in VaultSession. Every other
+        // state is locked here, so visible plaintext is synchronously flushed.
+        let preservesSystemAuthentication =
+            secureRevealPolicy.isAuthenticating && secureAuthenticationTask != nil
+        if preservesSystemAuthentication {
+            handleSecureRevealTransition(
+                secureRevealPolicy.setAppAndSceneAreActive(false))
+        } else {
+            secureAuthenticationTask?.cancel()
+            secureAuthenticationTask = nil
+            handleSecureRevealTransition(secureRevealPolicy.lock())
+        }
         flushPendingSecureContent()
         view.endEditing(true)
     }

@@ -49,6 +49,25 @@ final class SecureSnippetRevealTests: XCTestCase {
         XCTAssertEqual(policy.begin(source: .touchHold), .none)
     }
 
+    func testTransientBiometricDeactivationPreservesOnlyRedactedAuthentication() throws {
+        var policy = SecureSnippetRevealPolicy()
+        policy.bindSecure(
+            rendererIsHealthy: true,
+            appAndSceneAreActive: true,
+            sceneCaptureIsInactive: true)
+        let token = try XCTUnwrap(policy.beginAuthentication())
+
+        XCTAssertEqual(policy.setAppAndSceneAreActive(false), .none)
+        XCTAssertEqual(policy.state, .authenticating)
+        XCTAssertTrue(policy.authenticationSucceeded(token: token))
+        XCTAssertEqual(policy.state, .authenticatedRedacted)
+        XCTAssertEqual(policy.begin(source: .touchHold), .none)
+        XCTAssertFalse(policy.permitsTextMutation)
+
+        XCTAssertEqual(policy.setAppAndSceneAreActive(true), .none)
+        XCTAssertEqual(policy.begin(source: .touchHold), .reveal)
+    }
+
     func testInactiveAppAndSceneCaptureImmediatelyRedactAndGateMutation() throws {
         var inactivePolicy = try makeRevealedPolicy()
         XCTAssertEqual(inactivePolicy.setAppAndSceneAreActive(false), .redact)

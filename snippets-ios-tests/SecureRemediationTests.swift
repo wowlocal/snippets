@@ -401,6 +401,36 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertThrowsError(try components.session.currentKey())
     }
 
+    func testSameVaultForegroundReloadPreservesAuthenticationAndUnlockedSession() async throws {
+        let gate = AuthenticationGate()
+        let evaluatorStarted = expectation(description: "authentication evaluator started")
+        let components = makeComponents(authenticationEvaluator: { _ in
+            evaluatorStarted.fulfill()
+            return await gate.waitForDecision()
+        })
+        let pending = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pending)
+
+        let unlockTask = Task { @MainActor in
+            try await components.session.unlock(reason: "Test Face ID foreground reload")
+        }
+        await fulfillment(of: [evaluatorStarted], timeout: 1)
+
+        // Models sceneDidBecomeActive racing the tail of LocalAuthentication.
+        components.secureStore.reload(notifyChange: false)
+        gate.finish(with: true)
+        _ = try await unlockTask.value
+        XCTAssertTrue(components.session.state.isUnlocked)
+        XCTAssertNoThrow(try components.session.currentKey())
+
+        // A second foreground reload immediately after the prompt must not destroy
+        // the just-opened session either.
+        components.secureStore.reload(notifyChange: false)
+        XCTAssertTrue(components.session.state.isUnlocked)
+        XCTAssertNoThrow(try components.session.currentKey())
+    }
+
     func testBackgroundLockCancelsAuthenticationInFlightWithoutKeyResurrection() async throws {
         let gate = AuthenticationGate()
         let evaluatorStarted = expectation(description: "authentication evaluator started")
