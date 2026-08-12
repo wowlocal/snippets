@@ -25,6 +25,21 @@ nonisolated struct SyncJournal: Equatable {
         /// The desired generation this snapshot came from. A later local edit advances
         /// `Entry.generation` without changing this value.
         var generation: UInt64
+        /// The exact backend generation used for this offer. It is inseparable from the
+        /// offered bytes: after a fetched B/V2 is persisted, a crash may leave older
+        /// offer A in the journal. Retrying A with V2 would pass CAS and overwrite B;
+        /// retrying it with its original V1/nil safely conflicts.
+        var recordVersion: SyncRecordVersion?
+
+        init(
+            envelope: SyncEnvelope,
+            generation: UInt64,
+            recordVersion: SyncRecordVersion? = nil
+        ) {
+            self.envelope = envelope
+            self.generation = generation
+            self.recordVersion = recordVersion
+        }
     }
 
     struct Entry: Equatable {
@@ -161,12 +176,18 @@ nonisolated struct SyncJournal: Equatable {
 
     /// Durably called before the corresponding snapshots are handed to a transport.
     /// Existing unresolved offers are deliberately immutable.
-    mutating func markOffered(_ envelopes: [SyncEnvelope]) {
+    mutating func markOffered(
+        _ envelopes: [SyncEnvelope],
+        confirmed: SyncBase? = nil
+    ) {
         for envelope in envelopes {
             let key = SyncBase.key(envelope.id)
             guard var entry = entries[key], entry.offered == nil,
                   Self.sameVersion(entry.desired, envelope) else { continue }
-            entry.offered = Offered(envelope: envelope, generation: entry.generation)
+            entry.offered = Offered(
+                envelope: envelope,
+                generation: entry.generation,
+                recordVersion: confirmed?.recordVersion(envelope.id))
             entries[key] = entry
         }
     }
@@ -215,13 +236,17 @@ nonisolated struct SyncJournal: Equatable {
                 if entry.offered == nil {
                     entry.offered = Offered(
                         envelope: envelope,
-                        generation: entry.generation)
+                        generation: entry.generation,
+                        recordVersion: confirmed.recordVersion(envelope.id))
                     entries[key] = entry
                 }
             } else {
                 entries[key] = Entry(
                     desired: envelope,
-                    offered: Offered(envelope: envelope, generation: 1),
+                    offered: Offered(
+                        envelope: envelope,
+                        generation: 1,
+                        recordVersion: confirmed.recordVersion(envelope.id)),
                     generation: 1,
                     modifiedAt: now)
             }
@@ -358,6 +383,9 @@ nonisolated extension SyncJournal: Codable {
     private struct StoredOffered: Codable {
         var envelope: String
         var generation: UInt64
+        /// Additive for pre-CAS journal compatibility. Missing means the offer was
+        /// created by an older build; nil is the safe conditional-create token.
+        var recordVersion: SyncRecordVersion?
     }
 
     private struct StoredEntry: Codable {
@@ -408,7 +436,10 @@ nonisolated extension SyncJournal: Codable {
                         in: container,
                         debugDescription: "invalid offered sync-journal entry")
                 }
-                offered = Offered(envelope: envelope, generation: storedOffered.generation)
+                offered = Offered(
+                    envelope: envelope,
+                    generation: storedOffered.generation,
+                    recordVersion: storedOffered.recordVersion)
             } else {
                 offered = nil
             }
@@ -431,7 +462,8 @@ nonisolated extension SyncJournal: Codable {
             let offered = try entry.offered.map {
                 StoredOffered(
                     envelope: try $0.envelope.canonicalData().base64EncodedString(),
-                    generation: $0.generation)
+                    generation: $0.generation,
+                    recordVersion: $0.recordVersion)
             }
             stored[key] = StoredEntry(
                 desired: try entry.desired.canonicalData().base64EncodedString(),

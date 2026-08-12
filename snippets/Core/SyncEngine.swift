@@ -454,6 +454,8 @@ final class SyncEngine {
         var round = RoundOutcome()
         var offeredThisRound: [UUID: SyncEnvelope] = [:]
         var rejectedThisRound = Set<UUID>()
+        var authoritativeConflictRecords: [WireRecord] = []
+        var unresolvedConflictIDs = Set<UUID>()
         // A permanent per-record rejection is surfaced only after an authoritative
         // fetch has resolved the durable offer. Throwing immediately would pin that
         // frozen offer forever and prevent a later local fix from being submitted.
@@ -501,12 +503,25 @@ final class SyncEngine {
             // fails afterwards, restart retries these bytes rather than guessing which
             // of a newer edit and our own server echo is authoritative.
             var marked = journal
-            marked.markOffered(pending)
+            marked.markOffered(pending, confirmed: base)
             try persistJournal(marked)
             offeredThisRound = Dictionary(
                 pending.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
-            let records = try pending.map { try WireCodec.seal($0, using: sealer) }
+            let records = try pending.map { envelope in
+                var record = try WireCodec.seal(envelope, using: sealer)
+                // The generation belongs to this immutable offer, not merely this id.
+                // A later fetched base may already contain B/V2 while crash replay still
+                // owes old offer A; attaching V2 to A would authorize it to overwrite B.
+                guard let offered = journal.entry(envelope.id)?.offered,
+                      Self.sameVersion(offered.envelope, envelope) else {
+                    throw SyncEngineFailure(
+                        reason: .localLibraryQuarantined,
+                        detail: "pending sync state lost its compare-and-swap snapshot")
+                }
+                record.recordVersion = offered.recordVersion
+                return record
+            }
             try Task.checkCancellation()
             let submission = try await transport.submit(records, at: base.cursor)
             try Task.checkCancellation()
@@ -529,13 +544,15 @@ final class SyncEngine {
 
             for result in submission.results {
                 switch result.outcome {
-                case .accepted:
+                case .accepted(_, let recordVersion):
                     // Only now is it agreed. Recording it before the backend accepted
                     // would make the next diff skip it, and the record would never be
                     // pushed again. An outcome for an id we did not submit is ignored
                     // rather than trusted.
                     guard let accepted = pendingByID[result.id] else { continue }
-                    nextBase.record(accepted)
+                    nextBase.recordConfirmed(
+                        accepted,
+                        recordVersion: recordVersion)
                     if acceptedIDs.insert(result.id).inserted { round.uploaded += 1 }
                 case .rejected(.authenticationRequired(let detail)):
                     // Not a halt. An expired token is an ordinary, recoverable state and
@@ -559,6 +576,21 @@ final class SyncEngine {
                     rejectedThisRound.insert(result.id)
                     terminalEngineFailureAfterFetch = terminalEngineFailureAfterFetch
                         ?? SyncEngineFailure(reason: .backendRefused, detail: detail)
+                case .rejected(.conflict(let remote)):
+                    guard pendingByID[result.id] != nil else { continue }
+                    rejectedThisRound.insert(result.id)
+                    if let remote, remote.id == result.id {
+                        // This record is newer than (or is the accepted echo of) our
+                        // offered generation. Process it before the subsequent change
+                        // feed: a legacy cursor may already be past it and legitimately
+                        // return an empty delta.
+                        authoritativeConflictRecords.append(remote)
+                    } else {
+                        // A conflict without the server value disproves acceptance of
+                        // this attempt but does not prove which earlier ambiguous offer
+                        // is remote. Never clear it on the strength of an empty delta.
+                        unresolvedConflictIDs.insert(result.id)
+                    }
                 case .rejected(let rejection):
                     guard pendingByID[result.id] != nil else { continue }
                     rejectedThisRound.insert(result.id)
@@ -601,9 +633,15 @@ final class SyncEngine {
 
         // FETCH, possibly paged.
         var cursor = base.cursor
-        var incoming: [SyncEnvelope] = []
+        struct OpenedRemote {
+            var envelope: SyncEnvelope
+            var recordVersion: SyncRecordVersion
+        }
+        var rawIncoming = authoritativeConflictRecords.map { (record: $0, fromConflict: true) }
         var isFullResync = false
         var opaqueFetchedIDs = Set<UUID>()
+        var fetchedAuthoritativeIDs = Set<UUID>()
+        round.downloaded += authoritativeConflictRecords.count
 
         while true {
             try Task.checkCancellation()
@@ -611,20 +649,44 @@ final class SyncEngine {
             try Task.checkCancellation()
             isFullResync = isFullResync || fetch.isFullResync
             round.downloaded += fetch.records.count
-            for record in fetch.records {
-                do {
-                    incoming.append(try WireCodec.open(record, using: sealer))
-                } catch {
-                    // Undecryptable. Never applied, never dropped silently — a record we
-                    // cannot read is either a key we do not have or a bug, and both need
-                    // to be visible rather than inferred from missing data later.
-                    quarantine(record)
-                    opaqueFetchedIDs.insert(record.id)
-                    round.quarantined += 1
-                }
-            }
+            rawIncoming.append(contentsOf: fetch.records.map {
+                (record: $0, fromConflict: false)
+            })
             cursor = fetch.cursor
             guard fetch.hasMore else { break }
+        }
+
+        var incoming: [OpenedRemote] = []
+        incoming.reserveCapacity(rawIncoming.count)
+        for item in rawIncoming {
+            guard let recordVersion = item.record.recordVersion else {
+                // A fetched value without the generation that guards its replacement is
+                // incomplete protocol data. Hold the cursor/offer exactly like an
+                // undecryptable blob; accepting the envelope alone would make the next
+                // local edit a conditional create and lose the known ancestry.
+                quarantine(item.record)
+                opaqueFetchedIDs.insert(item.record.id)
+                if item.fromConflict { unresolvedConflictIDs.insert(item.record.id) }
+                round.quarantined += 1
+                continue
+            }
+            do {
+                let envelope = try WireCodec.open(item.record, using: sealer)
+                incoming.append(OpenedRemote(
+                    envelope: envelope,
+                    recordVersion: recordVersion))
+                if !item.fromConflict {
+                    fetchedAuthoritativeIDs.insert(envelope.id)
+                }
+            } catch {
+                // Undecryptable. Never applied, never dropped silently — a record we
+                // cannot read is either a key we do not have or a bug, and both need
+                // to be visible rather than inferred from missing data later.
+                quarantine(item.record)
+                opaqueFetchedIDs.insert(item.record.id)
+                if item.fromConflict { unresolvedConflictIDs.insert(item.record.id) }
+                round.quarantined += 1
+            }
         }
 
         // Capture edits — especially an absence that means delete — which happened
@@ -645,7 +707,9 @@ final class SyncEngine {
             if !isFullResync {
                 var resolvedJournal = journal
                 resolvedJournal.reject(Array(
-                    rejectedThisRound.subtracting(opaqueFetchedIDs)))
+                    rejectedThisRound
+                        .subtracting(opaqueFetchedIDs)
+                        .subtracting(unresolvedConflictIDs)))
                 try persistJournal(resolvedJournal)
             }
 
@@ -653,13 +717,17 @@ final class SyncEngine {
             // fails, retaining the old cursor lets a CAS-capable transport reject a
             // restart's stale offer against any remote value fetched in this round.
             // An undecryptable record was fetched but not applied, so hold the cursor.
-            if opaqueFetchedIDs.isEmpty {
+            if opaqueFetchedIDs.isEmpty, unresolvedConflictIDs.isEmpty {
                 var nextBase = base
                 nextBase.cursor = cursor
                 try persistBase(nextBase)
             }
             round.fullResync = isFullResync
             if let failure = terminalEngineFailureAfterFetch { throw failure }
+            if !unresolvedConflictIDs.isEmpty {
+                throw SyncTransportFailure.unreachable(
+                    detail: "the backend reported a conflict without its authoritative record")
+            }
             return round
         }
 
@@ -672,13 +740,15 @@ final class SyncEngine {
         // The local files contain live records only. The journal supplies explicit
         // tombstones and may also contain a restamped recreation that the frozen local
         // model cannot represent by itself.
-        for envelope in incoming {
+        for remote in incoming {
+            let envelope = remote.envelope
             if let desired = journal.entry(envelope.id)?.desired {
                 localNow[envelope.id] = desired
             }
         }
         var merged: [SyncEnvelope] = []
-        for envelope in incoming {
+        for remote in incoming {
+            let envelope = remote.envelope
             let offered = journal.entry(envelope.id)?.offered?.envelope
                 ?? offeredThisRound[envelope.id]
             let ancestor: SyncEnvelope?
@@ -732,9 +802,13 @@ final class SyncEngine {
         // re-applies it as a no-op rather than as churn.
         try Task.checkCancellation()
         var nextBase = base
-        let confirmedIncoming = incoming.filter { !unapplied.contains($0.id) }
-        for envelope in confirmedIncoming {
-            nextBase.record(envelope)
+        let confirmedIncoming = incoming.filter {
+            !unapplied.contains($0.envelope.id)
+        }
+        for remote in confirmedIncoming {
+            nextBase.recordConfirmed(
+                remote.envelope,
+                recordVersion: remote.recordVersion)
         }
         // First make fetched envelopes durable while deliberately retaining the old
         // compare-and-swap cursor. That old cursor is the safety net if journal
@@ -747,7 +821,14 @@ final class SyncEngine {
         // A fetched server value resolves ambiguity for that record. A matching offer
         // is acknowledged; a different value explicitly rejects the old offer while
         // retaining the latest desired generation for the next round.
-        let confirmedIDs = Set(confirmedIncoming.map(\.id))
+        let confirmedIDs = Set(confirmedIncoming.map(\.envelope.id))
+        // A conflict result may omit its server record, in which case the offer stays
+        // frozen until a normal fetch supplies and applies that id. Once the fetched
+        // value is durably confirmed it is exactly the authoritative proof we were
+        // waiting for; retaining the unresolved marker would pin the stale offer and
+        // back off forever despite already holding B/V2.
+        unresolvedConflictIDs.subtract(
+            confirmedIDs.intersection(fetchedAuthoritativeIDs))
         var resolvedJournal = journal
         resolvedJournal.acknowledge(Array(confirmedIDs), confirmed: base)
         let authoritativelyRejectedIDs: Set<UUID>
@@ -760,6 +841,7 @@ final class SyncEngine {
             authoritativelyRejectedIDs = rejectedThisRound
                 .subtracting(unapplied)
                 .subtracting(opaqueFetchedIDs)
+                .subtracting(unresolvedConflictIDs)
         }
         resolvedJournal.reject(Array(authoritativelyRejectedIDs))
 
@@ -775,13 +857,20 @@ final class SyncEngine {
         // Only after the journal no longer exposes a stale offer may the CAS ancestor
         // advance past the remote values just applied. On a transport that enforces that
         // ancestor, a crash in any preceding window causes a harmless conflict/refetch.
-        if unapplied.isEmpty, opaqueFetchedIDs.isEmpty {
+        if unapplied.isEmpty,
+           opaqueFetchedIDs.isEmpty,
+           unresolvedConflictIDs.isEmpty {
             var advancedBase = base
             advancedBase.cursor = cursor
             try persistBase(advancedBase)
         }
 
         if let failure = terminalEngineFailureAfterFetch { throw failure }
+
+        if !unresolvedConflictIDs.isEmpty {
+            throw SyncTransportFailure.unreachable(
+                detail: "the backend reported a conflict without its authoritative record")
+        }
 
         if !incompatible.isEmpty {
             throw SyncEngineFailure(

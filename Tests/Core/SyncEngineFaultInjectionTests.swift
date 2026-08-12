@@ -397,20 +397,24 @@ struct SyncEngineFaultInjectionTests {
         let newSealer = SnippetCryptoSealer(
             keyring: SnippetCrypto.Keyring.generate(), scopeID: "after-rekey")
         let wireA = try WireCodec.seal(ancestorA, using: oldSealer)
-        let wireCOldKey = try WireCodec.seal(offeredC, using: oldSealer)
-        let wireCNewKey = try WireCodec.seal(offeredC, using: newSealer)
+        var wireCOldKey = try WireCodec.seal(offeredC, using: oldSealer)
+        var wireCNewKey = try WireCodec.seal(offeredC, using: newSealer)
         let wireD = try WireCodec.seal(independentD, using: newSealer)
 
         let acceptingBackend = InMemoryTransport()
         acceptingBackend.seed([wireA])
+        let storedA = try #require(acceptingBackend.snapshot.first)
+        let versionA = try #require(storedA.recordVersion)
+        wireCOldKey.recordVersion = versionA
+        wireCNewKey.recordVersion = versionA
         let cursorAtA = try #require(acceptingBackend.currentCursor)
         var confirmed = SyncBase(cursor: cursorAtA)
-        confirmed.record(ancestorA)
+        confirmed.recordConfirmed(ancestorA, recordVersion: versionA)
         var journal = SyncJournal()
         journal.reconcile(
             current: [snippetID: offeredC], confirmed: confirmed,
             deviceID: Self.deviceA, now: Date(timeIntervalSince1970: 1))
-        journal.markOffered(journal.pending(confirmed: confirmed))
+        journal.markOffered(journal.pending(confirmed: confirmed), confirmed: confirmed)
         #expect(journal.entry(snippetID)?.offered?.envelope == offeredC)
 
         // The first submission fails before commit, so A remains remotely and C stays
@@ -419,7 +423,7 @@ struct SyncEngineFaultInjectionTests {
         await #expect(throws: (any Error).self) {
             _ = try await acceptingBackend.submit([wireCOldKey], at: confirmed.cursor)
         }
-        #expect(acceptingBackend.snapshot == [wireA])
+        #expect(acceptingBackend.snapshot == [storedA])
 
         journal.stageConfirmedForTransportRekey(confirmed, now: Date(timeIntervalSince1970: 2))
         let resetBase = SyncBase(cursor: confirmed.cursor)
@@ -440,13 +444,16 @@ struct SyncEngineFaultInjectionTests {
         // D can then be merged with C over their shared ancestor A.
         let conflictingBackend = InMemoryTransport()
         conflictingBackend.seed([wireA])
+        var conflictingOffer = wireCNewKey
+        conflictingOffer.recordVersion = try #require(
+            conflictingBackend.snapshot.first?.recordVersion)
         let sharedCursor = try #require(conflictingBackend.currentCursor)
         conflictingBackend.seed([wireD])
-        let rejected = try await conflictingBackend.submit([wireCNewKey], at: sharedCursor)
+        let rejected = try await conflictingBackend.submit([conflictingOffer], at: sharedCursor)
         let conflict = try #require(rejected.rejections.first)
         #expect(conflict.id == snippetID)
-        if case .conflict(let remoteRev) = conflict.rejection {
-            #expect(remoteRev == wireD.rev)
+        if case .conflict(let remote) = conflict.rejection {
+            #expect(remote?.rev == wireD.rev)
         } else {
             Issue.record("expected the post-cursor independent write D to conflict")
         }

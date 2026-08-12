@@ -709,12 +709,13 @@ nonisolated struct SnippetCryptoSealer: SyncBlobSealing {
 
 // MARK: - The wire record
 
-/// The only four things that ever leave the device.
+/// The application fields that leave the device, plus opaque backend concurrency state.
 ///
 /// Everything else — name, keyword, tags, body, `secure`, the HLC, the originating
 /// device, the timestamps — lives **inside** `blob`, encrypted. A backend operator, or
 /// Apple, or whoever ends up with the bucket, sees a set of opaque ids, opaque
-/// revisions, a deletion flag, and ciphertext. They can count a user's snippets and
+/// revisions, a deletion flag, ciphertext, and the backend's own generation token. They
+/// can count a user's snippets and
 /// watch when they change; they cannot read one.
 ///
 /// `deleted` is in the clear, and that is a deliberate concession rather than an
@@ -733,12 +734,20 @@ nonisolated struct WireRecord: Equatable, Sendable, Codable {
     var deleted: Bool
     /// The sealed `SyncEnvelope`.
     var blob: Data
+    /// Backend-owned optimistic-concurrency metadata. It is deliberately outside the
+    /// sealed identity: refreshing a CloudKit change tag does not change user content,
+    /// the application revision, or the ciphertext.
+    var recordVersion: SyncRecordVersion?
 
-    init(id: UUID, rev: String, deleted: Bool, blob: Data) {
+    init(
+        id: UUID, rev: String, deleted: Bool, blob: Data,
+        recordVersion: SyncRecordVersion? = nil
+    ) {
         self.id = id
         self.rev = rev
         self.deleted = deleted
         self.blob = blob
+        self.recordVersion = recordVersion
     }
 }
 

@@ -344,7 +344,8 @@ struct SyncEngineTests {
         let h = try harness()
         defer { try? FileManager.default.removeItem(at: h.dir) }
 
-        h.library.envelopes[UUID()] = envelope(UUID(), name: "a")
+        let id = UUID()
+        h.library.envelopes[id] = envelope(id, name: "a")
         await h.transport.configure { $0.rejectEverything = .authenticationRequired(detail: "token expired") }
 
         let state = await h.engine.sync()
@@ -408,7 +409,8 @@ struct SyncEngineTests {
 
         var clock = Date(timeIntervalSince1970: 1_000)
         h.engine.now = { clock }
-        h.library.envelopes[UUID()] = envelope(UUID(), name: "a")
+        let id = UUID()
+        h.library.envelopes[id] = envelope(id, name: "a")
         await h.transport.configure { $0.unreachable = true }
 
         let first = await h.engine.sync()

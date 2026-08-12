@@ -476,11 +476,10 @@ Keychain has propagated either can — which needs a user enabling sync on two M
 minute, ever, and only the first time. iCloud Keychain converges on one; `SyncCoordinator` notices
 the stored key no longer matches the one its engine holds, durably stages every confirmed envelope
 as an offer, then clears only the confirmed envelopes while retaining the change cursor. That cursor
-preserves the ancestor a compare-and-swap-capable transport needs when replacing old-key records.
-The current CloudKit transport does not yet carry `recordChangeTag` system fields and still saves
-with `.allKeys`, so retaining the cursor alone does **not** yet prevent an independent remote write
-from being overwritten; the system-field/CAS transport step must close that boundary. The projection
-sidecar is kept:
+and each record's archived CloudKit system fields preserve the transport ancestry needed when
+replacing old-key records. Every staged offer captures the exact per-record generation beside its
+payload and CloudKit saves with `.ifServerRecordUnchanged`, so re-encryption cannot authorize an
+overwrite of a newer independent edit. The projection sidecar is kept:
 its HLC/origin and unknown extension fields are independent of the wire key, and deleting it would
 strip forward-compatible metadata on the replacement upload. Stale losing-key records still
 need the planned zone wipe, but they no longer suppress readable replacements.
@@ -490,9 +489,12 @@ need the planned zone wipe, but they no longer suppress readable replacements.
 `SyncEngine` runs one round: journal, push, fetch, then apply. **Push first** — fetching and applying
 first would rewrite local records before this device's own changes had left it. Before any network
 operation, `Sync/journal.json` stores both the latest `desired` envelope and the exact immutable
-`offered` snapshot. If the backend commits and its acknowledgement is lost, restart retries those
-exact bytes and a fetched echo becomes a tentative ancestor; a later edit or tombstone therefore
-cannot be mistaken for an unrelated conflict and silently discarded.
+`offered` snapshot, including the exact backend generation used for its conditional write. If the
+backend commits and its acknowledgement is lost, restart retries those exact bytes with that same
+generation and a fetched echo becomes a tentative ancestor; a later edit or tombstone therefore
+cannot be mistaken for an unrelated conflict and silently discarded. Binding the generation to
+the offer rather than only its UUID is essential: after fetch persists B/V2 but before it clears
+older offer A/V1, a crash must retry A with V1, never with V2 that would authorize overwriting B.
 
 Before deriving that snapshot, the bridge synchronously makes pending ordinary edits durable in
 the primary `snippets.json`. A termination rescue copy is not sufficient: restart projects the
@@ -509,14 +511,24 @@ a fetched CloudKit batch are marked as remote and refresh the UI without schedul
 
 A record is recorded in the base only once the backend has *accepted* it or a fetched value has
 been applied. Base and journal are durable protocol state, not disposable caches. Confirmation is
-written before an exact offer is acknowledged. For a different fetched value, its envelope is first
-written with the old cursor, then journal ambiguity is resolved, and only then is the cursor
-advanced. This preserves the engine-level ancestor and makes a CAS-capable transport refetch a
-conflict instead of accepting a stale offer over the fetched value. The journal still prevents lost
-local intent with today's CloudKit transport, but `.allKeys` cannot reject the stale write until
-CloudKit system fields are persisted and submitted conditionally. An additive `journalEstablished`
-marker distinguishes a legacy pre-journal base from a later missing journal and makes the latter a
-sticky safety stop.
+written before an exact offer is acknowledged. `base.json` pairs each confirmed envelope with an
+opaque per-record version; CloudKit implements that version with
+`CKRecord.encodeSystemFields(with:)`, including `recordChangeTag`. A save is accepted only when the
+modify response returns a saved `CKRecord` whose new system fields can also be archived. A thrown
+partial response may have committed unnamed items, but without those returned fields they remain
+ambiguous offers rather than false successes.
+
+For a different fetched value, its envelope and system fields are first written with the old
+cursor, then journal ambiguity is resolved, and only then is the cursor advanced. A
+`serverRecordChanged` result carries the authoritative server record directly into the same merge;
+this is load-bearing while migrating a legacy base whose cursor may already be past that record.
+Malformed fetched records or per-item fetch failures do not advance the cursor. An additive
+`journalEstablished` marker distinguishes a legacy pre-journal base from a later missing journal
+and makes the latter a sticky safety stop.
+
+Current clients use `.ifServerRecordUnchanged`; old installed builds that still save with
+`.allKeys` remain a fleet-wide compatibility risk until they are updated. No new client-side CAS
+can stop an older binary from issuing an unconditional write.
 
 `Sync/library-metadata.json` is the local projection sidecar. The frozen `snippets.json` format
 cannot hold an HLC, origin, or forward-compatible wire extensions, so the bridge retains those

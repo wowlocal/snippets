@@ -335,9 +335,13 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertFalse(ordinaryConfirmed.secure)
         XCTAssertTrue(secureConfirmed.secure)
 
+        let ordinaryVersion = SyncRecordVersion(Data("ordinary-system-fields".utf8))
+        let secureVersion = SyncRecordVersion(Data("secure-system-fields".utf8))
         var confirmedBase = SyncBase(cursor: SyncCursor("73"))
-        confirmedBase.record(ordinaryConfirmed)
-        confirmedBase.record(secureConfirmed)
+        confirmedBase.recordConfirmed(
+            ordinaryConfirmed, recordVersion: ordinaryVersion)
+        confirmedBase.recordConfirmed(
+            secureConfirmed, recordVersion: secureVersion)
 
         var editedOrdinary = ordinary
         editedOrdinary.content = "ordinary pending edit"
@@ -361,7 +365,10 @@ final class SecureRemediationTests: XCTestCase {
             modifiedAt: Date(timeIntervalSinceReferenceDate: 20))
         let secureEntry = SyncJournal.Entry(
             desired: secureConfirmed,
-            offered: SyncJournal.Offered(envelope: secureConfirmed, generation: 1),
+            offered: SyncJournal.Offered(
+                envelope: secureConfirmed,
+                generation: 1,
+                recordVersion: secureVersion),
             generation: 1,
             modifiedAt: Date(timeIntervalSinceReferenceDate: 10))
         let journal = SyncJournal(entries: [
@@ -389,6 +396,10 @@ final class SecureRemediationTests: XCTestCase {
         }
         XCTAssertEqual(retainedBase.envelope(ordinary.id), ordinaryConfirmed)
         XCTAssertNil(retainedBase.envelope(toSecure.id))
+        XCTAssertEqual(retainedBase.recordVersion(ordinary.id), ordinaryVersion,
+                       "forget must retain ordinary CloudKit replacement authority")
+        XCTAssertNil(retainedBase.recordVersion(toSecure.id),
+                     "forgotten secure ciphertext must not leave replacement authority behind")
         XCTAssertNil(retainedBase.cursor,
                      "the next opt-in must fetch remote secure state from the beginning")
 
@@ -681,12 +692,18 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertNotEqual(confirmed, offered)
         XCTAssertNotEqual(offered, desired)
 
+        let rollbackVersion = SyncRecordVersion(Data("rollback-system-fields".utf8))
         var base = SyncBase(cursor: SyncCursor("111"), journalEstablished: true)
-        base.record(confirmed)
+        base.recordConfirmed(
+            confirmed,
+            recordVersion: rollbackVersion)
         let journal = SyncJournal(entries: [
             SyncBase.key(snippet.id): SyncJournal.Entry(
                 desired: desired,
-                offered: SyncJournal.Offered(envelope: offered, generation: 1),
+                offered: SyncJournal.Offered(
+                    envelope: offered,
+                    generation: 1,
+                    recordVersion: rollbackVersion),
                 generation: 2,
                 modifiedAt: Date(timeIntervalSinceReferenceDate: 123.456)),
         ])

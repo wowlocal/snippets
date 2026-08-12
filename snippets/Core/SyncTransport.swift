@@ -26,6 +26,89 @@ nonisolated struct SyncCursor: Hashable, Sendable, Codable, CustomStringConverti
     var description: String { rawValue }
 }
 
+/// A backend-owned optimistic-concurrency token for one record.
+///
+/// `WireRecord.rev` cannot fill this role: it is derived from the encrypted application
+/// envelope and therefore says what value we are writing, not which server generation
+/// we read before writing it. CloudKit's implementation stores the archived `CKRecord`
+/// system fields here; another backend can store an ETag or generation number. Core
+/// deliberately treats the bytes as opaque.
+///
+/// The wrapper has its own small, closed schema because these bytes become part of the
+/// durable merge ancestor in `SyncBase`. If a future build changes their representation,
+/// an older build must stop instead of silently discarding the compare-and-swap token.
+nonisolated struct SyncRecordVersion: Equatable, Hashable, Sendable, Codable {
+    static let currentSchemaVersion = 1
+    static let maximumDataBytes = 1_048_576
+
+    let schemaVersion: Int
+    var data: Data
+
+    init(_ data: Data) {
+        schemaVersion = Self.currentSchemaVersion
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion, data
+    }
+
+    private struct AnyCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            intValue = nil
+        }
+
+        init?(intValue: Int) {
+            stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let allFields = try decoder.container(keyedBy: AnyCodingKey.self)
+        let actual = Set(allFields.allKeys.map(\.stringValue))
+        let expected = Set(CodingKeys.allCases.map(\.rawValue))
+        guard actual == expected else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath,
+                      debugDescription: "unexpected sync-record-version fields"))
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "unsupported sync-record-version schema version")
+        }
+        data = try container.decode(Data.self, forKey: .data)
+        guard data.count <= Self.maximumDataBytes else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .data,
+                in: container,
+                debugDescription: "sync-record-version data is too large")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        guard schemaVersion == Self.currentSchemaVersion,
+              data.count <= Self.maximumDataBytes else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "invalid sync-record-version value"))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(data, forKey: .data)
+    }
+}
+
 /// Something the backend told us out of band.
 ///
 /// Deliberately not "the backend pushed you these records": an event is a *hint* that
@@ -61,9 +144,12 @@ nonisolated enum SyncTransportEvent: Sendable, Equatable {
 /// on with the rest of the batch.
 nonisolated enum SyncRejection: Error, Sendable, Equatable, CustomStringConvertible {
     /// The backend holds a newer revision than the one this submission was built on.
-    /// `remoteRev` is supplied when the backend discloses it, which turns a
-    /// fetch-merge-resubmit round trip into a single fetch.
-    case conflict(remoteRev: String?)
+    /// When the backend discloses its authoritative record, carrying it here is
+    /// load-bearing for migration: a legacy cursor may already be past that value, so a
+    /// subsequent delta fetch is allowed to be empty. `nil` means the transport could
+    /// prove only that a conflict exists; the engine must then retain the offer until an
+    /// authoritative record is obtained.
+    case conflict(remote: WireRecord?)
     /// Slow down. `retryAfter` is the backend's own number when it gives one.
     case rateLimited(retryAfter: TimeInterval)
     /// Credentials are missing, expired, or insufficient.
@@ -86,8 +172,9 @@ nonisolated enum SyncRejection: Error, Sendable, Equatable, CustomStringConverti
 
     var description: String {
         switch self {
-        case .conflict(let rev):
-            return "the backend has a newer version of this snippet\(rev.map { " (\($0))" } ?? "")"
+        case .conflict(let remote):
+            return "the backend has a newer version of this snippet"
+                + (remote.map { " (\($0.rev))" } ?? "")
         case .rateLimited(let after):
             return "the backend is rate-limiting; retry in \(Int(after.rounded()))s"
         case .authenticationRequired(let detail):
@@ -146,8 +233,10 @@ nonisolated struct SyncFetch: Sendable, Equatable {
 /// What happened to one submitted record.
 nonisolated enum SyncSubmitOutcome: Sendable, Equatable {
     /// Stored. `rev` is what the backend now holds, which may differ from the rev that
-    /// was submitted if the backend assigns its own.
-    case accepted(rev: String)
+    /// was submitted if the backend assigns its own. `recordVersion` is mandatory: an
+    /// adapter that did not receive the saved generation cannot distinguish success
+    /// from an ambiguous acknowledgement and must report a retryable rejection instead.
+    case accepted(rev: String, recordVersion: SyncRecordVersion)
     case rejected(SyncRejection)
 }
 
@@ -221,10 +310,13 @@ nonisolated protocol SyncTransport: Sendable {
 
     /// Pushes records.
     ///
-    /// - Parameter cursor: what the engine had last read when it built this batch. It
-    ///   is the only thing that lets a backend detect "you wrote this from a stale
-    ///   view" for a record it has never seen before, where a per-record revision
-    ///   check has nothing to compare against.
+    /// Every update carries the `recordVersion` returned by the corresponding prior
+    /// fetch/save; a create carries nil. The backend must condition the write on that
+    /// exact generation and return `.conflict` rather than overwrite a different one.
+    ///
+    /// - Parameter cursor: what the engine had last read when it built this batch. A
+    ///   backend may use it as an additional feed-level precondition, but it is not a
+    ///   substitute for the per-record version and CloudKit intentionally ignores it.
     ///
     /// Throwing means the whole call failed. A batch where some records were stored and
     /// others were not comes back as a normal `SyncSubmission` with mixed outcomes,

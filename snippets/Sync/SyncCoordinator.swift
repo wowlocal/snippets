@@ -539,10 +539,10 @@ final class SyncCoordinator {
     }
 
     /// Clears the agreed envelopes when the key that sealed them is no longer the key we
-    /// hold, so everything is re-pushed under the new one. The change cursor is retained
-    /// as transport ancestry; a CAS-capable transport can use it while replacing those
-    /// same remote records. CloudKit's current `.allKeys` adapter cannot yet enforce that
-    /// comparison, which is why record system fields are the next transport migration.
+    /// hold, so everything is re-pushed under the new one. The change cursor and the
+    /// per-record server generations are retained as transport ancestry: the payload
+    /// must be re-sealed, but each replacement must still compare-and-swap against the
+    /// exact CloudKit value previously fetched or saved.
     ///
     /// Without this, changing the sealing key is a silent, one-way data loss. `base.json`
     /// records each record as *agreed with the backend*, so `pendingChanges` skips them
@@ -634,10 +634,10 @@ final class SyncCoordinator {
         // Journal first is intentional. A crash here leaves the old base in place and
         // the fingerprint unchanged, so start repeats the reset. Once its envelopes are
         // empty, base-before-journal remains valid even if the fingerprint write is
-        // delayed. Keep the cursor rather than discarding transport ancestry; it is
-        // consumed by CAS-capable adapters and will be paired with CloudKit system fields
-        // once that adapter stops using `.allKeys`.
+        // delayed. Keep both feed position and record generations: the staged offers are
+        // re-encrypted values, not permission to overwrite a concurrent server edit.
         try SyncBaseFile.write(SyncBase(
+            recordVersions: confirmed.recordVersions,
             cursor: confirmed.cursor,
             journalEstablished: true))
 
@@ -657,8 +657,8 @@ final class SyncCoordinator {
     /// `start()` fingerprints the new material and clears the confirmed envelopes before
     /// constructing the replacement engine, so records accepted under the losing key are
     /// re-pushed rather than remaining permanently suppressed by a stale agreed base. Its
-    /// cursor remains available as ancestry for transports that enforce compare-and-swap;
-    /// CloudKit additionally needs its per-record system fields before it can do so.
+    /// cursor and per-record generations remain available as transport ancestry for the
+    /// compare-and-swap replacements.
     ///
     /// Skipped mid-round, so a rebuild can never race the engine it is replacing.
     ///

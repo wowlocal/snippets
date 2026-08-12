@@ -77,6 +77,8 @@ nonisolated enum CloudKitRecordMapping {
 
     enum Failure: Error, CustomStringConvertible {
         case unrecognisedRecordName(String)
+        case unexpectedRecordType(String)
+        case unexpectedRecordZone
         case missingField(String, recordName: String)
         case blobTooLarge(bytes: Int, recordName: String)
 
@@ -84,6 +86,10 @@ nonisolated enum CloudKitRecordMapping {
             switch self {
             case .unrecognisedRecordName(let name):
                 return "record name '\(name)' is not a uuid"
+            case .unexpectedRecordType(let type):
+                return "record type '\(type)' is not the snippets record type"
+            case .unexpectedRecordZone:
+                return "record belongs to a different CloudKit zone"
             case .missingField(let field, let name):
                 return "record \(name) has no '\(field)' field"
             case .blobTooLarge(let bytes, let name):
@@ -111,22 +117,45 @@ nonisolated enum CloudKitRecordMapping {
                 bytes: wire.blob.count, recordName: wire.id.uuidString.lowercased())
         }
 
-        // A fresh CKRecord with no system fields, deliberately. Combined with
-        // `savePolicy: .allKeys` this needs no cached `recordChangeTag`, which is what
-        // lets the whole system-fields sidecar not exist — see `CloudKitTransport.submit`.
-        let record = CKRecord(
-            recordType: CloudKitSchema.recordType,
-            recordID: recordID(for: wire.id, in: zoneID))
+        let expectedID = recordID(for: wire.id, in: zoneID)
+
+        // Restore the exact server generation when it is usable. A damaged/mismatched
+        // cached archive falls back to a fresh record rather than wedging sync. This is
+        // safe only because submit uses `.ifServerRecordUnchanged`: if the id already
+        // exists, CloudKit returns `serverRecordChanged` and supplies authoritative
+        // system fields instead of overwriting it.
+        let record: CKRecord
+        if let version = wire.recordVersion,
+           let restored = try? CloudKitRecordVersion.restore(
+                version,
+                expectedRecordID: expectedID,
+                expectedRecordType: CloudKitSchema.recordType) {
+            record = restored
+        } else {
+            record = CKRecord(
+                recordType: CloudKitSchema.recordType,
+                recordID: expectedID)
+        }
         record[CloudKitSchema.Field.rev] = wire.rev as CKRecordValue
         record[CloudKitSchema.Field.deleted] = wire.deleted as CKRecordValue
         record[CloudKitSchema.Field.blob] = wire.blob as CKRecordValue
         return record
     }
 
-    static func makeWireRecord(from record: CKRecord) throws -> WireRecord {
+    static func makeWireRecord(
+        from record: CKRecord,
+        expectedZoneID: CKRecordZone.ID? = nil
+    ) throws -> WireRecord {
         let name = record.recordID.recordName
-        guard let id = UUID(uuidString: name) else {
+        guard let id = UUID(uuidString: name),
+              id.uuidString.lowercased() == name else {
             throw Failure.unrecognisedRecordName(name)
+        }
+        guard record.recordType == CloudKitSchema.recordType else {
+            throw Failure.unexpectedRecordType(record.recordType)
+        }
+        if let expectedZoneID, record.recordID.zoneID != expectedZoneID {
+            throw Failure.unexpectedRecordZone
         }
         guard let rev = record[CloudKitSchema.Field.rev] as? String else {
             throw Failure.missingField(CloudKitSchema.Field.rev, recordName: name)
@@ -137,7 +166,89 @@ nonisolated enum CloudKitRecordMapping {
         // Absent reads as "not deleted". A missing flag must never be read as a
         // tombstone: that turns a schema hiccup into a deletion.
         let deleted = record[CloudKitSchema.Field.deleted] as? Bool ?? false
-        return WireRecord(id: id, rev: rev, deleted: deleted, blob: blob)
+        return WireRecord(
+            id: id,
+            rev: rev,
+            deleted: deleted,
+            blob: blob,
+            recordVersion: try CloudKitRecordVersion.archive(record))
+    }
+}
+
+// MARK: - Per-record optimistic-concurrency state
+
+/// Durable `CKRecord` system fields, wrapped in Core's backend-opaque token.
+///
+/// Apple documents `encodeSystemFields(with:)` / `CKRecord(coder:)` as the supported way
+/// to preserve `recordChangeTag` across launches. Archiving the whole record with
+/// `archivedData(withRootObject:)` would also persist user fields, duplicating ciphertext
+/// in plaintext protocol state and making the sidecar larger than necessary.
+nonisolated enum CloudKitRecordVersion {
+
+    enum Failure: Error, CustomStringConvertible {
+        case archiveFailed
+        case archiveTooLarge
+        case decodeFailed
+        case identityMismatch
+        case missingChangeTag
+
+        var description: String {
+            switch self {
+            case .archiveFailed: return "CloudKit record system fields could not be archived"
+            case .archiveTooLarge: return "CloudKit record system fields archive is too large"
+            case .decodeFailed: return "CloudKit record system fields could not be decoded"
+            case .identityMismatch: return "CloudKit record system fields identify a different record"
+            case .missingChangeTag: return "CloudKit record has no server change tag"
+            }
+        }
+    }
+
+    static func archive(_ record: CKRecord) throws -> SyncRecordVersion {
+        // A fresh local CKRecord also has encodable system fields (type, id, zone), but
+        // no server generation. Treating that archive as a version would allow a test or
+        // malformed adapter response to acknowledge an offer without any usable CAS
+        // token. CloudKit sets recordChangeTag only on a server-returned record.
+        guard record.recordChangeTag?.isEmpty == false else {
+            throw Failure.missingChangeTag
+        }
+        let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+        record.encodeSystemFields(with: archiver)
+        archiver.finishEncoding()
+        let data = archiver.encodedData
+        guard !data.isEmpty else { throw Failure.archiveFailed }
+        guard data.count <= SyncRecordVersion.maximumDataBytes else {
+            throw Failure.archiveTooLarge
+        }
+        return SyncRecordVersion(data)
+    }
+
+    static func restore(
+        _ version: SyncRecordVersion,
+        expectedRecordID: CKRecord.ID,
+        expectedRecordType: CKRecord.RecordType = CloudKitSchema.recordType
+    ) throws -> CKRecord {
+        let unarchiver: NSKeyedUnarchiver
+        do {
+            unarchiver = try NSKeyedUnarchiver(forReadingFrom: version.data)
+        } catch {
+            throw Failure.decodeFailed
+        }
+        unarchiver.requiresSecureCoding = true
+        unarchiver.decodingFailurePolicy = .setErrorAndReturn
+        defer { unarchiver.finishDecoding() }
+
+        guard let record = CKRecord(coder: unarchiver),
+              unarchiver.error == nil else {
+            throw Failure.decodeFailed
+        }
+        guard record.recordID == expectedRecordID,
+              record.recordType == expectedRecordType else {
+            throw Failure.identityMismatch
+        }
+        guard record.recordChangeTag?.isEmpty == false else {
+            throw Failure.missingChangeTag
+        }
+        return record
     }
 }
 

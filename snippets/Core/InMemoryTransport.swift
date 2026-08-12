@@ -163,7 +163,7 @@ nonisolated final class InMemoryTransport: SyncTransport, @unchecked Sendable {
     /// Puts records in as if another device had written them, bypassing every fault.
     func seed(_ records: [WireRecord]) {
         lock.lock(); defer { lock.unlock() }
-        for record in records { store(record) }
+        for record in records { _ = store(record) }
     }
 
     /// Everything the backend holds, in sequence order.
@@ -315,32 +315,51 @@ nonisolated final class InMemoryTransport: SyncTransport, @unchecked Sendable {
                     id: record.id, outcome: .rejected(faultsStorage.partialBatchRejection)))
                 continue
             }
-            // Real optimistic concurrency: the submitter's view of the world, as
-            // expressed by the cursor it built the batch from, has to still cover the
-            // record it is overwriting. This is what makes "two devices pushed the same
-            // record" a `conflict` instead of a lost update.
+            // Real per-record optimistic concurrency. A feed cursor cannot protect an
+            // individual record: it may already point past a value whose system fields
+            // a legacy client never stored. The submitted generation must be the exact
+            // one returned by the last fetch/save. A create carries nil and conflicts if
+            // the id already exists, which is how a lost create acknowledgement becomes
+            // a merge instead of an unconditional overwrite.
             if let existing = stored[record.id],
-               existing.record.rev != record.rev,
-               Self.position(of: cursor) ?? 0 < existing.sequence {
+               existing.record.recordVersion != record.recordVersion {
                 results.append(SyncSubmitResult(
-                    id: record.id, outcome: .rejected(.conflict(remoteRev: existing.record.rev))))
+                    id: record.id,
+                    outcome: .rejected(.conflict(remote: existing.record))))
+                continue
+            }
+            if stored[record.id] == nil, record.recordVersion != nil {
+                results.append(SyncSubmitResult(
+                    id: record.id,
+                    outcome: .rejected(.conflict(remote: nil))))
                 continue
             }
 
             var toStore = record
             if faultsStorage.rewriteAcceptedRevs { toStore.rev = "srv-\(nextSequence)-\(record.rev)" }
-            store(toStore)
+            let stored = store(toStore)
             accepted += 1
-            results.append(SyncSubmitResult(id: record.id, outcome: .accepted(rev: toStore.rev)))
+            results.append(SyncSubmitResult(
+                id: record.id,
+                outcome: .accepted(
+                    rev: stored.record.rev,
+                    recordVersion: stored.version)))
         }
 
         return SyncSubmission(results: results, cursor: cursorLocked())
     }
 
     /// Caller holds `lock`.
-    private func store(_ record: WireRecord) {
-        stored[record.id] = Stored(record: record, sequence: nextSequence)
+    @discardableResult
+    private func store(
+        _ record: WireRecord
+    ) -> (record: WireRecord, version: SyncRecordVersion) {
+        var versioned = record
+        let version = SyncRecordVersion(Data("memory-\(nextSequence)".utf8))
+        versioned.recordVersion = version
+        stored[record.id] = Stored(record: versioned, sequence: nextSequence)
         nextSequence += 1
+        return (versioned, version)
     }
 
     /// Caller holds `lock`.

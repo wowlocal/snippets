@@ -256,6 +256,74 @@ final class SyncLifecycleTests: XCTestCase {
         coordinator.setEnabled(false)
     }
 
+    func testTransportRekeyRetainsPerRecordVersionsForOrdinaryAndSecureOffers() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let ordinaryID = UUID(uuidString: "56565656-5656-4656-8656-565656565656")!
+        let secureID = UUID(uuidString: "78787878-7878-4878-8878-787878787878")!
+        func envelope(_ id: UUID, secure: Bool) -> SyncEnvelope {
+            SyncEnvelope(
+                id: id,
+                hlc: HLC(wallMs: secure ? 200 : 100, counter: 0, device: "aaaaaaa1"),
+                origin: "aaaaaaa1",
+                secure: secure,
+                deleted: false,
+                fields: SyncEnvelope.Fields(
+                    name: secure ? "Secure" : "Ordinary",
+                    keyword: secure ? "secure" : "ordinary",
+                    content: Data((secure ? "sealed secure" : "ordinary body").utf8),
+                    tags: [],
+                    isEnabled: true,
+                    isPinned: false,
+                    createdAt: Date(timeIntervalSince1970: 1),
+                    updatedAt: Date(timeIntervalSince1970: 2)),
+                x: secure ? [
+                    SyncEnvelope.vaultKeyIDExtensionKey: .string("test-vault"),
+                ] : [:])
+        }
+        let ordinary = envelope(ordinaryID, secure: false)
+        let secure = envelope(secureID, secure: true)
+        let ordinaryVersion = SyncRecordVersion(Data("ordinary-system-fields".utf8))
+        let secureVersion = SyncRecordVersion(Data("secure-system-fields".utf8))
+        var confirmed = SyncBase(
+            cursor: SyncCursor("rekey-cursor"), journalEstablished: true)
+        confirmed.recordConfirmed(ordinary, recordVersion: ordinaryVersion)
+        confirmed.recordConfirmed(secure, recordVersion: secureVersion)
+        try SyncBaseFile.write(confirmed)
+        try SyncJournalFile.write(SyncJournal())
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        UserDefaults.standard.set(
+            "stale-fingerprint", forKey: Self.wireKeyFingerprintDefaultsKey)
+        let transport = SyncLifecycleTransport()
+        let coordinator = makeCoordinatorForRekeyTests(transport: transport)
+        defer { coordinator.setEnabled(false) }
+
+        // `start()` performs the migration synchronously and only schedules the startup
+        // round. These assertions therefore observe the crash-safe rekey checkpoint,
+        // before the inert transport can run.
+        coordinator.start()
+
+        guard case .loaded(let reset) = SyncBaseFile.load() else {
+            return XCTFail("rekey must leave a readable base")
+        }
+        XCTAssertTrue(reset.envelopes.isEmpty,
+                      "payload ancestry is staged into the journal for resealing")
+        XCTAssertEqual(reset.cursor, confirmed.cursor)
+        XCTAssertEqual(reset.recordVersion(ordinaryID), ordinaryVersion)
+        XCTAssertEqual(reset.recordVersion(secureID), secureVersion)
+
+        guard case .loaded(let journal) = SyncJournalFile.load() else {
+            return XCTFail("rekey must leave a readable journal")
+        }
+        XCTAssertEqual(journal.entry(ordinaryID)?.offered?.envelope, ordinary)
+        XCTAssertEqual(journal.entry(secureID)?.offered?.envelope, secure)
+        XCTAssertEqual(
+            journal.entry(ordinaryID)?.offered?.recordVersion, ordinaryVersion)
+        XCTAssertEqual(
+            journal.entry(secureID)?.offered?.recordVersion, secureVersion)
+        XCTAssertEqual(transport.fetchAttempts, 0)
+        XCTAssertEqual(transport.submitAttempts, 0)
+    }
+
     private func makeCoordinatorForRekeyTests(
         transport: SyncLifecycleTransport = SyncLifecycleTransport()
     ) -> SyncCoordinator {

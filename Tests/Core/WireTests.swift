@@ -1126,7 +1126,7 @@ struct WireTests {
 
         @Test func aPerRecordRejectionLetsTheRestOfTheBatchThrough() async throws {
             let transport = InMemoryTransport()
-            transport.configure { $0.rejectRecords[id(1)] = .conflict(remoteRev: "abc") }
+            transport.configure { $0.rejectRecords[id(1)] = .conflict(remote: nil) }
 
             let submission = try await transport.submit(try records([0, 1, 2]), at: nil)
 
@@ -1276,12 +1276,13 @@ struct WireTests {
 
             let submission = try await transport.submit(submitted, at: nil)
 
-            guard case .accepted(let rev) = submission.results[0].outcome else {
+            guard case .accepted(let rev, let recordVersion) = submission.results[0].outcome else {
                 Issue.record("the record should have been accepted")
                 return
             }
             #expect(rev != submitted[0].rev)
             #expect(transport.snapshot[0].rev == rev)
+            #expect(transport.snapshot[0].recordVersion == recordVersion)
         }
 
         // MARK: Conflicts and push support
@@ -1306,11 +1307,22 @@ struct WireTests {
             let submission = try await transport.submit([mine], at: staleCursor)
 
             #expect(submission.acceptedIDs.isEmpty)
-            #expect(submission.rejections.first?.rejection == .conflict(remoteRev: theirs.rev))
+            guard case .conflict(let authoritative?) =
+                    submission.rejections.first?.rejection else {
+                Issue.record("the stale write must disclose the authoritative record")
+                return
+            }
+            #expect(authoritative.id == theirs.id)
+            #expect(authoritative.rev == theirs.rev)
+            #expect(authoritative.deleted == theirs.deleted)
+            #expect(authoritative.blob == theirs.blob)
+            #expect(authoritative.recordVersion != nil)
 
             // Re-reading first, then resubmitting, succeeds.
             let fresh = try await transport.fetchChanges(since: staleCursor)
-            let retried = try await transport.submit([mine], at: fresh.cursor)
+            var retriedMine = mine
+            retriedMine.recordVersion = fresh.records.first(where: { $0.id == mine.id })?.recordVersion
+            let retried = try await transport.submit([retriedMine], at: fresh.cursor)
             #expect(retried.acceptedIDs == [id(0)])
         }
 

@@ -1001,6 +1001,16 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // to return without forgetting ordinary confirmed ancestors.
         retainedBase.cursor = nil
         retainedJournal.forgetSecureIntent()
+        // System fields are credentials to replace the corresponding remote record.
+        // Keep them for every ordinary confirmation or surviving ordinary desired
+        // change (including a secure-to-plain demotion), and discard credentials owned
+        // only by the forgotten vault. Leaving a secure generation behind without its
+        // envelope/journal would let a later unrelated recreation inherit that identity.
+        let retainedVersionKeys = Set(retainedBase.envelopes.keys)
+            .union(retainedJournal.entries.keys)
+        retainedBase.recordVersions = retainedBase.recordVersions.filter { key, _ in
+            retainedVersionKeys.contains(key)
+        }
 
         // Establish the post-forget protocol state before destroying either ciphertext
         // or its device-only key. If either write fails the vault is still intact and a

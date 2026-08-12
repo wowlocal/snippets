@@ -31,9 +31,11 @@ nonisolated enum CloudKitErrorMapping {
 
         // The one that matters most: another device wrote this record after the view
         // this batch was built from. Re-merge and retry, which is what the three-way
-        // merge on the fetch leg is for.
+        // merge on the fetch leg is for. The transport enriches this with the validated
+        // server record because it knows the expected id and zone; this policy-only
+        // mapper cannot safely do that by itself.
         case .serverRecordChanged:
-            return .conflict(remoteRev: remoteRev(from: ckError))
+            return .conflict(remote: nil)
 
         // Time-based back-pressure. CloudKit states the delay; honour it rather than
         // guessing, or the retry contributes to the condition it is waiting out.
@@ -150,16 +152,6 @@ nonisolated enum CloudKitErrorMapping {
             return max(1, seconds)
         }
         return fallback
-    }
-
-    /// The revision CloudKit holds, when it discloses it.
-    ///
-    /// Supplying it turns a fetch-merge-resubmit round trip into a single fetch, which is
-    /// why `SyncRejection.conflict` carries it. Read from the *server* record, never the
-    /// client one — the client record is the value we just tried and failed to write.
-    static func remoteRev(from error: CKError) -> String? {
-        guard let server = error.serverRecord else { return nil }
-        return server[CloudKitSchema.Field.rev] as? String
     }
 
     /// Unwraps `partialFailure` into the per-item errors the engine can act on.

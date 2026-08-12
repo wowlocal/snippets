@@ -20,6 +20,11 @@ nonisolated struct SyncBase: Equatable {
     /// Every record as last agreed, keyed by lowercase uuid string so the file is
     /// diffable by eye.
     var envelopes: [String: SyncEnvelope]
+    /// The backend generation paired with each confirmed envelope. Entries are allowed
+    /// to outlive `envelopes` during a transport-key reset: the application payload must
+    /// be re-sealed, while the CloudKit change tag is exactly what prevents that rekey
+    /// from overwriting an independent remote edit.
+    var recordVersions: [String: SyncRecordVersion]
     /// The backend cursor these envelopes correspond to.
     var cursor: SyncCursor?
     /// Once true, a missing journal is evidence of lost protocol state rather than a
@@ -30,11 +35,13 @@ nonisolated struct SyncBase: Equatable {
     init(
         schemaVersion: Int = SyncBase.currentSchemaVersion,
         envelopes: [String: SyncEnvelope] = [:],
+        recordVersions: [String: SyncRecordVersion] = [:],
         cursor: SyncCursor? = nil,
         journalEstablished: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.envelopes = envelopes
+        self.recordVersions = recordVersions
         self.cursor = cursor
         self.journalEstablished = journalEstablished
     }
@@ -43,8 +50,31 @@ nonisolated struct SyncBase: Equatable {
 
     func envelope(_ id: UUID) -> SyncEnvelope? { envelopes[Self.key(id)] }
 
+    func recordVersion(_ id: UUID) -> SyncRecordVersion? {
+        recordVersions[Self.key(id)]
+    }
+
+    /// Updates application ancestry without disturbing its transport generation. This
+    /// is used by projection overlays and old call sites whose operation is not a server
+    /// acknowledgement.
     mutating func record(_ envelope: SyncEnvelope) {
         envelopes[Self.key(envelope.id)] = envelope
+    }
+
+    /// Atomically pairs the exact server payload with the generation returned by the
+    /// same fetch/save. Passing `nil` deliberately removes a stale token; transports
+    /// that enforce CAS never confirm a record without supplying one.
+    mutating func recordConfirmed(
+        _ envelope: SyncEnvelope,
+        recordVersion: SyncRecordVersion?
+    ) {
+        let key = Self.key(envelope.id)
+        envelopes[key] = envelope
+        recordVersions[key] = recordVersion
+    }
+
+    mutating func removeRecordVersion(_ id: UUID) {
+        recordVersions.removeValue(forKey: Self.key(id))
     }
 
     /// What this device has that the backend has not seen.
@@ -86,7 +116,7 @@ nonisolated struct SyncBase: Equatable {
 /// definition of "what an envelope looks like" instead of two that can drift.
 nonisolated extension SyncBase: Codable {
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, envelopes, cursor, journalEstablished
+        case schemaVersion, envelopes, recordVersions, cursor, journalEstablished
     }
 
     init(from decoder: Decoder) throws {
@@ -126,6 +156,26 @@ nonisolated extension SyncBase: Codable {
             decoded[key] = envelope
         }
         envelopes = decoded
+
+        // Additive and optional for upgrades from the pre-CAS base. Explicit `null` is
+        // not absence: it is a damaged/truncated value and must fail the entire ancestor
+        // file closed. A record-version entry may legitimately exist without an
+        // envelope while a transport-key rekey is staged.
+        recordVersions = if container.contains(.recordVersions) {
+            try container.decode(
+                [String: SyncRecordVersion].self,
+                forKey: .recordVersions)
+        } else {
+            [:]
+        }
+        for key in recordVersions.keys {
+            guard let id = UUID(uuidString: key), Self.key(id) == key else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .recordVersions,
+                    in: container,
+                    debugDescription: "invalid sync-record-version key")
+            }
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -138,6 +188,7 @@ nonisolated extension SyncBase: Codable {
             raw[key] = try envelope.canonicalData().base64EncodedString()
         }
         try container.encode(raw, forKey: .envelopes)
+        try container.encode(recordVersions, forKey: .recordVersions)
     }
 }
 

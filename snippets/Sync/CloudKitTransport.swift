@@ -232,32 +232,25 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             }
 
         var records: [WireRecord] = []
-        var ignoredRecords = 0
-        var firstIgnoredFailure: DiagnosticFailure?
         for (_, outcome) in modifications {
             switch outcome {
             case .success(let modification):
                 do {
-                    records.append(try CloudKitRecordMapping.makeWireRecord(from: modification.record))
+                    records.append(try CloudKitRecordMapping.makeWireRecord(
+                        from: modification.record,
+                        expectedZoneID: zoneID))
                 } catch {
-                    // A record whose shape this build does not understand. Dropped from
-                    // the page rather than thrown, because throwing would stall the whole
-                    // feed behind one bad record forever. The engine's own quarantine
-                    // handles the undecryptable case; this is the un-*mappable* one,
-                    // which means the CloudKit schema is not what this build expects.
-                    ignoredRecords += 1
-                    if firstIgnoredFailure == nil {
-                        firstIgnoredFailure = DiagnosticFailure(error)
-                    }
+                    // Advancing the change token past an un-mappable record permanently
+                    // loses both its payload and its system fields. Fail the page closed;
+                    // a schema/app mismatch needs repair or an update, not a cursor that
+                    // claims the skipped value was durably applied.
+                    throw SyncTransportFailure.rejected(.permanent(
+                        detail: "CloudKit returned a snippet record this build cannot map"))
                 }
             case .failure(let error):
-                // Per-record failure inside a fetch. Logged, not thrown, for the same
-                // reason — and not treated as a deletion, which is the one reading that
-                // could lose data.
-                ignoredRecords += 1
-                if firstIgnoredFailure == nil {
-                    firstIgnoredFailure = DiagnosticFailure(error)
-                }
+                // The page is not complete, therefore its token is not a durability
+                // boundary. Retain the old cursor and retry/halt according to policy.
+                throw CloudKitErrorMapping.failure(for: error)
             }
         }
 
@@ -269,15 +262,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         // it is a zone reset, a Dashboard action, or another client — and inferring
         // "remove this snippet" from it is the fastest known way to wipe a library.
         if !result.deletions.isEmpty {
-            ignoredRecords += result.deletions.count
-        }
-        if ignoredRecords > 0 {
-            Diagnostics.record(.cloudKitRecordsIgnored(count: ignoredRecords))
-        }
-        if let firstIgnoredFailure {
-            Diagnostics.record(.cloudKitFailure(
-                operation: .fetchChanges,
-                failure: firstIgnoredFailure))
+            Diagnostics.record(.cloudKitRecordsIgnored(count: result.deletions.count))
         }
 
         return SyncFetch(
@@ -329,13 +314,11 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     private func submit(chunk: [WireRecord]) async throws -> [UUID: SyncSubmitOutcome] {
         var outcomes: [UUID: SyncSubmitOutcome] = [:]
         var toSave: [CKRecord] = []
-        var byRecordName: [String: UUID] = [:]
 
         for wire in chunk {
             do {
                 let record = try CloudKitRecordMapping.makeRecord(from: wire, in: zoneID)
                 toSave.append(record)
-                byRecordName[record.recordID.recordName] = wire.id
             } catch {
                 // Refused before it ever reaches the network — currently only the
                 // oversized-blob case. Permanent because retrying an 800 KB snippet
@@ -358,36 +341,25 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
             // never syncs. Partial acceptance is not an error here; it is the common case
             // under a rate limit, and `SyncSubmission` exists to express it.
             //
-            // `savePolicy: .allKeys` is the current compatibility boundary. It does not
-            // compare change tags and therefore cannot reject a stale offer before that
-            // offer overwrites an independent remote write. Fetch-side three-way merge
-            // is too late for the overwritten value. Persisting CKRecord system fields
-            // and switching to `.ifServerRecordUnchanged` is the required CAS migration;
-            // until then this adapter does not provide the concurrency guarantee exercised
-            // by `InMemoryTransport`.
+            // The restored `recordChangeTag` is the per-record compare-and-swap token.
+            // A create (or a legacy/corrupt cache entry) has no tag and therefore
+            // conflicts rather than overwriting when the id already exists.
             let (saveResults, _) = try await database.modifyRecords(
-                saving: toSave, deleting: [], savePolicy: .allKeys, atomically: false)
+                saving: toSave,
+                deleting: [],
+                savePolicy: .ifServerRecordUnchanged,
+                atomically: false)
 
             var firstItemFailure: DiagnosticFailure?
-            for (recordID, outcome) in saveResults {
-                guard let id = byRecordName[recordID.recordName] else { continue }
-                switch outcome {
-                case .success(let saved):
-                    // The rev we sent, read back from the stored record — not
-                    // CloudKit's `recordChangeTag`.
-                    //
-                    // `WireCodec.open` recomputes `rev` from the envelope and quarantines
-                    // a mismatch, so substituting a server-assigned revision here would
-                    // make every record this device pushes come back undecryptable. The
-                    // symptom would be "nothing ever arrives", which is the hardest
-                    // possible thing to attribute to this line.
-                    let rev = saved[CloudKitSchema.Field.rev] as? String
-                    outcomes[id] = .accepted(rev: rev ?? revision(of: id, in: chunk))
-                case .failure(let error):
-                    outcomes[id] = .rejected(CloudKitErrorMapping.rejection(for: error))
-                    if firstItemFailure == nil {
-                        firstItemFailure = DiagnosticFailure(error)
-                    }
+            for wire in chunk where outcomes[wire.id] == nil {
+                let recordID = CloudKitRecordMapping.recordID(for: wire.id, in: zoneID)
+                let item = saveResults[recordID]
+                outcomes[wire.id] = Self.submissionOutcome(
+                    for: wire,
+                    result: item,
+                    expectedZoneID: zoneID)
+                if case .failure(let error)? = item, firstItemFailure == nil {
+                    firstItemFailure = DiagnosticFailure(error)
                 }
             }
             if let firstItemFailure {
@@ -413,16 +385,23 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
                 operation: .modifyRecords,
                 failure: DiagnosticFailure(error)))
             // A partial failure arrives as a thrown `CKError` carrying per-item errors.
-            // Unwrapping it is what keeps a half-accepted batch from being reported as a
-            // total loss.
+            // Unwrap the named failures, while retaining every unnamed item as an
+            // ambiguous durable offer because this API shape returned no saved record.
             if let partial = CloudKitErrorMapping.partialErrors(in: error) {
-                for (recordID, itemError) in partial {
-                    guard let id = byRecordName[recordID.recordName] else { continue }
-                    outcomes[id] = .rejected(CloudKitErrorMapping.rejection(for: itemError))
-                }
-                // Anything not named in the partial error succeeded.
                 for wire in chunk where outcomes[wire.id] == nil {
-                    outcomes[wire.id] = .accepted(rev: wire.rev)
+                    let recordID = CloudKitRecordMapping.recordID(for: wire.id, in: zoneID)
+                    let item = partial[recordID].map {
+                        Result<CKRecord, any Error>.failure($0)
+                    }
+                    // CloudKit's thrown partial error does not carry returned saved
+                    // CKRecords for unnamed items. They may have succeeded, but without
+                    // their new system fields that is an ambiguous acknowledgement, not
+                    // an acceptance. The durable offer will safely conflict/reconcile on
+                    // retry.
+                    outcomes[wire.id] = Self.submissionOutcome(
+                        for: wire,
+                        result: item,
+                        expectedZoneID: zoneID)
                 }
                 return outcomes
             }
@@ -430,8 +409,56 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         }
     }
 
-    private func revision(of id: UUID, in chunk: [WireRecord]) -> String {
-        chunk.first { $0.id == id }?.rev ?? ""
+    /// Converts exactly one returned CloudKit item into the transport contract.
+    ///
+    /// Kept internal and pure enough for app-target tests: correctness must not require
+    /// a live signed container merely to prove that a missing returned record cannot be
+    /// mistaken for acceptance.
+    static func submissionOutcome(
+        for wire: WireRecord,
+        result: Result<CKRecord, any Error>?,
+        expectedZoneID: CKRecordZone.ID? = nil
+    ) -> SyncSubmitOutcome {
+        guard let result else {
+            return .rejected(.rateLimited(retryAfter: 5))
+        }
+
+        switch result {
+        case .success(let saved):
+            do {
+                let returned = try CloudKitRecordMapping.makeWireRecord(
+                    from: saved,
+                    expectedZoneID: expectedZoneID)
+                guard returned.id == wire.id,
+                      returned.rev == wire.rev,
+                      returned.deleted == wire.deleted,
+                      returned.blob == wire.blob,
+                      let recordVersion = returned.recordVersion else {
+                    return .rejected(.rateLimited(retryAfter: 5))
+                }
+                return .accepted(
+                    rev: returned.rev,
+                    recordVersion: recordVersion)
+            } catch {
+                // The write may already have landed. Without a returned generation the
+                // only honest outcome is ambiguous/retryable; reporting permanent would
+                // freeze an offer that a later conflict can resolve.
+                return .rejected(.rateLimited(retryAfter: 5))
+            }
+
+        case .failure(let error):
+            var rejection = CloudKitErrorMapping.rejection(for: error)
+            if case .conflict = rejection,
+               let ckError = error as? CKError,
+               let server = ckError.serverRecord,
+               let remote = try? CloudKitRecordMapping.makeWireRecord(
+                    from: server,
+                    expectedZoneID: expectedZoneID),
+               remote.id == wire.id {
+                rejection = .conflict(remote: remote)
+            }
+            return .rejected(rejection)
+        }
     }
 
     /// Splits a batch to stay inside both of CloudKit's undocumented-as-API limits.
