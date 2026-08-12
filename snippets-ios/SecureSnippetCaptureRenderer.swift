@@ -56,6 +56,8 @@ final class SecureSnippetCaptureRenderer {
     private var frameGeneration: UInt64 = 0
     private var isRendering = false
     private var isFailingClosed = false
+    private var pendingPresentationGeneration: UInt64?
+    private var flushCompletionOverrideForTesting: (((@escaping () -> Void)) -> Void)?
     private var decodeFailureObserver: NSObjectProtocol?
     private var outputProtectionObserver: NSObjectProtocol?
 
@@ -115,8 +117,8 @@ final class SecureSnippetCaptureRenderer {
         }
     }
 
-    /// Arms a protected neutral presentation. A 1x1 neutral frame is permitted
-    /// before Auto Layout gives the editor a viewport; plaintext frames never are.
+    /// Arms an allocation-free protected neutral presentation. Redaction never
+    /// enqueues an AV frame; the opaque fallback is the complete visible result.
     func arm() -> Bool {
         guard displayLayer.preventsCapture,
               displayLayer.superlayer === surfaceView.layer,
@@ -127,17 +129,50 @@ final class SecureSnippetCaptureRenderer {
         surfaceView.isHidden = false
         updateLayerGeometry()
         updateFallbackColor()
-        fallbackLayer.isHidden = false
-        displayLayer.isHidden = true
-        return enqueueFrame(kind: .redaction, permitsPlaceholderGeometry: true)
+        hideAndFlushToFallback()
+        return true
     }
 
     func renderPlaintext() -> Bool {
-        enqueueFrame(kind: .plaintext, permitsPlaceholderGeometry: false)
+        if isRendering { return true }
+        guard isHealthyForPlaintextPresentation,
+              textView.secureCaptureMayPresentPlaintextNow,
+              let geometry = frameGeometry(permitsPlaceholder: false) else {
+            failClosed()
+            return false
+        }
+
+        isRendering = true
+        defer { isRendering = false }
+        updateLayerGeometry()
+        updateFallbackColor()
+
+        // Invalidate every older completion and synchronously hide the AV layer
+        // before doing any allocation or TextKit work.
+        let generation = hideAndFlushToFallback()
+        guard let pixelBuffer = makePixelBuffer(for: geometry),
+              draw(kind: .plaintext, into: pixelBuffer, geometry: geometry),
+              let sampleBuffer = makeSampleBuffer(
+                from: pixelBuffer,
+                presentationGeneration: generation
+              ) else {
+            failClosed()
+            return false
+        }
+
+        pendingPresentationGeneration = generation
+        flushBeforePresentingPlaintext { [weak self] in
+            guard let self else { return }
+            self.presentPlaintextIfCurrent(sampleBuffer, generation: generation)
+        }
+        return true
     }
 
     func renderRedaction() -> Bool {
-        enqueueFrame(kind: .redaction, permitsPlaceholderGeometry: true)
+        updateLayerGeometry()
+        updateFallbackColor()
+        hideAndFlushToFallback()
+        return true
     }
 
     func invalidate(plaintext: Bool) {
@@ -150,7 +185,10 @@ final class SecureSnippetCaptureRenderer {
     /// and is restoring an ordinary editor.
     func clear(keepFallbackVisible: Bool) {
         frameGeneration &+= 1
+        pendingPresentationGeneration = nil
+        surfaceView.isHidden = false
         displayLayer.isHidden = true
+        fallbackLayer.isHidden = false
         displayLayer.sampleBufferRenderer.flush(
             removingDisplayedImage: true,
             completionHandler: nil
@@ -185,59 +223,97 @@ final class SecureSnippetCaptureRenderer {
     var preventsDisplaySleepForInspection: Bool {
         displayLayer.preventsDisplaySleepDuringVideoPlayback
     }
+    var displayLayerIsHiddenForInspection: Bool { displayLayer.isHidden }
+    var fallbackLayerIsVisibleForInspection: Bool {
+        !surfaceView.isHidden && !fallbackLayer.isHidden
+    }
+    var pendingPresentationGenerationForInspection: UInt64? {
+        pendingPresentationGeneration
+    }
+    var canBeginPlaintextPresentation: Bool {
+        isReadyForHiddenPlaintextPresentation
+    }
+
+    func setFlushCompletionOverrideForTesting(
+        _ override: (((@escaping () -> Void)) -> Void)?
+    ) {
+        flushCompletionOverrideForTesting = override
+    }
 
     private enum FrameKind {
         case redaction
         case plaintext
     }
 
+    /// Allocation-free synchronous redaction boundary. The AV layer stays hidden
+    /// after this method returns; no completion is allowed to reverse that fact.
     @discardableResult
-    private func enqueueFrame(
-        kind: FrameKind,
-        permitsPlaceholderGeometry: Bool
-    ) -> Bool {
-        if isRendering { return true }
-
-        guard displayLayer.preventsCapture,
-              displayLayer.superlayer === surfaceView.layer,
-              !displayLayer.isOutputObscuredDueToInsufficientExternalProtection,
-              let geometry = frameGeometry(permitsPlaceholder: permitsPlaceholderGeometry) else {
-            failClosed()
-            return false
-        }
-
-        isRendering = true
-        defer { isRendering = false }
-        updateLayerGeometry()
-        updateFallbackColor()
-
-        // Hide and flush synchronously before replacing any old frame. A capture-
-        // state transition or renderer failure therefore cannot leave a stale
-        // plaintext image pending in AVFoundation.
-        displayLayer.isHidden = true
+    private func hideAndFlushToFallback() -> UInt64 {
+        frameGeneration &+= 1
+        let generation = frameGeneration
+        pendingPresentationGeneration = nil
+        surfaceView.isHidden = false
         fallbackLayer.isHidden = false
+        displayLayer.isHidden = true
         displayLayer.sampleBufferRenderer.flush(
             removingDisplayedImage: true,
             completionHandler: nil
         )
+        return generation
+    }
 
-        guard let pixelBuffer = makePixelBuffer(for: geometry),
-              draw(kind: kind, into: pixelBuffer, geometry: geometry),
-              let sampleBuffer = makeSampleBuffer(from: pixelBuffer) else {
-            failClosed()
-            return false
+    private func flushBeforePresentingPlaintext(completion: @escaping () -> Void) {
+        if let flushCompletionOverrideForTesting {
+            flushCompletionOverrideForTesting(completion)
+            return
+        }
+        displayLayer.sampleBufferRenderer.flush(
+            removingDisplayedImage: true
+        ) {
+            DispatchQueue.main.async(execute: completion)
+        }
+    }
+
+    private func presentPlaintextIfCurrent(
+        _ sampleBuffer: CMSampleBuffer,
+        generation: UInt64
+    ) {
+        guard generation == frameGeneration,
+              pendingPresentationGeneration == generation,
+              isReadyForHiddenPlaintextPresentation,
+              textView.secureCaptureMayPresentPlaintextNow else {
+            return
         }
 
         displayLayer.sampleBufferRenderer.enqueue(sampleBuffer)
-        guard displayLayer.sampleBufferRenderer.status != .failed,
-              !displayLayer.isOutputObscuredDueToInsufficientExternalProtection else {
-            failClosed()
-            return false
+        guard generation == frameGeneration,
+              pendingPresentationGeneration == generation,
+              displayLayer.sampleBufferRenderer.status != .failed,
+              isHealthyForPlaintextPresentation,
+              textView.secureCaptureMayPresentPlaintextNow else {
+            if displayLayer.sampleBufferRenderer.status == .failed
+                || !isHealthyForPlaintextPresentation {
+                failClosed()
+            }
+            return
         }
 
+        pendingPresentationGeneration = nil
         displayLayer.isHidden = false
-        fallbackLayer.isHidden = false
-        return true
+    }
+
+    private var isHealthyForPlaintextPresentation: Bool {
+        displayLayer.preventsCapture
+            && displayLayer.superlayer === surfaceView.layer
+            && !surfaceView.isHidden
+            && !displayLayer.isOutputObscuredDueToInsufficientExternalProtection
+            && displayLayer.sampleBufferRenderer.status != .failed
+    }
+
+    private var isReadyForHiddenPlaintextPresentation: Bool {
+        isHealthyForPlaintextPresentation
+            && displayLayer.isHidden
+            && !fallbackLayer.isHidden
     }
 
     private func surfaceDidLayout() {
@@ -448,7 +524,10 @@ final class SecureSnippetCaptureRenderer {
         UIRectFill(caretRect)
     }
 
-    private func makeSampleBuffer(from pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
+    private func makeSampleBuffer(
+        from pixelBuffer: CVPixelBuffer,
+        presentationGeneration: UInt64? = nil
+    ) -> CMSampleBuffer? {
         var formatDescription: CMVideoFormatDescription?
         guard CMVideoFormatDescriptionCreateForImageBuffer(
             allocator: kCFAllocatorDefault,
@@ -456,10 +535,16 @@ final class SecureSnippetCaptureRenderer {
             formatDescriptionOut: &formatDescription
         ) == noErr, let formatDescription else { return nil }
 
-        frameGeneration &+= 1
+        let timestampGeneration: UInt64
+        if let presentationGeneration {
+            timestampGeneration = presentationGeneration
+        } else {
+            frameGeneration &+= 1
+            timestampGeneration = frameGeneration
+        }
         var timing = CMSampleTimingInfo(
             duration: .invalid,
-            presentationTimeStamp: CMTime(value: CMTimeValue(frameGeneration), timescale: 60),
+            presentationTimeStamp: CMTime(value: CMTimeValue(timestampGeneration), timescale: 60),
             decodeTimeStamp: .invalid
         )
         var sampleBuffer: CMSampleBuffer?

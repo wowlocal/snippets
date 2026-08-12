@@ -32,10 +32,21 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertTrue(textView.secureCaptureProtectionEnabledForInspection)
         XCTAssertTrue(textView.secureCaptureLayerAttachedForInspection)
         XCTAssertFalse(textView.secureCapturePreventsDisplaySleepForInspection)
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
 
         textView.setSecurePlaintextAcceptanceAuthorized(true)
+        var flushCompletion: (() -> Void)?
+        textView.setSecureCaptureFlushCompletionOverrideForTesting { completion in
+            flushCompletion = completion
+        }
         XCTAssertTrue(textView.displaySecurePlaintext("upright secure raster"))
         XCTAssertEqual(textView.secureCapturePhase, .protectedPlaintext)
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertNotNil(textView.secureCapturePendingGenerationForInspection)
+        flushCompletion?()
+        XCTAssertFalse(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertNil(textView.secureCapturePendingGenerationForInspection)
         let frame = try XCTUnwrap(textView.renderSecureFrameForInspection(plaintext: true))
         XCTAssertNotNil(CVPixelBufferGetIOSurface(frame.pixelBuffer))
         XCTAssertEqual(CVPixelBufferGetWidth(frame.pixelBuffer), frame.geometry.pixelWidth)
@@ -79,7 +90,53 @@ final class SecureCaptureRendererTests: XCTestCase {
             XCTAssertEqual(callback?.0, sentinel)
             XCTAssertEqual(callback?.1, .sceneCapture)
             XCTAssertTrue(textView.nativePlaintextLayerSuppressedForInspection)
+            XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+            XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
         }
+    }
+
+    func testStalePlaintextFlushCompletionCannotUndoSynchronousRedaction() throws {
+        let textView = makeTextView()
+        textView.setSceneCaptureStateForTesting(.inactive)
+        XCTAssertTrue(textView.bindSecureRedacted())
+
+        var staleCompletion: (() -> Void)?
+        textView.setSecureCaptureFlushCompletionOverrideForTesting { completion in
+            staleCompletion = completion
+        }
+        XCTAssertTrue(textView.displaySecurePlaintext("must never return"))
+        let pendingGeneration = try XCTUnwrap(
+            textView.secureCapturePendingGenerationForInspection
+        )
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+
+        textView.redactAndClearSecurePlaintext()
+
+        XCTAssertGreaterThan(textView.secureCaptureFrameGenerationForInspection, pendingGeneration)
+        XCTAssertNil(textView.secureCapturePendingGenerationForInspection)
+        XCTAssertEqual(textView.text, "")
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
+
+        staleCompletion?()
+
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
+        XCTAssertNil(textView.secureCapturePendingGenerationForInspection)
+    }
+
+    func testNonForegroundPresentationIsRejectedWithoutShowingAVLayer() {
+        let textView = makeTextView()
+        textView.setSceneCaptureStateForTesting(.inactive)
+        XCTAssertTrue(textView.bindSecureRedacted())
+        textView.setForegroundPresentationAllowedForTesting(false)
+
+        XCTAssertFalse(textView.displaySecurePlaintext("background secret"))
+
+        XCTAssertEqual(textView.secureCapturePhase, .protectedRedaction)
+        XCTAssertEqual(textView.text, "")
+        XCTAssertTrue(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
     }
 
     private func makeTextView() -> SecureSnippetTextView {
@@ -88,6 +145,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         textView.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
         textView.backgroundColor = .clear
         textView.secureCaptureBackgroundColor = .black
+        textView.setForegroundPresentationAllowedForTesting(true)
         textView.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
         textView.secureCaptureSurfaceView.frame = textView.bounds
         textView.layoutIfNeeded()

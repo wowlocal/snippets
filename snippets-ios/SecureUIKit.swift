@@ -69,8 +69,9 @@ final class SecureSnippetTextView: UITextView {
     private var savedNativeLayerOpacity: Float?
     private var savedTintColor: UIColor?
     private var sceneCaptureStateOverrideForTesting: UISceneCaptureState?
-    private var secureForegroundActiveOverrideForTesting: Bool?
+    private var foregroundPresentationOverrideForTesting: Bool?
     private var sceneCaptureTraitRegistration: (any UITraitChangeRegistration)?
+    private var visualTraitRegistration: (any UITraitChangeRegistration)?
     private lazy var secureCaptureRenderer: SecureSnippetCaptureRenderer = {
         let renderer = SecureSnippetCaptureRenderer(
             textView: self,
@@ -111,6 +112,14 @@ final class SecureSnippetTextView: UITextView {
             [UITraitSceneCaptureState.self]
         ) { (view: SecureSnippetTextView, _) in
             view.reevaluateSceneCaptureState()
+        }
+        visualTraitRegistration = registerForTraitChanges([
+            UITraitUserInterfaceStyle.self,
+            UITraitDisplayScale.self,
+            UITraitPreferredContentSizeCategory.self,
+            UITraitAccessibilityContrast.self,
+        ]) { (view: SecureSnippetTextView, _) in
+            view.invalidateSecureCaptureRenderer()
         }
     }
 
@@ -464,20 +473,31 @@ final class SecureSnippetTextView: UITextView {
         didSet { invalidateSecureCaptureRenderer() }
     }
 
+    override var font: UIFont? {
+        didSet { invalidateSecureCaptureRenderer() }
+    }
+
+    override var textContainerInset: UIEdgeInsets {
+        didSet { invalidateSecureCaptureRenderer() }
+    }
+
+    override var typingAttributes: [NSAttributedString.Key: Any] {
+        didSet { invalidateSecureCaptureRenderer() }
+    }
+
     /// Arms a protected neutral frame before a controller decrypts or assigns a
     /// secure body. Native UITextView compositing is suppressed synchronously.
     @discardableResult
     func bindSecureRedacted() -> Bool {
         suppressNativePresentation()
         isSecureContentMode = true
+        isEditable = false
         secureCapturePhase = .protectedRedaction
         securePlaintextIsLoaded = false
         secureEditingIsAuthorized = false
         securePlaintextAcceptanceIsAuthorized = false
-
-        guard secureCaptureRenderer.arm() else { return false }
         replaceTextStorage(with: "")
-        return true
+        return secureCaptureRenderer.arm()
     }
 
     /// Restores ordinary UIKit drawing only after old secure storage and every
@@ -494,6 +514,7 @@ final class SecureSnippetTextView: UITextView {
         secureCaptureRenderer.clear(keepFallbackVisible: false)
         secureCapturePhase = .ordinary
         isSecureContentMode = false
+        isEditable = true
         restoreNativePresentation()
         replaceTextStorage(with: ordinaryText)
         setNeedsDisplay()
@@ -506,8 +527,10 @@ final class SecureSnippetTextView: UITextView {
             && securePlaintextAcceptanceIsAuthorized
             && attachedSceneIsForegroundActive
             && currentSceneCaptureState == .inactive
+            && foregroundPresentationIsAllowed
             && secureCaptureRenderer.captureProtectionEnabledForInspection
             && secureCaptureRenderer.displayLayerIsAttachedForInspection
+            && secureCaptureRenderer.canBeginPlaintextPresentation
     }
 
     var permitsSecureTextMutation: Bool {
@@ -545,11 +568,12 @@ final class SecureSnippetTextView: UITextView {
         let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
         secureEditingIsAuthorized = false
         securePlaintextAcceptanceIsAuthorized = false
-        if secureCapturePhase == .protectedPlaintext {
-            guard secureCaptureRenderer.renderRedaction() else { return nil }
-        }
+        // Revoke editing/storage state before invoking any observer callback. The
+        // renderer's redaction path is allocation-free and always leaves AV hidden.
+        isEditable = false
         secureCapturePhase = .protectedRedaction
         securePlaintextIsLoaded = false
+        _ = secureCaptureRenderer.renderRedaction()
         replaceTextStorage(with: "")
         if notifyOwner, let plaintext {
             onSecureCaptureForcedRedaction?(plaintext, .sceneCapture)
@@ -583,7 +607,11 @@ final class SecureSnippetTextView: UITextView {
     }
 
     func setSecureForegroundActiveForTesting(_ active: Bool?) {
-        secureForegroundActiveOverrideForTesting = active
+        foregroundPresentationOverrideForTesting = active
+    }
+
+    func setForegroundPresentationAllowedForTesting(_ allowed: Bool?) {
+        foregroundPresentationOverrideForTesting = allowed
     }
 
     func renderSecureFrameForInspection(
@@ -608,16 +636,45 @@ final class SecureSnippetTextView: UITextView {
         layer.opacity == 0 && secureCapturePhase.suppressesUIKitDrawing
     }
 
-    private var currentSceneCaptureState: UISceneCaptureState {
-        sceneCaptureStateOverrideForTesting ?? traitCollection.sceneCaptureState
+    var secureCaptureDisplayLayerHiddenForInspection: Bool {
+        secureCaptureRenderer.displayLayerIsHiddenForInspection
     }
 
-    private var attachedSceneIsForegroundActive: Bool {
-        if let secureForegroundActiveOverrideForTesting {
-            return secureForegroundActiveOverrideForTesting
+    var secureCaptureFallbackVisibleForInspection: Bool {
+        secureCaptureRenderer.fallbackLayerIsVisibleForInspection
+    }
+
+    var secureCaptureFrameGenerationForInspection: UInt64 {
+        secureCaptureRenderer.frameGenerationForInspection
+    }
+
+    var secureCapturePendingGenerationForInspection: UInt64? {
+        secureCaptureRenderer.pendingPresentationGenerationForInspection
+    }
+
+    func setSecureCaptureFlushCompletionOverrideForTesting(
+        _ override: (((@escaping () -> Void)) -> Void)?
+    ) {
+        secureCaptureRenderer.setFlushCompletionOverrideForTesting(override)
+    }
+
+    var secureCaptureMayPresentPlaintextNow: Bool {
+        secureCapturePhase == .protectedPlaintext
+            && securePlaintextIsLoaded
+            && currentSceneCaptureState == .inactive
+            && foregroundPresentationIsAllowed
+    }
+
+    private var foregroundPresentationIsAllowed: Bool {
+        if let foregroundPresentationOverrideForTesting {
+            return foregroundPresentationOverrideForTesting
         }
-        return window?.windowScene?.activationState == .foregroundActive
-            && UIApplication.shared.applicationState == .active
+        return UIApplication.shared.applicationState == .active
+            && window?.windowScene?.activationState == .foregroundActive
+    }
+
+    private var currentSceneCaptureState: UISceneCaptureState {
+        sceneCaptureStateOverrideForTesting ?? traitCollection.sceneCaptureState
     }
 
     private func reevaluateSceneCaptureState() {
@@ -626,9 +683,10 @@ final class SecureSnippetTextView: UITextView {
             let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
             secureEditingIsAuthorized = false
             securePlaintextAcceptanceIsAuthorized = false
-            guard secureCaptureRenderer.renderRedaction() else { return }
+            isEditable = false
             secureCapturePhase = .protectedRedaction
             securePlaintextIsLoaded = false
+            _ = secureCaptureRenderer.renderRedaction()
             replaceTextStorage(with: "")
             onSecureCaptureForcedRedaction?(plaintext, .sceneCapture)
         }
@@ -638,6 +696,7 @@ final class SecureSnippetTextView: UITextView {
     private func secureCaptureRendererDidFail() {
         guard secureCapturePhase != .failedClosed else { return }
         let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
+        isEditable = false
         secureCapturePhase = .failedClosed
         securePlaintextIsLoaded = false
         secureEditingIsAuthorized = false
