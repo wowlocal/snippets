@@ -135,10 +135,13 @@ private func run() {
     )
     textView.string = ""
     scrollView.contentView.scroll(to: .zero)
+    textView.isSecureContentMode = true
     require(textView.setSecurePresentationEnabled(true), "shipping renderer must arm")
     require(textView.secureCapturePolicy.phase == .protectedRedaction, "arming must start redacted")
     require(textView.secureCaptureProtectionEnabledForInspection, "preventsCapture must be set")
     require(textView.secureCaptureObservesScrollForInspection, "clip-view scroll observer must be installed")
+    require(textView.secureHoverTracksPointerForInspection, "secure presentation must install hover tracking")
+    require(!textView.secureHoverRevealsPixelsForInspection, "arming must not reveal on synthetic state")
     textView.string = "Protected layer fixture"
     let firstUnprotectedBacking = unprotectedViewChecksum(textView)
     textView.string = "Entirely different protected fixture"
@@ -147,14 +150,22 @@ private func run() {
         firstUnprotectedBacking == secondUnprotectedBacking,
         "ordinary AppKit backing must not change with secure glyphs"
     )
-    require(textView.setSecurePixelsVisible(true), "protected plaintext frame must enqueue")
-    require(textView.setSecurePixelsVisible(false), "protected hide frame must enqueue")
-    require(textView.secureCapturePolicy.phase == .protectedRedaction, "hide must remain protected")
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+    require(textView.secureCapturePolicy.phase == .protectedRedaction, "window inactivity must remain redacted")
+    require(!textView.secureHoverRevealsPixelsForInspection, "window inactivity must never reveal pixels")
 
-    textView.string = ""
+    let generationBeforeTeardownClear = textView.secureCaptureFrameGenerationForInspection
+    require(textView.redactSecurePixelsBeforePlaintextClear(), "teardown must retain redaction")
+    textView.clearSecurePlaintextStorageForTeardown()
+    require(
+        textView.secureCaptureFrameGenerationForInspection == generationBeforeTeardownClear,
+        "post-redaction storage clear must not enqueue a frame"
+    )
     require(textView.setSecurePresentationEnabled(false), "cleared editor must restore ordinary mode")
+    textView.isSecureContentMode = false
     require(textView.secureCapturePolicy.phase == .ordinary, "teardown must restore ordinary mode")
-    print("PASS: shipping protected layer, IOSurface pixels, selection/caret/scroll/hide/clear")
+    require(!textView.secureHoverTracksPointerForInspection, "teardown must remove hover tracking")
+    print("PASS: shipping protected layer, IOSurface pixels, selection/caret/scroll/hover-redaction/clear")
 }
 
 MainActor.assumeIsolated {

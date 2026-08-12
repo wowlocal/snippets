@@ -198,4 +198,68 @@ struct SnippetContentTextViewTests {
         #expect(board.string(forType: writableType) == sentinel)
         #expect(!view.writablePasteboardTypes.isEmpty)
     }
+
+    @Test func hoverBoundaryStartsRedactedRejectsSyntheticEntryAndTearsDown() throws {
+        _ = NSApplication.shared
+        let view = editor("")
+        #expect(!view.setSecurePresentationEnabled(true))
+        #expect(view.secureCapturePolicy.phase == .ordinary)
+        view.isSecureContentMode = true
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        scrollView.documentView = view
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scrollView
+        // Keep the fixture deliberately non-key and off screen. A forged enter
+        // event must not be enough to reveal without a fresh real-cursor check.
+        #expect(!window.isVisible)
+        #expect(!window.isKeyWindow)
+
+        try #require(view.setSecurePresentationEnabled(true))
+        #expect(view.secureCapturePolicy.phase == .protectedRedaction)
+        #expect(view.secureHoverTracksPointerForInspection)
+        #expect(!view.secureHoverRevealsPixelsForInspection)
+        let redactionGeneration = view.secureCaptureFrameGenerationForInspection
+
+        view.string = "hover-boundary-sentinel"
+        #expect(view.secureCaptureFrameGenerationForInspection == redactionGeneration)
+        let syntheticEntry = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered,
+            location: NSPoint(x: 20, y: 20),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 99,
+            trackingNumber: 99,
+            userData: nil
+        ))
+        view.mouseEntered(with: syntheticEntry)
+
+        #expect(view.secureCapturePolicy.phase == .protectedRedaction)
+        #expect(!view.secureHoverRevealsPixelsForInspection)
+        #expect(view.string == "hover-boundary-sentinel")
+
+        try #require(view.redactSecurePixelsBeforePlaintextClear())
+        view.clearSecurePlaintextStorageForTeardown()
+        #expect(view.string.isEmpty)
+        #expect(
+            view.secureCaptureFrameGenerationForInspection == redactionGeneration,
+            "teardown clear must not enqueue a post-clear frame or failure callback"
+        )
+        try #require(view.setSecurePresentationEnabled(false))
+        #expect(view.secureCapturePolicy.phase == .ordinary)
+        #expect(!view.secureHoverTracksPointerForInspection)
+        #expect(!view.secureHoverRevealsPixelsForInspection)
+
+        view.isSecureContentMode = false
+        view.string = "ordinary-after-secure"
+        view.mouseExited(with: syntheticEntry)
+        #expect(view.secureCapturePolicy.phase == .ordinary)
+        #expect(view.string == "ordinary-after-secure")
+    }
 }

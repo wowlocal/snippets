@@ -33,6 +33,9 @@ final class SnippetContentTextView: NSTextView {
     var isSecureContentMode = false {
         didSet {
             guard oldValue != isSecureContentMode else { return }
+            if !isSecureContentMode {
+                _ = forceSecureHoverRedaction()
+            }
             applyContentExposureMode()
         }
     }
@@ -62,6 +65,20 @@ final class SnippetContentTextView: NSTextView {
 
     private(set) var secureCapturePolicy = SecureCapturePresentationPolicy()
     private lazy var secureCaptureRenderer = SecureSnippetCaptureRenderer(textView: self)
+    private(set) var secureHoverRevealPolicy = SecureHoverRevealPolicy()
+    private var secureHoverTrackingArea: NSTrackingArea?
+    private var secureHoverObservers: [NSObjectProtocol] = []
+    private var isSynchronizingSecureHoverReveal = false
+    private var isUpdatingSecureTrackingAreas = false
+    private(set) var isClearingSecurePlaintextStorageForTeardown = false
+    private var secureHoverValidationTimer: Timer?
+
+    deinit {
+        for observer in secureHoverObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        secureHoverValidationTimer?.invalidate()
+    }
 
     /// Arms the protected rendering path before the caller puts decrypted text in
     /// `NSTextStorage`. This first presents an opaque protected redaction frame and
@@ -69,6 +86,7 @@ final class SnippetContentTextView: NSTextView {
     @discardableResult
     func setSecurePresentationEnabled(_ enabled: Bool) -> Bool {
         if enabled {
+            guard isSecureContentMode else { return false }
             guard secureCapturePolicy.phase == .ordinary else {
                 return secureCapturePolicy.phase != .failedClosed
             }
@@ -77,6 +95,7 @@ final class SnippetContentTextView: NSTextView {
                 secureCapturePolicy.failClosed()
                 return false
             }
+            beginSecureHoverTracking()
             needsDisplay = true
             return true
         }
@@ -87,6 +106,11 @@ final class SnippetContentTextView: NSTextView {
             secureCaptureRenderer.failClosed()
             return false
         }
+        // `clear()` below synchronously hides and flushes the protected layer.
+        // Avoid asking the renderer for a new frame after storage was cleared:
+        // a teardown-time allocation failure must not run the save callback on
+        // an intentionally empty editor.
+        endSecureHoverTracking(redactDisplayedPixels: false)
         secureCaptureRenderer.clear()
         secureCapturePolicy.resetAfterPlaintextWasCleared()
         needsDisplay = true
@@ -99,22 +123,60 @@ final class SnippetContentTextView: NSTextView {
     @discardableResult
     func prepareForOrdinaryContentRebind() -> Bool {
         guard secureCapturePolicy.suppressesUnprotectedDrawing else { return true }
-        string = ""
+        _ = redactSecurePixelsBeforePlaintextClear()
+        undoManager?.removeAllActions(withTarget: self)
+        clearSecurePlaintextStorageForTeardown()
         return setSecurePresentationEnabled(false)
     }
 
-    /// Controls protected pixels only; it does not unlock the vault or restore
-    /// ordinary AppKit drawing. Hover policy can safely call this independently.
+    /// Hides and flushes a displayed plaintext sample while text storage still
+    /// contains the current edit. Callers then clear storage without triggering
+    /// a teardown-time renderer pass whose failure callback could observe an
+    /// intentionally empty editor.
     @discardableResult
-    func setSecurePixelsVisible(_ visible: Bool) -> Bool {
-        guard secureCapturePolicy.permitsPlaintextInTextStorage else { return false }
-        secureCapturePolicy.setPlaintextPixelsVisible(visible)
-        return visible
-            ? secureCaptureRenderer.renderPlaintext()
-            : secureCaptureRenderer.renderRedaction()
+    func redactSecurePixelsBeforePlaintextClear() -> Bool {
+        guard secureCapturePolicy.phase != .failedClosed else { return true }
+        return forceSecureHoverRedaction()
+    }
+
+    /// Clears NSTextStorage without entering `string`'s ordinary secure-frame
+    /// invalidation path. The caller has already redacted/flushed pixels while
+    /// the real edit was present, so a second renderer pass here would only add
+    /// a failure callback capable of observing this intentional empty value.
+    func clearSecurePlaintextStorageForTeardown() {
+        assert(secureCapturePolicy.suppressesUnprotectedDrawing)
+        guard secureCapturePolicy.suppressesUnprotectedDrawing else { return }
+        isClearingSecurePlaintextStorageForTeardown = true
+        defer { isClearingSecurePlaintextStorageForTeardown = false }
+        super.string = ""
+        needsDisplay = true
+    }
+
+    /// Re-evaluates the process-wide cursor position and active window before
+    /// applying the hover decision. Mouse-event coordinates are never trusted as
+    /// authorization to reveal. This controls protected pixels only; it neither
+    /// unlocks the vault nor decrypts content.
+    @discardableResult
+    func refreshSecureHoverRevealFromCurrentCursor() -> Bool {
+        guard secureHoverRevealPolicy.presentationIsArmed else {
+            return secureCapturePolicy.phase == .ordinary
+        }
+        if isSynchronizingSecureHoverReveal {
+            return secureCapturePolicy.phase != .failedClosed
+        }
+
+        isSynchronizingSecureHoverReveal = true
+        defer { isSynchronizingSecureHoverReveal = false }
+        updateSecureHoverPolicyFromCurrentCursor()
+        return applySecureHoverRevealDecision()
     }
 
     func refreshSecurePresentation() {
+        invalidateSecureCaptureRenderer()
+    }
+
+    func invalidateSecureCaptureRenderer() {
+        guard !isClearingSecurePlaintextStorageForTeardown else { return }
         secureCaptureRenderer.invalidate()
     }
 
@@ -123,6 +185,7 @@ final class SnippetContentTextView: NSTextView {
     }
 
     func secureCaptureRendererDidFail() {
+        endSecureHoverTracking(redactDisplayedPixels: false)
         secureCapturePolicy.failClosed()
         super.string = ""
         super.isEditable = false
@@ -141,8 +204,225 @@ final class SnippetContentTextView: NSTextView {
         secureCaptureRenderer.captureProtectionEnabledForInspection
     }
 
+    var secureCaptureFrameGenerationForInspection: UInt64 {
+        secureCaptureRenderer.frameGenerationForInspection
+    }
+
     var secureCaptureObservesScrollForInspection: Bool {
         secureCaptureRenderer.observesScrollForInspection
+    }
+
+    var secureHoverTracksPointerForInspection: Bool {
+        secureHoverRevealPolicy.presentationIsArmed
+            && secureHoverTrackingArea != nil
+            && secureHoverValidationTimer?.isValid == true
+    }
+
+    var secureHoverRevealsPixelsForInspection: Bool {
+        secureHoverRevealPolicy.shouldRevealPlaintextPixels
+            && secureCapturePolicy.rendersPlaintextPixels
+    }
+
+    private func beginSecureHoverTracking() {
+        secureHoverRevealPolicy.presentationDidArm()
+        installSecureHoverObservers()
+        rebuildSecureHoverTrackingArea()
+        startSecureHoverValidationTimer()
+
+        // Capture a fresh real-cursor snapshot so the controller can account for
+        // a pointer that was already inside when it assigns the decrypted body.
+        // Do not expose a frame here: arming itself always finishes redacted.
+        updateSecureHoverPolicyFromCurrentCursor()
+    }
+
+    private func endSecureHoverTracking(redactDisplayedPixels: Bool) {
+        if redactDisplayedPixels {
+            _ = forceSecureHoverRedaction()
+        } else {
+            secureHoverRevealPolicy.forceRedaction()
+        }
+        removeSecureHoverTrackingArea()
+        removeSecureHoverObservers()
+        secureHoverValidationTimer?.invalidate()
+        secureHoverValidationTimer = nil
+        secureHoverRevealPolicy.presentationDidEnd()
+    }
+
+    private func startSecureHoverValidationTimer() {
+        secureHoverValidationTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                _ = self?.refreshSecureHoverRevealFromCurrentCursor()
+            }
+        }
+        secureHoverValidationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func installSecureHoverObservers() {
+        removeSecureHoverObservers()
+        let center = NotificationCenter.default
+        let application = NSApplication.shared
+
+        secureHoverObservers.append(center.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: application,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                _ = self?.forceSecureHoverRedaction()
+            }
+        })
+        secureHoverObservers.append(center.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: application,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                _ = self?.refreshSecureHoverRevealFromCurrentCursor()
+            }
+        })
+
+        guard let window else { return }
+        for name in [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didDeminiaturizeNotification,
+            NSWindow.didMoveNotification,
+            NSWindow.didResizeNotification,
+            NSWindow.didChangeOcclusionStateNotification,
+        ] {
+            secureHoverObservers.append(center.addObserver(
+                forName: name,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    _ = self?.refreshSecureHoverRevealFromCurrentCursor()
+                }
+            })
+        }
+        for name in [
+            NSWindow.didResignKeyNotification,
+            NSWindow.didMiniaturizeNotification,
+            NSWindow.willCloseNotification,
+        ] {
+            secureHoverObservers.append(center.addObserver(
+                forName: name,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    _ = self?.forceSecureHoverRedaction()
+                }
+            })
+        }
+    }
+
+    private func removeSecureHoverObservers() {
+        for observer in secureHoverObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        secureHoverObservers.removeAll(keepingCapacity: true)
+    }
+
+    private func rebuildSecureHoverTrackingArea() {
+        guard !isUpdatingSecureTrackingAreas else { return }
+        isUpdatingSecureTrackingAreas = true
+        defer { isUpdatingSecureTrackingAreas = false }
+        removeSecureHoverTrackingArea()
+        guard secureHoverRevealPolicy.presentationIsArmed, window != nil else { return }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [
+                .mouseEnteredAndExited,
+                .mouseMoved,
+                .activeInKeyWindow,
+                .enabledDuringMouseDrag,
+                .inVisibleRect,
+            ],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        secureHoverTrackingArea = area
+    }
+
+    private func removeSecureHoverTrackingArea() {
+        if let secureHoverTrackingArea {
+            removeTrackingArea(secureHoverTrackingArea)
+        }
+        secureHoverTrackingArea = nil
+    }
+
+    private func updateSecureHoverPolicyFromCurrentCursor() {
+        let applicationIsActive = NSApp?.isActive == true
+        guard let window,
+              applicationIsActive,
+              window.isKeyWindow,
+              window.isVisible,
+              !window.isMiniaturized,
+              window.occlusionState.contains(.visible),
+              !isHiddenOrHasHiddenAncestor else {
+            secureHoverRevealPolicy.updateVerifiedEnvironment(
+                cursorInsideViewport: false,
+                applicationIsActive: applicationIsActive,
+                windowIsKey: window?.isKeyWindow == true
+            )
+            return
+        }
+
+        let viewport = visibleRect.intersection(bounds)
+        guard !viewport.isEmpty else {
+            secureHoverRevealPolicy.updateVerifiedEnvironment(
+                cursorInsideViewport: false,
+                applicationIsActive: true,
+                windowIsKey: true
+            )
+            return
+        }
+
+        let screenPoint = NSEvent.mouseLocation
+        let screenRect = NSRect(origin: screenPoint, size: .zero)
+        let windowPoint = window.convertFromScreen(screenRect).origin
+        let localPoint = convert(windowPoint, from: nil)
+        secureHoverRevealPolicy.updateVerifiedEnvironment(
+            cursorInsideViewport: viewport.contains(localPoint),
+            applicationIsActive: true,
+            windowIsKey: true
+        )
+    }
+
+    @discardableResult
+    private func applySecureHoverRevealDecision() -> Bool {
+        guard secureHoverRevealPolicy.presentationIsArmed,
+              secureCapturePolicy.permitsPlaintextInTextStorage else { return false }
+        let shouldReveal = secureHoverRevealPolicy.shouldRevealPlaintextPixels
+            && isSecureContentMode
+            && isEditable
+        guard secureCapturePolicy.rendersPlaintextPixels != shouldReveal else { return true }
+
+        secureCapturePolicy.setPlaintextPixelsVisible(shouldReveal)
+        return shouldReveal
+            ? secureCaptureRenderer.renderPlaintext()
+            : secureCaptureRenderer.renderRedaction()
+    }
+
+    /// Exit and activity-loss paths call this directly. If a plaintext sample is
+    /// currently displayed, `renderRedaction()` synchronously hides the display
+    /// layer and flushes that sample before returning.
+    @discardableResult
+    private func forceSecureHoverRedaction() -> Bool {
+        secureHoverRevealPolicy.forceRedaction()
+        guard secureCapturePolicy.permitsPlaintextInTextStorage else {
+            return secureCapturePolicy.phase == .ordinary
+        }
+        guard secureCapturePolicy.rendersPlaintextPixels else { return true }
+        secureCapturePolicy.setPlaintextPixelsVisible(false)
+        return secureCaptureRenderer.renderRedaction()
+    }
+
+    func secureVisibleViewportDidChange() {
+        _ = refreshSecureHoverRevealFromCurrentCursor()
     }
 
     var emptyStatePrompt: String = "" {
@@ -156,8 +436,8 @@ final class SnippetContentTextView: NSTextView {
         get { super.string }
         set {
             super.string = newValue
-            if secureCapturePolicy.suppressesUnprotectedDrawing {
-                secureCaptureRenderer.invalidate()
+            if secureCapturePolicy.rendersPlaintextPixels {
+                invalidateSecureCaptureRenderer()
             }
             needsDisplay = true
         }
@@ -166,12 +446,19 @@ final class SnippetContentTextView: NSTextView {
     /// With no snippet selected the editor is disabled and empty; "Paste or
     /// type…" would be inviting the user to do something the view refuses.
     override var isEditable: Bool {
-        didSet { needsDisplay = true }
+        didSet {
+            if !isEditable {
+                _ = forceSecureHoverRedaction()
+            }
+            needsDisplay = true
+        }
     }
 
     override func didChangeText() {
         super.didChangeText()
-        secureCaptureRenderer.invalidate()
+        if secureCapturePolicy.rendersPlaintextPixels {
+            invalidateSecureCaptureRenderer()
+        }
         needsDisplay = true
     }
 
@@ -484,7 +771,9 @@ final class SnippetContentTextView: NSTextView {
         stillSelecting stillSelectingFlag: Bool
     ) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
-        secureCaptureRenderer.invalidate()
+        if secureCapturePolicy.rendersPlaintextPixels {
+            invalidateSecureCaptureRenderer()
+        }
     }
 
     override func drawInsertionPoint(
@@ -493,7 +782,9 @@ final class SnippetContentTextView: NSTextView {
         turnedOn flag: Bool
     ) {
         guard !secureCapturePolicy.suppressesUnprotectedDrawing else {
-            secureCaptureRenderer.invalidate()
+            if secureCapturePolicy.rendersPlaintextPixels {
+                invalidateSecureCaptureRenderer()
+            }
             return
         }
         super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
@@ -501,27 +792,77 @@ final class SnippetContentTextView: NSTextView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        secureCaptureRenderer.invalidate()
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+        invalidateSecureCaptureRenderer()
     }
 
     override func setBoundsSize(_ newSize: NSSize) {
         super.setBoundsSize(newSize)
-        secureCaptureRenderer.invalidate()
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+        invalidateSecureCaptureRenderer()
     }
 
     override func scroll(_ point: NSPoint) {
         super.scroll(point)
-        secureCaptureRenderer.invalidate()
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+        invalidateSecureCaptureRenderer()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        rebuildSecureHoverTrackingArea()
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow !== window, secureHoverRevealPolicy.presentationIsArmed {
+            _ = forceSecureHoverRedaction()
+            removeSecureHoverTrackingArea()
+            removeSecureHoverObservers()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard secureHoverRevealPolicy.presentationIsArmed else { return }
+        installSecureHoverObservers()
+        rebuildSecureHoverTrackingArea()
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        // The event is only a wake-up signal. Reveal is based on the current
+        // process-wide cursor position, not this potentially stale/synthetic event.
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        // Redact before AppKit dispatches any later responder or tracking work.
+        _ = forceSecureHoverRedaction()
+        super.mouseExited(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+        super.mouseDown(with: event)
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        secureCaptureRenderer.invalidate()
+        _ = refreshSecureHoverRevealFromCurrentCursor()
+        invalidateSecureCaptureRenderer()
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        secureCaptureRenderer.invalidate()
+        invalidateSecureCaptureRenderer()
     }
 
     /// Typing `{` offers the placeholder tokens, which is what replaced the

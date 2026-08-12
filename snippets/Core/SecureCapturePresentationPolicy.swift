@@ -67,6 +67,56 @@ nonisolated struct SecureCapturePresentationPolicy: Equatable {
     }
 }
 
+/// Pure, fail-closed state for the physical-observer mitigation around secure
+/// pixels. The AppKit boundary is responsible for deriving
+/// `verifiedCursorInsideViewport` from the process-wide cursor position; mouse
+/// events alone are deliberately not accepted as proof that the pointer is in
+/// the editor.
+nonisolated struct SecureHoverRevealPolicy: Equatable {
+    private(set) var presentationIsArmed = false
+    private(set) var verifiedCursorInsideViewport = false
+    private(set) var applicationIsActive = false
+    private(set) var windowIsKey = false
+
+    var shouldRevealPlaintextPixels: Bool {
+        presentationIsArmed
+            && verifiedCursorInsideViewport
+            && applicationIsActive
+            && windowIsKey
+    }
+
+    /// Arming never reuses an earlier cursor or activity observation. The
+    /// protected presentation therefore starts redacted until the AppKit
+    /// boundary supplies a fresh, independently verified environment snapshot.
+    mutating func presentationDidArm() {
+        presentationIsArmed = true
+        verifiedCursorInsideViewport = false
+        applicationIsActive = false
+        windowIsKey = false
+    }
+
+    mutating func updateVerifiedEnvironment(
+        cursorInsideViewport: Bool,
+        applicationIsActive: Bool,
+        windowIsKey: Bool
+    ) {
+        guard presentationIsArmed else { return }
+        verifiedCursorInsideViewport = cursorInsideViewport
+        self.applicationIsActive = applicationIsActive
+        self.windowIsKey = windowIsKey
+    }
+
+    /// Used for exit, inactivity, detachment, and teardown notifications. A
+    /// later reveal requires another fresh verification of the real cursor.
+    mutating func forceRedaction() {
+        verifiedCursorInsideViewport = false
+    }
+
+    mutating func presentationDidEnd() {
+        self = SecureHoverRevealPolicy()
+    }
+}
+
 nonisolated struct SecureCaptureFrameGeometry {
     static let maximumPixelDimension = 16_384
     static let maximumPixelCount = 16_777_216

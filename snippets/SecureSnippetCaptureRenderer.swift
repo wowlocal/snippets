@@ -98,6 +98,7 @@ final class SecureSnippetCaptureRenderer {
     }
 
     func invalidate() {
+        guard !textView.isClearingSecurePlaintextStorageForTeardown else { return }
         guard textView.secureCapturePolicy.keepsProtectedLayerVisible else { return }
         if textView.secureCapturePolicy.rendersPlaintextPixels {
             _ = renderPlaintext()
@@ -138,6 +139,8 @@ final class SecureSnippetCaptureRenderer {
     }
 
     var captureProtectionEnabledForInspection: Bool { displayLayer.preventsCapture }
+
+    var frameGenerationForInspection: UInt64 { frameGeneration }
 
     var observesScrollForInspection: Bool {
         observedClipView === textView.enclosingScrollView?.contentView && clipViewObserver != nil
@@ -502,7 +505,11 @@ final class SecureSnippetCaptureRenderer {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.invalidate()
+                // Re-evaluate hover first: if a viewport change moved the
+                // visible document away from the physical pointer, redact and
+                // flush the old plaintext frame before drawing new geometry.
+                self?.textView.secureVisibleViewportDidChange()
+                self?.textView.invalidateSecureCaptureRenderer()
             }
         }
     }

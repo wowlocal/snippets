@@ -985,7 +985,9 @@ extension ViewController {
         secureCaptionLabel.stringValue =
             "Encrypted on this Mac. Won\u{2019}t expand when you type its keyword \u{2014} type \\, "
             + "pick it from the list, and confirm with Touch ID. Never in exports, share links, or "
-            + "snippets.json. Its name, keyword and tags stay readable so Snippets can find it while locked."
+            + "snippets.json. Move the pointer over the editor to show its protected pixels; moving "
+            + "it away hides only those pixels \u{2014} it doesn\u{2019}t lock the vault or decrypt on hover. "
+            + "Its name, keyword and tags stay readable so Snippets can find it while locked."
         secureCaptionLabel.isHidden = !secureDemoteStrip.isHidden
 
         func mask(_ message: String, action: String? = nil) {
@@ -1031,6 +1033,14 @@ extension ViewController {
            snippetTextView.mayContainSecurePlaintext,
            snippetTextView.secureCapturePolicy.permitsPlaintextInTextStorage {
             snippetTextView.isEditable = true
+            guard snippetTextView.refreshSecureHoverRevealFromCurrentCursor() else {
+                secureContentEditableForID = nil
+                snippetTextView.isEditable = false
+                secureLockOverlay.isHidden = true
+                secureCaptureFailureOverlay.isHidden = false
+                updatePreview(withTemplate: "")
+                return
+            }
             secureLockOverlay.isHidden = true
             secureCaptureFailureOverlay.isHidden = true
             updatePreview(withTemplate: "")
@@ -1071,10 +1081,10 @@ extension ViewController {
         snippetTextView.string = text
         snippetTextView.isEditable = true
         secureContentEditableForID = snippet.id
-        // Plaintext lives in the protected text storage, but starts redacted.
-        // The hover policy is the only path that asks the protected renderer to
-        // expose pixels, reducing shoulder-surfing and physical-camera exposure.
-        guard snippetTextView.setSecurePixelsVisible(false) else {
+        // Plaintext lives in protected text storage. The hover boundary now
+        // checks the real cursor, application activity, and key window; this
+        // accounts for a pointer already inside without decrypting on hover.
+        guard snippetTextView.refreshSecureHoverRevealFromCurrentCursor() else {
             secureContentEditableForID = nil
             snippetTextView.isEditable = false
             secureLockOverlay.isHidden = true
@@ -1123,11 +1133,18 @@ extension ViewController {
             || wasCaptureProtected
         guard hadSecureBoundary else { return }
 
-        // The undo graph can retain a body even when a renderer failure already
-        // cleared `string`. Destroy it unconditionally while all containment
-        // boundaries are still active.
+        // Flush any displayed protected plaintext while the editor still holds
+        // the current edit. If that renderer operation fails, its synchronous
+        // callback can persist the real value rather than an intentional clear.
+        if wasCaptureProtected {
+            _ = snippetTextView.redactSecurePixelsBeforePlaintextClear()
+        }
+        // A renderer failure may already have emptied the view; stale undo
+        // records can still retain the body, so clear them unconditionally.
         resetContentUndoHistory()
-        if !snippetTextView.string.isEmpty {
+        if wasCaptureProtected {
+            snippetTextView.clearSecurePlaintextStorageForTeardown()
+        } else if !snippetTextView.string.isEmpty {
             snippetTextView.string = ""
         }
         previewValueField.stringValue = ""

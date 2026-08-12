@@ -145,3 +145,93 @@ struct SecureCapturePresentationPolicyTests {
         ) == nil)
     }
 }
+
+@Suite("Secure hover reveal policy")
+struct SecureHoverRevealPolicyTests {
+    @Test("Arming always starts redacted and forgets stale observations")
+    func armStartsRedacted() {
+        var policy = SecureHoverRevealPolicy()
+        policy.presentationDidArm()
+        policy.updateVerifiedEnvironment(
+            cursorInsideViewport: true,
+            applicationIsActive: true,
+            windowIsKey: true
+        )
+        #expect(policy.shouldRevealPlaintextPixels)
+
+        policy.presentationDidEnd()
+        policy.presentationDidArm()
+
+        #expect(policy.presentationIsArmed)
+        #expect(!policy.verifiedCursorInsideViewport)
+        #expect(!policy.shouldRevealPlaintextPixels)
+    }
+
+    @Test(arguments: [
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+    ])
+    func everyEnvironmentConditionIsRequired(
+        cursorInside: Bool,
+        applicationActive: Bool,
+        windowKey: Bool
+    ) {
+        var policy = SecureHoverRevealPolicy()
+        policy.presentationDidArm()
+
+        policy.updateVerifiedEnvironment(
+            cursorInsideViewport: cursorInside,
+            applicationIsActive: applicationActive,
+            windowIsKey: windowKey
+        )
+
+        #expect(!policy.shouldRevealPlaintextPixels)
+    }
+
+    @Test("A verified active key-window cursor is the only reveal state")
+    func verifiedInsideCursorReveals() {
+        var policy = SecureHoverRevealPolicy()
+        policy.presentationDidArm()
+
+        policy.updateVerifiedEnvironment(
+            cursorInsideViewport: true,
+            applicationIsActive: true,
+            windowIsKey: true
+        )
+
+        #expect(policy.shouldRevealPlaintextPixels)
+    }
+
+    @Test("Exit forces redaction until another full verification")
+    func exitForcesFreshVerification() {
+        var policy = SecureHoverRevealPolicy()
+        policy.presentationDidArm()
+        policy.updateVerifiedEnvironment(
+            cursorInsideViewport: true,
+            applicationIsActive: true,
+            windowIsKey: true
+        )
+
+        policy.forceRedaction()
+
+        #expect(!policy.verifiedCursorInsideViewport)
+        #expect(!policy.shouldRevealPlaintextPixels)
+    }
+
+    @Test("Environment updates cannot reveal after teardown")
+    func teardownIsStickyUntilRearmed() {
+        var policy = SecureHoverRevealPolicy()
+        policy.presentationDidArm()
+        policy.presentationDidEnd()
+
+        policy.updateVerifiedEnvironment(
+            cursorInsideViewport: true,
+            applicationIsActive: true,
+            windowIsKey: true
+        )
+
+        #expect(!policy.presentationIsArmed)
+        #expect(!policy.shouldRevealPlaintextPixels)
+    }
+}
