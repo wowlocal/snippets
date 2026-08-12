@@ -58,6 +58,7 @@ final class SecureSnippetCaptureRenderer {
     private var isFailingClosed = false
     private var pendingPresentationGeneration: UInt64?
     private var flushCompletionOverrideForTesting: (((@escaping () -> Void)) -> Void)?
+    private var rendererFailedOverrideForTesting: Bool?
     private var decodeFailureObserver: NSObjectProtocol?
     private var outputProtectionObserver: NSObjectProtocol?
 
@@ -122,14 +123,14 @@ final class SecureSnippetCaptureRenderer {
     func arm() -> Bool {
         guard displayLayer.preventsCapture,
               displayLayer.superlayer === surfaceView.layer,
+              !rendererHasFailed,
               !displayLayer.isOutputObscuredDueToInsufficientExternalProtection else {
             failClosed()
             return false
         }
-        surfaceView.isHidden = false
+        hideAndFlushToFallback()
         updateLayerGeometry()
         updateFallbackColor()
-        hideAndFlushToFallback()
         return true
     }
 
@@ -169,9 +170,9 @@ final class SecureSnippetCaptureRenderer {
     }
 
     func renderRedaction() -> Bool {
+        hideAndFlushToFallback()
         updateLayerGeometry()
         updateFallbackColor()
-        hideAndFlushToFallback()
         return true
     }
 
@@ -240,6 +241,10 @@ final class SecureSnippetCaptureRenderer {
         flushCompletionOverrideForTesting = override
     }
 
+    func setRendererFailedOverrideForTesting(_ failed: Bool?) {
+        rendererFailedOverrideForTesting = failed
+    }
+
     private enum FrameKind {
         case redaction
         case plaintext
@@ -288,10 +293,10 @@ final class SecureSnippetCaptureRenderer {
         displayLayer.sampleBufferRenderer.enqueue(sampleBuffer)
         guard generation == frameGeneration,
               pendingPresentationGeneration == generation,
-              displayLayer.sampleBufferRenderer.status != .failed,
+              !rendererHasFailed,
               isHealthyForPlaintextPresentation,
               textView.secureCaptureMayPresentPlaintextNow else {
-            if displayLayer.sampleBufferRenderer.status == .failed
+            if rendererHasFailed
                 || !isHealthyForPlaintextPresentation {
                 failClosed()
             }
@@ -307,13 +312,18 @@ final class SecureSnippetCaptureRenderer {
             && displayLayer.superlayer === surfaceView.layer
             && !surfaceView.isHidden
             && !displayLayer.isOutputObscuredDueToInsufficientExternalProtection
-            && displayLayer.sampleBufferRenderer.status != .failed
+            && !rendererHasFailed
     }
 
     private var isReadyForHiddenPlaintextPresentation: Bool {
         isHealthyForPlaintextPresentation
             && displayLayer.isHidden
             && !fallbackLayer.isHidden
+    }
+
+    private var rendererHasFailed: Bool {
+        rendererFailedOverrideForTesting
+            ?? (displayLayer.sampleBufferRenderer.status == .failed)
     }
 
     private func surfaceDidLayout() {

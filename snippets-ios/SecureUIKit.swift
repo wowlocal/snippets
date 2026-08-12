@@ -658,6 +658,10 @@ final class SecureSnippetTextView: UITextView {
         secureCaptureRenderer.setFlushCompletionOverrideForTesting(override)
     }
 
+    func setSecureCaptureRendererFailedForTesting(_ failed: Bool?) {
+        secureCaptureRenderer.setRendererFailedOverrideForTesting(failed)
+    }
+
     var secureCaptureMayPresentPlaintextNow: Bool {
         secureCapturePhase == .protectedPlaintext
             && securePlaintextIsLoaded
