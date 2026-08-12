@@ -50,6 +50,20 @@ final class SecureCopyWarningOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// AppKit does not automatically remeasure a wrapping `NSTextField` when Auto
+/// Layout narrows its frame. Bind the text cell's measurement width to the real
+/// laid-out width so the toast grows vertically instead of clipping at one line.
+final class SecureCopyWarningLabel: NSTextField {
+    override func layout() {
+        super.layout()
+        let availableWidth = max(1, bounds.width)
+        guard abs(preferredMaxLayoutWidth - availableWidth) > 0.5 else { return }
+        preferredMaxLayoutWidth = availableWidth
+        invalidateIntrinsicContentSize()
+        superview?.needsLayout = true
+    }
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -122,7 +136,7 @@ final class ViewController: NSViewController {
     /// reflow while someone is typing in it.
     private let statusMessageOverlayLabel = NSTextField(labelWithString: "")
     private var statusMessageOverlayView: NSView?
-    private let secureCopyWarningLabel = NSTextField(wrappingLabelWithString: "")
+    private let secureCopyWarningLabel = SecureCopyWarningLabel(wrappingLabelWithString: "")
     private var secureCopyWarningOverlay: SecureCopyWarningOverlayView?
 
     let permissionBannerContainer = NSView()
@@ -638,11 +652,6 @@ final class ViewController: NSViewController {
         secureCopyWarningLabel.setAccessibilityHelp(
             "Nothing from the secure snippet was placed on the clipboard."
         )
-        // Give the toast a normal single-line ideal width. At narrower windows
-        // the required edge inequalities squeeze it and the label wraps instead
-        // of truncating or widening the window.
-        secureCopyWarningLabel.preferredMaxLayoutWidth = 620
-
         let contentView = NSView()
         contentView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(secureCopyWarningLabel)
@@ -661,6 +670,14 @@ final class ViewController: NSViewController {
         container.addSubview(surface)
         view.addSubview(container)
         secureCopyWarningOverlay = container
+
+        // `<=` constraints supply ceilings, not a preferred size. Without this
+        // equality Auto Layout is free to minimize the toast to its padding (32pt),
+        // which is exactly what a hosted shipping-module harness observed. Keep
+        // the natural width at 652 when possible; required window margins win and
+        // narrow it to `window width - 40` on smaller windows.
+        let preferredWidth = container.widthAnchor.constraint(equalToConstant: 652)
+        preferredWidth.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
             secureCopyWarningLabel.leadingAnchor.constraint(
@@ -686,6 +703,7 @@ final class ViewController: NSViewController {
             container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             container.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
             container.widthAnchor.constraint(lessThanOrEqualToConstant: 652),
+            preferredWidth,
             container.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
             container.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
         ])
