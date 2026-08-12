@@ -580,7 +580,54 @@ final class SnippetsIOSTests: XCTestCase {
 
         let command = MainSplitViewController.copySnippetKeyCommand()
         hosted.controller.copySnippetCommand(command)
-        XCTAssertEqual(pasteboard.string, "Hello from iPad")
+        XCTAssertTrue(waitUntil { pasteboard.string == "Hello from iPad" })
+    }
+
+    func testReturnOnSecureSnippetAuthenticatesAndUsesExpiringClipboard() throws {
+        let pasteboard = TestSnippetPasteboard(string: "Existing clipboard")
+        let secureID = UUID()
+        var authenticationCount = 0
+        let environment = AppEnvironment(
+            pasteboard: pasteboard,
+            secureContentLoader: { requestedID, reason in
+                authenticationCount += 1
+                XCTAssertEqual(requestedID, secureID)
+                XCTAssertEqual(reason, "Copy Secure")
+                var plaintext = Data("Secret body".utf8)
+                return SecurePlaintextLease(consuming: &plaintext)
+            }
+        )
+        let secureProvider = SecureProviderStub(shell: Snippet(
+            id: secureID,
+            name: "Secure",
+            keyword: "secure",
+            content: ""
+        ))
+        environment.store.secureProvider = secureProvider
+        let hosted = hostMainSplit(environment: environment, selecting: secureID)
+        hosted.list.focusFilteredList()
+
+        XCTAssertTrue(hosted.controller.handleReturnBeforeSystemBehavior())
+        XCTAssertTrue(waitUntil { pasteboard.secureWriteCount == 1 })
+        let toast = try XCTUnwrap(
+            hosted.controller.view.descendant(withAccessibilityIdentifier: "app-toast")
+        )
+        let message = try XCTUnwrap(
+            hosted.controller.view.descendant(withAccessibilityIdentifier: "app-toast-message")
+                as? UILabel
+        )
+        XCTAssertTrue(toast is UIVisualEffectView)
+        XCTAssertFalse(toast.isHidden)
+        XCTAssertEqual(
+            message.text,
+            "Copied “Secure”. Secure clipboard expires in 60 seconds."
+        )
+        XCTAssertNil(hosted.controller.presentedViewController)
+        XCTAssertEqual(authenticationCount, 1)
+        XCTAssertEqual(pasteboard.string, "Secret body")
+        XCTAssertNotNil(pasteboard.secureExpiration)
+        XCTAssertEqual(pasteboard.ordinaryWriteCount, 0)
+        withExtendedLifetime(secureProvider) {}
     }
 
     func testReturnHandlerCopiesOnlyWhenSnippetListOwnsFocus() {
@@ -591,7 +638,7 @@ final class SnippetsIOSTests: XCTestCase {
 
         hosted.list.focusFilteredList()
         XCTAssertTrue(hosted.controller.handleReturnBeforeSystemBehavior())
-        XCTAssertEqual(pasteboard.string, "Hello from iPad")
+        XCTAssertTrue(waitUntil { pasteboard.string == "Hello from iPad" })
 
         pasteboard.string = nil
         hosted.controller.searchCommand()
@@ -1084,6 +1131,16 @@ final class SnippetsIOSTests: XCTestCase {
                 .compactMap { ($0 as? UIAction)?.title }
             XCTAssertTrue(secureTitles.contains("Make Ordinary"))
             XCTAssertFalse(secureTitles.contains("Make Secure"))
+            XCTAssertTrue(secureTitles.contains("Copy"))
+
+            let editor = SnippetEditorViewController(environment: environment)
+            editor.loadViewIfNeeded()
+            editor.bind(to: secureID)
+            let copy = editor.navigationItem.rightBarButtonItems?.first {
+                $0.accessibilityIdentifier == "copy-snippet"
+            }
+            XCTAssertEqual(copy?.isEnabled, true)
+            XCTAssertEqual(copy?.accessibilityLabel, "Authenticate and Copy")
         }
     }
 

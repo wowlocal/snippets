@@ -26,7 +26,10 @@ final class AppEnvironment {
     /// editor and to defer list work that does not need to block a keystroke.
     var isPerformingLocalEditorChange: Bool { localEditorChangeDepth > 0 }
 
-    init(pasteboard: (any SnippetPasteboard)? = nil) {
+    init(
+        pasteboard: (any SnippetPasteboard)? = nil,
+        secureContentLoader: SnippetActionService.SecureContentLoader? = nil
+    ) {
         #if DEBUG
         if CommandLine.arguments.contains("--ui-testing-reset") {
             let root = FileManager.default.temporaryDirectory
@@ -81,7 +84,8 @@ final class AppEnvironment {
             store: store,
             vaultSession: vaultSession,
             secureStore: secureStore,
-            pasteboard: pasteboard
+            pasteboard: pasteboard,
+            secureContentLoader: secureContentLoader
         )
 
         store.secureProvider = secureStore

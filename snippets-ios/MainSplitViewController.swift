@@ -17,6 +17,7 @@ protocol SnippetListViewControllerDelegate: AnyObject {
     func snippetListRequestedEncryptedBackup(_ controller: SnippetListViewController)
     func snippetListRequestedSettings(_ controller: SnippetListViewController)
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController)
+    func snippetList(_ controller: SnippetListViewController, requestedCopy id: UUID)
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID)
     func snippetList(_ controller: SnippetListViewController, requestedDuplicate id: UUID)
     func snippetList(_ controller: SnippetListViewController, requestedToggleSecurity id: UUID)
@@ -24,6 +25,7 @@ protocol SnippetListViewControllerDelegate: AnyObject {
 
 @MainActor
 protocol SnippetEditorViewControllerDelegate: AnyObject {
+    func snippetEditorRequestedCopy(_ controller: SnippetEditorViewController, id: UUID)
     func snippetEditorRequestedDelete(_ controller: SnippetEditorViewController, id: UUID)
     func snippetEditorRequestedDuplicate(_ controller: SnippetEditorViewController, id: UUID)
 }
@@ -58,6 +60,7 @@ final class MainSplitViewController: UISplitViewController {
     private let listNavigationController: UINavigationController
     private let editorNavigationController: UINavigationController
     private let shortcutPanel = ShortcutPanelView()
+    private let toastPresenter = AppToastPresenter()
     private weak var shortcutPanelPreviousFirstResponder: UIView?
     private var selectedSnippetID: UUID?
     private var documentPickerPurpose: DocumentPickerPurpose?
@@ -111,6 +114,7 @@ final class MainSplitViewController: UISplitViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         configureShortcutPanel()
+        toastPresenter.install(in: view)
     }
 
     override var canBecomeFirstResponder: Bool { true }
@@ -919,9 +923,28 @@ final class MainSplitViewController: UISplitViewController {
     }
 
     @objc func copySnippetCommand(_ sender: UIKeyCommand) {
-        guard keyboardFocusContext == .list else { return }
-        guard let name = editorController.copySelectedSnippet() else { return }
-        listController.showStatus("Copied “\(name)”.")
+        guard keyboardFocusContext == .list, let selectedSnippetID else { return }
+        copy(id: selectedSnippetID)
+    }
+
+    private func copy(id: UUID) {
+        if environment.store.isSecure(id) {
+            editorController.prepareForModalPresentation()
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                switch try await environment.snippetActions.copy(id: id) {
+                case .copied(let name, let secure):
+                    let detail = secure ? " Secure clipboard expires in 60 seconds." : ""
+                    toastPresenter.show(message: "Copied “\(name)”.\(detail)")
+                case .empty(let name):
+                    toastPresenter.show(message: "“\(name)” has no content to copy.")
+                }
+            } catch {
+                showError(title: "Couldn’t Copy Snippet", error: error)
+            }
+        }
     }
 
     @objc func deleteSnippetCommand() {
@@ -1007,6 +1030,7 @@ extension MainSplitViewController: SnippetListViewControllerDelegate {
     }
     func snippetListRequestedSettings(_ controller: SnippetListViewController) { showSettings() }
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController) { showShortcuts() }
+    func snippetList(_ controller: SnippetListViewController, requestedCopy id: UUID) { copy(id: id) }
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID) { delete(id: id) }
     func snippetList(_ controller: SnippetListViewController, requestedDuplicate id: UUID) { duplicate(id: id) }
     func snippetList(_ controller: SnippetListViewController, requestedToggleSecurity id: UUID) {
@@ -1016,6 +1040,7 @@ extension MainSplitViewController: SnippetListViewControllerDelegate {
 }
 
 extension MainSplitViewController: SnippetEditorViewControllerDelegate {
+    func snippetEditorRequestedCopy(_ controller: SnippetEditorViewController, id: UUID) { copy(id: id) }
     func snippetEditorRequestedDelete(_ controller: SnippetEditorViewController, id: UUID) { delete(id: id) }
     func snippetEditorRequestedDuplicate(_ controller: SnippetEditorViewController, id: UUID) { duplicate(id: id) }
 }

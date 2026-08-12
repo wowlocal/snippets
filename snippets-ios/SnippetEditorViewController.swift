@@ -578,8 +578,9 @@ final class SnippetEditorViewController: UIViewController {
             target: self,
             action: #selector(copySnippet)
         )
-        copy.isEnabled = !isSecure
+        copy.isEnabled = true
         copy.accessibilityIdentifier = "copy-snippet"
+        copy.accessibilityLabel = isSecure ? "Authenticate and Copy" : "Copy"
 
         var children: [UIMenuElement] = [
             UIAction(title: snippet.isPinned ? "Unpin" : "Pin", image: UIImage(systemName: "pin")) { [weak self] _ in self?.togglePin() },
@@ -1286,22 +1287,10 @@ final class SnippetEditorViewController: UIViewController {
         }
     }
 
-    @discardableResult
-    func copySelectedSnippet() -> String? {
-        guard let id = selectedID,
-              !environment.store.isSecure(id),
-              let snippet = environment.store.snippet(id: id) else { return nil }
-        switch environment.snippetActions.copyOrdinary(snippet) {
-        case .copied(let name, _):
-            footerStatusLabel.text = "Copied “\(name)”."
-            return name
-        case .empty(let name):
-            footerStatusLabel.text = "“\(name)” has no content to copy."
-            return nil
-        }
+    @objc private func copySnippet() {
+        guard let selectedID else { return }
+        delegate?.snippetEditorRequestedCopy(self, id: selectedID)
     }
-
-    @objc private func copySnippet() { copySelectedSnippet() }
 
     private func copyShareLink() {
         guard let id = selectedID,

@@ -189,6 +189,7 @@ final class SnippetListViewController: UIViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
     }
 
+
     private func configureSearch() {
         searchController.searchResultsUpdater = self
         searchController.obscuresBackgroundDuringPresentation = false
@@ -428,13 +429,7 @@ final class SnippetListViewController: UIViewController {
     }
 
     private func copy(_ snippet: Snippet) {
-        guard !environment.store.isSecure(snippet.id) else { return }
-        switch environment.snippetActions.copyOrdinary(snippet) {
-        case .copied(let name, _):
-            showStatus("Copied “\(name)”.")
-        case .empty(let name):
-            showStatus("“\(name)” has no content to copy.")
-        }
+        delegate?.snippetList(self, requestedCopy: snippet.id)
     }
 
     private func copyLink(_ snippet: Snippet) {
@@ -464,10 +459,12 @@ final class SnippetListViewController: UIViewController {
                 guard let self else { return }
                 self.delegate?.snippetList(self, requestedToggleSecurity: snippet.id)
             },
+            UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                self?.copy(snippet)
+            },
         ]
         if !isSecure {
             actions.append(contentsOf: [
-                UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copy(snippet) },
                 UIAction(title: "Copy Share Link", image: UIImage(systemName: "link")) { [weak self] _ in self?.copyLink(snippet) },
                 UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in
                     guard let self else { return }
