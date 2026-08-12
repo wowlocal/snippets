@@ -236,13 +236,33 @@ final class SecureRemediationTests: XCTestCase {
                 }
             }
         }
-        defer { NotificationCenter.default.removeObserver(token) }
+        let stateToken = NotificationCenter.default.addObserver(
+            forName: .snippetsVaultStateChanged,
+            object: nil,
+            queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                guard !components.session.state.isUnlocked else { return }
+                probe.postLockDeliveryCount += 1
+                probe.keyWasGoneAtPostLock = (try? components.session.currentKey()) == nil
+                probe.revealedText = ""
+            }
+        }
+        defer {
+            NotificationCenter.default.removeObserver(token)
+            NotificationCenter.default.removeObserver(stateToken)
+        }
+
+        probe.revealedText = "PRELOCK-FLUSH-SENTINEL"
 
         components.session.lock()
 
         XCTAssertEqual(probe.deliveryCount, 1)
         XCTAssertTrue(probe.keyWasReadable)
         XCTAssertTrue(probe.flushSucceeded)
+        XCTAssertEqual(probe.postLockDeliveryCount, 1)
+        XCTAssertTrue(probe.keyWasGoneAtPostLock)
+        XCTAssertEqual(probe.revealedText, "")
         XCTAssertEqual(components.session.state, .locked)
         XCTAssertThrowsError(try components.session.currentKey())
 
@@ -250,6 +270,151 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertEqual(
             try components.secureStore.content(for: snippet.id),
             "PRELOCK-FLUSH-SENTINEL")
+    }
+
+    func testVaultUseSlidesFiveMinuteIdleDeadlineButNeverPastAuthenticationCap() async throws {
+        var authenticationCount = 0
+        let components = makeComponents(
+            duration: VaultSession.defaultDuration,
+            authenticationEvaluator: { _ in
+                authenticationCount += 1
+                return true
+            })
+        let pending = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pending)
+
+        let authenticatedAt = Date(timeIntervalSince1970: 20_000)
+        var currentTime = authenticatedAt
+        components.session.now = { currentTime }
+
+        var unlockedTransitionCount = 0
+        var unlockedCallbackCount = 0
+        components.session.onStateChange = { state in
+            if state.isUnlocked { unlockedCallbackCount += 1 }
+        }
+        let token = NotificationCenter.default.addObserver(
+            forName: .snippetsVaultStateChanged,
+            object: nil,
+            queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                if components.session.state.isUnlocked {
+                    unlockedTransitionCount += 1
+                }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        _ = try await components.session.unlock(reason: "Test sliding idle deadline")
+        XCTAssertEqual(authenticationCount, 1)
+        XCTAssertEqual(
+            unlockedDeadline(components.session.state),
+            authenticatedAt.addingTimeInterval(VaultSession.defaultDuration))
+        XCTAssertEqual(unlockedTransitionCount, 1)
+        XCTAssertEqual(unlockedCallbackCount, 1)
+
+        // Each access occurs before the current five-minute idle deadline. It must
+        // slide that deadline without turning a deadline detail into another public
+        // lock-state transition (which would recursively make the editor read again).
+        for elapsedMinutes in stride(from: 4, through: 28, by: 4) {
+            currentTime = authenticatedAt.addingTimeInterval(TimeInterval(elapsedMinutes * 60))
+            _ = try components.session.currentKey()
+            XCTAssertEqual(
+                unlockedDeadline(components.session.state),
+                min(
+                    currentTime.addingTimeInterval(VaultSession.defaultDuration),
+                    authenticatedAt.addingTimeInterval(VaultSession.maximumWindow)))
+        }
+
+        currentTime = authenticatedAt.addingTimeInterval(VaultSession.maximumWindow - 1)
+        _ = try components.session.currentKey()
+        XCTAssertEqual(
+            unlockedDeadline(components.session.state),
+            authenticatedAt.addingTimeInterval(VaultSession.maximumWindow))
+        XCTAssertEqual(authenticationCount, 1)
+        XCTAssertEqual(unlockedTransitionCount, 1)
+        XCTAssertEqual(unlockedCallbackCount, 1)
+
+        currentTime = authenticatedAt.addingTimeInterval(VaultSession.maximumWindow)
+        XCTAssertThrowsError(try components.session.currentKey())
+        XCTAssertEqual(components.session.state, .locked)
+    }
+
+    func testExpiredDeadlineIsAuthoritativeWhenTimerDeliveryIsDelayed() async throws {
+        let components = makeComponents(duration: 60)
+        let pending = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pending)
+
+        let start = Date(timeIntervalSince1970: 30_000)
+        var currentTime = start
+        components.session.now = { currentTime }
+        _ = try await components.session.unlock(reason: "Test delayed expiry timer")
+
+        // Do not run the run loop or wait for the Timer. Advancing the injected clock
+        // models a delayed callback; the stored deadline must still reject the key.
+        currentTime = start.addingTimeInterval(60)
+        XCTAssertThrowsError(try components.session.currentKey())
+        XCTAssertEqual(components.session.state, .locked)
+    }
+
+    func testIOSResignActiveKeepsExpansionWindowButBackgroundLocksImmediately() async throws {
+        let lifecycleCenter = NotificationCenter()
+        let components = makeComponents(lifecycleNotificationCenter: lifecycleCenter)
+        let pending = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pending)
+        _ = try await components.session.unlock(reason: "Test iOS lifecycle locking")
+
+        lifecycleCenter.post(
+            name: UIApplication.willResignActiveNotification,
+            object: nil)
+        XCTAssertTrue(components.session.state.isUnlocked)
+        XCTAssertNoThrow(try components.session.currentKey())
+
+        lifecycleCenter.post(
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil)
+        XCTAssertEqual(components.session.state, .locked)
+        XCTAssertThrowsError(try components.session.currentKey())
+    }
+
+    func testBackgroundLockCancelsAuthenticationInFlightWithoutKeyResurrection() async throws {
+        let gate = AuthenticationGate()
+        let evaluatorStarted = expectation(description: "authentication evaluator started")
+        let lifecycleCenter = NotificationCenter()
+        let components = makeComponents(
+            authenticationEvaluator: { _ in
+                evaluatorStarted.fulfill()
+                return await gate.waitForDecision()
+            },
+            lifecycleNotificationCenter: lifecycleCenter)
+        let pending = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pending)
+
+        let unlockTask = Task { @MainActor in
+            try await components.session.unlock(reason: "Test cancelled authentication")
+        }
+        await fulfillment(of: [evaluatorStarted], timeout: 1)
+
+        lifecycleCenter.post(
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil)
+        XCTAssertEqual(components.session.state, .locked)
+
+        gate.finish(with: true)
+        do {
+            _ = try await unlockTask.value
+            XCTFail("a completed prompt must not reopen a session after lifecycle lock")
+        } catch VaultSession.Failure.locked {
+            // Expected: lock invalidated the exact LAContext owned by this attempt.
+        } catch {
+            XCTFail("expected a locked failure, got \(error)")
+        }
+        XCTAssertEqual(components.session.state, .locked)
+        XCTAssertThrowsError(try components.session.currentKey())
     }
 
     func testSecureTextViewBlocksAmbientDisclosureAndRecoveryClipboardIsLocalAndExpiring() {
@@ -638,6 +803,7 @@ final class SecureRemediationTests: XCTestCase {
     private func makeComponents(
         duration: TimeInterval = VaultSession.defaultDuration,
         authenticationEvaluator: @escaping VaultSession.AuthenticationEvaluator = { _ in true },
+        lifecycleNotificationCenter: NotificationCenter = .default,
         syncBaseWriter: @escaping (SyncBase, URL, URL) throws -> Void = {
             try SyncBaseFile.write($0, to: $1, temporaryDirectory: $2)
         },
@@ -653,7 +819,8 @@ final class SecureRemediationTests: XCTestCase {
         let session = VaultSession(
             keychain: keychain,
             duration: duration,
-            authenticationEvaluator: authenticationEvaluator)
+            authenticationEvaluator: authenticationEvaluator,
+            lifecycleNotificationCenter: lifecycleNotificationCenter)
         let store = SnippetStore(configuration: .iOS)
         let secureStore = SecureSnippetStore(
             session: session,
@@ -669,6 +836,18 @@ final class SecureRemediationTests: XCTestCase {
             secureStore: secureStore,
             session: session,
             keychain: keychain)
+    }
+
+    private func unlockedDeadline(
+        _ state: VaultSession.State,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Date {
+        guard case .unlocked(let deadline) = state else {
+            XCTFail("expected an unlocked vault state, got \(state)", file: file, line: line)
+            return .distantPast
+        }
+        return deadline
     }
 
     private func prepareForgetRollbackSnapshot(
@@ -862,6 +1041,24 @@ private final class PreLockProbe {
     var deliveryCount = 0
     var keyWasReadable = false
     var flushSucceeded = false
+    var postLockDeliveryCount = 0
+    var keyWasGoneAtPostLock = false
+    var revealedText = ""
+}
+
+@MainActor
+private final class AuthenticationGate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    func waitForDecision() async -> Bool {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func finish(with result: Bool) {
+        let pending = continuation
+        continuation = nil
+        pending?.resume(returning: result)
+    }
 }
 
 @MainActor

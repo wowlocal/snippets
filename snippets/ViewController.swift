@@ -420,6 +420,20 @@ final class ViewController: NSViewController {
             }
         }
 
+        if let app = NSApp.delegate as? AppDelegate {
+            NotificationCenter.default.addObserver(
+                forName: .snippetsVaultWillLock,
+                object: app.vaultSession,
+                queue: .main
+            ) { [weak self] _ in
+                // VaultSession deliberately posts this synchronously while its key is
+                // still resident. Flush the editor's trailing debounce now; waiting for
+                // the state-change notification below would first destroy the key and
+                // then mask the only remaining copy of the newest text.
+                MainActor.assumeIsolated { self?.flushPendingSecureEdit() }
+            }
+        }
+
         NotificationCenter.default.addObserver(
             forName: .snippetsVaultStateChanged, object: nil, queue: .main
         ) { [weak self] _ in
