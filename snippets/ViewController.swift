@@ -433,8 +433,9 @@ final class ViewController: NSViewController {
 
     func bindState() {
         rebuildEnabledKeywordKeys()
-        store.onChange = { [weak self] source in
+        store.onChange = { [weak self] change in
             guard let self else { return }
+            let source = change.source
             // Ahead of the early return below: a local edit while the editor has
             // focus is precisely when a keyword moves, and the suggestion chips
             // are filtered against this on that same keystroke.

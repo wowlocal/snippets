@@ -98,9 +98,9 @@ final class MainSplitViewController: UISplitViewController {
         setViewController(listNavigationController, for: .primary)
         setViewController(editorNavigationController, for: .secondary)
 
-        environment.store.onChange = { [weak self] source in
+        environment.store.onChange = { [weak self] change in
             guard let self else { return }
-            self.libraryChanged(source: source)
+            self.libraryChanged(change)
         }
 
     }
@@ -413,7 +413,8 @@ final class MainSplitViewController: UISplitViewController {
         )
     }
 
-    private func libraryChanged(source: SnippetStore.ChangeSource) {
+    private func libraryChanged(_ change: SnippetStore.Change) {
+        let source = change.source
         if source == .local, environment.isPerformingLocalEditorChange {
             scheduleEditorListReload()
             return
@@ -424,6 +425,7 @@ final class MainSplitViewController: UISplitViewController {
         listController.reload(keepingSelection: true)
         if let selectedSnippetID,
            environment.store.snippetForDisplay(id: selectedSnippetID) != nil {
+            guard change.affects(selectedSnippetID) else { return }
             editorController.bind(
                 to: selectedSnippetID,
                 preserveFirstResponder: source == .local,
@@ -932,13 +934,13 @@ final class MainSplitViewController: UISplitViewController {
     @objc private func undoCommand() {
         guard keyboardFocusContext == .list else { return }
         guard environment.store.undo() else { return }
-        libraryChanged(source: .local)
+        libraryChanged(.init(source: .local))
     }
 
     @objc private func redoCommand() {
         guard keyboardFocusContext == .list else { return }
         guard environment.store.redo() else { return }
-        libraryChanged(source: .local)
+        libraryChanged(.init(source: .local))
     }
 
     private func configureShortcutPanel() {

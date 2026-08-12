@@ -169,8 +169,8 @@ final class EditorInvalidationTests: XCTestCase {
 
         let environment = makeEnvironment()
         var observed: [(source: SnippetStore.ChangeSource, editorContext: Bool)] = []
-        environment.store.onChange = { source in
-            observed.append((source, environment.isPerformingLocalEditorChange))
+        environment.store.onChange = { change in
+            observed.append((change.source, environment.isPerformingLocalEditorChange))
         }
 
         environment.performLocalEditorChange {
@@ -261,6 +261,95 @@ final class EditorInvalidationTests: XCTestCase {
         )
         XCTAssertEqual(phoneRowName(in: library, table: table), "Remote")
         XCTAssertEqual(editor.title, "Remote")
+    }
+
+    func testKnownRemoteChangeRebindsOnlyAffectedIPadEditor() throws {
+        let environment = makeEnvironment()
+        let selected = environment.store.addSnippet(name: "Selected", content: "Selected body")
+        let other = environment.store.addSnippet(name: "Other", content: "Other body")
+        environment.store.flushPendingWrites()
+        let hosted = try hostSplit(environment: environment, selecting: selected.id)
+        let nameField = try XCTUnwrap(
+            hosted.editor.view.invalidationDescendant(identifier: "snippet-name") as? UITextField
+        )
+        nameField.text = "Uncommitted editor marker"
+
+        var remoteOther = other
+        remoteOther.name = "Other from CloudKit"
+        remoteOther.updatedAt = other.updatedAt.addingTimeInterval(1)
+        try SnippetLibraryCodec.encode([selected, remoteOther])
+            .write(to: SnippetStorageLocations.snippetsFileURL)
+        XCTAssertTrue(environment.store.reloadAfterExternalWrite(notifyChange: false))
+
+        environment.store.coordinatedReloadDidFinish(
+            .remoteSync,
+            changedIDs: [other.id])
+
+        XCTAssertEqual(nameField.text, "Uncommitted editor marker")
+        XCTAssertEqual(hosted.editor.title, "Selected")
+        XCTAssertEqual(environment.store.snippet(id: other.id)?.name, "Other from CloudKit")
+
+        var remoteSelected = selected
+        remoteSelected.name = "Selected from CloudKit"
+        remoteSelected.updatedAt = selected.updatedAt.addingTimeInterval(2)
+        try SnippetLibraryCodec.encode([remoteSelected, remoteOther])
+            .write(to: SnippetStorageLocations.snippetsFileURL)
+        XCTAssertTrue(environment.store.reloadAfterExternalWrite(notifyChange: false))
+
+        environment.store.coordinatedReloadDidFinish(
+            .remoteSync,
+            changedIDs: [selected.id])
+
+        XCTAssertEqual(nameField.text, "Selected from CloudKit")
+        XCTAssertEqual(hosted.editor.title, "Selected from CloudKit")
+    }
+
+    func testKnownRemoteChangeRebindsOnlyAffectedPhoneEditor() throws {
+        let environment = makeEnvironment()
+        let selected = environment.store.addSnippet(name: "Selected", content: "Selected body")
+        let other = environment.store.addSnippet(name: "Other", content: "Other body")
+        environment.store.flushPendingWrites()
+        let root = PhoneRootViewController(environment: environment)
+        _ = host(root, size: CGSize(width: 390, height: 844))
+        let library = try XCTUnwrap(
+            root.viewControllers.first as? PhoneLibraryViewController
+        )
+        root.phoneLibrary(library, requestedEdit: selected.id)
+        let editor = try XCTUnwrap(root.topViewController as? PhoneSnippetEditorViewController)
+        editor.loadViewIfNeeded()
+        drainMainRunLoop(for: 0.05)
+        let nameField = try XCTUnwrap(
+            editor.view.invalidationDescendant(identifier: "snippet-name") as? UITextField
+        )
+        nameField.text = "Uncommitted editor marker"
+
+        var remoteOther = other
+        remoteOther.name = "Other from CloudKit"
+        remoteOther.updatedAt = other.updatedAt.addingTimeInterval(1)
+        try SnippetLibraryCodec.encode([selected, remoteOther])
+            .write(to: SnippetStorageLocations.snippetsFileURL)
+        XCTAssertTrue(environment.store.reloadAfterExternalWrite(notifyChange: false))
+
+        environment.store.coordinatedReloadDidFinish(
+            .remoteSync,
+            changedIDs: [other.id])
+
+        XCTAssertEqual(nameField.text, "Uncommitted editor marker")
+        XCTAssertEqual(editor.title, "Selected")
+
+        var remoteSelected = selected
+        remoteSelected.name = "Selected from CloudKit"
+        remoteSelected.updatedAt = selected.updatedAt.addingTimeInterval(2)
+        try SnippetLibraryCodec.encode([remoteSelected, remoteOther])
+            .write(to: SnippetStorageLocations.snippetsFileURL)
+        XCTAssertTrue(environment.store.reloadAfterExternalWrite(notifyChange: false))
+
+        environment.store.coordinatedReloadDidFinish(
+            .remoteSync,
+            changedIDs: [selected.id])
+
+        XCTAssertEqual(nameField.text, "Selected from CloudKit")
+        XCTAssertEqual(editor.title, "Selected from CloudKit")
     }
 
     private func phoneRowName(

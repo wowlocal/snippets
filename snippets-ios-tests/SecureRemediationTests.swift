@@ -134,7 +134,7 @@ final class SecureRemediationTests: XCTestCase {
         // Match AppEnvironment's production wiring: one secure structural change
         // refreshes the merged library and requests one sync round.
         components.secureStore.onChange = {
-            components.store.onChange?(.local)
+            components.store.onChange?(.init(source: .local))
             syncChangeCount += 1
         }
 

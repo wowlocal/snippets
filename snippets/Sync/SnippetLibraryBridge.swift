@@ -1297,7 +1297,11 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         // because this round applied what it just fetched.
         store.reloadAfterExternalWrite(notifyChange: false)
         secureStore.reload(notifyChange: false)
-        store.coordinatedReloadDidFinish(.remoteSync)
+        // Keep exact affected IDs process-local so UI can preserve a revealed editor
+        // when this batch only changed other snippets.
+        store.coordinatedReloadDidFinish(
+            .remoteSync,
+            changedIDs: Set(outcome.value.changedIDs))
         return ApplyOutcome(
             changedIDs: outcome.value.changedIDs,
             deferredIDs: Set(guarded.deferredIDs)
@@ -1425,7 +1429,9 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         if outcome.wroteLibrary || outcome.wroteVault {
             store.reloadAfterExternalWrite(notifyChange: false)
             secureStore.reload(notifyChange: false)
-            store.coordinatedReloadDidFinish(.remoteSync)
+            store.coordinatedReloadDidFinish(
+                .remoteSync,
+                changedIDs: Set(outcome.value.map(\.id)))
         }
         return ApplyOutcome(changedIDs: outcome.value.map(\.id))
     }
@@ -1661,7 +1667,9 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         if outcome.wroteLibrary || outcome.wroteVault {
             secureStore.reload(notifyChange: false)
             store.reloadAfterExternalWrite(notifyChange: false)
-            store.coordinatedReloadDidFinish(.remoteSync)
+            store.coordinatedReloadDidFinish(
+                .remoteSync,
+                changedIDs: Set(outcome.value.materializedIDs))
         }
         return ApplyOutcome(
             changedIDs: outcome.value.materializedIDs,

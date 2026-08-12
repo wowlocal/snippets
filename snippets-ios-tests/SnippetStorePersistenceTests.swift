@@ -110,8 +110,8 @@ final class SnippetStorePersistenceTests: XCTestCase {
         )
         let store = makeStore(worker: worker)
         var externalNotifications = 0
-        store.onChange = { source in
-            if source == .external { externalNotifications += 1 }
+        store.onChange = { change in
+            if change.source == .external { externalNotifications += 1 }
         }
 
         var edited = try XCTUnwrap(store.snippet(id: original.id))
@@ -156,8 +156,8 @@ final class SnippetStorePersistenceTests: XCTestCase {
         )
         let store = makeStore(worker: worker)
         var didEditFromCallback = false
-        store.onChange = { source in
-            guard source == .external, !didEditFromCallback else { return }
+        store.onChange = { change in
+            guard change.source == .external, !didEditFromCallback else { return }
             didEditFromCallback = true
             var callbackEdit = store.snippet(id: original.id)!
             callbackEdit.name = "Edited from callback"

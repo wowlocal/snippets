@@ -533,7 +533,7 @@ final class SnippetsIOSTests: XCTestCase {
             name: "Ordinary",
             keyword: "ordinary",
             content: ordinarySentinel))
-        phone.refreshFromStore(source: .external)
+        phone.refreshFromStore(change: .init(source: .external))
         tablet.bind(to: snippetID)
 
         for editorView in [phone.view!, tablet.view!] {

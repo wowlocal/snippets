@@ -88,7 +88,8 @@ final class AppEnvironment {
         store.syncDelegate = syncCoordinator
         secureStore.onChange = { [weak self] in
             guard let self else { return }
-            self.store.onChange?(self.localSecureChangeDepth > 0 ? .local : .external)
+            self.store.onChange?(.init(
+                source: self.localSecureChangeDepth > 0 ? .local : .external))
             self.syncCoordinator.libraryStructureChanged()
         }
         secureStore.reconcileInterruptedMove()
@@ -97,7 +98,7 @@ final class AppEnvironment {
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
-        store.onChange?(.external)
+        store.onChange?(.init(source: .external))
         syncCoordinator.startIfEnabled()
     }
 
@@ -111,7 +112,7 @@ final class AppEnvironment {
             || secureStore.isUnreadable != wasUnreadable {
             // A real vault change refreshes the UI and is itself the one foreground sync
             // request. A read-only reload must not manufacture a local-library change.
-            store.onChange?(.external)
+            store.onChange?(.init(source: .external))
             syncCoordinator.libraryStructureChanged()
         } else if SyncCoordinator.isEnabled {
             // No structural callback was emitted, so the lifecycle request is the one

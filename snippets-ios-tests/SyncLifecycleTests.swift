@@ -69,8 +69,8 @@ final class SyncLifecycleTests: XCTestCase {
     func testAppEnvironmentStartIsIdempotentAndPublishesInitialLibraryOnce() {
         let environment = AppEnvironment()
         var initialExternalNotifications = 0
-        environment.store.onChange = { source in
-            if case .external = source { initialExternalNotifications += 1 }
+        environment.store.onChange = { change in
+            if case .external = change.source { initialExternalNotifications += 1 }
         }
 
         environment.start()
@@ -96,7 +96,7 @@ final class SyncLifecycleTests: XCTestCase {
     func testUnchangedForegroundReloadDoesNotPublishALibraryChange() {
         let environment = AppEnvironment()
         var changes: [SnippetStore.ChangeSource] = []
-        environment.store.onChange = { changes.append($0) }
+        environment.store.onChange = { changes.append($0.source) }
 
         environment.becameActive()
 
@@ -107,7 +107,7 @@ final class SyncLifecycleTests: XCTestCase {
     func testChangedForegroundVaultStatePublishesExactlyOneLibraryChange() throws {
         let environment = AppEnvironment()
         var changes: [SnippetStore.ChangeSource] = []
-        environment.store.onChange = { changes.append($0) }
+        environment.store.onChange = { changes.append($0.source) }
         try FileManager.default.createDirectory(
             at: SnippetStorageLocations.vaultFolderURL,
             withIntermediateDirectories: true)
@@ -251,10 +251,17 @@ final class SyncLifecycleTests: XCTestCase {
     func testStoreChangesUseDebounceButRemoteSyncWritesDoNot() {
         SyncCoordinator.runtimeEnabledOverride = true
         let environment = AppEnvironment()
+        let changedID = UUID()
+        var publishedChange: SnippetStore.Change?
+        environment.store.onChange = { publishedChange = $0 }
 
         XCTAssertTrue(environment.store.syncDelegate === environment.syncCoordinator)
-        environment.store.coordinatedReloadDidFinish(.remoteSync)
+        environment.store.coordinatedReloadDidFinish(
+            .remoteSync,
+            changedIDs: [changedID])
         XCTAssertFalse(environment.syncCoordinator.hasPendingLibraryChangeSync)
+        XCTAssertEqual(publishedChange?.source, .remoteSync)
+        XCTAssertEqual(publishedChange?.changedIDs, [changedID])
 
         _ = environment.store.addSnippet(name: "From CLI", content: "one")
         _ = environment.store.addSnippet(name: "From CLI", content: "two")

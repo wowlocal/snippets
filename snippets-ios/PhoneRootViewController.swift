@@ -33,8 +33,8 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
         navigationBar.prefersLargeTitles = true
         toolbar.tintColor = AppTheme.tint
 
-        environment.store.onChange = { [weak self] source in
-            self?.libraryChanged(source: source)
+        environment.store.onChange = { [weak self] change in
+            self?.libraryChanged(change)
         }
     }
 
@@ -58,7 +58,8 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
         )
     }
 
-    private func libraryChanged(source: SnippetStore.ChangeSource) {
+    private func libraryChanged(_ change: SnippetStore.Change) {
+        let source = change.source
         // The phone library is completely covered by the editor and reloads from the
         // store in viewWillAppear. Rebuilding its search/filter sections here made
         // every editor keystroke pay for hidden UITableView work. The editor publishes
@@ -69,7 +70,7 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
 
         libraryController.reload()
         if let editor = topViewController as? PhoneSnippetEditorViewController {
-            editor.refreshFromStore(source: source)
+            editor.refreshFromStore(change: change)
         }
     }
 

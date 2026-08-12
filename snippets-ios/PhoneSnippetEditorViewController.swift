@@ -116,8 +116,10 @@ final class PhoneSnippetEditorViewController: UIViewController {
         _ = environment.store.discardBlankDraft(id: snippetID)
     }
 
-    func refreshFromStore(source: SnippetStore.ChangeSource) {
+    func refreshFromStore(change: SnippetStore.Change) {
         guard isViewLoaded else { return }
+        guard change.affects(snippetID) else { return }
+        let source = change.source
         if source == .local,
            view.phoneFindFirstResponder() != nil || isPublishingEditorChange {
             refreshDerivedUI()

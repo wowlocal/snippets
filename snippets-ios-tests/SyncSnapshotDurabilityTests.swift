@@ -128,8 +128,8 @@ final class SyncSnapshotDurabilityTests: XCTestCase {
         let store = makeStore()
         let bridge = makeBridge(store: store)
         var callbackProjection: Result<[UUID: SyncEnvelope], Error>?
-        store.onChange = { source in
-            guard case .local = source, callbackProjection == nil else { return }
+        store.onChange = { change in
+            guard case .local = change.source, callbackProjection == nil else { return }
             callbackProjection = Result {
                 try bridge.currentEnvelopes(agreedBase: SyncBase())
             }

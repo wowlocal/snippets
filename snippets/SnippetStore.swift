@@ -263,9 +263,27 @@ final class SnippetStore {
         case remoteSync
     }
 
+    /// A process-local description of a published library mutation. `nil` means the
+    /// publisher cannot identify the affected records and consumers must refresh
+    /// conservatively; an empty set means the mutation is known not to affect any
+    /// snippet currently represented by the store.
+    struct Change {
+        let source: ChangeSource
+        let changedIDs: Set<UUID>?
+
+        init(source: ChangeSource, changedIDs: Set<UUID>? = nil) {
+            self.source = source
+            self.changedIDs = changedIDs
+        }
+
+        func affects(_ id: UUID) -> Bool {
+            changedIDs?.contains(id) ?? true
+        }
+    }
+
     private(set) var snippets: [Snippet] = []
 
-    var onChange: ((ChangeSource) -> Void)?
+    var onChange: ((Change) -> Void)?
     weak var syncDelegate: SnippetStoreSyncDelegate?
 
     /// Vends content-free shells for the secure snippets held in `Vault/vault.json`.
@@ -1369,8 +1387,11 @@ final class SnippetStore {
     /// projections with their individual callbacks suppressed. The sync bridge uses
     /// this after applying a CloudKit batch so UI observers refresh once while the sync
     /// delegate can identify and ignore its own write.
-    func coordinatedReloadDidFinish(_ source: ChangeSource) {
-        notifyChanged(source)
+    func coordinatedReloadDidFinish(
+        _ source: ChangeSource,
+        changedIDs: Set<UUID>? = nil
+    ) {
+        notifyChanged(source, changedIDs: changedIDs)
     }
 
     private func rememberDiskBytes(_ data: Data, digest: String? = nil) {
@@ -1379,9 +1400,9 @@ final class SnippetStore {
         diskObservationVersion &+= 1
     }
 
-    private func notifyChanged(_ source: ChangeSource) {
+    private func notifyChanged(_ source: ChangeSource, changedIDs: Set<UUID>? = nil) {
         librarySeq &+= 1
-        onChange?(source)
+        onChange?(Change(source: source, changedIDs: changedIDs))
         syncDelegate?.libraryDidChange(source)
     }
 

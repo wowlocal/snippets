@@ -195,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             guard let self else { return }
             // A vault change alters the merged display list, so the same channel a
             // library change uses has to fire, or the list silently goes stale.
-            self.store.onChange?(.external)
+            self.store.onChange?(.init(source: .external))
             // Sync does not need the vault to run, but creating or adopting one changes
             // what there is to sync. Without this, records that appeared in the vault a
             // moment ago would wait for a later scheduler wake.
@@ -212,7 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // is intentionally silent when there is no interrupted move, so publish the
         // completed attachment explicitly; otherwise existing secure shells remain
         // invisible until some unrelated library change forces another reload.
-        store.onChange?(.external)
+        store.onChange?(.init(source: .external))
         controlServer.start()
 
         // Opt-in. Returns immediately without touching CloudKit, without writing `Sync/`,
