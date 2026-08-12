@@ -24,7 +24,7 @@ xcrun swiftc scripts/verify-secure-capture-shipping-renderer.swift \
 Then use a disposable secure snippet whose body contains only obvious test text. Verify:
 
 1. Unlock/reveal it with the cursor initially outside the content viewport. The body must stay
-   redacted and the centered eye plus “Hover to reveal secure snippet” affordance must be visible.
+   redacted and the centered eye plus “Hover to reveal and edit secure snippet” affordance must be visible.
    Move the real pointer into the visible `SnippetContentTextView` viewport; only then may
    protected glyphs appear, and the affordance must disappear immediately. Move it out (including
    during a selection drag): redaction and the affordance must return immediately. Repeat with the
@@ -32,11 +32,13 @@ Then use a disposable secure snippet whose body contains only obvious test text.
    another app/window active. Inactivity, minimization, teardown, rebind, and renderer failure must
    never leave glyph pixels or a stale affordance visible. A fabricated enter event by itself must
    not reveal content.
-2. While genuinely hovered, type, select across wrapped lines, move the caret to the start/end
-   and after a trailing newline, scroll, resize, move between Retina/non-Retina displays, and
-   change Light/Dark appearance. The protected image must follow each state without showing a
-   plain AppKit text frame. Keyboard editing/navigation may continue while the pointer is out
-   and pixels are redacted; moving the pointer back in must show the updated protected frame.
+2. Give the editor keyboard focus, move the pointer outside until the affordance returns, and
+   try typing, deletion, paste, drag/drop, Undo, Redo, and an input method. The body must not
+   change and rejected Undo/Redo must remain available. Move the real pointer back inside; the
+   same editing actions must work only while the protected plaintext is visible. Selection and
+   navigation may remain available while redacted, but no content or character-attribute change
+   may occur. Also test wrapped lines, a trailing newline, scroll/resize, Retina/non-Retina
+   displays, and Light/Dark appearance without exposing a plain AppKit text frame.
 3. While genuinely hovered, capture the window and display with Screenshot.app, `screencapture`,
    QuickTime, and an app using ScreenCaptureKit. Record the result for each OS/tool in a
    verification matrix. Secure glyphs must not be present or readable; the protected area

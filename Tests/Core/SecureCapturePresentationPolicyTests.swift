@@ -235,3 +235,87 @@ struct SecureHoverRevealPolicyTests {
         #expect(!policy.shouldRevealPlaintextPixels)
     }
 }
+
+@Suite("Secure hover editing policy")
+struct SecureHoverEditingPolicyTests {
+    @Test func ordinaryEditingFollowsEditableFlag() {
+        #expect(SecureHoverEditingPolicy.permitsMutation(
+            capturePhase: .ordinary,
+            hoverPresentationIsArmed: false,
+            hoverPolicyPermitsReveal: false,
+            isSecureContentMode: false,
+            isEditable: true
+        ))
+        #expect(!SecureHoverEditingPolicy.permitsMutation(
+            capturePhase: .ordinary,
+            hoverPresentationIsArmed: false,
+            hoverPolicyPermitsReveal: false,
+            isSecureContentMode: false,
+            isEditable: false
+        ))
+    }
+
+    @Test func secureMutationRequiresTheVerifiedProtectedPlaintextPhase() {
+        func permits(
+            _ phase: SecureCapturePresentationPolicy.Phase,
+            armed: Bool = true,
+            hoverPermitsReveal: Bool = true,
+            editable: Bool = true
+        ) -> Bool {
+            SecureHoverEditingPolicy.permitsMutation(
+                capturePhase: phase,
+                hoverPresentationIsArmed: armed,
+                hoverPolicyPermitsReveal: hoverPermitsReveal,
+                isSecureContentMode: true,
+                isEditable: editable
+            )
+        }
+
+        #expect(permits(.protectedPlaintext))
+        #expect(!permits(.protectedRedaction))
+        #expect(!permits(.ordinary))
+        #expect(!permits(.failedClosed))
+        #expect(!permits(.protectedPlaintext, armed: false))
+        #expect(!permits(.protectedPlaintext, hoverPermitsReveal: false))
+        #expect(!permits(.protectedPlaintext, editable: false))
+    }
+
+    @Test func verifiedRevealPoliciesAgreeOnEditPermission() {
+        var hover = SecureHoverRevealPolicy()
+        var capture = SecureCapturePresentationPolicy()
+        hover.presentationDidArm()
+        capture.arm()
+
+        #expect(!SecureHoverEditingPolicy.permitsMutation(
+            capturePhase: capture.phase,
+            hoverPresentationIsArmed: hover.presentationIsArmed,
+            hoverPolicyPermitsReveal: hover.shouldRevealPlaintextPixels,
+            isSecureContentMode: true,
+            isEditable: true
+        ))
+
+        hover.updateVerifiedEnvironment(
+            cursorInsideViewport: true,
+            applicationIsActive: true,
+            windowIsKey: true
+        )
+        capture.setPlaintextPixelsVisible(hover.shouldRevealPlaintextPixels)
+        #expect(SecureHoverEditingPolicy.permitsMutation(
+            capturePhase: capture.phase,
+            hoverPresentationIsArmed: hover.presentationIsArmed,
+            hoverPolicyPermitsReveal: hover.shouldRevealPlaintextPixels,
+            isSecureContentMode: true,
+            isEditable: true
+        ))
+
+        hover.forceRedaction()
+        capture.setPlaintextPixelsVisible(hover.shouldRevealPlaintextPixels)
+        #expect(!SecureHoverEditingPolicy.permitsMutation(
+            capturePhase: capture.phase,
+            hoverPresentationIsArmed: hover.presentationIsArmed,
+            hoverPolicyPermitsReveal: hover.shouldRevealPlaintextPixels,
+            isSecureContentMode: true,
+            isEditable: true
+        ))
+    }
+}

@@ -985,8 +985,8 @@ extension ViewController {
         secureCaptionLabel.stringValue =
             "Encrypted on this Mac. Won\u{2019}t expand when you type its keyword \u{2014} type \\, "
             + "pick it from the list, and confirm with Touch ID. Never in exports, share links, or "
-            + "snippets.json. Move the pointer over the editor to show its protected pixels; moving "
-            + "it away hides only those pixels \u{2014} it doesn\u{2019}t lock the vault or decrypt on hover. "
+            + "snippets.json. Move the pointer over the editor to reveal and edit its protected text; moving "
+            + "it away hides those pixels and pauses body editing \u{2014} it doesn\u{2019}t lock the vault or decrypt on hover. "
             + "Its name, keyword and tags stay readable so Snippets can find it while locked."
         secureCaptionLabel.isHidden = !secureDemoteStrip.isHidden
 

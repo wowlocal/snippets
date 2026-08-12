@@ -258,6 +258,22 @@ final class SnippetContentTextView: NSTextView {
             && secureCapturePolicy.rendersPlaintextPixels
     }
 
+    /// Refreshes the independently verified cursor/window snapshot at the exact
+    /// mutation boundary, then permits a secure edit only while the protected
+    /// renderer is showing plaintext. This closes the interval between pointer
+    /// exit and the tracking/timer callbacks; synthetic events are not trusted.
+    private func secureHoverPermitsMutationNow() -> Bool {
+        guard isSecureContentMode else { return isEditable }
+        guard refreshSecureHoverRevealFromCurrentCursor() else { return false }
+        return SecureHoverEditingPolicy.permitsMutation(
+            capturePhase: secureCapturePolicy.phase,
+            hoverPresentationIsArmed: secureHoverRevealPolicy.presentationIsArmed,
+            hoverPolicyPermitsReveal: secureHoverRevealPolicy.shouldRevealPlaintextPixels,
+            isSecureContentMode: true,
+            isEditable: isEditable
+        )
+    }
+
     private func beginSecureHoverTracking() {
         secureHoverRevealPolicy.presentationDidArm()
         installSecureHoverObservers()
@@ -489,9 +505,11 @@ final class SnippetContentTextView: NSTextView {
         didSet { needsDisplay = true }
     }
 
-    /// Assigning `string` replaces the text without going through
-    /// `didChangeText()`, and `applySnippetToEditor` is exactly that path, so
-    /// the prompt would otherwise survive selecting a snippet that has content.
+    /// Assigning `string` is the controller-only bind/clear path and intentionally
+    /// bypasses the user-mutation hover gate. User actions must enter through the
+    /// NSTextView methods guarded below. Assignment also skips `didChangeText()`,
+    /// and `applySnippetToEditor` is exactly that path, so the prompt would otherwise
+    /// survive selecting a snippet that has content.
     override var string: String {
         get { super.string }
         set {
@@ -525,6 +543,66 @@ final class SnippetContentTextView: NSTextView {
 
     // MARK: - Secure plaintext containment
 
+    /// NSTextView funnels typing, IME commits, key-binding deletes, paste,
+    /// drag/drop, Services replacements, and its undo/redo replacements through
+    /// these validation methods. Gate both variants because AppKit can choose
+    /// either one for single- versus multi-range operations.
+    override func shouldChangeText(
+        inRanges affectedRanges: [NSValue],
+        replacementStrings: [String]?
+    ) -> Bool {
+        guard secureHoverPermitsMutationNow() else { return false }
+        return super.shouldChangeText(
+            inRanges: affectedRanges,
+            replacementStrings: replacementStrings
+        )
+    }
+
+    override func shouldChangeText(
+        in affectedCharRange: NSRange,
+        replacementString: String?
+    ) -> Bool {
+        guard secureHoverPermitsMutationNow() else { return false }
+        return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    }
+
+    /// Explicit ingress guards are defense in depth for direct callers and input
+    /// methods. The central shouldChangeText gate remains authoritative for the
+    /// actual storage replacement.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard secureHoverPermitsMutationNow() else { return }
+        super.insertText(string, replacementRange: replacementRange)
+
+        let inserted = (string as? String) ?? (string as? NSAttributedString)?.string
+        // Completion is an ambient text service on AppKit. Ordinary snippets
+        // keep the local token convenience; secure snippets keep the literal
+        // brace and never enter the completion subsystem at all.
+        guard inserted == "{", isEditable, !isSecureContentMode else { return }
+
+        // Not synchronously: AppKit is still inside its own insertion here, and
+        // the completion machinery reads the text storage this just wrote to.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, isEditable else { return }
+            complete(nil)
+        }
+    }
+
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        guard secureHoverPermitsMutationNow() else {
+            inputContext?.discardMarkedText()
+            return
+        }
+        super.setMarkedText(
+            string,
+            selectedRange: selectedRange,
+            replacementRange: replacementRange
+        )
+    }
+
     /// AppKit reaches the pasteboard through several different public entry
     /// points (Edit menu, Services, dragging, and callers invoking these methods
     /// directly). Every one is guarded; hiding Copy in a menu is not a boundary.
@@ -536,6 +614,26 @@ final class SnippetContentTextView: NSTextView {
     override func cut(_ sender: Any?) {
         guard !isSecureContentMode else { return }
         super.cut(sender)
+    }
+
+    override func delete(_ sender: Any?) {
+        guard secureHoverPermitsMutationNow() else { return }
+        super.delete(sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard secureHoverPermitsMutationNow() else { return }
+        super.paste(sender)
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        guard secureHoverPermitsMutationNow() else { return }
+        super.pasteAsPlainText(sender)
+    }
+
+    override func pasteAsRichText(_ sender: Any?) {
+        guard secureHoverPermitsMutationNow() else { return }
+        super.pasteAsRichText(sender)
     }
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
@@ -557,6 +655,24 @@ final class SnippetContentTextView: NSTextView {
     ) -> Bool {
         guard !isSecureContentMode else { return false }
         return super.writeSelection(to: pboard, types: types)
+    }
+
+    override func readSelection(
+        from pboard: NSPasteboard,
+        type: NSPasteboard.PasteboardType
+    ) -> Bool {
+        guard secureHoverPermitsMutationNow() else { return false }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        guard secureHoverPermitsMutationNow() else { return false }
+        return super.readSelection(from: pboard)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard secureHoverPermitsMutationNow() else { return false }
+        return super.performDragOperation(sender)
     }
 
     override func validRequestor(
@@ -729,6 +845,11 @@ final class SnippetContentTextView: NSTextView {
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         guard let action = item.action else { return super.validateUserInterfaceItem(item) }
+        if isSecureContentMode,
+           Self.secureMutationActionNames.contains(NSStringFromSelector(action)),
+           !secureHoverPermitsMutationNow() {
+            return false
+        }
         guard SnippetContentExposurePolicy.permitsResponderAction(
             named: NSStringFromSelector(action),
             whileSecure: isSecureContentMode
@@ -755,6 +876,32 @@ final class SnippetContentTextView: NSTextView {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = nil
         menu.addItem(item)
+    }
+
+    private static let secureMutationActionNames: Set<String> = [
+        "undo:", "redo:",
+        "paste:", "pasteAsPlainText:", "pasteAsRichText:",
+        "delete:", "deleteBackward:", "deleteForward:",
+        "deleteWordBackward:", "deleteWordForward:",
+        "deleteToBeginningOfLine:", "deleteToEndOfLine:",
+        "deleteToBeginningOfParagraph:", "deleteToEndOfParagraph:",
+        "transpose:", "transposeWords:", "yank:",
+        "insertNewline:", "insertNewlineIgnoringFieldEditor:",
+        "insertTabIgnoringFieldEditor:",
+    ]
+
+    /// The responder chain normally resolves these actions to the text view's
+    /// undo manager. Owning the actions here lets a redacted editor reject them
+    /// before the manager consumes an entry; the replacement itself still goes
+    /// through shouldChangeText as a second check.
+    @objc func undo(_ sender: Any?) {
+        guard secureHoverPermitsMutationNow() else { return }
+        undoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard secureHoverPermitsMutationNow() else { return }
+        undoManager?.redo()
     }
 
     private func applyContentExposureMode() {
@@ -924,26 +1071,6 @@ final class SnippetContentTextView: NSTextView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         invalidateSecureCaptureRenderer()
-    }
-
-    /// Typing `{` offers the placeholder tokens, which is what replaced the
-    /// permanent list of them that used to sit under this box. An action at the
-    /// point of need rather than a line to read and transcribe.
-    override func insertText(_ string: Any, replacementRange: NSRange) {
-        super.insertText(string, replacementRange: replacementRange)
-
-        let inserted = (string as? String) ?? (string as? NSAttributedString)?.string
-        // Completion is an ambient text service on AppKit. Ordinary snippets
-        // keep the local token convenience; secure snippets keep the literal
-        // brace and never enter the completion subsystem at all.
-        guard inserted == "{", isEditable, !isSecureContentMode else { return }
-
-        // Not synchronously: AppKit is still inside its own insertion here, and
-        // the completion machinery reads the text storage this just wrote to.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, isEditable else { return }
-            complete(nil)
-        }
     }
 
     /// The word being completed starts at the `{` the user typed, not wherever

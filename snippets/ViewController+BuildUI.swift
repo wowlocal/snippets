@@ -850,7 +850,7 @@ extension ViewController {
         secureHoverHintLabel.font = .systemFont(ofSize: 13, weight: .medium)
         secureHoverHintLabel.textColor = .secondaryLabelColor
         secureHoverHintLabel.alignment = .center
-        secureHoverHintLabel.setAccessibilityLabel("Hover to reveal secure snippet")
+        secureHoverHintLabel.setAccessibilityLabel("Hover to reveal and edit secure snippet")
 
         let secureHoverHintStack = NSStackView(
             views: [secureHoverHintIcon, secureHoverHintLabel]

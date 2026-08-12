@@ -152,7 +152,7 @@ final class ViewController: NSViewController {
     /// the instruction instead of an editor that appears broken.
     let secureHoverHintOverlay = SecureHoverHintOverlayView()
     let secureHoverHintIcon = NSImageView()
-    let secureHoverHintLabel = NSTextField(labelWithString: "Hover to reveal secure snippet")
+    let secureHoverHintLabel = NSTextField(labelWithString: "Hover to reveal and edit secure snippet")
     /// Opaque fail-closed cover. It is normally hidden; if the protected video
     /// renderer cannot create or present a frame it covers the editor while the
     /// underlying NSTextView remains in its drawing-suppressed secure phase.

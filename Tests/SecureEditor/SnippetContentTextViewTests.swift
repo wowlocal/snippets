@@ -4,6 +4,13 @@ import Testing
 
 @testable import SnippetsSecureEditor
 
+@MainActor
+private final class SecureEditorUndoDelegate: NSObject, NSTextViewDelegate {
+    let manager = UndoManager()
+
+    func undoManager(for view: NSTextView) -> UndoManager? { manager }
+}
+
 @Suite("Secure AppKit content editor")
 @MainActor
 struct SnippetContentTextViewTests {
@@ -264,7 +271,7 @@ struct SnippetContentTextViewTests {
         #expect(view.usesRolloverButtonForSelection == ordinaryRollover)
     }
 
-    @Test func secureModeKeepsLiteralEditingAndNavigationButNoCompletion() {
+    @Test func secureModeKeepsNavigationButRejectsUnprotectedLiteralEditingAndCompletion() {
         let view = editor("abc")
         view.setSelectedRange(NSRange(location: 2, length: 0))
         view.isSecureContentMode = true
@@ -274,13 +281,118 @@ struct SnippetContentTextViewTests {
 
         view.setSelectedRange(NSRange(location: 3, length: 0))
         view.insertText("{", replacementRange: NSRange(location: NSNotFound, length: 0))
-        #expect(view.string == "abc{")
+        #expect(view.string == "abc")
         #expect(view.rangeForUserCompletion.location == NSNotFound)
         var selectedCompletion = 0
         #expect(view.completions(
-            forPartialWordRange: NSRange(location: 3, length: 1),
+            forPartialWordRange: NSRange(location: 2, length: 1),
             indexOfSelectedItem: &selectedCompletion)?.isEmpty == true)
         #expect(selectedCompletion == -1)
+    }
+
+    @Test func hoverRedactionRejectsKeyboardIMEPasteDeleteAndValidatedReplacement() throws {
+        _ = NSApplication.shared
+        let sentinel = "hover-edit-gate-sentinel"
+        let view = editor(sentinel)
+        view.isSecureContentMode = true
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        scrollView.documentView = view
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scrollView
+        try #require(view.setSecurePresentationEnabled(true))
+        #expect(view.secureCapturePolicy.phase == .protectedRedaction)
+        #expect(!view.secureHoverRevealsPixelsForInspection)
+
+        let wholeRange = NSRange(location: 0, length: (sentinel as NSString).length)
+        #expect(!view.shouldChangeText(in: wholeRange, replacementString: "replace"))
+        #expect(!view.shouldChangeText(
+            inRanges: [NSValue(range: wholeRange)],
+            replacementStrings: ["replace"]
+        ))
+        #expect(!view.performValidatedReplacement(
+            in: wholeRange,
+            with: NSAttributedString(string: "replace")
+        ))
+        #expect(view.string == sentinel)
+
+        view.setSelectedRange(NSRange(location: (sentinel as NSString).length, length: 0))
+        view.insertText("typed", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.string == sentinel)
+
+        view.setMarkedText(
+            "ime",
+            selectedRange: NSRange(location: 3, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        #expect(view.string == sentinel)
+
+        view.setSelectedRange(wholeRange)
+        view.delete(nil)
+        #expect(view.string == sentinel)
+        view.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
+        #expect(view.string == sentinel)
+
+        let board = NSPasteboard(name: NSPasteboard.Name("secure-edit-gate-\(UUID().uuidString)"))
+        board.clearContents()
+        try #require(board.setString("pasted", forType: .string))
+        #expect(!view.readSelection(from: board, type: .string))
+        #expect(!view.readSelection(from: board))
+        #expect(view.string == sentinel)
+
+        let syntheticEntry = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered,
+            location: NSPoint(x: 20, y: 20),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 100,
+            trackingNumber: 100,
+            userData: nil
+        ))
+        view.mouseEntered(with: syntheticEntry)
+        view.insertText("forged", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.secureCapturePolicy.phase == .protectedRedaction)
+        #expect(view.string == sentinel)
+    }
+
+    @Test func hoverRedactionRejectsUndoWithoutConsumingTheAvailableEdit() throws {
+        _ = NSApplication.shared
+        let view = editor("before")
+        let undoDelegate = SecureEditorUndoDelegate()
+        undoDelegate.manager.groupsByEvent = false
+        view.delegate = undoDelegate
+        view.allowsUndo = true
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        undoDelegate.manager.beginUndoGrouping()
+        view.insertText("-edit", replacementRange: NSRange(location: NSNotFound, length: 0))
+        undoDelegate.manager.endUndoGrouping()
+        #expect(view.string == "before-edit")
+        try #require(undoDelegate.manager.canUndo)
+
+        view.isSecureContentMode = true
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        scrollView.documentView = view
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scrollView
+        try #require(view.setSecurePresentationEnabled(true))
+        #expect(view.secureCapturePolicy.phase == .protectedRedaction)
+
+        view.undo(nil)
+
+        #expect(view.string == "before-edit")
+        #expect(undoDelegate.manager.canUndo, "a rejected hidden undo must remain available for hover")
+        #expect(!undoDelegate.manager.canRedo)
     }
 
     @Test func ordinaryModeStillWritesItsSelection() throws {
@@ -436,7 +548,7 @@ struct SnippetContentTextViewTests {
         let overlay = SecureHoverHintOverlayView(
             frame: NSRect(x: 0, y: 0, width: 400, height: 200)
         )
-        let child = NSTextField(labelWithString: "Hover to reveal secure snippet")
+        let child = NSTextField(labelWithString: "Hover to reveal and edit secure snippet")
         child.frame = NSRect(x: 80, y: 80, width: 240, height: 20)
         overlay.addSubview(child)
         #expect(overlay.hitTest(NSPoint(x: 200, y: 100)) == nil)

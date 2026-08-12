@@ -117,6 +117,26 @@ nonisolated struct SecureHoverRevealPolicy: Equatable {
     }
 }
 
+/// Closed edit decision for an unlocked secure body. Keeping mutation permission
+/// tied to the same protected-pixel phase makes the rule independently testable:
+/// merely being editable, focused, or armed is never enough while the body is
+/// redacted.
+nonisolated enum SecureHoverEditingPolicy {
+    static func permitsMutation(
+        capturePhase: SecureCapturePresentationPolicy.Phase,
+        hoverPresentationIsArmed: Bool,
+        hoverPolicyPermitsReveal: Bool,
+        isSecureContentMode: Bool,
+        isEditable: Bool
+    ) -> Bool {
+        guard isSecureContentMode else { return isEditable }
+        return isEditable
+            && hoverPresentationIsArmed
+            && hoverPolicyPermitsReveal
+            && capturePhase == .protectedPlaintext
+    }
+}
+
 nonisolated struct SecureCaptureFrameGeometry {
     static let maximumPixelDimension = 16_384
     static let maximumPixelCount = 16_777_216
