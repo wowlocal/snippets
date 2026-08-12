@@ -484,6 +484,19 @@ final class SecureSnippetTextView: UITextView {
         invalidateSecureCaptureRenderer()
     }
 
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard isSecureContentMode else { return super.hitTest(point, with: event) }
+        // The native layer is intentionally fully transparent so plaintext cannot
+        // enter the ordinary UIKit compositor. UIView's default hit-test rejects a
+        // zero-opacity view, which would also make the protected editor impossible
+        // to focus. Keep touch delivery on this UITextView while all rendering stays
+        // in SecureSnippetCaptureRenderer; mutation remains separately policy-gated.
+        guard isUserInteractionEnabled,
+              !isHidden,
+              self.point(inside: point, with: event) else { return nil }
+        return self
+    }
+
     override func draw(_ rect: CGRect) {
         guard !isSecureContentMode,
               !secureCapturePhase.suppressesUIKitDrawing else { return }

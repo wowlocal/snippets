@@ -149,6 +149,20 @@ final class SecureSnippetRevealTests: XCTestCase {
         XCTAssertEqual(textView.text, "body!?")
     }
 
+    func testTransparentSecureEditorRemainsTouchHitTestable() {
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        let textView = makeTextView()
+        host.addSubview(textView)
+        textView.setSceneCaptureStateForTesting(.inactive)
+        textView.setSecureForegroundActiveForTesting(true)
+        XCTAssertTrue(textView.bindSecureRedacted())
+        XCTAssertTrue(textView.nativePlaintextLayerSuppressedForInspection)
+
+        XCTAssertTrue(
+            host.hitTest(CGPoint(x: 100, y: 80), with: nil) === textView,
+            "protected AV rendering must not remove the UITextView from touch hit-testing")
+    }
+
     func testOrdinaryTextMutationRemainsUnaffected() {
         let textView = makeTextView()
         textView.bindOrdinaryText("body")
