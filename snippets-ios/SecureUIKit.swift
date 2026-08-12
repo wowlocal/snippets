@@ -19,6 +19,12 @@ enum SecureSnippetForcedRedactionReason: Equatable {
     case rendererFailure
 }
 
+enum SecureSnippetPlaintextPreparation: Equatable {
+    case ready
+    case recoveredRenderer
+    case rejected
+}
+
 /// A text view that removes UIKit's ambient disclosure routes while a secure snippet
 /// is revealed. Copying a secure snippet remains an explicit app action backed by
 /// `SnippetActionService`, which authenticates and uses an expiring local pasteboard.
@@ -621,6 +627,28 @@ final class SecureSnippetTextView: UITextView {
             && secureCaptureRenderer.captureProtectionEnabledForInspection
             && secureCaptureRenderer.displayLayerIsAttachedForInspection
             && secureCaptureRenderer.canBeginPlaintextPresentation
+    }
+
+    /// A suspended AVSampleBufferDisplayLayer can become failed without delivering
+    /// its failure notification before the app returns to the foreground. Recover
+    /// that layer while the opaque redaction fallback is still the only visible
+    /// surface, before plaintext is assigned to UITextView storage.
+    func prepareSecurePlaintextPresentation() -> SecureSnippetPlaintextPreparation {
+        guard secureCapturePhase == .protectedRedaction,
+              securePlaintextAcceptanceIsAuthorized,
+              currentSceneCaptureState == .inactive,
+              foregroundPresentationIsAllowed,
+              secureCaptureRenderer.captureProtectionEnabledForInspection,
+              secureCaptureRenderer.displayLayerIsAttachedForInspection
+        else { return .rejected }
+
+        if secureCaptureRenderer.needsRecoveryForPlaintextPresentation {
+            guard secureCaptureRenderer.recoverAfterFailure(), canAcceptSecurePlaintext else {
+                return .rejected
+            }
+            return .recoveredRenderer
+        }
+        return canAcceptSecurePlaintext ? .ready : .rejected
     }
 
     var permitsSecureTextMutation: Bool {

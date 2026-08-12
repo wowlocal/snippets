@@ -412,6 +412,9 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "secure_reveal": ExportEventSchema(
             category: "vault",
             required: ["keyword", "keyword_truncated", "outcome", "caller"]),
+        "secure_editor_transition": ExportEventSchema(
+            category: "vault",
+            required: ["surface", "from_state", "to_state", "reason", "vault_state"]),
         "suggestion_anchor": ExportEventSchema(
             category: "performance", required: ["source", "reason", "duration_ms"]),
         "metrickit_diagnostic": ExportEventSchema(
@@ -435,7 +438,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "app_version", "app_build", "bundle_id", "platform", "os", "architecture",
         "cloud_environment", "state", "area", "operation", "error_family", "trigger",
         "halt_reason", "action", "keyword", "outcome", "caller", "source", "reason",
-        "kind", "exported_at", "oldest_entry_at", "newest_entry_at",
+        "kind", "surface", "from_state", "to_state", "vault_state", "exported_at",
+        "oldest_entry_at", "newest_entry_at",
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",

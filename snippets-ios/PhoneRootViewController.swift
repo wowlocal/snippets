@@ -69,7 +69,7 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
 
         libraryController.reload()
         if let editor = topViewController as? PhoneSnippetEditorViewController {
-            editor.refreshFromStore(preserveFirstResponder: source == .local)
+            editor.refreshFromStore(source: source)
         }
     }
 

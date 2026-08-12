@@ -22,6 +22,14 @@ ciphertext, keys, arbitrary error descriptions, or `NSError.userInfo`. Errors ar
 to a known family and numeric code. Secure-snippet keywords are explicitly approved
 metadata; they are normalized and bounded to 256 UTF-8 bytes.
 
+The `secure_editor_transition` event explains iPhone and iPad reveal behavior without
+identifying a snippet. It records only the editor surface, the closed reveal-policy states
+before and after the transition, a closed cause such as `store_refresh_remote_sync`,
+`app_will_resign_active`, `scene_capture_changed`, or `renderer_failed`, and whether the
+vault session was `no_key`, `locked`, or `unlocked`. No-op policy updates are omitted so
+protected renderer refreshes caused by typing, selection, scrolling, or layout do not
+become a high-frequency log.
+
 Use **Settings → Diagnostics → Export Logs** for a single portable JSONL file.
 The UI states that the export is plaintext before presenting the save or Files picker.
 It can also delete retained logs and a legacy reveal-audit file that could not be

@@ -152,6 +152,9 @@ final class SecureSnippetCaptureRenderer {
         displayLayer.removeFromSuperlayer()
 
         displayLayer = Self.makeDisplayLayer()
+        // The testing override models the status of the layer being replaced, so it
+        // must not leak into the fresh layer. Production reads the new layer's status.
+        rendererFailedOverrideForTesting = nil
         surfaceView.layer.addSublayer(displayLayer)
         installDisplayLayerObservers()
         return arm()
@@ -280,6 +283,7 @@ final class SecureSnippetCaptureRenderer {
     var canBeginPlaintextPresentation: Bool {
         isReadyForHiddenPlaintextPresentation
     }
+    var needsRecoveryForPlaintextPresentation: Bool { rendererHasFailed }
 
     func setFlushCompletionOverrideForTesting(
         _ override: (((@escaping () -> Void)) -> Void)?

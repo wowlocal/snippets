@@ -38,6 +38,19 @@ final class SnippetEditorViewController: UIViewController {
     private var secureContentIsRevealed: Bool { secureRevealPolicy.isProtectedPlaintext }
     private var isPreparingSecureContentForModalPresentation = false
 
+    @discardableResult
+    private func mutateSecureRevealPolicy<Result>(
+        reason: DiagnosticSecureEditorReason,
+        _ update: (inout SecureSnippetRevealPolicy) -> Result
+    ) -> Result {
+        updateSecureRevealPolicy(
+            &secureRevealPolicy,
+            surface: .tablet,
+            reason: reason,
+            vaultState: environment.vaultSession.state.diagnosticState,
+            update)
+    }
+
     init(environment: AppEnvironment) {
         self.environment = environment
         super.init(nibName: nil, bundle: nil)
@@ -59,21 +72,26 @@ final class SnippetEditorViewController: UIViewController {
         configureForm()
         configureActions()
         configureNotifications()
-        bind(to: nil)
+        bind(to: nil, diagnosticReason: .editorBound)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
-        handleSecureRevealTransition(secureRevealPolicy.lock())
+        handleSecureRevealTransition(
+            mutateSecureRevealPolicy(reason: .viewDisappeared) { $0.lock() })
         flushPendingSecureContent()
         commitPlainEditTransaction()
     }
 
     override var canBecomeFirstResponder: Bool { true }
 
-    func bind(to id: UUID?, preserveFirstResponder: Bool = false) {
+    func bind(
+        to id: UUID?,
+        preserveFirstResponder: Bool = false,
+        diagnosticReason: DiagnosticSecureEditorReason = .selectionChanged
+    ) {
         guard isViewLoaded else {
             selectedID = id
             return
@@ -84,7 +102,8 @@ final class SnippetEditorViewController: UIViewController {
             return
         }
 
-        handleSecureRevealTransition(secureRevealPolicy.cancelReveal())
+        handleSecureRevealTransition(
+            mutateSecureRevealPolicy(reason: diagnosticReason) { $0.cancelReveal() })
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
         flushPendingSecureContent()
@@ -92,7 +111,7 @@ final class SnippetEditorViewController: UIViewController {
         selectedID = id
 
         guard let id, let snippet = environment.store.snippetForDisplay(id: id) else {
-            showEmptyEditor()
+            showEmptyEditor(reason: id == nil ? diagnosticReason : .snippetUnavailable)
             return
         }
 
@@ -106,14 +125,16 @@ final class SnippetEditorViewController: UIViewController {
         secureSwitch.isOn = isSecure
         if isSecure {
             let rendererIsHealthy = bodyTextView.bindSecureRedacted()
-            secureRevealPolicy.bindSecure(
-                rendererIsHealthy: rendererIsHealthy,
-                appAndSceneAreActive: secureRevealEnvironmentIsActive,
-                sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
+            mutateSecureRevealPolicy(reason: diagnosticReason) {
+                $0.bindSecure(
+                    rendererIsHealthy: rendererIsHealthy,
+                    appAndSceneAreActive: secureRevealEnvironmentIsActive,
+                    sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
+            }
             secureBodyAccessibilityNotice.state = .locked
         } else {
             bodyTextView.bindOrdinaryText(snippet.content)
-            secureRevealPolicy.bindOrdinary()
+            mutateSecureRevealPolicy(reason: diagnosticReason) { $0.bindOrdinary() }
             secureBodyAccessibilityNotice.state = .hidden
         }
         isBinding = false
@@ -167,7 +188,8 @@ final class SnippetEditorViewController: UIViewController {
         guard isViewLoaded else { return }
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
-        handleSecureRevealTransition(secureRevealPolicy.lock())
+        handleSecureRevealTransition(
+            mutateSecureRevealPolicy(reason: .modalPresentation) { $0.lock() })
         view.endEditing(true)
         flushPendingSecureContent()
         commitPlainEditTransaction()
@@ -177,7 +199,8 @@ final class SnippetEditorViewController: UIViewController {
         guard isViewLoaded else { return }
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
-        handleSecureRevealTransition(secureRevealPolicy.lock())
+        handleSecureRevealTransition(
+            mutateSecureRevealPolicy(reason: .selectionChanged) { $0.lock() })
         view.endEditing(true)
         flushPendingSecureContent()
         commitPlainEditTransaction()
@@ -527,9 +550,9 @@ final class SnippetEditorViewController: UIViewController {
         return stack
     }
 
-    private func showEmptyEditor() {
+    private func showEmptyEditor(reason: DiagnosticSecureEditorReason) {
         bodyTextView.bindOrdinaryText("")
-        secureRevealPolicy.bindOrdinary()
+        mutateSecureRevealPolicy(reason: reason) { $0.bindOrdinary() }
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
         bodyTextView.accessibilityLabel = "Snippet content"
@@ -598,15 +621,17 @@ final class SnippetEditorViewController: UIViewController {
             : .hidden
         if secure, bodyTextView.secureCapturePhase == .ordinary {
             let rendererIsHealthy = bodyTextView.bindSecureRedacted()
-            secureRevealPolicy.bindSecure(
-                rendererIsHealthy: rendererIsHealthy,
-                appAndSceneAreActive: secureRevealEnvironmentIsActive,
-                sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
+            mutateSecureRevealPolicy(reason: .snippetChanged) {
+                $0.bindSecure(
+                    rendererIsHealthy: rendererIsHealthy,
+                    appAndSceneAreActive: secureRevealEnvironmentIsActive,
+                    sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
+            }
         }
         if !secure, bodyTextView.secureCapturePhase != .ordinary {
             let ordinaryContent = environment.store.snippet(id: selectedID)?.content ?? ""
             bodyTextView.bindOrdinaryText(ordinaryContent)
-            secureRevealPolicy.bindOrdinary()
+            mutateSecureRevealPolicy(reason: .snippetChanged) { $0.bindOrdinary() }
         }
 
         let showsAuthentication = secure
@@ -889,7 +914,7 @@ final class SnippetEditorViewController: UIViewController {
                             store: self.environment.store,
                             secureStore: self.environment.secureStore)
                     }
-                    self.bind(to: id)
+                    self.bind(to: id, diagnosticReason: .snippetChanged)
                 } catch {
                     self.showError(title: "Couldn’t Make Snippet Secure", error: error)
                 }
@@ -937,7 +962,7 @@ final class SnippetEditorViewController: UIViewController {
                                 secureStore: self.environment.secureStore)
                         }
                     }
-                    self.bind(to: id)
+                    self.bind(to: id, diagnosticReason: .snippetChanged)
                 } catch {
                     self.showError(title: "Couldn’t Make Snippet Ordinary", error: error)
                 }
@@ -969,7 +994,9 @@ final class SnippetEditorViewController: UIViewController {
     private func revealSecureContent() {
         guard let id = selectedID,
               environment.store.isSecure(id),
-              let token = secureRevealPolicy.beginAuthentication() else { return }
+              let token = mutateSecureRevealPolicy(reason: .userRequested, {
+                  $0.beginAuthentication()
+              }) else { return }
         updateSecurePresentation()
         refreshDerivedUI()
         secureAuthenticationTask?.cancel()
@@ -982,13 +1009,20 @@ final class SnippetEditorViewController: UIViewController {
                 guard !Task.isCancelled,
                       self.selectedID == id,
                       self.environment.store.isSecure(id),
-                      self.secureRevealPolicy.authenticationSucceeded(token: token)
+                      self.mutateSecureRevealPolicy(reason: .authenticationCompleted, {
+                          $0.authenticationSucceeded(token: token)
+                      })
                 else { return }
                 self.synchronizeSecureRevealEnvironment()
                 self.handleSecureRevealTransition(
                     self.secureRevealPolicy.beginAuthenticatedReveal())
             } catch {
-                let requestWasCurrent = self.secureRevealPolicy.authenticationFailed(token: token)
+                let reason: DiagnosticSecureEditorReason = error is CancellationError
+                    ? .authenticationCancelled
+                    : .authenticationFailed
+                let requestWasCurrent = self.mutateSecureRevealPolicy(reason: reason) {
+                    $0.authenticationFailed(token: token)
+                }
                 self.updateSecurePresentation()
                 self.refreshDerivedUI()
                 if requestWasCurrent, !(error is CancellationError) {
@@ -1000,10 +1034,14 @@ final class SnippetEditorViewController: UIViewController {
 
     private func synchronizeSecureRevealEnvironment() {
         handleSecureRevealTransition(
-            secureRevealPolicy.setAppAndSceneAreActive(secureRevealEnvironmentIsActive))
+            mutateSecureRevealPolicy(reason: .authenticationCompleted) {
+                $0.setAppAndSceneAreActive(secureRevealEnvironmentIsActive)
+            })
         handleSecureRevealTransition(
-            secureRevealPolicy.setSceneCaptureIsInactive(
-                bodyTextView.secureSceneCaptureState == .inactive))
+            mutateSecureRevealPolicy(reason: .authenticationCompleted) {
+                $0.setSceneCaptureIsInactive(
+                    bodyTextView.secureSceneCaptureState == .inactive)
+            })
     }
 
     private func handleSecureRevealTransition(_ transition: SecureSnippetRevealTransition) {
@@ -1023,8 +1061,10 @@ final class SnippetEditorViewController: UIViewController {
               environment.vaultSession.state.isUnlocked,
               secureRevealEnvironmentIsActive,
               bodyTextView.secureSceneCaptureState == .inactive else {
-            secureRevealPolicy.revealAttemptFailed(
-                vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+            mutateSecureRevealPolicy(reason: .environmentRejected) {
+                $0.revealAttemptFailed(
+                    vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+            }
             updateSecurePresentation()
             refreshDerivedUI()
             return
@@ -1040,24 +1080,34 @@ final class SnippetEditorViewController: UIViewController {
             else {
                 bodyTextView.setSecureEditingAuthorized(false)
                 _ = bodyTextView.redactAndClearSecurePlaintext()
-                secureRevealPolicy.revealAttemptFailed(
-                    vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+                mutateSecureRevealPolicy(reason: .environmentRejected) {
+                    $0.revealAttemptFailed(
+                        vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+                }
                 updateSecurePresentation()
                 refreshDerivedUI()
                 return
             }
             bodyTextView.setSecurePlaintextAcceptanceAuthorized(true)
             bodyTextView.setSecureRevealSessionAuthorized(true)
-            guard bodyTextView.canAcceptSecurePlaintext,
-                  secureRevealPolicy.beginPlaintextPresentation(),
+            let preparation = bodyTextView.prepareSecurePlaintextPresentation()
+            let presentationReason: DiagnosticSecureEditorReason = preparation == .recoveredRenderer
+                ? .rendererRecovered
+                : .authenticationCompleted
+            guard preparation != .rejected,
+                  mutateSecureRevealPolicy(reason: presentationReason, {
+                      $0.beginPlaintextPresentation()
+                  }),
                   bodyTextView.displaySecurePlaintext(plaintext)
             else {
                 bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
                 bodyTextView.setSecureRevealSessionAuthorized(false)
                 bodyTextView.setSecureEditingAuthorized(false)
                 _ = bodyTextView.redactAndClearSecurePlaintext()
-                secureRevealPolicy.revealAttemptFailed(
-                    vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+                mutateSecureRevealPolicy(reason: .presentationRejected) {
+                    $0.revealAttemptFailed(
+                        vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+                }
                 updateSecurePresentation()
                 refreshDerivedUI()
                 return
@@ -1066,8 +1116,10 @@ final class SnippetEditorViewController: UIViewController {
             updateSecurePresentation()
             refreshDerivedUI()
         } catch {
-            secureRevealPolicy.revealAttemptFailed(
-                vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+            mutateSecureRevealPolicy(reason: .environmentRejected) {
+                $0.revealAttemptFailed(
+                    vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+            }
             updateSecurePresentation()
             refreshDerivedUI()
             showError(title: "Couldn’t Reveal Secure Content", error: error)
@@ -1077,7 +1129,9 @@ final class SnippetEditorViewController: UIViewController {
     private func securePlaintextDidPresent() {
         switch secureRevealPolicy.state {
         case .presentingPlaintext:
-            guard secureRevealPolicy.confirmProtectedPlaintext() else {
+            guard mutateSecureRevealPolicy(reason: .presentationConfirmed, {
+                $0.confirmProtectedPlaintext()
+            }) else {
                 failClosedAfterRejectedPlaintextPresentation()
                 return
             }
@@ -1099,8 +1153,10 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     private func failClosedAfterRejectedPlaintextPresentation() {
-        secureRevealPolicy.revealAttemptFailed(
-            vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+        mutateSecureRevealPolicy(reason: .presentationRejected) {
+            $0.revealAttemptFailed(
+                vaultIsStillUnlocked: environment.vaultSession.state.isUnlocked)
+        }
         redactSecurePlaintextAndPersist()
     }
 
@@ -1119,7 +1175,7 @@ final class SnippetEditorViewController: UIViewController {
             view.endEditing(true)
             return
         }
-        _ = secureRevealPolicy.lock()
+        _ = mutateSecureRevealPolicy(reason: .modalPresentation) { $0.lock() }
         redactSecurePlaintextAndPersist()
         view.endEditing(true)
     }
@@ -1186,12 +1242,14 @@ final class SnippetEditorViewController: UIViewController {
         }
         switch reason {
         case .sceneCapture:
-            _ = secureRevealPolicy.setSceneCaptureIsInactive(false)
-            _ = secureRevealPolicy.lock()
+            _ = mutateSecureRevealPolicy(reason: .sceneCaptureChanged) {
+                $0.setSceneCaptureIsInactive(false)
+            }
+            _ = mutateSecureRevealPolicy(reason: .sceneCaptureChanged) { $0.lock() }
         case .presentationRevoked:
-            _ = secureRevealPolicy.lock()
+            _ = mutateSecureRevealPolicy(reason: .presentationRevoked) { $0.lock() }
         case .rendererFailure:
-            _ = secureRevealPolicy.rendererFailed()
+            _ = mutateSecureRevealPolicy(reason: .rendererFailed) { $0.rendererFailed() }
         }
         bodyTextView.setSecureEditingAuthorized(false)
         bodyTextView.resignFirstResponder()
@@ -1204,7 +1262,9 @@ final class SnippetEditorViewController: UIViewController {
 
     private func secureSceneCaptureStateChanged(_ state: UISceneCaptureState) {
         handleSecureRevealTransition(
-            secureRevealPolicy.setSceneCaptureIsInactive(state == .inactive))
+            mutateSecureRevealPolicy(reason: .sceneCaptureChanged) {
+                $0.setSceneCaptureIsInactive(state == .inactive)
+            })
         updateSecurePresentation()
         refreshDerivedUI()
     }
@@ -1291,7 +1351,9 @@ final class SnippetEditorViewController: UIViewController {
     @objc private func vaultWillLock(_ notification: Notification) {
         guard let session = notification.object as? VaultSession,
               session === environment.vaultSession else { return }
-        let transition = secureRevealPolicy.cancelReveal()
+        let transition = mutateSecureRevealPolicy(reason: .vaultWillLock) {
+            $0.cancelReveal()
+        }
         handleSecureRevealTransition(transition)
         flushPendingSecureContent()
     }
@@ -1301,27 +1363,32 @@ final class SnippetEditorViewController: UIViewController {
         guard !environment.vaultSession.state.isUnlocked else { return }
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
-        handleSecureRevealTransition(secureRevealPolicy.lock())
+        handleSecureRevealTransition(
+            mutateSecureRevealPolicy(reason: .vaultStateChanged) { $0.lock() })
         _ = bodyTextView.redactAndClearSecurePlaintext()
         updateSecurePresentation()
         refreshDerivedUI()
     }
 
     @objc private func willResignActive() {
-        prepareSecureContentForLifecycleDeactivation()
+        prepareSecureContentForLifecycleDeactivation(reason: .appWillResignActive)
     }
 
     @objc private func didBecomeActive() {
-        _ = secureRevealPolicy.setAppAndSceneAreActive(secureRevealEnvironmentIsActive)
+        _ = mutateSecureRevealPolicy(reason: .appDidBecomeActive) {
+            $0.setAppAndSceneAreActive(secureRevealEnvironmentIsActive)
+        }
         resumeAuthenticatedRevealIfNeeded()
     }
 
     @objc private func sceneWillDeactivate(_ notification: Notification) {
         guard notification.object as? UIScene === view.window?.windowScene else { return }
-        prepareSecureContentForLifecycleDeactivation()
+        prepareSecureContentForLifecycleDeactivation(reason: .sceneWillDeactivate)
     }
 
-    private func prepareSecureContentForLifecycleDeactivation() {
+    private func prepareSecureContentForLifecycleDeactivation(
+        reason: DiagnosticSecureEditorReason
+    ) {
         // LocalAuthentication temporarily deactivates the app and its scene while
         // Face ID is on screen. Preserve only that in-flight, still-redacted request;
         // didEnterBackground invalidates its LAContext in VaultSession. Every other
@@ -1330,11 +1397,14 @@ final class SnippetEditorViewController: UIViewController {
             secureRevealPolicy.isAuthenticating && secureAuthenticationTask != nil
         if preservesSystemAuthentication {
             handleSecureRevealTransition(
-                secureRevealPolicy.setAppAndSceneAreActive(false))
+                mutateSecureRevealPolicy(reason: reason) {
+                    $0.setAppAndSceneAreActive(false)
+                })
         } else {
             secureAuthenticationTask?.cancel()
             secureAuthenticationTask = nil
-            handleSecureRevealTransition(secureRevealPolicy.lock())
+            handleSecureRevealTransition(
+                mutateSecureRevealPolicy(reason: reason) { $0.lock() })
         }
         flushPendingSecureContent()
         view.endEditing(true)
@@ -1342,7 +1412,9 @@ final class SnippetEditorViewController: UIViewController {
 
     @objc private func sceneDidActivate(_ notification: Notification) {
         guard notification.object as? UIScene === view.window?.windowScene else { return }
-        _ = secureRevealPolicy.setAppAndSceneAreActive(secureRevealEnvironmentIsActive)
+        _ = mutateSecureRevealPolicy(reason: .sceneDidActivate) {
+            $0.setAppAndSceneAreActive(secureRevealEnvironmentIsActive)
+        }
         resumeAuthenticatedRevealIfNeeded()
     }
 
@@ -1361,10 +1433,12 @@ final class SnippetEditorViewController: UIViewController {
               environment.store.isSecure(selectedID),
               secureRevealPolicy.state == .failedClosed else { return }
         let rendererIsHealthy = bodyTextView.recoverSecureRedactionAfterRendererFailure()
-        secureRevealPolicy.bindSecure(
-            rendererIsHealthy: rendererIsHealthy,
-            appAndSceneAreActive: true,
-            sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
+        mutateSecureRevealPolicy(reason: .rendererRecovered) {
+            $0.bindSecure(
+                rendererIsHealthy: rendererIsHealthy,
+                appAndSceneAreActive: true,
+                sceneCaptureIsInactive: bodyTextView.secureSceneCaptureState == .inactive)
+        }
     }
 
     private var secureRevealEnvironmentIsActive: Bool {

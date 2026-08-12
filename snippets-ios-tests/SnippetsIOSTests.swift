@@ -533,7 +533,7 @@ final class SnippetsIOSTests: XCTestCase {
             name: "Ordinary",
             keyword: "ordinary",
             content: ordinarySentinel))
-        phone.refreshFromStore(preserveFirstResponder: false)
+        phone.refreshFromStore(source: .external)
         tablet.bind(to: snippetID)
 
         for editorView in [phone.view!, tablet.view!] {
@@ -1160,6 +1160,15 @@ final class SnippetsIOSTests: XCTestCase {
                 caller: .trusted),
             level: .info,
             synchronous: true)
+        service?.emit(
+            .secureEditorTransition(
+                surface: .phone,
+                from: .protectedPlaintext,
+                to: .locked,
+                reason: .storeRefreshRemoteSync,
+                vaultState: .unlocked),
+            level: .info,
+            synchronous: true)
         service?.flush()
 
         let summary = try XCTUnwrap(service?.summary())
@@ -1173,6 +1182,9 @@ final class SnippetsIOSTests: XCTestCase {
         let export = try String(contentsOf: exportURL, encoding: .utf8)
         XCTAssertTrue(export.contains("\"event\":\"diagnostics_manifest\""))
         XCTAssertTrue(export.contains("approved-keyword"))
+        XCTAssertTrue(export.contains("\"event\":\"secure_editor_transition\""))
+        XCTAssertTrue(export.contains("\"reason\":\"store_refresh_remote_sync\""))
+        XCTAssertTrue(export.contains("\"vault_state\":\"unlocked\""))
         XCTAssertTrue(export.contains("\"error_code\":917"))
         XCTAssertFalse(export.contains("PRIVATE-BODY-SENTINEL"))
         XCTAssertFalse(export.contains("/private/person"))

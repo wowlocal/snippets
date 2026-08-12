@@ -84,6 +84,34 @@ struct DiagnosticsTests {
         #expect(Set(fields.keys) == ["keyword", "keyword_truncated", "outcome", "caller"])
     }
 
+    @Test func secureEditorTransitionPersistsOnlyClosedStateAndCause() throws {
+        let record = DiagnosticRecord(
+            event: .secureEditorTransition(
+                surface: .phone,
+                from: .protectedPlaintext,
+                to: .locked,
+                reason: .storeRefreshRemoteSync,
+                vaultState: .unlocked),
+            timestamp: "2026-08-12T19:14:02.123Z",
+            elapsedMilliseconds: 545_614,
+            sessionIdentifier: "test-session",
+            sequence: 10)
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        let fields = try #require(object["fields"] as? [String: Any])
+
+        #expect(object["event"] as? String == "secure_editor_transition")
+        #expect(fields["surface"] as? String == "phone")
+        #expect(fields["from_state"] as? String == "protected_plaintext")
+        #expect(fields["to_state"] as? String == "locked")
+        #expect(fields["reason"] as? String == "store_refresh_remote_sync")
+        #expect(fields["vault_state"] as? String == "unlocked")
+        #expect(Set(fields.keys) == [
+            "surface", "from_state", "to_state", "reason", "vault_state",
+        ])
+    }
+
     @Test func globalFacadeIsNoOpUntilInstalledAndIsThreadSafeAfterInstall() {
         Diagnostics.install(nil)
         Diagnostics.record(.lifecycle(.started))
@@ -113,6 +141,18 @@ struct DiagnosticsTests {
             keyword: DiagnosticKeyword("allowed-keyword"),
             outcome: .failed,
             caller: .unknown))
+        Diagnostics.record(.secureEditorTransition(
+            surface: .tablet,
+            from: .presentingPlaintext,
+            to: .failedClosed,
+            reason: .rendererFailed,
+            vaultState: .unlocked))
+        Diagnostics.record(.secureEditorTransition(
+            surface: .phone,
+            from: .locked,
+            to: .authenticating,
+            reason: .userRequested,
+            vaultState: .locked))
         Diagnostics.record(.cloudKitFailure(
             operation: .fetchChanges,
             failure: DiagnosticFailure(family: .cloudKit, code: 3)))
@@ -120,11 +160,20 @@ struct DiagnosticsTests {
         let captured = sink.events.filter {
             switch $0.0 {
             case .secureReveal(let keyword, _, _): keyword.value == "allowed-keyword"
+            case .secureEditorTransition(_, _, _, .rendererFailed, _): true
             case .cloudKitFailure(let operation, _): operation == .fetchChanges
             default: false
             }
         }
-        #expect(captured.count == 2)
+        #expect(captured.count == 3)
         #expect(captured.allSatisfy { $0.2 })
+
+        let routineTransition = sink.events.first {
+            if case .secureEditorTransition(_, _, _, .userRequested, _) = $0.0 {
+                return true
+            }
+            return false
+        }
+        #expect(routineTransition?.2 == false)
     }
 }

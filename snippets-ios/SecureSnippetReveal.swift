@@ -184,6 +184,66 @@ struct SecureSnippetRevealPolicy {
     }
 }
 
+extension SecureSnippetRevealPolicy.State {
+    var diagnosticState: DiagnosticSecureEditorState {
+        switch self {
+        case .ordinary: .ordinary
+        case .locked: .locked
+        case .authenticating: .authenticating
+        case .authenticatedRedacted: .authenticatedRedacted
+        case .presentingPlaintext: .presentingPlaintext
+        case .protectedPlaintext: .protectedPlaintext
+        case .failedClosed: .failedClosed
+        }
+    }
+}
+
+extension VaultSession.State {
+    var diagnosticState: DiagnosticVaultState {
+        switch self {
+        case .noKey: .noKey
+        case .locked: .locked
+        case .unlocked: .unlocked
+        }
+    }
+}
+
+extension DiagnosticSecureEditorReason {
+    static func storeRefresh(_ source: SnippetStore.ChangeSource) -> Self {
+        switch source {
+        case .local: .storeRefreshLocal
+        case .external: .storeRefreshExternal
+        case .remoteSync: .storeRefreshRemoteSync
+        }
+    }
+}
+
+/// Records only semantic policy changes. Renderer refresh callbacks can occur for every
+/// edit, selection, scroll, or layout pass; omitting no-op transitions keeps this event
+/// useful without turning protected text interaction into a hot logging loop.
+@MainActor
+@discardableResult
+func updateSecureRevealPolicy<Result>(
+    _ policy: inout SecureSnippetRevealPolicy,
+    surface: DiagnosticSecureEditorSurface,
+    reason: DiagnosticSecureEditorReason,
+    vaultState: DiagnosticVaultState,
+    _ update: (inout SecureSnippetRevealPolicy) -> Result
+) -> Result {
+    let from = policy.state.diagnosticState
+    let result = update(&policy)
+    let to = policy.state.diagnosticState
+    if from != to {
+        Diagnostics.record(.secureEditorTransition(
+            surface: surface,
+            from: from,
+            to: to,
+            reason: reason,
+            vaultState: vaultState))
+    }
+    return result
+}
+
 /// Fail-closed status overlay shown only when protected display is unavailable.
 final class SecureSnippetRevealOverlayView: UIView {
     enum Presentation: Equatable {

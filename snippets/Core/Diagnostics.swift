@@ -221,6 +221,62 @@ nonisolated enum DiagnosticCallerClass: String, Codable, Sendable {
     case unknown
 }
 
+/// The iOS editor surface whose fail-closed reveal policy changed state.
+nonisolated enum DiagnosticSecureEditorSurface: String, Codable, Sendable {
+    case phone
+    case tablet
+}
+
+/// Privacy-safe projection of `SecureSnippetRevealPolicy.State`.
+nonisolated enum DiagnosticSecureEditorState: String, Codable, Sendable {
+    case ordinary
+    case locked
+    case authenticating
+    case authenticatedRedacted = "authenticated_redacted"
+    case presentingPlaintext = "presenting_plaintext"
+    case protectedPlaintext = "protected_plaintext"
+    case failedClosed = "failed_closed"
+}
+
+/// Privacy-safe projection of `VaultSession.State` at an editor transition.
+nonisolated enum DiagnosticVaultState: String, Codable, Sendable {
+    case noKey = "no_key"
+    case locked
+    case unlocked
+}
+
+/// Closed causes for iOS secure-editor policy transitions. These deliberately carry
+/// no record identity: ordering plus the editor surface is enough to diagnose why
+/// visible plaintext was withdrawn without making snippets correlatable in exports.
+nonisolated enum DiagnosticSecureEditorReason: String, Codable, Sendable {
+    case editorBound = "editor_bound"
+    case userRequested = "user_requested"
+    case authenticationCompleted = "authentication_completed"
+    case authenticationFailed = "authentication_failed"
+    case authenticationCancelled = "authentication_cancelled"
+    case appWillResignActive = "app_will_resign_active"
+    case appDidBecomeActive = "app_did_become_active"
+    case sceneWillDeactivate = "scene_will_deactivate"
+    case sceneDidActivate = "scene_did_activate"
+    case storeRefreshLocal = "store_refresh_local"
+    case storeRefreshExternal = "store_refresh_external"
+    case storeRefreshRemoteSync = "store_refresh_remote_sync"
+    case vaultWillLock = "vault_will_lock"
+    case vaultStateChanged = "vault_state_changed"
+    case sceneCaptureChanged = "scene_capture_changed"
+    case presentationConfirmed = "presentation_confirmed"
+    case presentationRejected = "presentation_rejected"
+    case presentationRevoked = "presentation_revoked"
+    case rendererFailed = "renderer_failed"
+    case rendererRecovered = "renderer_recovered"
+    case environmentRejected = "environment_rejected"
+    case snippetChanged = "snippet_changed"
+    case snippetUnavailable = "snippet_unavailable"
+    case modalPresentation = "modal_presentation"
+    case selectionChanged = "selection_changed"
+    case viewDisappeared = "view_disappeared"
+}
+
 nonisolated enum DiagnosticSuggestionAnchorSource: String, Codable, Sendable {
     case accessibility
     case caret
@@ -360,6 +416,13 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
     case cloudKitRecordsIgnored(count: Int)
     case vaultAction(DiagnosticVaultAction, count: Int?)
     case secureReveal(keyword: DiagnosticKeyword, outcome: DiagnosticSecureRevealOutcome, caller: DiagnosticCallerClass)
+    case secureEditorTransition(
+        surface: DiagnosticSecureEditorSurface,
+        from: DiagnosticSecureEditorState,
+        to: DiagnosticSecureEditorState,
+        reason: DiagnosticSecureEditorReason,
+        vaultState: DiagnosticVaultState
+    )
     case suggestionAnchor(
         source: DiagnosticSuggestionAnchorSource,
         reason: DiagnosticSuggestionAnchorReason,
@@ -375,7 +438,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .storageFailure, .storageState, .libraryMerge: .persistence
         case .syncTriggered, .syncState, .syncRound: .sync
         case .cloudKitFailure, .cloudKitBatchSplit, .cloudKitRecordsIgnored: .cloudKit
-        case .vaultAction, .secureReveal: .vault
+        case .vaultAction, .secureReveal, .secureEditorTransition: .vault
         case .suggestionAnchor: .performance
         case .metricKit: .metricKit
         case .diagnosticsMaintenance, .diagnosticsManifest: .diagnostics
@@ -397,6 +460,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .cloudKitRecordsIgnored: "cloudkit_records_ignored"
         case .vaultAction: "vault_action"
         case .secureReveal: "secure_reveal"
+        case .secureEditorTransition: "secure_editor_transition"
         case .suggestionAnchor: "suggestion_anchor"
         case .metricKit: "metrickit_diagnostic"
         case .diagnosticsMaintenance: "diagnostics_maintenance"
@@ -429,6 +493,11 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
              .secureReveal,
              .metricKit:
             true
+        case .secureEditorTransition(_, let from, let to, _, _):
+            from == .presentingPlaintext
+                || from == .protectedPlaintext
+                || to == .protectedPlaintext
+                || to == .failedClosed
         default:
             false
         }
@@ -492,6 +561,14 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
                 "keyword_truncated": .boolean(keyword.wasTruncated),
                 "outcome": .string(outcome.rawValue),
                 "caller": .string(caller.rawValue),
+            ]
+        case .secureEditorTransition(let surface, let from, let to, let reason, let vaultState):
+            return [
+                "surface": .string(surface.rawValue),
+                "from_state": .string(from.rawValue),
+                "to_state": .string(to.rawValue),
+                "reason": .string(reason.rawValue),
+                "vault_state": .string(vaultState.rawValue),
             ]
         case .suggestionAnchor(let source, let reason, let durationMilliseconds):
             return [
