@@ -60,6 +60,91 @@ final class SnippetContentTextView: NSTextView {
 
     private var ordinaryTextServiceSettings: AmbientTextServiceSettings?
 
+    private(set) var secureCapturePolicy = SecureCapturePresentationPolicy()
+    private lazy var secureCaptureRenderer = SecureSnippetCaptureRenderer(textView: self)
+
+    /// Arms the protected rendering path before the caller puts decrypted text in
+    /// `NSTextStorage`. This first presents an opaque protected redaction frame and
+    /// suppresses every AppKit text/caret/selection draw primitive.
+    @discardableResult
+    func setSecurePresentationEnabled(_ enabled: Bool) -> Bool {
+        if enabled {
+            guard secureCapturePolicy.phase == .ordinary else {
+                return secureCapturePolicy.phase != .failedClosed
+            }
+            secureCapturePolicy.arm()
+            guard secureCaptureRenderer.arm() else {
+                secureCapturePolicy.failClosed()
+                return false
+            }
+            needsDisplay = true
+            return true
+        }
+
+        // Plaintext must be gone before ordinary AppKit drawing can be restored.
+        assert(super.string.isEmpty, "Clear secure plaintext before disabling capture protection")
+        guard super.string.isEmpty else {
+            secureCaptureRenderer.failClosed()
+            return false
+        }
+        secureCaptureRenderer.clear()
+        secureCapturePolicy.resetAfterPlaintextWasCleared()
+        needsDisplay = true
+        return true
+    }
+
+    /// Ordered secure-to-ordinary rebind hook. Call this before assigning an
+    /// ordinary body; it clears old protected storage while drawing is still
+    /// suppressed, removes the protected image, then restores AppKit drawing.
+    @discardableResult
+    func prepareForOrdinaryContentRebind() -> Bool {
+        guard secureCapturePolicy.suppressesUnprotectedDrawing else { return true }
+        string = ""
+        return setSecurePresentationEnabled(false)
+    }
+
+    /// Controls protected pixels only; it does not unlock the vault or restore
+    /// ordinary AppKit drawing. Hover policy can safely call this independently.
+    @discardableResult
+    func setSecurePixelsVisible(_ visible: Bool) -> Bool {
+        guard secureCapturePolicy.permitsPlaintextInTextStorage else { return false }
+        secureCapturePolicy.setPlaintextPixelsVisible(visible)
+        return visible
+            ? secureCaptureRenderer.renderPlaintext()
+            : secureCaptureRenderer.renderRedaction()
+    }
+
+    func refreshSecurePresentation() {
+        secureCaptureRenderer.invalidate()
+    }
+
+    func setSecureCaptureFailureHandler(_ handler: @escaping () -> Void) {
+        secureCaptureRenderer.onFailure = handler
+    }
+
+    func secureCaptureRendererDidFail() {
+        secureCapturePolicy.failClosed()
+        super.string = ""
+        super.isEditable = false
+        needsDisplay = true
+    }
+
+    var secureCaptureDidFail: Bool { secureCapturePolicy.phase == .failedClosed }
+
+    func secureCaptureFrameForInspection(
+        plaintext: Bool
+    ) -> SecureSnippetCaptureRenderer.RenderedFrameInspection? {
+        secureCaptureRenderer.renderFrameForInspection(plaintext: plaintext)
+    }
+
+    var secureCaptureProtectionEnabledForInspection: Bool {
+        secureCaptureRenderer.captureProtectionEnabledForInspection
+    }
+
+    var secureCaptureObservesScrollForInspection: Bool {
+        secureCaptureRenderer.observesScrollForInspection
+    }
+
     var emptyStatePrompt: String = "" {
         didSet { needsDisplay = true }
     }
@@ -71,6 +156,9 @@ final class SnippetContentTextView: NSTextView {
         get { super.string }
         set {
             super.string = newValue
+            if secureCapturePolicy.suppressesUnprotectedDrawing {
+                secureCaptureRenderer.invalidate()
+            }
             needsDisplay = true
         }
     }
@@ -83,6 +171,7 @@ final class SnippetContentTextView: NSTextView {
 
     override func didChangeText() {
         super.didChangeText()
+        secureCaptureRenderer.invalidate()
         needsDisplay = true
     }
 
@@ -389,6 +478,52 @@ final class SnippetContentTextView: NSTextView {
         }
     }
 
+    override func setSelectedRanges(
+        _ ranges: [NSValue],
+        affinity: NSSelectionAffinity,
+        stillSelecting stillSelectingFlag: Bool
+    ) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        secureCaptureRenderer.invalidate()
+    }
+
+    override func drawInsertionPoint(
+        in rect: NSRect,
+        color: NSColor,
+        turnedOn flag: Bool
+    ) {
+        guard !secureCapturePolicy.suppressesUnprotectedDrawing else {
+            secureCaptureRenderer.invalidate()
+            return
+        }
+        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        secureCaptureRenderer.invalidate()
+    }
+
+    override func setBoundsSize(_ newSize: NSSize) {
+        super.setBoundsSize(newSize)
+        secureCaptureRenderer.invalidate()
+    }
+
+    override func scroll(_ point: NSPoint) {
+        super.scroll(point)
+        secureCaptureRenderer.invalidate()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        secureCaptureRenderer.invalidate()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        secureCaptureRenderer.invalidate()
+    }
+
     /// Typing `{` offers the placeholder tokens, which is what replaced the
     /// permanent list of them that used to sit under this box. An action at the
     /// point of need rather than a line to read and transcribe.
@@ -472,6 +607,10 @@ final class SnippetContentTextView: NSTextView {
     private static let maximumTokenCompletionLength = 24
 
     override func draw(_ dirtyRect: NSRect) {
+        // Do not call `super`: it draws glyphs, selection backgrounds, marked text,
+        // and a blinking insertion point into the ordinary window backing store.
+        // Secure pixels are drawn only by the offscreen renderer above.
+        guard !secureCapturePolicy.suppressesUnprotectedDrawing else { return }
         super.draw(dirtyRect)
 
         guard isEditable, !emptyStatePrompt.isEmpty, string.isEmpty else { return }

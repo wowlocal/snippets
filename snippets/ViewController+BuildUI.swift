@@ -375,6 +375,7 @@ extension ViewController {
             snippetTextView.layoutManager?.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
             snippetTextView.layoutManager?.ensureLayout(for: textContainer)
         }
+        snippetTextView.refreshSecurePresentation()
     }
 
     func clampedSidebarWidth(in splitView: NSSplitView, proposedWidth: CGFloat) -> CGFloat {
@@ -804,6 +805,17 @@ extension ViewController {
         snippetTextView.textContainer?.widthTracksTextView = true
         snippetTextView.textContainer?.lineBreakMode = .byCharWrapping
         snippetTextView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        snippetTextView.setSecureCaptureFailureHandler { [weak self] in
+            guard let self else { return }
+            // Renderer failure arrives on the main actor. Save the still-suppressed
+            // editor value before the text view clears it, then cover the surface.
+            self.updateSelectedSnippetFromEditor()
+            self.flushPendingSecureEdit()
+            self.secureContentEditableForID = nil
+            self.updatePreview(withTemplate: "")
+            self.secureLockOverlay.isHidden = true
+            self.secureCaptureFailureOverlay.isHidden = false
+        }
 
         snippetScrollView.documentView = snippetTextView
         snippetContainer.addSubview(snippetScrollView)
@@ -842,6 +854,18 @@ extension ViewController {
 
         secureLockOverlay.addSubview(secureLockOverlayButton)
         secureLockOverlay.addSubview(secureLockOverlayLabel)
+
+        secureCaptureFailureOverlay.translatesAutoresizingMaskIntoConstraints = false
+        secureCaptureFailureOverlay.wantsLayer = true
+        secureCaptureFailureOverlay.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        secureCaptureFailureOverlay.isHidden = true
+        secureCaptureFailureLabel.stringValue =
+            "Secure display is unavailable. The snippet has been hidden."
+        secureCaptureFailureLabel.alignment = .center
+        secureCaptureFailureLabel.textColor = .secondaryLabelColor
+        secureCaptureFailureLabel.translatesAutoresizingMaskIntoConstraints = false
+        secureCaptureFailureOverlay.addSubview(secureCaptureFailureLabel)
+        snippetContainer.addSubview(secureCaptureFailureOverlay)
         snippetContainer.addSubview(secureLockOverlay)
 
         NSLayoutConstraint.activate([
@@ -858,6 +882,15 @@ extension ViewController {
                 equalTo: secureLockOverlay.leadingAnchor, constant: 20),
             secureLockOverlayLabel.trailingAnchor.constraint(
                 equalTo: secureLockOverlay.trailingAnchor, constant: -20),
+            secureCaptureFailureOverlay.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
+            secureCaptureFailureOverlay.trailingAnchor.constraint(equalTo: snippetContainer.trailingAnchor),
+            secureCaptureFailureOverlay.topAnchor.constraint(equalTo: snippetContainer.topAnchor),
+            secureCaptureFailureOverlay.bottomAnchor.constraint(equalTo: snippetContainer.bottomAnchor),
+            secureCaptureFailureLabel.centerYAnchor.constraint(equalTo: secureCaptureFailureOverlay.centerYAnchor),
+            secureCaptureFailureLabel.leadingAnchor.constraint(
+                equalTo: secureCaptureFailureOverlay.leadingAnchor, constant: 20),
+            secureCaptureFailureLabel.trailingAnchor.constraint(
+                equalTo: secureCaptureFailureOverlay.trailingAnchor, constant: -20),
         ])
 
         // Two floors, not one. The hard floor is what the box may never go below

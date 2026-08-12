@@ -147,6 +147,11 @@ final class ViewController: NSViewController {
     let secureLockOverlay = NSView()
     let secureLockOverlayLabel = NSTextField(wrappingLabelWithString: "")
     let secureLockOverlayButton = NSButton()
+    /// Opaque fail-closed cover. It is normally hidden; if the protected video
+    /// renderer cannot create or present a frame it covers the editor while the
+    /// underlying NSTextView remains in its drawing-suppressed secure phase.
+    let secureCaptureFailureOverlay = NSView()
+    let secureCaptureFailureLabel = NSTextField(wrappingLabelWithString: "")
     /// Which secure snippet's real text is on screen right now. This identity latch,
     /// rather than placeholder text, gates whether editor content may be written back.
     var secureContentEditableForID: UUID?
