@@ -186,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self.store.onChange?(.external)
             // Sync does not need the vault to run, but creating or adopting one changes
             // what there is to sync. Without this, records that appeared in the vault a
-            // moment ago would wait for the next two-minute poll.
+            // moment ago would wait for a later scheduler wake.
             self.syncCoordinator.libraryStructureChanged()
         }
 
@@ -257,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationDidBecomeActive(_ notification: Notification) {
         Diagnostics.record(.lifecycle(.becameActive))
+        _ = syncCoordinator.syncNow(trigger: .becameActive)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

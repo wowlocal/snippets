@@ -10,10 +10,10 @@ import Foundation
 /// identity and one full reconcile; it can never lose a snippet.
 nonisolated struct SyncState: Codable, Equatable {
 
-    /// Schema 2 adds the sticky `accountChanged` halt. Older builds must see a future
-    /// state and stop, rather than fail enum decoding and regenerate a state that has
-    /// silently cleared this safety boundary.
-    static let currentSchemaVersion = 2
+    /// Schema 3 adds distinct local-checkpoint and remote-reset safety stops. Older
+    /// builds must stop at the version fence instead of regenerating state and silently
+    /// clearing either policy boundary.
+    static let currentSchemaVersion = 3
 
     /// Why sync stopped and refuses to resume without the user looking at it.
     ///
@@ -38,6 +38,10 @@ nonisolated struct SyncState: Codable, Equatable {
         /// checkpoint, an unknown) iCloud account. Continuing would either mix private
         /// libraries or silently suppress every local record as already agreed.
         case accountChanged
+        /// Authenticated local CKSyncEngine state is missing, corrupt, or incompatible.
+        case checkpointUnreadable
+        /// CloudKit physically deleted records/the zone or purged encrypted data.
+        case remoteDataReset
         /// The manifest HMAC did not match — the backend was rolled back, truncated,
         /// or tampered with.
         ///
@@ -67,6 +71,8 @@ nonisolated struct SyncState: Codable, Equatable {
             case .massDeletion: return "an unusually large deletion arrived"
             case .backendRefused: return "iCloud refused a snippet"
             case .accountChanged: return "the iCloud account changed"
+            case .checkpointUnreadable: return "the local iCloud sync checkpoint could not be read"
+            case .remoteDataReset: return "the remote iCloud library was reset"
             case .manifestIntegrityFailed: return "the backend failed an integrity check"
             case .localLibraryQuarantined: return "the snippet library could not be read"
             case .vaultUnreadable: return "the secure vault could not be read"
@@ -88,6 +94,12 @@ nonisolated struct SyncState: Codable, Equatable {
                     + "device's current library and merge it into the newly signed-in "
                     + "account from a fresh checkpoint. Otherwise, switch back before "
                     + "resuming."
+            case .checkpointUnreadable:
+                return "Resume will retain this device's current library, replace only "
+                    + "the unreadable local scheduler checkpoint, and perform a full merge."
+            case .remoteDataReset:
+                return "Snippets stopped without deleting or re-uploading local data. "
+                    + "CloudKit requires an explicit recovery decision after a purge or reset."
             case .massDeletion:
                 return "Check another device still has your snippets before resuming."
             case .schemaTooNew:
@@ -100,9 +112,10 @@ nonisolated struct SyncState: Codable, Equatable {
         var isUserRecoverable: Bool {
             switch self {
             case .massDeletion, .backendRefused, .manifestIntegrityFailed,
-                 .localLibraryQuarantined, .vaultUnreadable, .accountChanged:
+                 .localLibraryQuarantined, .vaultUnreadable, .accountChanged,
+                 .checkpointUnreadable:
                 return true
-            case .schemaTooNew:
+            case .schemaTooNew, .remoteDataReset:
                 return false
             }
         }

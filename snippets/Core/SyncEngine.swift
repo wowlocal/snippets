@@ -126,11 +126,16 @@ final class SyncEngine {
     /// explicit Resume can proceed. Otherwise Resume would overwrite the only remaining
     /// evidence of an ambiguous server commit with a fresh empty journal.
     private var journalRequiresReload = false
-    /// One process-local authorization granted only by clearing an `accountChanged`
+    /// One process-local authorization granted by clearing a recoverable transport
     /// halt. It is consumed before the journal-first reset begins. A crash therefore
     /// loses the authorization and asks for review again rather than guessing that the
-    /// account migration completed.
-    private var approvedAccountReset = false
+    /// replacement completed.
+    private enum ApprovedTransportReset { case account, checkpoint }
+    private var approvedTransportReset: ApprovedTransportReset?
+    /// A reviewed checkpoint reset may fail transiently after its one-shot authority is
+    /// consumed. Keep the public result retryable for that attempt, but require a new
+    /// Review before any later data-plane call (and persist the halt for a restart).
+    private var checkpointResetRequiresReview = false
     private var consecutiveFailures = 0
     /// The exact halt value read from or written to disk. It is a compare-and-swap
     /// token: Resume may clear only this halt, never a newer stop written by a peer.
@@ -273,29 +278,34 @@ final class SyncEngine {
     /// because "resume" would read as something safe to call automatically.
     func clearHaltAfterUserReview() {
         guard case .halted(let reason, let detail) = state else { return }
+        guard reason.isUserRecoverable else { return }
         guard reloadProtocolPairAfterReview() else { return }
 
         switch updatePersistedHalt(nil, expecting: durableHalt) {
         case .written:
             durableHalt = nil
             consecutiveFailures = 0
-            approvedAccountReset = reason == .accountChanged
+            approvedTransportReset = switch reason {
+            case .accountChanged: .account
+            case .checkpointUnreadable: .checkpoint
+            default: nil
+            }
             transition(to: .idle(lastSync: nil))
         case .superseded(let newer):
-            approvedAccountReset = false
+            approvedTransportReset = nil
             // A peer stopped for a different reason after this pane was drawn. The
             // user's review covered the old stop, not this one; adopt it and ask again.
             durableHalt = newer
             transition(to: .halted(newer.reason, detail: newer.detail))
         case .tooNew(let version):
-            approvedAccountReset = false
+            approvedTransportReset = nil
             durableHalt = nil
             transition(to: .halted(
                 .schemaTooNew,
                 detail: "Sync/state.json is version \(version); update Snippets before "
                     + "sync can resume."))
         case .failed:
-            approvedAccountReset = false
+            approvedTransportReset = nil
             transition(to: .halted(
                 reason,
                 detail: detail + " The reviewed stop could not be cleared from disk; "
@@ -475,16 +485,38 @@ final class SyncEngine {
         // one private database; using them under another Apple ID is never a migration.
         let roundAccountIdentity: SyncAccountIdentity?
         do {
-            roundAccountIdentity = try await transport.resolveAccountIdentity()
+            let preflight = try await transport.preflightScope()
+            roundAccountIdentity = preflight.identity
             try Task.checkCancellation()
-            try reconcileAccountIdentity(roundAccountIdentity)
+            switch preflight.checkpointIssue {
+            case .accountChanged where approvedTransportReset != .account:
+                throw SyncTransportFailure.accountChanged
+            case .unreadable where approvedTransportReset != .checkpoint:
+                throw SyncTransportFailure.checkpointUnreadable(
+                    detail: "the authenticated local scheduler checkpoint is unreadable")
+            case nil, .accountChanged, .unreadable:
+                break
+            }
+            try await reconcileAccountIdentity(roundAccountIdentity)
         } catch {
             // Review authorizes exactly this immediate account-resolution attempt. If
             // iCloud is unavailable (or the task is cancelled) before a scope can be
             // fixed, carrying that permission into a later round could silently apply
             // it to an entirely different account.
-            approvedAccountReset = false
+            approvedTransportReset = nil
             throw error
+        }
+
+        // Local maintenance (wire-key convergence or secure-vault forget) has already
+        // staged every surviving value and removed the scheduler cursor. Record-level
+        // CAS generations survive a wire-key change because CloudKit change tags are
+        // independent of payload encryption. Reset the transport-private scheduler
+        // before any offer/fetch can observe its old encrypted inbox.
+        if base.requiresTransportFullResync {
+            try await transport.resetForLocalFullResync()
+            var resetComplete = base
+            resetComplete.requiresTransportFullResync = false
+            try persistBase(resetComplete)
         }
 
         // Establish the base-before-journal invariant before deriving or offering any
@@ -665,6 +697,7 @@ final class SyncEngine {
 
         // FETCH, possibly paged.
         var cursor = base.cursor
+        var cursorKind = base.cursorKind
         struct OpenedRemote {
             var envelope: SyncEnvelope
             var recordVersion: SyncRecordVersion
@@ -691,6 +724,7 @@ final class SyncEngine {
                 (record: $0, fromConflict: false)
             })
             cursor = fetch.cursor
+            cursorKind = fetch.cursorKind
             guard fetch.hasMore else { break }
         }
 
@@ -757,8 +791,9 @@ final class SyncEngine {
             // An undecryptable record was fetched but not applied, so hold the cursor.
             if opaqueFetchedIDs.isEmpty, unresolvedConflictIDs.isEmpty {
                 var nextBase = base
-                nextBase.cursor = cursor
+                nextBase.adoptCursor(cursor, kind: cursorKind)
                 try persistBase(nextBase)
+                try await transport.acknowledgeFetched(through: cursor)
             }
             round.fullResync = isFullResync
             if let failure = terminalEngineFailureAfterFetch { throw failure }
@@ -899,8 +934,9 @@ final class SyncEngine {
            opaqueFetchedIDs.isEmpty,
            unresolvedConflictIDs.isEmpty {
             var advancedBase = base
-            advancedBase.cursor = cursor
+            advancedBase.adoptCursor(cursor, kind: cursorKind)
             try persistBase(advancedBase)
+            try await transport.acknowledgeFetched(through: cursor)
         }
 
         if let failure = terminalEngineFailureAfterFetch { throw failure }
@@ -928,9 +964,33 @@ final class SyncEngine {
     /// sticky review path before local data is even projected.
     private func reconcileAccountIdentity(
         _ resolved: SyncAccountIdentity?
-    ) throws {
-        if base.accountIdentity == resolved {
-            approvedAccountReset = false
+    ) async throws {
+        if case .checkpoint? = approvedTransportReset {
+            // Consume before any fallible work. If reset fails, another human Review is
+            // required; the authorization must never leak into a later scope.
+            approvedTransportReset = nil
+            do {
+                try await resetTransportCheckpoint(
+                    resolved: resolved,
+                    reset: { try await self.transport.resetAfterCheckpointReview() })
+                checkpointResetRequiresReview = false
+            } catch {
+                checkpointResetRequiresReview = true
+                enterHalt(
+                    .checkpointUnreadable,
+                    detail: "the reviewed local scheduler checkpoint could not be replaced; review is required before retrying")
+                throw error
+            }
+            return
+        }
+
+        if checkpointResetRequiresReview {
+            throw SyncEngineFailure(
+                reason: .checkpointUnreadable,
+                detail: "the previous reviewed scheduler reset did not complete; review is required again")
+        }
+
+        if base.accountIdentity == resolved, approvedTransportReset == nil {
             return
         }
 
@@ -947,11 +1007,11 @@ final class SyncEngine {
             bound.schemaVersion = SyncBase.currentSchemaVersion
             bound.accountIdentity = resolved
             try persistBase(bound)
-            approvedAccountReset = false
+            approvedTransportReset = nil
             return
         }
 
-        guard approvedAccountReset else {
+        guard case .account? = approvedTransportReset else {
             let detail: String
             if base.accountIdentity == nil {
                 detail = "the confirmed iCloud checkpoint predates account binding; review "
@@ -970,7 +1030,7 @@ final class SyncEngine {
 
         // Consume before the first fallible write. Failure or process death must not
         // leave a reusable authorization that can later target a different account.
-        approvedAccountReset = false
+        approvedTransportReset = nil
 
         // Capture primary storage against the OLD projection before erasing its base.
         // This is the only point where an unjournaled local deletion can still be
@@ -988,6 +1048,33 @@ final class SyncEngine {
         // the old account-bound base plus complete latest local intent and asks for
         // review again. No old offered generation survives into the new account.
         try persistJournal(resetJournal)
+        // Only now may transport-private account state be replaced. A failed CKSyncEngine
+        // checkpoint reset leaves the old base intact and the one-shot approval already
+        // consumed, so the next attempt must ask for Review again.
+        try await transport.resetAfterAccountReview()
+        try persistBase(SyncBase(
+            journalEstablished: true,
+            accountIdentity: resolved))
+    }
+
+    /// Rebuilds same-account local intent before replacing an unreadable/poisoned
+    /// scheduler checkpoint. This intentionally uses the same conservative fence as an
+    /// account migration: cursor and record generations cannot be trusted once the
+    /// scheduler epoch is replaced.
+    private func resetTransportCheckpoint(
+        resolved: SyncAccountIdentity?,
+        reset: () async throws -> Void
+    ) async throws {
+        let current = try library.currentEnvelopes(
+            agreedBase: journal.projectionKnowledge(over: base))
+        var resetJournal = journal
+        resetJournal.prepareForAccountChange(
+            current: current,
+            confirmed: base,
+            deviceID: device,
+            now: now())
+        try persistJournal(resetJournal)
+        try await reset()
         try persistBase(SyncBase(
             journalEstablished: true,
             accountIdentity: resolved))
@@ -1017,6 +1104,10 @@ final class SyncEngine {
                 .accountChanged,
                 detail: "the iCloud account changed during an active sync operation; "
                     + "no response from that operation was trusted")
+        case .checkpointUnreadable(let detail):
+            enterHalt(.checkpointUnreadable, detail: detail)
+        case .remoteDataReset(let detail):
+            enterHalt(.remoteDataReset, detail: detail)
         case .unreachable, .rejected:
             consecutiveFailures += 1
             let delay = min(pow(2, Double(consecutiveFailures)), Self.maxBackoff)
@@ -1098,7 +1189,7 @@ final class SyncEngine {
     /// Makes a safety stop survive process death and an ordinary relaunch.
     ///
     /// `SyncState.halt` has always promised this, but the engine previously kept its
-    /// halt only in memory. A rival vault therefore stopped the two-minute poll in one
+    /// halt only in memory. A rival vault therefore stopped one scheduler round in one
     /// process, then fetched the same held cursor and stopped again after every launch.
     /// Backend refusals and mass-deletion stops had the same hole. All safety halts now
     /// go through this one door.

@@ -735,6 +735,32 @@ struct ClockAndStateTests {
             #expect(!SyncState.HaltReason.backendRefused.title.contains("backendRefused"))
         }
 
+        @Test func newSafetyHaltsBumpSchemaAndKeepTheirRecoveryPoliciesDistinct() throws {
+            #expect(SyncState.currentSchemaVersion == 3,
+                    "adding durable halt cases requires a downgrade fence")
+            #expect(!SyncState.HaltReason.remoteDataReset.isUserRecoverable,
+                    "zone purge/reset must never offer a path that can reupload local data")
+            #expect(SyncState.HaltReason.checkpointUnreadable.isUserRecoverable,
+                    "an authenticated local-checkpoint failure has an explicit reviewed reset")
+
+            for reason in [
+                SyncState.HaltReason.remoteDataReset,
+                .checkpointUnreadable,
+            ] {
+                var state = Self.sampleState()
+                state.halt = SyncState.Halt(
+                    reason: reason,
+                    detail: "bounded typed safety detail",
+                    at: Date(timeIntervalSince1970: 0))
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                let data = try encoder.encode(state)
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                #expect(try decoder.decode(SyncState.self, from: data) == state)
+            }
+        }
+
         /// A file at the current version loads, so the probe is not simply refusing
         /// everything.
         @Test func aFileAtTheCurrentSchemaVersionLoadsNormally() throws {

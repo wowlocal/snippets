@@ -180,7 +180,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     /// explicitly, the second not at all, because nothing checked. Throwing from inside
     /// the transaction rolls back every plaintext envelope merged alongside it and leaves
     /// the cursor where it was, so one un-fileable secret stopped **all** inbound sync,
-    /// permanently, retried every two minutes for ever. Ordinary snippets edited on
+    /// permanently, retried on every scheduler wake for ever. Ordinary snippets edited on
     /// another Mac simply never arrived, while the pane talked about vault keys.
     ///
     /// A missing-vault record is deferred and retried without backoff. A rival-vault

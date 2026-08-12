@@ -216,7 +216,10 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         case .sync:
             var rows: [Row] = [.syncToggle, .syncStatus]
             if SyncCoordinator.isEnabled { rows.append(.syncNow) }
-            if environment.syncCoordinator.state.isHalted { rows.append(.reviewHalt) }
+            if case .halted(let reason, _) = environment.syncCoordinator.state,
+               reason.isUserRecoverable {
+                rows.append(.reviewHalt)
+            }
             return rows
         case .security:
             var rows: [Row] = [.keychainStatus]

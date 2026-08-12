@@ -392,6 +392,15 @@ struct SyncJournalTests {
             confirmedBeforeNewerIntent,
         ])
         confirmed.cursor = originalCursor
+        confirmed.recordConfirmed(
+            live,
+            recordVersion: SyncRecordVersion(Data("live-before-rekey".utf8)))
+        confirmed.recordConfirmed(
+            tombstone,
+            recordVersion: SyncRecordVersion(Data("tombstone-before-rekey".utf8)))
+        confirmed.recordConfirmed(
+            confirmedBeforeNewerIntent,
+            recordVersion: SyncRecordVersion(Data("newer-intent-before-rekey".utf8)))
         var journal = SyncJournal(entries: [
             SyncBase.key(lostAckID): SyncJournal.Entry(
                 desired: lostAckDesired,
@@ -431,11 +440,19 @@ struct SyncJournalTests {
         #expect(stagedNewerDesired.offered?.envelope == confirmedBeforeNewerIntent,
                 "the confirmed ancestor is resealed before the newer desired value")
 
-        // The migration discards only confirmed envelopes. Its cursor is the CAS
-        // ancestor that permits these exact snapshots to replace their remote records.
-        let resetBase = SyncBase(cursor: confirmed.cursor)
+        // Replacing the scheduler epoch invalidates its cursor, not CloudKit's record
+        // change tags. Those tags are independent of the wire-encryption key and are
+        // what prevent resealed snapshots from overwriting an independent remote edit.
+        let resetBase = SyncBase(recordVersions: confirmed.recordVersions)
         #expect(resetBase.envelopes.isEmpty)
-        #expect(resetBase.cursor == originalCursor)
+        #expect(resetBase.cursor == nil)
+        #expect(journal.entry(liveID)?.offered?.recordVersion
+                == confirmed.recordVersion(liveID))
+        #expect(journal.entry(tombstoneID)?.offered?.recordVersion
+                == confirmed.recordVersion(tombstoneID))
+        #expect(journal.entry(newerDesiredID)?.offered?.recordVersion
+                == confirmed.recordVersion(newerDesiredID))
+        #expect(resetBase.recordVersions == confirmed.recordVersions)
         #expect(journal.pending(confirmed: resetBase) == [
             live,
             tombstone,
@@ -469,7 +486,7 @@ struct SyncJournalTests {
         // A lost create ACK means the confirmed base is empty. Staging that base and
         // then resetting it must still leave the immutable offered create as the retry.
         journal.stageConfirmedForTransportRekey(confirmed, now: time(30))
-        confirmed = SyncBase(cursor: confirmed.cursor)
+        confirmed = SyncBase()
         #expect(journal.entry(snippetID) == beforeRekey)
         #expect(journal.pending(confirmed: confirmed) == [created])
 

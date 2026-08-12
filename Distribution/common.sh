@@ -297,6 +297,24 @@ function assert_provisioning_profile() {
         fi
     done
 
+    # Presence alone is insufficient for APNs: a development-signed entitlement paired
+    # with a production profile (or vice versa) cannot receive CKSyncEngine's silent
+    # pushes. The export step is allowed to choose either environment, but the artifact
+    # and its embedded profile must agree exactly.
+    local claimed_aps profile_aps
+    claimed_aps=$(/usr/libexec/PlistBuddy \
+        -c "Print :com.apple.developer.aps-environment" "$claimed" 2>/dev/null || echo "")
+    profile_aps=$(/usr/libexec/PlistBuddy \
+        -c "Print :Entitlements:com.apple.developer.aps-environment" "$plist" \
+        2>/dev/null || echo "")
+    if [ -z "$claimed_aps" ] || [ "$claimed_aps" != "$profile_aps" ]; then
+        red_text
+        echo "Export failed — the APNs entitlement is absent or does not match the profile"
+        normal_text
+        rm -f "$plist" "$claimed"
+        exit 1
+    fi
+
     # snippets-cli is a bare Mach-O. A bare executable claiming restricted entitlements is
     # SIGKILLed at exec, so this must stay empty rather than inherit the app's.
     local cli="$app_path/Contents/MacOS/snippets-cli"

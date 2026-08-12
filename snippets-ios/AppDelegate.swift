@@ -72,6 +72,16 @@ final class SnippetWindow: UIWindow {
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     let environment = AppEnvironment()
 
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // CKSyncEngine is process-owned. Start before scene construction so a silent
+        // CloudKit wake can restore its subscription/state without requiring visible UI.
+        environment.start()
+        return true
+    }
+
     nonisolated static func allowsExtensionPoint(_ identifier: UIApplication.ExtensionPointIdentifier) -> Bool {
         // UIKit has no public per-text-view switch for third-party keyboards. Secure
         // snippet bodies are editable plaintext after authentication, so allowing a
@@ -135,8 +145,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         self.window = window
         rootController = root
-        appDelegate.environment.start()
-
         if CommandLine.arguments.contains("--ui-testing-reset"),
            CommandLine.arguments.contains("--ui-testing-show-shortcuts"),
            let splitRoot = root as? MainSplitViewController {

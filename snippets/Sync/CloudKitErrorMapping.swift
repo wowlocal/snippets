@@ -24,7 +24,7 @@ nonisolated enum CloudKitErrorMapping {
     /// A per-record outcome inside a partially accepted batch.
     static func rejection(for error: any Error) -> SyncRejection {
         guard let ckError = error as? CKError else {
-            return .permanent(detail: "\(error)")
+            return .permanent(detail: "the sync backend rejected this snippet")
         }
 
         switch ckError.code {
@@ -46,14 +46,14 @@ nonisolated enum CloudKitErrorMapping {
         // The user has to do something. Retrying on a timer cannot fix any of these and
         // repeatedly hitting a locked account is how it gets throttled.
         case .notAuthenticated, .permissionFailure, .managedAccountRestricted:
-            return .authenticationRequired(detail: ckError.localizedDescription)
+            return .authenticationRequired(detail: authenticationDetail(for: ckError.code))
 
         // Configuration or code, not data. `missingEntitlement` in particular means the
         // build is not provisioned for CloudKit at all, which no retry reaches.
         case .missingEntitlement, .badContainer, .badDatabase, .invalidArguments,
              .incompatibleVersion, .constraintViolation, .referenceViolation,
              .serverRejectedRequest, .internalError:
-            return .permanent(detail: ckError.localizedDescription)
+            return .permanent(detail: permanentDetail(for: ckError.code))
 
         // Not time-based, so not `rateLimited`: the user must free space or upgrade.
         case .quotaExceeded:
@@ -75,11 +75,14 @@ nonisolated enum CloudKitErrorMapping {
         case .batchRequestFailed:
             return .rateLimited(retryAfter: retryAfter(from: ckError))
 
-        // The zone or its contents went away underneath us. Not a per-record condition;
-        // the fetch path turns these into a full resync. If one arrives here, a retry
-        // after the transport re-creates the zone is the right response.
-        case .zoneNotFound, .userDeletedZone, .changeTokenExpired, .unknownItem:
+        // A missing record can race another writer and is retryable. Zone loss is
+        // intentionally handled by the CKSyncEngine driver as a reviewed safety halt;
+        // an established zone must never be recreated/reuploaded automatically.
+        case .changeTokenExpired, .unknownItem:
             return .rateLimited(retryAfter: retryAfter(from: ckError))
+
+        case .zoneNotFound, .userDeletedZone:
+            return .permanent(detail: "the CloudKit record zone no longer exists")
 
         // Cancellation is not a failure of the record.
         case .operationCancelled:
@@ -91,7 +94,7 @@ nonisolated enum CloudKitErrorMapping {
              .participantAlreadyInvited,
              .assetFileNotFound, .assetFileModified, .assetNotAvailable,
              .resultsTruncated, .partialFailure:
-            return .permanent(detail: ckError.localizedDescription)
+            return .permanent(detail: permanentDetail(for: ckError.code))
 
         @unknown default:
             // A code Apple added since this was written. Retryable on purpose: refusing
@@ -105,12 +108,12 @@ nonisolated enum CloudKitErrorMapping {
     static func failure(for error: any Error) -> SyncTransportFailure {
         if let failure = error as? SyncTransportFailure { return failure }
         guard let ckError = error as? CKError else {
-            return .unreachable(detail: "\(error)")
+            return .unreachable(detail: "the CloudKit operation failed")
         }
 
         switch ckError.code {
         case .networkUnavailable, .networkFailure, .serverResponseLost, .internalError:
-            return .unreachable(detail: ckError.localizedDescription)
+            return .unreachable(detail: "CloudKit is temporarily unreachable")
         default:
             return .rejected(rejection(for: ckError))
         }
@@ -124,6 +127,18 @@ nonisolated enum CloudKitErrorMapping {
         guard let ckError = error as? CKError else { return false }
         switch ckError.code {
         case .changeTokenExpired, .zoneNotFound, .userDeletedZone:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// A missing/deleted custom zone is a reviewed safety event, unlike an expired
+    /// per-zone change token that CKSyncEngine can refetch from a fresh watermark.
+    static func isZoneInvalidated(_ error: any Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        switch ckError.code {
+        case .zoneNotFound, .userDeletedZone:
             return true
         default:
             return false
@@ -160,6 +175,48 @@ nonisolated enum CloudKitErrorMapping {
             return nil
         }
         return ckError.partialErrorsByItemID as? [CKRecord.ID: any Error]
+    }
+
+    // MARK: - Durable, privacy-safe details
+
+    /// These strings may reach Sync/state.json and user-visible halt UI. Keep this a
+    /// closed mapping: CKError descriptions and userInfo can contain record names and
+    /// other private CloudKit coordinates.
+    private static func authenticationDetail(for code: CKError.Code) -> String {
+        switch code {
+        case .notAuthenticated:
+            return "sign in to iCloud to sync snippets"
+        case .permissionFailure:
+            return "iCloud denied access to the Snippets private database"
+        case .managedAccountRestricted:
+            return "this managed iCloud account does not permit Snippets sync"
+        default:
+            return "iCloud authentication is required"
+        }
+    }
+
+    private static func permanentDetail(for code: CKError.Code) -> String {
+        switch code {
+        case .missingEntitlement:
+            return "this build is not entitled to use the configured CloudKit container"
+        case .badContainer, .badDatabase:
+            return "the app's CloudKit container configuration is invalid"
+        case .invalidArguments, .incompatibleVersion:
+            return "this app version made an unsupported CloudKit request"
+        case .constraintViolation, .referenceViolation, .serverRejectedRequest:
+            return "CloudKit rejected this snippet record"
+        case .internalError:
+            return "CloudKit could not process this snippet record"
+        case .alreadyShared, .tooManyParticipants, .participantMayNeedVerification,
+             .participantAlreadyInvited:
+            return "the CloudKit sharing state is unsupported"
+        case .assetFileNotFound, .assetFileModified, .assetNotAvailable:
+            return "the CloudKit asset state is invalid"
+        case .resultsTruncated, .partialFailure:
+            return "CloudKit returned an incomplete record result"
+        default:
+            return "CloudKit permanently rejected this snippet record"
+        }
     }
 }
 

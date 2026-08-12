@@ -381,7 +381,7 @@ struct SyncEngineFaultInjectionTests {
         #expect(try serverEnvelope(snippetID, transport: backend, sealer: sealer)?.deleted == true)
     }
 
-    @Test func rekeyRetryRetainsCursorForCASAndConflictsWithIndependentRemoteWrite() async throws {
+    @Test func rekeyRetryDropsCursorButRetainsCASAndConflictsWithIndependentWrite() async throws {
         let snippetID = id(5)
         let ancestorA = envelope(
             snippetID, device: Self.deviceA, revision: 100,
@@ -426,30 +426,30 @@ struct SyncEngineFaultInjectionTests {
         #expect(acceptingBackend.snapshot == [storedA])
 
         journal.stageConfirmedForTransportRekey(confirmed, now: Date(timeIntervalSince1970: 2))
-        let resetBase = SyncBase(cursor: confirmed.cursor)
+        let resetBase = SyncBase(recordVersions: confirmed.recordVersions)
         #expect(resetBase.envelopes.isEmpty)
-        #expect(resetBase.cursor == cursorAtA,
-                "rekey must retain the compare-and-swap ancestor cursor")
+        #expect(resetBase.cursor == nil,
+                "a fresh scheduler epoch cannot inherit its predecessor's cursor")
+        #expect(journal.entry(snippetID)?.offered?.recordVersion == versionA,
+                "CloudKit change tags remain valid across a local wire-key rotation")
+        #expect(resetBase.recordVersion(snippetID) == versionA)
         #expect(journal.pending(confirmed: resetBase) == [offeredC],
                 "staging A must not replace the existing lost-ACK offer C")
 
-        let accepted = try await acceptingBackend.submit([wireCNewKey], at: resetBase.cursor)
+        let accepted = try await acceptingBackend.submit(
+            [wireCNewKey], at: resetBase.cursor)
         #expect(accepted.acceptedIDs == [snippetID],
-                "C can replace A because the retained cursor covers A's write")
+                "C can safely replace A using A's retained record change tag")
         let acceptedRecord = try #require(acceptingBackend.snapshot.first)
         #expect(try WireCodec.open(acceptedRecord, using: newSealer) == offeredC)
 
-        // In the independent branch, D lands after the same old cursor. Retaining that
-        // cursor must cause C to conflict rather than blindly overwrite D; the fetched
-        // D can then be merged with C over their shared ancestor A.
+        // In the independent branch, D lands after the discarded old cursor. The same
+        // V1-conditioned C must conflict rather than blindly overwrite D/V2; a full
+        // fetch then supplies D for an application-level merge over shared ancestor A.
         let conflictingBackend = InMemoryTransport()
         conflictingBackend.seed([wireA])
-        var conflictingOffer = wireCNewKey
-        conflictingOffer.recordVersion = try #require(
-            conflictingBackend.snapshot.first?.recordVersion)
-        let sharedCursor = try #require(conflictingBackend.currentCursor)
         conflictingBackend.seed([wireD])
-        let rejected = try await conflictingBackend.submit([conflictingOffer], at: sharedCursor)
+        let rejected = try await conflictingBackend.submit([wireCNewKey], at: nil)
         let conflict = try #require(rejected.rejections.first)
         #expect(conflict.id == snippetID)
         if case .conflict(let remote) = conflict.rejection {
@@ -458,7 +458,7 @@ struct SyncEngineFaultInjectionTests {
             Issue.record("expected the post-cursor independent write D to conflict")
         }
 
-        let fetched = try await conflictingBackend.fetchChanges(since: sharedCursor)
+        let fetched = try await conflictingBackend.fetchChanges(since: nil)
         let fetchedRecord = try #require(fetched.records.first(where: { $0.id == snippetID }))
         let fetchedD = try WireCodec.open(fetchedRecord, using: newSealer)
         #expect(fetchedD == independentD)

@@ -1261,8 +1261,8 @@ private final class SyncSettingsViewController: NSViewController {
         // it. Saying so here is cheaper than a support question.
         let limits = makeTertiaryLabel(
             "How often you use each snippet stays on this Mac and never syncs. "
-            + "Snippets does not use push notifications for sync, so a change made on another "
-            + "Mac can take up to two minutes to appear.")
+            + "iCloud schedules silent background sync; use Sync Now if a change from another "
+            + "device has not appeared yet.")
 
         secondMacLabel.font = .systemFont(ofSize: 12)
         secondMacLabel.textColor = .secondaryLabelColor

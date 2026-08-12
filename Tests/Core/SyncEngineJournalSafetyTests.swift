@@ -112,6 +112,25 @@ struct SyncEngineJournalSafetyTests {
         var cursor: SyncCursor?
     }
 
+    /// The schema gate in the build immediately before CKSyncEngine. Synthesized
+    /// decoding would ignore `cursorKind`, so the version check is the actual fence.
+    private struct SchemaTwoBaseReader: Decodable {
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let version = try container.decode(Int.self, forKey: .schemaVersion)
+            guard (1...2).contains(version) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .schemaVersion,
+                    in: container,
+                    debugDescription: "unsupported sync-base schema version")
+            }
+        }
+    }
+
     private func envelope(_ id: UUID) -> SyncEnvelope {
         SyncEnvelope(
             id: id,
@@ -194,6 +213,30 @@ struct SyncEngineJournalSafetyTests {
         }
     }
 
+    @Test func schemaThreeBaseRejectsUnknownFutureTopLevelField() throws {
+        let scratch = try ScratchDirectory("strict-base-future-field")
+        defer { scratch.remove() }
+        let baseURL = scratch.file("base.json")
+        let futureField = "cursorGenerationKindV4"
+        let document = try JSONSerialization.data(
+            withJSONObject: [
+                "schemaVersion": SyncBase.currentSchemaVersion,
+                "envelopes": [:],
+                "recordVersions": [:],
+                "journalEstablished": true,
+                futureField: "unknown-protocol-sentinel",
+            ],
+            options: [.sortedKeys])
+        try document.write(to: baseURL)
+
+        guard case .unreadable = SyncBaseFile.load(from: baseURL) else {
+            Issue.record(
+                "an unknown future field must not be ignored and erased on the next write")
+            return
+        }
+        #expect(try Data(contentsOf: baseURL) == document)
+    }
+
     @Test func legacySchemaOneWithoutJournalMarkerLoadsAndMigratesOnFirstRound() async throws {
         let scratch = try ScratchDirectory("legacy-base-migration")
         defer { scratch.remove() }
@@ -233,7 +276,7 @@ struct SyncEngineJournalSafetyTests {
         #expect(FileManager.default.fileExists(atPath: journalURL.path))
     }
 
-    @Test func accountBindingForcesADowngradeSafeBaseSchemaBump() throws {
+    @Test func accountBindingAndCursorKindForceADowngradeSafeBaseSchemaBump() throws {
         let scratch = try ScratchDirectory("marker-downgrade")
         defer { scratch.remove() }
         let baseURL = scratch.file("base.json")
@@ -245,12 +288,15 @@ struct SyncEngineJournalSafetyTests {
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let legacy = try decoder.decode(
-            LegacyBaseDecoder.self, from: Data(contentsOf: baseURL))
+        let baseBytes = try Data(contentsOf: baseURL)
+        let legacy = try decoder.decode(LegacyBaseDecoder.self, from: baseBytes)
 
         #expect(legacy.schemaVersion == SyncBase.currentSchemaVersion)
-        #expect(legacy.schemaVersion == 2,
-                "an older build must stop instead of dropping the account binding and reusing its cursor under another private database")
+        #expect(legacy.schemaVersion == 3,
+                "schema 3 must stop schema-2 builds before they ignore CKSyncEngine cursorKind and reinterpret a synthetic inbox receipt as a legacy CloudKit token; the account-binding fence remains intact")
+        #expect(throws: (any Error).self) {
+            try decoder.decode(SchemaTwoBaseReader.self, from: baseBytes)
+        }
         #expect(legacy.cursor == current.cursor)
         #expect(Set(legacy.envelopes.keys) == [SyncBase.key(snippetID)])
     }

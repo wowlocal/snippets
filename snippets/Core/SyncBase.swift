@@ -14,10 +14,10 @@ import Foundation
 /// must reach disk before the exact offer can be removed from journal.json.
 nonisolated struct SyncBase: Equatable {
 
-    /// Schema 2 makes the account binding downgrade-safe. A schema-1 reader must not
-    /// ignore that field, reuse this cursor under another private database, and then
-    /// write the checkpoint back without the only evidence that detects the switch.
-    static let currentSchemaVersion = 2
+    /// Schema 2 made account binding downgrade-safe. Schema 3 additionally fences the
+    /// switch from CKServerChangeToken to CKSyncEngine's synthetic durable-inbox cursor:
+    /// an older reader stops on the version before it can alternate the two protocols.
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int
     /// Every record as last agreed, keyed by lowercase uuid string so the file is
@@ -30,6 +30,9 @@ nonisolated struct SyncBase: Equatable {
     var recordVersions: [String: SyncRecordVersion]
     /// The backend cursor these envelopes correspond to.
     var cursor: SyncCursor?
+    /// Protocol family that issued `cursor`. Schema 1/2 cursors migrate as `.legacy`;
+    /// schema 3 requires an explicit value whenever a cursor exists.
+    var cursorKind: SyncCursorKind?
     /// Once true, a missing journal is evidence of lost protocol state rather than a
     /// pre-journal installation. The engine sets it only after journal.json is durable
     /// and before the first network operation that can create an ambiguous offer.
@@ -38,21 +41,29 @@ nonisolated struct SyncBase: Equatable {
     /// `nil` is valid for an accountless backend and identifies a legacy CloudKit base
     /// that requires migration before any data-plane operation.
     var accountIdentity: SyncAccountIdentity?
+    /// A crash-safe request to replace transport-private scheduler progress before the
+    /// next data-plane call. Local maintenance writes this only after surviving intent
+    /// is durable; Core clears it only after the transport reset succeeds.
+    var requiresTransportFullResync: Bool
 
     init(
         schemaVersion: Int = SyncBase.currentSchemaVersion,
         envelopes: [String: SyncEnvelope] = [:],
         recordVersions: [String: SyncRecordVersion] = [:],
         cursor: SyncCursor? = nil,
+        cursorKind: SyncCursorKind? = nil,
         journalEstablished: Bool = false,
-        accountIdentity: SyncAccountIdentity? = nil
+        accountIdentity: SyncAccountIdentity? = nil,
+        requiresTransportFullResync: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.envelopes = envelopes
         self.recordVersions = recordVersions
         self.cursor = cursor
+        self.cursorKind = cursor == nil ? nil : (cursorKind ?? .legacy)
         self.journalEstablished = journalEstablished
         self.accountIdentity = accountIdentity
+        self.requiresTransportFullResync = requiresTransportFullResync
     }
 
     static func key(_ id: UUID) -> String { id.uuidString.lowercased() }
@@ -84,6 +95,12 @@ nonisolated struct SyncBase: Equatable {
 
     mutating func removeRecordVersion(_ id: UUID) {
         recordVersions.removeValue(forKey: Self.key(id))
+    }
+
+    mutating func adoptCursor(_ cursor: SyncCursor?, kind: SyncCursorKind?) {
+        schemaVersion = Self.currentSchemaVersion
+        self.cursor = cursor
+        cursorKind = cursor == nil ? nil : (kind ?? .legacy)
     }
 
     /// What this device has that the backend has not seen.
@@ -124,12 +141,21 @@ nonisolated struct SyncBase: Equatable {
 /// would be free to reorder keys. Storing each envelope as its canonical bytes keeps one
 /// definition of "what an envelope looks like" instead of two that can drift.
 nonisolated extension SyncBase: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case schemaVersion, envelopes, recordVersions, cursor, journalEstablished
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion, envelopes, recordVersions, cursor, cursorKind, journalEstablished
         case accountIdentity
+        case requiresTransportFullResync
     }
 
     init(from decoder: Decoder) throws {
+        let allFields = try decoder.container(keyedBy: AnyCodingKey.self)
+        let actual = Set(allFields.allKeys.map(\.stringValue))
+        let expected = Set(CodingKeys.allCases.map(\.rawValue))
+        guard actual.isSubset(of: expected) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath,
+                      debugDescription: "unexpected sync-base fields"))
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         guard (1...SyncBase.currentSchemaVersion).contains(schemaVersion) else {
@@ -139,6 +165,24 @@ nonisolated extension SyncBase: Codable {
                 debugDescription: "unsupported sync-base schema version")
         }
         cursor = try container.decodeIfPresent(SyncCursor.self, forKey: .cursor)
+        if schemaVersion >= 3 {
+            cursorKind = try container.decodeIfPresent(
+                SyncCursorKind.self, forKey: .cursorKind)
+            guard (cursor == nil) == (cursorKind == nil) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .cursorKind,
+                    in: container,
+                    debugDescription: "sync cursor and cursor kind must be paired")
+            }
+        } else {
+            guard !container.contains(.cursorKind) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .cursorKind,
+                    in: container,
+                    debugDescription: "sync cursor kind requires sync-base schema 3")
+            }
+            cursorKind = cursor == nil ? nil : .legacy
+        }
         // Missing only on a pre-journal schema-1 checkpoint. Schema 2 is intentionally
         // a downgrade fence: an older build must stop on the version before it can
         // erase either this marker or the account binding added beside it.
@@ -161,6 +205,17 @@ nonisolated extension SyncBase: Codable {
                 forKey: .accountIdentity,
                 in: container,
                 debugDescription: "sync account identity requires sync-base schema 2")
+        }
+        requiresTransportFullResync = if container.contains(.requiresTransportFullResync) {
+            try container.decode(Bool.self, forKey: .requiresTransportFullResync)
+        } else {
+            false
+        }
+        if schemaVersion < 3, requiresTransportFullResync {
+            throw DecodingError.dataCorruptedError(
+                forKey: .requiresTransportFullResync,
+                in: container,
+                debugDescription: "transport full-resync marker requires sync-base schema 3")
         }
 
         let raw = try container.decode([String: String].self, forKey: .envelopes)
@@ -202,12 +257,46 @@ nonisolated extension SyncBase: Codable {
         }
     }
 
+    private struct AnyCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            intValue = nil
+        }
+
+        init?(intValue: Int) {
+            stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
     func encode(to encoder: Encoder) throws {
+        guard (cursor == nil) == (cursorKind == nil) else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "sync cursor and cursor kind must be paired"))
+        }
+        if schemaVersion < 3, cursorKind != nil, cursorKind != .legacy {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "CKSyncEngine cursor requires sync-base schema 3"))
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encodeIfPresent(cursor, forKey: .cursor)
+        if schemaVersion >= 3 {
+            try container.encodeIfPresent(cursorKind, forKey: .cursorKind)
+        }
         try container.encode(journalEstablished, forKey: .journalEstablished)
         try container.encodeIfPresent(accountIdentity, forKey: .accountIdentity)
+        if schemaVersion >= 3 {
+            try container.encode(requiresTransportFullResync,
+                                 forKey: .requiresTransportFullResync)
+        }
         var raw: [String: String] = [:]
         for (key, envelope) in envelopes {
             raw[key] = try envelope.canonicalData().base64EncodedString()

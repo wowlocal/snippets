@@ -120,6 +120,25 @@ final class CloudKitAccountIdentityTests: XCTestCase {
         XCTAssertEqual(fixture.recordIDCalls, 1)
     }
 
+    func testInjectedAccountBoundaryDoesNotInstantiateCloudKitContainerOrDataPlane() async throws {
+        let fixture = CloudKitAccountFixture(recordName: "injected-boundary-user")
+        let transport = CloudKitTransport(
+            accountStatusProvider: { fixture.accountStatus() },
+            userRecordIDProvider: { fixture.userRecordID() },
+            environmentProvider: { fixture.environment() })
+
+        let resolved = try await transport.resolveAccountIdentity()
+
+        XCTAssertEqual(resolved, CloudKitAccountIdentity.derive(
+            containerIdentifier: CloudKitSchema.containerIdentifier,
+            databaseScope: .private,
+            environment: .production,
+            userRecordID: CKRecord.ID(recordName: "injected-boundary-user")))
+        XCTAssertEqual(fixture.environmentCalls, 1)
+        XCTAssertEqual(fixture.statusCalls, 1)
+        XCTAssertEqual(fixture.recordIDCalls, 1)
+    }
+
     func testInjectedEnvironmentProviderSelectsTheResolvedIdentityScope() async throws {
         let fixture = CloudKitAccountFixture(
             recordName: "same-user-in-both-environments",

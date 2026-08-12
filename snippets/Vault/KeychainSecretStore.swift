@@ -1,6 +1,36 @@
 import Foundation
 import Security
 
+/// Injectable Security.framework boundary shared by the production keychain stores.
+///
+/// Keeping the exact C-shaped calls here lets tests inspect queries and updates without
+/// touching a simulator's real keychain. Production uses `live`, which is only a thin
+/// forwarding layer and does not change Security.framework's ownership rules.
+nonisolated struct KeychainItemOperations: @unchecked Sendable {
+    let copyMatching: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+    let update: (CFDictionary, CFDictionary) -> OSStatus
+    let add: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+    let delete: (CFDictionary) -> OSStatus
+
+    init(
+        copyMatching: @escaping (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus,
+        update: @escaping (CFDictionary, CFDictionary) -> OSStatus,
+        add: @escaping (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus,
+        delete: @escaping (CFDictionary) -> OSStatus
+    ) {
+        self.copyMatching = copyMatching
+        self.update = update
+        self.add = add
+        self.delete = delete
+    }
+
+    static let live = KeychainItemOperations(
+        copyMatching: { query, result in SecItemCopyMatching(query, result) },
+        update: { query, values in SecItemUpdate(query, values) },
+        add: { attributes, result in SecItemAdd(attributes, result) },
+        delete: { query in SecItemDelete(query) })
+}
+
 /// Holds the small items that have to reach a user's other Macs, in the macOS Keychain.
 ///
 /// This is the primary home of `K_lib`. The wraps in `vault.json` are escape hatches;
@@ -72,6 +102,7 @@ final class KeychainSecretStore {
     }
 
     private let service: String
+    private let keychainOperations: KeychainItemOperations
     /// Instance-local test backend. Production always leaves this `nil` and reaches
     /// Security.framework; unsigned simulator tests can exercise vault ordering without
     /// requiring or mutating a real keychain access group.
@@ -81,11 +112,13 @@ final class KeychainSecretStore {
     init(
         tier: Tier? = nil,
         service: String = "com.khm.snippets.vault",
-        inMemory: Bool = false
+        inMemory: Bool = false,
+        keychainOperations: KeychainItemOperations = .live
     ) {
         self.tier = tier ?? Self.detectTier()
         self.service = service
         self.inMemoryItems = inMemory ? [:] : nil
+        self.keychainOperations = keychainOperations
     }
 
     // MARK: - Which tier this build actually gets
@@ -162,17 +195,17 @@ final class KeychainSecretStore {
         let query = baseQuery(account: account)
         let values: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: accessibility,
+            kSecAttrAccessible as String: accessibility(for: account),
         ]
 
-        let update = SecItemUpdate(query as CFDictionary, values as CFDictionary)
+        let update = keychainOperations.update(query as CFDictionary, values as CFDictionary)
         switch update {
         case errSecSuccess:
             return
         case errSecItemNotFound:
             var attributes = query
             for (name, value) in values { attributes[name] = value }
-            let add = SecItemAdd(attributes as CFDictionary, nil)
+            let add = keychainOperations.add(attributes as CFDictionary, nil)
             guard add == errSecSuccess else { throw Failure.unavailable(add) }
         default:
             throw Failure.unavailable(update)
@@ -198,9 +231,9 @@ final class KeychainSecretStore {
 
         var attributes = baseQuery(account: account)
         attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = accessibility
+        attributes[kSecAttrAccessible as String] = accessibility(for: account)
 
-        let add = SecItemAdd(attributes as CFDictionary, nil)
+        let add = keychainOperations.add(attributes as CFDictionary, nil)
         switch add {
         case errSecSuccess:
             return data
@@ -244,8 +277,14 @@ final class KeychainSecretStore {
             return try validated(value)
         }
 
-        if let current = try copyData(matching: baseQuery(account: account)) {
-            return try validated(current)
+        let primaryQuery = baseQuery(account: account)
+        if let current = try copyItem(matching: primaryQuery) {
+            let data = try validated(current.data)
+            try migrateAccessibilityIfNeeded(
+                account: account,
+                query: primaryQuery,
+                currentAccessibility: current.accessibility)
+            return data
         }
 
         guard case .synchronizable = tier,
@@ -306,7 +345,7 @@ final class KeychainSecretStore {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = keychainOperations.copyMatching(query as CFDictionary, &item)
         switch status {
         case errSecSuccess:
             guard let data = item as? Data else { throw Failure.unavailable(status) }
@@ -322,8 +361,55 @@ final class KeychainSecretStore {
         }
     }
 
+    private struct LoadedItem {
+        var data: Data
+        var accessibility: String?
+    }
+
+    /// Reads bytes and their protection class in one operation so a load can migrate
+    /// only a stale protection attribute. The returned bytes are validated by the
+    /// caller before any update is attempted.
+    private func copyItem(matching base: [String: Any]) throws -> LoadedItem? {
+        var query = base
+        query[kSecReturnData as String] = true
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = keychainOperations.copyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let attributes = item as? [String: Any],
+                  let data = attributes[kSecValueData as String] as? Data
+            else { throw Failure.unavailable(status) }
+            return LoadedItem(
+                data: data,
+                accessibility: attributes[kSecAttrAccessible as String] as? String)
+        case errSecItemNotFound:
+            return nil
+        case errSecUserCanceled:
+            throw Failure.userCancelled
+        case errSecAuthFailed:
+            throw Failure.authenticationFailed
+        default:
+            throw Failure.unavailable(status)
+        }
+    }
+
+    private func migrateAccessibilityIfNeeded(
+        account: String,
+        query: [String: Any],
+        currentAccessibility: String?
+    ) throws {
+        let required = accessibility(for: account)
+        guard currentAccessibility != required as String else { return }
+        let status = keychainOperations.update(
+            query as CFDictionary,
+            [kSecAttrAccessible as String: required] as CFDictionary)
+        guard status == errSecSuccess else { throw Failure.unavailable(status) }
+    }
+
     private func deleteMatching(_ query: [String: Any]) throws {
-        let status = SecItemDelete(query as CFDictionary)
+        let status = keychainOperations.delete(query as CFDictionary)
         if status != errSecSuccess, status != errSecItemNotFound {
             throw Failure.unavailable(status)
         }
@@ -364,11 +450,17 @@ final class KeychainSecretStore {
 
     // MARK: - Query construction
 
-    /// `...ThisDeviceOnly` on the local tier, plain `...WhenUnlocked` on the
-    /// synchronizable one — the `ThisDeviceOnly` variants are, by definition, refused
-    /// for a synchronizable item.
-    private var accessibility: CFString {
-        tier.syncsBetweenDevices
+    /// Vault and identity items stay `WhenUnlocked`; only the fixed wire-key account is
+    /// available after first unlock so CKSyncEngine can run while the device is locked.
+    /// Local-tier variants remain device-only, while a synchronizable item cannot use a
+    /// `ThisDeviceOnly` protection class by definition.
+    private func accessibility(for account: String) -> CFString {
+        if account == SyncKeyStore.account {
+            return tier.syncsBetweenDevices
+                ? kSecAttrAccessibleAfterFirstUnlock
+                : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        }
+        return tier.syncsBetweenDevices
             ? kSecAttrAccessibleWhenUnlocked
             : kSecAttrAccessibleWhenUnlockedThisDeviceOnly
     }
@@ -405,7 +497,7 @@ final class KeychainSecretStore {
         var query = base
         query[kSecReturnData as String] = false
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        let status = keychainOperations.copyMatching(query as CFDictionary, nil)
         switch status {
         case errSecSuccess: return true
         case errSecItemNotFound: return false

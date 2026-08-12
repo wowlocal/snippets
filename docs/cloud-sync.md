@@ -475,9 +475,10 @@ so two processes on one Mac cannot mint two wire keys. Two *Macs* that both mint
 Keychain has propagated either can — which needs a user enabling sync on two Macs within about a
 minute, ever, and only the first time. iCloud Keychain converges on one; `SyncCoordinator` notices
 the stored key no longer matches the one its engine holds, durably stages every confirmed envelope
-as an offer, then clears only the confirmed envelopes while retaining the change cursor. That cursor
-and each record's archived CloudKit system fields preserve the transport ancestry needed when
-replacing old-key records. Every staged offer captures the exact per-record generation beside its
+as an offer, then clears the confirmed envelopes and CKSyncEngine scheduler checkpoint. Each
+record's archived CloudKit system fields remain valid across this payload-key change and preserve
+the transport ancestry needed when replacing old-key records. Every staged offer captures the
+exact per-record generation beside its
 payload and CloudKit saves with `.ifServerRecordUnchanged`, so re-encryption cannot authorize an
 overwrite of a newer independent edit. The projection sidecar is kept:
 its HLC/origin and unknown extension fields are independent of the wire key, and deleting it would
@@ -497,7 +498,7 @@ the offer rather than only its UUID is essential: after fetch persists B/V2 but 
 older offer A/V1, a crash must retry A with V1, never with V2 that would authorize overwriting B.
 
 Before even reading the local library, a CloudKit round binds that protocol state to the current
-private database. `base.json` schema 2 stores an opaque SHA-256 account identity derived from four
+private database. `base.json` schema 3 stores an opaque SHA-256 account identity derived from four
 separately length-prefixed routing coordinates: the explicit container, private-database scope,
 the CloudKit environment selected by the running binary's actual code-signing entitlement, and
 `CKContainer.userRecordID()`. Development and Production are distinct even if CloudKit returns the
@@ -525,9 +526,25 @@ intent, then writes an empty confirmed base bound to the new account. `snippets.
 projection sidecar are not erased, so the next round merges this device's library into the new
 private database instead of treating either account as authoritative. The one-shot review is
 consumed before fallible work and cannot survive a crash or failed account-resolution attempt.
-Rekey, secure-snippet forget, and rollback preserve the binding. Schema 2 is also a downgrade
-fence: an older binary stops at the future base/state version rather than silently stripping the
-account boundary.
+Rekey, secure-snippet forget, and rollback preserve the binding. Schema 2 introduced the account
+boundary; schema 3 also records the cursor family. That second downgrade fence prevents an older
+binary from feeding a CKSyncEngine synthetic inbox cursor to the legacy CKServerChangeToken path.
+
+CloudKit scheduling now belongs to `CKSyncEngine`, while the existing domain `SyncEngine` remains
+the only merge reducer and `SyncJournal` remains the only durable outbound source of truth.
+`hasPendingUntrackedChanges` is only a wake hint: snippet records are leased immutably from the
+journal, and tombstones are still record saves rather than CloudKit physical deletes. Automatic
+scheduling uses CKSyncEngine's subscription and silent APNs wake. Startup, foreground, and
+**Sync Now** remain explicit triggers; a six-hour timer is only a missed-push health check.
+
+CKSyncEngine's opaque state serialization may contain account-identifying CloudKit state. It is
+therefore persisted only inside `Sync/cksync-checkpoint.bin`, an AES-GCM envelope encrypted with a
+separate per-install, non-synchronizable, device-only Keychain key. The same atomic envelope holds
+ordered inbound generations. A generation is removed only when a later round presents the cursor
+that Core already wrote durably to `base.json`; the adapter exposes the complete inbox as one
+`hasMore == false` fetch so an intra-round page cursor can never become a premature ACK. A missing
+key, failed authentication tag, account mismatch, zone deletion, purge, or encrypted-data reset
+fails closed and requires reviewed recovery; an established zone is never recreated automatically.
 
 Before deriving that snapshot, the bridge synchronously makes pending ordinary edits durable in
 the primary `snippets.json`. A termination rescue copy is not sufficient: restart projects the
@@ -538,7 +555,7 @@ a synchronous **Sync Now** request from inside a change callback.
 Local app edits and filesystem changes adopted from `snippets-cli` request an outbound round on a
 one-second trailing debounce. The debounce resets across a burst, so an editor typing run or a
 script invoking the CLI once per input line produces one round after the burst rather than one
-CloudKit operation per mutation. A manual, startup, foreground, or polling round consumes any
+CloudKit operation per mutation. A manual, startup, foreground, push, or health-check round consumes any
 pending debounce because it already includes the current library. Changes written while applying
 a fetched CloudKit batch are marked as remote and refresh the UI without scheduling a replay.
 
@@ -651,14 +668,12 @@ Still unverified, each with a fallback:
 
 | Unknown | Fallback |
 |---|---|
-| `CKSyncEngine` specifically in a non-sandboxed Developer ID build (no shipping exemplar found) | Hand-roll `CKFetchRecordZoneChangesOperation`/`CKModifyRecordsOperation` behind the same protocol, or ship object storage first |
-| Push delivery to such an app | Polling; `supportsPush` is already on the protocol |
+| CKSyncEngine subscription and push delivery in the exported non-sandboxed Developer ID build | The six-hour health check, foreground/startup refresh, and explicit **Sync Now** remain |
 | Data-protection Keychain + access group after a Sparkle update, on a stapled build | Keep the entitlement-free login-keychain tier; recovery keys make a missing item recoverable |
 
-**Requires the maintainer's Apple Developer account**: enabling iCloud and Keychain Sharing on the
-App IDs, and creating the container. Until then the CloudKit backend cannot be built, so the code
-must gate on the entitlement at runtime (read the app's own entitlements via `SecCodeCopySelf` →
-`SecCodeCopySigningInformation`) and degrade to the other backend rather than crash.
+**Requires the maintainer's Apple Developer account**: the App IDs and provisioning profiles must
+authorize iCloud, Keychain Sharing, and APNs. Build scripts validate the entitlements on the signed
+artifact and their exact profile authorization; simulator builds cannot prove push delivery.
 
 Adding any of these entitlements means the app permanently carries
 `Contents/embedded.provisionprofile`, which Gatekeeper evaluates at launch. That is a new single

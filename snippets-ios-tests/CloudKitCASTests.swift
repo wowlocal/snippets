@@ -200,6 +200,33 @@ final class CloudKitCASTests: XCTestCase {
         XCTAssertEqual(restored.recordType, CloudKitSchema.recordType)
     }
 
+    func testInboundServerRecordOverBlobLimitIsRejectedBeforeWireInbox() throws {
+        let zoneID = zone()
+        let record = CKRecord(
+            recordType: CloudKitSchema.recordType,
+            recordID: CloudKitRecordMapping.recordID(for: snippetID, in: zoneID))
+        try assignServerChangeTag("oversized-inbound-record", to: record)
+        record[CloudKitSchema.Field.rev] = "oversized-revision" as CKRecordValue
+        record[CloudKitSchema.Field.deleted] = false as CKRecordValue
+        record[CloudKitSchema.Field.blob] = Data(
+            repeating: 0xA5,
+            count: CloudKitSchema.maxBlobBytes + 1) as CKRecordValue
+
+        XCTAssertThrowsError(
+            try CloudKitRecordMapping.makeWireRecord(
+                from: record,
+                expectedZoneID: zoneID)
+        ) { error in
+            guard case CloudKitRecordMapping.Failure.blobTooLarge(
+                let bytes, let recordName
+            ) = error else {
+                return XCTFail("oversized inbound blob failed for the wrong reason: \(error)")
+            }
+            XCTAssertEqual(bytes, CloudKitSchema.maxBlobBytes + 1)
+            XCTAssertEqual(recordName, self.snippetID.uuidString.lowercased())
+        }
+    }
+
     func testServerRecordChangedCarriesAuthoritativeRemoteWireRecord() throws {
         let zoneID = zone()
         let remoteRecord = try CloudKitRecordMapping.makeRecord(from: wire(), in: zoneID)
@@ -251,6 +278,91 @@ final class CloudKitCASTests: XCTestCase {
                     result: malformedFailure,
                     expectedZoneID: zoneID) else {
             return XCTFail("an unusable server record must fail safely without invented data")
+        }
+    }
+
+    func testFreshCreateFailureUsesIssuedWireToPreserveAuthoritativeConflict() throws {
+        let zoneID = zone()
+        let offered = wire(version: nil, rev: "fresh-create")
+        let failedFreshRecord = try CloudKitRecordMapping.makeRecord(
+            from: offered,
+            in: zoneID)
+        XCTAssertNil(failedFreshRecord.recordChangeTag,
+                     "the failed attempted create has no server generation to map")
+
+        let authoritativeWire = wire(version: nil, rev: "remote-winner")
+        let authoritativeRecord = try CloudKitRecordMapping.makeRecord(
+            from: authoritativeWire,
+            in: zoneID)
+        try assignServerChangeTag("authoritative-create-conflict", to: authoritativeRecord)
+        let conflict = CKError(
+            .serverRecordChanged,
+            userInfo: [CKRecordChangedErrorServerRecordKey: authoritativeRecord])
+
+        let result = CloudKitSyncEngineDriver.failedSentResult(
+            failedRecord: failedFreshRecord,
+            error: conflict,
+            issued: [offered.id: offered],
+            zoneID: zoneID)
+
+        guard case .rejected(let id, .conflict(remote: let remote?))? = result else {
+            return XCTFail(
+                "an issued fresh-create conflict must not degrade to omission/rate-limit")
+        }
+        XCTAssertEqual(id, offered.id)
+        XCTAssertEqual(remote.id, offered.id)
+        XCTAssertEqual(remote.rev, authoritativeWire.rev)
+        XCTAssertEqual(remote.blob, authoritativeWire.blob)
+        XCTAssertNotNil(remote.recordVersion)
+    }
+
+    func testFailedSendCallbackOutsideIssuedLeaseOrZoneIsIgnored() throws {
+        let zoneID = zone()
+        let offered = wire(version: nil, rev: "issued")
+        let failed = try CloudKitRecordMapping.makeRecord(from: offered, in: zoneID)
+        let error = CKError(.serverRecordChanged)
+
+        XCTAssertNil(CloudKitSyncEngineDriver.failedSentResult(
+            failedRecord: failed,
+            error: error,
+            issued: [:],
+            zoneID: zoneID),
+            "a callback for an unissued UUID has no authority over the active lease")
+
+        let other = wire(id: UUID(), version: nil, rev: "other-issued")
+        XCTAssertNil(CloudKitSyncEngineDriver.failedSentResult(
+            failedRecord: failed,
+            error: error,
+            issued: [other.id: other],
+            zoneID: zoneID))
+
+        XCTAssertNil(CloudKitSyncEngineDriver.failedSentResult(
+            failedRecord: failed,
+            error: error,
+            issued: [offered.id: offered],
+            zoneID: zone("ForeignZone")),
+            "a callback from another zone must be ignored even for the same UUID")
+    }
+
+    func testZoneLossErrorsArePermanentWhileRecordAndTokenMissesRemainRetryable() {
+        let zoneLossCodes: [CKError.Code] = [.zoneNotFound, .userDeletedZone]
+        for code in zoneLossCodes {
+            let rejection = CloudKitErrorMapping.rejection(for: CKError(code))
+            XCTAssertFalse(rejection.isRetryable, "\(code) must require zone review")
+            guard case .permanent = rejection else {
+                XCTFail("\(code) must map to a permanent rejection")
+                continue
+            }
+        }
+
+        let recoverableCodes: [CKError.Code] = [.changeTokenExpired, .unknownItem]
+        for code in recoverableCodes {
+            let rejection = CloudKitErrorMapping.rejection(for: CKError(code))
+            XCTAssertTrue(rejection.isRetryable, "\(code) remains recoverable in the mapper")
+            guard case .rateLimited = rejection else {
+                XCTFail("\(code) must retain a retryable mapper result")
+                continue
+            }
         }
     }
 

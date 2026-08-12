@@ -60,14 +60,14 @@ final class SyncKeyStore {
 
     enum Failure: Error, CustomStringConvertible {
         case malformedMaterial(Int)
-        case keychain(String)
+        case keychainUnavailable
 
         var description: String {
             switch self {
             case .malformedMaterial(let count):
                 return "the stored sync key must be \(SyncKeyStore.materialByteCount) bytes; found \(count)"
-            case .keychain(let detail):
-                return "the keychain refused the sync key: \(detail)"
+            case .keychainUnavailable:
+                return "the keychain could not provide the sync key"
             }
         }
     }
@@ -99,15 +99,15 @@ final class SyncKeyStore {
         } catch let failure as Failure {
             throw failure
         } catch {
-            throw Failure.keychain("\(error)")
+            throw Failure.keychainUnavailable
         }
     }
 
     /// The wire key, minting and storing one on first use.
     ///
     /// No user presence, deliberately — see the type's documentation. Background rounds
-    /// run every two minutes and must not raise a Touch ID sheet over whatever the user
-    /// is actually doing.
+    /// may be started silently by CKSyncEngine and must not raise a Touch ID sheet over
+    /// whatever the user is actually doing.
     func materialMintingIfNeeded() throws -> Data {
         if let existing = try material() { return existing }
 
@@ -124,7 +124,7 @@ final class SyncKeyStore {
         } catch let failure as Failure {
             throw failure
         } catch {
-            throw Failure.keychain("\(error)")
+            throw Failure.keychainUnavailable
         }
     }
 

@@ -999,7 +999,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }
         // A later opt-in deliberately performs a full fetch, allowing the remote vault
         // to return without forgetting ordinary confirmed ancestors.
-        retainedBase.cursor = nil
+        retainedBase.adoptCursor(nil, kind: nil)
+        retainedBase.requiresTransportFullResync = !baseWasMissing
         retainedJournal.forgetSecureIntent()
         // System fields are credentials to replace the corresponding remote record.
         // Keep them for every ordinary confirmation or surviving ordinary desired
@@ -1067,7 +1068,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // metadata on the next upload, so remove only entries owned by the deleted vault.
         if case .loaded(var metadata) = SyncBaseFile.load(from: syncMetadataURL) {
             metadata.envelopes = metadata.envelopes.filter { !$0.value.secure }
-            metadata.cursor = nil
+            metadata.adoptCursor(nil, kind: nil)
             do {
                 try SyncBaseFile.write(
                     metadata, to: syncMetadataURL, temporaryDirectory: temporaryDirectory)

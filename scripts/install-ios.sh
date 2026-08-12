@@ -327,6 +327,10 @@ actual_services="$(plist_value "$WORK_DIR/app-entitlements.plist" \
     com.apple.developer.icloud-services || true)"
 actual_keychain_groups="$(plist_value "$WORK_DIR/app-entitlements.plist" \
     keychain-access-groups || true)"
+actual_aps_environment="$(plist_value "$WORK_DIR/app-entitlements.plist" \
+    aps-environment || true)"
+actual_background_modes="$(plist_value "$APP_PATH/Info.plist" \
+    UIBackgroundModes || true)"
 
 [ "$actual_bundle_identifier" = "$BUNDLE_IDENTIFIER" ] \
     || fail "Unexpected Release bundle identifier: $actual_bundle_identifier"
@@ -340,6 +344,10 @@ actual_keychain_groups="$(plist_value "$WORK_DIR/app-entitlements.plist" \
     || fail "The signed app does not contain the CloudKit service entitlement"
 [[ "$actual_keychain_groups" == *"$expected_application_identifier"* ]] \
     || fail "The signed app does not contain the shared keychain group"
+[ -n "$actual_aps_environment" ] \
+    || fail "The signed app does not contain the APNs environment entitlement"
+[[ "$actual_background_modes" == *"remote-notification"* ]] \
+    || fail "The built app does not permit silent remote-notification background wakes"
 
 profile_application_identifier="$(plist_value "$WORK_DIR/profile.plist" \
     Entitlements:application-identifier || true)"
@@ -351,6 +359,8 @@ profile_services="$(plist_value "$WORK_DIR/profile.plist" \
     Entitlements:com.apple.developer.icloud-services || true)"
 profile_keychain_groups="$(plist_value "$WORK_DIR/profile.plist" \
     Entitlements:keychain-access-groups || true)"
+profile_aps_environment="$(plist_value "$WORK_DIR/profile.plist" \
+    Entitlements:aps-environment || true)"
 
 [ "$profile_application_identifier" = "$actual_application_identifier" ] \
     || fail "The provisioning profile does not authorize the Release App ID"
@@ -363,6 +373,8 @@ profile_keychain_groups="$(plist_value "$WORK_DIR/profile.plist" \
 [[ "$profile_keychain_groups" == *"$expected_application_identifier"* \
     || "$profile_keychain_groups" == *"$TEAM_IDENTIFIER.*"* ]] \
     || fail "The provisioning profile does not authorize the shared keychain group"
+[ "$profile_aps_environment" = "$actual_aps_environment" ] \
+    || fail "The signed APNs environment does not match the provisioning profile"
 
 profile_expiry="$(plist_value "$WORK_DIR/profile.plist" ExpirationDate || true)"
 profile_expiry_seconds="$(date -j -f '%a %b %d %T %Z %Y' \
@@ -381,7 +393,7 @@ fi
 
 profile_vouches_for_signature "$APP_PATH" "$WORK_DIR/profile.plist" \
     || fail "The provisioning profile does not contain the app's signing certificate"
-success "Signature, certificate, Production CloudKit, and keychain profile are valid"
+success "Signature, certificate, Production CloudKit, APNs, and keychain profile are valid"
 
 info "Installing $BUNDLE_IDENTIFIER in place"
 if ! run_redacted xcrun devicectl device install app \

@@ -194,6 +194,13 @@ nonisolated enum SnippetStorageLocations {
         syncFolderURL.appendingPathComponent("journal.json", isDirectory: false)
     }
 
+    /// Encrypted CKSyncEngine scheduler state and the inbound generations it already
+    /// advanced past. Unlike `base.json`, this is transport-private and may contain
+    /// CloudKit account coordinates, so its complete envelope is device-key encrypted.
+    static var cloudKitSyncCheckpointFileURL: URL {
+        syncFolderURL.appendingPathComponent("cksync-checkpoint.bin", isDirectory: false)
+    }
+
     /// The last envelope projected into the frozen local library files.
     ///
     /// Unlike `base.json`, this is the local side of the merge. It retains clocks,

@@ -32,7 +32,7 @@ nonisolated struct SyncRoundRequestCoalescer {
 /// both wasteful and more likely to hit backend throttling. Resetting one one-shot timer
 /// gives the whole burst a single round while keeping the ordinary interactive delay
 /// short. The timer runs in common modes so an open menu or editor tracking loop cannot
-/// strand a completed change until the next two-minute poll.
+/// strand a completed change until the next CKSyncEngine wake or health-check poll.
 @MainActor
 final class SyncTriggerDebouncer {
     private let delay: TimeInterval
@@ -66,6 +66,62 @@ final class SyncTriggerDebouncer {
     }
 }
 
+/// Arms exactly one retry at the deadline chosen by `SyncEngine` after a call-level
+/// transport failure. CKSyncEngine/APNs replace polling as the normal scheduler, but a
+/// missed network request still needs its exponential-backoff retry rather than waiting
+/// for the six-hour health check.
+@MainActor
+final class SyncOfflineRetryScheduler {
+    typealias Cancellation = () -> Void
+    typealias Arm = (TimeInterval, @escaping () -> Void) -> Cancellation
+
+    private let now: () -> Date
+    private let arm: Arm
+    private var cancellation: Cancellation?
+    private var generation: UInt64 = 0
+    private(set) var scheduledDeadline: Date?
+
+    init(
+        now: @escaping () -> Date = Date.init,
+        arm: @escaping Arm = { delay, action in
+            let timer = Timer(timeInterval: max(0, delay), repeats: false) { _ in
+                MainActor.assumeIsolated { action() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            return { timer.invalidate() }
+        }
+    ) {
+        self.now = now
+        self.arm = arm
+    }
+
+    func update(for state: SyncEngine.State, action: @escaping () -> Void) {
+        guard case .offline(let deadline) = state else {
+            cancel()
+            return
+        }
+        guard scheduledDeadline != deadline || cancellation == nil else { return }
+
+        cancel()
+        scheduledDeadline = deadline
+        generation &+= 1
+        let armedGeneration = generation
+        cancellation = arm(max(0, deadline.timeIntervalSince(now()))) { [weak self] in
+            guard let self, self.generation == armedGeneration else { return }
+            self.cancellation = nil
+            self.scheduledDeadline = nil
+            action()
+        }
+    }
+
+    func cancel() {
+        generation &+= 1
+        cancellation?()
+        cancellation = nil
+        scheduledDeadline = nil
+    }
+}
+
 /// Owns whether sync is running, and runs it.
 ///
 /// ## Off is structural, not filtered
@@ -94,7 +150,7 @@ final class SyncTriggerDebouncer {
 /// The old arrangement made sync a dependent of Secure Snippets — no vault meant no
 /// keyring meant nothing could be pushed, and a *locked* vault meant background rounds
 /// stopped until the user proved presence again. For a feature whose whole job is to run
-/// unattended every two minutes, that was fatal, and it was buying nothing: the wire key
+/// unattended in the background, that was fatal, and it was buying nothing: the wire key
 /// protects snippet bodies and metadata that already sit in the clear in `snippets.json`
 /// and `vault.json` on this disk, and it never protected a secure snippet's content,
 /// which reaches this layer already sealed under `K_rec`. See `SyncKeyStore` for the full
@@ -156,6 +212,7 @@ final class SyncCoordinator {
     private let keys: SyncKeyStore
     private let device: String
     private let transportFactory: () -> any SyncTransport
+    private let offlineRetryScheduler: SyncOfflineRetryScheduler
 
     private(set) var engine: SyncEngine?
     private(set) var state: SyncEngine.State = .disabled
@@ -174,6 +231,11 @@ final class SyncCoordinator {
     /// Retained until the round has actually returned. Cancellation is advisory across
     /// an awaited CloudKit call, so `engine == nil` is not proof that sync is quiescent.
     private var roundTask: Task<Void, Never>?
+    /// Retains the retiring transport until its current round and backend-owned
+    /// scheduler have both stopped. `start()` may not construct a replacement while
+    /// this barrier exists: production CloudKit permits only one CKSyncEngine per
+    /// database in a process.
+    private var shutdownTask: Task<Void, Never>?
     /// The generation of `roundTask`. After `stop()` cancellation is advisory, so a new
     /// engine may exist while the old task is still draining. Requests for that new
     /// generation belong to the replay, never to the old round.
@@ -209,12 +271,14 @@ final class SyncCoordinator {
         library: any SyncLibraryAccess,
         keys: SyncKeyStore,
         device: String,
-        transportFactory: @escaping () -> any SyncTransport = { CloudKitTransport() }
+        transportFactory: @escaping () -> any SyncTransport = { CloudKitTransport() },
+        offlineRetryScheduler: SyncOfflineRetryScheduler? = nil
     ) {
         self.library = library
         self.keys = keys
         self.device = device
         self.transportFactory = transportFactory
+        self.offlineRetryScheduler = offlineRetryScheduler ?? SyncOfflineRetryScheduler()
     }
 
     // MARK: - The preference
@@ -248,7 +312,7 @@ final class SyncCoordinator {
 
     /// Destructive local maintenance may proceed only after an old round has returned,
     /// not merely after the checkbox was switched off.
-    var isQuiescent: Bool { roundTask == nil }
+    var isQuiescent: Bool { roundTask == nil && shutdownTask == nil }
 
     @discardableResult
     func addStateObserver(_ observer: @escaping (SyncEngine.State) -> Void) -> UUID {
@@ -285,6 +349,9 @@ final class SyncCoordinator {
 
     func start() {
         guard Self.isEnabled, engine == nil else { return }
+        // Re-enabling is intentionally deferred while the prior transport drains. The
+        // shutdown task calls start again after its awaited backend barrier completes.
+        guard roundTask == nil, shutdownTask == nil else { return }
 
         let material: Data
         let sealer: SnippetCryptoSealer
@@ -356,8 +423,8 @@ final class SyncCoordinator {
     /// library change to notice it, and until then nothing this Mac writes reaches any
     /// other one. So the retry has to be a timer of its own.
     ///
-    /// A minute rather than the two-minute poll: this is cheap — one keychain read — and
-    /// the window it covers is a user waiting for their session to finish unlocking.
+    /// A minute rather than the six-hour missed-push health check: this is cheap — one
+    /// keychain read — and covers a user waiting for their session to finish unlocking.
     private func scheduleStartRetry() {
         guard startRetryTimer == nil else { return }
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -382,14 +449,31 @@ final class SyncCoordinator {
         eventTask = nil
         // Do not clear `roundTask` here. A CloudKit operation may take time to observe
         // cancellation, and local vault removal must wait until it has returned and the
-        // engine's cancellation barriers have prevented further mutations.
-        roundTask?.cancel()
+        // transport's awaited shutdown has prevented further callbacks or automatic
+        // scheduler work.
+        let retiringRound = roundTask
+        let retiringTransport = transport
+        retiringRound?.cancel()
         engine = nil
         transport = nil
         activeKeyMaterial = nil
         roundRequests.cancelReplay()
         publish(.disabled)
         finishAllRequests(with: .completed(.disabled))
+
+        if shutdownTask == nil, retiringRound != nil || retiringTransport != nil {
+            shutdownTask = Task { @MainActor [weak self, retiringRound, retiringTransport] in
+                // SyncEngine owns the transport strongly, so first let its data-plane
+                // call return. Then stop transport-owned automatic work and wait until
+                // the backend confirms quiescence before a replacement can be built.
+                if let retiringRound { await retiringRound.value }
+                if let retiringTransport { await retiringTransport.shutdown() }
+
+                guard let self else { return }
+                self.shutdownTask = nil
+                if Self.isEnabled { self.start() }
+            }
+        }
     }
 
     /// Re-evaluates after the shape of the library changed underneath — most usefully,
@@ -457,6 +541,12 @@ final class SyncCoordinator {
             return .notStarted(unavailable)
         }
 
+        if shutdownTask != nil {
+            roundRequests.requestReplay()
+            if let completion { replayRoundCompletions.append(completion) }
+            return .queued
+        }
+
         guard engine != nil else {
             // A start that failed — the keychain would not answer — is retried here
             // rather than only at launch. Without this the only way back was to relaunch
@@ -481,6 +571,11 @@ final class SyncCoordinator {
         }
         // A rebuild also ends by syncing; running a second round here would be waste.
         if restartIfWireKeyChanged() {
+            if shutdownTask != nil {
+                roundRequests.requestReplay()
+                if let completion { replayRoundCompletions.append(completion) }
+                return .queued
+            }
             guard engine != nil else {
                 let unavailable = readiness
                 completion?(.notStarted(unavailable))
@@ -539,10 +634,9 @@ final class SyncCoordinator {
     }
 
     /// Clears the agreed envelopes when the key that sealed them is no longer the key we
-    /// hold, so everything is re-pushed under the new one. The change cursor and the
-    /// per-record server generations are retained as transport ancestry: the payload
-    /// must be re-sealed, but each replacement must still compare-and-swap against the
-    /// exact CloudKit value previously fetched or saved.
+    /// hold, so everything is re-pushed under the new one. Scheduler progress belongs
+    /// to the losing encryption epoch and is reset; per-record CloudKit CAS generations
+    /// are independent of that payload key and remain the safe overwrite boundary.
     ///
     /// Without this, changing the sealing key is a silent, one-way data loss. `base.json`
     /// records each record as *agreed with the backend*, so `pendingChanges` skips them
@@ -632,15 +726,16 @@ final class SyncCoordinator {
         try SyncJournalFile.write(journal)
 
         // Journal first is intentional. A crash here leaves the old base in place and
-        // the fingerprint unchanged, so start repeats the reset. Once its envelopes are
-        // empty, base-before-journal remains valid even if the fingerprint write is
-        // delayed. Keep both feed position and record generations: the staged offers are
-        // re-encrypted values, not permission to overwrite a concurrent server edit.
+        // the fingerprint unchanged, so start repeats the reset. The CKSyncEngine
+        // scheduler checkpoint is discarded, but CloudKit record generations are not:
+        // change tags are independent of the payload-encryption key and are exactly
+        // what lets the resealed value replace old ciphertext without overwriting an
+        // independent remote edit.
         try SyncBaseFile.write(SyncBase(
             recordVersions: confirmed.recordVersions,
-            cursor: confirmed.cursor,
             journalEstablished: true,
-            accountIdentity: confirmed.accountIdentity))
+            accountIdentity: confirmed.accountIdentity,
+            requiresTransportFullResync: true))
 
         // The projection sidecar remains untouched: it contains forward-compatible `x`
         // fields and local HLC/origin metadata independent of the transport key.
@@ -657,9 +752,10 @@ final class SyncCoordinator {
     ///
     /// `start()` fingerprints the new material and clears the confirmed envelopes before
     /// constructing the replacement engine, so records accepted under the losing key are
-    /// re-pushed rather than remaining permanently suppressed by a stale agreed base. Its
-    /// cursor and per-record generations remain available as transport ancestry for the
-    /// compare-and-swap replacements.
+    /// re-pushed rather than remaining permanently suppressed by a stale agreed base.
+    /// Scheduler state is deliberately discarded because its inbox is encrypted under
+    /// the losing key. Per-record CloudKit generations are retained: they do not depend
+    /// on that key and keep the reseal conditional on the exact remote ancestor.
     ///
     /// Skipped mid-round, so a rebuild can never race the engine it is replacing.
     ///
@@ -704,6 +800,12 @@ final class SyncCoordinator {
             completion(.completed(finalState))
         }
 
+        // A stopped generation is only draining toward `shutdownTask`. It must not
+        // consume replay intent queued by a rapid re-enable or complete those callers
+        // with the retired engine's state. The shutdown barrier starts the replacement,
+        // whose startup round will own that replay.
+        guard generation == lifecycleGeneration else { return }
+
         // The safety-halt fallback can switch the persisted opt-in off from inside this
         // round. Keep the task retained until this point so destructive maintenance still
         // sees the real quiescence boundary, then tear the engine down completely. Merely
@@ -745,10 +847,9 @@ final class SyncCoordinator {
 
     private func startPolling(every interval: TimeInterval) {
         pollTimer?.invalidate()
-        // Load-bearing rather than a backstop: with no APNs entitlement there are no
-        // CloudKit push subscriptions, so this timer is the only thing that makes a remote
-        // change arrive. `tolerance` lets the system coalesce it with other timers, which
-        // matters for a laptop's battery at a two-minute cadence.
+        // CKSyncEngine's subscription and silent pushes are primary. This infrequent
+        // health check covers a missed push without restoring the old two-minute load.
+        // `tolerance` lets the system coalesce it with other background work.
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.syncNow(trigger: .poll) }
         }
@@ -778,6 +879,9 @@ final class SyncCoordinator {
 
     private func publish(_ newState: SyncEngine.State) {
         state = newState
+        offlineRetryScheduler.update(for: newState) { [weak self] in
+            _ = self?.syncNow(trigger: .retry)
+        }
         Diagnostics.record(.syncState(
             Self.diagnosticState(for: newState),
             haltReason: Self.diagnosticHaltReason(for: newState)))
@@ -804,7 +908,9 @@ final class SyncCoordinator {
         guard case .halted(let reason, _) = state else { return nil }
         return switch reason {
         case .massDeletion: .destructiveChange
-        case .backendRefused, .accountChanged: .accountRequiresReview
+        case .backendRefused, .accountChanged, .checkpointUnreadable:
+            .accountRequiresReview
+        case .remoteDataReset: .destructiveChange
         case .schemaTooNew, .manifestIntegrityFailed,
              .localLibraryQuarantined, .vaultUnreadable: .incompatibleState
         }

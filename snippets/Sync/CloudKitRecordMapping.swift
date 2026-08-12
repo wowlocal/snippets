@@ -528,6 +528,9 @@ nonisolated enum CloudKitRecordMapping {
         guard let blob = record[CloudKitSchema.Field.blob] as? Data else {
             throw Failure.missingField(CloudKitSchema.Field.blob, recordName: name)
         }
+        guard blob.count <= CloudKitSchema.maxBlobBytes else {
+            throw Failure.blobTooLarge(bytes: blob.count, recordName: name)
+        }
         // Absent reads as "not deleted". A missing flag must never be read as a
         // tombstone: that turns a schema hiccup into a deletion.
         let deleted = record[CloudKitSchema.Field.deleted] as? Bool ?? false

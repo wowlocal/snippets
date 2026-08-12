@@ -144,9 +144,10 @@ For a Production-connected iOS build, the second command must show all of:
   sealed under their vault record keys.
 - Sync is opt-in. The per-bundle UserDefaults key is `SnippetsICloudSyncEnabled`. With the
   preference absent, no CloudKit transport is created and `Sync/base.json` is absent.
-- There is currently no APNs entitlement or CloudKit subscription. Remote changes arrive
-  through the two-minute polling interval or an explicit **Sync Now** action.
-- `Sync/base.json` schema 2 binds every confirmed checkpoint to an opaque hash of the
+- Both targets carry the APNs entitlement and iOS declares the `remote-notification`
+  background mode. `CKSyncEngine` owns its CloudKit subscription and automatic scheduling;
+  startup, foreground, explicit **Sync Now**, and a six-hour missed-push health check remain.
+- `Sync/base.json` schema 3 binds every confirmed checkpoint to an opaque hash of the
   explicit container, private-database scope, actual signed CloudKit environment, and
   current `CKContainer.userRecordID()`. The raw user record name is never persisted or
   logged. Resolve that binding before reading local library state or entering the data
@@ -159,6 +160,11 @@ For a Production-connected iOS build, the second command must show all of:
   reads the running task's entitlements and iOS device builds inspect the signed Mach-O
   once per transport lifetime. Simulator is the documented exception: its CloudKit
   environment is always Development and CloudKit itself enforces container authorization.
+- CKSyncEngine state plus its ordered inbound generations are stored atomically in the
+  fully encrypted `Sync/cksync-checkpoint.bin`. Its per-install key is non-synchronizable
+  and device-only. Never log, export, or persist the opaque serialization in plaintext.
+  `SyncJournal` remains the only outbound source of truth; tombstones are record saves,
+  never CloudKit physical deletes. A remote zone deletion/reset is a review-required halt.
 
 ### Production versus Development
 
@@ -172,7 +178,7 @@ This distinction is easy to miss and produces a convincing false success:
 - Always diagnose this by reading the signed app's actual entitlements. Do not infer the
   environment from scheme name, configuration name, container identifier, or UI status.
 
-Changing an installed app sandbox from Development to Production makes its schema-2
+Changing an installed app sandbox from Development to Production makes its schema-3
 binding mismatch before a Development change token can be used against Production. First
 verify the artifact's actual signed entitlements, then use the explicit account-review
 resume path; it keeps local intent but clears the old environment's cursor, offers, and CAS

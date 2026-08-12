@@ -340,6 +340,7 @@ final class SecureRemediationTests: XCTestCase {
         let accountIdentity = SyncAccountIdentity(Data(repeating: 0x73, count: 32))
         var confirmedBase = SyncBase(
             cursor: SyncCursor("73"),
+            cursorKind: .cloudKitSyncEngine,
             accountIdentity: accountIdentity)
         confirmedBase.recordConfirmed(
             ordinaryConfirmed, recordVersion: ordinaryVersion)
@@ -407,6 +408,16 @@ final class SecureRemediationTests: XCTestCase {
                        "secure forget must keep ordinary ancestry bound to its iCloud account")
         XCTAssertNil(retainedBase.cursor,
                      "the next opt-in must fetch remote secure state from the beginning")
+        XCTAssertNil(retainedBase.cursorKind,
+                     "forgetting a cursor must also forget which transport issued it")
+        let retainedBaseBytes = try Data(
+            contentsOf: SnippetStorageLocations.syncBaseFileURL)
+        let retainedBaseObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: retainedBaseBytes) as? [String: Any])
+        XCTAssertEqual(retainedBaseObject["schemaVersion"] as? Int, 3,
+                       "secure forget must persist the current schema fence")
+        XCTAssertNil(retainedBaseObject["cursor"])
+        XCTAssertNil(retainedBaseObject["cursorKind"])
 
         let retainedJournal: SyncJournal
         switch SyncJournalFile.load() {

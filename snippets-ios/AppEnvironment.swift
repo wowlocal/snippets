@@ -17,6 +17,7 @@ final class AppEnvironment {
     let snippetActions: SnippetActionService
     private var localSecureChangeDepth = 0
     private var localEditorChangeDepth = 0
+    private var hasStarted = false
 
     /// True only while an editor is synchronously publishing its own UI state.
     ///
@@ -94,6 +95,8 @@ final class AppEnvironment {
     }
 
     func start() {
+        guard !hasStarted else { return }
+        hasStarted = true
         store.onChange?(.external)
         syncCoordinator.startIfEnabled()
     }

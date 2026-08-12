@@ -26,6 +26,17 @@ nonisolated struct SyncCursor: Hashable, Sendable, Codable, CustomStringConverti
     var description: String { rawValue }
 }
 
+/// Which transport protocol issued a cursor.
+///
+/// CKServerChangeToken and CKSyncEngine.State.Serialization are unrelated formats even
+/// though both ultimately represent CloudKit progress. Persisting this discriminator in
+/// a schema-bumped base makes an app downgrade stop instead of alternating protocols and
+/// treating each other's opaque values as a recoverable token loss.
+nonisolated enum SyncCursorKind: String, Codable, Equatable, Sendable {
+    case legacy
+    case cloudKitSyncEngine
+}
+
 /// An opaque identity for the account/database scope that owns a confirmed checkpoint.
 ///
 /// A change token and per-record generation are meaningful only inside the private
@@ -104,6 +115,27 @@ nonisolated struct SyncAccountIdentity: Equatable, Hashable, Sendable, Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(data, forKey: .data)
+    }
+}
+
+/// Account and transport-private checkpoint are one preflight decision. Returning a
+/// typed issue beside the identity (instead of throwing it away) lets an explicitly
+/// reviewed reset remain bound to the exact current private-database scope.
+nonisolated struct SyncScopePreflight: Sendable, Equatable {
+    nonisolated enum CheckpointIssue: Sendable, Equatable {
+        case accountChanged
+        case unreadable
+    }
+
+    var identity: SyncAccountIdentity?
+    var checkpointIssue: CheckpointIssue?
+
+    init(
+        identity: SyncAccountIdentity?,
+        checkpointIssue: CheckpointIssue? = nil
+    ) {
+        self.identity = identity
+        self.checkpointIssue = checkpointIssue
     }
 }
 
@@ -278,6 +310,13 @@ nonisolated enum SyncTransportFailure: Error, Sendable, Equatable, CustomStringC
     /// The backend account changed after the round established its scope. Any response
     /// may belong to a different private database and must be ignored wholesale.
     case accountChanged
+    /// The encrypted transport-private scheduler checkpoint cannot be authenticated or
+    /// decoded. Unlike a backend refusal, this has one safe recovery: after explicit
+    /// review, durably capture local intent and replace only that checkpoint.
+    case checkpointUnreadable(detail: String)
+    /// CloudKit reported physical record/zone loss. Automatically uploading the local
+    /// cache would violate CloudKit's purge/reset contract, so this stop has no Resume.
+    case remoteDataReset(detail: String)
 
     var description: String {
         switch self {
@@ -285,6 +324,10 @@ nonisolated enum SyncTransportFailure: Error, Sendable, Equatable, CustomStringC
         case .rejected(let rejection): return rejection.description
         case .pushUnsupported: return "this sync backend does not accept pushes"
         case .accountChanged: return "the sync backend account changed during the operation"
+        case .checkpointUnreadable(let detail):
+            return "the sync scheduler checkpoint could not be read: \(detail)"
+        case .remoteDataReset(let detail):
+            return "the remote sync data was reset: \(detail)"
         }
     }
 }
@@ -299,6 +342,9 @@ nonisolated struct SyncFetch: Sendable, Equatable {
     /// Where to resume. Persist this only after the page has been applied and durably
     /// written; persisting it first turns a crash into permanent data loss.
     var cursor: SyncCursor?
+    /// Protocol family that issued `cursor`. A nil/default value is interpreted as the
+    /// transport-agnostic legacy family for existing backends.
+    var cursorKind: SyncCursorKind?
     /// More pages are waiting. The engine loops rather than waiting for the next poll.
     var hasMore: Bool
     /// The backend could not honour the cursor it was given and restarted the stream.
@@ -314,12 +360,14 @@ nonisolated struct SyncFetch: Sendable, Equatable {
     init(
         records: [WireRecord],
         cursor: SyncCursor?,
+        cursorKind: SyncCursorKind? = nil,
         hasMore: Bool = false,
         isFullResync: Bool = false,
         accountIdentity: SyncAccountIdentity? = nil
     ) {
         self.records = records
         self.cursor = cursor
+        self.cursorKind = cursor == nil ? nil : (cursorKind ?? .legacy)
         self.hasMore = hasMore
         self.isFullResync = isFullResync
         self.accountIdentity = accountIdentity
@@ -416,6 +464,11 @@ nonisolated protocol SyncTransport: Sendable {
     /// throw; they are never represented as a different or missing identity.
     func resolveAccountIdentity() async throws -> SyncAccountIdentity?
 
+    /// Resolves account scope and inspects transport-private checkpoint binding before
+    /// Core reads/project local user data. Stateful transports override this; the
+    /// default preserves the existing account-resolution contract.
+    func preflightScope() async throws -> SyncScopePreflight
+
     /// Changes since `cursor`; everything the backend has when `cursor` is `nil`.
     func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch
 
@@ -433,8 +486,41 @@ nonisolated protocol SyncTransport: Sendable {
     /// others were not comes back as a normal `SyncSubmission` with mixed outcomes,
     /// because that is not an error — it is the common case under a rate limit.
     func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission
+
+    /// One-shot destructive transport reset after Core has durably journaled all local
+    /// intent from the old account. Accountless/stateless transports need no work.
+    func resetAfterAccountReview() async throws
+
+    /// One-shot replacement of an unreadable transport-private checkpoint. Core calls
+    /// this only after a human review and after the latest local intent is durable.
+    func resetAfterCheckpointReview() async throws
+
+    /// Resets transport-private scheduler progress after a local crypto/projection
+    /// migration already staged every surviving record in the durable journal.
+    func resetForLocalFullResync() async throws
+
+    /// Confirms that a transport-owned inbox cursor is now durable in Core's base. A
+    /// stateless transport needs no work; CKSyncEngine uses it to compact only the
+    /// generation prefix already applied and fsynced by the domain reducer.
+    func acknowledgeFetched(through cursor: SyncCursor?) async throws
+
+    /// Stops backend-owned work and returns only after it can no longer mutate local
+    /// protocol state or retain an active connection/scheduler for this scope.
+    ///
+    /// The coordinator awaits this barrier before constructing a replacement
+    /// transport. Stateful backends must override it; the default keeps inert and
+    /// request-scoped transports source compatible.
+    func shutdown() async
 }
 
 nonisolated extension SyncTransport {
     func resolveAccountIdentity() async throws -> SyncAccountIdentity? { nil }
+    func preflightScope() async throws -> SyncScopePreflight {
+        SyncScopePreflight(identity: try await resolveAccountIdentity())
+    }
+    func resetAfterAccountReview() async throws {}
+    func resetAfterCheckpointReview() async throws {}
+    func resetForLocalFullResync() async throws {}
+    func acknowledgeFetched(through cursor: SyncCursor?) async throws {}
+    func shutdown() async {}
 }
