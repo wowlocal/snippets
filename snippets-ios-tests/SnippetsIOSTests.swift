@@ -1030,6 +1030,9 @@ final class SnippetsIOSTests: XCTestCase {
                 .first { $0.title == "Connect iCloud" }
         )
         XCTAssertEqual(connect.subtitle, "Off. Your snippets stay on this device.")
+        let generalTitles = disconnectedMenu.children.compactMap { ($0 as? UIAction)?.title }
+        XCTAssertTrue(generalTitles.contains("Keyboard Shortcuts"))
+        XCTAssertTrue(generalTitles.contains("Settings"))
 
         // Change only the preference after constructing the environment so this UI
         // test can exercise the enabled presentation without starting CloudKit.
@@ -1046,6 +1049,42 @@ final class SnippetsIOSTests: XCTestCase {
                 .first { $0.title == "Sync Now" }
         )
         XCTAssertEqual(syncNow.subtitle, "Starting\u{2026}")
+    }
+
+    func testIPadEditorMoreMenuContainsOnlyCurrentSnippetActions() throws {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Menu", content: "Snippet actions")
+        let editor = SnippetEditorViewController(environment: environment)
+        editor.loadViewIfNeeded()
+        editor.bind(to: snippet.id)
+
+        let menu = try XCTUnwrap(editor.navigationItem.rightBarButtonItems?.first?.menu)
+        let titles = menu.children.compactMap { ($0 as? UIAction)?.title }
+        XCTAssertEqual(titles, ["Pin", "Copy Share Link", "Share", "Duplicate", "Delete"])
+        XCTAssertFalse(titles.contains("Keyboard Shortcuts"))
+        XCTAssertFalse(titles.contains("Settings"))
+    }
+
+    func testIPadRowContextMenuOffersMatchingSecurityTransition() {
+        let environment = AppEnvironment()
+        let ordinary = environment.store.addSnippet(name: "Ordinary", content: "Visible")
+        let list = SnippetListViewController(environment: environment)
+
+        let ordinaryTitles = list.contextMenu(for: ordinary).children
+            .compactMap { ($0 as? UIAction)?.title }
+        XCTAssertTrue(ordinaryTitles.contains("Make Secure"))
+        XCTAssertFalse(ordinaryTitles.contains("Make Ordinary"))
+
+        let secureID = UUID()
+        let secure = Snippet(id: secureID, name: "Secure", keyword: "", content: "")
+        let secureProvider = SecureProviderStub(shell: secure)
+        environment.store.secureProvider = secureProvider
+        withExtendedLifetime(secureProvider) {
+            let secureTitles = list.contextMenu(for: secure).children
+                .compactMap { ($0 as? UIAction)?.title }
+            XCTAssertTrue(secureTitles.contains("Make Ordinary"))
+            XCTAssertFalse(secureTitles.contains("Make Secure"))
+        }
     }
 
     func testSidebarTagFiltersWrapAndExpandWithoutHorizontalScrolling() {

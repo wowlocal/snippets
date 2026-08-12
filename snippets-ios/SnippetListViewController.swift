@@ -446,7 +446,7 @@ final class SnippetListViewController: UIViewController {
         }
     }
 
-    private func contextMenu(for snippet: Snippet) -> UIMenu {
+    func contextMenu(for snippet: Snippet) -> UIMenu {
         let isSecure = environment.store.isSecure(snippet.id)
         var actions: [UIMenuElement] = [
             UIAction(
@@ -457,6 +457,13 @@ final class SnippetListViewController: UIViewController {
                 title: snippet.isEnabled ? "Disable" : "Enable",
                 image: UIImage(systemName: snippet.isEnabled ? "pause.circle" : "checkmark.circle")
             ) { [weak self] _ in self?.toggleEnabled(snippet) },
+            UIAction(
+                title: isSecure ? "Make Ordinary" : "Make Secure",
+                image: UIImage(systemName: isSecure ? "lock.open" : "lock")
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.delegate?.snippetList(self, requestedToggleSecurity: snippet.id)
+            },
         ]
         if !isSecure {
             actions.append(contentsOf: [

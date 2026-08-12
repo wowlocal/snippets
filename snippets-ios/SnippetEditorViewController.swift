@@ -591,19 +591,9 @@ final class SnippetEditorViewController: UIViewController {
                 UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateSnippet() },
             ])
         }
-        children.append(contentsOf: [
-            UIAction(title: "Keyboard Shortcuts", image: UIImage(systemName: "keyboard")) { [weak self] _ in
-                guard let self else { return }
-                self.prepareSecureContentForModalPresentation()
-                self.delegate?.snippetEditorRequestedShortcuts(self)
-            },
-            UIAction(title: "Settings", image: UIImage(systemName: "gearshape")) { [weak self] _ in
-                guard let self else { return }
-                self.prepareSecureContentForModalPresentation()
-                self.delegate?.snippetEditorRequestedSettings(self)
-            },
-            UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteSnippet() },
-        ])
+        children.append(
+            UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteSnippet() }
+        )
         let more = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: UIMenu(children: children))
         navigationItem.rightBarButtonItems = [more, copy]
     }
@@ -884,6 +874,17 @@ final class SnippetEditorViewController: UIViewController {
         } else {
             makeSecure(id: id)
         }
+    }
+
+    /// Routes list context-menu requests through the same authenticated transition as
+    /// the editor's lock control. The split controller selects the row first so any
+    /// confirmation or recovery-key sheet is anchored to the matching editor.
+    func requestSecurityToggle(for id: UUID) {
+        guard environment.store.snippetForDisplay(id: id) != nil else { return }
+        if selectedID != id {
+            bind(to: id)
+        }
+        secureSwitchChanged()
     }
 
     private func makeSecure(id: UUID) {

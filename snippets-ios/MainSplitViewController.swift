@@ -19,14 +19,13 @@ protocol SnippetListViewControllerDelegate: AnyObject {
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController)
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID)
     func snippetList(_ controller: SnippetListViewController, requestedDuplicate id: UUID)
+    func snippetList(_ controller: SnippetListViewController, requestedToggleSecurity id: UUID)
 }
 
 @MainActor
 protocol SnippetEditorViewControllerDelegate: AnyObject {
     func snippetEditorRequestedDelete(_ controller: SnippetEditorViewController, id: UUID)
     func snippetEditorRequestedDuplicate(_ controller: SnippetEditorViewController, id: UUID)
-    func snippetEditorRequestedSettings(_ controller: SnippetEditorViewController)
-    func snippetEditorRequestedShortcuts(_ controller: SnippetEditorViewController)
 }
 
 final class MainSplitViewController: UISplitViewController {
@@ -1010,13 +1009,15 @@ extension MainSplitViewController: SnippetListViewControllerDelegate {
     func snippetListRequestedShortcuts(_ controller: SnippetListViewController) { showShortcuts() }
     func snippetList(_ controller: SnippetListViewController, requestedDelete id: UUID) { delete(id: id) }
     func snippetList(_ controller: SnippetListViewController, requestedDuplicate id: UUID) { duplicate(id: id) }
+    func snippetList(_ controller: SnippetListViewController, requestedToggleSecurity id: UUID) {
+        select(id: id, revealEditor: true)
+        editorController.requestSecurityToggle(for: id)
+    }
 }
 
 extension MainSplitViewController: SnippetEditorViewControllerDelegate {
     func snippetEditorRequestedDelete(_ controller: SnippetEditorViewController, id: UUID) { delete(id: id) }
     func snippetEditorRequestedDuplicate(_ controller: SnippetEditorViewController, id: UUID) { duplicate(id: id) }
-    func snippetEditorRequestedSettings(_ controller: SnippetEditorViewController) { showSettings() }
-    func snippetEditorRequestedShortcuts(_ controller: SnippetEditorViewController) { showShortcuts() }
 }
 
 extension MainSplitViewController: UIDocumentPickerDelegate {
