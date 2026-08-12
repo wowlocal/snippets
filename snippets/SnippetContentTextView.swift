@@ -1,4 +1,5 @@
 import AppKit
+import QuickLookUI
 
 /// The snippet content editor. `NSTextView` has no placeholder of its own, and
 /// the prompt must never become real text: it would be stored, exported and
@@ -26,6 +27,39 @@ final class SnippetContentTextView: NSTextView {
         mayContainSecurePlaintext = false
     }
 
+    /// True for the whole lifetime of a selected secure record, including its
+    /// locked/empty state. Set this before decrypted bytes enter `string` and
+    /// clear the bytes before setting it back to false.
+    var isSecureContentMode = false {
+        didSet {
+            guard oldValue != isSecureContentMode else { return }
+            applyContentExposureMode()
+        }
+    }
+
+    private struct AmbientTextServiceSettings {
+        let continuousSpellChecking: Bool
+        let grammarChecking: Bool
+        let automaticSpellingCorrection: Bool
+        let enabledTextCheckingTypes: NSTextCheckingTypes
+        let smartInsertDelete: Bool
+        let automaticQuoteSubstitution: Bool
+        let automaticLinkDetection: Bool
+        let automaticDataDetection: Bool
+        let automaticDashSubstitution: Bool
+        let automaticTextReplacement: Bool
+        let automaticTextCompletion: Bool
+        let inlinePredictionType: NSTextInputTraitType
+        let mathExpressionCompletionType: NSTextInputTraitType
+        let writingToolsBehavior: NSWritingToolsBehavior
+        let usesFindPanel: Bool
+        let usesFindBar: Bool
+        let incrementalSearching: Bool
+        let rolloverButtonForSelection: Bool
+    }
+
+    private var ordinaryTextServiceSettings: AmbientTextServiceSettings?
+
     var emptyStatePrompt: String = "" {
         didSet { needsDisplay = true }
     }
@@ -52,6 +86,309 @@ final class SnippetContentTextView: NSTextView {
         needsDisplay = true
     }
 
+    // MARK: - Secure plaintext containment
+
+    /// AppKit reaches the pasteboard through several different public entry
+    /// points (Edit menu, Services, dragging, and callers invoking these methods
+    /// directly). Every one is guarded; hiding Copy in a menu is not a boundary.
+    override func copy(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.copy(sender)
+    }
+
+    override func cut(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.cut(sender)
+    }
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        guard !isSecureContentMode else { return [] }
+        return super.writablePasteboardTypes
+    }
+
+    override func writeSelection(
+        to pboard: NSPasteboard,
+        type: NSPasteboard.PasteboardType
+    ) -> Bool {
+        guard !isSecureContentMode else { return false }
+        return super.writeSelection(to: pboard, type: type)
+    }
+
+    override func writeSelection(
+        to pboard: NSPasteboard,
+        types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+        guard !isSecureContentMode else { return false }
+        return super.writeSelection(to: pboard, types: types)
+    }
+
+    override func validRequestor(
+        forSendType sendType: NSPasteboard.PasteboardType?,
+        returnType: NSPasteboard.PasteboardType?
+    ) -> Any? {
+        // Refuse both directions. A receive-only Service can still inspect the
+        // selection while preparing its replacement, so it is not a safe exception.
+        guard !isSecureContentMode else { return nil }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
+    override func dragSelection(
+        with event: NSEvent,
+        offset mouseOffset: NSSize,
+        slideBack: Bool
+    ) -> Bool {
+        guard !isSecureContentMode else { return false }
+        return super.dragSelection(with: event, offset: mouseOffset, slideBack: slideBack)
+    }
+
+    override func dragImageForSelection(
+        with event: NSEvent,
+        origin: NSPointPointer?
+    ) -> NSImage? {
+        guard !isSecureContentMode else { return nil }
+        return super.dragImageForSelection(with: event, origin: origin)
+    }
+
+    override func orderFrontSharingServicePicker(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.orderFrontSharingServicePicker(sender)
+    }
+
+    override func performFindPanelAction(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.performFindPanelAction(sender)
+    }
+
+    override func performTextFinderAction(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.performTextFinderAction(sender)
+    }
+
+    override func startSpeaking(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.startSpeaking(sender)
+    }
+
+    override func quickLook(with event: NSEvent) {
+        guard !isSecureContentMode else { return }
+        super.quickLook(with: event)
+    }
+
+    override func quickLookPreviewItems(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.quickLookPreviewItems(sender)
+    }
+
+    override func toggleQuickLookPreviewPanel(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleQuickLookPreviewPanel(sender)
+    }
+
+    override func quickLookPreviewableItems(inRanges ranges: [NSValue]) -> [any QLPreviewItem] {
+        guard !isSecureContentMode else { return [] }
+        return super.quickLookPreviewableItems(inRanges: ranges)
+    }
+
+    override func checkSpelling(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.checkSpelling(sender)
+    }
+
+    override func showGuessPanel(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.showGuessPanel(sender)
+    }
+
+    override func checkTextInSelection(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.checkTextInSelection(sender)
+    }
+
+    override func checkTextInDocument(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.checkTextInDocument(sender)
+    }
+
+    override func checkText(
+        in range: NSRange,
+        types checkingTypes: NSTextCheckingTypes,
+        options: [NSSpellChecker.OptionKey: Any]
+    ) {
+        guard !isSecureContentMode else { return }
+        super.checkText(in: range, types: checkingTypes, options: options)
+    }
+
+    override func toggleContinuousSpellChecking(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleContinuousSpellChecking(sender)
+    }
+
+    override func toggleGrammarChecking(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleGrammarChecking(sender)
+    }
+
+    override func toggleAutomaticSpellingCorrection(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleAutomaticSpellingCorrection(sender)
+    }
+
+    override func toggleAutomaticQuoteSubstitution(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleAutomaticQuoteSubstitution(sender)
+    }
+
+    override func toggleAutomaticLinkDetection(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleAutomaticLinkDetection(sender)
+    }
+
+    override func toggleAutomaticDataDetection(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleAutomaticDataDetection(sender)
+    }
+
+    override func toggleAutomaticDashSubstitution(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleAutomaticDashSubstitution(sender)
+    }
+
+    override func toggleAutomaticTextReplacement(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleAutomaticTextReplacement(sender)
+    }
+
+    override func toggleSmartInsertDelete(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleSmartInsertDelete(sender)
+    }
+
+    override func toggleAutomaticTextCompletion(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.toggleAutomaticTextCompletion(sender)
+    }
+
+    override func orderFrontSubstitutionsPanel(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.orderFrontSubstitutionsPanel(sender)
+    }
+
+    @available(macOS 15.2, *)
+    override func showWritingTools(_ sender: Any?) {
+        guard !isSecureContentMode else { return }
+        super.showWritingTools(sender)
+    }
+
+    /// Menu validation and `tryToPerform` are defense in depth around the direct
+    /// overrides above. The policy denies output actions without intercepting the
+    /// many responder selectors NSTextView uses for ordinary keyboard editing.
+    override func tryToPerform(_ action: Selector, with object: Any?) -> Bool {
+        guard SnippetContentExposurePolicy.permitsResponderAction(
+            named: NSStringFromSelector(action),
+            whileSecure: isSecureContentMode
+        ) else { return false }
+        return super.tryToPerform(action, with: object)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard let action = item.action else { return super.validateUserInterfaceItem(item) }
+        guard SnippetContentExposurePolicy.permitsResponderAction(
+            named: NSStringFromSelector(action),
+            whileSecure: isSecureContentMode
+        ) else { return false }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard isSecureContentMode else { return super.menu(for: event) }
+
+        let menu = NSMenu()
+        appendSecureMenuItem(title: "Undo", action: NSSelectorFromString("undo:"), to: menu)
+        appendSecureMenuItem(title: "Redo", action: NSSelectorFromString("redo:"), to: menu)
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        appendSecureMenuItem(title: "Paste", action: #selector(paste(_:)), to: menu)
+        appendSecureMenuItem(title: "Select All", action: #selector(selectAll(_:)), to: menu)
+        return menu
+    }
+
+    private func appendSecureMenuItem(title: String, action: Selector, to menu: NSMenu) {
+        guard SnippetContentExposurePolicy.permitsResponderAction(
+            named: NSStringFromSelector(action), whileSecure: true
+        ) else { return }
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = nil
+        menu.addItem(item)
+    }
+
+    private func applyContentExposureMode() {
+        if isSecureContentMode {
+            if ordinaryTextServiceSettings == nil {
+                ordinaryTextServiceSettings = AmbientTextServiceSettings(
+                    continuousSpellChecking: isContinuousSpellCheckingEnabled,
+                    grammarChecking: isGrammarCheckingEnabled,
+                    automaticSpellingCorrection: isAutomaticSpellingCorrectionEnabled,
+                    enabledTextCheckingTypes: enabledTextCheckingTypes,
+                    smartInsertDelete: smartInsertDeleteEnabled,
+                    automaticQuoteSubstitution: isAutomaticQuoteSubstitutionEnabled,
+                    automaticLinkDetection: isAutomaticLinkDetectionEnabled,
+                    automaticDataDetection: isAutomaticDataDetectionEnabled,
+                    automaticDashSubstitution: isAutomaticDashSubstitutionEnabled,
+                    automaticTextReplacement: isAutomaticTextReplacementEnabled,
+                    automaticTextCompletion: isAutomaticTextCompletionEnabled,
+                    inlinePredictionType: inlinePredictionType,
+                    mathExpressionCompletionType: mathExpressionCompletionType,
+                    writingToolsBehavior: writingToolsBehavior,
+                    usesFindPanel: usesFindPanel,
+                    usesFindBar: usesFindBar,
+                    incrementalSearching: isIncrementalSearchingEnabled,
+                    rolloverButtonForSelection: usesRolloverButtonForSelection)
+            }
+
+            stopSpeaking(nil)
+            if #available(macOS 15.2, *) {
+                writingToolsCoordinator?.stopWritingTools()
+            }
+            isContinuousSpellCheckingEnabled = false
+            isGrammarCheckingEnabled = false
+            isAutomaticSpellingCorrectionEnabled = false
+            enabledTextCheckingTypes = 0
+            smartInsertDeleteEnabled = false
+            isAutomaticQuoteSubstitutionEnabled = false
+            isAutomaticLinkDetectionEnabled = false
+            isAutomaticDataDetectionEnabled = false
+            isAutomaticDashSubstitutionEnabled = false
+            isAutomaticTextReplacementEnabled = false
+            isAutomaticTextCompletionEnabled = false
+            inlinePredictionType = .no
+            mathExpressionCompletionType = .no
+            writingToolsBehavior = .none
+            usesFindPanel = false
+            usesFindBar = false
+            isIncrementalSearchingEnabled = false
+            usesRolloverButtonForSelection = false
+        } else if let settings = ordinaryTextServiceSettings {
+            isContinuousSpellCheckingEnabled = settings.continuousSpellChecking
+            isGrammarCheckingEnabled = settings.grammarChecking
+            isAutomaticSpellingCorrectionEnabled = settings.automaticSpellingCorrection
+            enabledTextCheckingTypes = settings.enabledTextCheckingTypes
+            smartInsertDeleteEnabled = settings.smartInsertDelete
+            isAutomaticQuoteSubstitutionEnabled = settings.automaticQuoteSubstitution
+            isAutomaticLinkDetectionEnabled = settings.automaticLinkDetection
+            isAutomaticDataDetectionEnabled = settings.automaticDataDetection
+            isAutomaticDashSubstitutionEnabled = settings.automaticDashSubstitution
+            isAutomaticTextReplacementEnabled = settings.automaticTextReplacement
+            isAutomaticTextCompletionEnabled = settings.automaticTextCompletion
+            inlinePredictionType = settings.inlinePredictionType
+            mathExpressionCompletionType = settings.mathExpressionCompletionType
+            writingToolsBehavior = settings.writingToolsBehavior
+            usesFindPanel = settings.usesFindPanel
+            usesFindBar = settings.usesFindBar
+            isIncrementalSearchingEnabled = settings.incrementalSearching
+            usesRolloverButtonForSelection = settings.rolloverButtonForSelection
+            ordinaryTextServiceSettings = nil
+        }
+    }
+
     /// Typing `{` offers the placeholder tokens, which is what replaced the
     /// permanent list of them that used to sit under this box. An action at the
     /// point of need rather than a line to read and transcribe.
@@ -59,7 +396,10 @@ final class SnippetContentTextView: NSTextView {
         super.insertText(string, replacementRange: replacementRange)
 
         let inserted = (string as? String) ?? (string as? NSAttributedString)?.string
-        guard inserted == "{", isEditable else { return }
+        // Completion is an ambient text service on AppKit. Ordinary snippets
+        // keep the local token convenience; secure snippets keep the literal
+        // brace and never enter the completion subsystem at all.
+        guard inserted == "{", isEditable, !isSecureContentMode else { return }
 
         // Not synchronously: AppKit is still inside its own insertion here, and
         // the completion machinery reads the text storage this just wrote to.
@@ -73,6 +413,9 @@ final class SnippetContentTextView: NSTextView {
     /// AppKit's word boundaries land inside `{da`. Without this the completion
     /// would insert a token beside the brace instead of replacing it.
     override var rangeForUserCompletion: NSRange {
+        guard !isSecureContentMode else {
+            return NSRange(location: NSNotFound, length: 0)
+        }
         let text = string as NSString
         let caret = selectedRange()
         guard caret.length == 0, caret.location > 0, caret.location <= text.length else {
@@ -101,6 +444,28 @@ final class SnippetContentTextView: NSTextView {
         }
 
         return NSRange(location: braceRange.location, length: length)
+    }
+
+    /// Never fall through to NSSpellChecker if somebody invokes completion
+    /// directly despite `rangeForUserCompletion` refusing a secure range.
+    override func completions(
+        forPartialWordRange charRange: NSRange,
+        indexOfSelectedItem index: UnsafeMutablePointer<Int>?
+    ) -> [String]? {
+        guard isSecureContentMode else {
+            if let index {
+                return super.completions(
+                    forPartialWordRange: charRange,
+                    indexOfSelectedItem: index)
+            }
+            var ignoredIndex = 0
+            return super.completions(
+                forPartialWordRange: charRange,
+                indexOfSelectedItem: &ignoredIndex)
+        }
+
+        index?.pointee = -1
+        return []
     }
 
     private static let tokenBoundaryCharacters = CharacterSet(charactersIn: "{}\n")

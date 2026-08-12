@@ -345,13 +345,17 @@ extension ViewController {
             isApplyingSnippetToEditor = true
             editingSnippetID = nil
             clearSecurePlaintextPresentation()
-            if !snippetTextView.string.isEmpty {
-                resetContentUndoHistory()
-                snippetTextView.string = ""
-            }
             if !nameField.stringValue.isEmpty {
                 nameField.stringValue = ""
             }
+            if !snippetTextView.string.isEmpty || snippetTextView.isSecureContentMode {
+                resetContentUndoHistory()
+                snippetTextView.string = ""
+            }
+            // Leave secure mode only after its text and undo graph are gone.
+            // Reversing this order briefly exposes the old body to the ordinary
+            // NSTextView services restored by the mode transition.
+            snippetTextView.isSecureContentMode = false
             if !keywordField.stringValue.isEmpty {
                 keywordField.stringValue = ""
             }
@@ -376,11 +380,35 @@ extension ViewController {
 
     func applySnippetToEditor(_ snippet: Snippet) {
         isApplyingSnippetToEditor = true
+        let previousEditingSnippetID = editingSnippetID
         editingSnippetID = snippet.id
+        let isSecure = store.isSecure(snippet.id)
+
         // A rebind replaces the old editor and preview values before their
         // protected-content attributes are made public again. This is needed
         // even when the destination is an ordinary snippet.
         clearSecurePlaintextPresentation()
+
+        if isSecure {
+            // Establish the deny-by-default editor boundary and clear every
+            // derived ordinary-text surface before decrypted bytes are fetched.
+            snippetTextView.isSecureContentMode = true
+            updatePreview(withTemplate: "")
+            nameField.placeholderString = EditorCopy.namePlaceholderFallback
+            if previousEditingSnippetID != snippet.id {
+                resetContentUndoHistory()
+                snippetTextView.string = ""
+            }
+        } else if snippetTextView.isSecureContentMode {
+            // A body can be byte-identical across a demotion. Clear it and its
+            // undo history anyway, while the secure policy is still active,
+            // before restoring ordinary text services.
+            resetContentUndoHistory()
+            snippetTextView.string = ""
+            updatePreview(withTemplate: "")
+            nameField.placeholderString = EditorCopy.namePlaceholderFallback
+            snippetTextView.isSecureContentMode = false
+        }
         if nameField.stringValue != snippet.name {
             nameField.stringValue = snippet.name
         }
@@ -404,7 +432,6 @@ extension ViewController {
         setEditorEnabled(true)
         // Must run after `setEditorEnabled(true)`, which unconditionally makes the text
         // view editable — a locked secret has to end up read-only regardless.
-        let isSecure = store.isSecure(snippet.id)
         secureLockToggle.state = isSecure ? .on : .off
         secureLockToggle.contentTintColor = isSecure ? .controlAccentColor : .secondaryLabelColor
         secureLockToggle.toolTip = isSecure
@@ -537,19 +564,14 @@ extension ViewController {
     /// guard: it is a placeholder on a fixed-height single-line field, so nothing
     /// reflows, but there is no reason to redraw it for an unchanged string.
     func updateNameFieldPlaceholder() {
-        // For an ordinary snippet this is useful derived UI. For a secure one it
-        // would create a third plaintext-bearing accessibility element: AX can
-        // expose a text field's placeholder even while its visible value (the
-        // intentionally non-private secure name) is non-empty. Never derive
-        // metadata/UI from the vault body.
-        let firstLine: String
-        if let editingSnippetID, store.isSecure(editingSnippetID) {
-            firstLine = ""
-        } else {
-            firstLine = snippetTextView.string
-                .prefix(while: { !$0.isNewline })
-                .trimmingCharacters(in: .whitespaces)
-        }
+        let isSecure = snippetTextView.isSecureContentMode
+            || editingSnippetID.map(store.isSecure) == true
+        let source = SnippetContentExposurePolicy.namePlaceholderSource(
+            snippetTextView.string,
+            whileSecure: isSecure)
+        let firstLine = (source ?? "")
+            .prefix(while: { !$0.isNewline })
+            .trimmingCharacters(in: .whitespaces)
 
         let placeholder: String
         if firstLine.isEmpty {
@@ -826,9 +848,22 @@ extension ViewController {
     }
 
     func updatePreview(withTemplate template: String) {
-        let rendered = PlaceholderResolver.resolveForPreview(template: template)
-        let hasDynamicContent = !template.isEmpty
-            && PlaceholderResolver.containsResolvablePlaceholder(in: template)
+        let isSecure = snippetTextView.isSecureContentMode
+            || editingSnippetID.map(store.isSecure) == true
+        guard let permittedTemplate = SnippetContentExposurePolicy.dynamicPreviewTemplate(
+            template,
+            whileSecure: isSecure
+        ) else {
+            // Clear the ordinary AX-visible field before hiding it. A hidden
+            // NSTextField can remain queryable to an already-held AX element.
+            previewValueField.stringValue = ""
+            previewSectionStack.isHidden = true
+            return
+        }
+
+        let rendered = PlaceholderResolver.resolveForPreview(template: permittedTemplate)
+        let hasDynamicContent = !permittedTemplate.isEmpty
+            && PlaceholderResolver.containsResolvablePlaceholder(in: permittedTemplate)
         // Hides the whole section, label included — no separator above it any
         // more, because with the token hint gone it was a horizontal rule no
         // other section had, fencing a section already fenced by being
@@ -947,6 +982,7 @@ extension ViewController {
 
         func mask(_ message: String, action: String? = nil) {
             secureContentEditableForID = nil
+            snippetTextView.isSecureContentMode = true
             resetContentUndoHistory()
             clearSecurePlaintextPresentation()
             if !snippetTextView.string.isEmpty {
@@ -978,6 +1014,13 @@ extension ViewController {
             mask("Hidden while Snippets is in the background.")
             return
         }
+
+        // Establish containment and erase ordinary derived surfaces before
+        // asking the vault for plaintext. This ordering remains safe when this
+        // method is called directly after activation rather than via a rebind.
+        snippetTextView.isSecureContentMode = true
+        updatePreview(withTemplate: "")
+        nameField.placeholderString = EditorCopy.namePlaceholderFallback
         guard app.secureContentAccessibilityProtection.canPresentSecurePlaintext else {
             mask("Protected-content accessibility is unavailable, so this snippet stays hidden.")
             return

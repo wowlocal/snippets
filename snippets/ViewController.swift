@@ -510,6 +510,14 @@ final class ViewController: NSViewController {
         guard pasteboardChangeCount != observedPasteboardChangeCount else { return }
 
         observedPasteboardChangeCount = pasteboardChangeCount
+        let isSecure = snippetTextView.isSecureContentMode
+            || editingSnippetID.map(store.isSecure) == true
+        guard !isSecure else {
+            // Do not even submit the secure body to placeholder inspection.
+            // `updatePreview` also refuses it, independently, for every caller.
+            updatePreview(withTemplate: "")
+            return
+        }
         let template = snippetTextView.string
         guard PlaceholderResolver.containsClipboardPlaceholder(in: template) else { return }
 

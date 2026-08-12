@@ -42,6 +42,10 @@ let package = Package(
         // The event-tap AX budget is another AppKit boundary that must be exercised without
         // launching a signed app or requiring Accessibility permission.
         .target(name: "SnippetsAX", swiftSettings: [.swiftLanguageMode(.v5)]),
+        // The secure NSTextView is an AppKit boundary just like pasteboard and AX.
+        // Compile the shipping source itself so responder/pasteboard/text-service
+        // overrides are exercised without launching the full application.
+        .target(name: "SnippetsSecureEditor", swiftSettings: [.swiftLanguageMode(.v5)]),
         .testTarget(
             name: "SnippetsCoreTests",
             dependencies: ["SnippetsCore"],
@@ -55,6 +59,11 @@ let package = Package(
         .testTarget(
             name: "SnippetsAXTests",
             dependencies: ["SnippetsAX"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "SnippetsSecureEditorTests",
+            dependencies: ["SnippetsSecureEditor"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
