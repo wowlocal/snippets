@@ -341,7 +341,15 @@ deletes or inserts anything. Cancellation and every failed revalidation wipe the
 | Authenticated suggestion expansion | Every explicit acceptance gets a fresh LocalAuthentication context. `VaultSession.withOneUseAuthentication` locks before prompting and on every exit; `SecurePlaintextLease` zeroes its owned byte allocation on success, refusal, cancellation, and deinit. |
 | Clipboard managers | Secure expansion prefers the Accessibility write path, which never touches the pasteboard. Where the pasteboard is unavoidable, `TemporaryPasteboardLease(isConcealed:)` sets `org.nspasteboard.ConcealedType` and `TransientType` — a **courtesy, not a control**: there is no AppKit constant, managers honour it only by convention, and anything that ignores it still sees the text. |
 | The snippet list and suggestion panel | A secure main-list row renders `••••••••`, and a suggestion row shows a lock marker. Both carry a shell with `content == ""`, so there is nothing to render even if either view forgot. |
+| macOS secure editor | AppKit's application-wide and per-view protected-content accessibility contract is armed before decryption. Ordinary NSTextView drawing is suppressed and the visible viewport is rasterized only into an `AVSampleBufferDisplayLayer` with capture prevention enabled. Plaintext pixels are shown only while the real pointer is inside the active key window's editor. Copy/cut, pasteboard writes, dragging, Services, sharing, Find, speech, Quick Look, text checking, completion, and Writing Tools are denied while secure mode is active; derived preview and name-placeholder surfaces stay empty. |
+| Vault session lifetime | Secure-content use slides a five-minute idle deadline, capped at thirty minutes from authentication. Deadlines are checked on every key access as well as by a timer. Sleep, screen/session lock, screensaver start, and iOS backgrounding lock immediately, with a synchronous pre-lock editor flush before the key is discarded. |
 | Two-file moves | `LibraryTransaction` — one lock over both files, destination written before source removal, crash marker. A mixed-direction sync batch first writes an intentional duplicate state. An interruption duplicates, never disappears. |
+
+The macOS protected renderer and hover policy are exposure reductions, not an absolute
+confidentiality or DRM claim. A physical camera can record the body during the hovered
+interval, and privileged/debugging software can operate outside AppKit's accessibility
+and capture contracts. The supported Screenshot/QuickTime/ScreenCaptureKit verification
+matrix is documented in `docs/secure-capture-manual-verification.md`.
 
 ### The CLI can ask for a secret; it cannot take one
 

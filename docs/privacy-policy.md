@@ -1,6 +1,6 @@
 # Snippets Privacy Policy
 
-Last updated: August 9, 2026
+Last updated: August 12, 2026
 
 Snippets is designed so the developer does not receive or read your snippet library.
 
@@ -13,6 +13,15 @@ analytics SDKs.
 Secure snippet bodies are encrypted at rest. Their names, keywords, and tags remain
 searchable on the device while the vault is locked. A secure body is revealed, copied,
 or edited only after device-owner authentication.
+
+On macOS, Snippets marks the secure editor as protected accessibility content, blocks
+ambient text-export features, displays the body through a capture-protected system
+layer, and reveals those protected pixels only while the pointer is over the editor.
+This reduces accidental accessibility scraping, screen capture, and shoulder-surfing
+exposure, but cannot prevent a physical camera from recording a body while it is visible
+or protect against sufficiently privileged software. The vault auto-locks after five
+minutes without secure-content use, no later than thirty minutes after authentication,
+and immediately on system/session lock, sleep, screensaver start, or iOS backgrounding.
 
 ## Optional iCloud sync
 
