@@ -15,11 +15,17 @@ nonisolated enum SyncLibraryProjection {
 
     enum Failure: Error, CustomStringConvertible, Equatable {
         case invalidSecureBody(UUID)
+        case incompatibleSecureConflictVault(UUID)
+        case invalidSecureConflictCarrier(UUID)
 
         var description: String {
             switch self {
             case .invalidSecureBody(let id):
                 return "secure sync record \(id) does not contain a valid UTF-8 sealed value"
+            case .incompatibleSecureConflictVault(let id):
+                return "secure sync record \(id) contains a conflict from another vault"
+            case .invalidSecureConflictCarrier(let id):
+                return "secure sync record \(id) contains an invalid conflict carrier"
             }
         }
     }
@@ -89,7 +95,52 @@ nonisolated enum SyncLibraryProjection {
                 out[record.id] = known
             } else {
                 let known = newest(projected, agreed)
-                var extensions = known?.x ?? [:]
+                // Primary storage is authoritative for resolution. Derived metadata
+                // may still carry a variant/provenance from before the transaction
+                // removed it, so replace (including with the empty set) rather than
+                // unioning these reserved keys back into the record.
+                var extensions = (known?.x ?? [:]).filter {
+                    !SyncMerge.isContentConflictExtension($0.key)
+                        && $0.key != SyncMerge.plainConflictCopyExtensionKey
+                }
+                for (key, value) in record.x {
+                    if key.hasPrefix(SyncMerge.contentConflictOpaqueCarrierPrefix),
+                       case .string(let base64) = value,
+                       let bytes = Data(base64Encoded: base64),
+                       let restored = try? CanonicalJSON.value(bytes) {
+                        let suffix = String(key.dropFirst(
+                            SyncMerge.contentConflictOpaqueCarrierPrefix.count))
+                        let restoredKey = SyncMerge.contentConflictExtensionPrefix + suffix
+                        if let existing = extensions[restoredKey], existing != restored {
+                            // Legacy direct and current opaque encodings of the same
+                            // member must agree regardless of Dictionary iteration order.
+                            extensions[SyncMerge.contentConflictExtensionPrefix + "invalid"] =
+                                .null
+                        } else {
+                            extensions[restoredKey] = restored
+                        }
+                    } else if key.hasPrefix(SyncMerge.contentConflictExtensionPrefix) {
+                        // Legacy builds briefly wrote structured variants directly.
+                        // Preserve their JSON value; strict validation at the app
+                        // projection boundary decides whether it is safe to sync.
+                        let restored = canonicalValue(value)
+                        if let existing = extensions[key], existing != restored {
+                            extensions[SyncMerge.contentConflictExtensionPrefix + "invalid"] =
+                                .null
+                        } else {
+                            extensions[key] = restored
+                        }
+                    } else if key.hasPrefix(SyncMerge.contentConflictOpaqueCarrierPrefix) {
+                        // Preserve an unmistakably reserved invalid sentinel. The app
+                        // boundary validates and halts before this can be offered; most
+                        // importantly it can never look like a resolved/deletable record.
+                        extensions[SyncMerge.contentConflictExtensionPrefix + "invalid"] =
+                            .null
+                    } else if key == SyncMerge.plainConflictCopyExtensionKey,
+                              let provenance = conflictCopyProvenance(value) {
+                        extensions[key] = provenance
+                    }
+                }
                 extensions[SyncEnvelope.vaultContentHashExtensionKey] =
                     nonEmpty(record.contentHash).map(CanonicalJSON.Value.string)
                 // Stamped alongside the content hash, and for the same reason: the
@@ -118,16 +169,50 @@ nonisolated enum SyncLibraryProjection {
         from envelope: SyncEnvelope,
         preserving existing: VaultRecord? = nil
     ) throws -> VaultRecord? {
-        guard !envelope.deleted, envelope.secure, let fields = envelope.fields else {
+        guard envelope.secure else { return nil }
+        if envelope.deleted {
+            // Tombstones are not vault records, but a tombstone carrying the sole
+            // unresolved secure-conflict snapshot is malformed and must not hide it.
+            try SyncMerge.validateContentConflictExtensions(in: envelope)
             return nil
         }
+        guard let fields = envelope.fields else { return nil }
         guard let sealed = String(data: fields.content, encoding: .utf8) else {
             throw Failure.invalidSecureBody(envelope.id)
         }
+        // Preserve this boundary's specific invalid-body diagnosis. The complete wire
+        // budget validator canonicalizes the envelope and would otherwise surface its
+        // lower-level UTF-8 error before this projection can explain what is wrong.
+        try SyncMerge.validateContentConflictExtensions(in: envelope)
 
+        let variants = try SyncMerge.secureContentConflictVariants(in: envelope)
+        if let localKID = envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text,
+           variants.contains(where: {
+               $0.sourceExtensions[SyncEnvelope.vaultKeyIDExtensionKey]?.text != localKID
+           }) {
+            throw Failure.incompatibleSecureConflictVault(envelope.id)
+        }
         let carriedHash = envelope.x[SyncEnvelope.vaultContentHashExtensionKey]?.text
         let preservedHash = existing.flatMap { old in
             old.sealed == sealed ? nonEmpty(old.contentHash) : nil
+        }
+        var recordExtensions = (existing?.x ?? [:]).filter {
+            !$0.key.hasPrefix(SyncMerge.contentConflictOpaqueCarrierPrefix)
+                && !SyncMerge.isContentConflictExtension($0.key)
+                && $0.key != SyncMerge.plainConflictCopyExtensionKey
+        }
+        // Secure losing versions remain encrypted wire metadata until the vault key is
+        // available. Mirror them into the vault record's passthrough bag so a missing
+        // derived sync sidecar or an ordinary metadata edit cannot strip the only copy.
+        for key in envelope.x.keys where SyncMerge.isContentConflictExtension(key) {
+            guard let value = envelope.x[key] else { continue }
+            let suffix = String(key.dropFirst(SyncMerge.contentConflictExtensionPrefix.count))
+            recordExtensions[SyncMerge.contentConflictOpaqueCarrierPrefix + suffix] =
+                .string(try CanonicalJSON.data(value).base64EncodedString())
+        }
+        if let provenance = envelope.x[SyncMerge.plainConflictCopyExtensionKey],
+           let value = conflictCopyProvenance(provenance) {
+            recordExtensions[SyncMerge.plainConflictCopyExtensionKey] = value
         }
 
         return VaultRecord(
@@ -145,11 +230,68 @@ nonisolated enum SyncLibraryProjection {
             // honest and recoverable after unlock, while a SHA of ciphertext is not.
             contentHash: carriedHash ?? preservedHash ?? "",
             sealed: sealed,
-            x: existing?.x ?? [:])
+            x: recordExtensions)
     }
 
     private static func nonEmpty(_ value: String) -> String? {
         value.isEmpty ? nil : value
+    }
+
+    private static func canonicalValue(_ value: JSONValue) -> CanonicalJSON.Value {
+        switch value {
+        case .null: return .null
+        case .bool(let flag): return .bool(flag)
+        case .integer(let number): return .int(number)
+        case .double(let number): return .double(number)
+        case .string(let text): return .string(text)
+        case .array(let values): return .array(values.map(canonicalValue))
+        case .object(let object): return .object(object.mapValues(canonicalValue))
+        }
+    }
+
+    private static func conflictCopyProvenance(
+        _ value: JSONValue
+    ) -> CanonicalJSON.Value? {
+        guard case .object(let object) = value,
+              Set(object.keys) == ["version", "sourceID", "fingerprint"],
+              object["version"] == .integer(1),
+              case .string(let sourceText)? = object["sourceID"],
+              let sourceID = UUID(uuidString: sourceText),
+              sourceText == sourceID.uuidString.lowercased(),
+              case .string(let fingerprint)? = object["fingerprint"],
+              isLowercaseSHA256(fingerprint)
+        else { return nil }
+        return .object([
+            "version": .int(1),
+            "sourceID": .string(sourceText),
+            "fingerprint": .string(fingerprint),
+        ])
+    }
+
+    private static func conflictCopyProvenance(
+        _ value: CanonicalJSON.Value
+    ) -> JSONValue? {
+        guard let object = value.object,
+              Set(object.keys) == ["version", "sourceID", "fingerprint"],
+              object["version"]?.int == 1,
+              let sourceText = object["sourceID"]?.text,
+              let sourceID = UUID(uuidString: sourceText),
+              sourceText == sourceID.uuidString.lowercased(),
+              let fingerprint = object["fingerprint"]?.text,
+              isLowercaseSHA256(fingerprint)
+        else { return nil }
+        return .object([
+            "version": .integer(1),
+            "sourceID": .string(sourceText),
+            "fingerprint": .string(fingerprint),
+        ])
+    }
+
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        return bytes.count == 64 && bytes.allSatisfy {
+            (0x30...0x39).contains($0) || (0x61...0x66).contains($0)
+        }
     }
 
     private static func exactPlain(
@@ -191,9 +333,44 @@ nonisolated enum SyncLibraryProjection {
               fields.updatedAt == record.updatedAt,
               candidate.x[SyncEnvelope.vaultContentHashExtensionKey]?.text
                 == nonEmpty(record.contentHash),
-              candidate.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == vaultKID
+              candidate.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text == vaultKID,
+              let storedConflicts = conflictExtensions(record.x),
+              conflictExtensions(candidate.x) == storedConflicts,
+              candidate.x[SyncMerge.plainConflictCopyExtensionKey]
+                == record.x[SyncMerge.plainConflictCopyExtensionKey]
+                    .flatMap(conflictCopyProvenance)
         else { return nil }
         return candidate
+    }
+
+    private static func conflictExtensions(
+        _ values: [String: CanonicalJSON.Value]
+    ) -> [String: CanonicalJSON.Value] {
+        values.filter { $0.key.hasPrefix(SyncMerge.contentConflictExtensionPrefix) }
+    }
+
+    private static func conflictExtensions(
+        _ values: [String: JSONValue]
+    ) -> [String: CanonicalJSON.Value]? {
+        var result: [String: CanonicalJSON.Value] = [:]
+        for pair in values {
+            if pair.key.hasPrefix(SyncMerge.contentConflictOpaqueCarrierPrefix) {
+                guard case .string(let base64) = pair.value,
+                      let bytes = Data(base64Encoded: base64),
+                      let value = try? CanonicalJSON.value(bytes)
+                else { return nil }
+                let suffix = String(pair.key.dropFirst(
+                    SyncMerge.contentConflictOpaqueCarrierPrefix.count))
+                let restoredKey = SyncMerge.contentConflictExtensionPrefix + suffix
+                if let existing = result[restoredKey], existing != value { return nil }
+                result[restoredKey] = value
+            } else if SyncMerge.isContentConflictExtension(pair.key) {
+                let value = canonicalValue(pair.value)
+                if let existing = result[pair.key], existing != value { return nil }
+                result[pair.key] = value
+            }
+        }
+        return result
     }
 
     private static func newest(

@@ -74,6 +74,23 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
             metadata: metadata,
             agreedBase: agreedBase,
             vaultKID: secureStore.document?.kid)
+        do {
+            for envelope in envelopes.values {
+                try SyncMerge.validateContentConflictExtensions(in: envelope)
+                if let kid = secureStore.document?.kid,
+                   try SyncMerge.secureContentConflictVariants(in: envelope).contains(where: {
+                       $0.sourceExtensions[SyncEnvelope.vaultKeyIDExtensionKey]?.text != kid
+                   }) {
+                    throw SyncLibraryProjection.Failure
+                        .incompatibleSecureConflictVault(envelope.id)
+                }
+            }
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "local secure conflict state is malformed or belongs to another vault; "
+                    + "sync stopped before offering it")
+        }
         persistMetadata(envelopes)
         return envelopes
     }
@@ -137,7 +154,10 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     /// and the engine applies the rest of the batch before entering a sticky halt.
     func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification {
         if secureStore.document == nil,
-           envelopes.contains(where: { $0.secure && !$0.deleted }) {
+           envelopes.contains(where: {
+               ($0.secure && !$0.deleted)
+                   || ((try? SyncMerge.secureContentConflictVariants(in: $0))?.isEmpty == false)
+           }) {
             secureStore.joinSharedVaultIfAvailable()
         }
 
@@ -147,6 +167,20 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         var incompatible: [UUID] = []
 
         for envelope in envelopes {
+            let variantKIDs = (try? SyncMerge.secureContentConflictVariants(in: envelope))?
+                .compactMap {
+                    $0.sourceExtensions[SyncEnvelope.vaultKeyIDExtensionKey]?.text
+                } ?? []
+            if !variantKIDs.isEmpty {
+                guard let localKID else {
+                    deferred.append(envelope.id)
+                    continue
+                }
+                if variantKIDs.contains(where: { $0 != localKID }) {
+                    incompatible.append(envelope.id)
+                    continue
+                }
+            }
             guard envelope.secure else {
                 applicable.append(envelope)
                 continue
@@ -163,6 +197,125 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         return RemoteClassification(
             applicable: applicable, deferredIDs: deferred,
             incompatibleVaultIDs: incompatible)
+    }
+
+    /// Validates and partitions secure conflict snapshots without mutating primary
+    /// storage. Materialisation belongs to `applyRemote`'s one transaction so the losing
+    /// copy and selected survivor cannot interleave with another writer.
+    func prepareRemote(_ envelopes: [SyncEnvelope]) throws -> RemoteClassification {
+        var variantsByID: [UUID: [SyncMerge.SecureContentConflictVariant]] = [:]
+        var unknownIDs = Set<UUID>()
+        var incomingByID: [UUID: SyncEnvelope] = [:]
+        do {
+            // Validate the complete authoritative batch, not just records which this
+            // vault can currently file. A deferred/incompatible record still occupies
+            // its id and therefore still participates in deterministic-copy collision
+            // checks. This also avoids `Dictionary(uniqueKeysWithValues:)` trapping on
+            // malformed direct callers which repeat an id.
+            for envelope in envelopes {
+                guard incomingByID.updateValue(envelope, forKey: envelope.id) == nil else {
+                    throw SyncMerge.EnvelopeFailure.malformedContentConflict
+                }
+                try SyncMerge.validateContentConflictExtensions(in: envelope)
+                if SyncMerge.hasUnknownContentConflictVersion(envelope) {
+                    unknownIDs.insert(envelope.id)
+                    continue
+                }
+                let variants = try SyncMerge.secureContentConflictVariants(in: envelope)
+                if !variants.isEmpty { variantsByID[envelope.id] = variants }
+            }
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "an incoming secure conflict snapshot was malformed; sync stopped "
+                    + "before changing the library")
+        }
+
+        // Collision authority is structural and comes before key availability. Waiting
+        // for or adopting a vault may defer a valid dependency, but it must never turn
+        // an unrelated occupant of the deterministic copy id into an applicable
+        // standalone record — or mutate local vault state before rejecting the batch.
+        var dependentCopyIDsBySource: [UUID: Set<UUID>] = [:]
+        for (sourceID, variants) in variantsByID {
+            for variant in variants {
+                guard let occupant = incomingByID[variant.copyID] else { continue }
+                guard !occupant.deleted,
+                      occupant.secure,
+                      SyncMerge.matchesConflictCopyProvenance(
+                    occupant,
+                    sourceID: variant.sourceID,
+                    fingerprint: variant.fingerprint),
+                      occupant.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text
+                        == variant.sourceExtensions[
+                            SyncEnvelope.vaultKeyIDExtensionKey]?.text
+                else {
+                    throw SyncEngineFailure(
+                        reason: .localLibraryQuarantined,
+                        detail: "a secure conflict copy collided with an existing snippet; "
+                            + "sync stopped without overwriting either record")
+                }
+                // Provenance identifies which logical copy this is; it does not
+                // authenticate the body. AEAD and keyed-hash validation follows inside
+                // the transaction once the key is known.
+                dependentCopyIDsBySource[sourceID, default: []].insert(variant.copyID)
+            }
+        }
+
+        let initial = classifyRemote(envelopes)
+        var deferred = Set(initial.deferredIDs).union(unknownIDs)
+        var applicable = initial.applicable.filter { !unknownIDs.contains($0.id) }
+        guard !variantsByID.isEmpty else {
+            return RemoteClassification(
+                applicable: applicable,
+                deferredIDs: deferred.sorted { $0.uuidString < $1.uuidString },
+                incompatibleVaultIDs: initial.incompatibleVaultIDs)
+        }
+
+        // Only sources that survived ordinary vault-scope classification need a local
+        // key. Sources already reported as incompatible stay incompatible; their copy
+        // occupants must not be promoted into an independent applicable record.
+        let applicableIDs = Set(applicable.map(\.id))
+        let activeVariantSourceIDs = Set(variantsByID.keys).intersection(applicableIDs)
+        let activeDependencyIDs = activeVariantSourceIDs.reduce(into: Set<UUID>()) {
+            result, sourceID in
+            result.formUnion(dependentCopyIDsBySource[sourceID] ?? [])
+        }
+        guard activeVariantSourceIDs.isEmpty || secureStore.document != nil else {
+            deferred.formUnion(activeVariantSourceIDs)
+            deferred.formUnion(activeDependencyIDs)
+            applicable.removeAll {
+                activeVariantSourceIDs.contains($0.id) || activeDependencyIDs.contains($0.id)
+            }
+            return RemoteClassification(
+                applicable: applicable,
+                deferredIDs: deferred.sorted { $0.uuidString < $1.uuidString },
+                incompatibleVaultIDs: initial.incompatibleVaultIDs)
+        }
+        if !activeVariantSourceIDs.isEmpty {
+            do {
+                _ = try secureStore.unlockedKeyringForSync()
+            } catch VaultSession.Failure.locked {
+                deferred.formUnion(activeVariantSourceIDs)
+                deferred.formUnion(activeDependencyIDs)
+                applicable.removeAll {
+                    activeVariantSourceIDs.contains($0.id)
+                        || activeDependencyIDs.contains($0.id)
+                }
+                return RemoteClassification(
+                    applicable: applicable,
+                    deferredIDs: deferred.sorted { $0.uuidString < $1.uuidString },
+                    incompatibleVaultIDs: initial.incompatibleVaultIDs)
+            } catch {
+                throw SyncEngineFailure(
+                    reason: .vaultUnreadable,
+                    detail: "the unlocked secure vault could not produce its conflict key; "
+                        + "sync stopped before changing the library")
+            }
+        }
+        return RemoteClassification(
+            applicable: applicable,
+            deferredIDs: deferred.sorted { $0.uuidString < $1.uuidString },
+            incompatibleVaultIDs: initial.incompatibleVaultIDs)
     }
 
     // MARK: - Applying
@@ -187,30 +340,136 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     /// record is classified as incompatible: everything else in the batch applies, then
     /// the engine halts instead of holding one cursor and re-fetching it forever.
     func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome {
-        guard !envelopes.isEmpty else { return ApplyOutcome() }
+        // Defense in depth: the engine normally supplies the result of `prepareRemote`,
+        // but this is the mutation boundary and must remain safe for direct callers and
+        // for a future engine refactor. Re-run structural validation and preserve its
+        // dependency partition in this method's result.
+        let guarded = try prepareRemote(envelopes)
+        let envelopes = guarded.applicable
+        guard !envelopes.isEmpty else {
+            return ApplyOutcome(
+                deferredIDs: guarded.deferredIDs,
+                incompatibleVaultIDs: guarded.incompatibleVaultIDs)
+        }
 
         // Same hazard as promote: the transaction below reads snippets.json from disk,
         // so an unflushed in-memory edit would be invisible to it and then land on top
         // of the merged result a fraction of a second later.
-        store.flushPendingWrites()
-
-        // A secure record is arriving and this Mac has no vault. Before the transaction
-        // refuses it, look for the vault the user's other Macs already share — this is
-        // the moment we learn one exists, and a Mac with no secure snippets of its own
-        // never has a local change that would trigger the check anywhere else.
-        //
-        // Outside the transaction on purpose: adopting takes the same library lock, and
-        // taking it twice would deadlock rather than merely fail.
-        if secureStore.document == nil,
-           envelopes.contains(where: { $0.secure && !$0.deleted }) {
-            secureStore.joinSharedVaultIfAvailable()
+        do {
+            try store.flushPendingWritesForSync()
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "the latest ordinary snippet edits could not be made durable; "
+                    + "sync stopped before applying iCloud changes")
         }
 
-        let outcome = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
+        let variantsByEnvelope: [UUID: [SyncMerge.SecureContentConflictVariant]]
+        do {
+            variantsByEnvelope = try envelopes.reduce(into: [:]) { result, envelope in
+                let variants = try SyncMerge.secureContentConflictVariants(in: envelope)
+                if !variants.isEmpty { result[envelope.id] = variants }
+            }
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "an incoming secure conflict snapshot was malformed; sync stopped "
+                    + "before changing the library")
+        }
+        let materializationKeyring: SnippetCrypto.Keyring?
+        if variantsByEnvelope.isEmpty {
+            materializationKeyring = nil
+        } else {
+            do {
+                materializationKeyring = try secureStore.unlockedKeyringForSync()
+            } catch VaultSession.Failure.locked {
+                // `prepareRemote` may have succeeded moments earlier and the session
+                // may expire before this second, transaction-adjacent key read. Nothing
+                // in this call has been written yet, so report *every* applicable id as
+                // deferred. Reporting only the variant source would let the engine
+                // confirm its dependent copy (and unrelated plaintext peers) in base
+                // despite never applying them to primary storage.
+                return ApplyOutcome(
+                    deferredIDs: Set(guarded.deferredIDs)
+                        .union(envelopes.map(\.id))
+                        .sorted { $0.uuidString < $1.uuidString },
+                    incompatibleVaultIDs: guarded.incompatibleVaultIDs)
+            } catch {
+                throw SyncEngineFailure(
+                    reason: .vaultUnreadable,
+                    detail: "the secure conflict key became unavailable before apply; "
+                        + "sync stopped without changing the library")
+            }
+        }
+        let expectedVault = secureStore.document.map { ($0.kid, $0.vaultSalt) }
+        var incomingByID: [UUID: SyncEnvelope] = [:]
+        for envelope in envelopes {
+            guard incomingByID.updateValue(envelope, forKey: envelope.id) == nil else {
+                throw SyncEngineFailure(
+                    reason: .localLibraryQuarantined,
+                    detail: "an incoming sync batch repeated a snippet identifier; "
+                        + "sync stopped before changing the library")
+            }
+        }
+
+        let outcome: LibraryTransaction.Outcome<ApplyResult>
+        do {
+            outcome = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
             var changed: [UUID] = []
             var applied: [SyncEnvelope] = []
             var deferred: [UUID] = []
             var incompatible: [UUID] = []
+
+            if let materializationKeyring {
+                guard var vault = contents.vault,
+                      let expectedVault,
+                      vault.kid == expectedVault.0,
+                      vault.vaultSalt == expectedVault.1 else {
+                    throw SyncSecureConflictMaterializer.Failure.incompatibleVault
+                }
+                for envelope in envelopes where variantsByEnvelope[envelope.id] != nil {
+                    for variant in variantsByEnvelope[envelope.id] ?? [] {
+                        guard let occupant = incomingByID[variant.copyID] else { continue }
+                        guard SyncMerge.matchesConflictCopyProvenance(
+                            occupant,
+                            sourceID: variant.sourceID,
+                            fingerprint: variant.fingerprint)
+                        else {
+                            throw SyncSecureConflictMaterializer.Failure.identifierCollision
+                        }
+                        try SyncSecureConflictMaterializer.validateIncomingSecureCopy(
+                            occupant,
+                            keyring: materializationKeyring,
+                            vaultKID: vault.kid)
+                    }
+                    let result = try SyncSecureConflictMaterializer.materialize(
+                        envelope: envelope,
+                        keyring: materializationKeyring,
+                        vaultKID: vault.kid,
+                        existingSnippets: contents.snippets,
+                        existingRecords: vault.records)
+                    // Resealing under the deterministic copy id preserves plaintext
+                    // size, but the conflict name/tags/provenance add wire metadata.
+                    // Refuse before either primary file is written if that completed
+                    // copy cannot fit the shipping record budget.
+                    for copyID in result.materializedIDs {
+                        guard let record = result.records.first(where: { $0.id == copyID }),
+                              let projected = SyncLibraryProjection.currentEnvelopes(
+                                snippets: [],
+                                records: [record],
+                                deviceID: store.deviceID,
+                                metadata: SyncBase(),
+                                agreedBase: SyncBase(),
+                                vaultKID: vault.kid)[copyID]
+                        else {
+                            throw SyncSecureConflictMaterializer.Failure.malformedVariant
+                        }
+                        try SyncMerge.validateContentConflictExtensions(in: projected)
+                    }
+                    vault.records = result.records
+                }
+                contents.vault = vault
+            }
 
             for envelope in envelopes {
                 let wasPlain = contents.snippets.contains { $0.id == envelope.id }
@@ -298,6 +557,14 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
             return ApplyResult(
                 changedIDs: changed, appliedEnvelopes: applied, deferredIDs: deferred,
                 incompatibleVaultIDs: incompatible)
+            }
+        } catch let failure as LibraryTransaction.Failure {
+            throw failure
+        } catch {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "a secure conflict copy failed integrity or collision checks; "
+                    + "sync stopped without applying the survivor")
         }
 
         var metadata = loadMetadata(fallingBackTo: SyncBase())
@@ -321,8 +588,13 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         store.coordinatedReloadDidFinish(.remoteSync)
         return ApplyOutcome(
             changedIDs: outcome.value.changedIDs,
-            deferredIDs: outcome.value.deferredIDs,
-            incompatibleVaultIDs: outcome.value.incompatibleVaultIDs)
+            deferredIDs: Set(guarded.deferredIDs)
+                .union(outcome.value.deferredIDs)
+                .sorted { $0.uuidString < $1.uuidString },
+            incompatibleVaultIDs: Set(
+                Set(guarded.incompatibleVaultIDs)
+                    .union(outcome.value.incompatibleVaultIDs))
+                .sorted { $0.uuidString < $1.uuidString })
     }
 
     // MARK: - Frozen-file metadata

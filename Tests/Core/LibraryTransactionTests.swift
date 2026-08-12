@@ -81,10 +81,10 @@ struct LibraryTransactionTests {
                 "a completed move must not leave a marker for reconcile to act on")
     }
 
-    /// The ordering contract. If the library write fails, the vault write must already
-    /// have landed and the marker must survive — that is what makes the crash window
-    /// produce a duplicate rather than a vanished secret.
-    @Test func whenTheLibraryWriteFailsTheVaultWriteHasAlreadyLandedAndTheMarkerRemains() throws {
+    /// Every promotion first publishes an intermediate library which retains the old
+    /// plaintext source. If that destination write fails, the transaction has not
+    /// started: the vault remains unchanged and no crash marker may claim otherwise.
+    @Test func whenPromotionDestinationWriteFailsOriginalStateRemainsWithoutMarker() throws {
         let f = try fixture()
         defer {
             try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.dir.path)
@@ -118,12 +118,13 @@ struct LibraryTransactionTests {
             }
         }
 
-        // The secret exists in the vault…
-        #expect(VaultFile.load(from: f.vault).value?.records.map(\.id) == [id])
-        // …the plaintext copy is still in the library, so nothing was lost…
+        // The original plaintext source remains the sole durable owner…
         #expect(try LibraryWriter.read(from: blockedLibrary).snippets.map(\.id) == [id])
-        // …and reconcile is told what was in flight.
-        #expect(LibraryTransaction.pendingMarker(stateURL: f.state) == .promoting(id))
+        // …the vault destination never became visible…
+        #expect(VaultFile.load(from: f.vault).value == nil)
+        #expect(FileManager.default.fileExists(atPath: f.vault.path) == false)
+        // …and reconcile is not told that a move started.
+        #expect(LibraryTransaction.pendingMarker(stateURL: f.state) == .none)
     }
 
     /// The demote-side mirror of the promotion contract. Its destination is the

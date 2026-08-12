@@ -514,6 +514,51 @@ nonisolated enum SyncMerge {
 
 nonisolated extension SyncMerge {
 
+    /// A cross-device merge can create an additional ordinary record. Keeping that
+    /// fact beside the survivor is what lets `SyncEngine` apply both values in one
+    /// durable library transaction and then journal the copy as its own CAS create.
+    struct EnvelopeOutcome: Sendable {
+        var survivor: SyncEnvelope?
+        var conflictCopies: [SyncEnvelope]
+    }
+
+    enum EnvelopeFailure: Error, Equatable {
+        case malformedContentConflict
+        case unresolvedContentConflictDeletion
+    }
+
+    /// Every secure losing version is one independently mergeable member of `x`.
+    /// A single nested map would be unsafe with an older client's shallow dictionary
+    /// merge: two peers adding different members concurrently could replace the whole
+    /// map with one side. Dynamic keys turn that same old merge into a set union.
+    static let contentConflictExtensionPrefix = "contentConflict."
+    static let contentConflictV1ExtensionPrefix = "contentConflict.v1."
+    static let contentConflictOpaqueCarrierPrefix = "contentConflictOpaque.v1."
+    static let plainConflictCopyExtensionKey = "conflictCopy.v1"
+    static let maximumContentConflictVariantCount = 128
+    /// Independently bounds parsing work and variant fan-out. The stricter complete
+    /// canonical-envelope ceiling below accounts for the selected body and every fixed
+    /// field, so this aggregate cap need not guess how much space those fields consume.
+    static let maximumContentConflictVariantBytes = 512 * 1_024
+
+    /// Largest canonical envelope which the shipping `SnippetCryptoSealer` can encode
+    /// below CloudKit's 900,000-byte non-asset field ceiling. ISO-7816 padding rounds
+    /// `P + 1` to 256 bytes, AES-GCM adds 16 bytes, base64url expands by 4/3, and the
+    /// textual `v1.<nonce>.<body>` wrapper adds 20 bytes. P=674,815 seals to 899,796;
+    /// P=674,816 enters the next padding block and seals to 900,138.
+    static let maximumWireCanonicalBytes = 674_815
+
+    struct SecureContentConflictVariant: Sendable, Equatable {
+        var extensionKey: String
+        var fingerprint: String
+        var copyID: UUID
+        var sourceID: UUID
+        var sourceHLC: HLC
+        var sourceOrigin: String
+        var fields: SyncEnvelope.Fields
+        var sourceExtensions: [String: CanonicalJSON.Value]
+    }
+
     /// Three-way merge of one record as it travels between devices.
     ///
     /// The same rules as `mergeRecord`, restated over envelopes so a cross-device merge
@@ -529,28 +574,62 @@ nonisolated extension SyncMerge {
     static func mergeEnvelope(
         base: SyncEnvelope?, local: SyncEnvelope?, remote: SyncEnvelope?
     ) -> SyncEnvelope? {
+        // Test/legacy convenience only. Production uses the strict outcome API below,
+        // which cannot confuse an integrity failure with a legitimate absence and also
+        // receives every generated conflict copy.
+        do {
+            return try mergeEnvelopeOutcome(base: base, local: local, remote: remote).survivor
+        } catch {
+            assertionFailure("strict envelope merge failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Strict form used by the sync engine. The compatibility wrapper above keeps the
+    /// pure merge call sites compact, while production must stop rather than discard a
+    /// malformed or unrepresentable conflict snapshot.
+    static func mergeEnvelopeOutcome(
+        base: SyncEnvelope?, local: SyncEnvelope?, remote: SyncEnvelope?
+    ) throws -> EnvelopeOutcome {
+        for envelope in [base, local, remote].compactMap({ $0 }) {
+            try validateContentConflictExtensions(in: envelope)
+        }
+
         switch (local, remote) {
         case (nil, nil):
-            return nil
+            return EnvelopeOutcome(survivor: nil, conflictCopies: [])
 
         // Absence is never a delete without an ancestor to prove it, exactly as locally.
         case (nil, .some(let remote)):
-            return remote
+            return EnvelopeOutcome(survivor: remote, conflictCopies: [])
         case (.some(let local), nil):
-            return local
+            return EnvelopeOutcome(survivor: local, conflictCopies: [])
 
         case (.some(let local), .some(let remote)):
             // An explicit tombstone on one side loses to a real edit on the other: a
             // deletion is trivially repeatable, an edit that a delete swallowed is gone.
-            if local.deleted && remote.deleted { return local.hlc > remote.hlc ? local : remote }
-            if local.deleted { return changed(remote, since: base) ? remote : local }
-            if remote.deleted { return changed(local, since: base) ? local : remote }
+            if local.deleted && remote.deleted {
+                try refuseDeletionIfConflictIsUnresolved(base)
+                return EnvelopeOutcome(
+                    survivor: try envelopeOutranks(local, remote) ? local : remote,
+                    conflictCopies: [])
+            }
+            if local.deleted {
+                let survivor = try changed(remote, since: base) ? remote : local
+                if survivor.deleted { try refuseDeletionIfConflictIsUnresolved(base ?? remote) }
+                return EnvelopeOutcome(survivor: survivor, conflictCopies: [])
+            }
+            if remote.deleted {
+                let survivor = try changed(local, since: base) ? local : remote
+                if survivor.deleted { try refuseDeletionIfConflictIsUnresolved(base ?? local) }
+                return EnvelopeOutcome(survivor: survivor, conflictCopies: [])
+            }
 
             guard let localFields = local.fields, let remoteFields = remote.fields else {
-                return local.hlc > remote.hlc ? local : remote
+                throw EnvelopeFailure.malformedContentConflict
             }
             if localFields == remoteFields, local.secure == remote.secure {
-                let localWins = local.hlc >= remote.hlc
+                let localWins = try envelopeOutranksOrEqual(local, remote)
                 let winner = localWins ? local : remote
                 var mergedX = local.x.merging(remote.x) { mine, theirs in
                     localWins ? mine : theirs
@@ -568,45 +647,19 @@ nonisolated extension SyncMerge {
                     mergedX[SyncEnvelope.vaultContentHashExtensionKey] = nil
                     mergedX[SyncEnvelope.vaultKeyIDExtensionKey] = nil
                 }
-                return SyncEnvelope(
+                let survivor = SyncEnvelope(
                     id: winner.id, hlc: winner.hlc, origin: winner.origin,
-                    secure: winner.secure, deleted: false, fields: winner.fields, x: mergedX)
+                    secure: winner.secure, deleted: false,
+                    fields: winner.fields, x: mergedX)
+                try validateContentConflictExtensions(in: survivor)
+                return EnvelopeOutcome(survivor: survivor, conflictCopies: [])
             }
 
-            // `fields.content` has two representations: plaintext in a plain
-            // envelope, and the opaque vault seal in a secure one. A one-sided move
-            // relative to the ancestor is explicit and must carry its representation
-            // with it. OR-ing the flags and then merging the body independently can
-            // put plaintext in `VaultRecord.sealed`, and also makes a real demotion
-            // impossible to sync.
-            let mergedSecure: Bool
-            let representationCameFromLocal: Bool?
-            if local.secure == remote.secure {
-                mergedSecure = local.secure
-                representationCameFromLocal = nil
-            } else if let base {
-                let localMoved = local.secure != base.secure
-                let remoteMoved = remote.secure != base.secure
-                if localMoved != remoteMoved {
-                    representationCameFromLocal = localMoved
-                    mergedSecure = localMoved ? local.secure : remote.secure
-                } else {
-                    // Defensive fallback for an inconsistent ancestor. Keeping the
-                    // secure representation is the non-leaking direction.
-                    mergedSecure = true
-                    representationCameFromLocal = local.secure
-                }
-            } else {
-                // With no ancestor there is no proof that a plain copy is a deliberate
-                // demotion. Keep the secure representation.
-                mergedSecure = true
-                representationCameFromLocal = local.secure
-            }
-
-            // Symmetric, so both devices pick the same winner from mirrored inputs. The
-            // HLC already carries a device tiebreak, so unlike the local merge there is
-            // no need to hash payloads here.
-            let localWins = local.hlc > remote.hlc
+            // HLC normally supplies a total order, including its device component. A
+            // restored or hand-built record can nevertheless carry the exact same HLC
+            // on both sides. The payload rank closes that last tie symmetrically; using
+            // `>` alone would make each mirrored peer select its remote argument.
+            let localWins = try envelopeOutranksOrEqual(local, remote)
             let baseFields = base?.fields
 
             var merged = SyncEnvelope.Fields(
@@ -619,68 +672,86 @@ nonisolated extension SyncMerge {
                 createdAt: min(localFields.createdAt, remoteFields.createdAt),
                 updatedAt: max(localFields.updatedAt, remoteFields.updatedAt))
 
-            // Content resolves on the keyed hash, so this branch is identical whether or
-            // not the vault happens to be unlocked.
+            // Representation is part of content identity. Plain bytes and a vault seal
+            // can never be interchanged just because their digests happen to match.
+            // This also makes promotion-vs-edit and demotion-vs-edit genuine conflicts
+            // instead of feeding plaintext into `VaultRecord.sealed` (or vice versa).
             let localKey = mergeContentKey(local, fields: localFields)
             let remoteKey = mergeContentKey(remote, fields: remoteFields)
             let baseKey = base.flatMap { envelope in
                 envelope.fields.map { mergeContentKey(envelope, fields: $0) }
             }
 
-            let contentCameFromLocal: Bool
-            if let representationCameFromLocal {
-                merged.content = representationCameFromLocal
-                    ? localFields.content : remoteFields.content
-                contentCameFromLocal = representationCameFromLocal
-            } else if localKey == remoteKey || baseKey == remoteKey {
-                merged.content = localFields.content
-                contentCameFromLocal = true
+            let contentSource: SyncEnvelope
+            var conflictCopies: [SyncEnvelope] = []
+            var secureVariant: (key: String, value: CanonicalJSON.Value)?
+            if localKey == remoteKey {
+                contentSource = localWins ? local : remote
+            } else if baseKey == remoteKey {
+                contentSource = local
             } else if baseKey == localKey {
-                merged.content = remoteFields.content
-                contentCameFromLocal = false
+                contentSource = remote
             } else {
-                // Both sides genuinely changed the body. Unlike the local merge there is
-                // no conflict copy here: minting one would require sealing a new record,
-                // which needs the vault key — and this path has to work while locked.
-                // The loser is preserved by the OTHER device, which does hold its own
-                // copy and will push it back as an ordinary edit if the user keeps it.
-                merged.content = localWins ? localFields.content : remoteFields.content
-                contentCameFromLocal = localWins
+                // Both bodies changed. Ordinary content can become a normal sync record
+                // immediately. A vault seal cannot: it is AEAD-bound to the source UUID,
+                // so filing the same bytes under a generated UUID would create a record
+                // that can never authenticate. Preserve its complete opaque snapshot in
+                // the encrypted extension bag until a key-aware layer can open under the
+                // source context and reseal under the deterministic copy id.
+                contentSource = localWins ? local : remote
+                let loser = localWins ? remote : local
+                if loser.secure {
+                    secureVariant = try makeSecureContentConflictVariant(from: loser)
+                } else {
+                    conflictCopies = [try makePlainContentConflictCopy(from: loser)]
+                }
             }
+            guard let selectedFields = contentSource.fields else {
+                throw EnvelopeFailure.malformedContentConflict
+            }
+            merged.content = selectedFields.content
 
             let winner = localWins ? local : remote
             var mergedX = local.x.merging(remote.x) { mine, theirs in
                 localWins ? mine : theirs
             }
-            if mergedSecure {
+            if contentSource.secure {
                 // Both extensions belong to the selected sealed body, not to the
                 // whole-record HLC winner. The body winner can differ when one peer only
                 // renamed the snippet while the other changed its secret.
-                let contentX = contentCameFromLocal ? local.x : remote.x
                 mergedX[SyncEnvelope.vaultContentHashExtensionKey] =
-                    contentX[SyncEnvelope.vaultContentHashExtensionKey]
+                    contentSource.x[SyncEnvelope.vaultContentHashExtensionKey]
                 mergedX[SyncEnvelope.vaultKeyIDExtensionKey] =
-                    contentX[SyncEnvelope.vaultKeyIDExtensionKey]
+                    contentSource.x[SyncEnvelope.vaultKeyIDExtensionKey]
             } else {
                 mergedX[SyncEnvelope.vaultContentHashExtensionKey] = nil
                 mergedX[SyncEnvelope.vaultKeyIDExtensionKey] = nil
             }
-            return SyncEnvelope(
-                id: local.id,
-                hlc: max(local.hlc, remote.hlc),
-                origin: winner.origin,
-                secure: mergedSecure,
-                deleted: false,
-                fields: merged,
-                x: mergedX)
+            if let secureVariant { mergedX[secureVariant.key] = secureVariant.value }
+
+            let survivor = SyncEnvelope(
+                id: local.id, hlc: max(local.hlc, remote.hlc),
+                origin: winner.origin, secure: contentSource.secure,
+                deleted: false, fields: merged, x: mergedX)
+            try validateContentConflictExtensions(in: survivor)
+            for copy in conflictCopies {
+                try validateContentConflictExtensions(in: copy)
+            }
+            return EnvelopeOutcome(
+                survivor: survivor,
+                conflictCopies: conflictCopies.sorted {
+                    $0.id.uuidString < $1.id.uuidString
+                })
         }
     }
 
     /// Whether a side moved away from the ancestor. With no ancestor, anything present
     /// counts as a change — the conservative direction, since it keeps data.
-    private static func changed(_ envelope: SyncEnvelope, since base: SyncEnvelope?) -> Bool {
+    private static func changed(
+        _ envelope: SyncEnvelope, since base: SyncEnvelope?
+    ) throws -> Bool {
         guard let base else { return true }
-        return (try? base.envelopeHash()) != (try? envelope.envelopeHash())
+        return try base.envelopeHash() != envelope.envelopeHash()
     }
 
     private static func mergeContentKey(
@@ -688,9 +759,299 @@ nonisolated extension SyncMerge {
     ) -> String {
         if envelope.secure,
            let keyedHash = envelope.x[SyncEnvelope.vaultContentHashExtensionKey]?.text {
-            return keyedHash
+            let vault = envelope.x[SyncEnvelope.vaultKeyIDExtensionKey]?.text ?? "legacy"
+            return "secure:\(vault):\(keyedHash)"
         }
-        return envelope.contentHash
-            ?? SHA256.hash(data: fields.content).map { String(format: "%02x", $0) }.joined()
+        let digest = envelope.contentHash ?? hex(SHA256.hash(data: fields.content))
+        return envelope.secure ? "secure:legacy:\(digest)" : "plain:\(digest)"
+    }
+
+    private static func envelopeOutranksOrEqual(
+        _ lhs: SyncEnvelope, _ rhs: SyncEnvelope
+    ) throws -> Bool {
+        if lhs == rhs { return true }
+        return try envelopeOutranks(lhs, rhs)
+    }
+
+    private static func envelopeOutranks(
+        _ lhs: SyncEnvelope, _ rhs: SyncEnvelope
+    ) throws -> Bool {
+        if lhs.hlc != rhs.hlc { return lhs.hlc > rhs.hlc }
+
+        let left = try conflictRankData(lhs)
+        let right = try conflictRankData(rhs)
+        if left != right { return left.lexicographicallyPrecedes(right) }
+
+        // Only independently unionable conflict extensions may have been removed from
+        // the rank. Their keys are content-derived and equal keys validate to equal
+        // values, so choosing either side here cannot change a user field.
+        return false
+    }
+
+    private static func conflictRankData(_ envelope: SyncEnvelope) throws -> Data {
+        let ranked = SyncEnvelope(
+            schemaVersion: envelope.schemaVersion,
+            id: envelope.id,
+            hlc: envelope.hlc,
+            origin: envelope.origin,
+            secure: envelope.secure,
+            deleted: envelope.deleted,
+            fields: envelope.fields,
+            x: envelope.x.filter { !isContentConflictExtension($0.key) })
+        return try ranked.canonicalData()
+    }
+
+    private static func makePlainContentConflictCopy(
+        from source: SyncEnvelope
+    ) throws -> SyncEnvelope {
+        guard var copy = source.plainSnippet else {
+            throw EnvelopeFailure.malformedContentConflict
+        }
+        let fingerprint = try contentConflictFingerprint(for: source)
+        let copyID = deterministicUUID(
+            namespace: source.id,
+            name: "sync-content-conflict-v1|\(fingerprint)")
+        copy.id = copyID
+        copy.name = conflictName(for: copy)
+        copy.keyword = ""
+        copy.isEnabled = false
+        copy.isPinned = false
+        copy.tags = SnippetTagging.normalizedTags(copy.tags + ["conflict"])
+
+        var extensions = source.x.filter {
+            !isContentConflictExtension($0.key)
+                && $0.key != SyncEnvelope.vaultContentHashExtensionKey
+                && $0.key != SyncEnvelope.vaultKeyIDExtensionKey
+        }
+        extensions[plainConflictCopyExtensionKey] = .object([
+            "version": .int(1),
+            "sourceID": .string(source.id.uuidString.lowercased()),
+            "fingerprint": .string(fingerprint),
+        ])
+        return .plain(copy, hlc: source.hlc, origin: source.origin, x: extensions)
+    }
+
+    private static func makeSecureContentConflictVariant(
+        from source: SyncEnvelope
+    ) throws -> (key: String, value: CanonicalJSON.Value) {
+        guard source.secure else { throw EnvelopeFailure.malformedContentConflict }
+        var snapshot = try contentConflictSnapshot(for: source)
+        let fingerprint = try contentConflictFingerprint(snapshot: snapshot)
+        let copyID = deterministicUUID(
+            namespace: source.id,
+            name: "sync-content-conflict-v1|\(fingerprint)")
+        snapshot["copyID"] = .string(copyID.uuidString.lowercased())
+        return (
+            contentConflictV1ExtensionPrefix + fingerprint,
+            .object(snapshot))
+    }
+
+    private static func contentConflictFingerprint(
+        for source: SyncEnvelope
+    ) throws -> String {
+        try contentConflictFingerprint(snapshot: contentConflictSnapshot(for: source))
+    }
+
+    private static func contentConflictFingerprint(
+        snapshot: [String: CanonicalJSON.Value]
+    ) throws -> String {
+        hex(SHA256.hash(data: try CanonicalJSON.data(.object(snapshot))))
+    }
+
+    private static func contentConflictSnapshot(
+        for source: SyncEnvelope
+    ) throws -> [String: CanonicalJSON.Value] {
+        guard let fields = source.fields, !source.deleted else {
+            throw EnvelopeFailure.malformedContentConflict
+        }
+        // `VaultRecord.x` is plaintext primary storage. A secure conflict snapshot is
+        // mirrored there so it survives loss of derived sync state, therefore copying
+        // an arbitrary future wire extension into the snapshot would silently widen
+        // that plaintext boundary. These two values are the complete allow-list needed
+        // to authenticate and materialise the losing ciphertext.
+        let approvedSourceExtensions = source.x.filter {
+            $0.key == SyncEnvelope.vaultContentHashExtensionKey
+                || $0.key == SyncEnvelope.vaultKeyIDExtensionKey
+        }
+        return [
+            "version": .int(1),
+            "sourceID": .string(source.id.uuidString.lowercased()),
+            "sourceHLC": .string(source.hlc.string),
+            "sourceOrigin": .string(source.origin),
+            "secure": .bool(source.secure),
+            "fields": fields.canonicalValue,
+            "x": .object(approvedSourceExtensions),
+        ]
+    }
+
+    static func secureContentConflictVariants(
+        in envelope: SyncEnvelope
+    ) throws -> [SecureContentConflictVariant] {
+        if envelope.deleted,
+           envelope.x.keys.contains(where: isContentConflictExtension) {
+            throw EnvelopeFailure.malformedContentConflict
+        }
+        var variants: [SecureContentConflictVariant] = []
+        for (key, raw) in envelope.x where isContentConflictExtension(key) {
+            guard key.hasPrefix(contentConflictV1ExtensionPrefix) else { continue }
+            let fingerprint = String(key.dropFirst(contentConflictV1ExtensionPrefix.count))
+            let fingerprintBytes = Array(fingerprint.utf8)
+            guard fingerprintBytes.count == 64,
+                  fingerprintBytes.allSatisfy({
+                      (0x30...0x39).contains($0) || (0x61...0x66).contains($0)
+                  }),
+                  let object = raw.object,
+                  Set(object.keys) == [
+                    "version", "copyID", "sourceID", "sourceHLC", "sourceOrigin",
+                    "secure", "fields", "x",
+                  ],
+                  object["version"]?.int == 1,
+                  object["secure"]?.bool == true,
+                  let copyText = object["copyID"]?.text,
+                  let copyID = UUID(uuidString: copyText),
+                  copyText == copyID.uuidString.lowercased(),
+                  let sourceText = object["sourceID"]?.text,
+                  let sourceID = UUID(uuidString: sourceText),
+                  sourceText == sourceID.uuidString.lowercased(),
+                  sourceID == envelope.id,
+                  let hlcText = object["sourceHLC"]?.text,
+                  let sourceHLC = HLC(parsing: hlcText),
+                  let sourceOrigin = object["sourceOrigin"]?.text,
+                  HLC.isCanonicalDeviceID(sourceOrigin),
+                  let fieldsValue = object["fields"],
+                  let fields = try? SyncEnvelope.Fields.parse(fieldsValue),
+                  let sourceX = object["x"]?.object,
+                  Set(sourceX.keys) == [
+                      SyncEnvelope.vaultContentHashExtensionKey,
+                      SyncEnvelope.vaultKeyIDExtensionKey,
+                  ],
+                  sourceX[SyncEnvelope.vaultContentHashExtensionKey]?.text != nil,
+                  sourceX[SyncEnvelope.vaultKeyIDExtensionKey]?.text != nil,
+                  (sourceX[SyncEnvelope.vaultContentHashExtensionKey]?.text?.utf8.count
+                    ?? Int.max) <= 256,
+                  (sourceX[SyncEnvelope.vaultKeyIDExtensionKey]?.text?.utf8.count
+                    ?? Int.max) <= 256
+            else { throw EnvelopeFailure.malformedContentConflict }
+
+            var snapshot = object
+            snapshot["copyID"] = nil
+            guard try contentConflictFingerprint(snapshot: snapshot) == fingerprint,
+                  copyID == deterministicUUID(
+                    namespace: sourceID,
+                    name: "sync-content-conflict-v1|\(fingerprint)")
+            else { throw EnvelopeFailure.malformedContentConflict }
+
+            variants.append(SecureContentConflictVariant(
+                extensionKey: key,
+                fingerprint: fingerprint,
+                copyID: copyID,
+                sourceID: sourceID,
+                sourceHLC: sourceHLC,
+                sourceOrigin: sourceOrigin,
+                fields: fields,
+                sourceExtensions: sourceX))
+        }
+        return variants.sorted { $0.extensionKey < $1.extensionKey }
+    }
+
+    static func hasUnknownContentConflictVersion(_ envelope: SyncEnvelope) -> Bool {
+        envelope.x.keys.contains {
+            isContentConflictExtension($0)
+                && !$0.hasPrefix(contentConflictV1ExtensionPrefix)
+        }
+    }
+
+    static func hasUnresolvedContentConflict(_ envelope: SyncEnvelope?) -> Bool {
+        guard let envelope else { return false }
+        return envelope.x.keys.contains(where: isContentConflictExtension)
+    }
+
+    /// Unknown versions remain opaque members of `x`. Their key must still have a
+    /// bounded, deterministic grammar so a typo does not become an immortal record,
+    /// but an older binary must not reject a future snapshot it cannot interpret.
+    static func validateContentConflictExtensions(in envelope: SyncEnvelope) throws {
+        guard try envelope.canonicalData().count <= maximumWireCanonicalBytes else {
+            throw EnvelopeFailure.malformedContentConflict
+        }
+        guard !envelope.deleted || !hasUnresolvedContentConflict(envelope) else {
+            throw EnvelopeFailure.malformedContentConflict
+        }
+        let variants = envelope.x.filter { isContentConflictExtension($0.key) }
+        guard variants.count <= maximumContentConflictVariantCount else {
+            throw EnvelopeFailure.malformedContentConflict
+        }
+        var aggregateBytes = 0
+        for (key, value) in variants {
+            let bytes = Array(key.utf8)
+            let components = key.split(separator: ".", omittingEmptySubsequences: false)
+            let versionBytes = components.count == 3
+                ? Array(components[1].utf8.dropFirst()) : []
+            let fingerprintBytes = components.count == 3
+                ? Array(components[2].utf8) : []
+            guard components.count == 3,
+                  components[0] == "contentConflict",
+                  components[1].utf8.first == Character("v").asciiValue,
+                  !versionBytes.isEmpty,
+                  versionBytes.count <= 3,
+                  versionBytes.allSatisfy({ (0x30...0x39).contains($0) }),
+                  fingerprintBytes.count == 64,
+                  fingerprintBytes.allSatisfy({
+                      (0x30...0x39).contains($0) || (0x61...0x66).contains($0)
+                  })
+            else { throw EnvelopeFailure.malformedContentConflict }
+            let valueBytes = try CanonicalJSON.data(value).count
+            guard bytes.count <= maximumContentConflictVariantBytes - aggregateBytes,
+                  valueBytes <= maximumContentConflictVariantBytes
+                    - aggregateBytes - bytes.count else {
+                throw EnvelopeFailure.malformedContentConflict
+            }
+            aggregateBytes += bytes.count + valueBytes
+        }
+        _ = try secureContentConflictVariants(in: envelope)
+    }
+
+    static func isMatchingPlainConflictCopy(
+        _ envelope: SyncEnvelope, candidate: SyncEnvelope
+    ) -> Bool {
+        guard envelope.id == candidate.id,
+              let expected = candidate.x[plainConflictCopyExtensionKey],
+              envelope.x[plainConflictCopyExtensionKey] == expected
+        else { return false }
+        return true
+    }
+
+    static func conflictCopyProvenance(
+        sourceID: UUID, fingerprint: String
+    ) -> CanonicalJSON.Value {
+        .object([
+            "version": .int(1),
+            "sourceID": .string(sourceID.uuidString.lowercased()),
+            "fingerprint": .string(fingerprint),
+        ])
+    }
+
+    static func matchesConflictCopyProvenance(
+        _ envelope: SyncEnvelope,
+        sourceID: UUID,
+        fingerprint: String
+    ) -> Bool {
+        envelope.x[plainConflictCopyExtensionKey]
+            == conflictCopyProvenance(sourceID: sourceID, fingerprint: fingerprint)
+    }
+
+    private static func refuseDeletionIfConflictIsUnresolved(
+        _ envelope: SyncEnvelope?
+    ) throws {
+        if hasUnresolvedContentConflict(envelope) {
+            throw EnvelopeFailure.unresolvedContentConflictDeletion
+        }
+    }
+
+    static func isContentConflictExtension(_ key: String) -> Bool {
+        key.hasPrefix(contentConflictExtensionPrefix)
+    }
+
+    private static func hex(_ digest: SHA256.Digest) -> String {
+        digest.map { String(format: "%02x", $0) }.joined()
     }
 }

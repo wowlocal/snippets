@@ -107,6 +107,15 @@ nonisolated struct SyncJournal: Equatable {
                 // Reconciliation may run repeatedly while an offer is in flight. Reuse
                 // the one deletion event rather than minting a new clock every time.
                 desired = previousDesired
+            } else if let protected = [previous?.desired, offered?.envelope, confirmedEnvelope]
+                .compactMap({ $0 })
+                .filter({ SyncMerge.hasUnresolvedContentConflict($0) })
+                .max(by: { $0.hlc < $1.hlc }) {
+                // A secure losing version is still encrypted under this source id.
+                // Turning the only envelope carrying it into a body-free tombstone
+                // would be irreversible. Keep the live value until a key-aware layer
+                // materialises/resolves its variants; deletion is intentionally held.
+                desired = protected
             } else if let existenceProof = Self.newestLive(
                 offered?.envelope, confirmedEnvelope) {
                 let evidence = [previous?.desired, offered?.envelope, confirmedEnvelope]

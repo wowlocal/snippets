@@ -126,6 +126,11 @@ nonisolated struct SyncBase: Equatable {
         // is never a delete — the whole merge rests on that.
         for (key, known) in envelopes where !known.deleted {
             guard let id = UUID(uuidString: key), current[id] == nil else { continue }
+            // The only copy of a losing secure body can still live inside this live
+            // envelope. A tombstone deliberately carries no content or arbitrary `x`,
+            // so deleting now would discard that ciphertext. Hold the record until the
+            // key-aware vault layer materialises or resolves every pending variant.
+            if SyncMerge.hasUnresolvedContentConflict(known) { continue }
             pending.append(known.tombstoned(hlc: known.hlc, origin: known.origin))
         }
 

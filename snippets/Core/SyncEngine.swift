@@ -57,10 +57,20 @@ protocol SyncLibraryAccess: AnyObject {
     /// Partitions records before the deletion guard. A deletion the library cannot file
     /// must not count toward a mass-deletion halt, and must not be passed to `applyRemote`.
     func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification
+    /// Makes every secure losing snapshot durable in primary storage before a merge
+    /// can replace its source representation. A locked vault may defer the affected
+    /// records; it may never apply them and hope a best-effort sidecar survives.
+    func prepareRemote(_ envelopes: [SyncEnvelope]) throws -> RemoteClassification
     /// Applies merged remote state, reporting what changed and what had to wait.
     func applyRemote(_ envelopes: [SyncEnvelope]) throws -> ApplyOutcome
     /// Live ids, for the deletion guard.
     func liveIDs() -> Set<UUID>
+}
+
+@MainActor extension SyncLibraryAccess {
+    func prepareRemote(_ envelopes: [SyncEnvelope]) throws -> RemoteClassification {
+        classifyRemote(envelopes)
+    }
 }
 
 /// Drives one backend, whatever it is.
@@ -728,9 +738,14 @@ final class SyncEngine {
             guard fetch.hasMore else { break }
         }
 
-        var incoming: [OpenedRemote] = []
-        incoming.reserveCapacity(rawIncoming.count)
-        for item in rawIncoming {
+        // The transport inbox is ordered and may retain several generations of one
+        // record. Only the last decodable occurrence is authoritative for Core. If the
+        // last occurrence is opaque, no earlier plaintext generation may slip through.
+        var latestIncomingByID: [UUID: OpenedRemote] = [:]
+        var latestIncomingOrder: [UUID: Int] = [:]
+        var opaqueLatestIDs = Set<UUID>()
+        for (position, item) in rawIncoming.enumerated() {
+            latestIncomingOrder[item.record.id] = position
             guard let recordVersion = item.record.recordVersion else {
                 // A fetched value without the generation that guards its replacement is
                 // incomplete protocol data. Hold the cursor/offer exactly like an
@@ -738,15 +753,19 @@ final class SyncEngine {
                 // local edit a conditional create and lose the known ancestry.
                 quarantine(item.record)
                 opaqueFetchedIDs.insert(item.record.id)
+                opaqueLatestIDs.insert(item.record.id)
+                latestIncomingByID[item.record.id] = nil
                 if item.fromConflict { unresolvedConflictIDs.insert(item.record.id) }
                 round.quarantined += 1
                 continue
             }
             do {
                 let envelope = try WireCodec.open(item.record, using: sealer)
-                incoming.append(OpenedRemote(
+                latestIncomingByID[envelope.id] = OpenedRemote(
                     envelope: envelope,
-                    recordVersion: recordVersion))
+                    recordVersion: recordVersion)
+                opaqueLatestIDs.remove(envelope.id)
+                opaqueFetchedIDs.remove(envelope.id)
                 if !item.fromConflict {
                     fetchedAuthoritativeIDs.insert(envelope.id)
                 }
@@ -756,10 +775,19 @@ final class SyncEngine {
                 // to be visible rather than inferred from missing data later.
                 quarantine(item.record)
                 opaqueFetchedIDs.insert(item.record.id)
+                opaqueLatestIDs.insert(item.record.id)
+                latestIncomingByID[item.record.id] = nil
                 if item.fromConflict { unresolvedConflictIDs.insert(item.record.id) }
                 round.quarantined += 1
             }
         }
+        let incoming = latestIncomingByID.values.sorted {
+            (latestIncomingOrder[$0.envelope.id] ?? 0)
+                < (latestIncomingOrder[$1.envelope.id] ?? 0)
+        }
+        // A newer undecodable generation supersedes any earlier decoded value of the
+        // same id. Holding the cursor makes it retryable without applying stale data.
+        opaqueFetchedIDs.formUnion(opaqueLatestIDs)
 
         // Capture edits — especially an absence that means delete — which happened
         // while submit/fetch was suspended. This write precedes remote apply so a crash
@@ -809,6 +837,8 @@ final class SyncEngine {
         // loses to a local edit is not a deletion, and counting it as one would trip the
         // breaker on a library that was never in danger.
         var localNow = projectedLocal
+        let authoritativeIncomingByID = Dictionary(
+            uniqueKeysWithValues: incoming.map { ($0.envelope.id, $0.envelope) })
 
         // The local files contain live records only. The journal supplies explicit
         // tombstones and may also contain a restamped recreation that the frozen local
@@ -819,7 +849,7 @@ final class SyncEngine {
                 localNow[envelope.id] = desired
             }
         }
-        var merged: [SyncEnvelope] = []
+        var mergedByID: [UUID: SyncEnvelope] = [:]
         for remote in incoming {
             let envelope = remote.envelope
             let offered = journal.entry(envelope.id)?.offered?.envelope
@@ -834,17 +864,72 @@ final class SyncEngine {
             } else {
                 ancestor = base.envelope(envelope.id)
             }
-            guard let resolved = SyncMerge.mergeEnvelope(
-                base: ancestor,
-                local: localNow[envelope.id],
-                remote: envelope
-            ) else { continue }
-            merged.append(resolved)
+            let merge: SyncMerge.EnvelopeOutcome
+            do {
+                merge = try SyncMerge.mergeEnvelopeOutcome(
+                    base: ancestor,
+                    local: localNow[envelope.id],
+                    remote: envelope)
+            } catch {
+                throw SyncEngineFailure(
+                    reason: .localLibraryQuarantined,
+                    detail: "a content-conflict snapshot was malformed or could not be "
+                        + "preserved safely; sync stopped without applying it")
+            }
+            if let resolved = merge.survivor {
+                mergedByID[resolved.id] = resolved
+                localNow[resolved.id] = resolved
+            }
+            for copy in merge.conflictCopies {
+                let authoritative = authoritativeIncomingByID[copy.id]
+                if let authoritative {
+                    guard SyncMerge.isMatchingPlainConflictCopy(
+                        authoritative, candidate: copy)
+                    else {
+                        throw SyncEngineFailure(
+                            reason: .localLibraryQuarantined,
+                            detail: "a generated conflict copy collided with an existing "
+                                + "snippet; sync stopped without overwriting either record")
+                    }
+                    // The remote record may be a later user edit of the generated copy.
+                    // Treat the pristine deterministic copy as its ancestor so it cannot
+                    // become a second content conflict merely because both arrived in
+                    // the same durable inbox batch.
+                    let evolved = try SyncMerge.mergeEnvelopeOutcome(
+                        base: copy,
+                        local: localNow[copy.id] ?? copy,
+                        remote: authoritative)
+                    guard evolved.conflictCopies.isEmpty,
+                          let survivor = evolved.survivor else {
+                        throw SyncEngineFailure(
+                            reason: .localLibraryQuarantined,
+                            detail: "an existing conflict copy could not be reconciled safely")
+                    }
+                    mergedByID[copy.id] = survivor
+                    localNow[copy.id] = survivor
+                } else if let existing = localNow[copy.id] ?? mergedByID[copy.id] {
+                    guard SyncMerge.isMatchingPlainConflictCopy(existing, candidate: copy) else {
+                        throw SyncEngineFailure(
+                            reason: .localLibraryQuarantined,
+                            detail: "a generated conflict copy collided with an existing "
+                                + "snippet; sync stopped without overwriting either record")
+                    }
+                    // A user may already have renamed or edited the copy. Deterministic
+                    // redelivery identifies the same provenance but must never restore
+                    // the original generated snapshot over that later user change.
+                    mergedByID[copy.id] = existing
+                    localNow[copy.id] = existing
+                } else {
+                    mergedByID[copy.id] = copy
+                    localNow[copy.id] = copy
+                }
+            }
         }
+        let merged = mergedByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
 
         // Classify before the circuit breaker: a rival-vault tombstone is not a deletion
         // this library can apply and must not trip a sticky mass-deletion halt.
-        let classification = library.classifyRemote(merged)
+        let classification = try library.prepareRemote(merged)
 
         // The circuit breaker.
         let live = library.liveIDs()

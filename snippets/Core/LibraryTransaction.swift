@@ -84,12 +84,14 @@ nonisolated enum LibraryTransaction {
 
     /// Which durable write has to land first to keep every moved record recoverable.
     ///
-    /// A normal user action moves records in only one direction. A sync batch can carry
-    /// promotions and demotions together, though, and no ordering of the two final files
-    /// is safe for both: either one removes a source before the other has installed its
-    /// destination. That case gets an intermediate plaintext library which retains the
-    /// promoted sources while adding the demoted destinations. After that duplicate
-    /// stage, either final file may be written without creating a disappearance window.
+    /// A promotion can also create an additional plaintext conflict copy in the same
+    /// transaction. Writing the vault first would then expose a crash window in which
+    /// startup reconciliation removes the old plaintext source before that generated
+    /// copy ever lands. Every promotion therefore gets an intermediate plaintext
+    /// library which retains its old source while installing all final plaintext
+    /// destinations. After that duplicate stage, either final file may be written
+    /// without creating a disappearance window. The same plan naturally covers a mixed
+    /// promotion/demotion batch.
     private enum WritePlan {
         case vaultThenLibrary
         case libraryThenVault
@@ -210,8 +212,9 @@ nonisolated enum LibraryTransaction {
 
             case .duplicateLibraryThenVaultThenLibrary(let promoting):
                 // Retain the old plaintext source of every promotion while installing
-                // all final plaintext destinations. This is the only extra write, and
-                // it is required only for a batch containing both move directions.
+                // all final plaintext destinations. The extra write is required even
+                // for a one-way promotion when that transaction also generated another
+                // record which preserves the losing content.
                 let finalIDs = Set(contents.snippets.map(\.id))
                 let retainedSources = librarySnapshot.snippets.filter {
                     promoting.contains($0.id) && !finalIDs.contains($0.id)
@@ -262,10 +265,9 @@ nonisolated enum LibraryTransaction {
             .subtracting(afterVaultIDs)
             .intersection(afterLibraryIDs)
 
-        if !promoting.isEmpty && !demoting.isEmpty {
+        if !promoting.isEmpty {
             return .duplicateLibraryThenVaultThenLibrary(promoting: promoting)
         }
-        if !promoting.isEmpty { return .vaultThenLibrary }
         if !demoting.isEmpty { return .libraryThenVault }
 
         switch after.marker {

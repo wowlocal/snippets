@@ -1428,6 +1428,13 @@ final class SecureSnippetStore: SecureSnippetProviding {
         return try session.keyring(vaultSalt: salt)
     }
 
+    /// Sync may opportunistically materialise an encrypted conflict only while the
+    /// user has already unlocked this vault. This never prompts and never extends the
+    /// authentication window beyond the ordinary `currentKey()` semantics.
+    func unlockedKeyringForSync() throws -> SnippetCrypto.Keyring {
+        try keyring(requireDocument())
+    }
+
     /// The crypto scope is the vault's own `kid` — **never** `SyncState.scopeID`, which
     /// is regenerated whenever that file cannot be read and would make every record
     /// permanently unopenable. See `SnippetCrypto.RecordContext.scopeID`.
