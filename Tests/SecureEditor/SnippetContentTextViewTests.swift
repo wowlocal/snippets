@@ -126,6 +126,45 @@ struct SnippetContentTextViewTests {
         #expect(upperBand > lowerBand)
     }
 
+    @Test func protectedPlaintextRedrawRetainsDisplayedFrameUntilReplacement() throws {
+        _ = NSApplication.shared
+        let view = editor("redraw-sentinel")
+        view.isSecureContentMode = true
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        scrollView.documentView = view
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scrollView
+        try #require(view.setSecurePresentationEnabled(true))
+
+        // Exercise a renderer directly so the test does not need to forge the
+        // physical-pointer authorization owned by the view's hover policy.
+        let renderer = SecureSnippetCaptureRenderer(textView: view)
+        var displayedImageRemovalRequests: [Bool] = []
+        renderer.setFlushObserverForTesting {
+            displayedImageRemovalRequests.append($0)
+        }
+
+        try #require(renderer.arm())
+        #expect(displayedImageRemovalRequests == [true])
+        try #require(renderer.renderPlaintext())
+        try #require(renderer.renderPlaintext())
+        #expect(
+            displayedImageRemovalRequests == [true, false, false],
+            "plaintext-to-plaintext redraws must flush queued frames without blanking the displayed protected image"
+        )
+
+        try #require(renderer.renderRedaction())
+        #expect(
+            displayedImageRemovalRequests.last == true,
+            "security redaction must still synchronously remove the displayed plaintext image"
+        )
+    }
+
     @Test func secureModeRefusesEveryPasteboardAndServicesWriteBoundary() throws {
         let sentinel = "vault-sentinel"
         let view = editor(sentinel)

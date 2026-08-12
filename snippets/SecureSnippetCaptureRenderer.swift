@@ -27,6 +27,7 @@ final class SecureSnippetCaptureRenderer {
     private weak var observedClipView: NSClipView?
     private var clipViewObserver: NSObjectProtocol?
     private var decodeFailureObserver: NSObjectProtocol?
+    private var flushObserverForTesting: ((Bool) -> Void)?
 
     var onFailure: (() -> Void)?
 
@@ -114,7 +115,7 @@ final class SecureSnippetCaptureRenderer {
         frameGeneration &+= 1
         removeClipViewObserver()
         displayLayer.isHidden = true
-        displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+        flush(removingDisplayedImage: true)
         fallbackLayer.isHidden = true
     }
 
@@ -144,6 +145,10 @@ final class SecureSnippetCaptureRenderer {
 
     var observesScrollForInspection: Bool {
         observedClipView === textView.enclosingScrollView?.contentView && clipViewObserver != nil
+    }
+
+    func setFlushObserverForTesting(_ observer: ((Bool) -> Void)?) {
+        flushObserverForTesting = observer
     }
 
     private enum FrameKind {
@@ -177,10 +182,7 @@ final class SecureSnippetCaptureRenderer {
             // physical observers see the neutral fallback immediately.
             fallbackLayer.isHidden = false
             displayLayer.isHidden = true
-            displayLayer.sampleBufferRenderer.flush(
-                removingDisplayedImage: true,
-                completionHandler: nil
-            )
+            flush(removingDisplayedImage: true)
         }
 
         guard let pixelBuffer = makePixelBuffer(for: geometry),
@@ -190,14 +192,13 @@ final class SecureSnippetCaptureRenderer {
             return false
         }
 
-        // A static editor needs one frame, not a playback queue. Remove the previous
-        // displayed image and every queued buffer before each replacement, so hide and
-        // redraw cannot leave an older plaintext viewport waiting in AVFoundation.
+        // A static editor needs one frame, not a playback queue. Discard queued
+        // plaintext buffers before each replacement, but retain the currently
+        // displayed protected image until the new protected frame is accepted. Using
+        // `removingDisplayedImage: true` here exposed the neutral fallback between
+        // caret/selection frames and made the complete secure body blink.
         if case .plaintext = kind {
-            displayLayer.sampleBufferRenderer.flush(
-                removingDisplayedImage: true,
-                completionHandler: nil
-            )
+            flush(removingDisplayedImage: false)
         }
 
         // The layer remains behind an opaque neutral fallback until AVFoundation
@@ -212,6 +213,14 @@ final class SecureSnippetCaptureRenderer {
         displayLayer.isHidden = false
         fallbackLayer.isHidden = false
         return true
+    }
+
+    private func flush(removingDisplayedImage: Bool) {
+        flushObserverForTesting?(removingDisplayedImage)
+        displayLayer.sampleBufferRenderer.flush(
+            removingDisplayedImage: removingDisplayedImage,
+            completionHandler: nil
+        )
     }
 
     private func frameGeometry() -> SecureCaptureFrameGeometry? {
