@@ -675,9 +675,11 @@ final class ViewController: NSViewController {
         // equality Auto Layout is free to minimize the toast to its padding (32pt),
         // which is exactly what a hosted shipping-module harness observed. Keep
         // the natural width at 652 when possible; required window margins win and
-        // narrow it to `window width - 40` on smaller windows.
+        // narrow it to `window width - 40` on smaller windows. This preference
+        // must also stay below AppKit's window-resize priorities: at 500 or above
+        // the layout engine grows the window instead of yielding the toast.
         let preferredWidth = container.widthAnchor.constraint(equalToConstant: 652)
-        preferredWidth.priority = .defaultHigh
+        preferredWidth.priority = EditorVerticalMetrics.editorFitsViewportPriority
 
         NSLayoutConstraint.activate([
             secureCopyWarningLabel.leadingAnchor.constraint(
