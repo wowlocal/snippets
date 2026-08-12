@@ -447,7 +447,13 @@ final class ViewController: NSViewController {
 
             cancelEditorListReload()
             reloadVisibleSnippets(keepSelection: true)
-            if source == .external || !isEditingDetails {
+            // A remote batch that changed only other records still needs to refresh
+            // the list, but not this editor. When the selected record itself changed,
+            // always display the result of sync's three-way merge: focus alone is not
+            // a local edit and must not leave the content area stale. Unknown changes
+            // remain conservative and take the full rebind path.
+            let selectedSnippetWasAffected = selectedSnippetID.map(change.affects) ?? true
+            if selectedSnippetWasAffected {
                 applySelectedSnippetToEditor()
             }
         }
