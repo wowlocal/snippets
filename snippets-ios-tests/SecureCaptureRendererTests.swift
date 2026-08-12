@@ -195,7 +195,7 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertTrue(textView.secureCaptureFallbackVisibleForInspection)
     }
 
-    func testSubsequentProtectedRedrawReportsPresentationWithoutFailingClosed() {
+    func testSubsequentProtectedRedrawReplacesVisibleFrameWithoutBlanking() {
         let textView = makeTextView()
         textView.setSceneCaptureStateForTesting(.inactive)
         XCTAssertTrue(textView.bindSecureRedacted())
@@ -209,15 +209,18 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertEqual(completions.count, 1)
         completions.removeFirst()()
         XCTAssertEqual(presentedCount, 1)
+        XCTAssertFalse(textView.secureCaptureDisplayLayerHiddenForInspection)
 
         textView.invalidateSecureCaptureRenderer()
-        XCTAssertEqual(completions.count, 1)
-        completions.removeFirst()()
 
+        XCTAssertTrue(
+            completions.isEmpty,
+            "a protected-to-protected redraw must not enter the initial flush path")
         XCTAssertEqual(presentedCount, 2)
         XCTAssertEqual(textView.text, "refresh secret")
         XCTAssertEqual(textView.secureCapturePhase, .protectedPlaintext)
         XCTAssertFalse(textView.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertNil(textView.secureCapturePendingGenerationForInspection)
     }
 
     func testDecodeFailedRendererCannotReportHealthyWhenRearmed() {

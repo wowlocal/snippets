@@ -149,9 +149,20 @@ final class SecureSnippetCaptureRenderer {
         updateLayerGeometry()
         updateFallbackColor()
 
-        // Invalidate every older completion and synchronously hide the AV layer
-        // before doing any allocation or TextKit work.
-        let generation = hideAndFlushToFallback()
+        // The first disclosed frame crosses the redaction boundary, so keep the
+        // synchronous hide/flush and asynchronous lifecycle gate. Once a protected
+        // frame is already visible, leave it in place while rasterizing and enqueue
+        // its replacement directly into the same preventsCapture layer. Hiding the
+        // old frame on an ordinary caret/selection redraw produces a blank flash.
+        let replacesVisibleProtectedFrame = pendingPresentationGeneration == nil
+            && !displayLayer.isHidden
+        let generation: UInt64
+        if replacesVisibleProtectedFrame {
+            frameGeneration &+= 1
+            generation = frameGeneration
+        } else {
+            generation = hideAndFlushToFallback()
+        }
         guard let pixelBuffer = makePixelBuffer(for: geometry),
               draw(kind: .plaintext, into: pixelBuffer, geometry: geometry),
               let sampleBuffer = makeSampleBuffer(
@@ -163,9 +174,21 @@ final class SecureSnippetCaptureRenderer {
         }
 
         pendingPresentationGeneration = generation
-        flushBeforePresentingPlaintext { [weak self] in
-            guard let self else { return }
-            self.presentPlaintextIfCurrent(sampleBuffer, generation: generation)
+        if replacesVisibleProtectedFrame {
+            presentPlaintextIfCurrent(
+                sampleBuffer,
+                generation: generation,
+                replacesVisibleProtectedFrame: true
+            )
+        } else {
+            flushBeforePresentingPlaintext { [weak self] in
+                guard let self else { return }
+                self.presentPlaintextIfCurrent(
+                    sampleBuffer,
+                    generation: generation,
+                    replacesVisibleProtectedFrame: false
+                )
+            }
         }
         return true
     }
@@ -282,7 +305,8 @@ final class SecureSnippetCaptureRenderer {
 
     private func presentPlaintextIfCurrent(
         _ sampleBuffer: CMSampleBuffer,
-        generation: UInt64
+        generation: UInt64,
+        replacesVisibleProtectedFrame: Bool
     ) {
         // A stale completion belongs to a generation that has already been
         // synchronously hidden/flushed, so it must be an inert no-op. A current
@@ -290,7 +314,10 @@ final class SecureSnippetCaptureRenderer {
         // lifecycle/source gate must actively fail closed and clear plaintext.
         guard generation == frameGeneration,
               pendingPresentationGeneration == generation else { return }
-        guard isReadyForHiddenPlaintextPresentation else {
+        let presentationSurfaceIsReady = replacesVisibleProtectedFrame
+            ? isReadyForVisiblePlaintextReplacement
+            : isReadyForHiddenPlaintextPresentation
+        guard presentationSurfaceIsReady else {
             failClosed()
             return
         }
@@ -312,7 +339,9 @@ final class SecureSnippetCaptureRenderer {
         }
 
         pendingPresentationGeneration = nil
-        displayLayer.isHidden = false
+        if !replacesVisibleProtectedFrame {
+            displayLayer.isHidden = false
+        }
         CATransaction.flush()
         guard generation == frameGeneration else { return }
         guard !rendererHasFailed,
@@ -340,6 +369,10 @@ final class SecureSnippetCaptureRenderer {
         isHealthyForPlaintextPresentation
             && displayLayer.isHidden
             && !fallbackLayer.isHidden
+    }
+
+    private var isReadyForVisiblePlaintextReplacement: Bool {
+        isHealthyForPlaintextPresentation && !displayLayer.isHidden
     }
 
     private var rendererHasFailed: Bool {

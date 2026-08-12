@@ -141,12 +141,19 @@ final class SecureSnippetRevealTests: XCTestCase {
         textView.insertAttributedText(NSAttributedString(string: "?"))
         XCTAssertEqual(textView.text, "body!?")
 
+        textView.selectedRange = NSRange(location: 4, length: 2)
+        textView.delete(nil)
+        XCTAssertEqual(
+            textView.text,
+            "body",
+            "the edit-menu Delete action must mutate through UITextInput without forwarding an unsupported selector")
+
         textView.setSecureEditingAuthorized(false)
         textView.deleteBackward()
         textView.paste(nil)
         textView.paste(itemProviders: [itemProvider])
         textView.captureTextFromCamera(nil)
-        XCTAssertEqual(textView.text, "body!?")
+        XCTAssertEqual(textView.text, "body")
     }
 
     func testTransparentSecureEditorRemainsTouchHitTestable() {

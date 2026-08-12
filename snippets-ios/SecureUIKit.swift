@@ -372,7 +372,13 @@ final class SecureSnippetTextView: UITextView {
 
     override func delete(_ sender: Any?) {
         guard permitsSecureTextMutation else { return }
-        super.delete(sender)
+        // `delete(_:)` is an optional UIResponderStandardEditActions selector, not
+        // a concrete UITextView method that is safe to invoke with `super`. UIKit's
+        // edit menu can still route Delete here, and forwarding it to `super` raises
+        // an unrecognized-selector exception on the runtime UITextView subclass.
+        // Perform the standard selected-range mutation through UITextInput instead.
+        guard let selectedTextRange, !selectedTextRange.isEmpty else { return }
+        replace(selectedTextRange, withText: "")
     }
 
     override func insertText(_ text: String) {
