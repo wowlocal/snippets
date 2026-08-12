@@ -36,6 +36,7 @@ final class SnippetEditorViewController: UIViewController {
     private var secureAuthenticationTask: Task<Void, Never>?
     private var secureSaveWorkItem: DispatchWorkItem?
     private var secureContentIsRevealed: Bool { secureRevealPolicy.isProtectedPlaintext }
+    private var isPreparingSecureContentForModalPresentation = false
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -579,10 +580,12 @@ final class SnippetEditorViewController: UIViewController {
         children.append(contentsOf: [
             UIAction(title: "Keyboard Shortcuts", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 guard let self else { return }
+                self.prepareSecureContentForModalPresentation()
                 self.delegate?.snippetEditorRequestedShortcuts(self)
             },
             UIAction(title: "Settings", image: UIImage(systemName: "gearshape")) { [weak self] _ in
                 guard let self else { return }
+                self.prepareSecureContentForModalPresentation()
                 self.delegate?.snippetEditorRequestedSettings(self)
             },
             UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteSnippet() },
@@ -929,6 +932,7 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     private func makeOrdinary(id: UUID) {
+        prepareSecureContentForModalPresentation()
         let alert = UIAlertController(
             title: "Make This Snippet Ordinary?",
             message: "Its content will be decrypted and stored in the ordinary library, where it can be copied, shared, and exported.",
@@ -964,6 +968,7 @@ final class SnippetEditorViewController: UIViewController {
         _ pending: SecureSnippetStore.PendingVaultCreation,
         completion: @escaping () -> Void
     ) {
+        prepareSecureContentForModalPresentation()
         let key = pending.recoveryKeyText
         let alert = UIAlertController(
             title: "Save Your Recovery Key",
@@ -1147,6 +1152,26 @@ final class SnippetEditorViewController: UIViewController {
         redactSecurePlaintextAndPersist()
     }
 
+    /// Revoke any continuous hover/hold before an alert or delegate-owned
+    /// transition can cover this editor. Persistence failures are rendered in the
+    /// inline footer, so this path cannot recursively present another error alert.
+    private func prepareSecureContentForModalPresentation() {
+        guard !isPreparingSecureContentForModalPresentation else { return }
+        isPreparingSecureContentForModalPresentation = true
+        defer { isPreparingSecureContentForModalPresentation = false }
+
+        secureAuthenticationTask?.cancel()
+        secureAuthenticationTask = nil
+        let selectedRecordIsSecure = selectedID.map(environment.store.isSecure) == true
+        guard selectedRecordIsSecure || bodyTextView.isSecureContentMode else {
+            view.endEditing(true)
+            return
+        }
+        _ = secureRevealPolicy.lock()
+        redactSecurePlaintextAndPersist()
+        view.endEditing(true)
+    }
+
     private func redactSecurePlaintextAndPersist() {
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
@@ -1288,15 +1313,18 @@ final class SnippetEditorViewController: UIViewController {
 
     private func duplicateSnippet() {
         guard let id = selectedID else { return }
+        prepareSecureContentForModalPresentation()
         delegate?.snippetEditorRequestedDuplicate(self, id: id)
     }
 
     @objc private func deleteSnippet() {
         guard let id = selectedID else { return }
+        prepareSecureContentForModalPresentation()
         delegate?.snippetEditorRequestedDelete(self, id: id)
     }
 
     private func showError(title: String, error: Error) {
+        prepareSecureContentForModalPresentation()
         let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))

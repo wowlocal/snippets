@@ -23,6 +23,8 @@ enum SecureSnippetForcedRedactionReason: Equatable {
 /// is revealed. Copying a secure snippet remains an explicit app action backed by
 /// `SnippetActionService`, which authenticates and uses an expiring local pasteboard.
 final class SecureSnippetTextView: UITextView {
+    private final class BlockedDictationPlaceholder: NSObject {}
+
     let secureCaptureSurfaceView = SecureSnippetCaptureSurfaceView()
 
     private var secureContentMode = false
@@ -353,6 +355,21 @@ final class SecureSnippetTextView: UITextView {
         super.paste(sender)
     }
 
+    override func paste(itemProviders: [NSItemProvider]) {
+        guard permitsSecureTextMutation else { return }
+        super.paste(itemProviders: itemProviders)
+    }
+
+    override func canPaste(_ itemProviders: [NSItemProvider]) -> Bool {
+        guard permitsSecureTextMutation else { return false }
+        return super.canPaste(itemProviders)
+    }
+
+    override func captureTextFromCamera(_ sender: Any?) {
+        guard permitsSecureTextMutation else { return }
+        super.captureTextFromCamera(sender)
+    }
+
     override func delete(_ sender: Any?) {
         guard permitsSecureTextMutation else { return }
         super.delete(sender)
@@ -381,6 +398,30 @@ final class SecureSnippetTextView: UITextView {
     override func insertDictationResult(_ dictationResult: [UIDictationPhrase]) {
         guard permitsSecureTextMutation else { return }
         super.insertDictationResult(dictationResult)
+    }
+
+    override var insertDictationResultPlaceholder: Any {
+        guard permitsSecureTextMutation else {
+            return BlockedDictationPlaceholder()
+        }
+        return super.insertDictationResultPlaceholder
+    }
+
+    override func frame(forDictationResultPlaceholder placeholder: Any) -> CGRect {
+        guard !isBlockedDictationPlaceholder(placeholder),
+              permitsSecureTextMutation else { return .zero }
+        return super.frame(forDictationResultPlaceholder: placeholder)
+    }
+
+    override func removeDictationResultPlaceholder(
+        _ placeholder: Any,
+        willInsertResult: Bool
+    ) {
+        if isBlockedDictationPlaceholder(placeholder) { return }
+        guard permitsSecureTextMutation else { return }
+        super.removeDictationResultPlaceholder(
+            placeholder,
+            willInsertResult: willInsertResult)
     }
 
     override func insertText(
@@ -428,6 +469,10 @@ final class SecureSnippetTextView: UITextView {
     override func remove(_ textPlaceholder: UITextPlaceholder) {
         guard permitsSecureTextMutation else { return }
         super.remove(textPlaceholder)
+    }
+
+    private func isBlockedDictationPlaceholder(_ placeholder: Any) -> Bool {
+        placeholder is BlockedDictationPlaceholder
     }
 
     override func didMoveToWindow() {

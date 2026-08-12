@@ -52,6 +52,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private var displayedModeIndex = 0
     private var modeTransitionAnimator: UIViewPropertyAnimator?
     private var secureHoldParkingView: SecureHoldParkingView?
+    private var isPreparingSecureContentForModalPresentation = false
 
     init(environment: AppEnvironment, snippetID: UUID) {
         self.environment = environment
@@ -928,6 +929,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func makeOrdinary() {
+        prepareSecureContentForModalPresentation()
         let alert = UIAlertController(
             title: "Make This Snippet Ordinary?",
             message: "Its content will be decrypted into the ordinary library, where it can be copied, shared, and exported.",
@@ -963,6 +965,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         _ pending: SecureSnippetStore.PendingVaultCreation,
         completion: @escaping () -> Void
     ) {
+        prepareSecureContentForModalPresentation()
         let key = pending.recoveryKeyText
         let alert = UIAlertController(
             title: "Save Your Recovery Key",
@@ -1153,6 +1156,28 @@ final class PhoneSnippetEditorViewController: UIViewController {
         redactSecurePlaintextAndPersist()
     }
 
+    /// UIKit can keep delivering an already-tracked hold while an alert, system
+    /// authentication sheet, or delegate-owned transition is being presented.
+    /// Revoke the editor binding before that handoff so plaintext cannot remain
+    /// visible behind the new UI. Secure save failures stay in the inline status
+    /// path, which prevents modal-error recursion through this barrier.
+    private func prepareSecureContentForModalPresentation() {
+        guard !isPreparingSecureContentForModalPresentation else { return }
+        isPreparingSecureContentForModalPresentation = true
+        defer { isPreparingSecureContentForModalPresentation = false }
+
+        secureAuthenticationTask?.cancel()
+        secureAuthenticationTask = nil
+        guard environment.store.isSecure(snippetID) || bodyTextView.isSecureContentMode else {
+            view.endEditing(true)
+            return
+        }
+        _ = secureRevealPolicy.lock()
+        redactSecurePlaintextAndPersist()
+        restoreSecureHoldControlToOverlay()
+        view.endEditing(true)
+    }
+
     private func redactSecurePlaintextAndPersist() {
         restoreSecureHoldControlToOverlay()
         secureSaveWorkItem?.cancel()
@@ -1238,8 +1263,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func copySnippet() {
-        view.endEditing(true)
-        flushPendingSecureContent()
+        prepareSecureContentForModalPresentation()
         copyFeedbackGenerator.prepare()
         Task { @MainActor in
             do {
@@ -1288,11 +1312,12 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func duplicateSnippet() {
+        prepareSecureContentForModalPresentation()
         delegate?.phoneSnippetEditor(self, requestedDuplicate: snippetID)
     }
 
     private func deleteSnippet() {
-        restoreSecureHoldControlToOverlay()
+        prepareSecureContentForModalPresentation()
         delegate?.phoneSnippetEditor(self, requestedDelete: snippetID)
     }
 
@@ -1352,6 +1377,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     private func showError(title: String, error: Error) {
+        prepareSecureContentForModalPresentation()
         let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))

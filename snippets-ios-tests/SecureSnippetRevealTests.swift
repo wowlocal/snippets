@@ -136,6 +136,17 @@ final class SecureSnippetRevealTests: XCTestCase {
         textView.setAttributedMarkedText(
             NSAttributedString(string: "blocked-attributed-ime"),
             selectedRange: NSRange(location: 0, length: 0))
+        let itemProvider = NSItemProvider(object: "blocked-provider" as NSString)
+        XCTAssertFalse(textView.canPaste([itemProvider]))
+        textView.paste(itemProviders: [itemProvider])
+        textView.captureTextFromCamera(nil)
+        let dictationPlaceholder = textView.insertDictationResultPlaceholder
+        XCTAssertEqual(
+            textView.frame(forDictationResultPlaceholder: dictationPlaceholder),
+            .zero)
+        textView.removeDictationResultPlaceholder(
+            dictationPlaceholder,
+            willInsertResult: true)
         textView.text = "blocked-programmatic"
         XCTAssertEqual(textView.text, "")
 
@@ -154,6 +165,8 @@ final class SecureSnippetRevealTests: XCTestCase {
         textView.setSecureEditingAuthorized(false)
         textView.deleteBackward()
         textView.paste(nil)
+        textView.paste(itemProviders: [itemProvider])
+        textView.captureTextFromCamera(nil)
         XCTAssertEqual(textView.text, "body!?")
     }
 

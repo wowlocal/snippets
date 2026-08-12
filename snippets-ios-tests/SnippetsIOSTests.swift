@@ -411,6 +411,70 @@ final class SnippetsIOSTests: XCTestCase {
         }
     }
 
+    func testMakeOrdinaryModalSynchronouslyRedactsSecureBodyOnPhoneAndIPad() throws {
+        let environment = AppEnvironment()
+        let secureID = UUID()
+        let secureProvider = SecureProviderStub(shell: Snippet(
+            id: secureID,
+            name: "Secure",
+            keyword: "secure",
+            content: ""))
+        environment.store.secureProvider = secureProvider
+
+        let phone = PhoneSnippetEditorViewController(
+            environment: environment,
+            snippetID: secureID)
+        let phoneNavigation = UINavigationController(rootViewController: phone)
+        let phoneWindow = testWindow(frame: CGRect(x: 0, y: 0, width: 430, height: 932))
+        phoneWindow.rootViewController = phoneNavigation
+        phoneWindow.makeKeyAndVisible()
+        phone.loadViewIfNeeded()
+        phone.view.layoutIfNeeded()
+        addTeardownBlock {
+            phoneWindow.isHidden = true
+            phoneWindow.rootViewController = nil
+        }
+
+        let phoneBody = try XCTUnwrap(
+            phone.view.firstDescendant(ofType: SecureSnippetTextView.self))
+        try loadPendingSecurePlaintext("PHONE-MODAL-SENTINEL", into: phoneBody)
+        let phoneSecureSwitch = try XCTUnwrap(
+            phone.view.descendant(withAccessibilityIdentifier: "snippet-secure")
+                as? UISwitch)
+        phoneSecureSwitch.sendActions(for: .valueChanged)
+        XCTAssertEqual(phoneBody.text, "")
+        XCTAssertEqual(phoneBody.secureCapturePhase, .protectedRedaction)
+        XCTAssertTrue(phoneBody.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(phone.presentedViewController is UIAlertController)
+        phone.dismiss(animated: false)
+
+        let tablet = SnippetEditorViewController(environment: environment)
+        let tabletNavigation = UINavigationController(rootViewController: tablet)
+        let tabletWindow = testWindow(frame: CGRect(x: 0, y: 0, width: 1180, height: 820))
+        tabletWindow.rootViewController = tabletNavigation
+        tabletWindow.makeKeyAndVisible()
+        tablet.loadViewIfNeeded()
+        tablet.bind(to: secureID)
+        tablet.view.layoutIfNeeded()
+        addTeardownBlock {
+            tabletWindow.isHidden = true
+            tabletWindow.rootViewController = nil
+        }
+
+        let tabletBody = try XCTUnwrap(
+            tablet.view.firstDescendant(ofType: SecureSnippetTextView.self))
+        try loadPendingSecurePlaintext("IPAD-MODAL-SENTINEL", into: tabletBody)
+        let tabletSecureButton = try XCTUnwrap(
+            tablet.view.descendant(withAccessibilityIdentifier: "snippet-secure")
+                as? UIButton)
+        tabletSecureButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(tabletBody.text, "")
+        XCTAssertEqual(tabletBody.secureCapturePhase, .protectedRedaction)
+        XCTAssertTrue(tabletBody.secureCaptureDisplayLayerHiddenForInspection)
+        XCTAssertTrue(tablet.presentedViewController is UIAlertController)
+        withExtendedLifetime(secureProvider) {}
+    }
+
     func testPhoneAndIPadOrdinaryEditorsRetainTextViewAccessibility() throws {
         let environment = AppEnvironment()
         let snippet = environment.store.addSnippet(
@@ -1285,6 +1349,23 @@ final class SnippetsIOSTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
         }
         return condition()
+    }
+
+    private func loadPendingSecurePlaintext(
+        _ plaintext: String,
+        into textView: SecureSnippetTextView
+    ) throws {
+        textView.setSceneCaptureStateForTesting(.inactive)
+        textView.setSecureForegroundActiveForTesting(true)
+        textView.setSecurePlaintextAcceptanceAuthorized(true)
+        textView.setSecureContinuousRevealAuthorized(true)
+        var pendingCompletion: (() -> Void)?
+        textView.setSecureCaptureFlushCompletionOverrideForTesting {
+            pendingCompletion = $0
+        }
+        XCTAssertTrue(textView.displaySecurePlaintext(plaintext))
+        XCTAssertNotNil(pendingCompletion)
+        XCTAssertEqual(textView.text, plaintext)
     }
 }
 
