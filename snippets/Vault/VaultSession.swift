@@ -330,12 +330,14 @@ final class VaultSession {
             return false
         }
 
-        // Tolerance lets the system coalesce this with other timers; a few seconds of
-        // slop on a five-minute window is irrelevant and saves wakeups.
+        // This timer removes both the visible plaintext and the in-memory key.
+        // Do not opt into coalescing slack at the security deadline. A blocked
+        // main run loop can still delay delivery, which is why every key access
+        // independently enforces the stored deadline above.
         let timer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.lock() }
         }
-        timer.tolerance = 5
+        timer.tolerance = 0
         RunLoop.main.add(timer, forMode: .common)
         expiryTimer = timer
         if state.isUnlocked {

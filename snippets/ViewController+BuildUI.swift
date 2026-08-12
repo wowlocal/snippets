@@ -811,6 +811,10 @@ extension ViewController {
             // editor value before the text view clears it, then cover the surface.
             self.updateSelectedSnippetFromEditor()
             self.flushPendingSecureEdit()
+            // The renderer clears NSTextStorage immediately after this callback.
+            // Remove retained edit actions first so Undo cannot resurrect the
+            // secret after a later secure-to-ordinary rebind.
+            self.resetContentUndoHistory()
             self.secureContentEditableForID = nil
             self.updatePreview(withTemplate: "")
             self.secureLockOverlay.isHidden = true

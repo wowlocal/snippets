@@ -343,6 +343,10 @@ extension ViewController {
     func applySelectedSnippetToEditor() {
         guard let snippet = selectedSnippet else {
             isApplyingSnippetToEditor = true
+            // A table click can move selection before the secure editor's
+            // debounce fires. Persist the outgoing body while its identity
+            // latch and vault key are still valid.
+            flushPendingSecureEdit()
             editingSnippetID = nil
             secureContentEditableForID = nil
             clearSecurePlaintextPresentation()
@@ -383,6 +387,11 @@ extension ViewController {
     func applySnippetToEditor(_ snippet: Snippet) {
         isApplyingSnippetToEditor = true
         let previousEditingSnippetID = editingSnippetID
+        if previousEditingSnippetID != snippet.id {
+            // Preserve an outgoing secure edit before rebinding the identity
+            // latch or clearing its protected text storage.
+            flushPendingSecureEdit()
+        }
         editingSnippetID = snippet.id
         let isSecure = store.isSecure(snippet.id)
 
@@ -1114,8 +1123,11 @@ extension ViewController {
             || wasCaptureProtected
         guard hadSecureBoundary else { return }
 
+        // The undo graph can retain a body even when a renderer failure already
+        // cleared `string`. Destroy it unconditionally while all containment
+        // boundaries are still active.
+        resetContentUndoHistory()
         if !snippetTextView.string.isEmpty {
-            resetContentUndoHistory()
             snippetTextView.string = ""
         }
         previewValueField.stringValue = ""
