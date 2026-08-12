@@ -366,4 +366,79 @@ struct SnippetContentTextViewTests {
         #expect(view.secureCapturePolicy.phase == .ordinary)
         #expect(view.string == "ordinary-after-secure")
     }
+
+    @Test func hoverHintTracksOnlyEditableProtectedRedactionAndTearsDown() throws {
+        _ = NSApplication.shared
+        let view = editor("")
+        var visibilityChanges: [Bool] = []
+        view.setSecureHoverHintVisibilityHandler { visibilityChanges.append($0) }
+        #expect(visibilityChanges == [false])
+
+        view.isSecureContentMode = true
+        try #require(view.setSecurePresentationEnabled(true))
+        #expect(view.secureCapturePolicy.phase == .protectedRedaction)
+        #expect(view.isSecureHoverHintVisible)
+        #expect(visibilityChanges == [false, true])
+
+        view.isEditable = false
+        #expect(!view.isSecureHoverHintVisible)
+        #expect(visibilityChanges == [false, true, false])
+
+        view.isEditable = true
+        #expect(view.isSecureHoverHintVisible)
+        #expect(visibilityChanges == [false, true, false, true])
+
+        try #require(view.redactSecurePixelsBeforePlaintextClear())
+        view.clearSecurePlaintextStorageForTeardown()
+        try #require(view.setSecurePresentationEnabled(false))
+        #expect(!view.isSecureHoverHintVisible)
+        #expect(visibilityChanges == [false, true, false, true, false])
+
+        view.isSecureContentMode = false
+        #expect(!view.isSecureHoverHintVisible)
+    }
+
+    @Test func hoverHintPredicateHidesImmediatelyForRevealedAndNonSecureStates() {
+        func isVisible(
+            _ phase: SecureCapturePresentationPolicy.Phase,
+            armed: Bool = true,
+            secure: Bool = true,
+            editable: Bool = true
+        ) -> Bool {
+            SecureHoverHintPresentationPolicy.isVisible(
+                capturePhase: phase,
+                hoverPresentationIsArmed: armed,
+                isSecureContentMode: secure,
+                isEditable: editable
+            )
+        }
+
+        #expect(isVisible(.protectedRedaction))
+        #expect(!isVisible(.protectedPlaintext), "actual reveal must hide the safe affordance")
+        #expect(!isVisible(.ordinary))
+        #expect(!isVisible(.failedClosed))
+        #expect(!isVisible(.protectedRedaction, armed: false))
+        #expect(!isVisible(.protectedRedaction, secure: false))
+        #expect(!isVisible(.protectedRedaction, editable: false))
+    }
+
+    @Test func hoverHintFailsClosedAndItsOverlayNeverCapturesPointerInput() throws {
+        _ = NSApplication.shared
+        let view = editor("")
+        view.isSecureContentMode = true
+        try #require(view.setSecurePresentationEnabled(true))
+        #expect(view.isSecureHoverHintVisible)
+
+        view.secureCaptureRendererDidFail()
+        #expect(view.secureCapturePolicy.phase == .failedClosed)
+        #expect(!view.isSecureHoverHintVisible)
+
+        let overlay = SecureHoverHintOverlayView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 200)
+        )
+        let child = NSTextField(labelWithString: "Hover to reveal secure snippet")
+        child.frame = NSRect(x: 80, y: 80, width: 240, height: 20)
+        overlay.addSubview(child)
+        #expect(overlay.hitTest(NSPoint(x: 200, y: 100)) == nil)
+    }
 }

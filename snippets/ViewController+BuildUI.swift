@@ -817,12 +817,54 @@ extension ViewController {
             self.resetContentUndoHistory()
             self.secureContentEditableForID = nil
             self.updatePreview(withTemplate: "")
+            self.secureHoverHintOverlay.isHidden = true
             self.secureLockOverlay.isHidden = true
             self.secureCaptureFailureOverlay.isHidden = false
         }
 
         snippetScrollView.documentView = snippetTextView
         snippetContainer.addSubview(snippetScrollView)
+
+        // Safe explanatory chrome, deliberately outside the capture-protected
+        // plaintext layer. Screen recordings therefore show the affordance while
+        // AVSampleBufferDisplayLayer omits the secure pixels underneath. The full-
+        // size overlay is click-through so the text view remains the sole owner of
+        // hover verification, cursor tracking, selection, and editing.
+        secureHoverHintOverlay.translatesAutoresizingMaskIntoConstraints = false
+        secureHoverHintOverlay.isHidden = true
+        secureHoverHintOverlay.setAccessibilityElement(false)
+
+        secureHoverHintIcon.translatesAutoresizingMaskIntoConstraints = false
+        secureHoverHintIcon.image = NSImage(
+            systemSymbolName: "eye",
+            accessibilityDescription: "Hover reveal"
+        )
+        secureHoverHintIcon.contentTintColor = .secondaryLabelColor
+        secureHoverHintIcon.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 20,
+            weight: .medium
+        )
+        secureHoverHintIcon.setAccessibilityElement(false)
+
+        secureHoverHintLabel.translatesAutoresizingMaskIntoConstraints = false
+        secureHoverHintLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        secureHoverHintLabel.textColor = .secondaryLabelColor
+        secureHoverHintLabel.alignment = .center
+        secureHoverHintLabel.setAccessibilityLabel("Hover to reveal secure snippet")
+
+        let secureHoverHintStack = NSStackView(
+            views: [secureHoverHintIcon, secureHoverHintLabel]
+        )
+        secureHoverHintStack.translatesAutoresizingMaskIntoConstraints = false
+        secureHoverHintStack.orientation = .vertical
+        secureHoverHintStack.alignment = .centerX
+        secureHoverHintStack.spacing = 7
+        secureHoverHintOverlay.addSubview(secureHoverHintStack)
+        snippetContainer.addSubview(secureHoverHintOverlay)
+
+        snippetTextView.setSecureHoverHintVisibilityHandler { [weak self] isVisible in
+            self?.secureHoverHintOverlay.isHidden = !isVisible
+        }
 
         // Above the scroll view, filling the container. A full-bleed transparent button
         // sits behind the label so a click anywhere on the area unlocks — matching what
@@ -869,10 +911,22 @@ extension ViewController {
         secureCaptureFailureLabel.textColor = .secondaryLabelColor
         secureCaptureFailureLabel.translatesAutoresizingMaskIntoConstraints = false
         secureCaptureFailureOverlay.addSubview(secureCaptureFailureLabel)
+        // Failure and lock states cover the hover affordance. Their text describes
+        // a different state and, unlike the hint, the lock overlay owns clicks.
         snippetContainer.addSubview(secureCaptureFailureOverlay)
         snippetContainer.addSubview(secureLockOverlay)
 
         NSLayoutConstraint.activate([
+            secureHoverHintOverlay.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
+            secureHoverHintOverlay.trailingAnchor.constraint(equalTo: snippetContainer.trailingAnchor),
+            secureHoverHintOverlay.topAnchor.constraint(equalTo: snippetContainer.topAnchor),
+            secureHoverHintOverlay.bottomAnchor.constraint(equalTo: snippetContainer.bottomAnchor),
+            secureHoverHintStack.centerXAnchor.constraint(equalTo: secureHoverHintOverlay.centerXAnchor),
+            secureHoverHintStack.centerYAnchor.constraint(equalTo: secureHoverHintOverlay.centerYAnchor),
+            secureHoverHintLabel.leadingAnchor.constraint(
+                greaterThanOrEqualTo: secureHoverHintOverlay.leadingAnchor, constant: 20),
+            secureHoverHintLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: secureHoverHintOverlay.trailingAnchor, constant: -20),
             secureLockOverlay.leadingAnchor.constraint(equalTo: snippetContainer.leadingAnchor),
             secureLockOverlay.trailingAnchor.constraint(equalTo: snippetContainer.trailingAnchor),
             secureLockOverlay.topAnchor.constraint(equalTo: snippetContainer.topAnchor),

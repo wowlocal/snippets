@@ -1,6 +1,30 @@
 import AppKit
 import QuickLookUI
 
+/// A safe, non-interactive sibling that explains an intentionally blank secure
+/// editor. It must never become the hit-test target: the text view underneath
+/// owns the real cursor verification used by the hover reveal boundary.
+final class SecureHoverHintOverlayView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// Pure visibility decision kept separate from cursor verification. In
+/// particular, protected plaintext is never accompanied by chrome that could
+/// obscure selection, and every non-redaction phase fails hidden.
+nonisolated enum SecureHoverHintPresentationPolicy {
+    static func isVisible(
+        capturePhase: SecureCapturePresentationPolicy.Phase,
+        hoverPresentationIsArmed: Bool,
+        isSecureContentMode: Bool,
+        isEditable: Bool
+    ) -> Bool {
+        capturePhase == .protectedRedaction
+            && hoverPresentationIsArmed
+            && isSecureContentMode
+            && isEditable
+    }
+}
+
 /// The snippet content editor. `NSTextView` has no placeholder of its own, and
 /// the prompt must never become real text: it would be stored, exported and
 /// expanded. So it is drawn, not inserted — `string` stays empty the whole time
@@ -72,6 +96,8 @@ final class SnippetContentTextView: NSTextView {
     private var isUpdatingSecureTrackingAreas = false
     private(set) var isClearingSecurePlaintextStorageForTeardown = false
     private var secureHoverValidationTimer: Timer?
+    private var secureHoverHintVisibilityHandler: ((Bool) -> Void)?
+    private(set) var isSecureHoverHintVisible = false
 
     deinit {
         for observer in secureHoverObservers {
@@ -184,9 +210,18 @@ final class SnippetContentTextView: NSTextView {
         secureCaptureRenderer.onFailure = handler
     }
 
+    /// Publishes only the safe presentation state, never content. The controller
+    /// renders the affordance as a sibling above the protected capture layer so
+    /// recordings retain the explanation while secure pixels remain omitted.
+    func setSecureHoverHintVisibilityHandler(_ handler: @escaping (Bool) -> Void) {
+        secureHoverHintVisibilityHandler = handler
+        handler(isSecureHoverHintVisible)
+    }
+
     func secureCaptureRendererDidFail() {
         endSecureHoverTracking(redactDisplayedPixels: false)
         secureCapturePolicy.failClosed()
+        updateSecureHoverHintVisibility()
         super.string = ""
         super.isEditable = false
         needsDisplay = true
@@ -233,6 +268,7 @@ final class SnippetContentTextView: NSTextView {
         // a pointer that was already inside when it assigns the decrypted body.
         // Do not expose a frame here: arming itself always finishes redacted.
         updateSecureHoverPolicyFromCurrentCursor()
+        updateSecureHoverHintVisibility()
     }
 
     private func endSecureHoverTracking(redactDisplayedPixels: Bool) {
@@ -246,6 +282,7 @@ final class SnippetContentTextView: NSTextView {
         secureHoverValidationTimer?.invalidate()
         secureHoverValidationTimer = nil
         secureHoverRevealPolicy.presentationDidEnd()
+        updateSecureHoverHintVisibility()
     }
 
     private func startSecureHoverValidationTimer() {
@@ -402,9 +439,14 @@ final class SnippetContentTextView: NSTextView {
         guard secureCapturePolicy.rendersPlaintextPixels != shouldReveal else { return true }
 
         secureCapturePolicy.setPlaintextPixelsVisible(shouldReveal)
-        return shouldReveal
+        updateSecureHoverHintVisibility()
+        let rendered = shouldReveal
             ? secureCaptureRenderer.renderPlaintext()
             : secureCaptureRenderer.renderRedaction()
+        if !rendered {
+            updateSecureHoverHintVisibility()
+        }
+        return rendered
     }
 
     /// Exit and activity-loss paths call this directly. If a plaintext sample is
@@ -414,11 +456,29 @@ final class SnippetContentTextView: NSTextView {
     private func forceSecureHoverRedaction() -> Bool {
         secureHoverRevealPolicy.forceRedaction()
         guard secureCapturePolicy.permitsPlaintextInTextStorage else {
+            updateSecureHoverHintVisibility()
             return secureCapturePolicy.phase == .ordinary
         }
-        guard secureCapturePolicy.rendersPlaintextPixels else { return true }
+        guard secureCapturePolicy.rendersPlaintextPixels else {
+            updateSecureHoverHintVisibility()
+            return true
+        }
         secureCapturePolicy.setPlaintextPixelsVisible(false)
-        return secureCaptureRenderer.renderRedaction()
+        let rendered = secureCaptureRenderer.renderRedaction()
+        updateSecureHoverHintVisibility()
+        return rendered
+    }
+
+    private func updateSecureHoverHintVisibility() {
+        let shouldShow = SecureHoverHintPresentationPolicy.isVisible(
+            capturePhase: secureCapturePolicy.phase,
+            hoverPresentationIsArmed: secureHoverRevealPolicy.presentationIsArmed,
+            isSecureContentMode: isSecureContentMode,
+            isEditable: isEditable
+        )
+        guard shouldShow != isSecureHoverHintVisible else { return }
+        isSecureHoverHintVisible = shouldShow
+        secureHoverHintVisibilityHandler?(shouldShow)
     }
 
     func secureVisibleViewportDidChange() {
@@ -450,6 +510,7 @@ final class SnippetContentTextView: NSTextView {
             if !isEditable {
                 _ = forceSecureHoverRedaction()
             }
+            updateSecureHoverHintVisibility()
             needsDisplay = true
         }
     }

@@ -992,6 +992,7 @@ extension ViewController {
 
         func mask(_ message: String, action: String? = nil) {
             secureContentEditableForID = nil
+            secureHoverHintOverlay.isHidden = true
             snippetTextView.isSecureContentMode = true
             resetContentUndoHistory()
             clearSecurePlaintextPresentation()
@@ -1036,6 +1037,7 @@ extension ViewController {
             guard snippetTextView.refreshSecureHoverRevealFromCurrentCursor() else {
                 secureContentEditableForID = nil
                 snippetTextView.isEditable = false
+                secureHoverHintOverlay.isHidden = true
                 secureLockOverlay.isHidden = true
                 secureCaptureFailureOverlay.isHidden = false
                 updatePreview(withTemplate: "")
@@ -1067,6 +1069,7 @@ extension ViewController {
             // cover. Keep that failed phase sticky until the selection is rebound.
             secureContentEditableForID = nil
             snippetTextView.isEditable = false
+            secureHoverHintOverlay.isHidden = true
             secureLockOverlay.isHidden = true
             secureCaptureFailureOverlay.isHidden = false
             updatePreview(withTemplate: "")
@@ -1087,6 +1090,7 @@ extension ViewController {
         guard snippetTextView.refreshSecureHoverRevealFromCurrentCursor() else {
             secureContentEditableForID = nil
             snippetTextView.isEditable = false
+            secureHoverHintOverlay.isHidden = true
             secureLockOverlay.isHidden = true
             secureCaptureFailureOverlay.isHidden = false
             updatePreview(withTemplate: "")
@@ -1189,6 +1193,7 @@ extension ViewController {
         assert(!snippetTextView.secureCapturePolicy.suppressesUnprotectedDrawing)
         assert(!snippetTextView.mayContainSecurePlaintext)
         snippetTextView.isSecureContentMode = false
+        secureHoverHintOverlay.isHidden = true
         secureLockOverlay.isHidden = true
         secureCaptureFailureOverlay.isHidden = true
         secureCaptionLabel.isHidden = true

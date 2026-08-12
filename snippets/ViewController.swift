@@ -147,6 +147,12 @@ final class ViewController: NSViewController {
     let secureLockOverlay = NSView()
     let secureLockOverlayLabel = NSTextField(wrappingLabelWithString: "")
     let secureLockOverlayButton = NSButton()
+    /// Safe chrome shown while an unlocked secure body is hover-redacted. This
+    /// is a sibling of the protected rendering surface, so screen capture sees
+    /// the instruction instead of an editor that appears broken.
+    let secureHoverHintOverlay = SecureHoverHintOverlayView()
+    let secureHoverHintIcon = NSImageView()
+    let secureHoverHintLabel = NSTextField(labelWithString: "Hover to reveal secure snippet")
     /// Opaque fail-closed cover. It is normally hidden; if the protected video
     /// renderer cannot create or present a frame it covers the editor while the
     /// underlying NSTextView remains in its drawing-suppressed secure phase.
