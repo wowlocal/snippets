@@ -146,7 +146,7 @@ final class ViewController: NSViewController {
     /// already try.
     let secureLockOverlay = NSView()
     let secureLockOverlayLabel = NSTextField(wrappingLabelWithString: "")
-    let secureLockOverlayButton = NSButton()
+    let secureLockOverlayButton = SecureUnlockOverlayButton()
     /// Safe chrome shown while an unlocked secure body is hover-redacted. This
     /// is a sibling of the protected rendering surface, so screen capture sees
     /// the instruction instead of an editor that appears broken.
