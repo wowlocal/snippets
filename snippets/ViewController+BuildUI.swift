@@ -867,8 +867,9 @@ extension ViewController {
         }
 
         // Above the scroll view, filling the container. A full-bleed transparent button
-        // sits behind the label so a click anywhere on the area unlocks — matching what
-        // people instinctively do, which is click where the text should be.
+        // is the frontmost hit-test target so a click anywhere on the area — including
+        // directly on the explanatory text — unlocks. It draws no content, so the label
+        // immediately below it remains visible.
         secureLockOverlay.translatesAutoresizingMaskIntoConstraints = false
         secureLockOverlay.wantsLayer = true
         secureLockOverlay.isHidden = true
@@ -878,6 +879,9 @@ extension ViewController {
         secureLockOverlayButton.bezelStyle = .shadowlessSquare
         secureLockOverlayButton.target = self
         secureLockOverlayButton.action = #selector(unlockFromEditorOverlay)
+        secureLockOverlayButton.setAccessibilityLabel("Unlock secure snippet")
+        secureLockOverlayButton.setAccessibilityHelp(
+            "Authenticate with Touch ID or your login password.")
         secureLockOverlayButton.translatesAutoresizingMaskIntoConstraints = false
         // The box sizes the overlay, never the other way round — and a button
         // stretched across a container that has no intrinsic size of its own does
@@ -896,10 +900,16 @@ extension ViewController {
         secureLockOverlayLabel.font = .systemFont(ofSize: 13)
         secureLockOverlayLabel.textColor = .secondaryLabelColor
         secureLockOverlayLabel.alignment = .center
+        // `wrappingLabelWithString:` is selectable by default. Besides making a
+        // status sentence look editable, that gives it the I-beam cursor. Keep the
+        // safe message available to Accessibility but leave pointer interaction to
+        // the full-surface button above it.
+        secureLockOverlayLabel.isEditable = false
+        secureLockOverlayLabel.isSelectable = false
         secureLockOverlayLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        secureLockOverlay.addSubview(secureLockOverlayButton)
         secureLockOverlay.addSubview(secureLockOverlayLabel)
+        secureLockOverlay.addSubview(secureLockOverlayButton)
 
         secureCaptureFailureOverlay.translatesAutoresizingMaskIntoConstraints = false
         secureCaptureFailureOverlay.wantsLayer = true
