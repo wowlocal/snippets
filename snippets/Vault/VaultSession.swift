@@ -104,12 +104,13 @@ final class VaultSession {
     init(
         keychain: KeychainSecretStore? = nil,
         duration: TimeInterval = VaultSession.defaultDuration,
-        authenticationEvaluator: AuthenticationEvaluator? = nil
+        authenticationEvaluator: AuthenticationEvaluator? = nil,
+        lifecycleNotificationCenter: NotificationCenter = .default
     ) {
         self.keychain = keychain ?? KeychainSecretStore()
         self.duration = duration
         self.authenticationEvaluator = authenticationEvaluator
-        observeSystemLockEvents()
+        observeSystemLockEvents(lifecycleNotificationCenter: lifecycleNotificationCenter)
     }
 
     deinit {
@@ -149,7 +150,7 @@ final class VaultSession {
 
         if case .unlocked(let until) = state, let libraryKey {
             if until > now() {
-                extendWindow()
+                guard extendWindow() else { throw Failure.locked }
                 return libraryKey
             }
             // The timer can be delayed while the main run loop is busy. The deadline,
@@ -209,7 +210,7 @@ final class VaultSession {
         // Set BEFORE extendWindow, which reads it to compute the ceiling. A fresh touch
         // is what restarts the half-hour, so this is the one place it may move.
         authenticatedAt = now()
-        extendWindow()
+        guard extendWindow() else { throw Failure.locked }
         return key
     }
 
@@ -260,6 +261,11 @@ final class VaultSession {
             lock()
             throw Failure.locked
         }
+        // Reading or changing secure content is actual vault use. Keep the short idle
+        // window sliding while that work continues, but never beyond the fixed ceiling
+        // measured from the authentication above. Merely keeping the app/process alive
+        // does not call this method and therefore does not keep the vault open.
+        guard extendWindow() else { throw Failure.locked }
         return libraryKey
     }
 
@@ -305,32 +311,45 @@ final class VaultSession {
         transition(to: .locked)
     }
 
-    private func extendWindow() {
+    @discardableResult
+    private func extendWindow() -> Bool {
         // The five-minute window slides on every use, so a session that is merely
         // *active* never expires — leave a Mac unattended with the app busy and the
         // vault stays open indefinitely. The absolute cap is measured from the touch
         // that actually authenticated, so no amount of subsequent activity can extend
         // the vault beyond half an hour without the user proving presence again.
-        let ceiling = (authenticatedAt ?? now()).addingTimeInterval(Self.maximumWindow)
-        let deadline = min(now().addingTimeInterval(duration), ceiling)
-        let remaining = deadline.timeIntervalSince(now())
+        let currentTime = now()
+        let ceiling = (authenticatedAt ?? currentTime).addingTimeInterval(Self.maximumWindow)
+        let deadline = min(currentTime.addingTimeInterval(duration), ceiling)
+        let remaining = deadline.timeIntervalSince(currentTime)
 
         expiryTimer?.invalidate()
         guard remaining > 0 else {
             // The cap has already passed; re-authenticating is the only way forward.
             lock()
-            return
+            return false
         }
 
-        // Tolerance lets the system coalesce this with other timers; a few seconds of
-        // slop on a five-minute window is irrelevant and saves wakeups.
+        // This timer removes both the visible plaintext and the in-memory key.
+        // Do not opt into coalescing slack at the security deadline. A blocked
+        // main run loop can still delay delivery, which is why every key access
+        // independently enforces the stored deadline above.
         let timer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.lock() }
         }
-        timer.tolerance = 5
+        timer.tolerance = 0
         RunLoop.main.add(timer, forMode: .common)
         expiryTimer = timer
-        transition(to: .unlocked(until: deadline))
+        if state.isUnlocked {
+            // A changed deadline is not a lock-state transition. Broadcasting it would
+            // make every secure read ask the editor to rebind, whose decrypt would read
+            // the key again and recursively renew forever. Keep the public deadline
+            // accurate without announcing a semantic state change.
+            state = .unlocked(until: deadline)
+        } else {
+            transition(to: .unlocked(until: deadline))
+        }
+        return true
     }
 
     private func transition(to newState: State) {
@@ -356,7 +375,7 @@ final class VaultSession {
     /// Deliberately NOT `NSApplication.didResignActiveNotification`. See the type's
     /// documentation: this app is backgrounded precisely when a secure snippet is being
     /// used, so resign-active would lock the vault at the only moment it matters.
-    private func observeSystemLockEvents() {
+    private func observeSystemLockEvents(lifecycleNotificationCenter: NotificationCenter) {
         #if os(macOS)
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
@@ -378,7 +397,7 @@ final class VaultSession {
             }
         }
         #elseif os(iOS)
-        NotificationCenter.default.addObserver(
+        lifecycleNotificationCenter.addObserver(
             forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
             queue: .main

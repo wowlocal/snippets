@@ -147,6 +147,11 @@ final class ViewController: NSViewController {
     let secureLockOverlay = NSView()
     let secureLockOverlayLabel = NSTextField(wrappingLabelWithString: "")
     let secureLockOverlayButton = NSButton()
+    /// Opaque fail-closed cover. It is normally hidden; if the protected video
+    /// renderer cannot create or present a frame it covers the editor while the
+    /// underlying NSTextView remains in its drawing-suppressed secure phase.
+    let secureCaptureFailureOverlay = NSView()
+    let secureCaptureFailureLabel = NSTextField(wrappingLabelWithString: "")
     /// Which secure snippet's real text is on screen right now. This identity latch,
     /// rather than placeholder text, gates whether editor content may be written back.
     var secureContentEditableForID: UUID?
@@ -420,6 +425,20 @@ final class ViewController: NSViewController {
             }
         }
 
+        if let app = NSApp.delegate as? AppDelegate {
+            NotificationCenter.default.addObserver(
+                forName: .snippetsVaultWillLock,
+                object: app.vaultSession,
+                queue: .main
+            ) { [weak self] _ in
+                // VaultSession deliberately posts this synchronously while its key is
+                // still resident. Flush the editor's trailing debounce now; waiting for
+                // the state-change notification below would first destroy the key and
+                // then mask the only remaining copy of the newest text.
+                MainActor.assumeIsolated { self?.flushPendingSecureEdit() }
+            }
+        }
+
         NotificationCenter.default.addObserver(
             forName: .snippetsVaultStateChanged, object: nil, queue: .main
         ) { [weak self] _ in
@@ -496,6 +515,14 @@ final class ViewController: NSViewController {
         guard pasteboardChangeCount != observedPasteboardChangeCount else { return }
 
         observedPasteboardChangeCount = pasteboardChangeCount
+        let isSecure = snippetTextView.isSecureContentMode
+            || editingSnippetID.map(store.isSecure) == true
+        guard !isSecure else {
+            // Do not even submit the secure body to placeholder inspection.
+            // `updatePreview` also refuses it, independently, for every caller.
+            updatePreview(withTemplate: "")
+            return
+        }
         let template = snippetTextView.string
         guard PlaceholderResolver.containsClipboardPlaceholder(in: template) else { return }
 

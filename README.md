@@ -69,8 +69,16 @@ date placeholders. Offsets can contain several terms, for example
 
 - Make any snippet secure to move its body out of the ordinary JSON library and into an
   AES-GCM encrypted vault.
-- Reveal, copy, edit, or insert secure content only after a fresh Touch ID, Face ID, or
-  device-owner password/passcode approval.
+- Reveal or edit secure content only after device-owner authentication. On macOS, the
+  editor marks the body as protected Accessibility content, renders it through a
+  capture-protected layer, and shows its pixels only while the pointer is over the
+  editor. Secure editor copy, drag, Services, sharing, Find, speech, Quick Look, text
+  checking, and Writing Tools routes are disabled. On iPhone and iPad, explicit secure
+  copy and insertion remain authenticated actions.
+- The vault auto-locks after five minutes without secure-content use and always within
+  thirty minutes of authentication. Sleep, screen/session lock, screensaver start, and
+  iOS backgrounding lock it immediately; merely switching away from the macOS app does
+  not, because secure insertion is used while another app is active.
 - Secure snippets never auto-expand, never appear in ordinary exports or share links,
   and show a lock marker wherever their searchable metadata appears.
 - A recovery key can restore the vault key if it is missing from Keychain.
@@ -78,6 +86,11 @@ date placeholders. Offsets can contain several terms, for example
   60 seconds.
 - Names, keywords, and tags remain visible locally so Snippets can find a secure snippet
   while the vault is locked. The encrypted body is the protected part.
+
+Capture protection and hover reduce accidental screen-share, screenshot, recording,
+and shoulder-surfing exposure; they are not a DRM or physical-camera guarantee. A camera
+can still photograph content while the pointer is over it, and sufficiently privileged
+software on the same Mac remains outside this boundary.
 
 ### End-to-end encrypted iCloud sync
 

@@ -343,14 +343,25 @@ extension ViewController {
     func applySelectedSnippetToEditor() {
         guard let snippet = selectedSnippet else {
             isApplyingSnippetToEditor = true
+            // A table click can move selection before the secure editor's
+            // debounce fires. Persist the outgoing body while its identity
+            // latch and vault key are still valid.
+            flushPendingSecureEdit()
             editingSnippetID = nil
+            secureContentEditableForID = nil
+            clearSecurePlaintextPresentation()
             if !nameField.stringValue.isEmpty {
                 nameField.stringValue = ""
             }
-            if !snippetTextView.string.isEmpty {
+            if !snippetTextView.string.isEmpty || snippetTextView.isSecureContentMode {
                 resetContentUndoHistory()
                 snippetTextView.string = ""
             }
+            // Leave secure mode only after its text and undo graph are gone.
+            // Reversing this order briefly exposes the old body to the ordinary
+            // NSTextView services restored by the mode transition.
+            snippetTextView.isSecureContentMode = false
+            secureCaptureFailureOverlay.isHidden = true
             if !keywordField.stringValue.isEmpty {
                 keywordField.stringValue = ""
             }
@@ -375,13 +386,43 @@ extension ViewController {
 
     func applySnippetToEditor(_ snippet: Snippet) {
         isApplyingSnippetToEditor = true
+        let previousEditingSnippetID = editingSnippetID
+        if previousEditingSnippetID != snippet.id {
+            // Preserve an outgoing secure edit before rebinding the identity
+            // latch or clearing its protected text storage.
+            flushPendingSecureEdit()
+        }
         editingSnippetID = snippet.id
+        let isSecure = store.isSecure(snippet.id)
+
+        // A rebind clears old secure storage while both AX and capture
+        // protection are still active. This must happen before an ordinary
+        // body's assignment, otherwise teardown could erase the new snippet.
+        clearSecurePlaintextPresentation()
+
+        if isSecure {
+            // Establish the deny-by-default editor boundary and clear every
+            // derived ordinary-text surface before decrypted bytes are fetched.
+            snippetTextView.isSecureContentMode = true
+            updatePreview(withTemplate: "")
+            nameField.placeholderString = EditorCopy.namePlaceholderFallback
+            if previousEditingSnippetID != snippet.id {
+                resetContentUndoHistory()
+                snippetTextView.string = ""
+            }
+        } else {
+            // `clearSecurePlaintextPresentation` has already removed any old
+            // secret and protected frame. Only now may ordinary text services
+            // and AppKit drawing become available again.
+            snippetTextView.isSecureContentMode = false
+        }
         if nameField.stringValue != snippet.name {
             nameField.stringValue = snippet.name
         }
-        if snippetTextView.string != snippet.content {
+        let editorShell = isSecure ? "" : snippet.content
+        if snippetTextView.string != editorShell {
             resetContentUndoHistory()
-            snippetTextView.string = snippet.content
+            snippetTextView.string = editorShell
         }
         if keywordField.stringValue != snippet.normalizedKeyword {
             keywordField.stringValue = snippet.normalizedKeyword
@@ -393,13 +434,12 @@ extension ViewController {
         if enabledCheckbox.state != targetEnabledState {
             enabledCheckbox.state = targetEnabledState
         }
-        updatePreview(withTemplate: snippet.content)
+        updatePreview(withTemplate: isSecure ? "" : snippet.content)
         updateKeywordStatus(for: snippet)
         updateNameFieldPlaceholder()
         setEditorEnabled(true)
         // Must run after `setEditorEnabled(true)`, which unconditionally makes the text
         // view editable — a locked secret has to end up read-only regardless.
-        let isSecure = store.isSecure(snippet.id)
         secureLockToggle.state = isSecure ? .on : .off
         secureLockToggle.contentTintColor = isSecure ? .controlAccentColor : .secondaryLabelColor
         secureLockToggle.toolTip = isSecure
@@ -532,7 +572,12 @@ extension ViewController {
     /// guard: it is a placeholder on a fixed-height single-line field, so nothing
     /// reflows, but there is no reason to redraw it for an unchanged string.
     func updateNameFieldPlaceholder() {
-        let firstLine = snippetTextView.string
+        let isSecure = snippetTextView.isSecureContentMode
+            || editingSnippetID.map(store.isSecure) == true
+        let source = SnippetContentExposurePolicy.namePlaceholderSource(
+            snippetTextView.string,
+            whileSecure: isSecure)
+        let firstLine = (source ?? "")
             .prefix(while: { !$0.isNewline })
             .trimmingCharacters(in: .whitespaces)
 
@@ -811,9 +856,22 @@ extension ViewController {
     }
 
     func updatePreview(withTemplate template: String) {
-        let rendered = PlaceholderResolver.resolveForPreview(template: template)
-        let hasDynamicContent = !template.isEmpty
-            && PlaceholderResolver.containsResolvablePlaceholder(in: template)
+        let isSecure = snippetTextView.isSecureContentMode
+            || editingSnippetID.map(store.isSecure) == true
+        guard let permittedTemplate = SnippetContentExposurePolicy.dynamicPreviewTemplate(
+            template,
+            whileSecure: isSecure
+        ) else {
+            // Clear the ordinary AX-visible field before hiding it. A hidden
+            // NSTextField can remain queryable to an already-held AX element.
+            previewValueField.stringValue = ""
+            previewSectionStack.isHidden = true
+            return
+        }
+
+        let rendered = PlaceholderResolver.resolveForPreview(template: permittedTemplate)
+        let hasDynamicContent = !permittedTemplate.isEmpty
+            && PlaceholderResolver.containsResolvablePlaceholder(in: permittedTemplate)
         // Hides the whole section, label included — no separator above it any
         // more, because with the token hint gone it was a horizontal rule no
         // other section had, fencing a section already fenced by being
@@ -927,14 +985,21 @@ extension ViewController {
         secureCaptionLabel.stringValue =
             "Encrypted on this Mac. Won\u{2019}t expand when you type its keyword \u{2014} type \\, "
             + "pick it from the list, and confirm with Touch ID. Never in exports, share links, or "
-            + "snippets.json. Its name, keyword and tags stay readable so Snippets can find it while locked."
+            + "snippets.json. Move the pointer over the editor to show its protected pixels; moving "
+            + "it away hides only those pixels \u{2014} it doesn\u{2019}t lock the vault or decrypt on hover. "
+            + "Its name, keyword and tags stay readable so Snippets can find it while locked."
         secureCaptionLabel.isHidden = !secureDemoteStrip.isHidden
 
         func mask(_ message: String, action: String? = nil) {
             secureContentEditableForID = nil
+            snippetTextView.isSecureContentMode = true
             resetContentUndoHistory()
-            snippetTextView.string = ""
+            clearSecurePlaintextPresentation()
+            if !snippetTextView.string.isEmpty {
+                snippetTextView.string = ""
+            }
             snippetTextView.isEditable = false
+            secureCaptureFailureOverlay.isHidden = true
             secureLockOverlayLabel.stringValue = message
             secureLockOverlayButton.isEnabled = action != nil
             secureLockOverlay.isHidden = false
@@ -960,8 +1025,54 @@ extension ViewController {
             mask("Hidden while Snippets is in the background.")
             return
         }
-        guard app.vaultSession.state.isUnlocked,
-              let text = try? app.secureStore.content(for: snippet.id) else {
+
+        // Unlock completion and the vault-state notification can arrive in the
+        // same run-loop turn. Do not tear down and decrypt a presentation that is
+        // already valid for this exact record.
+        if secureContentEditableForID == snippet.id,
+           snippetTextView.mayContainSecurePlaintext,
+           snippetTextView.secureCapturePolicy.permitsPlaintextInTextStorage {
+            snippetTextView.isEditable = true
+            guard snippetTextView.refreshSecureHoverRevealFromCurrentCursor() else {
+                secureContentEditableForID = nil
+                snippetTextView.isEditable = false
+                secureLockOverlay.isHidden = true
+                secureCaptureFailureOverlay.isHidden = false
+                updatePreview(withTemplate: "")
+                return
+            }
+            secureLockOverlay.isHidden = true
+            secureCaptureFailureOverlay.isHidden = true
+            updatePreview(withTemplate: "")
+            return
+        }
+
+        // Establish containment and erase ordinary derived surfaces before
+        // asking the vault for plaintext. This ordering remains safe when this
+        // method is called directly after activation rather than via a rebind.
+        snippetTextView.isSecureContentMode = true
+        clearSecurePlaintextPresentation()
+        updatePreview(withTemplate: "")
+        nameField.placeholderString = EditorCopy.namePlaceholderFallback
+        guard app.secureContentAccessibilityProtection.canPresentSecurePlaintext else {
+            mask("Protected-content accessibility is unavailable, so this snippet stays hidden.")
+            return
+        }
+        guard app.vaultSession.state.isUnlocked else {
+            mask("Locked. Click to unlock with Touch ID or your login password.", action: "unlock")
+            return
+        }
+        guard beginSecurePlaintextPresentation() else {
+            // Capture setup fails closed and synchronously installs its opaque
+            // cover. Keep that failed phase sticky until the selection is rebound.
+            secureContentEditableForID = nil
+            snippetTextView.isEditable = false
+            secureLockOverlay.isHidden = true
+            secureCaptureFailureOverlay.isHidden = false
+            updatePreview(withTemplate: "")
+            return
+        }
+        guard let text = try? app.secureStore.content(for: snippet.id) else {
             mask("Locked. Click to unlock with Touch ID or your login password.", action: "unlock")
             return
         }
@@ -969,9 +1080,96 @@ extension ViewController {
         resetContentUndoHistory()
         snippetTextView.string = text
         snippetTextView.isEditable = true
-        secureLockOverlay.isHidden = true
         secureContentEditableForID = snippet.id
-        updatePreview(withTemplate: text)
+        // Plaintext lives in protected text storage. The hover boundary now
+        // checks the real cursor, application activity, and key window; this
+        // accounts for a pointer already inside without decrypting on hover.
+        guard snippetTextView.refreshSecureHoverRevealFromCurrentCursor() else {
+            secureContentEditableForID = nil
+            snippetTextView.isEditable = false
+            secureLockOverlay.isHidden = true
+            secureCaptureFailureOverlay.isHidden = false
+            updatePreview(withTemplate: "")
+            return
+        }
+        secureLockOverlay.isHidden = true
+        secureCaptureFailureOverlay.isHidden = true
+        // Preview is an ordinary NSTextField and would be a second unprotected
+        // plaintext rendering surface. Secure bodies render only in the protected
+        // content layer; their metadata remains available elsewhere in the form.
+        updatePreview(withTemplate: "")
+    }
+
+    /// Opens both halves of the secure presentation boundary before plaintext
+    /// is fetched: AppKit drawing is suppressed behind a protected video layer,
+    /// then the editor and preview are marked as protected AX elements.
+    @discardableResult
+    func beginSecurePlaintextPresentation() -> Bool {
+        assert(snippetTextView.string.isEmpty)
+        assert(previewValueField.stringValue.isEmpty)
+        guard let app = NSApp.delegate as? AppDelegate,
+              snippetTextView.setSecurePresentationEnabled(true) else { return false }
+        guard app.secureContentAccessibilityProtection.beginProtecting(
+            [snippetTextView, previewValueField]
+        ) else {
+            // No plaintext exists yet, so rolling capture protection back is safe.
+            _ = snippetTextView.setSecurePresentationEnabled(false)
+            return false
+        }
+        snippetTextView.prepareForSecurePlaintextAccessibility()
+        return true
+    }
+
+    /// Clears every current UI copy before making either AX element ordinary or
+    /// restoring AppKit drawing. Safe to call redundantly from selection, lock,
+    /// activation and teardown paths.
+    func clearSecurePlaintextPresentation() {
+        let wasAccessibilityProtected = snippetTextView.mayContainSecurePlaintext
+            || snippetTextView.isAccessibilityProtectedContent()
+            || previewValueField.isAccessibilityProtectedContent()
+        let wasCaptureProtected = snippetTextView.secureCapturePolicy.suppressesUnprotectedDrawing
+        let hadSecureBoundary = snippetTextView.isSecureContentMode
+            || wasAccessibilityProtected
+            || wasCaptureProtected
+        guard hadSecureBoundary else { return }
+
+        // Flush any displayed protected plaintext while the editor still holds
+        // the current edit. If that renderer operation fails, its synchronous
+        // callback can persist the real value rather than an intentional clear.
+        if wasCaptureProtected {
+            _ = snippetTextView.redactSecurePixelsBeforePlaintextClear()
+        }
+        // A renderer failure may already have emptied the view; stale undo
+        // records can still retain the body, so clear them unconditionally.
+        resetContentUndoHistory()
+        if wasCaptureProtected {
+            snippetTextView.clearSecurePlaintextStorageForTeardown()
+        } else if !snippetTextView.string.isEmpty {
+            snippetTextView.string = ""
+        }
+        previewValueField.stringValue = ""
+        previewSectionStack.isHidden = true
+
+        // Restore the ordinary backing-store draw path only after NSTextStorage
+        // and the retained protected frame have both been cleared.
+        if wasCaptureProtected {
+            _ = snippetTextView.setSecurePresentationEnabled(false)
+        }
+
+        if wasAccessibilityProtected, let app = NSApp.delegate as? AppDelegate {
+            snippetTextView.securePlaintextWasClearedFromAccessibility()
+            app.secureContentAccessibilityProtection.endProtecting(
+                [snippetTextView, previewValueField]
+            )
+        } else if wasAccessibilityProtected {
+            // A controller instantiated outside the production application
+            // graph must still leave no stale protected state behind.
+            snippetTextView.securePlaintextWasClearedFromAccessibility()
+            assert(snippetTextView.string.isEmpty)
+            assert(previewValueField.stringValue.isEmpty)
+            snippetTextView.setAccessibilityProtectedContent(false)
+            previewValueField.setAccessibilityProtectedContent(false)
+        }
     }
 
     /// Drops the content editor's undo history.
@@ -988,7 +1186,11 @@ extension ViewController {
     /// previously selected secure snippet would stay over the next one.
     func clearSecureEditorChrome() {
         secureContentEditableForID = nil
+        assert(!snippetTextView.secureCapturePolicy.suppressesUnprotectedDrawing)
+        assert(!snippetTextView.mayContainSecurePlaintext)
+        snippetTextView.isSecureContentMode = false
         secureLockOverlay.isHidden = true
+        secureCaptureFailureOverlay.isHidden = true
         secureCaptionLabel.isHidden = true
         secureDemoteStrip.isHidden = true
     }
