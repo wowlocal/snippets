@@ -249,7 +249,7 @@ final class SecureCaptureRendererTests: XCTestCase {
 
     private func authorizePresentation(in textView: SecureSnippetTextView) {
         textView.setSecurePlaintextAcceptanceAuthorized(true)
-        textView.setSecureContinuousRevealAuthorized(true)
+        textView.setSecureRevealSessionAuthorized(true)
     }
 
     private func pixelBufferContainsNonBackgroundPixels(_ pixelBuffer: CVPixelBuffer) -> Bool {

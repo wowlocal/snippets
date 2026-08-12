@@ -84,7 +84,7 @@ final class SnippetEditorViewController: UIViewController {
             return
         }
 
-        handleSecureRevealTransition(secureRevealPolicy.cancelContinuousReveal())
+        handleSecureRevealTransition(secureRevealPolicy.cancelReveal())
         secureAuthenticationTask?.cancel()
         secureAuthenticationTask = nil
         flushPendingSecureContent()
@@ -300,16 +300,7 @@ final class SnippetEditorViewController: UIViewController {
         lockStack.alignment = .center
         lockStack.spacing = 14
 
-        secureRevealOverlay.prefersHover = true
         secureRevealOverlay.protectedBackgroundColor = AppTheme.editorSurface
-        secureRevealOverlay.onHoldChanged = { [weak self] isHolding in
-            self?.secureTouchHoldChanged(isHolding)
-        }
-        let hoverRecognizer = UIHoverGestureRecognizer(
-            target: self,
-            action: #selector(secureHoverChanged(_:)))
-        hoverRecognizer.name = "secure-reveal-hover"
-        bodyContainer.addGestureRecognizer(hoverRecognizer)
 
         bodyContainer.addSubview(bodyTextView)
         bodyTextView.addSubview(bodyPlaceholderLabel)
@@ -634,17 +625,10 @@ final class SnippetEditorViewController: UIViewController {
             secureRevealOverlay.presentation = .hidden
         } else if secureRevealPolicy.isCaptureBlocked {
             secureRevealOverlay.presentation = .captureBlocked
+        } else if secureRevealPolicy.state == .failedClosed {
+            secureRevealOverlay.presentation = .failedClosed
         } else {
-            switch secureRevealPolicy.state {
-            case .authenticatedRedacted, .presentingPlaintext:
-                secureRevealOverlay.presentation = .authenticatedRedacted
-            case .protectedPlaintext:
-                secureRevealOverlay.presentation = .protectedPlaintext
-            case .failedClosed:
-                secureRevealOverlay.presentation = .failedClosed
-            case .ordinary, .locked, .authenticating:
-                secureRevealOverlay.presentation = .hidden
-            }
+            secureRevealOverlay.presentation = .hidden
         }
         bodyTextView.setSecureEditingAuthorized(secureRevealPolicy.permitsTextMutation)
         bodyTextView.isEditable = !secure || secureRevealPolicy.permitsTextMutation
@@ -705,9 +689,7 @@ final class SnippetEditorViewController: UIViewController {
             if secureRevealPolicy.isCaptureBlocked {
                 footerStatusLabel.text = "Screen recording detected. Secure content stays hidden."
             } else if secureContentIsRevealed {
-                footerStatusLabel.text = "Release the hold or move the pointer away to hide secure content."
-            } else if secureRevealPolicy.isAuthenticated {
-                footerStatusLabel.text = "Authenticated. Hover over the editor or hold to reveal and edit."
+                footerStatusLabel.text = "Secure content is revealed and editable until you leave this screen."
             } else {
                 footerStatusLabel.text = "Content is encrypted and hidden. Metadata remains searchable."
             }
@@ -1002,10 +984,9 @@ final class SnippetEditorViewController: UIViewController {
                       self.environment.store.isSecure(id),
                       self.secureRevealPolicy.authenticationSucceeded(token: token)
                 else { return }
-                // Authentication never decrypts or reveals. A fresh hover/hold event
-                // is required after this point.
-                self.updateSecurePresentation()
-                self.refreshDerivedUI()
+                self.synchronizeSecureRevealEnvironment()
+                self.handleSecureRevealTransition(
+                    self.secureRevealPolicy.beginAuthenticatedReveal())
             } catch {
                 let requestWasCurrent = self.secureRevealPolicy.authenticationFailed(token: token)
                 self.updateSecurePresentation()
@@ -1015,34 +996,6 @@ final class SnippetEditorViewController: UIViewController {
                 }
             }
         }
-    }
-
-    private func secureTouchHoldChanged(_ isHolding: Bool) {
-        if isHolding {
-            beginSecureReveal(source: .touchHold)
-        } else {
-            handleSecureRevealTransition(secureRevealPolicy.end(source: .touchHold))
-        }
-    }
-
-    @objc private func secureHoverChanged(_ recognizer: UIHoverGestureRecognizer) {
-        let point = recognizer.location(in: bodyContainer)
-        let intent = SecureSnippetHoverIntent.resolve(
-            gestureState: recognizer.state,
-            locationIsInside: bodyContainer.bounds.contains(point))
-        switch intent {
-        case .begin:
-            beginSecureReveal(source: .hover)
-        case .end:
-            handleSecureRevealTransition(secureRevealPolicy.end(source: .hover))
-        case .none:
-            break
-        }
-    }
-
-    private func beginSecureReveal(source: SecureSnippetRevealSource) {
-        synchronizeSecureRevealEnvironment()
-        handleSecureRevealTransition(secureRevealPolicy.begin(source: source))
     }
 
     private func synchronizeSecureRevealEnvironment() {
@@ -1058,13 +1011,13 @@ final class SnippetEditorViewController: UIViewController {
         case .none:
             return
         case .reveal:
-            revealSecureContentForContinuousSource()
+            revealSecureContentForAuthenticatedSession()
         case .redact:
             redactSecurePlaintextAndPersist()
         }
     }
 
-    private func revealSecureContentForContinuousSource() {
+    private func revealSecureContentForAuthenticatedSession() {
         guard let id = selectedID,
               environment.store.isSecure(id),
               environment.vaultSession.state.isUnlocked,
@@ -1082,7 +1035,6 @@ final class SnippetEditorViewController: UIViewController {
             let plaintext = try environment.secureStore.content(for: id)
             guard selectedID == id,
                   bindingGeneration == secureRevealPolicy.bindingGeneration,
-                  secureRevealPolicy.hasContinuousRevealSource,
                   secureRevealEnvironmentIsActive,
                   bodyTextView.secureSceneCaptureState == .inactive
             else {
@@ -1095,13 +1047,13 @@ final class SnippetEditorViewController: UIViewController {
                 return
             }
             bodyTextView.setSecurePlaintextAcceptanceAuthorized(true)
-            bodyTextView.setSecureContinuousRevealAuthorized(true)
+            bodyTextView.setSecureRevealSessionAuthorized(true)
             guard bodyTextView.canAcceptSecurePlaintext,
                   secureRevealPolicy.beginPlaintextPresentation(),
                   bodyTextView.displaySecurePlaintext(plaintext)
             else {
                 bodyTextView.setSecurePlaintextAcceptanceAuthorized(false)
-                bodyTextView.setSecureContinuousRevealAuthorized(false)
+                bodyTextView.setSecureRevealSessionAuthorized(false)
                 bodyTextView.setSecureEditingAuthorized(false)
                 _ = bodyTextView.redactAndClearSecurePlaintext()
                 secureRevealPolicy.revealAttemptFailed(
@@ -1131,7 +1083,7 @@ final class SnippetEditorViewController: UIViewController {
             }
         case .protectedPlaintext:
             // A redraw callback confirms a newer protected raster while the same
-            // continuous source remains active; it is not a second state change.
+            // authenticated session remains active; it is not a second state change.
             guard secureRevealPolicy.permitsTextMutation else {
                 failClosedAfterRejectedPlaintextPresentation()
                 return
@@ -1152,8 +1104,8 @@ final class SnippetEditorViewController: UIViewController {
         redactSecurePlaintextAndPersist()
     }
 
-    /// Revoke any continuous hover/hold before an alert or delegate-owned
-    /// transition can cover this editor. Persistence failures are rendered in the
+    /// Revoke the reveal session before an alert or delegate-owned transition can
+    /// cover this editor. Persistence failures are rendered in the
     /// inline footer, so this path cannot recursively present another error alert.
     private func prepareSecureContentForModalPresentation() {
         guard !isPreparingSecureContentForModalPresentation else { return }
@@ -1176,7 +1128,7 @@ final class SnippetEditorViewController: UIViewController {
         secureSaveWorkItem?.cancel()
         secureSaveWorkItem = nil
         bodyTextView.setSecureEditingAuthorized(false)
-        bodyTextView.setSecureContinuousRevealAuthorized(false)
+        bodyTextView.setSecureRevealSessionAuthorized(false)
         bodyTextView.unmarkText()
         bodyTextView.resignFirstResponder()
         let plaintext = bodyTextView.redactAndClearSecurePlaintext()
@@ -1235,8 +1187,9 @@ final class SnippetEditorViewController: UIViewController {
         switch reason {
         case .sceneCapture:
             _ = secureRevealPolicy.setSceneCaptureIsInactive(false)
+            _ = secureRevealPolicy.lock()
         case .presentationRevoked:
-            _ = secureRevealPolicy.cancelContinuousReveal()
+            _ = secureRevealPolicy.lock()
         case .rendererFailure:
             _ = secureRevealPolicy.rendererFailed()
         }
@@ -1338,7 +1291,7 @@ final class SnippetEditorViewController: UIViewController {
     @objc private func vaultWillLock(_ notification: Notification) {
         guard let session = notification.object as? VaultSession,
               session === environment.vaultSession else { return }
-        let transition = secureRevealPolicy.cancelContinuousReveal()
+        let transition = secureRevealPolicy.cancelReveal()
         handleSecureRevealTransition(transition)
         flushPendingSecureContent()
     }
@@ -1360,7 +1313,7 @@ final class SnippetEditorViewController: UIViewController {
 
     @objc private func didBecomeActive() {
         _ = secureRevealPolicy.setAppAndSceneAreActive(secureRevealEnvironmentIsActive)
-        updateSecurePresentation()
+        resumeAuthenticatedRevealIfNeeded()
     }
 
     @objc private func sceneWillDeactivate(_ notification: Notification) {
@@ -1390,7 +1343,15 @@ final class SnippetEditorViewController: UIViewController {
     @objc private func sceneDidActivate(_ notification: Notification) {
         guard notification.object as? UIScene === view.window?.windowScene else { return }
         _ = secureRevealPolicy.setAppAndSceneAreActive(secureRevealEnvironmentIsActive)
-        updateSecurePresentation()
+        resumeAuthenticatedRevealIfNeeded()
+    }
+
+    private func resumeAuthenticatedRevealIfNeeded() {
+        if secureRevealPolicy.state == .authenticatedRedacted {
+            handleSecureRevealTransition(secureRevealPolicy.beginAuthenticatedReveal())
+        } else {
+            updateSecurePresentation()
+        }
     }
 
     private var secureRevealEnvironmentIsActive: Bool {

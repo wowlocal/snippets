@@ -495,7 +495,7 @@ final class SecureRemediationTests: XCTestCase {
         textView.setSecureForegroundActiveForTesting(true)
         XCTAssertTrue(textView.bindSecureRedacted())
         textView.setSecurePlaintextAcceptanceAuthorized(true)
-        textView.setSecureContinuousRevealAuthorized(true)
+        textView.setSecureRevealSessionAuthorized(true)
         XCTAssertTrue(textView.displaySecurePlaintext("SECURE-BODY-AX-SENTINEL"))
 
         // A visual reveal must not make the UIKit text storage queryable through

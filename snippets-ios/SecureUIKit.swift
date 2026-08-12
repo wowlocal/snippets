@@ -69,7 +69,7 @@ final class SecureSnippetTextView: UITextView {
     private var securePlaintextIsLoaded = false
     private var secureEditingIsAuthorized = false
     private var securePlaintextAcceptanceIsAuthorized = false
-    private var secureContinuousRevealIsAuthorized = false
+    private var secureRevealSessionIsAuthorized = false
     private var isChangingSecureStorage = false
     private var savedNativeLayerOpacity: Float?
     private var savedTintColor: UIColor?
@@ -548,7 +548,7 @@ final class SecureSnippetTextView: UITextView {
         securePlaintextIsLoaded = false
         secureEditingIsAuthorized = false
         securePlaintextAcceptanceIsAuthorized = false
-        secureContinuousRevealIsAuthorized = false
+        secureRevealSessionIsAuthorized = false
         replaceTextStorage(with: "")
         return secureCaptureRenderer.arm()
     }
@@ -564,7 +564,7 @@ final class SecureSnippetTextView: UITextView {
         securePlaintextIsLoaded = false
         secureEditingIsAuthorized = false
         securePlaintextAcceptanceIsAuthorized = false
-        secureContinuousRevealIsAuthorized = false
+        secureRevealSessionIsAuthorized = false
         secureCaptureRenderer.clear(keepFallbackVisible: false)
         secureCapturePhase = .ordinary
         isSecureContentMode = false
@@ -603,8 +603,8 @@ final class SecureSnippetTextView: UITextView {
         securePlaintextAcceptanceIsAuthorized = authorized && isSecureContentMode
     }
 
-    func setSecureContinuousRevealAuthorized(_ authorized: Bool) {
-        secureContinuousRevealIsAuthorized = authorized && isSecureContentMode
+    func setSecureRevealSessionAuthorized(_ authorized: Bool) {
+        secureRevealSessionIsAuthorized = authorized && isSecureContentMode
     }
 
     @discardableResult
@@ -615,7 +615,7 @@ final class SecureSnippetTextView: UITextView {
         secureCapturePhase = .protectedPlaintext
         guard secureCaptureRenderer.renderPlaintext() else {
             securePlaintextAcceptanceIsAuthorized = false
-            secureContinuousRevealIsAuthorized = false
+            secureRevealSessionIsAuthorized = false
             isEditable = false
             secureCapturePhase = .protectedRedaction
             securePlaintextIsLoaded = false
@@ -634,7 +634,7 @@ final class SecureSnippetTextView: UITextView {
         let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
         secureEditingIsAuthorized = false
         securePlaintextAcceptanceIsAuthorized = false
-        secureContinuousRevealIsAuthorized = false
+        secureRevealSessionIsAuthorized = false
         // Revoke editing/storage state before invoking any observer callback. The
         // renderer's redaction path is allocation-free and always leaves AV hidden.
         isEditable = false
@@ -732,13 +732,13 @@ final class SecureSnippetTextView: UITextView {
     var secureCaptureMayPresentPlaintextNow: Bool {
         secureCapturePhase == .protectedPlaintext
             && securePlaintextIsLoaded
-            && secureContinuousRevealIsAuthorized
+            && secureRevealSessionIsAuthorized
             && currentSceneCaptureState == .inactive
             && foregroundPresentationIsAllowed
     }
 
     /// A generation-current AV presentation may still be rejected if the app,
-    /// scene, capture state, or continuous reveal source changed while the
+    /// scene, capture state, or authenticated reveal session changed while the
     /// renderer's asynchronous flush was in flight. Clear storage and notify the
     /// owner synchronously; a late completion must never leave policy and pixels
     /// disagreeing about whether plaintext is disclosed.
@@ -747,7 +747,7 @@ final class SecureSnippetTextView: UITextView {
         let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
         secureEditingIsAuthorized = false
         securePlaintextAcceptanceIsAuthorized = false
-        secureContinuousRevealIsAuthorized = false
+        secureRevealSessionIsAuthorized = false
         isEditable = false
         secureCapturePhase = .protectedRedaction
         securePlaintextIsLoaded = false
@@ -774,7 +774,7 @@ final class SecureSnippetTextView: UITextView {
             let plaintext = securePlaintextIsLoaded ? (text ?? "") : nil
             secureEditingIsAuthorized = false
             securePlaintextAcceptanceIsAuthorized = false
-            secureContinuousRevealIsAuthorized = false
+            secureRevealSessionIsAuthorized = false
             isEditable = false
             secureCapturePhase = .protectedRedaction
             securePlaintextIsLoaded = false
@@ -793,7 +793,7 @@ final class SecureSnippetTextView: UITextView {
         securePlaintextIsLoaded = false
         secureEditingIsAuthorized = false
         securePlaintextAcceptanceIsAuthorized = false
-        secureContinuousRevealIsAuthorized = false
+        secureRevealSessionIsAuthorized = false
         replaceTextStorage(with: "")
         onSecureCaptureForcedRedaction?(plaintext, .rendererFailure)
     }
@@ -943,7 +943,7 @@ final class SecureBodyAccessibilityNoticeView: UIView {
     static let lockedValue =
         "Use Reveal Secure Content to show it visually. The text is unavailable to accessibility."
     static let authenticatedValue =
-        "Authenticated. Hover over the editor or hold to show it visually. The text is unavailable to accessibility."
+        "Authenticated secure content is being prepared. The text is unavailable to accessibility."
     static let revealedValue =
         "Content is shown visually. The text remains unavailable to accessibility."
 

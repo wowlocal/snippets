@@ -1358,7 +1358,7 @@ final class SnippetsIOSTests: XCTestCase {
         textView.setSceneCaptureStateForTesting(.inactive)
         textView.setSecureForegroundActiveForTesting(true)
         textView.setSecurePlaintextAcceptanceAuthorized(true)
-        textView.setSecureContinuousRevealAuthorized(true)
+        textView.setSecureRevealSessionAuthorized(true)
         var pendingCompletion: (() -> Void)?
         textView.setSecureCaptureFlushCompletionOverrideForTesting {
             pendingCompletion = $0
