@@ -104,6 +104,13 @@
 			remoteGlobalIDString = 28A000000000000000000004;
 			remoteInfo = "Snippets iOS";
 		};
+		28E000000000000000000008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 272782CF2F41F9F1000B9989 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 272782D62F41F9F1000B9989;
+			remoteInfo = Snippets;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -192,6 +199,7 @@
 		28A100000000000000000031 /* SyncBackendSelectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncBackendSelectionStore.swift; path = snippets/Sync/SyncBackendSelectionStore.swift; sourceTree = SOURCE_ROOT; };
 		28B000000000000000000001 /* Snippets iOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28C000000000000000000001 /* Snippets iOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iOSUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		28E000000000000000000001 /* Snippets macOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets macOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28D000000000000000000001 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Diagnostics.swift; path = snippets/Core/Diagnostics.swift; sourceTree = SOURCE_ROOT; };
 		28D000000000000000000003 /* DiagnosticsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DiagnosticsService.swift; path = snippets/Diagnostics/DiagnosticsService.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -228,6 +236,11 @@
 		28C000000000000000000002 /* snippets-ios-uitests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "snippets-ios-uitests";
+			sourceTree = "<group>";
+		};
+		28E000000000000000000002 /* snippets-cross-platform-tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "snippets-cross-platform-tests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -271,6 +284,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		28E000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -281,6 +301,7 @@
 				28A000000000000000000002 /* snippets-ios */,
 				28B000000000000000000002 /* snippets-ios-tests */,
 				28C000000000000000000002 /* snippets-ios-uitests */,
+				28E000000000000000000002 /* snippets-cross-platform-tests */,
 				28A000000000000000000003 /* Shared iOS Sources */,
 				27C1100E2F5300000000000E /* snippets-cli */,
 				272782D82F41F9F1000B9989 /* Products */,
@@ -294,6 +315,7 @@
 				28A000000000000000000001 /* Snippets.app */,
 				28B000000000000000000001 /* Snippets iOSTests.xctest */,
 				28C000000000000000000001 /* Snippets iOSUITests.xctest */,
+				28E000000000000000000001 /* Snippets macOSTests.xctest */,
 				27C110012F53000000000001 /* snippets-cli */,
 			);
 			name = Products;
@@ -465,6 +487,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				28B000000000000000000002 /* snippets-ios-tests */,
+				28E000000000000000000002 /* snippets-cross-platform-tests */,
 			);
 			name = "Snippets iOSTests";
 			packageProductDependencies = (
@@ -496,6 +519,29 @@
 			productReference = 28C000000000000000000001 /* Snippets iOSUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		28E000000000000000000003 /* Snippets macOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 28E00000000000000000000B /* Build configuration list for PBXNativeTarget "Snippets macOSTests" */;
+			buildPhases = (
+				28E000000000000000000004 /* Sources */,
+				28E000000000000000000005 /* Frameworks */,
+				28E000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				28E000000000000000000007 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				28E000000000000000000002 /* snippets-cross-platform-tests */,
+			);
+			name = "Snippets macOSTests";
+			packageProductDependencies = (
+			);
+			productName = "Snippets macOSTests";
+			productReference = 28E000000000000000000001 /* Snippets macOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -523,6 +569,10 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 28A000000000000000000004;
 					};
+					28E000000000000000000003 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 272782D62F41F9F1000B9989;
+					};
 				};
 			};
 			buildConfigurationList = 272782D22F41F9F1000B9989 /* Build configuration list for PBXProject "Snippets" */;
@@ -547,6 +597,7 @@
 				28A000000000000000000004 /* Snippets iOS */,
 				28B000000000000000000003 /* Snippets iOSTests */,
 				28C000000000000000000003 /* Snippets iOSUITests */,
+				28E000000000000000000003 /* Snippets macOSTests */,
 				27C1100A2F5300000000000A /* snippets-cli */,
 			);
 		};
@@ -577,6 +628,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		28C000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28E000000000000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -688,6 +746,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		28E000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -705,6 +770,11 @@
 			isa = PBXTargetDependency;
 			target = 28A000000000000000000004 /* Snippets iOS */;
 			targetProxy = 28C000000000000000000008 /* PBXContainerItemProxy */;
+		};
+		28E000000000000000000007 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 272782D62F41F9F1000B9989 /* Snippets */;
+			targetProxy = 28E000000000000000000008 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1091,6 +1161,41 @@
 			};
 			name = Release;
 		};
+		28E000000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.macOSTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Snippets Debug.app/Contents/MacOS/Snippets Debug";
+			};
+			name = Debug;
+		};
+		28E00000000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = H8QG3CBM96;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.macOSTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Snippets.app/Contents/MacOS/Snippets";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1144,6 +1249,15 @@
 			buildConfigurations = (
 				28C000000000000000000009 /* Debug */,
 				28C00000000000000000000A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		28E00000000000000000000B /* Build configuration list for PBXNativeTarget "Snippets macOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				28E000000000000000000009 /* Debug */,
+				28E00000000000000000000A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
