@@ -327,15 +327,18 @@ final class PhoneLibraryUXTests: XCTestCase {
             cell.descendant(withAccessibilityIdentifier: "phone-snippet-swipe-surface")
         )
         let editAction = try XCTUnwrap(
-            cell.descendant(withAccessibilityIdentifier: "phone-swipe-edit") as? UIControl
+            cell.descendant(withAccessibilityIdentifier: "phone-swipe-edit") as? UIButton
         )
         let pinAction = try XCTUnwrap(
-            cell.descendant(withAccessibilityIdentifier: "phone-swipe-pin") as? UIControl
+            cell.descendant(withAccessibilityIdentifier: "phone-swipe-pin") as? UIButton
         )
         let deleteAction = try XCTUnwrap(
-            cell.descendant(withAccessibilityIdentifier: "phone-swipe-delete") as? UIControl
+            cell.descendant(withAccessibilityIdentifier: "phone-swipe-delete") as? UIButton
         )
         XCTAssertTrue(swipeSurface.gestureRecognizers?.contains { $0 is UIPanGestureRecognizer } == true)
+        XCTAssertNotNil(editAction.configuration)
+        XCTAssertNotNil(pinAction.configuration)
+        XCTAssertNotNil(deleteAction.configuration)
         XCTAssertEqual(editAction.bounds.width, PhoneSnippetCell.actionWidth, accuracy: 0.5)
         XCTAssertEqual(pinAction.bounds.width, PhoneSnippetCell.actionWidth, accuracy: 0.5)
         XCTAssertEqual(deleteAction.bounds.width, PhoneSnippetCell.actionWidth, accuracy: 0.5)
@@ -365,51 +368,72 @@ final class PhoneLibraryUXTests: XCTestCase {
     }
 
     func testCustomSwipePhysicsUsesResistanceVelocityAndSemanticDirection() throws {
+        let leadingWidth = PhoneSnippetCell.leadingActionWidth
+        let trailingWidth = PhoneSnippetCell.trailingActionWidth
+        let containerWidth: CGFloat = 390
+        let fullSwipeThreshold = PhoneSwipePhysics.leadingFullSwipeThreshold(
+            leadingWidth: leadingWidth,
+            containerWidth: containerWidth
+        )
         XCTAssertEqual(
             PhoneSwipePhysics.displayedOffset(
                 for: 40,
-                leadingLimit: 82,
-                trailingLimit: 164,
-                containerWidth: 390
+                leadingLimit: leadingWidth,
+                trailingLimit: trailingWidth,
+                containerWidth: containerWidth,
+                leadingExpansionLimit: fullSwipeThreshold
             ),
             40,
             accuracy: 0.001
         )
-        let resisted = PhoneSwipePhysics.displayedOffset(
-            for: 260,
-            leadingLimit: 82,
-            trailingLimit: 164,
-            containerWidth: 390
+        XCTAssertEqual(
+            PhoneSwipePhysics.displayedOffset(
+                for: 150,
+                leadingLimit: leadingWidth,
+                trailingLimit: trailingWidth,
+                containerWidth: containerWidth,
+                leadingExpansionLimit: fullSwipeThreshold
+            ),
+            150,
+            accuracy: 0.001,
+            "A full-swipe action should track the finger directly until it arms"
         )
-        XCTAssertGreaterThan(resisted, 82)
-        XCTAssertLessThan(resisted, 260)
+        let resisted = PhoneSwipePhysics.displayedOffset(
+            for: 300,
+            leadingLimit: leadingWidth,
+            trailingLimit: trailingWidth,
+            containerWidth: containerWidth,
+            leadingExpansionLimit: fullSwipeThreshold
+        )
+        XCTAssertGreaterThan(resisted, fullSwipeThreshold)
+        XCTAssertLessThan(resisted, 300)
         XCTAssertEqual(
             PhoneSwipePhysics.resolution(
-                rawOffset: 44,
+                rawOffset: leadingWidth * 0.54,
                 velocity: 0,
-                leadingWidth: 82,
-                trailingWidth: 164,
-                containerWidth: 390
+                leadingWidth: leadingWidth,
+                trailingWidth: trailingWidth,
+                containerWidth: containerWidth
             ),
             .open(.leading)
         )
         XCTAssertEqual(
             PhoneSwipePhysics.resolution(
-                rawOffset: -84,
+                rawOffset: -trailingWidth * 0.54,
                 velocity: 0,
-                leadingWidth: 82,
-                trailingWidth: 164,
-                containerWidth: 390
+                leadingWidth: leadingWidth,
+                trailingWidth: trailingWidth,
+                containerWidth: containerWidth
             ),
             .open(.trailing)
         )
         XCTAssertEqual(
             PhoneSwipePhysics.resolution(
-                rawOffset: 210,
+                rawOffset: fullSwipeThreshold + 1,
                 velocity: 0,
-                leadingWidth: 82,
-                trailingWidth: 164,
-                containerWidth: 390
+                leadingWidth: leadingWidth,
+                trailingWidth: trailingWidth,
+                containerWidth: containerWidth
             ),
             .triggerLeadingAction
         )

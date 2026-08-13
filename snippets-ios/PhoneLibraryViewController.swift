@@ -892,9 +892,15 @@ private final class PhoneSectionHeaderView: UITableViewHeaderFooterView {
 
 final class PhoneSnippetCell: UITableViewCell {
     static let reuseIdentifier = "PhoneSnippetCell"
-    static let actionWidth: CGFloat = 82
-    static let leadingActionWidth = actionWidth
-    static let trailingActionWidth = actionWidth * 2
+    static let actionWidth: CGFloat = 76
+    static let actionSpacing: CGFloat = 8
+    static let actionEdgeInset: CGFloat = 8
+    static let actionSurfaceGap: CGFloat = 8
+    static let leadingActionWidth = actionEdgeInset + actionWidth + actionSurfaceGap
+    static let trailingActionWidth = actionEdgeInset
+        + actionWidth * 2
+        + actionSpacing
+        + actionSurfaceGap
 
     weak var swipeDelegate: PhoneSnippetCellSwipeDelegate?
 
@@ -903,6 +909,8 @@ final class PhoneSnippetCell: UITableViewCell {
     private let editActionButton = PhoneSwipeActionButton()
     private let pinActionButton = PhoneSwipeActionButton()
     private let deleteActionButton = PhoneSwipeActionButton()
+    private let leadingActionsGroup = UIStackView()
+    private let trailingActionsGroup = UIStackView()
     private let highlightView = UIView()
     private let rowContentView = UIView()
     private let separatorView = UIView()
@@ -933,6 +941,9 @@ final class PhoneSnippetCell: UITableViewCell {
     private var revealedSide: PhoneSnippetSwipeSide?
     private var panStartLogicalOffset: CGFloat = 0
     private var latestRawLogicalOffset: CGFloat = 0
+    private var interactionSide: PhoneSnippetSwipeSide?
+    private var isLeadingActionArmed = false
+    private let actionArmingFeedback = UIImpactFeedbackGenerator(style: .rigid)
     private lazy var swipePanGesture: UIPanGestureRecognizer = {
         let gesture = UIPanGestureRecognizer(target: self, action: #selector(handleSwipePan(_:)))
         gesture.delegate = self
@@ -968,7 +979,7 @@ final class PhoneSnippetCell: UITableViewCell {
         contentView.clipsToBounds = true
 
         actionsHostView.translatesAutoresizingMaskIntoConstraints = false
-        actionsHostView.backgroundColor = AppTheme.tint
+        actionsHostView.backgroundColor = .clear
         actionsHostView.isHidden = true
         actionsHostView.accessibilityIdentifier = "phone-snippet-swipe-actions"
         actionsHostView.isAccessibilityElement = false
@@ -996,6 +1007,16 @@ final class PhoneSnippetCell: UITableViewCell {
         deleteActionButton.addAction(UIAction { [weak self] _ in
             self?.performSwipeAction(.delete)
         }, for: .touchUpInside)
+
+        [leadingActionsGroup, trailingActionsGroup].forEach { group in
+            group.translatesAutoresizingMaskIntoConstraints = false
+            group.axis = .horizontal
+            group.alignment = .fill
+            group.distribution = .fill
+            group.spacing = Self.actionSpacing
+        }
+        leadingActionsGroup.addArrangedSubview(editActionButton)
+        [pinActionButton, deleteActionButton].forEach(trailingActionsGroup.addArrangedSubview)
 
         highlightView.translatesAutoresizingMaskIntoConstraints = false
         highlightView.backgroundColor = AppTheme.selectedRow
@@ -1071,8 +1092,8 @@ final class PhoneSnippetCell: UITableViewCell {
 
         contentView.addSubview(actionsHostView)
         contentView.addSubview(swipeSurfaceView)
-        [editActionButton, pinActionButton, deleteActionButton]
-            .forEach(actionsHostView.addSubview)
+        actionsHostView.addSubview(leadingActionsGroup)
+        actionsHostView.addSubview(trailingActionsGroup)
         swipeSurfaceView.addSubview(highlightView)
         swipeSurfaceView.addSubview(rowContentView)
         swipeSurfaceView.addSubview(separatorView)
@@ -1091,19 +1112,33 @@ final class PhoneSnippetCell: UITableViewCell {
             swipeSurfaceView.topAnchor.constraint(equalTo: contentView.topAnchor),
             swipeSurfaceView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
-            editActionButton.leadingAnchor.constraint(equalTo: actionsHostView.leadingAnchor),
-            editActionButton.topAnchor.constraint(equalTo: actionsHostView.topAnchor),
-            editActionButton.bottomAnchor.constraint(equalTo: actionsHostView.bottomAnchor),
+            leadingActionsGroup.leadingAnchor.constraint(
+                equalTo: actionsHostView.leadingAnchor,
+                constant: Self.actionEdgeInset
+            ),
+            leadingActionsGroup.topAnchor.constraint(
+                equalTo: actionsHostView.topAnchor,
+                constant: 7
+            ),
+            leadingActionsGroup.bottomAnchor.constraint(
+                equalTo: actionsHostView.bottomAnchor,
+                constant: -7
+            ),
             editActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
 
-            deleteActionButton.trailingAnchor.constraint(equalTo: actionsHostView.trailingAnchor),
-            deleteActionButton.topAnchor.constraint(equalTo: actionsHostView.topAnchor),
-            deleteActionButton.bottomAnchor.constraint(equalTo: actionsHostView.bottomAnchor),
+            trailingActionsGroup.trailingAnchor.constraint(
+                equalTo: actionsHostView.trailingAnchor,
+                constant: -Self.actionEdgeInset
+            ),
+            trailingActionsGroup.topAnchor.constraint(
+                equalTo: actionsHostView.topAnchor,
+                constant: 7
+            ),
+            trailingActionsGroup.bottomAnchor.constraint(
+                equalTo: actionsHostView.bottomAnchor,
+                constant: -7
+            ),
             deleteActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
-
-            pinActionButton.trailingAnchor.constraint(equalTo: deleteActionButton.leadingAnchor),
-            pinActionButton.topAnchor.constraint(equalTo: actionsHostView.topAnchor),
-            pinActionButton.bottomAnchor.constraint(equalTo: actionsHostView.bottomAnchor),
             pinActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
 
             highlightView.leadingAnchor.constraint(equalTo: swipeSurfaceView.leadingAnchor, constant: 16),
@@ -1265,6 +1300,9 @@ final class PhoneSnippetCell: UITableViewCell {
             stopSettleAnimatorAtCurrentPosition()
             panStartLogicalOffset = swipeOffset
             latestRawLogicalOffset = panStartLogicalOffset
+            let logicalVelocity = gesture.velocity(in: self).x * layoutDirectionScale
+            interactionSide = restingSide ?? (logicalVelocity >= 0 ? .leading : .trailing)
+            actionArmingFeedback.prepare()
             swipeDelegate?.phoneSnippetCellWillBeginSwipe(self)
             setHighlighted(false, animated: false)
         case .changed:
@@ -1272,6 +1310,7 @@ final class PhoneSnippetCell: UITableViewCell {
         case .ended:
             updateInteractiveOffset(from: gesture)
             finishInteractiveSwipe(with: gesture.velocity(in: self).x)
+            interactionSide = nil
         case .cancelled, .failed:
             let target: CGFloat
             if let restingSide {
@@ -1287,6 +1326,7 @@ final class PhoneSnippetCell: UITableViewCell {
                 physicalVelocity: gesture.velocity(in: self).x,
                 animated: true
             )
+            interactionSide = nil
         default:
             break
         }
@@ -1313,14 +1353,33 @@ final class PhoneSnippetCell: UITableViewCell {
     private func updateInteractiveOffset(from gesture: UIPanGestureRecognizer) {
         let translation = gesture.translation(in: self).x * layoutDirectionScale
         let proposedOffset = panStartLogicalOffset + translation
-        latestRawLogicalOffset = proposedOffset
-        let displayedOffset = PhoneSwipePhysics.displayedOffset(
-            for: proposedOffset,
-            leadingLimit: Self.leadingActionWidth,
-            trailingLimit: Self.trailingActionWidth,
+        let constrainedOffset: CGFloat
+        switch interactionSide {
+        case .leading:
+            constrainedOffset = max(proposedOffset, 0)
+        case .trailing:
+            constrainedOffset = min(proposedOffset, 0)
+        case nil:
+            constrainedOffset = proposedOffset
+        }
+        latestRawLogicalOffset = constrainedOffset
+        let fullSwipeThreshold = PhoneSwipePhysics.leadingFullSwipeThreshold(
+            leadingWidth: Self.leadingActionWidth,
             containerWidth: bounds.width
         )
+        let displayedOffset = PhoneSwipePhysics.displayedOffset(
+            for: constrainedOffset,
+            leadingLimit: Self.leadingActionWidth,
+            trailingLimit: Self.trailingActionWidth,
+            containerWidth: bounds.width,
+            leadingExpansionLimit: fullSwipeThreshold
+        )
         applyInteractiveOffset(displayedOffset)
+        setLeadingActionArmed(
+            constrainedOffset >= fullSwipeThreshold,
+            animated: true,
+            providesFeedback: true
+        )
     }
 
     private func applyInteractiveOffset(_ logicalOffset: CGFloat) {
@@ -1336,6 +1395,7 @@ final class PhoneSnippetCell: UITableViewCell {
             translationX: logicalOffset * layoutDirectionScale,
             y: 0
         )
+        applyActionPresentation(for: logicalOffset)
         updateHighlight(animated: false)
     }
 
@@ -1359,6 +1419,7 @@ final class PhoneSnippetCell: UITableViewCell {
                 animated: true
             )
         case .triggerLeadingAction:
+            setLeadingActionArmed(true, animated: true, providesFeedback: true)
             triggerLeadingFullSwipe(with: physicalVelocity)
         }
     }
@@ -1390,6 +1451,8 @@ final class PhoneSnippetCell: UITableViewCell {
 
         guard animated, UIView.areAnimationsEnabled else {
             swipeSurfaceView.transform = targetTransform
+            applyActionPresentation(for: logicalOffset)
+            setLeadingActionArmed(false, animated: false, providesFeedback: false)
             complete()
             return
         }
@@ -1398,6 +1461,17 @@ final class PhoneSnippetCell: UITableViewCell {
             targetTransform: targetTransform,
             physicalVelocity: physicalVelocity
         )
+        animator.addAnimations { [weak self] in
+            guard let self else { return }
+            self.applyActionPresentation(for: logicalOffset)
+            if side == nil {
+                self.setLeadingActionArmed(
+                    false,
+                    animated: false,
+                    providesFeedback: false
+                )
+            }
+        }
         animator.addCompletion { [weak self, weak animator] position in
             guard let self,
                   let animator,
@@ -1447,6 +1521,10 @@ final class PhoneSnippetCell: UITableViewCell {
             targetTransform: targetTransform,
             physicalVelocity: physicalVelocity
         )
+        animator.addAnimations { [weak self] in
+            guard let self else { return }
+            self.applyActionPresentation(for: self.bounds.width)
+        }
         animator.addCompletion { [weak self, weak animator] position in
             guard let self,
                   let animator,
@@ -1465,9 +1543,72 @@ final class PhoneSnippetCell: UITableViewCell {
         guard revealedSide != side else { return }
         revealedSide = side
         actionsHostView.isHidden = false
-        editActionButton.isHidden = side != .leading
-        pinActionButton.isHidden = side != .trailing
-        deleteActionButton.isHidden = side != .trailing
+        leadingActionsGroup.isHidden = side != .leading
+        trailingActionsGroup.isHidden = side != .trailing
+        if side == .trailing {
+            setLeadingActionArmed(false, animated: false, providesFeedback: false)
+        }
+    }
+
+    private func applyActionPresentation(for logicalOffset: CGFloat) {
+        let side: PhoneSnippetSwipeSide?
+        if logicalOffset > 0.5 {
+            side = .leading
+        } else if logicalOffset < -0.5 {
+            side = .trailing
+        } else {
+            side = revealedSide
+        }
+        guard let side else { return }
+
+        let targetWidth = side == .leading
+            ? Self.leadingActionWidth
+            : Self.trailingActionWidth
+        let progress = min(max(abs(logicalOffset) / targetWidth, 0), 1)
+        let opacityProgress = min(max((progress - 0.08) / 0.52, 0), 1)
+        let scale = 0.96 + 0.04 * progress
+        let parallaxDistance = 12 * (1 - progress)
+        let physicalTranslation: CGFloat
+        if side == .leading {
+            physicalTranslation = -parallaxDistance * layoutDirectionScale
+        } else {
+            physicalTranslation = parallaxDistance * layoutDirectionScale
+        }
+        let group = side == .leading ? leadingActionsGroup : trailingActionsGroup
+        group.alpha = opacityProgress
+        group.transform = CGAffineTransform(
+            translationX: physicalTranslation,
+            y: 0
+        ).scaledBy(x: scale, y: scale)
+    }
+
+    private func setLeadingActionArmed(
+        _ armed: Bool,
+        animated: Bool,
+        providesFeedback: Bool
+    ) {
+        guard isLeadingActionArmed != armed else { return }
+        isLeadingActionArmed = armed
+        if providesFeedback {
+            actionArmingFeedback.impactOccurred(intensity: armed ? 0.8 : 0.45)
+            actionArmingFeedback.prepare()
+        }
+        let changes = { [weak self] in
+            guard let self else { return }
+            self.editActionButton.transform = armed
+                ? CGAffineTransform(scaleX: 1.06, y: 1.06)
+                : .identity
+        }
+        if animated, UIView.areAnimationsEnabled, !UIAccessibility.isReduceMotionEnabled {
+            UIView.animate(
+                withDuration: 0.16,
+                delay: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction],
+                animations: changes
+            )
+        } else {
+            changes()
+        }
     }
 
     private func performSwipeAction(_ action: PhoneSnippetSwipeAction) {
@@ -1492,13 +1633,18 @@ final class PhoneSnippetCell: UITableViewCell {
         settleAnimator = nil
         restingSide = nil
         revealedSide = nil
+        interactionSide = nil
         panStartLogicalOffset = 0
         latestRawLogicalOffset = 0
         swipeSurfaceView.transform = .identity
         actionsHostView.isHidden = true
-        editActionButton.isHidden = false
-        pinActionButton.isHidden = false
-        deleteActionButton.isHidden = false
+        leadingActionsGroup.isHidden = false
+        trailingActionsGroup.isHidden = false
+        leadingActionsGroup.alpha = 1
+        trailingActionsGroup.alpha = 1
+        leadingActionsGroup.transform = .identity
+        trailingActionsGroup.transform = .identity
+        setLeadingActionArmed(false, animated: false, providesFeedback: false)
         updateHighlight(animated: false)
     }
 
