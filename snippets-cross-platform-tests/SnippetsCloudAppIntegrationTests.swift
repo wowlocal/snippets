@@ -30,6 +30,7 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         case macVerify = "mac-verify"
         case iosVerify = "ios-verify"
         case macVerifyDeletion = "mac-verify-deletion"
+        case macChaosTruncatedFetch = "mac-chaos-truncated-fetch"
         case iosVerifyDeletion = "ios-verify-deletion"
     }
 
@@ -92,6 +93,9 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
             accessToken: token)
         XCTAssertTrue(try selection.makeTransport().supportsPush)
         XCTAssertTrue(selection.hasPendingProviderSwitch)
+        if phase == .macChaosTruncatedFetch {
+            try await assertTruncatedFetchRecovers(selection)
+        }
 
         #if os(macOS)
         let store = SnippetStore(configuration: .macOSDefault)
@@ -186,7 +190,7 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         case .macVerify, .iosVerify:
             assertConverged(store)
 
-        case .macVerifyDeletion, .iosVerifyDeletion:
+        case .macVerifyDeletion, .macChaosTruncatedFetch, .iosVerifyDeletion:
             assertLibrary(store, expected: Self.convergedAfterDeletion)
         }
 
@@ -263,6 +267,27 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         XCTAssertEqual(actual, expected)
     }
 
+    private func assertTruncatedFetchRecovers(
+        _ selection: SyncBackendSelectionStore
+    ) async throws {
+        let transport = try selection.makeTransport()
+        _ = try await transport.resolveAccountIdentity()
+        do {
+            _ = try await transport.fetchChanges(since: nil)
+            XCTFail("the deterministic proxy did not truncate the first change page")
+        } catch let failure as SyncTransportFailure {
+            guard case .unreachable(let detail) = failure else {
+                return XCTFail("unexpected truncated-response classification: \(failure)")
+            }
+            XCTAssertEqual(detail, "invalid_json_response")
+        }
+
+        let recovered = try await transport.fetchChanges(since: nil)
+        XCTAssertTrue(recovered.isFullResync)
+        XCTAssertFalse(recovered.hasMore)
+        XCTAssertEqual(recovered.records.count, 3) // Two live records and one tombstone.
+    }
+
     private func remoteBeforeLocalMutation(for phase: Phase) -> [String: String] {
         switch phase {
         case .macSeed:
@@ -283,14 +308,14 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
             ]
         case .macVerify, .iosVerify:
             return Self.convergedLibrary
-        case .macVerifyDeletion, .iosVerifyDeletion:
+        case .macVerifyDeletion, .macChaosTruncatedFetch, .iosVerifyDeletion:
             return Self.convergedAfterDeletion
         }
     }
 
     private func confirmedRecordCount(for phase: Phase) -> Int {
         switch phase {
-        case .macVerifyDeletion, .iosVerifyDeletion:
+        case .macVerifyDeletion, .macChaosTruncatedFetch, .iosVerifyDeletion:
             return 3 // Two live records plus the retained iOS tombstone.
         default:
             return remoteBeforeLocalMutation(for: phase).count
@@ -301,6 +326,7 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         #if os(macOS)
         let valid: Set<Phase> = [
             .macSeed, .macUpdateAndroid, .macVerify, .macVerifyDeletion,
+            .macChaosTruncatedFetch,
         ]
         #else
         let valid: Set<Phase> = [

@@ -68,7 +68,8 @@ owner even when a cheaper layer also tests the behavior.
 | Secure/vault record survives Apple/Android/HTTP round trip | Opaque secure projection tests | L1 + L4 | Partial: opaque preservation is automated; unlocked Android UX/pairing remains pending |
 | iCloud -> HTTP -> iCloud preserves unchanged encrypted blobs | CloudKit adapter/core tests | L5 | Dedicated signed canary pending |
 | Crash after every Switch and Sync durable phase | Journal/account reset fault injection | L1 + L5 | Core phases covered; full provider transaction crash matrix pending |
-| Network loss, duplicate/reordered pages and stale cursors | Transport/engine fault injection | L1 + L4/L6 | Deterministic coverage; proxy chaos lane pending |
+| Network loss, malformed pages and stale cursors | Transport/engine fault injection | L1 + L4/L6 | Automated through the deterministic edge |
+| Duplicate delivery and reordered pages | Transport/engine fault injection | L1 + L4/L6 | Duplicate request delivery supported; multi-page reordering scenario pending |
 | Database restore changes dataset generation and causes review halt | Server/client reset tests | L3 + L6 | Drill pending |
 | Boundary-size, pagination and partial batch interoperability | Core/server limit tests | L3 + L4 | Server covered; multi-client boundary corpus pending |
 
@@ -88,9 +89,15 @@ It then runs this ordered state machine:
    and Keystore wrapping key, imports the portable test key again, and downloads M+I+A.
 4. Fresh macOS downloads all records and edits A; fresh iOS downloads them and edits M.
 5. Fresh Android, macOS, and iOS independently verify the same three-record state.
-6. Android switches to Local Only, deletes I offline, returns to the same HTTP scope,
-   uploads the tombstone, wipes the local installation, and downloads M+A.
-7. Fresh macOS, iOS, and Android independently verify that I remains deleted.
+6. Android switches to Local Only, deletes I offline, and returns to the same HTTP scope.
+   The deterministic edge lets the server commit its tombstone but replaces the response
+   with a 503. The same Android installation then confirms the authoritative echo without
+   duplicating or resurrecting the record.
+7. The edge truncates one macOS change page; the transport rejects it as invalid JSON,
+   retries after the one-shot rule is exhausted, and completes a full fetch. It then
+   replaces one Android cursor with an invalid value and proves the documented full-
+   snapshot recovery path.
+8. Fresh iOS and Android installations independently verify that I remains deleted.
 
 Between phases the script asserts server live/tombstone counts. At the end it asserts
 that all nine tenant tables have enabled and forced RLS, the runtime role sees zero rows
@@ -169,10 +176,37 @@ failure has a required client classification:
 | Clock skew | HLC ordering remains deterministic; no wall-clock last-write-wins shortcut |
 | Key/vault loss or Android Keystore invalidation | Existing ciphertext is not overwritten with a newly minted incompatible key |
 
-The proxy chaos profile should support deterministic scripts rather than random packet
-loss only: fail the Nth request, cut a response after N bytes, delay beyond timeout,
-duplicate a page, and return a stale cursor/CAS response. Seeds and failure schedules are
-reported without including request payloads.
+### Deterministic network edge
+
+`scripts/cross-platform-tls-edge.rb` accepts an optional atomically replaced JSON plan
+and a JSON state path. Every rule matches an exact HTTP method, a bounded Ruby regular
+expression over path plus query, and the Nth matching request. A new `generation` resets
+all counters, so unrelated readiness, JWKS, and prior-client traffic cannot move the
+failure point. Invalid plans fail closed with 503 instead of silently disabling chaos.
+
+The closed action vocabulary is:
+
+- `return_before_upstream` — deterministic HTTP failure without a server write;
+- `delay_before_upstream` — fixed delay, including a client timeout when desired;
+- `forward_then_replace` — server receives/commits the request but the client receives a
+  configured failure, modelling an ambiguous acknowledgement;
+- `forward_then_truncate` — cut a real response after exactly N bytes;
+- `repeat_upstream` — deliver the identical request two to five times while returning the
+  first response;
+- `rewrite_upstream_path` — replace one path/query, used for stale or foreign cursors.
+
+The state file records only generation, rule IDs, match/trigger counts, and triggered
+upstream-attempt counts. The E2E harness asserts exactly one trigger before disabling a
+plan and deletes both files with the disposable run root. Unit coverage for every action
+and invalid-plan fail-closed behavior is:
+
+```sh
+ruby scripts/cross-platform-tls-edge-tests.rb
+```
+
+This is deterministic failure injection, not random packet loss. Multi-page response
+reordering and a real socket half-close remain separate follow-up scenarios; neither is
+claimed by the current E2E lane.
 
 ## Cadence and release gates
 
@@ -180,7 +214,7 @@ reported without including request payloads.
 | --- | --- |
 | Every PR | Relevant L0 checks; CorePackage; Android shared-core/Gradle compile; server unit/OpenAPI; macOS and iOS builds |
 | Sync/protocol/security PR | All above plus real PostgreSQL integration and disposable four-way E2E |
-| Nightly | Full iPhone/iPad/Android emulator suites, L4, deterministic proxy chaos, fuzz/property corpus, self-host conformance |
+| Nightly | Full iPhone/iPad/Android emulator suites, L4 deterministic proxy chaos, fuzz/property corpus, self-host conformance |
 | Weekly | PostgreSQL backup/restore and migration drill, 8-24 hour soak, supported Android API/ABI/device matrix, CloudKit Development canary |
 | Release candidate | Signed physical Apple/Android devices, CloudKit Production synthetic canary, clean self-host install/upgrade, deletion/export, dependency/SBOM, performance and battery budgets |
 
