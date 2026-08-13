@@ -94,6 +94,35 @@ final class SnippetsIOSUITests: XCTestCase {
         XCTAssertFalse(app.buttons["phone-swipe-delete"].exists)
     }
 
+    func testPhoneLibraryFullSwipeOpensEditorWithoutWaitingForRowAnimation() throws {
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset"]
+        app.launch()
+
+        let create = app.buttons["phone-new-snippet"]
+        try XCTSkipUnless(
+            create.waitForExistence(timeout: 3),
+            "This smoke test covers the iPhone root controller"
+        )
+        create.tap()
+        let name = app.textFields["snippet-name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        name.tap()
+        name.typeText("Full Swipe Edit")
+        app.navigationBars.buttons["Snippets"].tap()
+
+        let rowTitle = app.staticTexts["Full Swipe Edit"]
+        XCTAssertTrue(rowTitle.waitForExistence(timeout: 3))
+        rowTitle.swipeRight()
+
+        XCTAssertTrue(
+            app.textFields["snippet-name"].waitForExistence(timeout: 1),
+            "The editor should start opening as soon as the full swipe ends"
+        )
+    }
+
     func testReturnCopiesSelectedSnippetFromList() throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("The iOS Simulator does not dispatch synthesized keys through the hardware-key press pipeline")

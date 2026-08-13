@@ -1420,7 +1420,7 @@ final class PhoneSnippetCell: UITableViewCell {
             )
         case .triggerLeadingAction:
             setLeadingActionArmed(true, animated: true, providesFeedback: true)
-            triggerLeadingFullSwipe(with: physicalVelocity)
+            commitLeadingFullSwipe(with: physicalVelocity)
         }
     }
 
@@ -1510,7 +1510,9 @@ final class PhoneSnippetCell: UITableViewCell {
         return animator
     }
 
-    private func triggerLeadingFullSwipe(with physicalVelocity: CGFloat) {
+    /// Starts the visual commit and requests Edit in the same event-loop turn. The
+    /// navigation transition must not wait for the row to travel offscreen.
+    func commitLeadingFullSwipe(with physicalVelocity: CGFloat) {
         stopSettleAnimatorAtCurrentPosition()
         showActions(for: .leading)
         let targetTransform = CGAffineTransform(
@@ -1533,10 +1535,10 @@ final class PhoneSnippetCell: UITableViewCell {
             guard position == .end else { return }
             self.resetSwipePresentation()
             self.swipeDelegate?.phoneSnippetCellDidCloseSwipe(self)
-            self.swipeDelegate?.phoneSnippetCell(self, requested: .edit)
         }
         settleAnimator = animator
         animator.startAnimation()
+        swipeDelegate?.phoneSnippetCell(self, requested: .edit)
     }
 
     private func showActions(for side: PhoneSnippetSwipeSide) {

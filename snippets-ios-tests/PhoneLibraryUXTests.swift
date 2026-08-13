@@ -454,6 +454,28 @@ final class PhoneLibraryUXTests: XCTestCase {
         XCTAssertEqual(rtlSurface.transform, .identity)
     }
 
+    func testLeadingFullSwipeRequestsEditWithoutWaitingForCommitAnimation() {
+        let cell = PhoneSnippetCell(style: .default, reuseIdentifier: "full-swipe")
+        cell.frame = CGRect(x: 0, y: 0, width: 390, height: 110)
+        cell.layoutIfNeeded()
+        let delegate = PhoneSnippetCellSwipeDelegateSpy()
+        cell.swipeDelegate = delegate
+
+        UIView.setAnimationsEnabled(true)
+        defer {
+            cell.closeSwipe(animated: false)
+            UIView.setAnimationsEnabled(false)
+        }
+
+        cell.commitLeadingFullSwipe(with: 900)
+
+        XCTAssertEqual(
+            delegate.actions,
+            [.edit],
+            "Edit should be requested synchronously when the finger lifts"
+        )
+    }
+
     func testStatusActionCanOnlyRunOnce() throws {
         let environment = AppEnvironment()
         let library = PhoneLibraryViewController(environment: environment)
