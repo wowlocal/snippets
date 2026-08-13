@@ -258,31 +258,32 @@ private fun SnippetCard(
                 snippet.content.lineSequence().firstOrNull().orEmpty(),
                 maxLines = 2,
                 style = MaterialTheme.typography.bodyMedium)
-            if (snippet.tags.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    snippet.tags.take(3).forEach { tag ->
-                        TagPill(
-                            tag = tag,
-                            selected = tagFilterKey(tag) in activeTagKeys,
-                            onClick = { onToggleTag(tag) })
-                    }
-                    if (snippet.tags.size > 3) {
-                        Text(
-                            "+${snippet.tags.size - 3}",
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
             Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically) {
+                if (snippet.tags.isNotEmpty()) {
+                    Row(
+                        Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        snippet.tags.take(3).forEach { tag ->
+                            TagPill(
+                                tag = tag,
+                                selected = tagFilterKey(tag) in activeTagKeys,
+                                onClick = { onToggleTag(tag) })
+                        }
+                        if (snippet.tags.size > 3) {
+                            Text(
+                                "+${snippet.tags.size - 3}",
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
                 TextButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onShare) { Text("Share") }
             }
