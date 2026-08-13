@@ -6,6 +6,11 @@
         <item name="android:statusBarColor">#FFF8F2</item>
         <item name="android:navigationBarColor">#FFF8F2</item>
     </style>
+    <style name="Theme.Snippets.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/snippets_splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.Snippets</item>
+    </style>
     <style name="Theme.Snippets.Dialog" parent="Theme.Snippets">
         <item name="android:windowIsTranslucent">false</item>
         <item name="android:windowNoTitle">true</item>
