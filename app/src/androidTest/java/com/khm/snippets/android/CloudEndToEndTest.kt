@@ -60,8 +60,16 @@ class CloudEndToEndTest {
         sender.syncNow()
         assertNull(sender.state.value.errorCode)
         assertEquals("Synced", sender.state.value.syncLabel)
-        assertEquals(PLAINTEXT_PROBE, sender.state.value.snippets.single().content)
+        val senderAndroid = sender.state.value.snippets.single {
+            it.id.equals(uploaded.id, ignoreCase = true)
+        }
+        val senderApple = sender.state.value.snippets.single {
+            it.id.equals(APPLE_RECORD_ID, ignoreCase = true)
+        }
+        assertEquals(PLAINTEXT_PROBE, senderAndroid.content)
+        assertEquals(APPLE_PLAINTEXT_PROBE, senderApple.content)
         assertLocalFilesDoNotContain(PLAINTEXT_PROBE)
+        assertLocalFilesDoNotContain(APPLE_PLAINTEXT_PROBE)
 
         // This models a fresh Android installation. Neither the encrypted files
         // nor the device-bound key survive; only the explicitly portable sync key does.
@@ -76,7 +84,9 @@ class CloudEndToEndTest {
 
         assertNull(receiver.state.value.errorCode)
         assertEquals("Synced", receiver.state.value.syncLabel)
-        val downloaded = receiver.state.value.snippets.single()
+        val downloaded = receiver.state.value.snippets.single {
+            it.id.equals(uploaded.id, ignoreCase = true)
+        }
         // Foundation's UUID Codable spelling is uppercase while java.util.UUID
         // emits lowercase; UUID identity is intentionally case-insensitive.
         assertEquals(uploaded.id.lowercase(), downloaded.id.lowercase())
@@ -85,7 +95,13 @@ class CloudEndToEndTest {
         assertEquals(uploaded.content, downloaded.content)
         assertEquals(uploaded.tags, downloaded.tags)
         assertEquals(uploaded.isPinned, downloaded.isPinned)
+        val appleDownloaded = receiver.state.value.snippets.single {
+            it.id.equals(APPLE_RECORD_ID, ignoreCase = true)
+        }
+        assertEquals(APPLE_PLAINTEXT_PROBE, appleDownloaded.content)
+        assertEquals("Apple Core E2E", appleDownloaded.name)
         assertLocalFilesDoNotContain(PLAINTEXT_PROBE)
+        assertLocalFilesDoNotContain(APPLE_PLAINTEXT_PROBE)
     }
 
     private fun destroyLocalInstallationState() {
@@ -124,5 +140,7 @@ class CloudEndToEndTest {
     private companion object {
         const val LOCAL_KEY_ALIAS = "com.khm.snippets.android.local-v1"
         const val PLAINTEXT_PROBE = "snippets-e2e-plaintext-probe-4f6c77f8"
+        const val APPLE_RECORD_ID = "a11ce001-0000-4000-8000-000000000001"
+        const val APPLE_PLAINTEXT_PROBE = "snippets-apple-e2e-plaintext-probe-8d134f53"
     }
 }
