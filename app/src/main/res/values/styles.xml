@@ -3,8 +3,8 @@
     <style name="Theme.Snippets" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:statusBarColor">#FFF8F2</item>
-        <item name="android:navigationBarColor">#FFF8F2</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
     <style name="Theme.Snippets.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/snippets_splash_background</item>
