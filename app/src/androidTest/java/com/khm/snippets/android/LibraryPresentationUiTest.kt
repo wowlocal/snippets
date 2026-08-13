@@ -1,7 +1,9 @@
 package com.khm.snippets.android
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
@@ -53,11 +55,10 @@ class LibraryPresentationUiTest {
     }
 
     @Test
-    fun cardAndPrimaryButtonCopyWhileEditAndShareRemainSeparateActions() {
-        // The card itself has the same primary action as its filled Copy button.
+    fun cardCopiesWhileEditAndShareRemainSeparateActions() {
         compose.onNodeWithText("Email follow up").performClick()
-        compose.onNodeWithText("Copy").performClick()
-        assertEquals(2, copyCount)
+        assertEquals(1, copyCount)
+        compose.onAllNodesWithText("Copy").assertCountEquals(0)
 
         compose.onNodeWithText("Edit").performClick()
         assertSame(snippet, edit)

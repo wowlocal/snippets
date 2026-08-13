@@ -281,9 +281,8 @@ private fun SnippetCard(
             Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onCopy, modifier = Modifier.weight(1f)) { Text("Copy") }
                 TextButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onShare) { Text("Share") }
             }
