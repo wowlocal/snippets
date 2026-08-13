@@ -1,0 +1,79 @@
+name: snippets-sync
+
+x-database-environment: &database-environment
+  DATABASE_HOST: postgres
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: ${POSTGRES_DB:?set POSTGRES_DB}
+  DATABASE_OWNER_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+  DATABASE_OWNER_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  DATABASE_RUNTIME_USER: snippets_runtime
+  DATABASE_RUNTIME_PASSWORD: ${SNIPPETS_RUNTIME_PASSWORD:?set SNIPPETS_RUNTIME_PASSWORD}
+  DATABASE_TLS_MODE: disable
+
+services:
+  postgres:
+    image: postgres:17.10-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      SNIPPETS_RUNTIME_PASSWORD: ${SNIPPETS_RUNTIME_PASSWORD:?set SNIPPETS_RUNTIME_PASSWORD}
+    ports:
+      - "127.0.0.1:${DATABASE_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./Container/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+    entrypoint: ["snippets-migrate"]
+    environment:
+      <<: *database-environment
+      MIGRATIONS_DIR: /opt/snippets/Migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  server:
+    build:
+      context: .
+    environment:
+      <<: *database-environment
+      SNIPPETS_ENV: ${SNIPPETS_ENV:?set SNIPPETS_ENV}
+      BIND_HOST: 0.0.0.0
+      PORT: "8080"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      SERVER_INSTANCE_ID: ${SERVER_INSTANCE_ID:?set SERVER_INSTANCE_ID}
+      SERVER_VERSION: ${SERVER_VERSION:-dev}
+      TOKEN_HMAC_SECRET: ${TOKEN_HMAC_SECRET:?set TOKEN_HMAC_SECRET}
+      IDENTITY_PEPPER: ${IDENTITY_PEPPER:?set IDENTITY_PEPPER}
+      OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:?set OIDC_JWKS_URL}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:?set OIDC_AUDIENCE}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid offline_access}
+      OIDC_ALLOWED_ALGORITHMS: ${OIDC_ALLOWED_ALGORITHMS:-RS256}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
