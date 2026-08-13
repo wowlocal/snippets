@@ -46,6 +46,17 @@ class AndroidBoundaryTest {
         assertTrue(context.packageManager.getActivityInfo(processText, 0).exported)
     }
 
+    @Test
+    fun manifestUsesBrandedLauncherIconAndSplashTheme() {
+        val applicationInfo = context.packageManager.getApplicationInfo(context.packageName, 0)
+        assertEquals("com.khm.snippets.android:mipmap/ic_launcher",
+            context.resources.getResourceName(applicationInfo.icon))
+
+        val mainActivity = ComponentName(context, MainActivity::class.java)
+        val activityInfo = context.packageManager.getActivityInfo(mainActivity, 0)
+        assertEquals(R.style.Theme_Snippets_Starting, activityInfo.themeResource)
+    }
+
     private fun ByteArray.containsSubsequence(needle: ByteArray): Boolean {
         if (needle.isEmpty()) return true
         return indices.any { start ->
