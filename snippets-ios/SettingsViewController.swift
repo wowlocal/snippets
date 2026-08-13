@@ -8,7 +8,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
 
         var title: String {
             switch self {
-            case .sync: "iCloud Sync"
+            case .sync: "Sync"
             case .security: "Secure Snippets"
             case .diagnostics: "Diagnostics"
             }
@@ -16,6 +16,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     }
 
     private enum Row: Hashable {
+        case syncProvider
         case syncToggle
         case syncStatus
         case syncNow
@@ -108,9 +109,14 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         cell.accessoryType = .none
 
         switch row {
+        case .syncProvider:
+            let selection = SyncBackendSelectionStore()
+            cell.textLabel?.text = "Cloud Provider"
+            cell.detailTextLabel?.text = selection.provider.displayName
+            cell.accessoryType = .disclosureIndicator
         case .syncToggle:
             cell.textLabel?.text = "Sync this library"
-            cell.detailTextLabel?.text = "Encrypted before it is sent to the existing Snippets CloudKit container."
+            cell.detailTextLabel?.text = "Encrypted before it is sent. Only one cloud provider is writable at a time."
             let control = UISwitch()
             control.isOn = SyncCoordinator.isEnabled
             control.accessibilityIdentifier = "icloud-sync"
@@ -131,7 +137,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             cell.textLabel?.textColor = AppTheme.tint
         case .reviewHalt:
             cell.textLabel?.text = "Resume After Review"
-            cell.detailTextLabel?.text = "Only resume after confirming the library and CloudKit account are correct."
+            cell.detailTextLabel?.text = "Only resume after confirming the library and selected cloud account are correct."
             cell.imageView?.image = UIImage(systemName: "exclamationmark.shield")
             cell.textLabel?.textColor = AppTheme.warning
         case .keychainStatus:
@@ -190,6 +196,8 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         tableView.deselectRow(at: indexPath, animated: true)
         let row = rows(in: Section(rawValue: indexPath.section)!)[indexPath.row]
         switch row {
+        case .syncProvider:
+            chooseSyncProvider()
         case .syncNow:
             environment.syncCoordinator.syncNow()
         case .reviewHalt:
@@ -214,7 +222,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     private func rows(in section: Section) -> [Row] {
         switch section {
         case .sync:
-            var rows: [Row] = [.syncToggle, .syncStatus]
+            var rows: [Row] = [.syncProvider, .syncToggle, .syncStatus]
             if SyncCoordinator.isEnabled { rows.append(.syncNow) }
             if case .halted(let reason, _) = environment.syncCoordinator.state,
                reason.isUserRecoverable {
@@ -233,6 +241,80 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         case .diagnostics:
             return [.diagnosticsStatus, .exportDiagnostics, .deleteDiagnostics]
         }
+    }
+
+    private func chooseSyncProvider() {
+        let selection = SyncBackendSelectionStore()
+        let alert = UIAlertController(
+            title: "Cloud Provider",
+            message: "Switch and Sync preserves the local library and the other cloud. iCloud continues using the existing CloudKit implementation.",
+            preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: "iCloud", style: .default) { [weak self] _ in
+            guard let self else { return }
+            selection.selectICloud()
+            self.environment.syncCoordinator.reloadProviderSelection()
+            self.tableView.reloadData()
+        })
+        alert.addAction(UIAlertAction(title: "Snippets Cloud…", style: .default) { [weak self] _ in
+            self?.configureSnippetsCloud()
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = view
+            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+        }
+        present(alert, animated: true)
+    }
+
+    private func configureSnippetsCloud() {
+        let selection = SyncBackendSelectionStore()
+        let current = selection.cloudCoordinates
+        let alert = UIAlertController(
+            title: "Snippets Cloud",
+            message: "Enter an HTTPS server, space ID, and OIDC access token. The token is stored only in this device’s Keychain.",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "https://sync.example.com"
+            field.text = current?.serverURL.absoluteString
+            field.keyboardType = .URL
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addTextField { field in
+            field.placeholder = "Space UUID"
+            field.text = current?.spaceID.uuidString.lowercased()
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addTextField { field in
+            field.placeholder = "OIDC access token"
+            field.isSecureTextEntry = true
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Switch and Sync", style: .default) { [weak self, weak alert] _ in
+            guard let self,
+                  let fields = alert?.textFields,
+                  fields.count == 3,
+                  let urlText = fields[0].text,
+                  let serverURL = URL(string: urlText),
+                  let spaceText = fields[1].text,
+                  let spaceID = UUID(uuidString: spaceText),
+                  let token = fields[2].text else { return }
+            fields[2].text = nil
+            do {
+                try selection.selectSnippetsCloud(
+                    serverURL: serverURL,
+                    spaceID: spaceID,
+                    accessToken: token)
+                self.environment.syncCoordinator.reloadProviderSelection()
+                self.tableView.reloadData()
+            } catch {
+                self.showError(title: "Couldn’t Configure Snippets Cloud", error: error)
+            }
+        })
+        present(alert, animated: true)
     }
 
     private func exportDiagnostics() {
@@ -373,7 +455,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
 
     private func confirmForgetVault() {
         let syncWarning = SyncCoordinator.isEnabled
-            ? "Turn off iCloud Sync first."
+            ? "Turn off cloud sync first."
             : "This removes every secure snippet stored on this device. This action cannot be undone."
         let alert = UIAlertController(
             title: "Remove Secure Snippets?",

@@ -1,0 +1,1 @@
+../../../snippets/Core/SnippetLibraryCodec.swift

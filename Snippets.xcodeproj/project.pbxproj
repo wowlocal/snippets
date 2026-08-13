@@ -74,6 +74,8 @@
 		28A20000000000000000002D /* CloudKitSyncEngineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000002D /* CloudKitSyncEngineAdapter.swift */; };
 		28A20000000000000000002E /* CloudKitSyncEngineDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000002E /* CloudKitSyncEngineDriver.swift */; };
 		28A20000000000000000002F /* SyncSecureConflictMaterializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A10000000000000000002F /* SyncSecureConflictMaterializer.swift */; };
+		28A200000000000000000030 /* SnippetsCloudTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000030 /* SnippetsCloudTransport.swift */; };
+		28A200000000000000000031 /* SyncBackendSelectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000031 /* SyncBackendSelectionStore.swift */; };
 		28D000000000000000000002 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000001 /* Diagnostics.swift */; };
 		28D000000000000000000004 /* DiagnosticsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000003 /* DiagnosticsService.swift */; };
 		28D000000000000000000008 /* CocoaLumberjack in Frameworks */ = {isa = PBXBuildFile; productRef = 28D000000000000000000006 /* CocoaLumberjack */; };
@@ -186,6 +188,8 @@
 		28A10000000000000000002D /* CloudKitSyncEngineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudKitSyncEngineAdapter.swift; path = snippets/Sync/CloudKitSyncEngineAdapter.swift; sourceTree = SOURCE_ROOT; };
 		28A10000000000000000002E /* CloudKitSyncEngineDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudKitSyncEngineDriver.swift; path = snippets/Sync/CloudKitSyncEngineDriver.swift; sourceTree = SOURCE_ROOT; };
 		28A10000000000000000002F /* SyncSecureConflictMaterializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncSecureConflictMaterializer.swift; path = snippets/Core/SyncSecureConflictMaterializer.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000030 /* SnippetsCloudTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetsCloudTransport.swift; path = snippets/Core/SnippetsCloudTransport.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000031 /* SyncBackendSelectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncBackendSelectionStore.swift; path = snippets/Sync/SyncBackendSelectionStore.swift; sourceTree = SOURCE_ROOT; };
 		28B000000000000000000001 /* Snippets iOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28C000000000000000000001 /* Snippets iOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iOSUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28D000000000000000000001 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Diagnostics.swift; path = snippets/Core/Diagnostics.swift; sourceTree = SOURCE_ROOT; };
@@ -350,6 +354,8 @@
 				28A100000000000000000015 /* SyncLibraryProjection.swift */,
 				28A100000000000000000016 /* SyncMerge.swift */,
 				28A10000000000000000002F /* SyncSecureConflictMaterializer.swift */,
+				28A100000000000000000030 /* SnippetsCloudTransport.swift */,
+				28A100000000000000000031 /* SyncBackendSelectionStore.swift */,
 				28A100000000000000000017 /* SyncStateFile.swift */,
 				28A100000000000000000018 /* SyncTransport.swift */,
 				28A100000000000000000019 /* Tombstones.swift */,
@@ -643,6 +649,8 @@
 				28A200000000000000000015 /* SyncLibraryProjection.swift in Sources */,
 				28A200000000000000000016 /* SyncMerge.swift in Sources */,
 				28A20000000000000000002F /* SyncSecureConflictMaterializer.swift in Sources */,
+				28A200000000000000000030 /* SnippetsCloudTransport.swift in Sources */,
+				28A200000000000000000031 /* SyncBackendSelectionStore.swift in Sources */,
 				28A200000000000000000017 /* SyncStateFile.swift in Sources */,
 				28A200000000000000000018 /* SyncTransport.swift in Sources */,
 				28A200000000000000000019 /* Tombstones.swift in Sources */,

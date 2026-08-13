@@ -1,0 +1,2 @@
+-keep class com.khm.snippets.core.** { *; }
+-keep class org.swift.swiftkit.** { *; }

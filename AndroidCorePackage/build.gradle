@@ -1,0 +1,87 @@
+import java.nio.file.Files
+
+plugins {
+    alias(libs.plugins.android.library)
+}
+
+android {
+    namespace "com.khm.snippets.swiftcore"
+    compileSdkVersion 36
+
+    defaultConfig {
+        minSdkVersion 28
+        ndk { abiFilters "arm64-v8a", "x86_64" }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation("org.swift.swiftkit:swiftkit-core:0.5.1")
+}
+
+def swiftSDKRoot = providers.gradleProperty("swift.sdk.root")
+    .orElse(providers.environmentVariable("SWIFT_SDK_ROOT"))
+    .orElse("${System.getProperty('user.home')}/Library/org.swift.swiftpm/swift-sdks")
+def androidSDKBundle = "swift-6.3.3-RELEASE_android.artifactbundle"
+def androidSDKPath = "${swiftSDKRoot.get()}/${androidSDKBundle}"
+def generatedJniLibs = layout.buildDirectory.dir("generated/jniLibs")
+def generatedJava = file(".build/plugins/outputs/androidcorepackage/SnippetsAndroidCore/destination/JExtractSwiftPlugin/src/generated/java")
+def swiftRuntimeLibs = [
+    "swiftCore", "swift_Concurrency", "swift_StringProcessing", "swift_RegexParser",
+    "swift_Builtin_float", "swift_math", "swiftAndroid", "dispatch", "BlocksRuntime",
+    "swiftSwiftOnoneSupport", "swiftDispatch", "Foundation", "FoundationEssentials",
+    "FoundationInternationalization", "_FoundationICU", "swiftSynchronization"
+]
+def abis = [
+    "arm64-v8a": [triple: "aarch64-unknown-linux-android28", sdkLib: "swift-aarch64", ndkLib: "aarch64-linux-android"],
+    "x86_64": [triple: "x86_64-unknown-linux-android28", sdkLib: "swift-x86_64", ndkLib: "x86_64-linux-android"]
+]
+
+def buildSwiftAll = tasks.register("buildSwiftAll") {
+    group = "build"
+    inputs.file("Package.swift")
+    inputs.file("Package.resolved")
+    inputs.dir("Sources/SnippetsAndroidCore")
+    outputs.dir(generatedJava)
+}
+
+abis.each { abi, info ->
+    def suffix = abi.replaceAll(/[^A-Za-z0-9]/, "_").capitalize()
+    def task = tasks.register("buildSwift${suffix}", Exec) {
+        workingDir = projectDir
+        executable = "swiftly"
+        args "run", "swift", "build", "+6.3.3", "--swift-sdk", info.triple, "--build-system", "native"
+        inputs.file("Package.swift")
+        inputs.file("Package.resolved")
+        inputs.dir("Sources/SnippetsAndroidCore")
+        outputs.dir(file(".build/${info.triple}/debug"))
+    }
+    buildSwiftAll.configure { dependsOn(task) }
+}
+
+def copyJniLibs = tasks.register("copyJniLibs", Copy) {
+    dependsOn(buildSwiftAll)
+    abis.each { abi, info ->
+        from(file(".build/${info.triple}/debug")) {
+            include "*.so"
+            into abi
+        }
+        from(file("${androidSDKPath}/swift-android/ndk-sysroot/usr/lib/${info.ndkLib}/libc++_shared.so")) {
+            into abi
+        }
+        from(swiftRuntimeLibs.collect { library ->
+            "${androidSDKPath}/swift-android/swift-resources/usr/lib/${info.sdkLib}/android/lib${library}.so"
+        }) {
+            into abi
+        }
+    }
+    into(generatedJniLibs)
+}
+
+android.sourceSets.main.java.srcDir(generatedJava)
+android.sourceSets.main.jniLibs.srcDir(generatedJniLibs)
+tasks.named("preBuild").configure { dependsOn(copyJniLibs) }
