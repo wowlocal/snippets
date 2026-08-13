@@ -29,6 +29,26 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "28E000000000000000000003"
+               BuildableName = "Snippets macOSTests.xctest"
+               BlueprintName = "Snippets macOSTests"
+               ReferencedContainer = "container:Snippets.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "272782D62F41F9F1000B9989"
+            BuildableName = "Snippets.app"
+            BlueprintName = "Snippets"
+            ReferencedContainer = "container:Snippets.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
@@ -52,6 +72,11 @@
          </BuildableReference>
       </BuildableProductRunnable>
       <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "SNIPPETS_CLOUD_E2E_CONFIG_PATH"
+            value = "/tmp/snippets-cross-platform-e2e-macos.json"
+            isEnabled = "YES">
+         </EnvironmentVariable>
          <EnvironmentVariable
             key = "SNIPPETS_SUPPORT_DIR"
             value = "/Users/mike/Library/Application Support/Snippets-Phase0a-Test"

@@ -353,9 +353,23 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest
 ```
 
-The live `SnippetsCloudTransportTests` case and `CloudEndToEndTest` are opt-in because
-they require one disposable, initially empty Snippets Cloud space. Run the Swift test
-first; it uploads an Apple-core ciphertext using the portable test key:
+The full cross-platform test builds the macOS app test host, runs the iOS app stack in
+an iPhone simulator, runs Android instrumentation on an API 36 emulator, and connects
+all three to one disposable PostgreSQL/OIDC/HTTPS server:
+
+```sh
+./scripts/test-cross-platform-sync.sh
+```
+
+It verifies macOS → iOS → Android convergence, edits an Android record from macOS and a
+macOS record from iOS, resets client-local installations between phases, and finally
+checks all clients plus server-side RLS and plaintext absence. It expects the separate
+server worktree in the sibling `../snippets-server` directory by default; override that
+location with `SNIPPETS_SERVER_WORKTREE`.
+
+The lower-level live `SnippetsCloudTransportTests` case remains available when only a
+disposable, initially empty Snippets Cloud space is available. It uploads an Apple-core
+ciphertext using the portable test key:
 
 ```sh
 SNIPPETS_CLOUD_E2E=1 \
@@ -365,16 +379,16 @@ SNIPPETS_CLOUD_E2E_SPACE_ID='<disposable-space-uuid>' \
 swift test --package-path CorePackage --filter liveHTTPSService
 ```
 
-Then run Android against that same space. It decrypts the Apple record, uploads its own
-encrypted snippet, deletes the local files and Android Keystore wrapping key, and
-downloads and decrypts both records with the same portable `sync-v1` key:
+The Android instrumentation case is normally driven by the full script because it now
+participates in `contribute` and `verify` phases of the macOS/iOS scenario.
 
 ```sh
 ./gradlew :app:connectedDebugAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.class=com.khm.snippets.android.CloudEndToEndTest \
   -Pandroid.testInstrumentationRunnerArguments.snippetsServerUrl=https://sync-test.example \
   -Pandroid.testInstrumentationRunnerArguments.snippetsAccessToken='<ephemeral-test-token>' \
-  -Pandroid.testInstrumentationRunnerArguments.snippetsSpaceId='<disposable-space-uuid>'
+  -Pandroid.testInstrumentationRunnerArguments.snippetsSpaceId='<disposable-space-uuid>' \
+  -Pandroid.testInstrumentationRunnerArguments.snippetsPhase=contribute
 ```
 
 Never point this destructive fresh-install test at a production app sandbox or reuse a

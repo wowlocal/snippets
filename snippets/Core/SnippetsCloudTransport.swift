@@ -40,7 +40,7 @@ actor SnippetsCloudTransport: SyncTransport {
     }
 
     nonisolated let identifier = "snippets-cloud"
-    nonisolated let supportsPush = false
+    nonisolated let supportsPush = true
     nonisolated let pollInterval: TimeInterval = 60
     nonisolated let events: AsyncStream<SyncTransportEvent>
 

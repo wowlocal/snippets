@@ -59,6 +59,7 @@ struct SnippetsCloudTransportTests {
         let transport = SnippetsCloudTransport(
             configuration: configuration,
             session: URLSession(configuration: sessionConfiguration))
+        #expect(transport.supportsPush)
         let identity = try #require(try await transport.resolveAccountIdentity())
         let fetch = try await transport.fetchChanges(since: nil)
         #expect(fetch.accountIdentity == identity)
