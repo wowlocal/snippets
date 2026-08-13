@@ -356,6 +356,17 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest
 ```
 
+To install the debug app on a running emulator and add the seven opt-in demo snippets
+without changing snippets that already use those keywords:
+
+```sh
+./scripts/seed-android-demo.sh [adb-serial]
+```
+
+This helper updates the target APK in place, runs only the demo fixture, removes the test
+APK, and leaves the app open. In contrast, Gradle's full connected-test lifecycle may
+uninstall its target APK after the run, so do not use it to preserve a hands-on sandbox.
+
 The full cross-platform test builds the macOS app test host, runs the iOS app stack in
 an iPhone simulator, runs Android instrumentation on an API 36 emulator, and connects
 all three to one disposable PostgreSQL/OIDC/HTTPS server:
