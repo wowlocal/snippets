@@ -33,6 +33,8 @@ IOS_SIMULATOR_STARTED=0
 IOS_UDID=""
 MACOS_CONFIG_PATH="/tmp/snippets-cross-platform-e2e-macos.json"
 MACOS_CONFIG_OWNED=0
+CHAOS_CONFIGURATION_PATH="$RUN_ROOT/chaos.json"
+CHAOS_STATE_PATH="$RUN_ROOT/chaos-state.json"
 
 cleanup() {
   set +e
@@ -180,6 +182,40 @@ assert_server_record_shape() {
       >/dev/null
 }
 
+replace_chaos_plan() {
+  local generation="$1"
+  local rules="$2"
+  local temporary="$CHAOS_CONFIGURATION_PATH.tmp"
+  jq -n --arg generation "$generation" --argjson rules "$rules" \
+    '{generation: $generation, rules: $rules}' > "$temporary"
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$CHAOS_CONFIGURATION_PATH"
+}
+
+disable_chaos() {
+  replace_chaos_plan "disabled-$(uuidgen | tr '[:upper:]' '[:lower:]')" '[]'
+}
+
+assert_chaos_rule() {
+  local generation="$1"
+  local rule_id="$2"
+  local expected_upstream_attempts="$3"
+  for _ in $(seq 1 50); do
+    if [[ -f "$CHAOS_STATE_PATH" ]] && jq -e --arg generation "$generation" \
+      --arg id "$rule_id" --argjson upstream "$expected_upstream_attempts" \
+      '.generation == $generation and .configurationValid == true
+       and (.rules[] | select(.id == $id)
+         | .matched >= 1 and .triggered == 1 and .upstreamAttempts == $upstream)' \
+      "$CHAOS_STATE_PATH" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "chaos rule did not produce its expected state: $rule_id" >&2
+  jq -c '.' "$CHAOS_STATE_PATH" >&2 2>/dev/null || true
+  return 1
+}
+
 echo "Building macOS, iOS, and Android integration artifacts"
 xcodebuild -quiet -project "$CLIENT_DIR/Snippets.xcodeproj" -scheme Snippets \
   -configuration Debug -destination 'platform=macOS,arch=arm64' \
@@ -195,6 +231,7 @@ printf '%s\n' "$OWNER_PASSWORD" > "$RUN_ROOT/owner.pw"
 chmod 600 "$RUN_ROOT/owner.pw"
 openssl genrsa -out "$RUN_ROOT/oidc.pem" 2048 >/dev/null 2>&1
 chmod 600 "$RUN_ROOT/oidc.pem"
+disable_chaos
 
 echo "Starting disposable PostgreSQL"
 "$PG_BIN/initdb" -D "$RUN_ROOT/pgdata" --username=snippets_owner \
@@ -217,7 +254,8 @@ export DATABASE_TLS_MODE=disable
 (cd "$SERVER_DIR" && MIGRATIONS_DIR="$SERVER_DIR/Migrations" swift run snippets-migrate)
 
 ruby "$CLIENT_DIR/scripts/cross-platform-tls-edge.rb" \
-  "$RUN_ROOT/oidc.pem" "$EDGE_PORT" "$API_PORT" > "$RUN_ROOT/edge.log" 2>&1 &
+  "$RUN_ROOT/oidc.pem" "$EDGE_PORT" "$API_PORT" \
+  "$CHAOS_CONFIGURATION_PATH" "$CHAOS_STATE_PATH" > "$RUN_ROOT/edge.log" 2>&1 &
 EDGE_PID=$!
 cloudflared tunnel --no-autoupdate --protocol http2 --url "http://127.0.0.1:$EDGE_PORT" \
   > "$RUN_ROOT/api-tunnel.log" 2>&1 &
@@ -335,9 +373,54 @@ assert_server_record_shape 3 3 0
 run_android_phase verify
 run_macos_phase mac-verify
 run_ios_phase ios-verify
-run_android_phase delete
+LOST_ACK_GENERATION="lost-delete-ack"
+LOST_ACK_RULES="$(jq -cn --arg pattern \
+  "\\A/v1/spaces/$SPACE_ID/records:batch\\z" '[{
+    id: "lost-delete-ack",
+    method: "POST",
+    pathPattern: $pattern,
+    nth: 1,
+    action: {
+      type: "forward_then_replace",
+      status: 503,
+      body: "{\"code\":\"dependency_unavailable\"}"
+    }
+  }]')"
+replace_chaos_plan "$LOST_ACK_GENERATION" "$LOST_ACK_RULES"
+run_android_phase delete-lost-ack
+assert_chaos_rule "$LOST_ACK_GENERATION" lost-delete-ack 1
 assert_server_record_shape 3 2 1
-run_macos_phase mac-verify-deletion
+disable_chaos
+
+TRUNCATE_GENERATION="truncate-macos-change-page"
+TRUNCATE_RULES="$(jq -cn --arg pattern \
+  "\\A/v1/spaces/$SPACE_ID/changes(?:\\?.*)?\\z" '[{
+    id: "truncate-macos-change-page",
+    method: "GET",
+    pathPattern: $pattern,
+    nth: 1,
+    action: {type: "forward_then_truncate", bytes: 17}
+  }]')"
+replace_chaos_plan "$TRUNCATE_GENERATION" "$TRUNCATE_RULES"
+run_macos_phase mac-chaos-truncated-fetch
+assert_chaos_rule "$TRUNCATE_GENERATION" truncate-macos-change-page 1
+disable_chaos
+
+STALE_CURSOR_GENERATION="stale-android-cursor"
+STALE_CURSOR_RULES="$(jq -cn --arg pattern \
+  "\\A/v1/spaces/$SPACE_ID/changes\\?limit=50&cursor=.+\\z" \
+  --arg path "/v1/spaces/$SPACE_ID/changes?limit=50&cursor=not-a-valid-cursor" '[{
+    id: "stale-android-cursor",
+    method: "GET",
+    pathPattern: $pattern,
+    nth: 1,
+    action: {type: "rewrite_upstream_path", path: $path}
+  }]')"
+replace_chaos_plan "$STALE_CURSOR_GENERATION" "$STALE_CURSOR_RULES"
+run_android_phase chaos-stale-cursor
+assert_chaos_rule "$STALE_CURSOR_GENERATION" stale-android-cursor 1
+disable_chaos
+
 run_ios_phase ios-verify-deletion
 run_android_phase verify-deletion
 
@@ -375,4 +458,5 @@ test "$RUNTIME_SUMMARY" = "t|0"
 
 echo "Cross-platform sync passed: server + PostgreSQL + macOS + iOS Simulator + Android"
 echo "Final server records: 2 live + 1 tombstone; auth/tenant/idempotency checks passed"
+echo "Deterministic chaos passed: lost acknowledgement, truncated page, stale cursor recovery"
 echo "Plaintext probes absent; RLS enabled and forced on all 9 tenant tables"

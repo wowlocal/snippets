@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -19,10 +20,11 @@ import java.security.KeyStore
  * Opt-in E2E test against a real HTTPS Snippets server and PostgreSQL database.
  *
  * Required runner arguments: snippetsServerUrl, snippetsAccessToken, snippetsSpaceId,
- * and snippetsPhase (`contribute`, `verify`, `delete`, or `verify-deletion`). The same
- * disposable space is populated by macOS and iOS before this test runs. Android must
- * consume both, contribute its own record, survive complete local resets, consume edits
- * made by Apple clients, and publish an offline deletion after a Local Only round trip.
+ * and snippetsPhase. The same disposable space is populated by macOS and iOS before
+ * this test runs. Android must consume both, contribute its own record, survive complete
+ * local resets, consume edits made by Apple clients, and publish an offline deletion
+ * after a Local Only round trip. Chaos phases exercise an ambiguous acknowledgement and
+ * stale-cursor recovery in the same instrumentation process that observed the failure.
  */
 @RunWith(AndroidJUnit4::class)
 class CloudEndToEndTest {
@@ -43,10 +45,17 @@ class CloudEndToEndTest {
         val requiredServerURL = requireNotNull(serverURL)
         val requiredAccessToken = requireNotNull(accessToken)
         val requiredSpaceID = requireNotNull(spaceID)
-        require(phase in setOf("contribute", "verify", "delete", "verify-deletion"))
+        require(phase in setOf(
+            "contribute",
+            "verify",
+            "delete",
+            "delete-lost-ack",
+            "chaos-stale-cursor",
+            "verify-deletion",
+        ))
 
-        destroyLocalInstallationState()
         val keyBundle = portableKeyBundle()
+        destroyLocalInstallationState()
         val client = freshClient(
             keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
 
@@ -86,7 +95,7 @@ class CloudEndToEndTest {
                     "ios-e2e" to IOS_INITIAL,
                     "android-e2e" to ANDROID_FINAL))
             }
-            "delete" -> {
+            "delete", "delete-lost-ack" -> {
                 val beforeDeletion = mapOf(
                     "mac-e2e" to MAC_FINAL,
                     "ios-e2e" to IOS_INITIAL,
@@ -105,12 +114,29 @@ class CloudEndToEndTest {
                 // the same HTTP scope must publish the offline deletion as a tombstone.
                 client.configureCloud(requiredServerURL, requiredAccessToken, requiredSpaceID)
                 client.syncNow()
-                assertValues(client.state.value, FINAL_WITHOUT_IOS)
+                if (phase == "delete-lost-ack") {
+                    assertEquals("dependency_unavailable", client.state.value.errorCode)
+                    assertLibraryValues(client.state.value, FINAL_WITHOUT_IOS)
+                    // The Nth-match rule is one-shot. Retry from the same repository that
+                    // observed the ambiguous acknowledgement and confirm the server echo.
+                    client.syncNow()
+                    assertValues(client.state.value, FINAL_WITHOUT_IOS)
+                    assertNotNull(client.configuration().cursor)
+                } else {
+                    assertValues(client.state.value, FINAL_WITHOUT_IOS)
+                }
 
                 destroyLocalInstallationState()
                 val receiver = freshClient(
                     keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
                 assertValues(receiver.state.value, FINAL_WITHOUT_IOS)
+            }
+            "chaos-stale-cursor" -> {
+                val cursorBefore = requireNotNull(client.configuration().cursor)
+                client.syncNow()
+                assertValues(client.state.value, FINAL_WITHOUT_IOS)
+                assertNotNull(client.configuration().cursor)
+                assertEquals(cursorBefore, client.configuration().cursor)
             }
             "verify-deletion" -> assertValues(client.state.value, FINAL_WITHOUT_IOS)
             else -> error("validated above")

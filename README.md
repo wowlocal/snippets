@@ -363,11 +363,19 @@ all three to one disposable PostgreSQL/OIDC/HTTPS server:
 
 It verifies macOS → iOS → Android convergence, edits an Android record from macOS and a
 macOS record from iOS, resets client-local installations between phases, then switches
-Android through Local Only, publishes an offline deletion as a tombstone, and proves on
-all three clients that it is not resurrected. It also checks negative OIDC cases, space
-idempotency, tenant isolation, server-side RLS, and plaintext absence. It expects the
-separate server worktree in the sibling `../snippets-server` directory by default;
-override that location with `SNIPPETS_SERVER_WORKTREE`.
+Android through Local Only and publishes an offline deletion as a tombstone. A
+deterministic network edge then loses the successful server acknowledgement, truncates a
+macOS response, and replaces an Android cursor; recovery must converge without duplicates
+or resurrection. The lane also checks negative OIDC cases, space idempotency, tenant
+isolation, server-side RLS, and plaintext absence. It expects the separate server worktree
+in the sibling `../snippets-server` directory by default; override that location with
+`SNIPPETS_SERVER_WORKTREE`.
+
+Run the hermetic chaos-edge action tests without starting the platform matrix:
+
+```sh
+ruby scripts/cross-platform-tls-edge-tests.rb
+```
 
 The lower-level live `SnippetsCloudTransportTests` case remains available when only a
 disposable, initially empty Snippets Cloud space is available. It uploads an Apple-core
