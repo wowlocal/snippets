@@ -188,7 +188,7 @@ final class PhoneLibraryUXTests: XCTestCase {
         XCTAssertNotEqual(title.text, "Your Library Is Empty")
     }
 
-    func testLibraryUsesInsetMailStyleRowsAndScrollingSyncStatus() throws {
+    func testLibraryUsesInsetMailStyleRowsAndCustomSwipeActions() throws {
         UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
         let environment = AppEnvironment()
         _ = environment.store.addSnippet(
@@ -322,23 +322,112 @@ final class PhoneLibraryUXTests: XCTestCase {
         drainMainRunLoop()
         assertVisibleRowsUseFixedGrid()
 
-        let leading = try XCTUnwrap(
-            library.tableView(
-                table,
-                leadingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: 0)
-            )
+        let swipeCell = try XCTUnwrap(cell as? PhoneSnippetCell)
+        let swipeSurface = try XCTUnwrap(
+            cell.descendant(withAccessibilityIdentifier: "phone-snippet-swipe-surface")
         )
-        XCTAssertEqual(leading.actions.map(\.title), ["Edit"])
-        XCTAssertTrue(leading.performsFirstActionWithFullSwipe)
+        let editAction = try XCTUnwrap(
+            cell.descendant(withAccessibilityIdentifier: "phone-swipe-edit") as? UIControl
+        )
+        let pinAction = try XCTUnwrap(
+            cell.descendant(withAccessibilityIdentifier: "phone-swipe-pin") as? UIControl
+        )
+        let deleteAction = try XCTUnwrap(
+            cell.descendant(withAccessibilityIdentifier: "phone-swipe-delete") as? UIControl
+        )
+        XCTAssertTrue(swipeSurface.gestureRecognizers?.contains { $0 is UIPanGestureRecognizer } == true)
+        XCTAssertEqual(editAction.bounds.width, PhoneSnippetCell.actionWidth, accuracy: 0.5)
+        XCTAssertEqual(pinAction.bounds.width, PhoneSnippetCell.actionWidth, accuracy: 0.5)
+        XCTAssertEqual(deleteAction.bounds.width, PhoneSnippetCell.actionWidth, accuracy: 0.5)
 
-        let trailing = try XCTUnwrap(
-            library.tableView(
-                table,
-                trailingSwipeActionsConfigurationForRowAt: IndexPath(row: 0, section: 0)
-            )
+        swipeCell.openSwipeActions(on: .leading, animated: false)
+        XCTAssertEqual(swipeCell.swipeSide, .leading)
+        XCTAssertEqual(swipeCell.swipeOffset, PhoneSnippetCell.leadingActionWidth, accuracy: 0.5)
+        XCTAssertEqual(swipeSurface.transform.tx, PhoneSnippetCell.leadingActionWidth, accuracy: 0.5)
+
+        swipeCell.openSwipeActions(on: .trailing, animated: false)
+        XCTAssertEqual(swipeCell.swipeSide, .trailing)
+        XCTAssertEqual(swipeCell.swipeOffset, -PhoneSnippetCell.trailingActionWidth, accuracy: 0.5)
+        XCTAssertEqual(swipeSurface.transform.tx, -PhoneSnippetCell.trailingActionWidth, accuracy: 0.5)
+
+        let actionDelegate = PhoneSnippetCellSwipeDelegateSpy()
+        swipeCell.swipeDelegate = actionDelegate
+        pinAction.sendActions(for: .touchUpInside)
+        XCTAssertEqual(actionDelegate.actions, [.pin])
+        XCTAssertNil(swipeCell.swipeSide)
+        XCTAssertEqual(swipeCell.swipeOffset, 0, accuracy: 0.5)
+
+        swipeCell.openSwipeActions(on: .leading, animated: false)
+        editAction.sendActions(for: .touchUpInside)
+        swipeCell.openSwipeActions(on: .trailing, animated: false)
+        deleteAction.sendActions(for: .touchUpInside)
+        XCTAssertEqual(actionDelegate.actions, [.pin, .edit, .delete])
+    }
+
+    func testCustomSwipePhysicsUsesResistanceVelocityAndSemanticDirection() throws {
+        XCTAssertEqual(
+            PhoneSwipePhysics.displayedOffset(
+                for: 40,
+                leadingLimit: 82,
+                trailingLimit: 164,
+                containerWidth: 390
+            ),
+            40,
+            accuracy: 0.001
         )
-        XCTAssertEqual(trailing.actions.map(\.title), ["Delete", "Pin"])
-        XCTAssertFalse(trailing.performsFirstActionWithFullSwipe)
+        let resisted = PhoneSwipePhysics.displayedOffset(
+            for: 260,
+            leadingLimit: 82,
+            trailingLimit: 164,
+            containerWidth: 390
+        )
+        XCTAssertGreaterThan(resisted, 82)
+        XCTAssertLessThan(resisted, 260)
+        XCTAssertEqual(
+            PhoneSwipePhysics.resolution(
+                rawOffset: 44,
+                velocity: 0,
+                leadingWidth: 82,
+                trailingWidth: 164,
+                containerWidth: 390
+            ),
+            .open(.leading)
+        )
+        XCTAssertEqual(
+            PhoneSwipePhysics.resolution(
+                rawOffset: -84,
+                velocity: 0,
+                leadingWidth: 82,
+                trailingWidth: 164,
+                containerWidth: 390
+            ),
+            .open(.trailing)
+        )
+        XCTAssertEqual(
+            PhoneSwipePhysics.resolution(
+                rawOffset: 210,
+                velocity: 0,
+                leadingWidth: 82,
+                trailingWidth: 164,
+                containerWidth: 390
+            ),
+            .triggerLeadingAction
+        )
+
+        let rtlCell = PhoneSnippetCell(style: .default, reuseIdentifier: "rtl")
+        rtlCell.semanticContentAttribute = .forceRightToLeft
+        rtlCell.frame = CGRect(x: 0, y: 0, width: 390, height: 110)
+        rtlCell.layoutIfNeeded()
+        let rtlSurface = try XCTUnwrap(
+            rtlCell.descendant(withAccessibilityIdentifier: "phone-snippet-swipe-surface")
+        )
+        rtlCell.openSwipeActions(on: .leading, animated: false)
+        XCTAssertEqual(rtlCell.swipeOffset, PhoneSnippetCell.leadingActionWidth, accuracy: 0.5)
+        XCTAssertEqual(rtlSurface.transform.tx, -PhoneSnippetCell.leadingActionWidth, accuracy: 0.5)
+
+        rtlCell.prepareForReuse()
+        XCTAssertNil(rtlCell.swipeSide)
+        XCTAssertEqual(rtlSurface.transform, .identity)
     }
 
     func testStatusActionCanOnlyRunOnce() throws {
@@ -459,6 +548,28 @@ final class PhoneLibraryUXTests: XCTestCase {
 
     private func drainMainRunLoop() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+}
+
+@MainActor
+private final class PhoneSnippetCellSwipeDelegateSpy: PhoneSnippetCellSwipeDelegate {
+    private(set) var willBeginCount = 0
+    private(set) var didCloseCount = 0
+    private(set) var actions: [PhoneSnippetSwipeAction] = []
+
+    func phoneSnippetCellWillBeginSwipe(_ cell: PhoneSnippetCell) {
+        willBeginCount += 1
+    }
+
+    func phoneSnippetCellDidCloseSwipe(_ cell: PhoneSnippetCell) {
+        didCloseCount += 1
+    }
+
+    func phoneSnippetCell(
+        _ cell: PhoneSnippetCell,
+        requested action: PhoneSnippetSwipeAction
+    ) {
+        actions.append(action)
     }
 }
 

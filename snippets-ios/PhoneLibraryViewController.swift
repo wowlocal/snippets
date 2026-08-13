@@ -65,6 +65,7 @@ final class PhoneLibraryViewController: UIViewController {
     private var moreButtonBottomConstraint: NSLayoutConstraint?
     private let searchIndex = SnippetSearchIndex()
     private lazy var searchPipeline = SnippetSearchPipeline(index: searchIndex)
+    private weak var activeSwipeCell: PhoneSnippetCell?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -112,6 +113,7 @@ final class PhoneLibraryViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        closeActiveSwipe(animated: false)
         removeMoreButton()
     }
 
@@ -187,6 +189,7 @@ final class PhoneLibraryViewController: UIViewController {
             sections.append(Section(title: nil, snippets: unpinned))
         }
 
+        closeActiveSwipe(animated: false)
         tableView.reloadData()
         updateFilterItem()
         configureNavigationMenu()
@@ -656,6 +659,12 @@ final class PhoneLibraryViewController: UIViewController {
         sections[indexPath.section].snippets[indexPath.row]
     }
 
+    private func closeActiveSwipe(animated: Bool, excluding cell: PhoneSnippetCell? = nil) {
+        guard let activeSwipeCell, activeSwipeCell !== cell else { return }
+        activeSwipeCell.closeSwipe(animated: animated)
+        self.activeSwipeCell = nil
+    }
+
     private func scheduleGestureCoachingIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: DefaultsKey.showedGestureCoaching) else { return }
         UserDefaults.standard.set(true, forKey: DefaultsKey.showedGestureCoaching)
@@ -714,6 +723,10 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
         updateMoreButtonPosition()
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        closeActiveSwipe(animated: true)
+    }
+
     func numberOfSections(in tableView: UITableView) -> Int { sections.count }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -753,6 +766,7 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
             isSecure: environment.store.isSecure(snippet.id),
             showsSeparator: indexPath.row < sections[indexPath.section].snippets.count - 1
         )
+        cell.swipeDelegate = self
         cell.accessibilityCustomActions = [
             UIAccessibilityCustomAction(name: "Copy") { [weak self] _ in
                 guard let self else { return false }
@@ -783,6 +797,12 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
         delegate?.phoneLibrary(self, requestedCopy: snippet(at: indexPath).id)
     }
 
+    func tableView(_ tableView: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
+        guard activeSwipeCell != nil else { return true }
+        closeActiveSwipe(animated: true)
+        return false
+    }
+
     func tableView(_ tableView: UITableView, didHighlightRowAt indexPath: IndexPath) {
         copyFeedbackGenerator.prepare()
     }
@@ -798,47 +818,34 @@ extension PhoneLibraryViewController: UITableViewDataSource, UITableViewDelegate
         }
     }
 
-    func tableView(
-        _ tableView: UITableView,
-        leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath
-    ) -> UISwipeActionsConfiguration? {
-        let snippet = snippet(at: indexPath)
-        let edit = UIContextualAction(style: .normal, title: "Edit") { [weak self] _, _, completion in
-            guard let self else { completion(false); return }
-            self.delegate?.phoneLibrary(self, requestedEdit: snippet.id)
-            completion(true)
-        }
-        edit.image = UIImage(systemName: "pencil")
-        edit.backgroundColor = AppTheme.tint
-        let configuration = UISwipeActionsConfiguration(actions: [edit])
-        configuration.performsFirstActionWithFullSwipe = true
-        return configuration
+}
+
+extension PhoneLibraryViewController: PhoneSnippetCellSwipeDelegate {
+    func phoneSnippetCellWillBeginSwipe(_ cell: PhoneSnippetCell) {
+        closeActiveSwipe(animated: true, excluding: cell)
+        activeSwipeCell = cell
     }
 
-    func tableView(
-        _ tableView: UITableView,
-        trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath
-    ) -> UISwipeActionsConfiguration? {
+    func phoneSnippetCellDidCloseSwipe(_ cell: PhoneSnippetCell) {
+        if activeSwipeCell === cell {
+            activeSwipeCell = nil
+        }
+    }
+
+    func phoneSnippetCell(
+        _ cell: PhoneSnippetCell,
+        requested action: PhoneSnippetSwipeAction
+    ) {
+        guard let indexPath = tableView.indexPath(for: cell) else { return }
         let snippet = snippet(at: indexPath)
-        let delete = UIContextualAction(style: .destructive, title: "Delete") { [weak self] _, _, completion in
-            guard let self else { completion(false); return }
-            self.delegate?.phoneLibrary(self, requestedDelete: snippet.id)
-            completion(true)
+        switch action {
+        case .edit:
+            delegate?.phoneLibrary(self, requestedEdit: snippet.id)
+        case .pin:
+            delegate?.phoneLibrary(self, requestedPin: snippet.id)
+        case .delete:
+            delegate?.phoneLibrary(self, requestedDelete: snippet.id)
         }
-        delete.image = UIImage(systemName: "trash")
-        let pin = UIContextualAction(
-            style: .normal,
-            title: snippet.isPinned ? "Unpin" : "Pin"
-        ) { [weak self] _, _, completion in
-            guard let self else { completion(false); return }
-            self.delegate?.phoneLibrary(self, requestedPin: snippet.id)
-            completion(true)
-        }
-        pin.image = UIImage(systemName: snippet.isPinned ? "pin.slash" : "pin")
-        pin.backgroundColor = AppTheme.tint
-        let configuration = UISwipeActionsConfiguration(actions: [delete, pin])
-        configuration.performsFirstActionWithFullSwipe = false
-        return configuration
     }
 }
 
@@ -883,9 +890,19 @@ private final class PhoneSectionHeaderView: UITableViewHeaderFooterView {
     }
 }
 
-private final class PhoneSnippetCell: UITableViewCell {
+final class PhoneSnippetCell: UITableViewCell {
     static let reuseIdentifier = "PhoneSnippetCell"
+    static let actionWidth: CGFloat = 82
+    static let leadingActionWidth = actionWidth
+    static let trailingActionWidth = actionWidth * 2
 
+    weak var swipeDelegate: PhoneSnippetCellSwipeDelegate?
+
+    private let actionsHostView = UIView()
+    private let swipeSurfaceView = UIView()
+    private let editActionButton = PhoneSwipeActionButton()
+    private let pinActionButton = PhoneSwipeActionButton()
+    private let deleteActionButton = PhoneSwipeActionButton()
     private let highlightView = UIView()
     private let rowContentView = UIView()
     private let separatorView = UIView()
@@ -911,6 +928,32 @@ private final class PhoneSnippetCell: UITableViewCell {
         return label
     }()
     private let contentStack = UIStackView()
+    private var settleAnimator: UIViewPropertyAnimator?
+    private var restingSide: PhoneSnippetSwipeSide?
+    private var revealedSide: PhoneSnippetSwipeSide?
+    private var panStartLogicalOffset: CGFloat = 0
+    private var latestRawLogicalOffset: CGFloat = 0
+    private lazy var swipePanGesture: UIPanGestureRecognizer = {
+        let gesture = UIPanGestureRecognizer(target: self, action: #selector(handleSwipePan(_:)))
+        gesture.delegate = self
+        gesture.cancelsTouchesInView = true
+        gesture.maximumNumberOfTouches = 1
+        gesture.name = "PhoneSnippetCell.swipe"
+        return gesture
+    }()
+    private lazy var closeSwipeTapGesture: UITapGestureRecognizer = {
+        let gesture = UITapGestureRecognizer(target: self, action: #selector(handleCloseSwipeTap))
+        gesture.delegate = self
+        gesture.cancelsTouchesInView = true
+        gesture.name = "PhoneSnippetCell.closeSwipe"
+        return gesture
+    }()
+
+    var swipeSide: PhoneSnippetSwipeSide? { restingSide }
+
+    var swipeOffset: CGFloat {
+        swipeSurfaceView.transform.tx * layoutDirectionScale
+    }
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -922,6 +965,37 @@ private final class PhoneSnippetCell: UITableViewCell {
         selectedBackgroundView = UIView()
         selectedBackgroundView?.backgroundColor = .clear
         preservesSuperviewLayoutMargins = false
+        contentView.clipsToBounds = true
+
+        actionsHostView.translatesAutoresizingMaskIntoConstraints = false
+        actionsHostView.backgroundColor = AppTheme.tint
+        actionsHostView.isHidden = true
+        actionsHostView.accessibilityIdentifier = "phone-snippet-swipe-actions"
+        actionsHostView.isAccessibilityElement = false
+
+        swipeSurfaceView.translatesAutoresizingMaskIntoConstraints = false
+        swipeSurfaceView.backgroundColor = .systemBackground
+        swipeSurfaceView.accessibilityIdentifier = "phone-snippet-swipe-surface"
+
+        editActionButton.translatesAutoresizingMaskIntoConstraints = false
+        editActionButton.configure(title: "Edit", symbolName: "pencil", color: AppTheme.tint)
+        editActionButton.accessibilityIdentifier = "phone-swipe-edit"
+        editActionButton.addAction(UIAction { [weak self] _ in
+            self?.performSwipeAction(.edit)
+        }, for: .touchUpInside)
+
+        pinActionButton.translatesAutoresizingMaskIntoConstraints = false
+        pinActionButton.accessibilityIdentifier = "phone-swipe-pin"
+        pinActionButton.addAction(UIAction { [weak self] _ in
+            self?.performSwipeAction(.pin)
+        }, for: .touchUpInside)
+
+        deleteActionButton.translatesAutoresizingMaskIntoConstraints = false
+        deleteActionButton.configure(title: "Delete", symbolName: "trash", color: .systemRed)
+        deleteActionButton.accessibilityIdentifier = "phone-swipe-delete"
+        deleteActionButton.addAction(UIAction { [weak self] _ in
+            self?.performSwipeAction(.delete)
+        }, for: .touchUpInside)
 
         highlightView.translatesAutoresizingMaskIntoConstraints = false
         highlightView.backgroundColor = AppTheme.selectedRow
@@ -995,29 +1069,60 @@ private final class PhoneSnippetCell: UITableViewCell {
         contentStack.axis = .vertical
         contentStack.spacing = 5
 
-        contentView.addSubview(highlightView)
-        contentView.addSubview(rowContentView)
-        contentView.addSubview(separatorView)
+        contentView.addSubview(actionsHostView)
+        contentView.addSubview(swipeSurfaceView)
+        [editActionButton, pinActionButton, deleteActionButton]
+            .forEach(actionsHostView.addSubview)
+        swipeSurfaceView.addSubview(highlightView)
+        swipeSurfaceView.addSubview(rowContentView)
+        swipeSurfaceView.addSubview(separatorView)
         rowContentView.addSubview(contentStack)
+        swipeSurfaceView.addGestureRecognizer(swipePanGesture)
+        swipeSurfaceView.addGestureRecognizer(closeSwipeTapGesture)
 
         NSLayoutConstraint.activate([
-            highlightView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            highlightView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            highlightView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 3),
-            highlightView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -3),
+            actionsHostView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            actionsHostView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            actionsHostView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            actionsHostView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            swipeSurfaceView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            swipeSurfaceView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            swipeSurfaceView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            swipeSurfaceView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            editActionButton.leadingAnchor.constraint(equalTo: actionsHostView.leadingAnchor),
+            editActionButton.topAnchor.constraint(equalTo: actionsHostView.topAnchor),
+            editActionButton.bottomAnchor.constraint(equalTo: actionsHostView.bottomAnchor),
+            editActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
+
+            deleteActionButton.trailingAnchor.constraint(equalTo: actionsHostView.trailingAnchor),
+            deleteActionButton.topAnchor.constraint(equalTo: actionsHostView.topAnchor),
+            deleteActionButton.bottomAnchor.constraint(equalTo: actionsHostView.bottomAnchor),
+            deleteActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
+
+            pinActionButton.trailingAnchor.constraint(equalTo: deleteActionButton.leadingAnchor),
+            pinActionButton.topAnchor.constraint(equalTo: actionsHostView.topAnchor),
+            pinActionButton.bottomAnchor.constraint(equalTo: actionsHostView.bottomAnchor),
+            pinActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
+
+            highlightView.leadingAnchor.constraint(equalTo: swipeSurfaceView.leadingAnchor, constant: 16),
+            highlightView.trailingAnchor.constraint(equalTo: swipeSurfaceView.trailingAnchor, constant: -16),
+            highlightView.topAnchor.constraint(equalTo: swipeSurfaceView.topAnchor, constant: 3),
+            highlightView.bottomAnchor.constraint(equalTo: swipeSurfaceView.bottomAnchor, constant: -3),
 
             // Fixed anchors, rather than layoutMarginsGuide, keep every reused row on
             // exactly the same horizontal grid.
             rowContentView.leadingAnchor.constraint(
-                equalTo: contentView.leadingAnchor,
+                equalTo: swipeSurfaceView.leadingAnchor,
                 constant: PhoneLibraryLayout.horizontalInset
             ),
             rowContentView.trailingAnchor.constraint(
-                equalTo: contentView.trailingAnchor,
+                equalTo: swipeSurfaceView.trailingAnchor,
                 constant: -PhoneLibraryLayout.horizontalInset
             ),
-            rowContentView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
-            rowContentView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12),
+            rowContentView.topAnchor.constraint(equalTo: swipeSurfaceView.topAnchor, constant: 12),
+            rowContentView.bottomAnchor.constraint(equalTo: swipeSurfaceView.bottomAnchor, constant: -12),
 
             contentStack.leadingAnchor.constraint(equalTo: rowContentView.leadingAnchor),
             contentStack.trailingAnchor.constraint(equalTo: rowContentView.trailingAnchor),
@@ -1025,14 +1130,14 @@ private final class PhoneSnippetCell: UITableViewCell {
             contentStack.bottomAnchor.constraint(equalTo: rowContentView.bottomAnchor),
 
             separatorView.leadingAnchor.constraint(
-                equalTo: contentView.leadingAnchor,
+                equalTo: swipeSurfaceView.leadingAnchor,
                 constant: PhoneLibraryLayout.horizontalInset
             ),
             separatorView.trailingAnchor.constraint(
-                equalTo: contentView.trailingAnchor,
+                equalTo: swipeSurfaceView.trailingAnchor,
                 constant: -PhoneLibraryLayout.horizontalInset
             ),
-            separatorView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            separatorView.bottomAnchor.constraint(equalTo: swipeSurfaceView.bottomAnchor),
             separatorHeightConstraint,
         ])
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
@@ -1050,6 +1155,8 @@ private final class PhoneSnippetCell: UITableViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        closeSwipe(animated: false)
+        swipeDelegate = nil
         accessibilityCustomActions = nil
         separatorView.isHidden = false
         updateHighlight(animated: false)
@@ -1068,6 +1175,11 @@ private final class PhoneSnippetCell: UITableViewCell {
     func configure(snippet: Snippet, isSecure: Bool, showsSeparator: Bool) {
         backgroundColor = .clear
         contentView.backgroundColor = .clear
+        pinActionButton.configure(
+            title: snippet.isPinned ? "Unpin" : "Pin",
+            symbolName: snippet.isPinned ? "pin.slash" : "pin",
+            color: AppTheme.tint
+        )
         separatorView.isHidden = !showsSeparator
         nameLabel.text = snippet.displayName
         dateLabel.text = Self.updatedText(for: snippet.updatedAt)
@@ -1119,9 +1231,281 @@ private final class PhoneSnippetCell: UITableViewCell {
             : "Double tap to copy"
     }
 
+    func openSwipeActions(on side: PhoneSnippetSwipeSide, animated: Bool) {
+        swipeDelegate?.phoneSnippetCellWillBeginSwipe(self)
+        settle(
+            at: side == .leading ? Self.leadingActionWidth : -Self.trailingActionWidth,
+            side: side,
+            physicalVelocity: 0,
+            animated: animated
+        )
+    }
+
+    func closeSwipe(animated: Bool) {
+        let wasActive = restingSide != nil
+            || abs(swipeOffset) > 0.5
+            || settleAnimator != nil
+            || !actionsHostView.isHidden
+        guard wasActive else {
+            resetSwipePresentation()
+            return
+        }
+        if animated {
+            settle(at: 0, side: nil, physicalVelocity: 0, animated: true)
+        } else {
+            stopSettleAnimatorAtCurrentPosition()
+            resetSwipePresentation()
+            swipeDelegate?.phoneSnippetCellDidCloseSwipe(self)
+        }
+    }
+
+    @objc private func handleSwipePan(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            stopSettleAnimatorAtCurrentPosition()
+            panStartLogicalOffset = swipeOffset
+            latestRawLogicalOffset = panStartLogicalOffset
+            swipeDelegate?.phoneSnippetCellWillBeginSwipe(self)
+            setHighlighted(false, animated: false)
+        case .changed:
+            updateInteractiveOffset(from: gesture)
+        case .ended:
+            updateInteractiveOffset(from: gesture)
+            finishInteractiveSwipe(with: gesture.velocity(in: self).x)
+        case .cancelled, .failed:
+            let target: CGFloat
+            if let restingSide {
+                target = restingSide == .leading
+                    ? Self.leadingActionWidth
+                    : -Self.trailingActionWidth
+            } else {
+                target = 0
+            }
+            settle(
+                at: target,
+                side: restingSide,
+                physicalVelocity: gesture.velocity(in: self).x,
+                animated: true
+            )
+        default:
+            break
+        }
+    }
+
+    @objc private func handleCloseSwipeTap() {
+        closeSwipe(animated: true)
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === closeSwipeTapGesture {
+            return restingSide != nil || abs(swipeOffset) > 0.5
+        }
+        guard gestureRecognizer === swipePanGesture,
+              let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        let velocity = pan.velocity(in: self)
+        return abs(velocity.x) > abs(velocity.y) * 1.15
+    }
+
+    private var layoutDirectionScale: CGFloat {
+        effectiveUserInterfaceLayoutDirection == .leftToRight ? 1 : -1
+    }
+
+    private func updateInteractiveOffset(from gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: self).x * layoutDirectionScale
+        let proposedOffset = panStartLogicalOffset + translation
+        latestRawLogicalOffset = proposedOffset
+        let displayedOffset = PhoneSwipePhysics.displayedOffset(
+            for: proposedOffset,
+            leadingLimit: Self.leadingActionWidth,
+            trailingLimit: Self.trailingActionWidth,
+            containerWidth: bounds.width
+        )
+        applyInteractiveOffset(displayedOffset)
+    }
+
+    private func applyInteractiveOffset(_ logicalOffset: CGFloat) {
+        if logicalOffset > 0.5 {
+            showActions(for: .leading)
+        } else if logicalOffset < -0.5 {
+            showActions(for: .trailing)
+        }
+        // The finger-tracking path deliberately touches only an animatable transform.
+        // Action views are created and constrained once, so no Auto Layout or button
+        // configuration work is introduced into a 120 Hz gesture.
+        swipeSurfaceView.transform = CGAffineTransform(
+            translationX: logicalOffset * layoutDirectionScale,
+            y: 0
+        )
+        updateHighlight(animated: false)
+    }
+
+    private func finishInteractiveSwipe(with physicalVelocity: CGFloat) {
+        let logicalVelocity = physicalVelocity * layoutDirectionScale
+        let resolution = PhoneSwipePhysics.resolution(
+            rawOffset: latestRawLogicalOffset,
+            velocity: logicalVelocity,
+            leadingWidth: Self.leadingActionWidth,
+            trailingWidth: Self.trailingActionWidth,
+            containerWidth: bounds.width
+        )
+        switch resolution {
+        case .closed:
+            settle(at: 0, side: nil, physicalVelocity: physicalVelocity, animated: true)
+        case .open(let side):
+            settle(
+                at: side == .leading ? Self.leadingActionWidth : -Self.trailingActionWidth,
+                side: side,
+                physicalVelocity: physicalVelocity,
+                animated: true
+            )
+        case .triggerLeadingAction:
+            triggerLeadingFullSwipe(with: physicalVelocity)
+        }
+    }
+
+    private func settle(
+        at logicalOffset: CGFloat,
+        side: PhoneSnippetSwipeSide?,
+        physicalVelocity: CGFloat,
+        animated: Bool
+    ) {
+        stopSettleAnimatorAtCurrentPosition()
+        if let side {
+            showActions(for: side)
+        }
+
+        let targetTransform = CGAffineTransform(
+            translationX: logicalOffset * layoutDirectionScale,
+            y: 0
+        )
+        let complete = { [weak self] in
+            guard let self else { return }
+            self.restingSide = side
+            self.latestRawLogicalOffset = logicalOffset
+            if side == nil {
+                self.resetSwipePresentation()
+                self.swipeDelegate?.phoneSnippetCellDidCloseSwipe(self)
+            }
+        }
+
+        guard animated, UIView.areAnimationsEnabled else {
+            swipeSurfaceView.transform = targetTransform
+            complete()
+            return
+        }
+
+        let animator = makeSettleAnimator(
+            targetTransform: targetTransform,
+            physicalVelocity: physicalVelocity
+        )
+        animator.addCompletion { [weak self, weak animator] position in
+            guard let self,
+                  let animator,
+                  self.settleAnimator === animator else { return }
+            self.settleAnimator = nil
+            if position == .end {
+                complete()
+            }
+        }
+        settleAnimator = animator
+        animator.startAnimation()
+    }
+
+    private func makeSettleAnimator(
+        targetTransform: CGAffineTransform,
+        physicalVelocity: CGFloat
+    ) -> UIViewPropertyAnimator {
+        let animator: UIViewPropertyAnimator
+        if UIAccessibility.isReduceMotionEnabled {
+            animator = UIViewPropertyAnimator(duration: 0.15, curve: .easeOut)
+        } else {
+            let distance = targetTransform.tx - swipeSurfaceView.transform.tx
+            let normalizedVelocity = abs(distance) > 0.5
+                ? max(min(physicalVelocity / distance, 12), -12)
+                : 0
+            let timing = UISpringTimingParameters(
+                dampingRatio: 0.88,
+                initialVelocity: CGVector(dx: normalizedVelocity, dy: 0)
+            )
+            animator = UIViewPropertyAnimator(duration: 0.34, timingParameters: timing)
+        }
+        animator.isUserInteractionEnabled = true
+        animator.addAnimations { [weak self] in
+            self?.swipeSurfaceView.transform = targetTransform
+        }
+        return animator
+    }
+
+    private func triggerLeadingFullSwipe(with physicalVelocity: CGFloat) {
+        stopSettleAnimatorAtCurrentPosition()
+        showActions(for: .leading)
+        let targetTransform = CGAffineTransform(
+            translationX: bounds.width * layoutDirectionScale,
+            y: 0
+        )
+        let animator = makeSettleAnimator(
+            targetTransform: targetTransform,
+            physicalVelocity: physicalVelocity
+        )
+        animator.addCompletion { [weak self, weak animator] position in
+            guard let self,
+                  let animator,
+                  self.settleAnimator === animator else { return }
+            self.settleAnimator = nil
+            guard position == .end else { return }
+            self.resetSwipePresentation()
+            self.swipeDelegate?.phoneSnippetCellDidCloseSwipe(self)
+            self.swipeDelegate?.phoneSnippetCell(self, requested: .edit)
+        }
+        settleAnimator = animator
+        animator.startAnimation()
+    }
+
+    private func showActions(for side: PhoneSnippetSwipeSide) {
+        guard revealedSide != side else { return }
+        revealedSide = side
+        actionsHostView.isHidden = false
+        editActionButton.isHidden = side != .leading
+        pinActionButton.isHidden = side != .trailing
+        deleteActionButton.isHidden = side != .trailing
+    }
+
+    private func performSwipeAction(_ action: PhoneSnippetSwipeAction) {
+        let delegate = swipeDelegate
+        closeSwipe(animated: false)
+        delegate?.phoneSnippetCell(self, requested: action)
+    }
+
+    private func stopSettleAnimatorAtCurrentPosition() {
+        guard let settleAnimator else { return }
+        settleAnimator.pauseAnimation()
+        let currentTransform = swipeSurfaceView.layer.presentation().map {
+            CATransform3DGetAffineTransform($0.transform)
+        } ?? swipeSurfaceView.transform
+        settleAnimator.stopAnimation(true)
+        self.settleAnimator = nil
+        swipeSurfaceView.transform = currentTransform
+    }
+
+    private func resetSwipePresentation() {
+        settleAnimator?.stopAnimation(true)
+        settleAnimator = nil
+        restingSide = nil
+        revealedSide = nil
+        panStartLogicalOffset = 0
+        latestRawLogicalOffset = 0
+        swipeSurfaceView.transform = .identity
+        actionsHostView.isHidden = true
+        editActionButton.isHidden = false
+        pinActionButton.isHidden = false
+        deleteActionButton.isHidden = false
+        updateHighlight(animated: false)
+    }
+
     private func updateHighlight(animated: Bool) {
         let changes = {
-            self.highlightView.alpha = self.isHighlighted || self.isSelected ? 1 : 0
+            let isAtRest = abs(self.swipeOffset) < 0.5 && self.restingSide == nil
+            self.highlightView.alpha = isAtRest && (self.isHighlighted || self.isSelected) ? 1 : 0
         }
         if animated {
             UIView.animate(
