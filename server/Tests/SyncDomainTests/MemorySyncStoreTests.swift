@@ -46,6 +46,70 @@ final class MemorySyncStoreTests: XCTestCase {
         _ = try acceptedVersion(update.outcomes[0])
     }
 
+    func testLostResponseRetryAndDeltaReplayConvergeWithoutDuplicateChange() async throws {
+        let store = try MemorySyncStore(serverInstanceID: instanceID, tokenSecret: tokenSecret)
+        let user = try principal(9)
+        let space = try await store.createSpace(for: user, idempotencyKey: nil)
+        let recordID = UUID()
+        let initial = wire(id: recordID, rev: "initial", byte: 0x10)
+        let created = try await store.submit(
+            for: user,
+            spaceID: space.scope.spaceID,
+            items: [.init(record: initial, expectedRecordVersion: nil)]
+        )
+        let initialVersion = try acceptedVersion(created.outcomes[0])
+        let checkpoint = try await store.fetchChanges(
+            for: user,
+            spaceID: space.scope.spaceID,
+            cursor: nil,
+            limit: 50
+        )
+
+        let updated = wire(id: recordID, rev: "updated", byte: 0x20)
+        // The server committed this update, but the caller deliberately discards
+        // its result to model a connection loss before the response is observed.
+        _ = try await store.submit(
+            for: user,
+            spaceID: space.scope.spaceID,
+            items: [.init(record: updated, expectedRecordVersion: initialVersion)]
+        )
+
+        let retry = try await store.submit(
+            for: user,
+            spaceID: space.scope.spaceID,
+            items: [.init(record: updated, expectedRecordVersion: initialVersion)]
+        )
+        guard case .conflict(let authoritative?) = retry.outcomes[0] else {
+            return XCTFail("A retry with the pre-commit CAS token must return the committed record")
+        }
+        XCTAssertEqual(authoritative.record, updated)
+        XCTAssertNotEqual(authoritative.recordVersion, initialVersion)
+
+        let firstDelivery = try await store.fetchChanges(
+            for: user,
+            spaceID: space.scope.spaceID,
+            cursor: checkpoint.cursor,
+            limit: 50
+        )
+        let replayedDelivery = try await store.fetchChanges(
+            for: user,
+            spaceID: space.scope.spaceID,
+            cursor: checkpoint.cursor,
+            limit: 50
+        )
+        XCTAssertEqual(firstDelivery, replayedDelivery)
+        XCTAssertFalse(firstDelivery.fullSnapshot)
+        XCTAssertEqual(firstDelivery.records.map(\.record), [updated])
+
+        let advanced = try await store.fetchChanges(
+            for: user,
+            spaceID: space.scope.spaceID,
+            cursor: firstDelivery.cursor,
+            limit: 50
+        )
+        XCTAssertTrue(advanced.records.isEmpty, "The CAS retry must not append a duplicate change")
+    }
+
     func testBlobBoundaryIsAcceptedAndOversizeIsPositionalRejection() async throws {
         let store = try MemorySyncStore(serverInstanceID: instanceID, tokenSecret: tokenSecret)
         let user = try principal(2)

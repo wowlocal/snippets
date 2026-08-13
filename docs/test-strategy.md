@@ -101,12 +101,66 @@ boundary. Its minimum assertions are:
 - two identities can use the same record UUID while retrieving only their own exact
   blob bytes;
 - create-only concurrent CAS has exactly one accepted result and one conflict;
+- a response discarded after an update commit can be retried with the original CAS
+  token: the retry returns the committed authoritative record and appends no change;
+- a mixed stale/new batch commits the independent item, preserves positional outcomes
+  even when database lock order differs, and remains convergent when delivered again;
+- repeating a delta request with the same cursor returns the same ordered records and
+  next cursor, while advancing that cursor does not expose a duplicate retry;
 - a request token becomes only an internal keyed principal, and the transaction-local
   `app.user_id` reaches RLS without leaking back into the pool;
 - a wrong identity receives `not_found`, cannot attach itself to a known foreign space,
   and a connection with no identity sees zero protected rows;
 - the runtime role is not a superuser, cannot bypass RLS, and owns no protected table;
 - a restore-generation rotation invalidates old cursors and record versions.
+
+### Deterministic network-chaos boundary
+
+The fast in-memory check can be run on its own:
+
+```sh
+cd server
+swift test --filter \
+  MemorySyncStoreTests.testLostResponseRetryAndDeltaReplayConvergeWithoutDuplicateChange
+```
+
+With the disposable PostgreSQL environment from the previous section, run the full HTTP
+boundary check directly:
+
+```sh
+cd server
+SNIPPETS_INTEGRATION_TESTS=1 \
+DATABASE_HOST=127.0.0.1 \
+DATABASE_PORT=55432 \
+DATABASE_NAME=snippets_sync_test \
+DATABASE_OWNER_USER=snippets_owner \
+DATABASE_OWNER_PASSWORD='<ephemeral-owner-password>' \
+DATABASE_RUNTIME_USER=snippets_runtime \
+DATABASE_RUNTIME_PASSWORD='<ephemeral-runtime-password>' \
+DATABASE_TLS_MODE=disable \
+swift test --filter \
+  PostgresIntegrationTests.testHTTPNetworkChaosRetriesPartialBatchAndDeltaReplayStayConvergent
+```
+
+These tests inject failure at a deterministic durability boundary rather than using
+random delays. The update request is allowed to reach the router and complete its
+PostgreSQL transaction, then its entire response is ignored. The exact request with its
+pre-commit CAS token is delivered again. The tests require an authoritative conflict,
+one durable update, and no extra sequence. They also replay one delta cursor and require
+the serialized response to be identical.
+
+The PostgreSQL case additionally sends `[stale update, independent create]` with UUIDs
+chosen so internal lock ordering is the reverse of request ordering. It requires
+`[conflict, accepted]`, redelivers the batch, requires `[conflict, conflict]`, and checks
+the database aggregate is exactly two current records, three changes, and
+`next_sequence = 3`. A runtime connection without request context must still see zero
+records.
+
+This boundary does not emulate a kernel socket reset, partial request-body delivery,
+task cancellation while a database transaction is running, a database disconnect
+mid-commit, TLS/proxy faults, HTTP/2 stream resets, or client timeout scheduling. Those
+belong in a separate live fault-proxy/connection-kill gate. Random packet loss is not
+added to the merge gate because it would make correctness evidence timing-dependent.
 
 ### Shared Swift and Apple platform gate
 
@@ -240,19 +294,20 @@ and generate a replacement immediately before each long-running platform phase.
 The following scenarios are required before a release and should move into deterministic
 nightly automation as harnesses become available:
 
-| Failure | Required observation |
-|---|---|
-| Response lost after server commit | Retry does not duplicate a change; CAS resolves from the authoritative record. |
-| Partial batch conflict | Independent accepted items remain durable and positional outcomes align with inputs. |
-| Tampered/foreign cursor or record version | Closed error; no row, scope, or instance information leaks. |
-| Database restore to older data | Operator rotation produces `dataset_reset`; clients stop for review before applying stale intent. |
-| Server unavailable during local edit | Journaled intent remains local and later uploads exactly once. iCloud remains usable when selected. |
-| OIDC expiry/JWKS rotation/outage | Existing local data remains usable; network operation fails closed and recovers after reauthentication. |
-| OIDC subject or server instance changes | Sticky account/scope review; no silent adoption of another tenant or dataset. |
-| iCloud account changes | Existing CloudKit binding-review behavior remains unchanged and independent from HTTP state. |
-| Provider switch interrupted at each durable step | Restart resumes or rolls back without two active providers or discarded journal intent. |
-| Device loses local wrapping key | Ciphertext remains unreadable until the explicit portable key/recovery flow succeeds. |
-| Oversized, duplicate-key, compressed, or malformed request | Request is rejected before decoding/persistence and no partial hidden write occurs. |
+| Failure | Required observation | Current automated coverage |
+|---|---|---|
+| Response lost after server commit | Retry does not duplicate a change; CAS resolves from the authoritative record. | Fast in-memory plus gated HTTP/PostgreSQL deterministic discard-and-redeliver tests. |
+| Delta response lost after read | Reusing the old cursor reproduces the ordered page; advancing the returned cursor does not replay a rejected CAS retry. | Fast in-memory semantic equality plus gated byte-identical HTTP/PostgreSQL response replay. |
+| Partial batch conflict | Independent accepted items remain durable and positional outcomes align with inputs. | Fast domain test plus gated reversed-lock-order HTTP/PostgreSQL redelivery test. |
+| Tampered/foreign cursor or record version | Closed error; no row, scope, or instance information leaks. | Fast opaque-token, memory-store, and HTTP tests. |
+| Database restore to older data | Operator rotation produces `dataset_reset`; clients stop for review before applying stale intent. | Gated PostgreSQL store test; client review remains a live/platform gate. |
+| Server unavailable during local edit | Journaled intent remains local and later uploads exactly once. iCloud remains usable when selected. | Client fault-transport tests and live gate required; server durability tests cannot prove local journaling. |
+| OIDC expiry/JWKS rotation/outage | Existing local data remains usable; network operation fails closed and recovers after reauthentication. | Signed-token fast test covers exact issuer/audience/subject; expiry, rotation, and outage recovery remain to automate. |
+| OIDC subject or server instance changes | Sticky account/scope review; no silent adoption of another tenant or dataset. | Fast identity/cursor binding tests plus live client-review gate. |
+| iCloud account changes | Existing CloudKit binding-review behavior remains unchanged and independent from HTTP state. | Apple platform/live gate; not a server test. |
+| Provider switch interrupted at each durable step | Restart resumes or rolls back without two active providers or discarded journal intent. | Deterministic client fake-transport tests and live gate required. |
+| Device loses local wrapping key | Ciphertext remains unreadable until the explicit portable key/recovery flow succeeds. | Android/Apple clean-install platform and live tests. |
+| Oversized, duplicate-key, compressed, or malformed request | Request is rejected before decoding/persistence and no partial hidden write occurs. | Fast HTTP tests. |
 
 ## Release evidence
 

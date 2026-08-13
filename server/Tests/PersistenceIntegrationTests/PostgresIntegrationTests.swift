@@ -98,6 +98,254 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 
+    func testHTTPNetworkChaosRetriesPartialBatchAndDeltaReplayStayConvergent() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["SNIPPETS_INTEGRATION_TESTS"] == "1" else {
+            throw XCTSkip("Set SNIPPETS_INTEGRATION_TESTS=1 and the documented test database variables")
+        }
+
+        let ownerConfiguration = try DatabaseConfiguration.load(environment: environment, owner: true)
+        let runtimeConfiguration = try DatabaseConfiguration.load(environment: environment)
+        guard ownerConfiguration.database == runtimeConfiguration.database,
+              ownerConfiguration.database.hasSuffix("_test")
+        else {
+            XCTFail("Integration tests require one dedicated database whose name ends in _test")
+            return
+        }
+
+        let ownerClient = PostgresClient(configuration: ownerConfiguration.postgresConfiguration())
+        let runtimeClient = PostgresClient(configuration: runtimeConfiguration.postgresConfiguration())
+        let migrationDirectory = serverRoot.appendingPathComponent("Migrations", isDirectory: true)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { await ownerClient.run() }
+            group.addTask { await runtimeClient.run() }
+            do {
+                try await MigrationRunner(client: ownerClient, directory: migrationDirectory).run()
+                try await exerciseHTTPNetworkChaos(runtimeClient, ownerClient: ownerClient)
+                group.cancelAll()
+                while let _ = try await group.next() {}
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
+    }
+
+    private func exerciseHTTPNetworkChaos(
+        _ runtimeClient: PostgresClient,
+        ownerClient: PostgresClient
+    ) async throws {
+        let configuration = try Self.integrationServerConfiguration()
+        let store = try PostgresSyncStore(
+            client: runtimeClient,
+            serverInstanceID: configuration.serverInstanceID,
+            tokenSecret: configuration.tokenSecret
+        )
+        let router = try SyncApplicationFactory.makeRouter(
+            configuration: configuration,
+            store: store,
+            tokenValidator: IntegrationTokenValidator()
+        )
+        let application = Application(router: router)
+        let headers: HTTPFields = [
+            .authorization: "Bearer tenant-a",
+            .contentType: "application/json",
+        ]
+        // Deliberately place the higher UUID first. PostgreSQL sorts record locks
+        // by UUID internally, while HTTP outcomes must remain in request order.
+        let existingRecordID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+        let newRecordID = "00000000-0000-4000-8000-000000000001"
+        let initialBlob = Data([0x10, 0x00, 0xff])
+        let updatedBlob = Data([0x20, 0x00, 0xfe])
+        let independentBlob = Data([0x30, 0x00, 0xfd])
+
+        let spaceID = try await application.test(.router) { client in
+            let spaceID = try await Self.createSpace(client: client, headers: headers)
+            let create = try await Self.executeBatch(
+                client: client,
+                headers: headers,
+                spaceID: spaceID,
+                items: [HTTPBatchFixture(
+                    id: existingRecordID,
+                    revision: "initial",
+                    blob: initialBlob,
+                    expectedRecordVersion: nil
+                )]
+            )
+            let createOutcomes = try XCTUnwrap(create["outcomes"] as? [[String: Any]])
+            XCTAssertEqual(createOutcomes[0]["kind"] as? String, "accepted")
+            let initialVersion = try XCTUnwrap(createOutcomes[0]["recordVersion"] as? String)
+
+            let snapshotResponse = try await client.execute(
+                uri: "/v1/spaces/\(spaceID)/changes?limit=50",
+                method: .get,
+                headers: [.authorization: "Bearer tenant-a"]
+            )
+            XCTAssertEqual(snapshotResponse.status, .ok)
+            let snapshot = try decodeJSONObject(snapshotResponse.body)
+            XCTAssertEqual(snapshot["fullSnapshot"] as? Bool, true)
+            let checkpointCursor = try XCTUnwrap(snapshot["cursor"] as? String)
+
+            let updateItems = [HTTPBatchFixture(
+                id: existingRecordID,
+                revision: "updated",
+                blob: updatedBlob,
+                expectedRecordVersion: initialVersion
+            )]
+            let updateBody = try Self.encodeBatchBody(updateItems)
+            // Hummingbird returns only after PostgresSyncStore committed. Ignore
+            // every response byte to model a network loss after that commit.
+            _ = try await client.execute(
+                uri: "/v1/spaces/\(spaceID)/records:batch",
+                method: .post,
+                headers: headers,
+                body: ByteBuffer(data: updateBody)
+            )
+
+            let retryResponse = try await client.execute(
+                uri: "/v1/spaces/\(spaceID)/records:batch",
+                method: .post,
+                headers: headers,
+                body: ByteBuffer(data: updateBody)
+            )
+            XCTAssertEqual(retryResponse.status, .ok)
+            let retry = try decodeJSONObject(retryResponse.body)
+            XCTAssertEqual(retry["partial"] as? Bool, true)
+            let retryOutcomes = try XCTUnwrap(retry["outcomes"] as? [[String: Any]])
+            XCTAssertEqual(retryOutcomes[0]["kind"] as? String, "conflict")
+            let committedUpdate = try XCTUnwrap(
+                retryOutcomes[0]["authoritativeRecord"] as? [String: Any]
+            )
+            XCTAssertEqual(committedUpdate["rev"] as? String, "updated")
+            XCTAssertEqual(
+                Data(base64Encoded: try XCTUnwrap(committedUpdate["blob"] as? String)),
+                updatedBlob
+            )
+            let updatedVersion = try XCTUnwrap(committedUpdate["recordVersion"] as? String)
+            XCTAssertNotEqual(updatedVersion, initialVersion)
+
+            let deltaURI = "/v1/spaces/\(spaceID)/changes?cursor=\(checkpointCursor)&limit=50"
+            let firstDeltaResponse = try await client.execute(
+                uri: deltaURI,
+                method: .get,
+                headers: [.authorization: "Bearer tenant-a"]
+            )
+            let replayedDeltaResponse = try await client.execute(
+                uri: deltaURI,
+                method: .get,
+                headers: [.authorization: "Bearer tenant-a"]
+            )
+            XCTAssertEqual(firstDeltaResponse.status, .ok)
+            XCTAssertEqual(replayedDeltaResponse.status, .ok)
+            XCTAssertEqual(
+                Data(firstDeltaResponse.body.readableBytesView),
+                Data(replayedDeltaResponse.body.readableBytesView),
+                "Replaying the same cursor must reproduce the same ordered delivery"
+            )
+            let firstDelta = try decodeJSONObject(firstDeltaResponse.body)
+            XCTAssertEqual(firstDelta["fullSnapshot"] as? Bool, false)
+            let firstDeltaRecords = try XCTUnwrap(firstDelta["records"] as? [[String: Any]])
+            XCTAssertEqual(firstDeltaRecords.count, 1)
+            XCTAssertEqual(firstDeltaRecords[0]["recordVersion"] as? String, updatedVersion)
+            let deltaCursor = try XCTUnwrap(firstDelta["cursor"] as? String)
+
+            let advanced = try await client.execute(
+                uri: "/v1/spaces/\(spaceID)/changes?cursor=\(deltaCursor)&limit=50",
+                method: .get,
+                headers: [.authorization: "Bearer tenant-a"]
+            )
+            let advancedRecords = try XCTUnwrap(
+                decodeJSONObject(advanced.body)["records"] as? [[String: Any]]
+            )
+            XCTAssertTrue(advancedRecords.isEmpty, "The lost-response retry must not append a change")
+
+            let partialItems = [
+                HTTPBatchFixture(
+                    id: existingRecordID,
+                    revision: "stale-overwrite",
+                    blob: Data([0x40]),
+                    expectedRecordVersion: initialVersion
+                ),
+                HTTPBatchFixture(
+                    id: newRecordID,
+                    revision: "independent",
+                    blob: independentBlob,
+                    expectedRecordVersion: nil
+                ),
+            ]
+            let partial = try await Self.executeBatch(
+                client: client,
+                headers: headers,
+                spaceID: spaceID,
+                items: partialItems
+            )
+            XCTAssertEqual(partial["partial"] as? Bool, true)
+            let partialOutcomes = try XCTUnwrap(partial["outcomes"] as? [[String: Any]])
+            XCTAssertEqual(partialOutcomes.map { $0["kind"] as? String }, ["conflict", "accepted"])
+            let partialAuthoritative = try XCTUnwrap(
+                partialOutcomes[0]["authoritativeRecord"] as? [String: Any]
+            )
+            XCTAssertEqual(partialAuthoritative["recordVersion"] as? String, updatedVersion)
+            let independentVersion = try XCTUnwrap(partialOutcomes[1]["recordVersion"] as? String)
+
+            let partialRetry = try await Self.executeBatch(
+                client: client,
+                headers: headers,
+                spaceID: spaceID,
+                items: partialItems
+            )
+            let partialRetryOutcomes = try XCTUnwrap(
+                partialRetry["outcomes"] as? [[String: Any]]
+            )
+            XCTAssertEqual(partialRetryOutcomes.map { $0["kind"] as? String }, ["conflict", "conflict"])
+            let independentAuthoritative = try XCTUnwrap(
+                partialRetryOutcomes[1]["authoritativeRecord"] as? [String: Any]
+            )
+            XCTAssertEqual(independentAuthoritative["recordVersion"] as? String, independentVersion)
+            XCTAssertEqual(
+                Data(base64Encoded: try XCTUnwrap(independentAuthoritative["blob"] as? String)),
+                independentBlob
+            )
+
+            let independentDeltaResponse = try await client.execute(
+                uri: "/v1/spaces/\(spaceID)/changes?cursor=\(deltaCursor)&limit=50",
+                method: .get,
+                headers: [.authorization: "Bearer tenant-a"]
+            )
+            let independentDelta = try decodeJSONObject(independentDeltaResponse.body)
+            let independentRecords = try XCTUnwrap(
+                independentDelta["records"] as? [[String: Any]]
+            )
+            XCTAssertEqual(independentRecords.count, 1)
+            XCTAssertEqual(independentRecords[0]["id"] as? String, newRecordID)
+            XCTAssertEqual(independentRecords[0]["recordVersion"] as? String, independentVersion)
+
+            return try XCTUnwrap(UUID(uuidString: spaceID))
+        }
+
+        var databaseCounts: (Int64, Int64, Int64)?
+        let rows = try await ownerClient.query("""
+            SELECT (SELECT count(*) FROM records WHERE space_id = \(spaceID)),
+                   (SELECT count(*) FROM changes WHERE space_id = \(spaceID)),
+                   (SELECT next_sequence FROM spaces WHERE id = \(spaceID))
+            """)
+        for try await values in rows.decode((Int64, Int64, Int64).self) {
+            databaseCounts = values
+        }
+        XCTAssertEqual(databaseCounts?.0, 2, "Retries must not duplicate current records")
+        XCTAssertEqual(databaseCounts?.1, 3, "Only create, update, and independent create append changes")
+        XCTAssertEqual(databaseCounts?.2, 3, "Rejected retries must not consume feed sequence numbers")
+
+        var noContextCount: Int64?
+        for try await value in try await runtimeClient.query(
+            "SELECT count(*) FROM records WHERE space_id = \(spaceID)"
+        ).decode(Int64.self) {
+            noContextCount = value
+        }
+        XCTAssertEqual(noContextCount, 0, "Chaos retries must not leak request identity into the pool")
+    }
+
     private func exerciseHTTPBoundary(_ runtimeClient: PostgresClient) async throws {
         let configuration = try Self.integrationServerConfiguration()
         let store = try PostgresSyncStore(
@@ -229,6 +477,41 @@ final class PostgresIntegrationTests: XCTestCase {
         let outcomes = try XCTUnwrap(decodeJSONObject(response.body)["outcomes"] as? [[String: Any]])
         XCTAssertEqual(outcomes.count, 1)
         XCTAssertEqual(outcomes[0]["kind"] as? String, "accepted")
+    }
+
+    private static func executeBatch(
+        client: TestClientProtocol,
+        headers: HTTPFields,
+        spaceID: String,
+        items: [HTTPBatchFixture]
+    ) async throws -> [String: Any] {
+        let response = try await client.execute(
+            uri: "/v1/spaces/\(spaceID)/records:batch",
+            method: .post,
+            headers: headers,
+            body: ByteBuffer(data: try encodeBatchBody(items))
+        )
+        XCTAssertEqual(response.status, .ok)
+        return try decodeJSONObject(response.body)
+    }
+
+    private static func encodeBatchBody(_ items: [HTTPBatchFixture]) throws -> Data {
+        let values: [[String: Any]] = items.map { item in
+            var result: [String: Any] = [
+                "record": [
+                    "id": item.id,
+                    "rev": item.revision,
+                    "deleted": false,
+                    "blob": item.blob.base64EncodedString(),
+                ]
+            ]
+            result["expectedRecordVersion"] = item.expectedRecordVersion ?? NSNull()
+            return result
+        }
+        return try JSONSerialization.data(
+            withJSONObject: ["items": values],
+            options: [.sortedKeys]
+        )
     }
 
     private static func fetchChanges(
@@ -467,6 +750,13 @@ final class PostgresIntegrationTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
     }
+}
+
+private struct HTTPBatchFixture: Sendable {
+    let id: String
+    let revision: String
+    let blob: Data
+    let expectedRecordVersion: String?
 }
 
 private func decodeJSONObject(_ buffer: ByteBuffer) throws -> [String: Any] {

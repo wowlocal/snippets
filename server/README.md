@@ -175,8 +175,9 @@ and rehearse the procedure against restored backups.
 The helper starts a dedicated database named `snippets_sync_test`, proves two-tenant
 isolation with overlapping record UUIDs through both direct store calls and the HTTP
 identity boundary, probes the runtime role and no-context RLS, exercises concurrent
-create CAS, and verifies restore-generation behavior. It deletes only the helper's
-dedicated Compose project and volume when finished.
+create CAS, deterministically discards and redelivers committed responses, replays delta
+cursors, checks positional partial batches, and verifies restore-generation behavior. It
+deletes only the helper's dedicated Compose project and volume when finished.
 
 ```sh
 cd server
@@ -190,6 +191,21 @@ variables, then running:
 ```sh
 swift test --filter PostgresIntegrationTests
 ```
+
+To run only the deterministic HTTP/PostgreSQL chaos boundary against that disposable
+database:
+
+```sh
+swift test --filter \
+  PostgresIntegrationTests.testHTTPNetworkChaosRetriesPartialBatchAndDeltaReplayStayConvergent
+```
+
+The test deliberately ignores a response only after the router has completed the store
+call, then redelivers the exact stale-CAS request and cursor. This models the durable
+server side of a lost response without timing or packet-loss randomness. Socket resets,
+partial request bodies, proxy/TLS failures, and database disconnects mid-transaction
+still require a separate live fault-injection environment; see
+[`../docs/test-strategy.md`](../docs/test-strategy.md).
 
 `Scripts/oidc-integration-fixture.rb` is a test-only RS256 helper for a full Android
 HTTPS integration environment. Its `serve` mode exposes only JWKS; `token` signs an
