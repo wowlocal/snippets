@@ -1,11 +1,32 @@
 import Foundation
 import Logging
-import Persistence
+@testable import Persistence
 import PostgresNIO
 import SyncDomain
 import XCTest
 
 final class PostgresIntegrationTests: XCTestCase {
+    func testMigrationStatementLexerKeepsQuotedSemicolonsTogether() throws {
+        let sql = #"""
+        -- the first ; is only a comment
+        CREATE TABLE "odd;name" (value text DEFAULT 'a;''b');
+        /* an outer ; /* and nested ; */ comment */
+        DO $migration$
+        BEGIN
+          PERFORM ';';
+        END
+        $migration$;
+        SELECT 1
+        """#
+
+        let statements = try MigrationRunner.statements(in: sql)
+
+        XCTAssertEqual(statements.count, 3)
+        XCTAssertTrue(statements[0].contains(#"CREATE TABLE "odd;name""#))
+        XCTAssertTrue(statements[1].contains("PERFORM ';';"))
+        XCTAssertTrue(statements[2].contains("SELECT 1"))
+    }
+
     func testMigrationsRLSBlindStorageAndConcurrentCAS() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["SNIPPETS_INTEGRATION_TESTS"] == "1" else {

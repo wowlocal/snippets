@@ -127,6 +127,16 @@ public final class PostgresSyncStore: SyncStore, Sendable {
                 ), status == "active" else { throw SyncServiceError.authenticationRequired }
                 return try await operation(connection, userID)
             }
+        } catch let transactionError as PostgresTransactionError {
+            // postgres-nio wraps every error thrown by a transaction closure so it
+            // can also report rollback failures. Preserve an intentional service
+            // result only when the rollback itself succeeded; infrastructure
+            // failures must stay collapsed to the dependency boundary.
+            if transactionError.rollbackError == nil,
+               let serviceError = transactionError.closureError as? SyncServiceError {
+                throw serviceError
+            }
+            throw SyncServiceError.dependencyUnavailable
         } catch let error as SyncServiceError {
             throw error
         } catch {

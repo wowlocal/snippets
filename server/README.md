@@ -178,9 +178,19 @@ cd server
 ./Scripts/test-integration.sh
 ```
 
-Docker was not available in the original implementation environment, so the checked-in
-integration suite is compiled by `swift test` but must run in CI or a workstation with
-Docker before merge/deployment.
+The same test can run against an already-provisioned disposable PostgreSQL database by
+setting `SNIPPETS_INTEGRATION_TESTS=1` plus the documented owner/runtime database
+variables, then running:
+
+```sh
+swift test --filter PostgresIntegrationTests
+```
+
+`Scripts/oidc-integration-fixture.rb` is a test-only RS256 helper for a full Android
+HTTPS integration environment. Its `serve` mode exposes only JWKS; `token` signs an
+ephemeral local test token. Keep its generated private key in a mode-0700 temporary
+directory and never use the fixture, its subject, or its keys in production. The opt-in
+Android `CloudEndToEndTest` documents the required instrumentation arguments.
 
 ## Security and compatibility invariants
 
