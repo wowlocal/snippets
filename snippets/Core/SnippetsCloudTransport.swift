@@ -353,6 +353,22 @@ private nonisolated struct BatchRequestDTO: Encodable, Sendable { let items: [Ba
 private nonisolated struct BatchItemDTO: Encodable, Sendable {
     let record: ServerRecordDTO
     let expectedRecordVersion: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case record, expectedRecordVersion
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(record, forKey: .record)
+        if let expectedRecordVersion {
+            try container.encode(expectedRecordVersion, forKey: .expectedRecordVersion)
+        } else {
+            // The v1 schema distinguishes a create's explicit null from a missing
+            // member. Synthesized Encodable omits nil optionals, so spell it out.
+            try container.encodeNil(forKey: .expectedRecordVersion)
+        }
+    }
 }
 
 private nonisolated struct BatchResponseDTO: Decodable, Sendable {

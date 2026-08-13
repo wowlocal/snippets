@@ -353,10 +353,21 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest
 ```
 
-`CloudEndToEndTest` is opt-in because it destroys only the test application's local
-encrypted state and requires a disposable Snippets Cloud space. It uploads an encrypted
-snippet, deletes the local files and Android Keystore wrapping key, then downloads and
-decrypts the record with the same portable `sync-v1` key:
+The live `SnippetsCloudTransportTests` case and `CloudEndToEndTest` are opt-in because
+they require one disposable, initially empty Snippets Cloud space. Run the Swift test
+first; it uploads an Apple-core ciphertext using the portable test key:
+
+```sh
+SNIPPETS_CLOUD_E2E=1 \
+SNIPPETS_CLOUD_E2E_SERVER_URL=https://sync-test.example \
+SNIPPETS_CLOUD_E2E_ACCESS_TOKEN='<ephemeral-test-token>' \
+SNIPPETS_CLOUD_E2E_SPACE_ID='<disposable-space-uuid>' \
+swift test --package-path CorePackage --filter liveHTTPSService
+```
+
+Then run Android against that same space. It decrypts the Apple record, uploads its own
+encrypted snippet, deletes the local files and Android Keystore wrapping key, and
+downloads and decrypts both records with the same portable `sync-v1` key:
 
 ```sh
 ./gradlew :app:connectedDebugAndroidTest \
