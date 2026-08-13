@@ -264,6 +264,10 @@ Release gate:
 
 ## Continuous verification matrix
 
+The executable coverage and cadence contract is maintained in
+[testing-strategy.md](testing-strategy.md); this section describes the delivery streams
+that supply those lanes.
+
 Shared changes run the repository's existing required checks:
 
 ```sh

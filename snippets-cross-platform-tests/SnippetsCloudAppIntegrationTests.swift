@@ -29,6 +29,8 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         case iosUpdateMac = "ios-update-mac"
         case macVerify = "mac-verify"
         case iosVerify = "ios-verify"
+        case macVerifyDeletion = "mac-verify-deletion"
+        case iosVerifyDeletion = "ios-verify-deletion"
     }
 
     func testCrossPlatformSyncPhase() async throws {
@@ -83,11 +85,13 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         let keychain = KeychainSecretStore(tier: .deviceOnly, inMemory: true)
         try keychain.storeItem(Self.portableSyncMaterial, account: SyncKeyStore.account)
         let selection = SyncBackendSelectionStore(defaults: defaults, keychain: keychain)
+        XCTAssertEqual(selection.provider, .iCloud)
         try selection.selectSnippetsCloud(
             serverURL: try XCTUnwrap(URL(string: serverText)),
             spaceID: try XCTUnwrap(UUID(uuidString: spaceText)),
             accessToken: token)
         XCTAssertTrue(try selection.makeTransport().supportsPush)
+        XCTAssertTrue(selection.hasPendingProviderSwitch)
 
         #if os(macOS)
         let store = SnippetStore(configuration: .macOSDefault)
@@ -112,7 +116,8 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         defer { coordinator.stop() }
 
         try await sync(coordinator)
-        assertConfirmedRecordCount(remoteBeforeLocalMutation(for: phase).count)
+        XCTAssertFalse(selection.hasPendingProviderSwitch)
+        assertConfirmedRecordCount(confirmedRecordCount(for: phase))
         try await assertRemoteLibrary(selection, expected: remoteBeforeLocalMutation(for: phase))
         switch phase {
         case .macSeed:
@@ -180,6 +185,9 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
 
         case .macVerify, .iosVerify:
             assertConverged(store)
+
+        case .macVerifyDeletion, .iosVerifyDeletion:
+            assertLibrary(store, expected: Self.convergedAfterDeletion)
         }
 
         XCTAssertTrue(FileManager.default.fileExists(
@@ -275,14 +283,29 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
             ]
         case .macVerify, .iosVerify:
             return Self.convergedLibrary
+        case .macVerifyDeletion, .iosVerifyDeletion:
+            return Self.convergedAfterDeletion
+        }
+    }
+
+    private func confirmedRecordCount(for phase: Phase) -> Int {
+        switch phase {
+        case .macVerifyDeletion, .iosVerifyDeletion:
+            return 3 // Two live records plus the retained iOS tombstone.
+        default:
+            return remoteBeforeLocalMutation(for: phase).count
         }
     }
 
     private func requirePhaseForCurrentPlatform(_ phase: Phase) throws {
         #if os(macOS)
-        let valid: Set<Phase> = [.macSeed, .macUpdateAndroid, .macVerify]
+        let valid: Set<Phase> = [
+            .macSeed, .macUpdateAndroid, .macVerify, .macVerifyDeletion,
+        ]
         #else
-        let valid: Set<Phase> = [.iosSeed, .iosUpdateMac, .iosVerify]
+        let valid: Set<Phase> = [
+            .iosSeed, .iosUpdateMac, .iosVerify, .iosVerifyDeletion,
+        ]
         #endif
         guard valid.contains(phase) else {
             throw XCTSkip("phase \(phase.rawValue) belongs to the other Apple platform")
@@ -313,6 +336,10 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
     private static let convergedLibrary = [
         "mac-e2e": macFinal,
         "ios-e2e": iosInitial,
+        "android-e2e": androidFinal,
+    ]
+    private static let convergedAfterDeletion = [
+        "mac-e2e": macFinal,
         "android-e2e": androidFinal,
     ]
 }

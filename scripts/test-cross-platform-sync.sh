@@ -163,14 +163,20 @@ run_android_phase() {
     -Pandroid.testInstrumentationRunnerArguments.snippetsPhase="$phase"
 }
 
-assert_server_record_count() {
-  local expected="$1"
+assert_server_record_shape() {
+  local expected_total="$1"
+  local expected_live="$2"
+  local expected_deleted="$3"
   local token
   token="$(issue_token)"
   curl -fsS -H "Authorization: Bearer $token" \
     "$API_ORIGIN/v1/spaces/$SPACE_ID/changes?limit=50" | \
-    jq -e --argjson expected "$expected" \
-      '(.records | length) == $expected and .fullSnapshot == true and .hasMore == false' \
+    jq -e --argjson total "$expected_total" --argjson live "$expected_live" \
+      --argjson deleted "$expected_deleted" \
+      '(.records | length) == $total
+       and ([.records[] | select(.deleted == false)] | length) == $live
+       and ([.records[] | select(.deleted == true)] | length) == $deleted
+       and .fullSnapshot == true and .hasMore == false' \
       >/dev/null
 }
 
@@ -250,11 +256,30 @@ for attempt in $(seq 1 120); do
 done
 curl --max-time 5 -fsS "$API_ORIGIN/health/ready" | jq -e '.status == "ok"' >/dev/null
 
+NO_AUTH_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' --data-binary '{}' "$API_ORIGIN/v1/spaces")"
+test "$NO_AUTH_STATUS" = 401
+MALFORMED_AUTH_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+  -H 'Authorization: Bearer not-a-jwt' -H 'Content-Type: application/json' \
+  --data-binary '{}' "$API_ORIGIN/v1/spaces")"
+test "$MALFORMED_AUTH_STATUS" = 401
+WRONG_AUDIENCE_TOKEN="$(ruby "$SERVER_DIR/Scripts/oidc-integration-fixture.rb" token \
+  "$RUN_ROOT/oidc.pem" "$OIDC_ORIGIN" snippets-wrong-audience snippets-fourway-a)"
+WRONG_AUDIENCE_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $WRONG_AUDIENCE_TOKEN" -H 'Content-Type: application/json' \
+  --data-binary '{}' "$API_ORIGIN/v1/spaces")"
+test "$WRONG_AUDIENCE_STATUS" = 401
+
 TOKEN_A="$(issue_token)"
 IDEMPOTENCY="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-SPACE_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN_A" \
+SPACE_RESPONSE="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN_A" \
+  -H 'Content-Type: application/json' --data-binary "{\"idempotencyKey\":\"$IDEMPOTENCY\"}" \
+  "$API_ORIGIN/v1/spaces")"
+SPACE_ID="$(jq -er '.spaceId' <<< "$SPACE_RESPONSE")"
+REPLAYED_SPACE_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN_A" \
   -H 'Content-Type: application/json' --data-binary "{\"idempotencyKey\":\"$IDEMPOTENCY\"}" \
   "$API_ORIGIN/v1/spaces" | jq -er '.spaceId')"
+test "$REPLAYED_SPACE_ID" = "$SPACE_ID"
 curl -fsS -H "Authorization: Bearer $TOKEN_A" \
   "$API_ORIGIN/v1/spaces/$SPACE_ID/changes?limit=50" | \
   jq -e --arg space "$SPACE_ID" '.spaceId == $space and (.records | length) == 0' >/dev/null
@@ -298,23 +323,31 @@ if ! "$ADB" devices | awk 'NR > 1 && $2 == "device" { found=1 } END { exit !foun
 fi
 
 run_macos_phase mac-seed
-assert_server_record_count 1
+assert_server_record_shape 1 1 0
 run_ios_phase ios-seed
-assert_server_record_count 2
+assert_server_record_shape 2 2 0
 run_android_phase contribute
-assert_server_record_count 3
+assert_server_record_shape 3 3 0
 run_macos_phase mac-update-android
-assert_server_record_count 3
+assert_server_record_shape 3 3 0
 run_ios_phase ios-update-mac
-assert_server_record_count 3
+assert_server_record_shape 3 3 0
 run_android_phase verify
 run_macos_phase mac-verify
 run_ios_phase ios-verify
+run_android_phase delete
+assert_server_record_shape 3 2 1
+run_macos_phase mac-verify-deletion
+run_ios_phase ios-verify-deletion
+run_android_phase verify-deletion
 
 TOKEN_A="$(issue_token)"
 curl -fsS -H "Authorization: Bearer $TOKEN_A" \
   "$API_ORIGIN/v1/spaces/$SPACE_ID/changes?limit=50" | \
-  jq -e '(.records | length) == 3 and .fullSnapshot == true and .hasMore == false' >/dev/null
+  jq -e '(.records | length) == 3
+    and ([.records[] | select(.deleted == false)] | length) == 2
+    and ([.records[] | select(.deleted == true)] | length) == 1
+    and .fullSnapshot == true and .hasMore == false' >/dev/null
 
 DB_SUMMARY="$(PGPASSWORD="$OWNER_PASSWORD" "$PG_BIN/psql" -XAt -h 127.0.0.1 \
   -p "$PG_PORT" -U snippets_owner -d snippets_fourway_test -c "
@@ -341,4 +374,5 @@ RUNTIME_SUMMARY="$(PGPASSWORD="$RUNTIME_PASSWORD" "$PG_BIN/psql" -XAt -h 127.0.0
 test "$RUNTIME_SUMMARY" = "t|0"
 
 echo "Cross-platform sync passed: server + PostgreSQL + macOS + iOS Simulator + Android"
-echo "Final server records: 3; plaintext probes absent; RLS enabled and forced on all 9 tenant tables"
+echo "Final server records: 2 live + 1 tombstone; auth/tenant/idempotency checks passed"
+echo "Plaintext probes absent; RLS enabled and forced on all 9 tenant tables"
