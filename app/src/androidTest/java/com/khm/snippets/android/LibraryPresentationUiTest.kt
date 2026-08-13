@@ -75,4 +75,12 @@ class LibraryPresentationUiTest {
         compose.onNodeWithText("work").performClick()
         assertEquals("work", toggledTag)
     }
+
+    @Test
+    fun tagsAndSecondaryActionsShareOneRow() {
+        val tagBounds = compose.onNodeWithText("work").fetchSemanticsNode().boundsInRoot
+        val editBounds = compose.onNodeWithText("Edit").fetchSemanticsNode().boundsInRoot
+
+        assertEquals(true, tagBounds.top < editBounds.bottom && editBounds.top < tagBounds.bottom)
+    }
 }
