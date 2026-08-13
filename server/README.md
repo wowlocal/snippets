@@ -55,6 +55,10 @@ swift test
 The ordinary test command skips PostgreSQL integration tests unless their explicit
 test-only gate is enabled. It still builds those tests.
 
+The repository-wide matrix that determines when server, database, Apple, Android,
+provider-switching, and live compatibility gates are required is in
+[`../docs/test-strategy.md`](../docs/test-strategy.md).
+
 ## Local Compose
 
 Docker Compose is a development convenience, not a production TLS topology. Copy the
@@ -169,9 +173,10 @@ and rehearse the procedure against restored backups.
 ## PostgreSQL integration tests
 
 The helper starts a dedicated database named `snippets_sync_test`, proves two-tenant
-isolation with overlapping record UUIDs, probes the runtime role and no-context RLS,
-exercises concurrent create CAS, and verifies restore-generation behavior. It deletes
-only the helper's dedicated Compose project and volume when finished.
+isolation with overlapping record UUIDs through both direct store calls and the HTTP
+identity boundary, probes the runtime role and no-context RLS, exercises concurrent
+create CAS, and verifies restore-generation behavior. It deletes only the helper's
+dedicated Compose project and volume when finished.
 
 ```sh
 cd server

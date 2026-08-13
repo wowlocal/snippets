@@ -95,6 +95,7 @@ let package = Package(
                 "SyncHTTP",
                 "SyncDomain",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
+                .product(name: "JWTKit", package: "jwt-kit"),
             ]
         ),
         .testTarget(
@@ -102,6 +103,9 @@ let package = Package(
             dependencies: [
                 "Persistence",
                 "SyncDomain",
+                "SyncHTTP",
+                .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "Logging", package: "swift-log"),
             ]

@@ -1,8 +1,11 @@
 import Foundation
+import Hummingbird
+import HummingbirdTesting
 import Logging
 @testable import Persistence
 import PostgresNIO
 import SyncDomain
+import SyncHTTP
 import XCTest
 
 final class PostgresIntegrationTests: XCTestCase {
@@ -59,6 +62,217 @@ final class PostgresIntegrationTests: XCTestCase {
                 throw error
             }
         }
+    }
+
+    func testHTTPIdentityContextAndPostgresRLSStayTenantScoped() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["SNIPPETS_INTEGRATION_TESTS"] == "1" else {
+            throw XCTSkip("Set SNIPPETS_INTEGRATION_TESTS=1 and the documented test database variables")
+        }
+
+        let ownerConfiguration = try DatabaseConfiguration.load(environment: environment, owner: true)
+        let runtimeConfiguration = try DatabaseConfiguration.load(environment: environment)
+        guard ownerConfiguration.database == runtimeConfiguration.database,
+              ownerConfiguration.database.hasSuffix("_test")
+        else {
+            XCTFail("Integration tests require one dedicated database whose name ends in _test")
+            return
+        }
+
+        let ownerClient = PostgresClient(configuration: ownerConfiguration.postgresConfiguration())
+        let runtimeClient = PostgresClient(configuration: runtimeConfiguration.postgresConfiguration())
+        let migrationDirectory = serverRoot.appendingPathComponent("Migrations", isDirectory: true)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { await ownerClient.run() }
+            group.addTask { await runtimeClient.run() }
+            do {
+                try await MigrationRunner(client: ownerClient, directory: migrationDirectory).run()
+                try await exerciseHTTPBoundary(runtimeClient)
+                group.cancelAll()
+                while let _ = try await group.next() {}
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
+    }
+
+    private func exerciseHTTPBoundary(_ runtimeClient: PostgresClient) async throws {
+        let configuration = try Self.integrationServerConfiguration()
+        let store = try PostgresSyncStore(
+            client: runtimeClient,
+            serverInstanceID: configuration.serverInstanceID,
+            tokenSecret: configuration.tokenSecret
+        )
+        let router = try SyncApplicationFactory.makeRouter(
+            configuration: configuration,
+            store: store,
+            tokenValidator: IntegrationTokenValidator()
+        )
+        let application = Application(router: router)
+        let tenantAHeaders: HTTPFields = [
+            .authorization: "Bearer tenant-a",
+            .contentType: "application/json",
+        ]
+        let tenantBHeaders: HTTPFields = [
+            .authorization: "Bearer tenant-b",
+            .contentType: "application/json",
+        ]
+        let sharedRecordID = UUID().uuidString.lowercased()
+        let tenantABlob = Data([0x00, 0xff, 0x41, 0x7f])
+        let tenantBBlob = Data([0x99, 0x00, 0x42])
+
+        try await application.test(.router) { client in
+            let tenantASpace = try await Self.createSpace(client: client, headers: tenantAHeaders)
+            let tenantBSpace = try await Self.createSpace(client: client, headers: tenantBHeaders)
+
+            try await Self.submit(
+                client: client,
+                headers: tenantAHeaders,
+                spaceID: tenantASpace,
+                recordID: sharedRecordID,
+                revision: "tenant-a-r1",
+                blob: tenantABlob
+            )
+            try await Self.submit(
+                client: client,
+                headers: tenantBHeaders,
+                spaceID: tenantBSpace,
+                recordID: sharedRecordID,
+                revision: "tenant-b-r1",
+                blob: tenantBBlob
+            )
+
+            let tenantAChanges = try await Self.fetchChanges(
+                client: client,
+                authorization: "Bearer tenant-a",
+                spaceID: tenantASpace
+            )
+            let tenantBChanges = try await Self.fetchChanges(
+                client: client,
+                authorization: "Bearer tenant-b",
+                spaceID: tenantBSpace
+            )
+            XCTAssertEqual(tenantAChanges.count, 1)
+            XCTAssertEqual(tenantBChanges.count, 1)
+            XCTAssertEqual(tenantAChanges[0].id, sharedRecordID)
+            XCTAssertEqual(tenantBChanges[0].id, sharedRecordID)
+            XCTAssertEqual(tenantAChanges[0].blob, tenantABlob)
+            XCTAssertEqual(tenantBChanges[0].blob, tenantBBlob)
+
+            let crossTenant = try await client.execute(
+                uri: "/v1/spaces/\(tenantASpace)/scope",
+                method: .get,
+                headers: [.authorization: "Bearer tenant-b"]
+            )
+            XCTAssertEqual(crossTenant.status, .notFound)
+
+            let unauthenticated = try await client.execute(
+                uri: "/v1/spaces/\(tenantASpace)/changes?limit=50",
+                method: .get
+            )
+            XCTAssertEqual(unauthenticated.status, .unauthorized)
+        }
+
+        var noContextRecordCount: Int64?
+        for try await value in try await runtimeClient.query("SELECT count(*) FROM records").decode(Int64.self) {
+            noContextRecordCount = value
+        }
+        XCTAssertEqual(
+            noContextRecordCount,
+            0,
+            "HTTP requests must not leak transaction-local RLS identity into the connection pool"
+        )
+    }
+
+    private static func createSpace(
+        client: TestClientProtocol,
+        headers: HTTPFields
+    ) async throws -> String {
+        let response = try await client.execute(
+            uri: "/v1/spaces",
+            method: .post,
+            headers: headers,
+            body: ByteBuffer(string: "{}")
+        )
+        XCTAssertEqual(response.status, .created)
+        return try XCTUnwrap(decodeJSONObject(response.body)["spaceId"] as? String)
+    }
+
+    private static func submit(
+        client: TestClientProtocol,
+        headers: HTTPFields,
+        spaceID: String,
+        recordID: String,
+        revision: String,
+        blob: Data
+    ) async throws {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "items": [[
+                "record": [
+                    "id": recordID,
+                    "rev": revision,
+                    "deleted": false,
+                    "blob": blob.base64EncodedString(),
+                ],
+                "expectedRecordVersion": NSNull(),
+            ]]
+        ], options: [.sortedKeys])
+        let response = try await client.execute(
+            uri: "/v1/spaces/\(spaceID)/records:batch",
+            method: .post,
+            headers: headers,
+            body: ByteBuffer(data: body)
+        )
+        XCTAssertEqual(response.status, .ok)
+        let outcomes = try XCTUnwrap(decodeJSONObject(response.body)["outcomes"] as? [[String: Any]])
+        XCTAssertEqual(outcomes.count, 1)
+        XCTAssertEqual(outcomes[0]["kind"] as? String, "accepted")
+    }
+
+    private static func fetchChanges(
+        client: TestClientProtocol,
+        authorization: String,
+        spaceID: String
+    ) async throws -> [(id: String, blob: Data)] {
+        let response = try await client.execute(
+            uri: "/v1/spaces/\(spaceID)/changes?limit=50",
+            method: .get,
+            headers: [.authorization: authorization]
+        )
+        XCTAssertEqual(response.status, .ok)
+        let records = try XCTUnwrap(decodeJSONObject(response.body)["records"] as? [[String: Any]])
+        return try records.map { record in
+            (
+                id: try XCTUnwrap(record["id"] as? String),
+                blob: try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(record["blob"] as? String)))
+            )
+        }
+    }
+
+    private static func integrationServerConfiguration() throws -> ServerConfiguration {
+        let oidc = try OIDCConfiguration(
+            issuer: URL(string: "https://integration-issuer.example")!,
+            audience: "snippets-integration",
+            clientID: "snippets-integration-client",
+            scopes: ["openid"],
+            jwksURL: URL(string: "https://integration-issuer.example/jwks")!,
+            allowedAlgorithms: ["RS256"],
+            maximumTokenAge: 3_600,
+            clockSkew: 60,
+            identityPepper: Data(repeating: 0x73, count: 32)
+        )
+        return try ServerConfiguration(
+            environment: .testing,
+            bindHost: "127.0.0.1",
+            port: 8_080,
+            publicBaseURL: URL(string: "http://127.0.0.1:8080")!,
+            serverInstanceID: UUID(),
+            serverVersion: "postgres-http-integration",
+            tokenSecret: Data(repeating: 0x51, count: 32),
+            oidc: oidc
+        )
     }
 
     private func exerciseDatabase(_ runtimeClient: PostgresClient, ownerClient: PostgresClient) async throws {
@@ -252,6 +466,23 @@ final class PostgresIntegrationTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+}
+
+private func decodeJSONObject(_ buffer: ByteBuffer) throws -> [String: Any] {
+    try XCTUnwrap(JSONSerialization.jsonObject(with: Data(buffer.readableBytesView)) as? [String: Any])
+}
+
+private struct IntegrationTokenValidator: AccessTokenValidating {
+    func validate(bearerToken: String) async throws -> AuthenticatedPrincipal {
+        switch bearerToken {
+        case "tenant-a":
+            try AuthenticatedPrincipal(identityDigest: Data(repeating: 0xa1, count: 32))
+        case "tenant-b":
+            try AuthenticatedPrincipal(identityDigest: Data(repeating: 0xb2, count: 32))
+        default:
+            throw SyncServiceError.authenticationRequired
+        }
     }
 }
 

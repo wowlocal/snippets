@@ -319,6 +319,8 @@ More detail:
   gates for Android, Apple clients, and the sync service.
 - [docs/diagnostics.md](docs/diagnostics.md) — persistent logging, exports, privacy, and
   collection workflows.
+- [docs/test-strategy.md](docs/test-strategy.md) — cross-component test matrix and gates
+  for the server, PostgreSQL, macOS, iOS, Android, iCloud, and Snippets Cloud.
 
 ## Verification
 
@@ -348,7 +350,6 @@ xcodebuild \
 
 Run iOS unit and UI tests on available iPhone and iPad simulators as described in
 [AGENTS.md](AGENTS.md).
-
 For the Android application, use Android Studio's bundled JBR and an API 36 emulator:
 
 ```sh
@@ -417,3 +418,6 @@ participates in `contribute` and `verify` phases of the macOS/iOS scenario.
 
 Never point this destructive fresh-install test at a production app sandbox or reuse a
 production bearer token.
+
+The complete change-to-gate and live cross-client compatibility policy is documented in
+[docs/test-strategy.md](docs/test-strategy.md).
