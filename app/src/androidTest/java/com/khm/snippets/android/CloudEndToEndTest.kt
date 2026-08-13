@@ -19,9 +19,10 @@ import java.security.KeyStore
  * Opt-in E2E test against a real HTTPS Snippets server and PostgreSQL database.
  *
  * Required runner arguments: snippetsServerUrl, snippetsAccessToken, snippetsSpaceId,
- * and snippetsPhase (`contribute` or `verify`). The same disposable space is populated
- * by macOS and iOS before this test runs. Android must consume both, contribute its own
- * record, survive a complete local reset, and later consume edits made by Apple clients.
+ * and snippetsPhase (`contribute`, `verify`, `delete`, or `verify-deletion`). The same
+ * disposable space is populated by macOS and iOS before this test runs. Android must
+ * consume both, contribute its own record, survive complete local resets, consume edits
+ * made by Apple clients, and publish an offline deletion after a Local Only round trip.
  */
 @RunWith(AndroidJUnit4::class)
 class CloudEndToEndTest {
@@ -42,46 +43,77 @@ class CloudEndToEndTest {
         val requiredServerURL = requireNotNull(serverURL)
         val requiredAccessToken = requireNotNull(accessToken)
         val requiredSpaceID = requireNotNull(spaceID)
-        require(phase == "contribute" || phase == "verify")
+        require(phase in setOf("contribute", "verify", "delete", "verify-deletion"))
 
         destroyLocalInstallationState()
         val keyBundle = portableKeyBundle()
         val client = freshClient(
             keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
 
-        if (phase == "contribute") {
-            assertValues(client.state.value, mapOf(
-                "mac-e2e" to MAC_INITIAL,
-                "ios-e2e" to IOS_INITIAL))
-            val uploaded = SnippetRepository.newSnippet().copy(
-                name = "Android E2E",
-                keyword = "android-e2e",
-                content = ANDROID_INITIAL,
-                tags = listOf("integration", "android"),
-                isPinned = true)
-            client.save(uploaded)
-            assertNull(client.state.value.errorCode)
-            client.syncNow()
-            assertSynced(client.state.value)
-            assertValues(client.state.value, mapOf(
-                "mac-e2e" to MAC_INITIAL,
-                "ios-e2e" to IOS_INITIAL,
-                "android-e2e" to ANDROID_INITIAL))
+        when (phase) {
+            "contribute" -> {
+                assertValues(client.state.value, mapOf(
+                    "mac-e2e" to MAC_INITIAL,
+                    "ios-e2e" to IOS_INITIAL))
+                val uploaded = SnippetRepository.newSnippet().copy(
+                    name = "Android E2E",
+                    keyword = "android-e2e",
+                    content = ANDROID_INITIAL,
+                    tags = listOf("integration", "android"),
+                    isPinned = true)
+                client.save(uploaded)
+                assertNull(client.state.value.errorCode)
+                client.syncNow()
+                assertSynced(client.state.value)
+                assertValues(client.state.value, mapOf(
+                    "mac-e2e" to MAC_INITIAL,
+                    "ios-e2e" to IOS_INITIAL,
+                    "android-e2e" to ANDROID_INITIAL))
 
-            // This models a fresh Android installation. Neither encrypted files nor
-            // the device-bound wrapping key survive; only the portable sync key does.
-            destroyLocalInstallationState()
-            val receiver = freshClient(
-                keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
-            assertValues(receiver.state.value, mapOf(
-                "mac-e2e" to MAC_INITIAL,
-                "ios-e2e" to IOS_INITIAL,
-                "android-e2e" to ANDROID_INITIAL))
-        } else {
-            assertValues(client.state.value, mapOf(
-                "mac-e2e" to MAC_FINAL,
-                "ios-e2e" to IOS_INITIAL,
-                "android-e2e" to ANDROID_FINAL))
+                // This models a fresh Android installation. Neither encrypted files nor
+                // the device-bound wrapping key survive; only the portable sync key does.
+                destroyLocalInstallationState()
+                val receiver = freshClient(
+                    keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
+                assertValues(receiver.state.value, mapOf(
+                    "mac-e2e" to MAC_INITIAL,
+                    "ios-e2e" to IOS_INITIAL,
+                    "android-e2e" to ANDROID_INITIAL))
+            }
+            "verify" -> {
+                assertValues(client.state.value, mapOf(
+                    "mac-e2e" to MAC_FINAL,
+                    "ios-e2e" to IOS_INITIAL,
+                    "android-e2e" to ANDROID_FINAL))
+            }
+            "delete" -> {
+                val beforeDeletion = mapOf(
+                    "mac-e2e" to MAC_FINAL,
+                    "ios-e2e" to IOS_INITIAL,
+                    "android-e2e" to ANDROID_FINAL)
+                assertValues(client.state.value, beforeDeletion)
+
+                client.useDeviceOnly()
+                assertEquals(SyncProvider.DEVICE, client.state.value.provider)
+                assertEquals("On device", client.state.value.syncLabel)
+                val iosRecord = client.state.value.snippets.single { it.keyword == "ios-e2e" }
+                client.delete(iosRecord.id)
+                assertNull(client.state.value.errorCode)
+                assertLibraryValues(client.state.value, FINAL_WITHOUT_IOS)
+
+                // The provider coordinates and agreed base survive Local Only. Returning to
+                // the same HTTP scope must publish the offline deletion as a tombstone.
+                client.configureCloud(requiredServerURL, requiredAccessToken, requiredSpaceID)
+                client.syncNow()
+                assertValues(client.state.value, FINAL_WITHOUT_IOS)
+
+                destroyLocalInstallationState()
+                val receiver = freshClient(
+                    keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
+                assertValues(receiver.state.value, FINAL_WITHOUT_IOS)
+            }
+            "verify-deletion" -> assertValues(client.state.value, FINAL_WITHOUT_IOS)
+            else -> error("validated above")
         }
 
         listOf(MAC_INITIAL, MAC_FINAL, IOS_INITIAL, ANDROID_INITIAL, ANDROID_FINAL)
@@ -112,6 +144,10 @@ class CloudEndToEndTest {
 
     private fun assertValues(state: LibraryState, expected: Map<String, String>) {
         assertSynced(state)
+        assertLibraryValues(state, expected)
+    }
+
+    private fun assertLibraryValues(state: LibraryState, expected: Map<String, String>) {
         assertEquals(expected.size, state.snippets.size)
         assertEquals(expected, state.snippets.associate { it.keyword to it.content })
     }
@@ -156,5 +192,8 @@ class CloudEndToEndTest {
         const val IOS_INITIAL = "snippets-ios-e2e-initial-91a8c211"
         const val ANDROID_INITIAL = "snippets-android-e2e-initial-4f6c77f8"
         const val ANDROID_FINAL = "snippets-android-e2e-final-from-macos-4f6c77f8"
+        val FINAL_WITHOUT_IOS = mapOf(
+            "mac-e2e" to MAC_FINAL,
+            "android-e2e" to ANDROID_FINAL)
     }
 }

@@ -59,6 +59,11 @@ Foundation, Dispatch, ICU, swift-java, and C++ runtimes.
 
 ## Verification
 
+The maintained coverage levels, platform/provider matrix, live CloudKit lane, chaos
+catalogue, and release evidence are defined in
+[testing-strategy.md](testing-strategy.md). The disposable four-way reference lane is
+`scripts/test-cross-platform-sync.sh`.
+
 ```sh
 swift test --package-path AndroidCorePackage
 swift build --package-path AndroidCorePackage \

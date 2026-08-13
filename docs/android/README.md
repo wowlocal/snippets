@@ -134,6 +134,9 @@ shim around the same Swift facade, not a rewrite of the domain core in Kotlin.
   isolation, authentication, key pairing, security, and operations.
 - [delivery-plan.md](delivery-plan.md) breaks the work into phases with exit criteria,
   tests, rollout gates, risks, and a proposed critical path.
+- [testing-strategy.md](testing-strategy.md) is the executable cross-platform verification
+  contract: coverage levels, provider/failure matrices, cadence, CloudKit canaries, and
+  privacy-safe evidence.
 
 ## Non-goals for the first public Android release
 

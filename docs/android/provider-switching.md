@@ -316,6 +316,11 @@ user does not perform an export/import or choose a merge mode.
 
 ## Required tests
 
+The maintained lane ownership, current automation status, live CloudKit canary, failure
+catalogue, and release cadence are defined in
+[testing-strategy.md](testing-strategy.md). The cases below remain the provider-switching
+acceptance contract.
+
 - Preference interpretation and downgrade across absent/false/true iCloud state and all
   new selection states.
 - No HTTP DNS/socket/key creation for an iCloud-only user; no CloudKit construction for

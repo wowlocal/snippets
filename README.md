@@ -311,6 +311,9 @@ More detail:
 - [docs/android/README.md](docs/android/README.md) — implementation plan for the native
   Android app, shared Swift core, fully compatible iCloud/HTTP provider switching, and
   the self-hostable sync service. It is a design proposal, not shipping status.
+- [docs/android/testing-strategy.md](docs/android/testing-strategy.md) — executable test
+  levels, cross-platform/provider matrices, CloudKit canaries, chaos coverage, and release
+  gates for Android, Apple clients, and the sync service.
 - [docs/diagnostics.md](docs/diagnostics.md) — persistent logging, exports, privacy, and
   collection workflows.
 
@@ -359,10 +362,12 @@ all three to one disposable PostgreSQL/OIDC/HTTPS server:
 ```
 
 It verifies macOS → iOS → Android convergence, edits an Android record from macOS and a
-macOS record from iOS, resets client-local installations between phases, and finally
-checks all clients plus server-side RLS and plaintext absence. It expects the separate
-server worktree in the sibling `../snippets-server` directory by default; override that
-location with `SNIPPETS_SERVER_WORKTREE`.
+macOS record from iOS, resets client-local installations between phases, then switches
+Android through Local Only, publishes an offline deletion as a tombstone, and proves on
+all three clients that it is not resurrected. It also checks negative OIDC cases, space
+idempotency, tenant isolation, server-side RLS, and plaintext absence. It expects the
+separate server worktree in the sibling `../snippets-server` directory by default;
+override that location with `SNIPPETS_SERVER_WORKTREE`.
 
 The lower-level live `SnippetsCloudTransportTests` case remains available when only a
 disposable, initially empty Snippets Cloud space is available. It uploads an Apple-core
