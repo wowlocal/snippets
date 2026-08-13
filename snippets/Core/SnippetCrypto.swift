@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 // Compiled into the app, the CLI, and the test package — see `Snippet.swift`.
 // Foundation and CryptoKit only: no AppKit (the CLI has no GUI) and no

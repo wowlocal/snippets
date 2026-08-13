@@ -1148,7 +1148,7 @@ private final class VaultSettingsViewController: NSViewController {
         // to be told "no" afterwards is worse than being told now.
         guard !SyncCoordinator.isEnabled else {
             let alert = NSAlert()
-            alert.messageText = "Turn off iCloud Sync first"
+            alert.messageText = "Turn off cloud sync first"
             alert.informativeText = "\(SecureSnippetStore.Failure.forgetRequiresSyncOff)"
             alert.runModal()
             return
@@ -1159,7 +1159,7 @@ private final class VaultSettingsViewController: NSViewController {
         // old engine until it has returned and can no longer write a base or tombstones.
         guard app.syncCoordinator.isQuiescent else {
             let alert = NSAlert()
-            alert.messageText = "iCloud Sync is still stopping"
+            alert.messageText = "Cloud sync is still stopping"
             alert.informativeText = "Wait a moment for the current sync round to finish, then try again."
             alert.runModal()
             return
@@ -1178,7 +1178,7 @@ private final class VaultSettingsViewController: NSViewController {
             ? "This permanently removes this Mac's encrypted copies while preserving the "
                 + "shared key. Snippets cannot tell whether these records finished syncing "
                 + "or another Mac has a copy. Anything that exists only on this Mac will be "
-                + "lost; re-enabling iCloud Sync can restore only records already uploaded. "
+                + "lost; re-enabling cloud sync can restore only records already uploaded. "
                 + "There is no local undo."
             : "This deletes the encrypted snippets and the key that opens them. "
                 + "There is no undo, and no export or backup of this app contains their text."
@@ -1213,7 +1213,7 @@ private extension NSBox {
     }
 }
 
-/// The opt-in switch for iCloud sync, and an honest account of what it does.
+/// The opt-in switch for the selected cloud provider, and an honest account of what it does.
 ///
 /// Off by default, and off means nothing is constructed — see `SyncCoordinator`.
 ///
@@ -1225,7 +1225,9 @@ private extension NSBox {
 @MainActor
 private final class SyncSettingsViewController: NSViewController {
     private let enableCheckbox = NSButton(
-        checkboxWithTitle: "Sync snippets with iCloud", target: nil, action: nil)
+        checkboxWithTitle: "Sync snippets with the selected cloud", target: nil, action: nil)
+    private let providerPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let configureCloudButton = NSButton(title: "Configure…", target: nil, action: nil)
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let syncNowButton = NSButton(title: "Sync Now", target: nil, action: nil)
     private let clearHaltButton = NSButton(title: "Resume After Review", target: nil, action: nil)
@@ -1235,14 +1237,29 @@ private final class SyncSettingsViewController: NSViewController {
         let (rootView, stack) = makeSettingsPane()
         view = rootView
 
-        let title = NSTextField(labelWithString: "iCloud Sync")
+        let title = NSTextField(labelWithString: "Cloud Sync")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
         let intro = makeSecondaryLabel(
-            "Keeps your snippets on every Mac signed in to this iCloud account. "
-            + "Every snippet is encrypted on this Mac before it leaves, so Apple stores only "
-            + "ciphertext \u{2014} names, keywords and tags included. The key is kept in your "
-            + "iCloud Keychain, which is how your other Macs can read what this one sends.")
+            "Choose iCloud or Snippets Cloud without migrating away from either one. "
+            + "Only the selected provider is writable. Every snippet is encrypted on this Mac "
+            + "before it leaves; both providers carry the same opaque wire records.")
+
+        providerPopup.addItems(withTitles: SyncBackendSelectionStore.Provider.allCases.map(\.displayName))
+        for (index, provider) in SyncBackendSelectionStore.Provider.allCases.enumerated() {
+            providerPopup.item(at: index)?.representedObject = provider.rawValue
+        }
+        providerPopup.target = self
+        providerPopup.action = #selector(handleProviderChanged(_:))
+        configureCloudButton.target = self
+        configureCloudButton.action = #selector(configureSnippetsCloud)
+        LiquidGlassDesign.configureActionButton(configureCloudButton, symbolName: "server.rack")
+        let providerLabel = NSTextField(labelWithString: "Cloud provider:")
+        providerLabel.textColor = .secondaryLabelColor
+        let providerRow = NSStackView(views: [providerLabel, providerPopup, configureCloudButton, NSView()])
+        providerRow.orientation = .horizontal
+        providerRow.alignment = .centerY
+        providerRow.spacing = 8
 
         enableCheckbox.target = self
         enableCheckbox.action = #selector(handleEnabledChanged(_:))
@@ -1265,14 +1282,14 @@ private final class SyncSettingsViewController: NSViewController {
         // it. Saying so here is cheaper than a support question.
         let limits = makeTertiaryLabel(
             "How often you use each snippet stays on this Mac and never syncs. "
-            + "iCloud schedules silent background sync; use Sync Now if a change from another "
-            + "device has not appeared yet.")
+            + "Use Sync Now if a change from another device has not appeared yet.")
 
         secondMacLabel.font = .systemFont(ofSize: 12)
         secondMacLabel.textColor = .secondaryLabelColor
 
         stack.addArrangedSubview(title)
         stack.addArrangedSubview(intro)
+        stack.addArrangedSubview(providerRow)
         stack.addArrangedSubview(enableCheckbox)
         stack.addArrangedSubview(statusLabel)
         stack.addArrangedSubview(buttonRow)
@@ -1306,6 +1323,13 @@ private final class SyncSettingsViewController: NSViewController {
         guard isViewLoaded, let coordinator = Self.coordinator else { return }
 
         enableCheckbox.state = SyncCoordinator.isEnabled ? .on : .off
+        let selection = SyncBackendSelectionStore()
+        if let item = providerPopup.itemArray.first(where: {
+            ($0.representedObject as? String) == selection.provider.rawValue
+        }) {
+            providerPopup.select(item)
+        }
+        configureCloudButton.isHidden = selection.provider != .snippetsCloud
         statusLabel.stringValue = coordinator.statusDescription
 
         // Shown whenever sync is on, not only when an engine exists: a start that failed
@@ -1330,6 +1354,11 @@ private final class SyncSettingsViewController: NSViewController {
     /// worth naming precisely rather than covering with one paragraph of hedging.
     private func secondMacAdvice() -> String {
         guard SyncCoordinator.isEnabled, let app = NSApp.delegate as? AppDelegate else { return "" }
+        if SyncBackendSelectionStore().provider == .snippetsCloud {
+            return "Another device joins this library through approved pairing or recovery. "
+                + "The server never receives the portable sync-v1 key. Switching back to "
+                + "iCloud keeps using the existing CloudKit container and implementation."
+        }
         let session = app.vaultSession
 
         guard session.syncsBetweenDevices else {
@@ -1357,6 +1386,66 @@ private final class SyncSettingsViewController: NSViewController {
     @objc private func handleEnabledChanged(_ sender: NSButton) {
         guard let coordinator = Self.coordinator else { return }
         coordinator.setEnabled(sender.state == .on)
+        reloadFromStorage()
+    }
+
+    @objc private func handleProviderChanged(_ sender: NSPopUpButton) {
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let provider = SyncBackendSelectionStore.Provider(rawValue: rawValue) else { return }
+        switch provider {
+        case .iCloud:
+            SyncBackendSelectionStore().selectICloud()
+            Self.coordinator?.reloadProviderSelection()
+            reloadFromStorage()
+        case .snippetsCloud:
+            configureSnippetsCloud()
+        }
+    }
+
+    @objc private func configureSnippetsCloud() {
+        let selection = SyncBackendSelectionStore()
+        let current = selection.cloudCoordinates
+        let alert = NSAlert()
+        alert.messageText = "Configure Snippets Cloud"
+        alert.informativeText = "Enter an HTTPS server, space ID, and OIDC access token. The token stays in this Mac’s device-only Keychain."
+        alert.addButton(withTitle: "Switch and Sync")
+        alert.addButton(withTitle: "Cancel")
+
+        let server = NSTextField(string: current?.serverURL.absoluteString ?? "")
+        server.placeholderString = "https://sync.example.com"
+        let space = NSTextField(string: current?.spaceID.uuidString.lowercased() ?? "")
+        space.placeholderString = "Space UUID"
+        let token = NSSecureTextField(string: "")
+        token.placeholderString = "OIDC access token"
+        for field in [server, space, token] {
+            field.translatesAutoresizingMaskIntoConstraints = false
+            field.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        }
+        let fields = NSStackView(views: [server, space, token])
+        fields.orientation = .vertical
+        fields.spacing = 8
+        alert.accessoryView = fields
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            reloadFromStorage()
+            return
+        }
+        defer { token.stringValue = "" }
+        do {
+            guard let url = URL(string: server.stringValue),
+                  let spaceID = UUID(uuidString: space.stringValue) else {
+                throw SyncBackendSelectionStore.Failure.missingConfiguration
+            }
+            try selection.selectSnippetsCloud(
+                serverURL: url,
+                spaceID: spaceID,
+                accessToken: token.stringValue)
+            Self.coordinator?.reloadProviderSelection()
+        } catch {
+            let failure = NSAlert(error: error)
+            failure.messageText = "Couldn’t Configure Snippets Cloud"
+            failure.runModal()
+        }
         reloadFromStorage()
     }
 

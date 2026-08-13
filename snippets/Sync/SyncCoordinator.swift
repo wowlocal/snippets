@@ -211,7 +211,8 @@ final class SyncCoordinator {
     private let library: any SyncLibraryAccess
     private let keys: SyncKeyStore
     private let device: String
-    private let transportFactory: () -> any SyncTransport
+    private let transportFactory: () throws -> any SyncTransport
+    private let backendSelection: SyncBackendSelectionStore
     private let offlineRetryScheduler: SyncOfflineRetryScheduler
 
     private(set) var engine: SyncEngine?
@@ -271,13 +272,16 @@ final class SyncCoordinator {
         library: any SyncLibraryAccess,
         keys: SyncKeyStore,
         device: String,
-        transportFactory: @escaping () -> any SyncTransport = { CloudKitTransport() },
+        transportFactory: (() throws -> any SyncTransport)? = nil,
+        backendSelection: SyncBackendSelectionStore? = nil,
         offlineRetryScheduler: SyncOfflineRetryScheduler? = nil
     ) {
         self.library = library
         self.keys = keys
         self.device = device
-        self.transportFactory = transportFactory
+        let selection = backendSelection ?? SyncBackendSelectionStore()
+        self.backendSelection = selection
+        self.transportFactory = transportFactory ?? { try selection.makeTransport() }
         self.offlineRetryScheduler = offlineRetryScheduler ?? SyncOfflineRetryScheduler()
     }
 
@@ -355,11 +359,13 @@ final class SyncCoordinator {
 
         let material: Data
         let sealer: SnippetCryptoSealer
+        let transport: any SyncTransport
         do {
             material = try keys.materialMintingIfNeeded()
             sealer = SnippetCryptoSealer(
                 keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
             try discardAgreedBaseIfWireKeyChanged(material)
+            transport = try transportFactory()
         } catch {
             // Not a halt: no remote or library data was changed. The keychain may not be
             // answering, or the stale agreed base may not yet be removable. Both are
@@ -380,7 +386,6 @@ final class SyncCoordinator {
         startFailure = nil
         activeKeyMaterial = material
 
-        let transport = transportFactory()
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: device)
         engine.onSafetyHaltPersistenceFailure = {
@@ -391,10 +396,11 @@ final class SyncCoordinator {
             _ = UserDefaults.standard.synchronize()
         }
         let generation = lifecycleGeneration
-        engine.onStateChange = { [weak self] state in
+        engine.onStateChange = { [weak self, weak engine] state in
             MainActor.assumeIsolated {
-                guard let self, self.lifecycleGeneration == generation else { return }
+                guard let self, let engine, self.lifecycleGeneration == generation else { return }
                 self.publish(state)
+                self.handleExpectedProviderTransition(state, engine: engine)
             }
         }
 
@@ -405,7 +411,10 @@ final class SyncCoordinator {
         // it does not transition during the no-op `sync()` below, so its callback will
         // not fire. Publish it explicitly or Settings would show `.disabled` after a
         // relaunch even though the engine correctly refuses to fetch.
-        if engine.state.isHalted { publish(engine.state) }
+        if engine.state.isHalted {
+            publish(engine.state)
+            handleExpectedProviderTransition(engine.state, engine: engine)
+        }
 
         startPolling(every: transport.pollInterval)
         startEventPump(for: transport)
@@ -473,6 +482,39 @@ final class SyncCoordinator {
                 self.shutdownTask = nil
                 if Self.isEnabled { self.start() }
             }
+        }
+    }
+
+    /// Rebuilds the transport after Settings changed the selected provider.
+    ///
+    /// The selection store records one durable, one-shot authorization. If the new
+    /// account identity differs from the old checkpoint, the ordinary sticky halt is
+    /// cleared only for this explicit Switch-and-Sync action; the engine then performs
+    /// its existing journal-first reset. Unexpected account changes retain the halt.
+    func reloadProviderSelection() {
+        stop()
+        if Self.isEnabled, shutdownTask == nil { start() }
+    }
+
+    private func handleExpectedProviderTransition(
+        _ state: SyncEngine.State,
+        engine: SyncEngine
+    ) {
+        guard backendSelection.hasPendingProviderSwitch else { return }
+        switch state {
+        case .halted(.accountChanged, _):
+            backendSelection.clearPendingProviderSwitch()
+            engine.clearHaltAfterUserReview()
+            _ = syncNow(trigger: .retry)
+        case .idle(let lastSync) where lastSync != nil:
+            // A pristine install or two scopes that legitimately bind identically need
+            // no reset. Consume the one-shot authorization after the successful round.
+            backendSelection.clearPendingProviderSwitch()
+        case .halted:
+            // A provider switch never authorizes clearing a different safety stop.
+            backendSelection.clearPendingProviderSwitch()
+        default:
+            break
         }
     }
 
@@ -1029,9 +1071,9 @@ final class SyncCoordinator {
         case .offline(let retryAfter):
             let formatter = DateFormatter()
             formatter.timeStyle = .short
-            return "Cannot reach iCloud. Trying again at \(formatter.string(from: retryAfter))."
+            return "Cannot reach \(backendSelection.provider.displayName). Trying again at \(formatter.string(from: retryAfter))."
         case .needsAuthentication(let detail):
-            return "iCloud needs attention: \(detail)"
+            return "\(backendSelection.provider.displayName) needs attention: \(detail)"
         case .waitingForVault(let detail):
             return "Waiting: \(detail)."
         case .halted(let reason, let detail):
