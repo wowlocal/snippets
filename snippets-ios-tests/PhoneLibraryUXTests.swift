@@ -267,12 +267,42 @@ final class PhoneLibraryUXTests: XCTestCase {
         let rowContent = try XCTUnwrap(
             cell.descendant(withAccessibilityIdentifier: "phone-snippet-row-content")
         )
+        let rowHighlight = try XCTUnwrap(
+            cell.descendant(withAccessibilityIdentifier: "phone-snippet-highlight")
+        )
         let pill = try XCTUnwrap(
             cell.descendant(withAccessibilityIdentifier: "phone-tag-pill")
         )
         XCTAssertLessThan(pill.bounds.width, cell.bounds.width / 2)
         XCTAssertEqual(rowContent.frame.minX, 18, accuracy: 0.5)
         XCTAssertEqual(cell.bounds.width - rowContent.frame.maxX, 18, accuracy: 0.5)
+        XCTAssertEqual(
+            rowHighlight.frame.minX,
+            PhoneSnippetCell.highlightHorizontalInset,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            cell.bounds.width - rowHighlight.frame.maxX,
+            PhoneSnippetCell.highlightHorizontalInset,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            rowContent.frame.minX - rowHighlight.frame.minX,
+            12,
+            accuracy: 0.5,
+            "The full-row highlight should leave comfortable padding before the text"
+        )
+        XCTAssertEqual(
+            rowHighlight.frame.minY,
+            PhoneSnippetCell.highlightVerticalInset,
+            accuracy: 0.5
+        )
+        XCTAssertGreaterThanOrEqual(rowContent.frame.minY - rowHighlight.frame.minY, 8)
+        XCTAssertEqual(rowHighlight.alpha, 0, accuracy: 0.01)
+        cell.setHighlighted(true, animated: false)
+        XCTAssertEqual(rowHighlight.alpha, 1, accuracy: 0.01)
+        cell.setHighlighted(false, animated: false)
+        XCTAssertEqual(rowHighlight.alpha, 0, accuracy: 0.01)
         XCTAssertEqual(cell.backgroundColor?.cgColor.alpha ?? 1, 0, accuracy: 0.01)
 
         // UITableView owns these margins and can mutate them while grouped cells are

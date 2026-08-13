@@ -896,6 +896,8 @@ final class PhoneSnippetCell: UITableViewCell {
     static let actionSpacing: CGFloat = 8
     static let actionEdgeInset: CGFloat = 8
     static let actionSurfaceGap: CGFloat = 8
+    static let highlightHorizontalInset: CGFloat = 6
+    static let highlightVerticalInset: CGFloat = 4
     static let leadingActionWidth = actionEdgeInset + actionWidth + actionSurfaceGap
     static let trailingActionWidth = actionEdgeInset
         + actionWidth * 2
@@ -1023,6 +1025,8 @@ final class PhoneSnippetCell: UITableViewCell {
         highlightView.layer.cornerRadius = 20
         highlightView.layer.cornerCurve = .continuous
         highlightView.alpha = 0
+        highlightView.accessibilityIdentifier = "phone-snippet-highlight"
+        highlightView.isAccessibilityElement = false
 
         rowContentView.translatesAutoresizingMaskIntoConstraints = false
         rowContentView.backgroundColor = .clear
@@ -1141,10 +1145,22 @@ final class PhoneSnippetCell: UITableViewCell {
             deleteActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
             pinActionButton.widthAnchor.constraint(equalToConstant: Self.actionWidth),
 
-            highlightView.leadingAnchor.constraint(equalTo: swipeSurfaceView.leadingAnchor, constant: 16),
-            highlightView.trailingAnchor.constraint(equalTo: swipeSurfaceView.trailingAnchor, constant: -16),
-            highlightView.topAnchor.constraint(equalTo: swipeSurfaceView.topAnchor, constant: 3),
-            highlightView.bottomAnchor.constraint(equalTo: swipeSurfaceView.bottomAnchor, constant: -3),
+            highlightView.leadingAnchor.constraint(
+                equalTo: swipeSurfaceView.leadingAnchor,
+                constant: Self.highlightHorizontalInset
+            ),
+            highlightView.trailingAnchor.constraint(
+                equalTo: swipeSurfaceView.trailingAnchor,
+                constant: -Self.highlightHorizontalInset
+            ),
+            highlightView.topAnchor.constraint(
+                equalTo: swipeSurfaceView.topAnchor,
+                constant: Self.highlightVerticalInset
+            ),
+            highlightView.bottomAnchor.constraint(
+                equalTo: swipeSurfaceView.bottomAnchor,
+                constant: -Self.highlightVerticalInset
+            ),
 
             // Fixed anchors, rather than layoutMarginsGuide, keep every reused row on
             // exactly the same horizontal grid.
