@@ -342,3 +342,26 @@ xcodebuild \
 
 Run iOS unit and UI tests on available iPhone and iPad simulators as described in
 [AGENTS.md](AGENTS.md).
+
+For the Android application, use Android Studio's bundled JBR and an API 36 emulator:
+
+```sh
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest
+```
+
+`CloudEndToEndTest` is opt-in because it destroys only the test application's local
+encrypted state and requires a disposable Snippets Cloud space. It uploads an encrypted
+snippet, deletes the local files and Android Keystore wrapping key, then downloads and
+decrypts the record with the same portable `sync-v1` key:
+
+```sh
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.khm.snippets.android.CloudEndToEndTest \
+  -Pandroid.testInstrumentationRunnerArguments.snippetsServerUrl=https://sync-test.example \
+  -Pandroid.testInstrumentationRunnerArguments.snippetsAccessToken='<ephemeral-test-token>' \
+  -Pandroid.testInstrumentationRunnerArguments.snippetsSpaceId='<disposable-space-uuid>'
+```
+
+Never point this destructive fresh-install test at a production app sandbox or reuse a
+production bearer token.
