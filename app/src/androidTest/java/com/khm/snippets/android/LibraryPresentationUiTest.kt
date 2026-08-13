@@ -1,11 +1,15 @@
 package com.khm.snippets.android
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.semantics.SemanticsActions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Before
@@ -35,7 +39,7 @@ class LibraryPresentationUiTest {
     @Before
     fun showLibrary() {
         compose.setContent {
-            MaterialTheme {
+            SnippetsTheme(dynamicColor = false) {
                 LibraryScreen(
                     state = LibraryState(snippets = listOf(snippet)),
                     query = "",
@@ -55,32 +59,43 @@ class LibraryPresentationUiTest {
     }
 
     @Test
-    fun cardCopiesWhileEditAndShareRemainSeparateActions() {
+    fun rowCopiesWhileEditAndShareStayInTheOverflowMenu() {
         compose.onNodeWithText("Email follow up").performClick()
         assertEquals(1, copyCount)
+        compose.onNodeWithText("Email follow up").assert(
+            SemanticsMatcher("has Copy snippet accessibility action") { node ->
+                node.config.contains(SemanticsActions.OnClick) &&
+                    node.config[SemanticsActions.OnClick].label == "Copy snippet"
+            })
         compose.onAllNodesWithText("Copy").assertCountEquals(0)
+        compose.onAllNodesWithText("Edit").assertCountEquals(0)
+        compose.onAllNodesWithText("Share").assertCountEquals(0)
 
+        compose.onNodeWithContentDescription("More options for Email follow up").performClick()
         compose.onNodeWithText("Edit").performClick()
         assertSame(snippet, edit)
 
+        compose.onNodeWithContentDescription("More options for Email follow up").performClick()
         compose.onNodeWithText("Share").performClick()
         assertEquals(1, shareCount)
+        assertEquals(1, copyCount)
     }
 
     @Test
     fun tagsAreVisibleAndCanOpenOrNarrowTheFilter() {
-        compose.onNodeWithText("Tags").performClick()
+        compose.onNodeWithContentDescription("Tag filters").performClick()
         assertEquals(true, showsTags)
 
-        compose.onNodeWithText("work").performClick()
+        compose.onAllNodesWithText("work")[0].performClick()
         assertEquals("work", toggledTag)
     }
 
     @Test
-    fun tagsAndSecondaryActionsShareOneRow() {
-        val tagBounds = compose.onNodeWithText("work").fetchSemanticsNode().boundsInRoot
-        val editBounds = compose.onNodeWithText("Edit").fetchSemanticsNode().boundsInRoot
-
-        assertEquals(true, tagBounds.top < editBounds.bottom && editBounds.top < tagBounds.bottom)
+    fun searchStatusAndFastTagFiltersAreAlwaysAvailable() {
+        compose.onNodeWithContentDescription("Search snippets").assertExists()
+        compose.onNodeWithText("Email follow up").assertHasClickAction()
+        compose.onNodeWithText("On device").assertExists()
+        compose.onAllNodesWithText("email").assertCountEquals(1)
+        compose.onAllNodesWithText("work").assertCountEquals(1)
     }
 }
