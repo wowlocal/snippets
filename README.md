@@ -311,6 +311,9 @@ More detail:
 - [docs/cloud-sync.md](docs/cloud-sync.md) — sync safety and secure-snippet design. Its
   older phase/status table predates the shipping CloudKit transport and iOS target; the
   current code is authoritative for implementation status.
+- [docs/android/README.md](docs/android/README.md) — implementation plan for the native
+  Android app, shared Swift core, fully compatible iCloud/HTTP provider switching, and
+  the self-hostable sync service. It is a design proposal, not shipping status.
 - [docs/diagnostics.md](docs/diagnostics.md) — persistent logging, exports, privacy, and
   collection workflows.
 
