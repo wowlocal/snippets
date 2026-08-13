@@ -84,9 +84,14 @@ class HttpSyncClient {
             repeat(count) { relativeIndex ->
                 val offer = offers.getJSONObject(offset + relativeIndex)
                 batch += offer
+                val expectedRecordVersion = recordVersion(offer)
                 items.put(JSONObject()
                     .put("record", swiftToServerRecord(offer))
-                    .put("expectedRecordVersion", recordVersion(offer)))
+                    // The protocol requires this nullable member to be present.
+                    // JSONObject.put(name, null) removes it instead of encoding null.
+                    .put(
+                        "expectedRecordVersion",
+                        expectedRecordVersion ?: JSONObject.NULL))
             }
 
             val response = JSONObject(request(
