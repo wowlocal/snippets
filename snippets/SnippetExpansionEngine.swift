@@ -23,6 +23,9 @@ final class SnippetExpansionEngine {
     static let accessibilityRequiredStatus = "Snippets needs Accessibility access to expand keywords."
 
     var onStateChange: (() -> Void)?
+    /// The app layer owns the user's opt-in. Keeping this as a closure avoids
+    /// coupling the typing engine to UserDefaults or the diagnostics backend.
+    var expansionVerboseDiagnosticsEnabled: () -> Bool = { false }
     /// Supplied by the app layer so this engine can request one decrypted record without
     /// learning how the vault key is stored. The lease carries bytes rather than a
     /// `String`, and a secure shell never reaches injection unless this resolver returns
@@ -67,9 +70,13 @@ final class SnippetExpansionEngine {
     private var suggestionActive = false
     private var suggestionQuery = ""
     private var suggestionDeleteCount = 1
-    private var suggestionLocalFallbackUsable = false
-    private var suggestionHasSyncedAXContext = false
+    private var suggestionContextState: SuggestionContextState = .localDisplayOnly
     private var suggestionSyncGeneration = 0
+    private var suggestionSessionGeneration: UInt = 0
+    private var suggestionAXObserver: AXObserver?
+    private var suggestionAXObserverSource: CFRunLoopSource?
+    private var suggestionAXObservedElements: [AXUIElement] = []
+    private var suggestionObserverAllowsAutoExpand = false
     /// Non-nil only while LocalAuthentication is servicing an explicit secure
     /// suggestion. Its own activation/secure-input transitions must not invalidate
     /// the target we are about to restore and re-check.
@@ -78,19 +85,13 @@ final class SnippetExpansionEngine {
     /// sometimes delivers the restored target's activation notification late; only
     /// that exact PID gets this grace, while activating any other app still cancels.
     private var secureExpansionActivationTargetPID: pid_t?
-    /// Frozen for the lifetime of one suggestion session so the three refreshes
-    /// per keystroke cannot reshuffle rows under the user's fingers.
+    /// Frozen for the lifetime of one suggestion session so AX notifications
+    /// cannot reshuffle rows under the user's fingers by changing frecency.
     private var suggestionFrecency: FrecencySnapshot = .empty
     /// The query the user had typed when they accepted from the panel, held
     /// only until `expand()` consumes it. Never set on an auto-expand path.
     private var pendingSelectionMemoryQuery: String?
     private lazy var suggestionPanel = SuggestionPanelController()
-    // Host apps can apply text edits asynchronously; reread focused text more
-    // than once before trusting the suggestion context for expansion.
-    private let suggestionTextSyncDelays: [Duration] = [
-        .milliseconds(18),
-        .milliseconds(60)
-    ]
     /// LocalAuthentication can return just before the host regains its focused AX
     /// element. During this bounded handoff, keep polling; only an exact fresh match
     /// authorizes deletion, so transient system-UI focus cannot cause a blind write.
@@ -156,7 +157,28 @@ final class SnippetExpansionEngine {
     private enum FocusedTriggerContextRead {
         case found(SuggestionTriggerContext)
         case missingTrigger
-        case unavailable
+        case unavailable(AXContextUnavailable)
+    }
+
+    private struct AXContextUnavailable {
+        let stage: DiagnosticExpansionAXStage
+        let failure: DiagnosticExpansionAXFailure
+        let errorCode: Int?
+    }
+
+    private enum AXTextRead {
+        case value(String)
+        case unavailable(AXContextUnavailable)
+    }
+
+    private enum AXRangeRead {
+        case value(CFRange)
+        case unavailable(AXContextUnavailable)
+    }
+
+    private enum AXElementRead {
+        case value(AXUIElement)
+        case unavailable(AXContextUnavailable)
     }
 
     private enum SecureDeletionRevalidation {
@@ -618,10 +640,11 @@ final class SnippetExpansionEngine {
         axBudget: AXMessagingBudget
     ) {
         suggestionActive = true
+        suggestionSessionGeneration &+= 1
         suggestionQuery = ""
         suggestionDeleteCount = 1
-        suggestionLocalFallbackUsable = true
-        suggestionHasSyncedAXContext = false
+        suggestionContextState = .localDisplayOnly
+        suggestionObserverAllowsAutoExpand = false
         suggestionFrecency = usage.makeRankingSnapshot()
         pendingSelectionMemoryQuery = nil
 
@@ -636,7 +659,11 @@ final class SnippetExpansionEngine {
             anchorFocusedElement: anchorFocusedElement,
             axBudget: axBudget
         )
-        scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: false)
+        startSuggestionAccessibilityObserver(anchorFocusedElement: anchorFocusedElement)
+        scheduleSuggestionContextRefresh(
+            operation: .activation,
+            expectedQuery: "",
+            allowAutoExpand: false)
         startSuggestionSecureInputWatchdog()
     }
 
@@ -661,6 +688,158 @@ final class SnippetExpansionEngine {
         suggestionSecureInputWatchdog = nil
     }
 
+    private func startSuggestionAccessibilityObserver(anchorFocusedElement: AXUIElement) {
+        let sessionGeneration = suggestionSessionGeneration
+        Task { @MainActor [weak self] in
+            // Register immediately after leaving the event-tap callback so AX
+            // setup can never delay delivery of the trigger key to the host.
+            await Task.yield()
+            guard let self,
+                  self.suggestionActive,
+                  self.suggestionSessionGeneration == sessionGeneration else { return }
+            self.installSuggestionAccessibilityObserver(
+                anchorFocusedElement: anchorFocusedElement)
+        }
+    }
+
+    private func installSuggestionAccessibilityObserver(anchorFocusedElement: AXUIElement) {
+        stopSuggestionAccessibilityObserver()
+
+        var pid: pid_t = 0
+        let pidResult = AXUIElementGetPid(anchorFocusedElement, &pid)
+        guard pidResult == .success else {
+            recordExpansionAccessibility(
+                operation: .observerRegistration,
+                outcome: .unavailable,
+                stateBefore: suggestionContextState,
+                stateAfter: suggestionContextState,
+                unavailable: axUnavailable(stage: .observerCreation, error: pidResult))
+            return
+        }
+
+        var observer: AXObserver?
+        let creationResult = AXObserverCreate(
+            pid,
+            { _, _, notification, refcon in
+                guard let refcon else { return }
+                let engine = Unmanaged<SnippetExpansionEngine>
+                    .fromOpaque(refcon)
+                    .takeUnretainedValue()
+                engine.receiveSuggestionAccessibilityNotification(notification)
+            },
+            &observer)
+        guard creationResult == .success, let observer else {
+            recordExpansionAccessibility(
+                operation: .observerRegistration,
+                outcome: .unavailable,
+                stateBefore: suggestionContextState,
+                stateAfter: suggestionContextState,
+                unavailable: axUnavailable(stage: .observerCreation, error: creationResult))
+            return
+        }
+
+        let elements = focusedTextContextCandidates(
+            startingAt: anchorFocusedElement,
+            axBudget: AXMessagingBudget(totalTimeoutSeconds: 0.1))
+        let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        let notifications: [(CFString, DiagnosticExpansionAXStage)] = [
+            (kAXValueChangedNotification as CFString, .valueNotification),
+            (kAXSelectedTextChangedNotification as CFString, .selectionNotification),
+        ]
+        var registeredAny = false
+        var lastFailure: AXContextUnavailable?
+
+        for element in elements {
+            for (notification, stage) in notifications {
+                let result = AXObserverAddNotification(observer, element, notification, refcon)
+                if result == .success || result == .notificationAlreadyRegistered {
+                    registeredAny = true
+                } else {
+                    lastFailure = axUnavailable(stage: stage, error: result)
+                }
+            }
+        }
+
+        guard registeredAny else {
+            recordExpansionAccessibility(
+                operation: .observerRegistration,
+                outcome: .unavailable,
+                stateBefore: suggestionContextState,
+                stateAfter: suggestionContextState,
+                unavailable: lastFailure ?? AXContextUnavailable(
+                    stage: .observerCreation,
+                    failure: .other,
+                    errorCode: nil))
+            return
+        }
+
+        // Some hosts expose only one of the two notifications, or expose it
+        // only on one level of the focused-element chain. The observer is
+        // still useful, but retain the rejected registration reason so an
+        // exported log explains why updates may be incomplete.
+        if let lastFailure {
+            recordExpansionAccessibility(
+                operation: .observerRegistration,
+                outcome: .unavailable,
+                stateBefore: suggestionContextState,
+                stateAfter: suggestionContextState,
+                unavailable: lastFailure)
+        }
+
+        let source = AXObserverGetRunLoopSource(observer)
+        suggestionAXObserver = observer
+        suggestionAXObserverSource = source
+        suggestionAXObservedElements = elements
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        recordExpansionAccessibility(
+            operation: .observerRegistration,
+            outcome: .observing,
+            stateBefore: suggestionContextState,
+            stateAfter: suggestionContextState,
+            stage: .observerCreation)
+    }
+
+    private func stopSuggestionAccessibilityObserver() {
+        if let source = suggestionAXObserverSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        if let observer = suggestionAXObserver {
+            for element in suggestionAXObservedElements {
+                _ = AXObserverRemoveNotification(
+                    observer, element, kAXValueChangedNotification as CFString)
+                _ = AXObserverRemoveNotification(
+                    observer, element, kAXSelectedTextChangedNotification as CFString)
+            }
+        }
+        suggestionAXObserverSource = nil
+        suggestionAXObservedElements.removeAll()
+        suggestionAXObserver = nil
+    }
+
+    /// AXObserver's source is installed on the main run loop, matching the
+    /// event tap. Keep the C callback itself nonisolated and make that invariant
+    /// explicit at the actor boundary.
+    nonisolated private func receiveSuggestionAccessibilityNotification(_ notification: CFString) {
+        MainActor.assumeIsolated {
+            handleSuggestionAccessibilityNotification(notification)
+        }
+    }
+
+    private func handleSuggestionAccessibilityNotification(_ notification: CFString) {
+        guard suggestionActive, !isInjecting else { return }
+        let stage: DiagnosticExpansionAXStage =
+            notification == (kAXSelectedTextChangedNotification as CFString)
+                ? .selectionNotification
+                : .valueNotification
+        refreshSuggestionContextFromFocusedText(
+            operation: .observerNotification,
+            expectedQuery: nil,
+            readIsAuthoritative: true,
+            allowAutoExpand: suggestionObserverAllowsAutoExpand,
+            dismissOnMissingTrigger: true,
+            notificationStage: stage)
+    }
+
     private func selectSuggestion(_ snippet: Snippet, deletion overrideDeletion: TriggerDeletion? = nil) {
         if let overrideDeletion {
             // Auto-expand callers pass a deletion from a context they
@@ -681,19 +860,18 @@ final class SnippetExpansionEngine {
         case confirmed(SuggestionTriggerContext)
         case mismatch
         case missingTrigger
-        case unavailable
+        case unavailable(AXContextUnavailable)
         /// The host text before the caret contains multi-scalar graphemes;
         /// no backspace count is reliable there.
         case unsafe
 
-        var isConfirmed: Bool {
-            if case .confirmed = self { return true }
-            return false
-        }
     }
 
-    private func readAcceptContext(matchingQuery query: String) -> AcceptContextRead {
-        switch focusedTriggerContext() {
+    private func readAcceptContext(
+        matchingQuery query: String,
+        axBudget: AXMessagingBudget
+    ) -> AcceptContextRead {
+        switch focusedTriggerContext(axBudget: axBudget) {
         case .found(let context):
             // Even a confirming AX read may carry a different scalar
             // composition than what was typed (e.g. decomposed form);
@@ -707,8 +885,8 @@ final class SnippetExpansionEngine {
             return .mismatch
         case .missingTrigger:
             return .missingTrigger
-        case .unavailable:
-            return .unavailable
+        case .unavailable(let unavailable):
+            return .unavailable(unavailable)
         }
     }
 
@@ -716,96 +894,114 @@ final class SnippetExpansionEngine {
     /// panel). The snippet must be captured by the caller BEFORE any context
     /// refresh so that re-ranking can never change what the user picked.
     ///
-    /// The delete count is taken from a fresh AX read only when that read
-    /// confirms the accepted query; async hosts (Electron/Slack) often have
-    /// not applied the last keystrokes to AX yet, so unconfirmed reads are
-    /// retried with the same delays as the regular resync path
-    /// (`suggestionTextSyncDelays`) before falling back to the locally
-    /// tracked count.
+    /// The delete count is taken from one fresh exact AX read. There is no
+    /// retry delay and no locally tracked deletion fallback: an unconfirmed
+    /// panel remains responsive, but cannot authorize edits in another app.
     private func acceptSelectedSuggestion(_ snippet: Snippet) {
         let localQuery = suggestionQuery
-        let localFallbackUsable = suggestionLocalFallbackUsable
-        let hadSyncedAXContext = suggestionHasSyncedAXContext
-        let acceptedGeneration = injectionContextGeneration
-        let acceptedTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let acceptedFocusTarget = store.isSecure(snippet.id)
-            ? captureSecureExpansionFocusTarget(targetPID: acceptedTargetPID)
-            : nil
-
-        // Captured before `dismissSuggestions()` clears the query. Only an
-        // explicit accept teaches selection memory; auto-expansions never do.
-        pendingSelectionMemoryQuery = localQuery
-
-        dismissSuggestions()
+        let stateBefore = suggestionContextState
 
         // Multi-scalar graphemes (ZWJ emoji, flags, combining marks) in the
         // query make the backspace count unreliable in web hosts — skip the
         // accept instead of corrupting host text.
         guard !containsMultiScalarGrapheme(localQuery) else {
-            // Without this the query would outlive the abandoned accept and be
-            // attributed to whatever expanded next — including an auto-expand,
-            // which must never write a binding.
+            recordExpansionAccessibility(
+                operation: .acceptance,
+                outcome: .unsafe,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore)
+            pendingSelectionMemoryQuery = nil
+            dismissSuggestions()
+            return
+        }
+
+        let context: SuggestionTriggerContext
+        switch readAcceptContext(
+            matchingQuery: localQuery,
+            axBudget: AXMessagingBudget(
+                totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+        ) {
+        case .confirmed(let confirmed):
+            context = confirmed
+            suggestionContextState = .axConfirmed
+            recordExpansionAccessibility(
+                operation: .acceptance,
+                outcome: .confirmed,
+                stateBefore: stateBefore,
+                stateAfter: .axConfirmed)
+        case .mismatch:
+            recordExpansionAccessibility(
+                operation: .acceptance,
+                outcome: .stale,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore)
+            pendingSelectionMemoryQuery = nil
+            dismissSuggestions()
+            return
+        case .missingTrigger:
+            recordExpansionAccessibility(
+                operation: .acceptance,
+                outcome: .missingTrigger,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore)
+            pendingSelectionMemoryQuery = nil
+            dismissSuggestions()
+            return
+        case .unavailable(let unavailable):
+            recordExpansionAccessibility(
+                operation: .acceptance,
+                outcome: .unavailable,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore,
+                unavailable: unavailable)
+            pendingSelectionMemoryQuery = nil
+            dismissSuggestions()
+            return
+        case .unsafe:
+            recordExpansionAccessibility(
+                operation: .acceptance,
+                outcome: .unsafe,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore)
+            pendingSelectionMemoryQuery = nil
+            dismissSuggestions()
+            return
+        }
+
+        let acceptedGeneration = injectionContextGeneration
+        let acceptedTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let acceptedFocusTarget = store.isSecure(snippet.id)
+            ? captureSecureExpansionFocusTarget(targetPID: acceptedTargetPID)
+            : nil
+        let deletion = TriggerDeletion.confirmed(context)
+
+        // Captured before `dismissSuggestions()` clears the query. Only an
+        // explicit accept teaches selection memory; auto-expansions never do.
+        pendingSelectionMemoryQuery = localQuery
+        dismissSuggestions()
+
+        guard deletion.characterCount > 0 else {
             pendingSelectionMemoryQuery = nil
             return
         }
 
-        // Ignore key events while the short confirmation reads run, exactly
-        // as a synchronous expansion did by blocking the run loop.
-        beginInjection()
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            var lastRead = self.readAcceptContext(matchingQuery: localQuery)
-            for delay in self.suggestionTextSyncDelays where !lastRead.isConfirmed {
-                try? await Task.sleep(for: delay)
-                // Secure input can come up mid-read; nothing we send afterwards would reach the host.
-                guard !self.secureEventInputEnabled else {
-                    self.pendingSelectionMemoryQuery = nil
-                    self.endInjection()
-                    return
-                }
-                lastRead = self.readAcceptContext(matchingQuery: localQuery)
-            }
-
-            let deletion: TriggerDeletion?
-            switch lastRead {
-            case .confirmed(let context):
-                deletion = .confirmed(context)
-            case .missingTrigger:
-                // AX previously showed this trigger and no longer does — the
-                // host text really changed, so deleting anything would be
-                // blind. Only trust local tracking if AX never synced at all.
-                deletion = (hadSyncedAXContext || !localFallbackUsable)
-                    ? nil
-                    : .localTracking(query: localQuery)
-            case .mismatch, .unavailable:
-                // AX is behind or unreadable; trust local tracking while it
-                // has stayed authoritative.
-                deletion = localFallbackUsable ? .localTracking(query: localQuery) : nil
-            case .unsafe:
-                // No backspace count is reliable over multi-scalar graphemes.
-                deletion = nil
-            }
-
-            guard let deletion, deletion.characterCount > 0 else {
-                // Nothing can vouch for the text before the caret — abort
-                // rather than delete blindly.
-                self.pendingSelectionMemoryQuery = nil
-                self.endInjection()
-                return
-            }
-            if self.store.isSecure(snippet.id) {
+        if store.isSecure(snippet.id) {
+            // Secure authentication is asynchronous and owns this outer gate
+            // until its separately revalidated insertion completes.
+            beginInjection()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.endInjection() }
                 await self.authenticateAndPerformSecureExpansion(
                     shell: snippet,
                     query: localQuery,
                     acceptedGeneration: acceptedGeneration,
                     acceptedTargetPID: acceptedTargetPID,
                     acceptedFocusTarget: acceptedFocusTarget)
-            } else {
-                self.enqueueExpansion(of: snippet, deletion: deletion)
             }
-            self.endInjection()
+        } else {
+            enqueueExpansion(of: snippet, deletion: deletion)
         }
     }
 
@@ -1004,12 +1200,45 @@ final class SnippetExpansionEngine {
             guard restoreKeyboardFocus(to: focusTarget, targetPID: targetPID) else {
                 continue
             }
-            switch readAcceptContext(matchingQuery: query) {
+            switch readAcceptContext(
+                matchingQuery: query,
+                axBudget: AXMessagingBudget()
+            ) {
             case .confirmed(let context):
+                recordExpansionAccessibility(
+                    operation: .secureRevalidation,
+                    outcome: .confirmed,
+                    stateBefore: .axConfirmed,
+                    stateAfter: .axConfirmed)
                 return .confirmed(.confirmed(context))
-            case .unavailable, .mismatch, .missingTrigger:
+            case .unavailable(let unavailable):
+                recordExpansionAccessibility(
+                    operation: .secureRevalidation,
+                    outcome: .unavailable,
+                    stateBefore: .axConfirmed,
+                    stateAfter: .uncertainAfterHostEdit,
+                    unavailable: unavailable)
+                continue
+            case .mismatch:
+                recordExpansionAccessibility(
+                    operation: .secureRevalidation,
+                    outcome: .stale,
+                    stateBefore: .axConfirmed,
+                    stateAfter: .uncertainAfterHostEdit)
+                continue
+            case .missingTrigger:
+                recordExpansionAccessibility(
+                    operation: .secureRevalidation,
+                    outcome: .missingTrigger,
+                    stateBefore: .axConfirmed,
+                    stateAfter: .uncertainAfterHostEdit)
                 continue
             case .unsafe:
+                recordExpansionAccessibility(
+                    operation: .secureRevalidation,
+                    outcome: .unsafe,
+                    stateBefore: .axConfirmed,
+                    stateAfter: .uncertainAfterHostEdit)
                 return .triggerNotConfirmed
             }
         }
@@ -1021,13 +1250,15 @@ final class SnippetExpansionEngine {
         // Before the guard: another path may have already cleared `suggestionActive`, and the timer
         // would then outlive the session it belongs to.
         stopSuggestionSecureInputWatchdog()
+        stopSuggestionAccessibilityObserver()
 
         guard suggestionActive else { return }
         suggestionActive = false
+        suggestionSessionGeneration &+= 1
         suggestionQuery = ""
         suggestionDeleteCount = 1
-        suggestionLocalFallbackUsable = false
-        suggestionHasSyncedAXContext = false
+        suggestionContextState = .localDisplayOnly
+        suggestionObserverAllowsAutoExpand = false
         suggestionSyncGeneration += 1
         suggestionFrecency = .empty
         suggestionPanel.dismiss()
@@ -1062,14 +1293,12 @@ final class SnippetExpansionEngine {
         // Emacs Ctrl+H - treat as backspace
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
             applyLocalSuggestionBackspace()
-            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
         // Emacs Ctrl+W - let the host edit, then read the real text before the caret.
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_W) {
-            suggestionLocalFallbackUsable = false
-            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
+            markSuggestionUncertainAfterHostEdit()
             return false
         }
 
@@ -1086,10 +1315,9 @@ final class SnippetExpansionEngine {
         }
 
         // Host apps do not agree on word boundaries, so let the app delete and
-        // then resync from AX instead of trying to model the shortcut.
+        // wait for its AX notification instead of trying to model the shortcut.
         if option && !command && event.keyCode == UInt16(kVK_Delete) {
-            suggestionLocalFallbackUsable = false
-            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
+            markSuggestionUncertainAfterHostEdit()
             return false
         }
 
@@ -1100,11 +1328,10 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Other Ctrl combos and function keys - let the host handle them, then
-        // refresh in case the shortcut moved the caret or edited text.
+        // Other Ctrl combos and function keys are host-owned. Mark the local
+        // display uncertain; an AX notification may reconcile it immediately.
         if ctrl {
-            suggestionLocalFallbackUsable = false
-            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
+            markSuggestionUncertainAfterHostEdit()
             return false
         }
 
@@ -1130,7 +1357,6 @@ final class SnippetExpansionEngine {
         // Backspace - let through to target app (it needs to delete characters too)
         if event.keyCode == UInt16(kVK_Delete) {
             applyLocalSuggestionBackspace()
-            scheduleSuggestionContextRefresh(allowAutoExpand: false, dismissOnMissingTrigger: true)
             return false
         }
 
@@ -1163,7 +1389,10 @@ final class SnippetExpansionEngine {
         // Let the host apply printable text, then resync from the focused AX text.
         if isValidKeywordCharacter(character) {
             appendLocalSuggestionCharacter(character)
-            scheduleSuggestionContextRefresh(allowAutoExpand: true, dismissOnMissingTrigger: true)
+            scheduleSuggestionContextRefresh(
+                operation: .printableEdit,
+                expectedQuery: suggestionQuery,
+                allowAutoExpand: true)
         } else {
             dismissSuggestions()
         }
@@ -1171,135 +1400,155 @@ final class SnippetExpansionEngine {
     }
 
     private func scheduleSuggestionContextRefresh(
-        allowAutoExpand: Bool,
-        dismissOnMissingTrigger: Bool
+        operation: DiagnosticExpansionAXOperation,
+        expectedQuery: String,
+        allowAutoExpand: Bool
     ) {
         suggestionSyncGeneration += 1
         let generation = suggestionSyncGeneration
-        let delays = suggestionTextSyncDelays
 
         Task { @MainActor [weak self] in
-            var lastRefreshResult: SuggestionContextRefreshResult = .unavailable
-            for (index, delay) in delays.enumerated() {
-                try? await Task.sleep(for: delay)
-                guard let self,
-                      self.suggestionActive,
-                      self.suggestionSyncGeneration == generation,
-                      !self.isInjecting else {
-                    return
-                }
-
-                let isLastAttempt = index == delays.count - 1
-                lastRefreshResult = self.refreshSuggestionContextFromFocusedText(
-                    allowAutoExpand: allowAutoExpand && isLastAttempt,
-                    dismissOnMissingTrigger: dismissOnMissingTrigger
-                )
-
-                if lastRefreshResult == .missingTrigger || !self.suggestionActive {
-                    return
-                }
-            }
-
+            // Yield only to get out of the event-tap callback and let the host
+            // receive the key. This is scheduling, not a wall-clock debounce.
+            await Task.yield()
             guard let self,
                   self.suggestionActive,
                   self.suggestionSyncGeneration == generation,
                   !self.isInjecting else {
                 return
             }
-            if lastRefreshResult == .unavailable {
-                if self.suggestionLocalFallbackUsable {
-                    self.handleUnavailableRefreshWithLocalFallback(allowAutoExpand: allowAutoExpand)
-                } else if dismissOnMissingTrigger {
-                    self.abandonUnsafeSuggestionContext()
-                }
-            }
+            self.refreshSuggestionContextFromFocusedText(
+                operation: operation,
+                expectedQuery: expectedQuery,
+                readIsAuthoritative: false,
+                allowAutoExpand: allowAutoExpand,
+                dismissOnMissingTrigger: false)
         }
     }
 
-    private func abandonUnsafeSuggestionContext() {
-        typedBuffer = ""
-        dismissSuggestions()
-    }
-
     private func appendLocalSuggestionCharacter(_ character: Character) {
-        guard suggestionActive, suggestionLocalFallbackUsable else { return }
+        guard suggestionActive else { return }
+        let stateBefore = suggestionContextState
+        suggestionContextState = suggestionContextState.afterLocalPrintableEdit
+        suggestionObserverAllowsAutoExpand = true
         suggestionQuery.append(character)
         suggestionDeleteCount = 1 + suggestionQuery.count
+        recordExpansionAccessibility(
+            operation: .printableEdit,
+            outcome: .observing,
+            stateBefore: stateBefore,
+            stateAfter: suggestionContextState)
         updateSuggestionResults()
     }
 
     private func applyLocalSuggestionBackspace() {
-        guard suggestionActive, suggestionLocalFallbackUsable else { return }
+        guard suggestionActive else { return }
+        let stateBefore = suggestionContextState
+        suggestionContextState = suggestionContextState.afterAmbiguousHostEdit
+        suggestionObserverAllowsAutoExpand = false
 
         if suggestionQuery.isEmpty {
+            recordExpansionAccessibility(
+                operation: .hostEdit,
+                outcome: .observing,
+                stateBefore: stateBefore,
+                stateAfter: suggestionContextState)
             dismissSuggestions()
             return
         }
 
         suggestionQuery.removeLast()
         suggestionDeleteCount = 1 + suggestionQuery.count
+        recordExpansionAccessibility(
+            operation: .hostEdit,
+            outcome: .observing,
+            stateBefore: stateBefore,
+            stateAfter: suggestionContextState)
         updateSuggestionResults()
     }
 
-    private func handleUnavailableRefreshWithLocalFallback(allowAutoExpand: Bool) {
-        guard suggestionActive, suggestionLocalFallbackUsable else { return }
-
-        if allowAutoExpand,
-           !suggestionQuery.isEmpty,
-           let snippet = unambiguousExactMatch(for: suggestionQuery) {
-            selectSuggestion(snippet, deletion: .localTracking(query: suggestionQuery))
-            return
-        }
-
-        updateSuggestionResults()
+    private func markSuggestionUncertainAfterHostEdit() {
+        guard suggestionActive else { return }
+        let stateBefore = suggestionContextState
+        suggestionContextState = suggestionContextState.afterAmbiguousHostEdit
+        suggestionObserverAllowsAutoExpand = false
+        recordExpansionAccessibility(
+            operation: .hostEdit,
+            outcome: .observing,
+            stateBefore: stateBefore,
+            stateAfter: suggestionContextState)
     }
 
-    @discardableResult
     private func refreshSuggestionContextFromFocusedText(
+        operation: DiagnosticExpansionAXOperation,
+        expectedQuery: String?,
+        readIsAuthoritative: Bool,
         allowAutoExpand: Bool,
-        dismissOnMissingTrigger: Bool
-    ) -> SuggestionContextRefreshResult {
-        guard suggestionActive else { return .missingTrigger }
+        dismissOnMissingTrigger: Bool,
+        notificationStage: DiagnosticExpansionAXStage? = nil
+    ) {
+        guard suggestionActive else { return }
+        let stateBefore = suggestionContextState
 
-        switch focusedTriggerContext() {
+        switch focusedTriggerContext(axBudget: AXMessagingBudget()) {
         case .found(let context):
+            if !readIsAuthoritative,
+               let expectedQuery,
+               normalizedForSuggestionMatching(context.query)
+                   != normalizedForSuggestionMatching(expectedQuery) {
+                // The host has not applied our just-observed key yet. Never
+                // roll the optimistic panel backwards based on this stale read.
+                recordExpansionAccessibility(
+                    operation: operation,
+                    outcome: .stale,
+                    stateBefore: stateBefore,
+                    stateAfter: stateBefore,
+                    stage: notificationStage)
+                return
+            }
+
             suggestionQuery = context.query
             suggestionDeleteCount = context.triggerLength
-            suggestionLocalFallbackUsable = true
-            suggestionHasSyncedAXContext = true
+            suggestionContextState = .axConfirmed
+            // One printable key grants at most one opportunity to auto-expand.
+            // Duplicate or later programmatic AX notifications may still
+            // reconcile the panel, but cannot spend the same authorization.
+            suggestionObserverAllowsAutoExpand = false
+            recordExpansionAccessibility(
+                operation: operation,
+                outcome: .confirmed,
+                stateBefore: stateBefore,
+                stateAfter: .axConfirmed,
+                stage: notificationStage)
 
             if allowAutoExpand,
                !context.query.isEmpty,
                let snippet = unambiguousExactMatch(for: context.query) {
                 selectSuggestion(snippet, deletion: .confirmed(context))
-                return .synced
+                return
             }
 
             updateSuggestionResults()
-            return .synced
 
         case .missingTrigger:
-            if suggestionLocalFallbackUsable && !suggestionHasSyncedAXContext {
-                if allowAutoExpand {
-                    handleUnavailableRefreshWithLocalFallback(allowAutoExpand: true)
-                }
-                return .localFallback
-            }
-
+            recordExpansionAccessibility(
+                operation: operation,
+                outcome: .missingTrigger,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore,
+                stage: notificationStage)
             if dismissOnMissingTrigger {
                 typedBuffer = ""
                 dismissSuggestions()
             }
-            return .missingTrigger
 
-        case .unavailable:
-            if suggestionLocalFallbackUsable {
-                if allowAutoExpand {
-                    handleUnavailableRefreshWithLocalFallback(allowAutoExpand: true)
-                }
-                return .localFallback
-            }
-            return .unavailable
+        case .unavailable(let unavailable):
+            recordExpansionAccessibility(
+                operation: operation,
+                outcome: .unavailable,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore,
+                unavailable: unavailable)
         }
     }
 
@@ -2428,34 +2677,130 @@ final class SnippetExpansionEngine {
         return .none
     }
 
-    private func focusedTriggerContext() -> FocusedTriggerContextRead {
-        guard let focused = frontmostFocusedElement() else { return .unavailable }
-
-        for element in focusedTextContextCandidates(startingAt: focused) {
-            guard let textBeforeCaret = textBeforeCaret(in: element, maxCharacters: maxBufferLength) else {
-                continue
-            }
-
-            // The first readable candidate is authoritative: injected
-            // backspaces land in the actually focused field, so a trigger
-            // found in an ancestor's unrelated text must never authorize a
-            // deletion here. Keep walking ancestors only while candidates
-            // are unreadable.
-            if let context = SuggestionTriggerContext.context(inTextBeforeCaret: textBeforeCaret) {
-                return .found(context)
-            }
-            return .missingTrigger
+    private func focusedTriggerContext(
+        axBudget: AXMessagingBudget
+    ) -> FocusedTriggerContextRead {
+        let focused: AXUIElement
+        switch focusedElementForTriggerContext(axBudget: axBudget) {
+        case .value(let element):
+            focused = element
+        case .unavailable(let unavailable):
+            return .unavailable(unavailable)
         }
 
-        return .unavailable
+        var lastUnavailable: AXContextUnavailable?
+        var element = focused
+        for depth in 0...4 {
+            switch detailedTextBeforeCaret(
+                in: element,
+                maxCharacters: maxBufferLength,
+                axBudget: axBudget
+            ) {
+            case .value(let textBeforeCaret):
+                // The first readable candidate is authoritative: injected
+                // backspaces land in the actually focused field, so a trigger
+                // found in an ancestor's unrelated text must never authorize a
+                // deletion here. Keep walking ancestors only while candidates
+                // are unreadable.
+                if let context = SuggestionTriggerContext.context(
+                    inTextBeforeCaret: textBeforeCaret
+                ) {
+                    return .found(context)
+                }
+                return .missingTrigger
+            case .unavailable(let unavailable):
+                lastUnavailable = unavailable
+            }
+
+            guard depth < 4,
+                  let parent = parentElement(of: element, axBudget: axBudget) else { break }
+            element = parent
+        }
+
+        return .unavailable(lastUnavailable ?? AXContextUnavailable(
+            stage: .value,
+            failure: .noValue,
+            errorCode: nil))
     }
 
-    private func focusedTextContextCandidates(startingAt element: AXUIElement) -> [AXUIElement] {
+    private func focusedElementForTriggerContext(
+        axBudget: AXMessagingBudget
+    ) -> AXElementRead {
+        guard accessibilityGranted else {
+            return .unavailable(AXContextUnavailable(
+                stage: .application,
+                failure: .notTrusted,
+                errorCode: nil))
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return .unavailable(AXContextUnavailable(
+                stage: .application,
+                failure: .noApplication,
+                errorCode: nil))
+        }
+
+        primeAccessibilityIfNeeded(for: app, axBudget: axBudget)
+        guard let appElement = withBoundedMessagingTimeout(
+            AXUIElementCreateApplication(app.processIdentifier),
+            axBudget: axBudget
+        ) else {
+            return .unavailable(axUnavailable(
+                stage: .application,
+                error: .cannotComplete))
+        }
+        var focusedValue: CFTypeRef?
+        var result = copyAttributeValue(
+            of: appElement,
+            attribute: kAXFocusedUIElementAttribute as CFString,
+            into: &focusedValue,
+            axBudget: axBudget)
+
+        if result != .success {
+            // Preserve the existing Chromium/Electron priming retry, but keep
+            // the final AXError instead of flattening it to nil.
+            primeAccessibilityIfNeeded(for: app, force: true, axBudget: axBudget)
+            focusedValue = nil
+            result = copyAttributeValue(
+                of: appElement,
+                attribute: kAXFocusedUIElementAttribute as CFString,
+                into: &focusedValue,
+                axBudget: axBudget)
+        }
+
+        guard result == .success else {
+            return .unavailable(axUnavailable(stage: .focusedElement, error: result))
+        }
+        guard let focusedValue,
+              CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+            return .unavailable(AXContextUnavailable(
+                stage: .focusedElement,
+                failure: .invalidType,
+                errorCode: nil))
+        }
+
+        guard let focused = withBoundedMessagingTimeout(
+            focusedValue as! AXUIElement,
+            axBudget: axBudget
+        ) else {
+            return .unavailable(axUnavailable(
+                stage: .focusedElement,
+                error: .cannotComplete))
+        }
+        return .value(deepestFocusedElement(
+            startingAt: focused,
+            maxDepth: 4,
+            axBudget: axBudget) ?? focused)
+    }
+
+    private func focusedTextContextCandidates(
+        startingAt element: AXUIElement,
+        axBudget: AXMessagingBudget? = nil
+    ) -> [AXUIElement] {
         var elements: [AXUIElement] = [element]
         var current = element
 
         for _ in 0..<4 {
-            guard let parent = parentElement(of: current) else { break }
+            guard let parent = parentElement(of: current, axBudget: axBudget) else { break }
             elements.append(parent)
             current = parent
         }
@@ -2463,16 +2808,179 @@ final class SnippetExpansionEngine {
         return elements
     }
 
-    private func textBeforeCaret(in element: AXUIElement, maxCharacters: Int) -> String? {
-        guard let selectedRange = selectedRange(of: element), selectedRange.location >= 0 else {
-            return nil
+    private func detailedTextBeforeCaret(
+        in element: AXUIElement,
+        maxCharacters: Int,
+        axBudget: AXMessagingBudget
+    ) -> AXTextRead {
+        let selectedRange: CFRange
+        switch detailedSelectedRange(of: element, axBudget: axBudget) {
+        case .value(let range):
+            selectedRange = range
+        case .unavailable(let unavailable):
+            return .unavailable(unavailable)
         }
-        return textBeforeCaret(
-            in: element,
-            caretLocation: selectedRange.location,
-            maxCharacters: maxCharacters,
-            allowFullValueFallback: true
-        )
+
+        guard selectedRange.location >= 0 else {
+            return .unavailable(AXContextUnavailable(
+                stage: .selectedRange,
+                failure: .invalidRange,
+                errorCode: nil))
+        }
+
+        let start = max(0, selectedRange.location - maxCharacters)
+        let rangeBeforeCaret = CFRange(
+            location: start,
+            length: selectedRange.location - start)
+        if rangeBeforeCaret.length == 0 {
+            return .value("")
+        }
+
+        var requestedRange = rangeBeforeCaret
+        guard let rangeValue = AXValueCreate(.cfRange, &requestedRange) else {
+            return .unavailable(AXContextUnavailable(
+                stage: .rangeText,
+                failure: .invalidRange,
+                errorCode: nil))
+        }
+
+        var rangeTextValue: CFTypeRef?
+        let rangeResult = axBudget.copyParameterizedAttributeValue(
+            of: element,
+            attribute: kAXStringForRangeParameterizedAttribute as CFString,
+            parameter: rangeValue,
+            into: &rangeTextValue)
+        if rangeResult == .success, let text = rangeTextValue as? String {
+            return .value(text)
+        }
+
+        // Some browser controls expose AXValue but not AXStringForRange. That
+        // is a supported fallback, not an unavailable result.
+        var wholeValue: CFTypeRef?
+        let valueResult = axBudget.copyAttributeValue(
+            of: element,
+            attribute: kAXValueAttribute as CFString,
+            into: &wholeValue)
+        guard valueResult == .success else {
+            return .unavailable(axUnavailable(stage: .value, error: valueResult))
+        }
+        guard let value = wholeValue as? String else {
+            return .unavailable(AXContextUnavailable(
+                stage: .value,
+                failure: .invalidType,
+                errorCode: nil))
+        }
+
+        let nsValue = value as NSString
+        let boundedLocation = min(max(0, selectedRange.location), nsValue.length)
+        let boundedStart = max(0, boundedLocation - maxCharacters)
+        return .value(nsValue.substring(with: NSRange(
+            location: boundedStart,
+            length: boundedLocation - boundedStart)))
+    }
+
+    private func detailedSelectedRange(
+        of element: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> AXRangeRead {
+        var value: CFTypeRef?
+        let result = axBudget.copyAttributeValue(
+            of: element,
+            attribute: kAXSelectedTextRangeAttribute as CFString,
+            into: &value)
+        guard result == .success else {
+            return .unavailable(axUnavailable(stage: .selectedRange, error: result))
+        }
+        guard let value, CFGetTypeID(value) == AXValueGetTypeID() else {
+            return .unavailable(AXContextUnavailable(
+                stage: .selectedRange,
+                failure: .invalidType,
+                errorCode: nil))
+        }
+
+        let axValue = value as! AXValue
+        guard AXValueGetType(axValue) == .cfRange else {
+            return .unavailable(AXContextUnavailable(
+                stage: .selectedRange,
+                failure: .invalidType,
+                errorCode: nil))
+        }
+
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(axValue, .cfRange, &range),
+              range.location >= 0,
+              range.length >= 0 else {
+            return .unavailable(AXContextUnavailable(
+                stage: .selectedRange,
+                failure: .invalidRange,
+                errorCode: nil))
+        }
+        return .value(range)
+    }
+
+    private func axUnavailable(
+        stage: DiagnosticExpansionAXStage,
+        error: AXError
+    ) -> AXContextUnavailable {
+        AXContextUnavailable(
+            stage: stage,
+            failure: diagnosticFailure(for: error),
+            errorCode: Int(error.rawValue))
+    }
+
+    private func diagnosticFailure(for error: AXError) -> DiagnosticExpansionAXFailure {
+        switch error {
+        case .attributeUnsupported, .parameterizedAttributeUnsupported:
+            .attributeUnsupported
+        case .noValue:
+            .noValue
+        case .cannotComplete:
+            .cannotComplete
+        case .notImplemented:
+            .notImplemented
+        case .invalidUIElement, .invalidUIElementObserver:
+            .invalidElement
+        case .illegalArgument:
+            .invalidRange
+        case .notificationUnsupported:
+            .notificationUnsupported
+        case .notificationAlreadyRegistered:
+            .alreadyRegistered
+        case .apiDisabled:
+            .apiDisabled
+        default:
+            .other
+        }
+    }
+
+    private func recordExpansionAccessibility(
+        operation: DiagnosticExpansionAXOperation,
+        outcome: DiagnosticExpansionAXOutcome,
+        stateBefore: SuggestionContextState,
+        stateAfter: SuggestionContextState,
+        unavailable: AXContextUnavailable? = nil,
+        stage: DiagnosticExpansionAXStage? = nil
+    ) {
+        guard expansionVerboseDiagnosticsEnabled() else { return }
+        Diagnostics.record(.expansionAccessibility(
+            operation: operation,
+            outcome: outcome,
+            stateBefore: diagnosticState(stateBefore),
+            stateAfter: diagnosticState(stateAfter),
+            stage: unavailable?.stage ?? stage,
+            failure: unavailable?.failure,
+            axErrorCode: unavailable?.errorCode,
+            queryLength: suggestionQuery.count))
+    }
+
+    private func diagnosticState(
+        _ state: SuggestionContextState
+    ) -> DiagnosticExpansionContextState {
+        switch state {
+        case .axConfirmed: .axConfirmed
+        case .localDisplayOnly: .localDisplayOnly
+        case .uncertainAfterHostEdit: .uncertainAfterHostEdit
+        }
     }
 
     /// Split out so a caller can pin the text and the caret offset to one observation, and so the

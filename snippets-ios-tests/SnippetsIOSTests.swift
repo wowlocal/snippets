@@ -1461,6 +1461,18 @@ final class SnippetsIOSTests: XCTestCase {
                 vaultState: .unlocked),
             level: .info,
             synchronous: true)
+        service?.emit(
+            .expansionAccessibility(
+                operation: .observerNotification,
+                outcome: .unavailable,
+                stateBefore: .uncertainAfterHostEdit,
+                stateAfter: .uncertainAfterHostEdit,
+                stage: .selectedRange,
+                failure: .attributeUnsupported,
+                axErrorCode: -25_205,
+                queryLength: 4),
+            level: .debug,
+            synchronous: true)
         service?.flush()
 
         let summary = try XCTUnwrap(service?.summary())
@@ -1475,6 +1487,10 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(export.contains("\"event\":\"diagnostics_manifest\""))
         XCTAssertTrue(export.contains("approved-keyword"))
         XCTAssertTrue(export.contains("\"event\":\"secure_editor_transition\""))
+        XCTAssertTrue(export.contains("\"event\":\"expansion_accessibility\""))
+        XCTAssertTrue(export.contains("\"state_before\":\"uncertain_after_host_edit\""))
+        XCTAssertTrue(export.contains("\"failure\":\"attribute_unsupported\""))
+        XCTAssertTrue(export.contains("\"ax_error_code\":-25205"))
         XCTAssertTrue(export.contains("\"reason\":\"store_refresh_remote_sync\""))
         XCTAssertTrue(export.contains("\"vault_state\":\"unlocked\""))
         XCTAssertTrue(export.contains("\"error_code\":917"))
@@ -1497,6 +1513,33 @@ final class SnippetsIOSTests: XCTestCase {
         await service!.deleteStoredLogs()
         XCTAssertEqual(service?.summary().fileCount, 0)
         service = nil
+    }
+
+    func testExpansionVerboseLoggingSessionModeDoesNotPersist() throws {
+        let suiteName = "ExpansionVerboseLoggingPreferenceTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let preference = ExpansionVerboseLoggingPreference(defaults: defaults)
+        XCTAssertEqual(preference.mode, .off)
+
+        preference.setMode(.session)
+        XCTAssertEqual(preference.mode, .session)
+        XCTAssertEqual(
+            ExpansionVerboseLoggingPreference(defaults: defaults).mode,
+            .off,
+            "This Session must reset in a new process/service lifetime")
+
+        preference.setMode(.always)
+        XCTAssertEqual(
+            ExpansionVerboseLoggingPreference(defaults: defaults).mode,
+            .always)
+
+        preference.setMode(.off)
+        XCTAssertEqual(
+            ExpansionVerboseLoggingPreference(defaults: defaults).mode,
+            .off)
     }
 
     func testLegacyRevealAuditMigrationDropsCallerPathAndPID() async throws {

@@ -54,22 +54,35 @@ struct TextReplacementTests {
             )
         }
 
-        @Test func onlyASyncedOrLocallyTrackedRefreshCanExpand() {
+        @Test func onlyAXConfirmedContextCanAuthorizeExpansion() {
             #expect(
-                SuggestionContextRefreshResult.synced.canUseForExpansion == true,
-                "synced refresh can select or auto-expand"
+                SuggestionContextState.axConfirmed.canAuthorizeExpansion,
+                "a fresh AX confirmation can authorize deletion"
             )
             #expect(
-                SuggestionContextRefreshResult.localFallback.canUseForExpansion == true,
-                "tracked local fallback can select or auto-expand when AX is unavailable"
+                !SuggestionContextState.localDisplayOnly.canAuthorizeExpansion,
+                "optimistic display state cannot authorize deletion"
             )
             #expect(
-                SuggestionContextRefreshResult.unavailable.canUseForExpansion == false,
-                "unavailable refresh cannot use stale suggestion state"
+                !SuggestionContextState.uncertainAfterHostEdit.canAuthorizeExpansion,
+                "an ambiguous host edit cannot authorize deletion"
+            )
+        }
+
+        @Test func localTypingAndHostEditsHaveExplicitSafetyTransitions() {
+            #expect(
+                SuggestionContextState.axConfirmed.afterLocalPrintableEdit == .localDisplayOnly,
+                "typing updates display before AX confirms the new host value"
             )
             #expect(
-                SuggestionContextRefreshResult.missingTrigger.canUseForExpansion == false,
-                "missing trigger cannot select or auto-expand"
+                SuggestionContextState.uncertainAfterHostEdit.afterLocalPrintableEdit
+                    == .uncertainAfterHostEdit,
+                "more locally inferred typing cannot repair an ambiguous edit"
+            )
+            #expect(
+                SuggestionContextState.localDisplayOnly.afterAmbiguousHostEdit
+                    == .uncertainAfterHostEdit,
+                "Backspace always makes host text uncertain until AX confirms it"
             )
         }
     }

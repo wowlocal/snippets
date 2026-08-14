@@ -112,6 +112,41 @@ struct DiagnosticsTests {
         ])
     }
 
+    @Test func expansionAccessibilityPersistsOnlyClosedContentFreeFacts() throws {
+        let record = DiagnosticRecord(
+            event: .expansionAccessibility(
+                operation: .observerNotification,
+                outcome: .unavailable,
+                stateBefore: .uncertainAfterHostEdit,
+                stateAfter: .uncertainAfterHostEdit,
+                stage: .selectedRange,
+                failure: .attributeUnsupported,
+                axErrorCode: -25_205,
+                queryLength: 4),
+            timestamp: "2026-08-14T09:12:00.000Z",
+            elapsedMilliseconds: 12,
+            sessionIdentifier: "test-session",
+            sequence: 11)
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        let fields = try #require(object["fields"] as? [String: Any])
+
+        #expect(object["event"] as? String == "expansion_accessibility")
+        #expect(fields["operation"] as? String == "observer_notification")
+        #expect(fields["outcome"] as? String == "unavailable")
+        #expect(fields["state_before"] as? String == "uncertain_after_host_edit")
+        #expect(fields["state_after"] as? String == "uncertain_after_host_edit")
+        #expect(fields["stage"] as? String == "selected_range")
+        #expect(fields["failure"] as? String == "attribute_unsupported")
+        #expect(fields["ax_error_code"] as? Int == -25_205)
+        #expect(fields["query_length"] as? Int == 4)
+        #expect(Set(fields.keys) == [
+            "operation", "outcome", "state_before", "state_after", "stage",
+            "failure", "ax_error_code", "query_length",
+        ])
+    }
+
     @Test func globalFacadeIsNoOpUntilInstalledAndIsThreadSafeAfterInstall() {
         Diagnostics.install(nil)
         Diagnostics.record(.lifecycle(.started))

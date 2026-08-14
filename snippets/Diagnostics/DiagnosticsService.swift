@@ -23,6 +23,56 @@ nonisolated struct DiagnosticsExportResult: Sendable {
     let skippedTrailingLines: Int
 }
 
+nonisolated enum ExpansionVerboseLoggingMode: String, CaseIterable, Sendable {
+    case off
+    case session
+    case always
+
+    var title: String {
+        switch self {
+        case .off: "Off"
+        case .session: "This Session"
+        case .always: "Always"
+        }
+    }
+}
+
+/// Owns the opt-in for high-frequency Accessibility expansion diagnostics.
+/// `.session` deliberately lives only in memory; `.always` is the sole mode
+/// persisted across launches.
+nonisolated final class ExpansionVerboseLoggingPreference: @unchecked Sendable {
+    static let defaultsKey = "SnippetsExpansionVerboseDiagnosticsEnabled"
+
+    private let defaults: UserDefaults
+    private let lock = NSLock()
+    private var storedMode: ExpansionVerboseLoggingMode
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        storedMode = defaults.bool(forKey: Self.defaultsKey) ? .always : .off
+    }
+
+    var mode: ExpansionVerboseLoggingMode {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedMode
+    }
+
+    var isEnabled: Bool { mode != .off }
+
+    func setMode(_ mode: ExpansionVerboseLoggingMode) {
+        lock.lock()
+        defer { lock.unlock() }
+        storedMode = mode
+
+        if mode == .always {
+            defaults.set(true, forKey: Self.defaultsKey)
+        } else {
+            defaults.removeObject(forKey: Self.defaultsKey)
+        }
+    }
+}
+
 nonisolated enum DiagnosticsExportError: LocalizedError {
     case storageUnavailable
     case corruptLog
@@ -107,6 +157,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
     private static let timestampFormatter = DiagnosticsTimestampFormatter()
 
     let appContext: DiagnosticAppContext
+    let expansionVerboseLogging: ExpansionVerboseLoggingPreference
 
     private let fileManager: FileManager
     private let log = DDLog()
@@ -133,9 +184,11 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         maximumFileCount: Int = DiagnosticsService.maximumFileCount,
         diskQuota: UInt64 = DiagnosticsService.diskQuota,
         registerGlobally: Bool,
-        mirrorToOSLog: Bool
+        mirrorToOSLog: Bool,
+        userDefaults: UserDefaults = .standard
     ) {
         self.fileManager = fileManager
+        expansionVerboseLogging = ExpansionVerboseLoggingPreference(defaults: userDefaults)
         retentionDayCount = max(1, retentionDays)
         registersGlobally = registerGlobally
         mirrorsToOSLog = mirrorToOSLog
@@ -417,6 +470,12 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             required: ["surface", "from_state", "to_state", "reason", "vault_state"]),
         "suggestion_anchor": ExportEventSchema(
             category: "performance", required: ["source", "reason", "duration_ms"]),
+        "expansion_accessibility": ExportEventSchema(
+            category: "integration",
+            required: [
+                "operation", "outcome", "state_before", "state_after", "query_length",
+            ],
+            optional: ["stage", "failure", "ax_error_code"]),
         "metrickit_diagnostic": ExportEventSchema(
             category: "metrickit",
             required: ["kind", "truncated"],
@@ -438,7 +497,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "app_version", "app_build", "bundle_id", "platform", "os", "architecture",
         "cloud_environment", "state", "area", "operation", "error_family", "trigger",
         "halt_reason", "action", "keyword", "outcome", "caller", "source", "reason",
-        "kind", "surface", "from_state", "to_state", "vault_state", "exported_at",
+        "kind", "surface", "from_state", "to_state", "vault_state",
+        "state_before", "state_after", "stage", "failure", "exported_at",
         "oldest_entry_at", "newest_entry_at",
     ]
     private static let exportBooleanFields: Set<String> = [
@@ -448,7 +508,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "error_code", "attempt", "value", "conflict_copies", "keyword_collisions",
         "duration_ms", "downloaded", "uploaded", "merged", "deferred", "quarantined",
         "record_count", "count", "exception_type", "exception_code", "signal",
-        "file_count", "byte_count", "skipped_trailing_lines",
+        "file_count", "byte_count", "skipped_trailing_lines", "query_length",
+        "ax_error_code",
     ]
 
     private func makeExport(at destination: URL) throws -> DiagnosticsExportResult {

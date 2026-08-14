@@ -23,7 +23,8 @@ Code references:
 3. On `\`, we try to prove a text field is focused.
 4. If focused text input is confirmed, suggestion mode activates.
 5. Suggestions are ranked and shown near the caret.
-6. Selection expands by deleting trigger text and pasting resolved snippet content.
+6. The panel updates optimistically while Accessibility confirms the host's actual text.
+7. Selection expands only after a fresh exact Accessibility read proves the trigger text.
 
 ## Permissions and trust
 
@@ -157,13 +158,14 @@ Handled intentionally:
 - `Ctrl+C` dismisses the suggestion panel and is passed through to the host app.
 - `Tab`/`Return` select suggestion and are suppressed.
 - Printable characters and deletion shortcuts are generally passed through so the host app edits real text first.
-- After host edits, the active query is reread from `AXSelectedTextRange` plus text before the caret instead of being inferred from key presses.
-- AX reread is retried after short delays because Chromium/Electron text state can lag behind the key event.
-- If AX text is unavailable, printable characters and simple backspace keep a local fallback query so terminal apps can still update suggestions.
-- Until AX has successfully found the trigger in the current session, a missing AX trigger can also stay on local fallback because terminal accessibility text may not expose the current typed buffer.
-- Selection and auto-expand are allowed only after a successful reread or tracked local fallback; unknown unavailable text context dismisses the active session instead of using stale query/delete state.
-- Host-side edits that invalidate the local query, such as `Ctrl+W` or `Option+Delete`, cannot re-enable local fallback until AX resync succeeds.
-- `Backspace`, `Ctrl+H`, `Option+Delete`, and `Ctrl+W` therefore use the host app's actual edit result and then resync suggestions.
+- The panel applies printable input and simple backspace immediately; it never waits on an AX timer before repainting.
+- The query carries one of three authority states: `axConfirmed`, `localDisplayOnly`, or `uncertainAfterHostEdit`.
+- Plain typing changes `axConfirmed` to `localDisplayOnly`. `Backspace`, `Ctrl+H`, `Option+Delete`, `Ctrl+W`, and other host-owned edits change it to `uncertainAfterHostEdit`.
+- The engine observes `AXValueChanged` and `AXSelectedTextChanged` on the focused control and readable ancestors. A notification triggers an immediate read of `AXSelectedTextRange` plus the text before the caret.
+- There are no 18/60 ms suggestion resync sleeps. A single next-run-loop read is also attempted after activation and printable input; `Backspace` and other host-owned edits never start a timer or poll. A value that still describes the preceding printable keystroke is classified as stale and never rolls the panel backwards.
+- Only `axConfirmed` may auto-expand or authorize trigger deletion. `localDisplayOnly` and `uncertainAfterHostEdit` keep the UI responsive but are display-only.
+- Explicit Tab/Return/click acceptance performs one fresh exact AX read. Missing, mismatched, unsafe, or unavailable host text leaves the typed trigger untouched; there is no local deletion fallback.
+- This is what handles browser autocomplete correctly: deleting a host-owned completion may produce a temporary local `jaz`, while the following AX notification confirms that the real field still contains `jazz` and restores the displayed query without ever authorizing the wrong delete count.
 - Cmd/Option combos mostly dismiss suggestion mode.
 - Cmd+Shift+3/4/5/6 are ignored (do not dismiss) to avoid interfering with screenshots.
 - Input-source switching shortcuts (for example Cmd+Space) do not dismiss.
@@ -250,6 +252,9 @@ Delays are intentional and tuned, and none of them blocks the main thread:
 
 They are awaited through a non-cancellable `settle(for:)`, not `Task.sleep`: a cancelled sleep
 returns immediately, which would rush the paste into a host still applying our deletions.
+
+These delays apply only after expansion has already been authorized, while synthetic deletion and
+paste are delivered. Suggestion tracking and ordinary AX confirmation have no wall-clock debounce.
 
 ### Confirming the paste
 

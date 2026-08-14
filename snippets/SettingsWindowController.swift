@@ -1371,6 +1371,7 @@ private final class SyncSettingsViewController: NSViewController {
 private final class DiagnosticsSettingsViewController: NSViewController {
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let privacyLabel = NSTextField(wrappingLabelWithString: "")
+    private let expansionVerbosePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let exportButton = NSButton(title: "Export Logs…", target: nil, action: nil)
     private let deleteButton = NSButton(title: "Delete Logs", target: nil, action: nil)
 
@@ -1391,8 +1392,32 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         let privacy = makeTertiaryLabel(
             "Exports are plaintext JSON Lines. They can include app and OS versions, "
             + "operation counts, error families and numeric codes, and secure-snippet "
-            + "keywords. Snippet bodies, names, tags, paths, record IDs, keys and "
+            + "keywords. When expansion verbose logging is enabled, they can also include "
+            + "content-free Accessibility stages, outcomes, state transitions, query lengths, "
+            + "and numeric AX error codes. Snippet bodies, names, tags, paths, record IDs, keys and "
             + "ciphertext are never accepted by the logging API.")
+
+        let expansionVerboseTitle = NSTextField(labelWithString: "Expansion Accessibility logging")
+        expansionVerboseTitle.font = .systemFont(ofSize: 13, weight: .medium)
+        expansionVerbosePopup.removeAllItems()
+        for mode in ExpansionVerboseLoggingMode.allCases {
+            expansionVerbosePopup.addItem(withTitle: mode.title)
+            expansionVerbosePopup.lastItem?.representedObject = mode.rawValue
+        }
+        expansionVerbosePopup.target = self
+        expansionVerbosePopup.action = #selector(changeExpansionVerboseLogging)
+        let expansionVerboseRow = NSStackView(views: [
+            expansionVerboseTitle,
+            NSView(),
+            expansionVerbosePopup,
+        ])
+        expansionVerboseRow.orientation = .horizontal
+        expansionVerboseRow.alignment = .centerY
+        expansionVerboseRow.spacing = 10
+        expansionVerboseRow.widthAnchor.constraint(equalToConstant: 620).isActive = true
+        let expansionVerboseHelp = makeTertiaryLabel(
+            "Off records no per-keystroke AX diagnostics. This Session resets when Snippets quits; "
+            + "Always remains enabled across launches. Typed text is never recorded.")
 
         statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
         privacyLabel.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -1412,13 +1437,15 @@ private final class DiagnosticsSettingsViewController: NSViewController {
 
         stack.addArrangedSubview(title)
         stack.addArrangedSubview(intro)
+        stack.addArrangedSubview(expansionVerboseRow)
+        stack.addArrangedSubview(expansionVerboseHelp)
         stack.addArrangedSubview(statusLabel)
         stack.addArrangedSubview(privacyLabel)
         stack.addArrangedSubview(buttons)
         stack.addArrangedSubview(NSBox.horizontalSeparator())
         stack.addArrangedSubview(privacy)
 
-        for label in [intro, privacy, statusLabel, privacyLabel] {
+        for label in [intro, expansionVerboseHelp, privacy, statusLabel, privacyLabel] {
             label.preferredMaxLayoutWidth = 620
         }
     }
@@ -1430,6 +1457,9 @@ private final class DiagnosticsSettingsViewController: NSViewController {
 
     func reloadFromStorage() {
         guard isViewLoaded, let service = Self.service else { return }
+        let verboseMode = service.expansionVerboseLogging.mode
+        expansionVerbosePopup.selectItem(
+            withTitle: verboseMode.title)
         let summary = service.summary()
         let bytes = ByteCountFormatter.string(
             fromByteCount: Int64(min(summary.byteCount, UInt64(Int64.max))),
@@ -1447,6 +1477,13 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         privacyLabel.isHidden = !summary.privacyCleanupNeeded
         exportButton.isEnabled = summary.storageAvailable && summary.fileCount > 0
         deleteButton.isEnabled = summary.fileCount > 0
+    }
+
+    @objc private func changeExpansionVerboseLogging() {
+        guard let service = Self.service,
+              let rawValue = expansionVerbosePopup.selectedItem?.representedObject as? String,
+              let mode = ExpansionVerboseLoggingMode(rawValue: rawValue) else { return }
+        service.expansionVerboseLogging.setMode(mode)
     }
 
     @objc private func exportLogs() {

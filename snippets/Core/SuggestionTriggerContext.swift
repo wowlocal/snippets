@@ -64,18 +64,28 @@ nonisolated struct TriggerDeletion: Equatable {
     }
 }
 
-nonisolated enum SuggestionContextRefreshResult: Equatable {
-    case synced
-    case localFallback
-    case missingTrigger
-    case unavailable
+/// How much authority the suggestion query has over text in another process.
+///
+/// Display stays optimistic for responsiveness, but only an Accessibility-confirmed
+/// context may authorize deletion. In particular, a physical Backspace says nothing
+/// about whether the host deleted a character, an autocomplete selection, or merely
+/// dismissed UI.
+nonisolated enum SuggestionContextState: String, Codable, Equatable, Sendable {
+    case axConfirmed = "ax_confirmed"
+    case localDisplayOnly = "local_display_only"
+    case uncertainAfterHostEdit = "uncertain_after_host_edit"
 
-    nonisolated var canUseForExpansion: Bool {
-        switch self {
-        case .synced, .localFallback:
-            return true
-        case .missingTrigger, .unavailable:
-            return false
-        }
+    nonisolated var canAuthorizeExpansion: Bool { self == .axConfirmed }
+
+    /// Plain typing can update suggestions immediately, but the new host text has not
+    /// yet been observed. An already-uncertain edit cannot be made trustworthy by more
+    /// locally inferred input.
+    nonisolated var afterLocalPrintableEdit: SuggestionContextState {
+        self == .uncertainAfterHostEdit ? .uncertainAfterHostEdit : .localDisplayOnly
+    }
+
+    /// Backspace and host-owned editing commands have app-specific semantics.
+    nonisolated var afterAmbiguousHostEdit: SuggestionContextState {
+        .uncertainAfterHostEdit
     }
 }

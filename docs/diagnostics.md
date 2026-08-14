@@ -30,6 +30,20 @@ vault session was `no_key`, `locked`, or `unlocked`. No-op policy updates are om
 protected renderer refreshes caused by typing, selection, scrolling, or layout do not
 become a high-frequency log.
 
+Per-keystroke expansion Accessibility diagnostics are opt-in on macOS under
+**Settings → Diagnostics → Expansion Accessibility logging**:
+
+- **Off** is the default.
+- **This Session** enables collection only until Snippets quits.
+- **Always** persists the opt-in across launches.
+
+When enabled, `expansion_accessibility` records only closed operation/outcome values,
+the `ax_confirmed` / `local_display_only` / `uncertain_after_host_edit` transition,
+the failing AX stage and classified failure when applicable, a numeric AX error code,
+and the query length. It never records the query, surrounding field text, app identity,
+snippet identity, or snippet content. These events are asynchronous debug records; the
+setting can be switched off immediately after reproducing a problem to limit volume.
+
 Use **Settings → Diagnostics → Export Logs** for a single portable JSONL file.
 The UI states that the export is plaintext before presenting the save or Files picker.
 It can also delete retained logs and a legacy reveal-audit file that could not be

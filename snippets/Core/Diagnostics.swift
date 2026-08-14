@@ -293,6 +293,60 @@ nonisolated enum DiagnosticSuggestionAnchorReason: String, Codable, Sendable {
     case unknown
 }
 
+/// High-frequency expansion diagnostics are opt-in. Every value remains closed and
+/// content-free so enabling verbose collection cannot persist what the user typed.
+nonisolated enum DiagnosticExpansionAXOperation: String, Codable, Sendable {
+    case activation
+    case printableEdit = "printable_edit"
+    case hostEdit = "host_edit"
+    case acceptance
+    case observerRegistration = "observer_registration"
+    case observerNotification = "observer_notification"
+    case secureRevalidation = "secure_revalidation"
+}
+
+nonisolated enum DiagnosticExpansionAXOutcome: String, Codable, Sendable {
+    case confirmed
+    case missingTrigger = "missing_trigger"
+    case unavailable
+    case stale
+    case unsafe
+    case observing
+}
+
+nonisolated enum DiagnosticExpansionContextState: String, Codable, Sendable {
+    case axConfirmed = "ax_confirmed"
+    case localDisplayOnly = "local_display_only"
+    case uncertainAfterHostEdit = "uncertain_after_host_edit"
+}
+
+nonisolated enum DiagnosticExpansionAXStage: String, Codable, Sendable {
+    case application
+    case focusedElement = "focused_element"
+    case selectedRange = "selected_range"
+    case rangeText = "range_text"
+    case value
+    case observerCreation = "observer_creation"
+    case valueNotification = "value_notification"
+    case selectionNotification = "selection_notification"
+}
+
+nonisolated enum DiagnosticExpansionAXFailure: String, Codable, Sendable {
+    case noApplication = "no_application"
+    case notTrusted = "not_trusted"
+    case attributeUnsupported = "attribute_unsupported"
+    case noValue = "no_value"
+    case cannotComplete = "cannot_complete"
+    case notImplemented = "not_implemented"
+    case invalidElement = "invalid_element"
+    case invalidType = "invalid_type"
+    case invalidRange = "invalid_range"
+    case notificationUnsupported = "notification_unsupported"
+    case alreadyRegistered = "already_registered"
+    case apiDisabled = "api_disabled"
+    case other
+}
+
 nonisolated enum DiagnosticMetricKind: String, Codable, Sendable {
     case crash
     case hang
@@ -428,6 +482,16 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         reason: DiagnosticSuggestionAnchorReason,
         durationMilliseconds: Int64
     )
+    case expansionAccessibility(
+        operation: DiagnosticExpansionAXOperation,
+        outcome: DiagnosticExpansionAXOutcome,
+        stateBefore: DiagnosticExpansionContextState,
+        stateAfter: DiagnosticExpansionContextState,
+        stage: DiagnosticExpansionAXStage?,
+        failure: DiagnosticExpansionAXFailure?,
+        axErrorCode: Int?,
+        queryLength: Int
+    )
     case metricKit(DiagnosticMetric)
     case diagnosticsMaintenance(DiagnosticMaintenanceAction, count: Int?)
     case diagnosticsManifest(DiagnosticExportManifest)
@@ -440,6 +504,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .cloudKitFailure, .cloudKitBatchSplit, .cloudKitRecordsIgnored: .cloudKit
         case .vaultAction, .secureReveal, .secureEditorTransition: .vault
         case .suggestionAnchor: .performance
+        case .expansionAccessibility: .integration
         case .metricKit: .metricKit
         case .diagnosticsMaintenance, .diagnosticsManifest: .diagnostics
         }
@@ -462,6 +527,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .secureReveal: "secure_reveal"
         case .secureEditorTransition: "secure_editor_transition"
         case .suggestionAnchor: "suggestion_anchor"
+        case .expansionAccessibility: "expansion_accessibility"
         case .metricKit: "metrickit_diagnostic"
         case .diagnosticsMaintenance: "diagnostics_maintenance"
         case .diagnosticsManifest: "diagnostics_manifest"
@@ -472,6 +538,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         switch self {
         case .storageFailure, .cloudKitFailure:
             .error
+        case .expansionAccessibility:
+            .debug
         case .syncState(.halted, _):
             .fault
         case .storageState(_, .versionTooNew, _),
@@ -576,6 +644,27 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
                 "reason": .string(reason.rawValue),
                 "duration_ms": .integer(durationMilliseconds),
             ]
+        case .expansionAccessibility(
+            let operation,
+            let outcome,
+            let stateBefore,
+            let stateAfter,
+            let stage,
+            let failure,
+            let axErrorCode,
+            let queryLength
+        ):
+            var fields: [String: DiagnosticJSONValue] = [
+                "operation": .string(operation.rawValue),
+                "outcome": .string(outcome.rawValue),
+                "state_before": .string(stateBefore.rawValue),
+                "state_after": .string(stateAfter.rawValue),
+                "query_length": .integer(Int64(max(0, queryLength))),
+            ]
+            if let stage { fields["stage"] = .string(stage.rawValue) }
+            if let failure { fields["failure"] = .string(failure.rawValue) }
+            if let axErrorCode { fields["ax_error_code"] = .integer(Int64(axErrorCode)) }
+            return fields
         case .metricKit(let metric):
             var fields: [String: DiagnosticJSONValue] = [
                 "kind": .string(metric.kind.rawValue),

@@ -85,6 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var syncEngine: SyncEngine? { syncCoordinator.engine }
     lazy var expansionEngine: SnippetExpansionEngine = {
         let engine = SnippetExpansionEngine(store: store, usage: usageStore)
+        let diagnostics = diagnostics
+        engine.expansionVerboseDiagnosticsEnabled = {
+            diagnostics.expansionVerboseLogging.isEnabled
+        }
         // Keep key ownership outside the typing engine. Every explicit secure
         // suggestion gets its own user-presence decision, one record is decrypted into
         // a wipeable lease, and VaultSession drops the key before this closure returns.
