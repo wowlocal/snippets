@@ -458,6 +458,10 @@ final class SnippetEditorViewController: UIViewController {
         keywordField.autocapitalizationType = .none
         keywordField.autocorrectionType = .no
         configure(field: nameField, placeholder: "First line is used when blank", identifier: "snippet-name")
+        keywordField.returnKeyType = .next
+        nameField.returnKeyType = .next
+        keywordField.delegate = self
+        nameField.delegate = self
         keywordField.addTarget(self, action: #selector(fieldChanged), for: .editingChanged)
         nameField.addTarget(self, action: #selector(fieldChanged), for: .editingChanged)
         keywordField.addTarget(self, action: #selector(editingBegan), for: .editingDidBegin)
@@ -635,6 +639,7 @@ final class SnippetEditorViewController: UIViewController {
             action: #selector(showKeywordWarning),
             for: .touchUpInside)
         accessory.addSubview(keywordWarningButton)
+        accessory.isUserInteractionEnabled = false
         keywordField.rightView = accessory
         keywordField.rightViewMode = .always
     }
@@ -947,6 +952,7 @@ final class SnippetEditorViewController: UIViewController {
         keywordWarningMessage = message
         let visibleMessage = keywordField.isFirstResponder ? nil : message
         keywordWarningButton.isHidden = visibleMessage == nil
+        keywordField.rightView?.isUserInteractionEnabled = visibleMessage != nil
         keywordWarningButton.accessibilityLabel = visibleMessage.map {
             "Keyword warning: \($0)"
         }
@@ -1699,6 +1705,20 @@ final class SnippetEditorViewController: UIViewController {
             self.scrollView.contentInset.bottom = bottomInset
             self.scrollView.verticalScrollIndicatorInsets.bottom = bottomInset
         }
+    }
+}
+
+extension SnippetEditorViewController: UITextFieldDelegate {
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        if textField === nameField {
+            _ = focusBody()
+            return false
+        }
+        if textField === keywordField {
+            _ = tagField.focusInput()
+            return false
+        }
+        return true
     }
 }
 

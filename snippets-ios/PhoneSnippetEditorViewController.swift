@@ -311,6 +311,8 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private func configureTextFields() {
         configure(field: nameField, placeholder: "First line is used when blank", identifier: "snippet-name")
         nameField.textContentType = .name
+        nameField.returnKeyType = .next
+        nameField.delegate = self
         nameField.addTarget(self, action: #selector(fieldChanged), for: .editingChanged)
         nameField.addTarget(self, action: #selector(editingBegan), for: .editingDidBegin)
         nameField.addTarget(self, action: #selector(editingEnded), for: .editingDidEnd)
@@ -319,6 +321,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         keywordField.autocapitalizationType = .none
         keywordField.autocorrectionType = .no
         keywordField.spellCheckingType = .no
+        keywordField.returnKeyType = .next
         keywordField.delegate = self
         keywordField.addTarget(self, action: #selector(fieldChanged), for: .editingChanged)
         keywordField.addTarget(self, action: #selector(editingBegan), for: .editingDidBegin)
@@ -862,6 +865,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         keywordWarningMessage = message
         let visibleMessage = keywordField.isFirstResponder ? nil : message
         keywordWarningButton.isHidden = visibleMessage == nil
+        keywordField.rightView?.isUserInteractionEnabled = visibleMessage != nil
         keywordWarningToolTip.defaultToolTip = visibleMessage
         keywordWarningButton.accessibilityLabel = visibleMessage.map {
             "Keyword warning: \($0)"
@@ -1487,6 +1491,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
             for: .touchUpInside)
         keywordWarningButton.addInteraction(keywordWarningToolTip)
         accessory.addSubview(keywordWarningButton)
+        accessory.isUserInteractionEnabled = false
         keywordField.rightView = accessory
         keywordField.rightViewMode = .always
     }
@@ -1689,6 +1694,18 @@ final class PhoneSnippetEditorViewController: UIViewController {
 }
 
 extension PhoneSnippetEditorViewController: UITextFieldDelegate {
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        if textField === nameField {
+            focusBody()
+            return false
+        }
+        if textField === keywordField {
+            _ = tagField.focusInput()
+            return false
+        }
+        return true
+    }
+
     func textField(
         _ textField: UITextField,
         shouldChangeCharactersIn range: NSRange,

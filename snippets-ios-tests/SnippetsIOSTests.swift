@@ -868,6 +868,47 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(name.isFirstResponder, "Tab navigates normally once completion is exhausted")
     }
 
+    func testIPadReturnMovesBetweenSingleLineFieldsButBodyKeepsNewlines() throws {
+        let environment = AppEnvironment()
+        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
+        let body = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView)
+        let keyword = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-keyword"
+        ) as? UITextField)
+        let name = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-name"
+        ) as? UITextField)
+        let tags = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "tags-input"
+        ) as? UITextField)
+
+        XCTAssertEqual(name.returnKeyType, .next)
+        XCTAssertEqual(keyword.returnKeyType, .next)
+        XCTAssertTrue(name.becomeFirstResponder())
+        XCTAssertFalse(hosted.editor.textFieldShouldReturn(name))
+        XCTAssertTrue(body.isFirstResponder)
+
+        XCTAssertTrue(keyword.becomeFirstResponder())
+        XCTAssertFalse(hosted.editor.textFieldShouldReturn(keyword))
+        XCTAssertTrue(tags.isFirstResponder)
+        XCTAssertTrue(hosted.editor.textView(
+            body,
+            shouldChangeTextIn: NSRange(location: body.text.utf16.count, length: 0),
+            replacementText: "\n"
+        ))
+    }
+
+    func testTagFieldEmptySurfaceRoutesTapsToItsInput() throws {
+        let tags = TagTokenField(frame: CGRect(x: 0, y: 0, width: 320, height: 48))
+        tags.layoutIfNeeded()
+
+        let hit = tags.hitTest(CGPoint(x: 310, y: 24), with: nil)
+        XCTAssertEqual(hit?.accessibilityIdentifier, "tags-input")
+    }
+
     func testPhoneSpaceAndExternalTabCompleteTheNextKeywordPart() throws {
         UIView.setAnimationsEnabled(false)
         addTeardownBlock { UIView.setAnimationsEnabled(true) }
@@ -903,6 +944,11 @@ final class SnippetsIOSTests: XCTestCase {
             withAccessibilityIdentifier: "snippet-keyword"
         ) as? UITextField)
         XCTAssertTrue(keyword.becomeFirstResponder())
+        phone.view.layoutIfNeeded()
+        XCTAssertTrue(keyword.hitTest(
+            CGPoint(x: keyword.bounds.maxX - 2, y: keyword.bounds.midY),
+            with: nil
+        ) === keyword, "a hidden warning accessory must not steal the field's right edge")
 
         let spaceRange = NSRange(location: (keyword.text ?? "").utf16.count, length: 0)
         XCTAssertFalse(phone.textField(
@@ -925,6 +971,32 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(UIApplication.shared.sendAction(action, to: phone, from: command, for: nil))
         XCTAssertEqual(keyword.text, "doc.")
         XCTAssertTrue(keyword.isFirstResponder)
+
+        let tags = try XCTUnwrap(phone.view.descendant(
+            withAccessibilityIdentifier: "tags-input"
+        ) as? UITextField)
+        XCTAssertFalse(phone.textFieldShouldReturn(keyword))
+        XCTAssertTrue(tags.isFirstResponder)
+
+        mode.selectedSegmentIndex = 0
+        mode.sendActions(for: .valueChanged)
+        phone.view.layoutIfNeeded()
+        let name = try XCTUnwrap(phone.view.descendant(
+            withAccessibilityIdentifier: "snippet-name"
+        ) as? UITextField)
+        let body = try XCTUnwrap(phone.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView)
+        XCTAssertEqual(name.returnKeyType, .next)
+        XCTAssertEqual(keyword.returnKeyType, .next)
+        XCTAssertTrue(name.becomeFirstResponder())
+        XCTAssertFalse(phone.textFieldShouldReturn(name))
+        XCTAssertTrue(body.isFirstResponder)
+        XCTAssertTrue(phone.textView(
+            body,
+            shouldChangeTextIn: NSRange(location: body.text.utf16.count, length: 0),
+            replacementText: "\n"
+        ))
     }
 
     func testEscapeLeavesEveryEditorFieldForSnippetList() {

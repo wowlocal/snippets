@@ -55,6 +55,19 @@ final class TagTokenField: UIView, UITextFieldDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hit = super.hitTest(point, with: event) else { return nil }
+
+        // The horizontal scroller fills the bordered surface, while its actual
+        // text field is only as wide as the placeholder or pending text. Route
+        // taps on the otherwise-empty scroller/stack background to that input;
+        // token buttons and their remove actions keep their normal hit targets.
+        if hit === self || hit === scrollView || hit === stack {
+            return textField
+        }
+        return hit
+    }
+
     func setTags(_ tags: [String]) {
         isUpdating = true
         self.tags = SnippetTagging.normalizedTags(tags)
