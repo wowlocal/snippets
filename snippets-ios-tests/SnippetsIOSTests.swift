@@ -909,11 +909,84 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(hit?.accessibilityIdentifier, "tags-input")
     }
 
+    func testTagFieldOffersAndAcceptsExistingPrefixCompletions() throws {
+        let tags = TagTokenField(frame: CGRect(x: 0, y: 0, width: 320, height: 48))
+        let controller = UIViewController()
+        controller.view.addSubview(tags)
+        let window = testWindow(frame: CGRect(x: 0, y: 0, width: 430, height: 932))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        addTeardownBlock {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        tags.setAvailableTags(["Email", "Work", "Workflow"])
+        let input = try XCTUnwrap(tags.descendant(
+            withAccessibilityIdentifier: "tags-input"
+        ) as? UITextField)
+        XCTAssertTrue(input.becomeFirstResponder())
+        input.text = "wo"
+        input.sendActions(for: .editingChanged)
+
+        let first = try XCTUnwrap(tags.descendant(
+            withAccessibilityIdentifier: "tag-completion-0"
+        ) as? UIButton)
+        let second = try XCTUnwrap(tags.descendant(
+            withAccessibilityIdentifier: "tag-completion-1"
+        ) as? UIButton)
+        XCTAssertEqual(first.accessibilityLabel, "Complete tag Work")
+        XCTAssertEqual(second.accessibilityLabel, "Complete tag Workflow")
+
+        first.sendActions(for: .touchUpInside)
+        XCTAssertEqual(tags.currentTags(), ["Work"])
+        XCTAssertNil(tags.descendant(withAccessibilityIdentifier: "tag-completion-0"))
+
+        input.text = "em"
+        input.sendActions(for: .editingChanged)
+        XCTAssertTrue(tags.hasPendingCompletion)
+        XCTAssertFalse(tags.textFieldShouldReturn(input))
+        XCTAssertEqual(tags.currentTags(), ["Work", "Email"])
+    }
+
+    func testIPadTabAcceptsTagCompletionBeforeLeavingTags() throws {
+        let environment = AppEnvironment()
+        _ = environment.store.addSnippet(
+            name: "Existing",
+            content: "Reference",
+            tags: ["Work"]
+        )
+        let editing = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let hosted = hostMainSplit(environment: environment, selecting: editing.id)
+        let body = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-content"
+        ) as? UITextView)
+        let tags = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "tags-input"
+        ) as? UITextField)
+
+        XCTAssertTrue(tags.becomeFirstResponder())
+        tags.text = "wo"
+        tags.sendActions(for: .editingChanged)
+        hosted.controller.nextFieldCommand()
+
+        XCTAssertEqual(environment.store.snippet(id: editing.id)?.tags, ["Work"])
+        XCTAssertTrue(tags.isFirstResponder)
+
+        hosted.controller.nextFieldCommand()
+        XCTAssertTrue(body.isFirstResponder)
+    }
+
     func testPhoneSpaceAndExternalTabCompleteTheNextKeywordPart() throws {
         UIView.setAnimationsEnabled(false)
         addTeardownBlock { UIView.setAnimationsEnabled(true) }
         let environment = AppEnvironment()
-        var existing = environment.store.addSnippet(name: "Frontend docs", content: "Reference")
+        var existing = environment.store.addSnippet(
+            name: "Frontend docs",
+            content: "Reference",
+            tags: ["Work"]
+        )
         existing.keyword = "doc.frontend"
         environment.store.update(existing)
         var editing = environment.store.addSnippet(name: "Selected", content: "Edit me")
@@ -964,7 +1037,7 @@ final class SnippetsIOSTests: XCTestCase {
             keyword.selectedTextRange = keyword.textRange(from: end, to: end)
         }
 
-        let command = try XCTUnwrap(phone.keyCommands?.first { $0.title == "Complete Keyword" })
+        let command = try XCTUnwrap(phone.keyCommands?.first { $0.title == "Complete" })
         let action = try XCTUnwrap(command.action)
         XCTAssertTrue(phone.canPerformAction(action, withSender: command))
         XCTAssertTrue(keyword.target(forAction: action, withSender: command) as AnyObject? === phone)
@@ -976,6 +1049,13 @@ final class SnippetsIOSTests: XCTestCase {
             withAccessibilityIdentifier: "tags-input"
         ) as? UITextField)
         XCTAssertFalse(phone.textFieldShouldReturn(keyword))
+        XCTAssertTrue(tags.isFirstResponder)
+
+        tags.text = "wo"
+        tags.sendActions(for: .editingChanged)
+        XCTAssertTrue(phone.canPerformAction(action, withSender: command))
+        XCTAssertTrue(UIApplication.shared.sendAction(action, to: phone, from: command, for: nil))
+        XCTAssertEqual(environment.store.snippet(id: editing.id)?.tags, ["Work"])
         XCTAssertTrue(tags.isFirstResponder)
 
         mode.selectedSegmentIndex = 0

@@ -160,6 +160,7 @@ final class SnippetEditorViewController: UIViewController {
         nameField.text = snippet.name
         keywordField.text = snippet.normalizedKeyword
         tagField.setTags(snippet.tags)
+        tagField.setAvailableTags(environment.store.allTags())
         enabledSwitch.isOn = snippet.isEnabled
         let isSecure = environment.store.isSecure(id)
         secureSwitch.isOn = isSecure
@@ -220,6 +221,7 @@ final class SnippetEditorViewController: UIViewController {
             return forward ? tagField.focusInput() : keywordField.becomeFirstResponder()
         }
         if tagField.isInputFirstResponder {
+            if forward, tagField.completePendingTag() { return true }
             return forward ? focusFirstEditorField() : nameField.becomeFirstResponder()
         }
         return false
@@ -864,6 +866,7 @@ final class SnippetEditorViewController: UIViewController {
 
     private func applyDerivedUI(for snippet: Snippet) {
         title = snippet.displayName
+        tagField.setAvailableTags(environment.store.allTags())
         updateNamePlaceholder(for: snippet)
         updatePreview()
         updateKeywordWarning(for: snippet)

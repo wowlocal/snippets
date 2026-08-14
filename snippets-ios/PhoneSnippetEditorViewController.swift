@@ -121,7 +121,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     override var keyCommands: [UIKeyCommand]? {
         let command = UIKeyCommand(
-            title: "Complete Keyword",
+            title: "Complete",
             action: #selector(completeKeywordCommand),
             input: "\t"
         )
@@ -131,12 +131,19 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         if action == #selector(completeKeywordCommand) {
-            return isViewLoaded && keywordField.isFirstResponder && keywordCompletionAtEnd() != nil
+            return isViewLoaded && (
+                keywordField.isFirstResponder && keywordCompletionAtEnd() != nil
+                || tagField.isInputFirstResponder && tagField.hasPendingCompletion
+            )
         }
         return super.canPerformAction(action, withSender: sender)
     }
 
     @objc private func completeKeywordCommand() {
+        if tagField.isInputFirstResponder {
+            _ = tagField.completePendingTag()
+            return
+        }
         guard let completion = keywordCompletionAtEnd() else { return }
         applyKeywordCompletion(completion)
     }
@@ -594,6 +601,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         nameField.text = snippet.name
         keywordField.text = snippet.normalizedKeyword
         tagField.setTags(snippet.tags)
+        tagField.setAvailableTags(environment.store.allTags())
         enabledSwitch.isOn = snippet.isEnabled
         let isSecure = environment.store.isSecure(snippetID)
         secureSwitch.isOn = isSecure
@@ -737,6 +745,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     private func applyDerivedUI(for snippet: Snippet) {
         title = snippet.displayName
+        tagField.setAvailableTags(environment.store.allTags())
         updateNamePlaceholder(for: snippet)
         updateKeywordWarning(for: snippet)
         updateSuggestions(for: snippet)

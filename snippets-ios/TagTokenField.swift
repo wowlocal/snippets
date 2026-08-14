@@ -7,6 +7,8 @@ final class TagTokenField: UIView, UITextFieldDelegate {
     private let stack = UIStackView()
     private let textField = BackspaceTextField()
     private var tags: [String] = []
+    private var availableTags: [String] = []
+    private var completionButtons: [UIButton] = []
     private var isUpdating = false
 
     override init(frame: CGRect) {
@@ -33,6 +35,8 @@ final class TagTokenField: UIView, UITextFieldDelegate {
         textField.delegate = self
         textField.accessibilityIdentifier = "tags-input"
         textField.onDeleteWhenEmpty = { [weak self] in self?.removeLastTag() }
+        textField.addTarget(self, action: #selector(inputChanged), for: .editingChanged)
+        textField.addTarget(self, action: #selector(inputChanged), for: .editingDidBegin)
         textField.addTarget(self, action: #selector(editingEnded), for: .editingDidEnd)
 
         stack.addArrangedSubview(textField)
@@ -75,12 +79,21 @@ final class TagTokenField: UIView, UITextFieldDelegate {
         isUpdating = false
     }
 
+    /// Supplies the library vocabulary used by the macOS token field's prefix
+    /// completion. Suggestions stay inside this field's horizontal scroller so
+    /// appearing and disappearing candidates never move the editor below it.
+    func setAvailableTags(_ tags: [String]) {
+        availableTags = SnippetTagging.normalizedTags(tags)
+        updateCompletions()
+    }
+
     func currentTags() -> [String] {
         commitPendingText(notify: false)
         return tags
     }
 
     var isInputFirstResponder: Bool { textField.isFirstResponder }
+    var hasPendingCompletion: Bool { !completionCandidates().isEmpty }
 
     @discardableResult
     func focusInput() -> Bool {
@@ -102,8 +115,20 @@ final class TagTokenField: UIView, UITextFieldDelegate {
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        commitPendingText()
+        if !completePendingTag() {
+            commitPendingText()
+        }
         return false
+    }
+
+    /// Accepts the first alphabetical prefix match, mirroring the default item
+    /// offered by `NSTokenField`. Used by Return and by the iPad hardware-Tab
+    /// focus loop before Tab advances to the next editor field.
+    @discardableResult
+    func completePendingTag() -> Bool {
+        guard let completion = completionCandidates().first else { return false }
+        acceptCompletion(completion)
+        return true
     }
 
     private func addTags(_ incoming: [String]) {
@@ -139,6 +164,7 @@ final class TagTokenField: UIView, UITextFieldDelegate {
     }
 
     private func rebuildTokens() {
+        completionButtons.removeAll()
         for view in stack.arrangedSubviews where view !== textField {
             stack.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -160,12 +186,82 @@ final class TagTokenField: UIView, UITextFieldDelegate {
             button.addAction(UIAction { [weak self] _ in self?.remove(tag: tag) }, for: .touchUpInside)
             stack.insertArrangedSubview(button, at: index)
         }
+        updateCompletions()
+    }
+
+    private func completionCandidates() -> [String] {
+        guard textField.isFirstResponder,
+              let query = SnippetTagging.normalizedTags([textField.text ?? ""]).first
+        else { return [] }
+
+        let queryKey = SnippetTagging.filterKey(for: query)
+        let selectedKeys = Set(tags.map(SnippetTagging.filterKey(for:)))
+        return availableTags.filter { tag in
+            let tagKey = SnippetTagging.filterKey(for: tag)
+            return tagKey.hasPrefix(queryKey) && !selectedKeys.contains(tagKey)
+        }
+    }
+
+    private func updateCompletions() {
+        for button in completionButtons {
+            stack.removeArrangedSubview(button)
+            button.removeFromSuperview()
+        }
+        completionButtons.removeAll()
+
+        for (index, tag) in completionCandidates().prefix(8).enumerated() {
+            var configuration = UIButton.Configuration.gray()
+            configuration.title = tag
+            configuration.image = UIImage(
+                systemName: "arrow.turn.down.right",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
+            )
+            configuration.imagePadding = 5
+            configuration.cornerStyle = .capsule
+            configuration.buttonSize = .small
+            configuration.contentInsets = NSDirectionalEdgeInsets(
+                top: 4,
+                leading: 8,
+                bottom: 4,
+                trailing: 8
+            )
+            configuration.baseForegroundColor = .secondaryLabel
+            configuration.baseBackgroundColor = UIColor.secondarySystemFill
+            let button = UIButton(configuration: configuration)
+            button.accessibilityIdentifier = "tag-completion-\(index)"
+            button.accessibilityLabel = "Complete tag \(tag)"
+            button.addAction(UIAction { [weak self] _ in
+                self?.acceptCompletion(tag)
+            }, for: .touchUpInside)
+            stack.addArrangedSubview(button)
+            completionButtons.append(button)
+        }
+
+        guard !completionButtons.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  textField.isFirstResponder,
+                  let firstCompletion = completionButtons.first
+            else { return }
+            stack.layoutIfNeeded()
+            scrollView.scrollRectToVisible(
+                textField.frame.union(firstCompletion.frame).insetBy(dx: -12, dy: 0),
+                animated: false
+            )
+        }
+    }
+
+    private func acceptCompletion(_ tag: String) {
+        textField.text = ""
+        addTags([tag])
     }
 
     private func notifyChange() {
         guard !isUpdating else { return }
         onChange?(tags)
     }
+
+    @objc private func inputChanged() { updateCompletions() }
 
     @objc private func editingEnded() { commitPendingText() }
 }
