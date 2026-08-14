@@ -111,6 +111,19 @@ function profile_vouches_for_signature() {
     return 1
 }
 
+function build_release_app() {
+    run_redacted xcodebuild \
+        -project "$PROJECT_PATH" \
+        -scheme "$SCHEME" \
+        -configuration "$CONFIGURATION" \
+        -destination "platform=iOS,id=$XCODE_DESTINATION_IDENTIFIER" \
+        -derivedDataPath "$DERIVED_DATA_PATH" \
+        -allowProvisioningUpdates \
+        -allowProvisioningDeviceRegistration \
+        -quiet \
+        build
+}
+
 # Returns 2 when SpringBoard rejected the launch only because the device is locked.
 function launch_app_once() {
     local launch_status
@@ -281,16 +294,7 @@ success "Eligible native iOS destination"
 
 if [ "$BUILD_APP" -eq 1 ]; then
     info "Building the signed Release app (incremental)"
-    if ! run_redacted xcodebuild \
-        -project "$PROJECT_PATH" \
-        -scheme "$SCHEME" \
-        -configuration "$CONFIGURATION" \
-        -destination "platform=iOS,id=$XCODE_DESTINATION_IDENTIFIER" \
-        -derivedDataPath "$DERIVED_DATA_PATH" \
-        -allowProvisioningUpdates \
-        -allowProvisioningDeviceRegistration \
-        -quiet \
-        build; then
+    if ! build_release_app; then
         fail "Release device build failed"
     fi
     success "Release build succeeded"
@@ -303,8 +307,32 @@ fi
     || fail "The Release app has no embedded provisioning profile"
 
 info "Validating the signed artifact"
-codesign --verify --deep --strict "$APP_PATH" >/dev/null 2>&1 \
-    || fail "The app's code signature is invalid"
+if ! codesign --verify --deep --strict "$APP_PATH" >/dev/null 2>&1; then
+    if [ "$BUILD_APP" -ne 1 ]; then
+        fail "The app's code signature is invalid; rerun without --no-build"
+    fi
+
+    # When one DerivedData directory is reused for a different device family,
+    # Xcode can refresh the destination-thinned Assets.car without rerunning the
+    # final CodeSign task. Move only the generated product aside so Xcode links
+    # the cached intermediates into a fresh bundle and signs it in the correct
+    # order. Keep signing under Xcode's control instead of manually re-signing.
+    warn "Xcode left a stale signature after switching devices; rebuilding the app bundle"
+    info "Rebuilding the signed Release app from cached intermediates"
+    stale_app_path="$WORK_DIR/stale-Snippets.app"
+    mv "$APP_PATH" "$stale_app_path" \
+        || fail "Could not move the stale Release app aside"
+    if ! build_release_app; then
+        if [ -d "$APP_PATH" ]; then
+            mv "$APP_PATH" "$WORK_DIR/failed-Snippets.app" || true
+        fi
+        mv "$stale_app_path" "$APP_PATH" || true
+        fail "Release device app-bundle rebuild failed"
+    fi
+    codesign --verify --deep --strict "$APP_PATH" >/dev/null 2>&1 \
+        || fail "The app's code signature is invalid after the automatic rebuild"
+    success "Release app bundle rebuilt and signed"
+fi
 codesign -d --entitlements :- "$APP_PATH" \
     >"$WORK_DIR/app-entitlements.plist" 2>/dev/null \
     || fail "Could not read the app's signed entitlements"
