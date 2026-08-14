@@ -35,6 +35,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private let keywordPrefixLabel = UILabel()
     private let keywordStatusLabel = UILabel()
     private let suggestionsStack = UIStackView()
+    private let keywordSuggestionsOverlay = UIView()
     private let tagField = TagTokenField()
     private let enabledSwitch = UISwitch()
     private let secureSwitch = UISwitch()
@@ -207,10 +208,11 @@ final class PhoneSnippetEditorViewController: UIViewController {
         keywordRow.axis = .horizontal
         keywordRow.alignment = .center
         keywordRow.spacing = 5
-        let keywordStack = UIStackView(arrangedSubviews: [keywordRow, keywordStatusLabel, suggestionsStack])
+        let keywordStack = UIStackView(arrangedSubviews: [keywordRow, keywordStatusLabel])
         keywordStack.axis = .vertical
         keywordStack.spacing = 8
-        detailsModeStack.addArrangedSubview(section(title: "Keyword", content: keywordStack))
+        let keywordEditorSection = section(title: "Keyword", content: keywordStack)
+        detailsModeStack.addArrangedSubview(keywordEditorSection)
         detailsModeStack.addArrangedSubview(section(title: "Tags", content: tagField))
         detailsModeStack.addArrangedSubview(
             toggleRow(
@@ -219,6 +221,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
                 control: enabledSwitch
             )
         )
+        configureKeywordSuggestionsOverlay(in: detailsModeStack, below: keywordEditorSection)
         detailsModeStack.addArrangedSubview(
             toggleRow(
                 title: "Secure",
@@ -380,6 +383,34 @@ final class PhoneSnippetEditorViewController: UIViewController {
             secureBodyAccessibilityNotice.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
             secureBodyAccessibilityNotice.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
             secureBodyAccessibilityNotice.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
+        ])
+    }
+
+    private func configureKeywordSuggestionsOverlay(in container: UIView, below anchor: UIView) {
+        keywordSuggestionsOverlay.translatesAutoresizingMaskIntoConstraints = false
+        keywordSuggestionsOverlay.layer.zPosition = 10
+        keywordSuggestionsOverlay.isHidden = true
+        AppTheme.configureSurface(
+            keywordSuggestionsOverlay,
+            cornerRadius: 10,
+            backgroundColor: .secondarySystemGroupedBackground
+        )
+
+        suggestionsStack.translatesAutoresizingMaskIntoConstraints = false
+        keywordSuggestionsOverlay.addSubview(suggestionsStack)
+        container.addSubview(keywordSuggestionsOverlay)
+        NSLayoutConstraint.activate([
+            keywordSuggestionsOverlay.leadingAnchor.constraint(equalTo: keywordField.leadingAnchor),
+            keywordSuggestionsOverlay.trailingAnchor.constraint(equalTo: keywordField.trailingAnchor),
+            keywordSuggestionsOverlay.topAnchor.constraint(equalTo: anchor.bottomAnchor, constant: 4),
+            suggestionsStack.leadingAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.leadingAnchor, constant: 10),
+            suggestionsStack.trailingAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.trailingAnchor, constant: -10),
+            suggestionsStack.topAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.topAnchor, constant: 8),
+            suggestionsStack.bottomAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.bottomAnchor, constant: -8),
         ])
     }
 
@@ -792,10 +823,18 @@ final class PhoneSnippetEditorViewController: UIViewController {
             suggestionsStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
-        guard snippet.normalizedKeyword.isEmpty else {
-            suggestionsStack.isHidden = true
+        if !snippet.normalizedKeyword.isEmpty {
+            let matches = KeywordSuggestions.existingMatches(
+                query: snippet.normalizedKeyword,
+                among: environment.store.snippetsSortedForDisplay()
+                    .filter { $0.id != snippet.id }
+                    .map(\.normalizedKeyword)
+            )
+            renderExistingKeywordMatches(matches)
             return
         }
+        suggestionsStack.axis = .horizontal
+        suggestionsStack.alignment = .center
         let existing = (environment.store.enabledSnippetsSorted()
             + environment.secureStore.enabledShellsSortedForDisplay())
             .filter { $0.id != snippet.id }
@@ -820,7 +859,35 @@ final class PhoneSnippetEditorViewController: UIViewController {
             }, for: .touchUpInside)
             suggestionsStack.addArrangedSubview(button)
         }
-        suggestionsStack.isHidden = suggestions.isEmpty
+        keywordSuggestionsOverlay.isUserInteractionEnabled = true
+        keywordSuggestionsOverlay.isHidden = suggestions.isEmpty || !keywordField.isFirstResponder
+    }
+
+    private func renderExistingKeywordMatches(_ matches: [String]) {
+        guard !matches.isEmpty else {
+            keywordSuggestionsOverlay.isHidden = true
+            return
+        }
+
+        suggestionsStack.axis = .vertical
+        suggestionsStack.alignment = .fill
+
+        let visible = Array(matches.prefix(8))
+        let hiddenCount = matches.count - visible.count
+        let referenceText = "Existing · " + visible.map { "\\\($0)" }.joined(separator: "  ·  ")
+            + (hiddenCount > 0 ? "  ·  +\(hiddenCount) more" : "")
+        let references = UILabel()
+        references.text = referenceText
+        references.font = AppTheme.scaledFont(size: 13, textStyle: .footnote, monospaced: true)
+        references.adjustsFontForContentSizeCategory = true
+        references.textColor = .secondaryLabel
+        references.numberOfLines = 2
+        references.lineBreakMode = .byTruncatingTail
+        references.accessibilityLabel = "Existing keywords: " + visible.joined(separator: ", ")
+            + (hiddenCount > 0 ? ", and \(hiddenCount) more" : "")
+        suggestionsStack.addArrangedSubview(references)
+        keywordSuggestionsOverlay.isUserInteractionEnabled = false
+        keywordSuggestionsOverlay.isHidden = !keywordField.isFirstResponder
     }
 
     private func editorChanged() {
@@ -1400,8 +1467,16 @@ final class PhoneSnippetEditorViewController: UIViewController {
     }
 
     @objc private func fieldChanged() { editorChanged() }
-    @objc private func editingBegan() { beginPlainEditTransaction() }
-    @objc private func editingEnded() { editorChanged(); commitPlainEditTransaction() }
+    @objc private func editingBegan() {
+        beginPlainEditTransaction()
+        if keywordField.isFirstResponder { refreshDerivedUI() }
+    }
+
+    @objc private func editingEnded() {
+        editorChanged()
+        keywordSuggestionsOverlay.isHidden = true
+        commitPlainEditTransaction()
+    }
 
     @objc private func vaultWillLock(_ notification: Notification) {
         guard let session = notification.object as? VaultSession,

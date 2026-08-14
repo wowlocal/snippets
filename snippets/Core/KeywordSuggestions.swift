@@ -43,6 +43,33 @@ nonisolated enum KeywordSuggestions {
     /// host, which is a word the user recognises.
     private static let ignoredLeadingWords: Set<String> = ["http", "https", "www"]
 
+    /// Existing library keywords that help a person keep a naming convention
+    /// while they type. These are references, not safe-to-use suggestions: an
+    /// exact result may already belong to another snippet and selecting it would
+    /// create the duplicate that the editor's conflict warning rejects.
+    ///
+    /// The ordinary substring cases make `doc` find both `doc.frontend` and
+    /// `frontend.doc`. When more than one dot-separated part has been typed, the
+    /// final fallback also ignores their order, so an accidental
+    /// `frontend.doc` still points back to an existing `doc.frontend`.
+    static func existingMatches(query rawQuery: String, among rawKeywords: [String]) -> [String] {
+        let query = foldedKeyword(rawQuery)
+        guard !query.isEmpty else { return [] }
+
+        var seen = Set<String>()
+        return rawKeywords.compactMap { rawKeyword -> (keyword: String, folded: String, rank: Int)? in
+            let keyword = Snippet.sanitizedKeyword(rawKeyword)
+            let folded = foldedKeyword(keyword)
+            guard !folded.isEmpty, seen.insert(folded).inserted,
+                  let rank = existingMatchRank(query: query, candidate: folded) else { return nil }
+            return (keyword, folded, rank)
+        }.sorted { lhs, rhs in
+            if lhs.rank != rhs.rank { return lhs.rank < rhs.rank }
+            if lhs.folded != rhs.folded { return lhs.folded < rhs.folded }
+            return lhs.keyword < rhs.keyword
+        }.map(\.keyword)
+    }
+
     /// Ordered best-first, deduplicated, and already folded the way
     /// `KeywordRelation` needs. Nothing here is measured against the library —
     /// the caller does that, because only it knows what is enabled.
@@ -94,5 +121,44 @@ nonisolated enum KeywordSuggestions {
             .lowercased()
             .split(whereSeparator: { !($0.isASCII && ($0.isLetter || $0.isNumber)) })
             .map(String.init)
+    }
+
+    private static func foldedKeyword(_ keyword: String) -> String {
+        SnippetTagging.filterKey(for: Snippet.sanitizedKeyword(keyword))
+    }
+
+    /// Smaller is better. Whole-keyword relationships lead, followed by a
+    /// matching dot component and finally an order-independent component match.
+    private static func existingMatchRank(query: String, candidate: String) -> Int? {
+        if candidate == query { return 0 }
+        if candidate.hasPrefix(query) { return 1 }
+
+        let queryParts = keywordParts(query)
+        let candidateParts = keywordParts(candidate)
+        if candidateParts.contains(query) { return 2 }
+        if candidateParts.contains(where: { $0.hasPrefix(query) }) { return 3 }
+        if candidate.contains(query) { return 4 }
+
+        guard queryParts.count > 1,
+              unorderedParts(queryParts, matchDistinctPartsIn: candidateParts) else { return nil }
+        return 5
+    }
+
+    private static func keywordParts(_ keyword: String) -> [String] {
+        keyword.split(separator: ".", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    /// Query parts are matched longest-first and consume candidate parts. This
+    /// keeps `doc.doc` from matching a keyword with only one `doc` component and
+    /// avoids a short partial stealing the only component a longer part can use.
+    private static func unorderedParts(_ queryParts: [String], matchDistinctPartsIn candidateParts: [String]) -> Bool {
+        guard candidateParts.count >= queryParts.count else { return false }
+
+        var available = candidateParts
+        for queryPart in queryParts.sorted(by: { $0.count > $1.count }) {
+            guard let index = available.firstIndex(where: { $0.contains(queryPart) }) else { return false }
+            available.remove(at: index)
+        }
+        return true
     }
 }

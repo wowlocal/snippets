@@ -621,5 +621,51 @@ struct TextReplacementTests {
                 "name and content agreeing produce one pair, not two"
             )
         }
+
+        @Test func existingKeywordsMatchADotComponentAnywhere() {
+            #expect(
+                KeywordSuggestions.existingMatches(
+                    query: "doc",
+                    among: ["frontend.doc", "doc.backend", "product"]
+                ) == ["doc.backend", "frontend.doc"],
+                "whole-keyword prefix leads, but a component in either position matches"
+            )
+        }
+
+        @Test func existingKeywordPartsMatchWhenTypedInTheWrongOrder() {
+            #expect(
+                KeywordSuggestions.existingMatches(
+                    query: "frontend.doc",
+                    among: ["other", "doc.frontend", "doc.backend"]
+                ) == ["doc.frontend"],
+                "dot-separated naming components are order independent"
+            )
+        }
+
+        @Test func partialReorderedKeywordPartsMatchWhileTyping() {
+            #expect(
+                KeywordSuggestions.existingMatches(
+                    query: "front.do",
+                    among: ["doc.frontend", "doc.backend", "frontend.design"]
+                ) == ["doc.frontend"],
+                "each partially typed component can find its existing counterpart"
+            )
+        }
+
+        @Test func exactExistingKeywordLeadsAndFoldedDuplicatesCollapse() {
+            #expect(
+                KeywordSuggestions.existingMatches(
+                    query: "\\CAFÉ.DOC",
+                    among: ["cafe.doc.extra", "Café.Doc", "cafe.doc", "other.cafe.doc"]
+                ) == ["Café.Doc", "cafe.doc.extra", "other.cafe.doc"],
+                "matching follows keyword sanitizing, case and diacritic folding"
+            )
+        }
+
+        @Test func anEmptyKeywordQueryShowsNoExistingReferences() {
+            #expect(
+                KeywordSuggestions.existingMatches(query: "  ", among: ["doc.frontend"]).isEmpty
+            )
+        }
     }
 }

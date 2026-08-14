@@ -795,30 +795,62 @@ extension ViewController {
         keywordField.toolTip = text.isEmpty ? nil : text
     }
 
-    /// The clickable candidates under the status line, offered only while the
-    /// keyword is empty — the one state in which the line above has nothing to
-    /// report and the snippet cannot fire. Anything offered here is a keyword
-    /// that line would immediately call valid: the collision test runs in *both*
-    /// prefix directions, so a chip can neither be swallowed by a longer keyword
-    /// nor stop a shorter one that already works.
+    /// The row under Keyword has two deliberately different modes. An empty
+    /// field gets clickable, collision-safe candidates. While a keyword is being
+    /// typed it gets neutral, non-clickable references to matching keywords that
+    /// already exist. Existing values are context for naming, not suggestions to
+    /// reuse — reusing one would create exactly the duplicate reported above.
     func updateSuggestedKeywordsRow(for snippet: Snippet?) {
-        let suggestions = suggestedKeywords(for: snippet)
+        let existing = existingKeywordMatches(for: snippet)
+        let showsExisting = !existing.isEmpty
+        let keywords = showsExisting ? existing : suggestedKeywords(for: snippet)
+        keywordSuggestionsOverlay.isHidden = keywords.isEmpty || keywordField.currentEditor() == nil
 
-        guard suggestions != renderedSuggestedKeywords else { return }
-        renderedSuggestedKeywords = suggestions
+        guard keywords != renderedSuggestedKeywords
+                || showsExisting != renderedKeywordsAreExisting else { return }
+        renderedSuggestedKeywords = keywords
+        renderedKeywordsAreExisting = showsExisting
 
-        let chips = suggestions.map { keyword -> TagChipView in
+        var chips: [NSView] = []
+        if showsExisting {
+            let label = TagChipView(fontSize: 11)
+            label.configure(text: "Existing", color: .secondaryLabelColor, style: .plain)
+            label.toolTip = "Keywords already in this library"
+            label.setAccessibility(label: "Existing keywords", isButton: false)
+            chips.append(label)
+        }
+        chips.append(contentsOf: keywords.map { keyword -> TagChipView in
             let chip = TagChipView(fontSize: 11)
-            chip.configure(text: "\\\(keyword)", color: .controlAccentColor, style: .tinted)
-            chip.toolTip = "Use \\\(keyword) as this snippet's keyword"
-            chip.setAccessibility(label: "Use keyword \(keyword)", isButton: true)
-            chip.onClick = { [weak self] in
-                self?.applySuggestedKeyword(keyword)
+            if showsExisting {
+                chip.configure(text: "\\\(keyword)", color: .secondaryLabelColor, style: .muted)
+                chip.toolTip = "\\\(keyword) already exists in this library"
+                chip.setAccessibility(label: "Existing keyword \(keyword)", isButton: false)
+            } else {
+                chip.configure(text: "\\\(keyword)", color: .controlAccentColor, style: .tinted)
+                chip.toolTip = "Use \\\(keyword) as this snippet's keyword"
+                chip.setAccessibility(label: "Use keyword \(keyword)", isButton: true)
+                chip.onClick = { [weak self] in
+                    self?.applySuggestedKeyword(keyword)
+                }
             }
             return chip
-        }
+        })
         editorSuggestedKeywordsFlow.setChips(chips)
-        editorSuggestedKeywordsFlow.isHidden = chips.isEmpty
+    }
+
+    private func existingKeywordMatches(for snippet: Snippet?) -> [String] {
+        guard let snippet, keywordField.isEnabled, !snippet.normalizedKeyword.isEmpty else { return [] }
+
+        let keywords = store.snippetsSortedForDisplay()
+            .filter { $0.id != snippet.id }
+            .map(\.normalizedKeyword)
+        // A compact reference row is easier to scan while typing. The flow can
+        // reveal its second line, but it should never build hundreds of views for
+        // a broad one-character query.
+        return Array(
+            KeywordSuggestions.existingMatches(query: snippet.normalizedKeyword, among: keywords)
+                .prefix(8)
+        )
     }
 
     private func suggestedKeywords(for snippet: Snippet?) -> [String] {

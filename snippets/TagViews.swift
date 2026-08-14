@@ -129,6 +129,9 @@ final class TagChipView: NSView {
         case tinted
         case filled
         case muted
+        /// Chip geometry without a capsule, used when a text label must share
+        /// the exact baseline and vertical insets of adjacent chips.
+        case plain
     }
 
     private let label = NSTextField(labelWithString: "")
@@ -212,6 +215,8 @@ final class TagChipView: NSView {
             return Self.contrastingTextColor(on: color)
         case .muted:
             return .secondaryLabelColor
+        case .plain:
+            return .secondaryLabelColor
         }
     }
 
@@ -240,6 +245,8 @@ final class TagChipView: NSView {
             return color.withAlphaComponent(hovering ? 1.0 : 0.92)
         case .muted:
             return NSColor.secondaryLabelColor.withAlphaComponent(hovering ? 0.2 : 0.12)
+        case .plain:
+            return .clear
         }
     }
 

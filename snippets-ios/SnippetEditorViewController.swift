@@ -21,6 +21,7 @@ final class SnippetEditorViewController: UIViewController {
     private let keywordPrefixLabel = UILabel()
     private let keywordStatusLabel = UILabel()
     private let suggestionsStack = UIStackView()
+    private let keywordSuggestionsOverlay = UIView()
     private let nameField = UITextField()
     private let tagField = TagTokenField()
     private let enabledSwitch = UISwitch()
@@ -262,7 +263,8 @@ final class SnippetEditorViewController: UIViewController {
 
         formStack.addArrangedSubview(snippetSection)
         formStack.addArrangedSubview(previewSection)
-        formStack.addArrangedSubview(section(title: "Keyword", content: keywordSection()))
+        let keywordEditorSection = section(title: "Keyword", content: keywordSection())
+        formStack.addArrangedSubview(keywordEditorSection)
         formStack.addArrangedSubview(section(title: "Name", content: nameField))
         formStack.addArrangedSubview(section(title: "Tags", content: tagField))
         formStack.addArrangedSubview(enabledButton)
@@ -273,6 +275,7 @@ final class SnippetEditorViewController: UIViewController {
         footerStatusLabel.numberOfLines = 0
         footerStatusLabel.accessibilityIdentifier = "editor-status"
         formStack.addArrangedSubview(footerStatusLabel)
+        configureKeywordSuggestionsOverlay(in: formStack, below: keywordEditorSection)
     }
 
     private func configureBody() {
@@ -544,10 +547,38 @@ final class SnippetEditorViewController: UIViewController {
         fieldRow.axis = .horizontal
         fieldRow.alignment = .center
         fieldRow.spacing = 4
-        let stack = UIStackView(arrangedSubviews: [fieldRow, keywordStatusLabel, suggestionsStack])
+        let stack = UIStackView(arrangedSubviews: [fieldRow, keywordStatusLabel])
         stack.axis = .vertical
         stack.spacing = 7
         return stack
+    }
+
+    private func configureKeywordSuggestionsOverlay(in container: UIView, below anchor: UIView) {
+        keywordSuggestionsOverlay.translatesAutoresizingMaskIntoConstraints = false
+        keywordSuggestionsOverlay.layer.zPosition = 10
+        keywordSuggestionsOverlay.isHidden = true
+        AppTheme.configureSurface(
+            keywordSuggestionsOverlay,
+            cornerRadius: 10,
+            backgroundColor: .secondarySystemBackground
+        )
+
+        suggestionsStack.translatesAutoresizingMaskIntoConstraints = false
+        keywordSuggestionsOverlay.addSubview(suggestionsStack)
+        container.addSubview(keywordSuggestionsOverlay)
+        NSLayoutConstraint.activate([
+            keywordSuggestionsOverlay.leadingAnchor.constraint(equalTo: keywordField.leadingAnchor),
+            keywordSuggestionsOverlay.trailingAnchor.constraint(equalTo: keywordField.trailingAnchor),
+            keywordSuggestionsOverlay.topAnchor.constraint(equalTo: anchor.bottomAnchor, constant: 4),
+            suggestionsStack.leadingAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.leadingAnchor, constant: 10),
+            suggestionsStack.trailingAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.trailingAnchor, constant: -10),
+            suggestionsStack.topAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.topAnchor, constant: 8),
+            suggestionsStack.bottomAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.bottomAnchor, constant: -8),
+        ])
     }
 
     private func showEmptyEditor(reason: DiagnosticSecureEditorReason) {
@@ -786,10 +817,18 @@ final class SnippetEditorViewController: UIViewController {
             suggestionsStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
-        guard snippet.normalizedKeyword.isEmpty else {
-            suggestionsStack.isHidden = true
+        if !snippet.normalizedKeyword.isEmpty {
+            let matches = KeywordSuggestions.existingMatches(
+                query: snippet.normalizedKeyword,
+                among: environment.store.snippetsSortedForDisplay()
+                    .filter { $0.id != snippet.id }
+                    .map(\.normalizedKeyword)
+            )
+            renderExistingKeywordMatches(matches)
             return
         }
+        suggestionsStack.axis = .horizontal
+        suggestionsStack.alignment = .center
         let existing = (environment.store.enabledSnippetsSorted() + environment.secureStore.enabledShellsSortedForDisplay())
             .filter { $0.id != snippet.id }
             .map { SnippetTagging.filterKey(for: $0.normalizedKeyword) }
@@ -815,7 +854,35 @@ final class SnippetEditorViewController: UIViewController {
             }, for: .touchUpInside)
             suggestionsStack.addArrangedSubview(button)
         }
-        suggestionsStack.isHidden = suggestions.isEmpty
+        keywordSuggestionsOverlay.isUserInteractionEnabled = true
+        keywordSuggestionsOverlay.isHidden = suggestions.isEmpty || !keywordField.isFirstResponder
+    }
+
+    private func renderExistingKeywordMatches(_ matches: [String]) {
+        guard !matches.isEmpty else {
+            keywordSuggestionsOverlay.isHidden = true
+            return
+        }
+
+        suggestionsStack.axis = .vertical
+        suggestionsStack.alignment = .fill
+
+        let visible = Array(matches.prefix(8))
+        let hiddenCount = matches.count - visible.count
+        let referenceText = "Existing · " + visible.map { "\\\($0)" }.joined(separator: "  ·  ")
+            + (hiddenCount > 0 ? "  ·  +\(hiddenCount) more" : "")
+        let references = UILabel()
+        references.text = referenceText
+        references.font = AppTheme.scaledFont(size: 12, textStyle: .caption1, monospaced: true)
+        references.adjustsFontForContentSizeCategory = true
+        references.textColor = .secondaryLabel
+        references.numberOfLines = 2
+        references.lineBreakMode = .byTruncatingTail
+        references.accessibilityLabel = "Existing keywords: " + visible.joined(separator: ", ")
+            + (hiddenCount > 0 ? ", and \(hiddenCount) more" : "")
+        suggestionsStack.addArrangedSubview(references)
+        keywordSuggestionsOverlay.isUserInteractionEnabled = false
+        keywordSuggestionsOverlay.isHidden = !keywordField.isFirstResponder
     }
 
     private func editorChanged() {
@@ -1335,8 +1402,16 @@ final class SnippetEditorViewController: UIViewController {
     }
 
     @objc private func fieldChanged() { editorChanged() }
-    @objc private func editingBegan() { beginPlainEditTransaction() }
-    @objc private func editingEnded() { editorChanged(); commitPlainEditTransaction() }
+    @objc private func editingBegan() {
+        beginPlainEditTransaction()
+        if keywordField.isFirstResponder { refreshDerivedUI() }
+    }
+
+    @objc private func editingEnded() {
+        editorChanged()
+        keywordSuggestionsOverlay.isHidden = true
+        commitPlainEditTransaction()
+    }
 
     @objc private func vaultWillLock(_ notification: Notification) {
         guard let session = notification.object as? VaultSession,

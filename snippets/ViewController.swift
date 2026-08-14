@@ -110,6 +110,7 @@ final class ViewController: NSViewController {
     var lastAppliedTagFilterKeys: Set<String>?
     var renderedSuggestedTags: [String] = []
     var renderedSuggestedKeywords: [String] = []
+    var renderedKeywordsAreExisting = false
     /// Folded keywords of every enabled snippet, so a keyword chip can be tested
     /// against the whole library with a set walk instead of filtering and
     /// sorting it again on every keystroke. Only a store change can move it.
@@ -220,6 +221,7 @@ final class ViewController: NSViewController {
     let tagsField = NSTokenField(string: "")
     let editorSuggestedTagsFlow = TagFlowView()
     let editorSuggestedKeywordsFlow = TagFlowView()
+    let keywordSuggestionsOverlay = NSVisualEffectView()
     let keywordPrefixLabel = NSTextField(labelWithString: "\\")
     let enabledCheckbox = NSButton(checkboxWithTitle: "Enabled", target: nil, action: nil)
     let previewValueField = NSTextField(wrappingLabelWithString: "")

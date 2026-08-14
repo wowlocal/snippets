@@ -1007,14 +1007,14 @@ extension ViewController {
         // A keyword that cannot expand — empty, duplicated, or in a prefix
         // collision — says so through the field's own tooltip rather than a line
         // of prose under it. The sentence was permanent furniture for a state
-        // most snippets are never in, and reserving its row left a gap under
-        // every keyword that was perfectly fine.
+        // most snippets are never in. The compact slot below is reserved for
+        // keyword references; it does not repeat that status prose.
 
-        // This row does come and go — it exists only
-        // while there is no keyword — so it collapses out of the stack rather
-        // than reserving a gap under every snippet that already works.
+        // Existing keywords and generated candidates live in a transient overlay
+        // below the field. It does not participate in the form stack, so showing
+        // it never moves Name, Tags or Enabled.
         editorSuggestedKeywordsFlow.collapsedRowLimit = 1
-        editorSuggestedKeywordsFlow.isHidden = true
+        editorSuggestedKeywordsFlow.isHidden = false
 
         tagsField.delegate = self
         tagsField.placeholderString = "work, email"
@@ -1091,8 +1091,7 @@ extension ViewController {
         )
         let keywordSection = EditorFormSection(
             title: "Keyword",
-            fields: [keywordRow, editorSuggestedKeywordsFlow],
-            fieldSpacing: 6
+            fields: [keywordRow]
         )
         let nameSection = EditorFormSection(title: "Name", fields: [nameField])
         let tagsSection = EditorFormSection(
@@ -1120,6 +1119,33 @@ extension ViewController {
             stack.addArrangedSubview(section.row)
             section.row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
+
+        keywordSuggestionsOverlay.translatesAutoresizingMaskIntoConstraints = false
+        keywordSuggestionsOverlay.material = .popover
+        keywordSuggestionsOverlay.blendingMode = .withinWindow
+        keywordSuggestionsOverlay.state = .active
+        keywordSuggestionsOverlay.wantsLayer = true
+        keywordSuggestionsOverlay.layer?.cornerRadius = 9
+        keywordSuggestionsOverlay.layer?.masksToBounds = true
+        keywordSuggestionsOverlay.layer?.borderWidth = 0.5
+        keywordSuggestionsOverlay.layer?.borderColor = NSColor.separatorColor.cgColor
+        keywordSuggestionsOverlay.isHidden = true
+        keywordSuggestionsOverlay.addSubview(editorSuggestedKeywordsFlow)
+        stack.addSubview(keywordSuggestionsOverlay, positioned: .above, relativeTo: nil)
+
+        NSLayoutConstraint.activate([
+            keywordSuggestionsOverlay.leadingAnchor.constraint(equalTo: keywordField.leadingAnchor),
+            keywordSuggestionsOverlay.trailingAnchor.constraint(equalTo: keywordField.trailingAnchor),
+            keywordSuggestionsOverlay.topAnchor.constraint(equalTo: keywordField.bottomAnchor, constant: 4),
+            editorSuggestedKeywordsFlow.leadingAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.leadingAnchor, constant: 8),
+            editorSuggestedKeywordsFlow.trailingAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.trailingAnchor, constant: -8),
+            editorSuggestedKeywordsFlow.topAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.topAnchor, constant: 6),
+            editorSuggestedKeywordsFlow.bottomAnchor.constraint(
+                equalTo: keywordSuggestionsOverlay.bottomAnchor, constant: -6),
+        ])
 
         previewContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true
         previewContainer.heightAnchor.constraint(lessThanOrEqualToConstant: MainLayoutMetrics.previewMaxHeight).isActive = true
