@@ -112,8 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
     private weak var statusMenuOpenItem: NSMenuItem?
+    private weak var statusMenuSecurePasteItem: NSMenuItem?
     private weak var statusMenuClipboardItem: NSMenuItem?
     private var hotkeyPromotedFromAccessory = false
+    /// Captured as the status menu opens, before its menu window can disturb the
+    /// password field that was focused in the frontmost app.
+    private var statusMenuSecurePasteTarget: SnippetExpansionEngine.SecurePasteTarget?
+    private var securePasteTarget: SnippetExpansionEngine.SecurePasteTarget?
+    private var securePasteTask: Task<Void, Never>?
     private var shouldTerminateForReal = false
     private var terminationReplyPending = false
     #if !NO_SPARKLE
@@ -348,6 +354,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     ) -> NSApplication.TerminateReply {
         guard !terminationReplyPending else { return .terminateLater }
         terminationReplyPending = true
+        // A LocalAuthentication request may outlive the panel that started it. Cancellation
+        // makes the engine wipe any returned lease before termination is allowed to continue.
+        securePasteTask?.cancel()
+        if securePasteTarget != nil {
+            expansionEngine.dismissSecurePastePicker()
+        }
+        securePasteTarget = nil
+        statusMenuSecurePasteTarget = nil
 
         let ready = expansionEngine.prepareForTermination { [weak self] canTerminate in
             guard let self else {
@@ -554,6 +568,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         LiquidGlassDesign.applyMenuSymbol("macwindow", to: openItem)
         // `setupGlobalHotkey()` runs next and fills in the ⌘\ hint.
         statusMenuOpenItem = openItem
+        let securePasteItem = NSMenuItem(
+            title: "Secure Paste…",
+            action: #selector(securePasteFromStatusBar(_:)),
+            keyEquivalent: ""
+        )
+        securePasteItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("lock.open", to: securePasteItem)
+        statusMenuSecurePasteItem = securePasteItem
         let clipboardItem = NSMenuItem(
             title: "",
             action: #selector(newSnippetFromClipboard(_:)),
@@ -577,6 +599,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         menu.delegate = self
         menu.addItem(openItem)
+        menu.addItem(securePasteItem)
         menu.addItem(clipboardItem)
         menu.addItem(.separator())
         menu.addItem(resetQuitBehaviorItem)
@@ -587,7 +610,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
+        // Secure Event Input can suppress every keyboard observer, including a
+        // registered global hotkey. Mouse tracking still works, so capture the
+        // destination before this menu becomes the only reliable entry point.
+        if securePasteTask == nil,
+           securePasteTarget == nil,
+           NSWorkspace.shared.frontmostApplication?.processIdentifier
+                != ProcessInfo.processInfo.processIdentifier {
+            statusMenuSecurePasteTarget = expansionEngine.captureSecurePasteTarget()
+        } else {
+            statusMenuSecurePasteTarget = nil
+        }
         refreshStatusMenuClipboardItem()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        // Menu actions are delivered before this deferred cleanup. A dismissed
+        // menu must not retain an AX target until its next opening.
+        DispatchQueue.main.async { [weak self] in
+            self?.statusMenuSecurePasteTarget = nil
+        }
     }
 
     /// The point of the item is that you can see what it would save before you
@@ -607,14 +650,116 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Global Shortcut
 
     private func setupGlobalHotkey() {
-        GlobalHotkeyManager.shared.onTrigger = { [weak self] in
+        let manager = GlobalHotkeyManager.shared
+        manager.onTrigger = { [weak self] in
             self?.toggleFromGlobalHotkey()
         }
-        GlobalHotkeyManager.shared.syncRegistration()
+        manager.onSecurePasteTrigger = { [weak self] in
+            self?.toggleSecurePasteFromGlobalHotkey()
+        }
+        manager.syncRegistration()
         refreshGlobalHotkeyMenuHint()
     }
 
+    private func toggleSecurePasteFromGlobalHotkey() {
+        if expansionEngine.securePastePickerIsVisible {
+            expansionEngine.cancelSecurePastePicker(returnFocus: true)
+            return
+        }
+        guard securePasteTask == nil else {
+            NSSound.beep()
+            return
+        }
+        guard let target = expansionEngine.captureSecurePasteTarget() else {
+            NSSound.beep()
+            if !expansionEngine.accessibilityGranted {
+                expansionEngine.requestAccessibilityPermission()
+                openFromGlobalHotkey()
+            }
+            return
+        }
+
+        beginSecurePaste(to: target)
+    }
+
+    @objc private func securePasteFromStatusBar(_ sender: Any?) {
+        if expansionEngine.securePastePickerIsVisible {
+            expansionEngine.cancelSecurePastePicker(returnFocus: true)
+            return
+        }
+        guard securePasteTask == nil else {
+            NSSound.beep()
+            return
+        }
+
+        let target = statusMenuSecurePasteTarget ?? expansionEngine.captureSecurePasteTarget()
+        statusMenuSecurePasteTarget = nil
+        guard let target else {
+            NSSound.beep()
+            if !expansionEngine.accessibilityGranted {
+                expansionEngine.requestAccessibilityPermission()
+                openFromGlobalHotkey()
+            }
+            return
+        }
+
+        // Let menu tracking release its temporary key window before asking the
+        // non-activating suggestion panel to become key for search input.
+        DispatchQueue.main.async { [weak self] in
+            self?.beginSecurePaste(to: target)
+        }
+    }
+
+    private func beginSecurePaste(to target: SnippetExpansionEngine.SecurePasteTarget) {
+        securePasteTarget = target
+        let didShow = expansionEngine.showSecurePastePicker(
+            for: target,
+            onSelect: { [weak self] snippet in
+                self?.securePasteSnippetSelected(snippet)
+            },
+            onCancel: { [weak self] shouldReturnFocus in
+                self?.securePasteCancelled(shouldReturnFocus: shouldReturnFocus)
+            }
+        )
+        guard didShow else {
+            securePasteTarget = nil
+            NSSound.beep()
+            return
+        }
+    }
+
+    private func securePasteSnippetSelected(_ snippet: Snippet) {
+        guard let target = securePasteTarget else { return }
+        securePasteTarget = nil
+
+        securePasteTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let inserted = await self.expansionEngine.pasteSnippetUsingSecurePaste(snippet, to: target)
+            if !inserted, !Task.isCancelled {
+                await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
+                NSSound.beep()
+            }
+            self.securePasteTask = nil
+        }
+    }
+
+    private func securePasteCancelled(shouldReturnFocus: Bool) {
+        guard let target = securePasteTarget else { return }
+        securePasteTarget = nil
+        guard shouldReturnFocus else { return }
+
+        securePasteTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
+            self.securePasteTask = nil
+        }
+    }
+
     private func toggleFromGlobalHotkey() {
+        if securePasteTarget != nil {
+            expansionEngine.cancelSecurePastePicker(returnFocus: true)
+            return
+        }
         if isShowingMainWindow {
             hideFromGlobalHotkey()
         } else {
@@ -658,9 +803,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// so it advertises ⌘\ — but only while the shortcut actually works.
     private func refreshGlobalHotkeyMenuHint() {
         let manager = GlobalHotkeyManager.shared
-        let showsShortcut = manager.isEnabled && manager.isActive
-        statusMenuOpenItem?.keyEquivalent = showsShortcut ? "\\" : ""
-        statusMenuOpenItem?.keyEquivalentModifierMask = showsShortcut ? [.command] : []
+        let showsOpenShortcut = manager.isEnabled && manager.isActive
+        statusMenuOpenItem?.keyEquivalent = showsOpenShortcut ? "\\" : ""
+        statusMenuOpenItem?.keyEquivalentModifierMask = showsOpenShortcut ? [.command] : []
+
+        let showsSecurePasteShortcut = manager.isEnabled && manager.isSecurePasteActive
+        statusMenuSecurePasteItem?.keyEquivalent = showsSecurePasteShortcut ? "\\" : ""
+        statusMenuSecurePasteItem?.keyEquivalentModifierMask = showsSecurePasteShortcut
+            ? [.command, .option]
+            : []
     }
 
     #if DEBUG && !NO_SPARKLE
@@ -940,6 +1091,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Activation Policy Switching
 
     private func hideToBackground() {
+        if securePasteTarget != nil {
+            expansionEngine.cancelSecurePastePicker(returnFocus: true)
+        }
         for window in NSApp.windows {
             window.orderOut(nil)
         }

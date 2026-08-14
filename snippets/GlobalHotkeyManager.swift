@@ -1,13 +1,14 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// System-wide ⌘\ shortcut that brings Snippets to the front from any app.
+/// System-wide shortcuts for opening Snippets and starting Secure Paste.
 ///
-/// Carbon's `RegisterEventHotKey` is still the only public API for a shortcut
-/// that fires while another app is frontmost and consumes the key event. It
-/// needs no Accessibility trust, so the shortcut works even before expansion
-/// permissions are granted, and it fires regardless of activation policy —
-/// including while the app is hidden to the menu bar.
+/// Carbon's `RegisterEventHotKey` is still the public API for a shortcut that
+/// fires while another app is frontmost and consumes an ordinary key event. It
+/// needs no Accessibility trust and works regardless of activation policy —
+/// including while the app is hidden to the menu bar. Secure Event Input is the
+/// intentional exception: macOS may suppress all third-party global shortcuts
+/// while a password field owns protected keyboard entry.
 @MainActor
 final class GlobalHotkeyManager {
     static let shared = GlobalHotkeyManager()
@@ -16,20 +17,29 @@ final class GlobalHotkeyManager {
 
     /// How the shortcut is rendered in menus and settings copy.
     static let displayString = "⌘\\"
+    static let securePasteDisplayString = "⌘⌥\\"
 
     /// `\` by physical key position: Carbon matches virtual key codes, not the
     /// character the active keyboard layout produces.
     private static let keyCode = UInt32(kVK_ANSI_Backslash)
-    private static let modifierFlags = UInt32(cmdKey)
+    private static let openModifierFlags = UInt32(cmdKey)
+    private static let securePasteModifierFlags = UInt32(cmdKey | optionKey)
     private static let signature = OSType(0x534E5054) // 'SNPT'
-    private static let identifier: UInt32 = 1
+    private static let openIdentifier: UInt32 = 1
+    private static let securePasteIdentifier: UInt32 = 2
 
     /// Called on the main thread each time the shortcut fires.
     var onTrigger: (() -> Void)?
+    var onSecurePasteTrigger: (() -> Void)?
 
-    /// True when the shortcut is enabled but macOS refused the registration,
-    /// which normally means another app already owns ⌘\.
-    private(set) var registrationFailed = false
+    /// True when a shortcut is enabled but macOS refused its registration,
+    /// which normally means another app already owns that key combination.
+    private(set) var openRegistrationFailed = false
+    private(set) var securePasteRegistrationFailed = false
+
+    var registrationFailed: Bool {
+        openRegistrationFailed || securePasteRegistrationFailed
+    }
 
     /// Enabled by default; a missing key means the user never chose.
     var isEnabled: Bool {
@@ -47,10 +57,13 @@ final class GlobalHotkeyManager {
     }
 
     var isActive: Bool {
-        hotKeyRef != nil
+        openHotKeyRef != nil
     }
 
-    private var hotKeyRef: EventHotKeyRef?
+    var isSecurePasteActive: Bool { securePasteHotKeyRef != nil }
+
+    private var openHotKeyRef: EventHotKeyRef?
+    private var securePasteHotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
 
     private init() {}
@@ -68,7 +81,8 @@ final class GlobalHotkeyManager {
     /// which is what the menu bar hint and Settings copy key off.
     @discardableResult
     private func applyRegistration() -> Bool {
-        let wasActive = isActive
+        let openWasActive = isActive
+        let securePasteWasActive = isSecurePasteActive
 
         if isEnabled {
             register()
@@ -76,7 +90,7 @@ final class GlobalHotkeyManager {
             unregister()
         }
 
-        return isActive != wasActive
+        return isActive != openWasActive || isSecurePasteActive != securePasteWasActive
     }
 
     private func postChangeNotification() {
@@ -84,47 +98,85 @@ final class GlobalHotkeyManager {
     }
 
     private func register() {
-        guard hotKeyRef == nil else { return }
-        installEventHandlerIfNeeded()
+        guard installEventHandlerIfNeeded() else {
+            openRegistrationFailed = openHotKeyRef == nil
+            securePasteRegistrationFailed = securePasteHotKeyRef == nil
+            return
+        }
 
+        var firstFailure: OSStatus?
+
+        if openHotKeyRef == nil {
+            let result = registerHotKey(
+                modifierFlags: Self.openModifierFlags,
+                identifier: Self.openIdentifier
+            )
+            openHotKeyRef = result.reference
+            openRegistrationFailed = result.reference == nil
+            if result.reference == nil { firstFailure = firstFailure ?? result.status }
+        }
+
+        if securePasteHotKeyRef == nil {
+            let result = registerHotKey(
+                modifierFlags: Self.securePasteModifierFlags,
+                identifier: Self.securePasteIdentifier
+            )
+            securePasteHotKeyRef = result.reference
+            securePasteRegistrationFailed = result.reference == nil
+            if result.reference == nil { firstFailure = firstFailure ?? result.status }
+        }
+
+        if let firstFailure {
+            recordRegistrationFailure(firstFailure)
+        }
+    }
+
+    private func registerHotKey(
+        modifierFlags: UInt32,
+        identifier: UInt32
+    ) -> (reference: EventHotKeyRef?, status: OSStatus) {
         var reference: EventHotKeyRef?
-        let hotKeyID = EventHotKeyID(signature: Self.signature, id: Self.identifier)
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: identifier)
         // Register and listen on the dispatcher target: in a Cocoa app the hot
         // key event reaches us through NSApplication's Carbon event dispatch,
         // so the handler has to sit on the same target the key is bound to.
         let status = RegisterEventHotKey(
             Self.keyCode,
-            Self.modifierFlags,
+            modifierFlags,
             hotKeyID,
             GetEventDispatcherTarget(),
             0,
             &reference
         )
-
         guard status == noErr, let reference else {
-            registrationFailed = true
-            Diagnostics.record(.storageFailure(
-                area: .globalHotkey,
-                operation: .register,
-                failure: DiagnosticFailure(family: .security, code: Int(status)),
-                attempt: nil))
-            return
+            return (nil, status == noErr ? OSStatus(eventInternalErr) : status)
         }
+        return (reference, status)
+    }
 
-        hotKeyRef = reference
-        registrationFailed = false
+    private func recordRegistrationFailure(_ status: OSStatus) {
+        Diagnostics.record(.storageFailure(
+            area: .globalHotkey,
+            operation: .register,
+            failure: DiagnosticFailure(family: .security, code: Int(status)),
+            attempt: nil))
     }
 
     private func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
+        if let openHotKeyRef {
+            UnregisterEventHotKey(openHotKeyRef)
+            self.openHotKeyRef = nil
         }
-        registrationFailed = false
+        if let securePasteHotKeyRef {
+            UnregisterEventHotKey(securePasteHotKeyRef)
+            self.securePasteHotKeyRef = nil
+        }
+        openRegistrationFailed = false
+        securePasteRegistrationFailed = false
     }
 
-    private func installEventHandlerIfNeeded() {
-        guard eventHandler == nil else { return }
+    private func installEventHandlerIfNeeded() -> Bool {
+        guard eventHandler == nil else { return true }
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -165,18 +217,27 @@ final class GlobalHotkeyManager {
                 operation: .register,
                 failure: DiagnosticFailure(family: .security, code: Int(status)),
                 attempt: nil))
-            return
+            return false
         }
 
         eventHandler = handlerRef
+        return true
     }
 
     private func handleHotKey(_ id: EventHotKeyID) -> OSStatus {
-        guard id.signature == Self.signature, id.id == Self.identifier else {
+        guard id.signature == Self.signature else {
             return OSStatus(eventNotHandledErr)
         }
 
-        onTrigger?()
-        return noErr
+        switch id.id {
+        case Self.openIdentifier:
+            onTrigger?()
+            return noErr
+        case Self.securePasteIdentifier:
+            onSecurePasteTrigger?()
+            return noErr
+        default:
+            return OSStatus(eventNotHandledErr)
+        }
     }
 }

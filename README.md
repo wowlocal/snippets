@@ -81,6 +81,16 @@ date placeholders. Offsets can contain several terms, for example
   not, because secure insertion is used while another app is active.
 - Secure snippets never auto-expand, never appear in ordinary exports or share links,
   and show a lock marker wherever their searchable metadata appears.
+- On macOS, press `⌘⌥\` in a text or password field to open Secure Paste. It searches
+  the whole library, ranks secure snippets ahead of equally relevant ordinary snippets,
+  restores the exact original field, and writes through Accessibility without exposing
+  the body to the clipboard. Secure snippets authenticate on every use; ordinary
+  snippets do not. A password field is replaced; an ordinary text field uses its
+  selection or caret.
+- macOS Secure Event Input can suppress third-party global shortcuts while a real
+  password field is focused. In that case choose **Secure Paste…** from the Snippets
+  menu-bar item; the mouse-driven route captures the same field before opening the same
+  picker.
 - A recovery key can restore the vault key if it is missing from Keychain.
 - On iPhone and iPad, secure copies are device-local and expire from the clipboard after
   60 seconds.
@@ -222,7 +232,8 @@ Global expansion uses Accessibility APIs:
 3. Return to Snippets and click **Refresh**.
 
 Input Monitoring may also be required on some macOS configurations. Library management,
-the `⌘\` global shortcut, and menu bar access do not depend on Accessibility permission.
+global shortcut registration, and menu bar access do not depend on Accessibility permission;
+insertion through Secure Paste does.
 
 ## Keyboard shortcuts on macOS
 
@@ -232,6 +243,7 @@ list.
 | Shortcut | Action |
 |---|---|
 | `⌘\` | Show or hide Snippets globally |
+| `⌘⌥\` | Secure Paste into the focused field |
 | `Return` | Copy selected snippet |
 | `⌘Return` | Paste selected snippet into the frontmost app |
 | `⌘F` | Search |

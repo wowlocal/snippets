@@ -164,3 +164,65 @@ final class AXMessagingBudget {
             + Double(components.attoseconds) / 1_000_000_000_000_000_000
     }
 }
+
+/// Chooses the one Accessibility write a Secure Paste attempt is allowed to make.
+///
+/// A password field's current value is intentionally never read. That rules out the
+/// ordinary read/modify/write insertion path and also means a failed write must not be
+/// followed by a second strategy: the first call may have landed even if its reply was
+/// lost. For a positively identified secure field, replacing `AXValue` matches password
+/// manager fill semantics. Everywhere else, only `AXSelectedText` is narrow enough to be
+/// safe — it inserts at the caret or replaces the user's selection without overwriting an
+/// unreadable field wholesale.
+nonisolated enum SecurePasteAccessibilityPolicy {
+    enum Strategy: Equatable {
+        case replaceSecureValue
+        case replaceSelection
+        case unavailable
+    }
+
+    static func strategy(
+        targetIsSecureTextField: Bool,
+        valueIsSettable: Bool,
+        selectedTextIsSettable: Bool
+    ) -> Strategy {
+        if targetIsSecureTextField, valueIsSettable {
+            return .replaceSecureValue
+        }
+        if selectedTextIsSettable {
+            return .replaceSelection
+        }
+        return .unavailable
+    }
+}
+
+/// The Secure Paste picker is security-biased without making security a search
+/// relevance override. A better name/keyword match wins first; secure status breaks
+/// otherwise equal matches before frecency and display order do.
+nonisolated enum SecurePasteSuggestionRankingPolicy {
+    enum Decision: Equatable {
+        case lhsFirst
+        case rhsFirst
+        case tied
+    }
+
+    static func decision(
+        lhsScore: Int,
+        lhsKeywordRank: Int,
+        lhsIsSecure: Bool,
+        rhsScore: Int,
+        rhsKeywordRank: Int,
+        rhsIsSecure: Bool
+    ) -> Decision {
+        if lhsScore != rhsScore {
+            return lhsScore > rhsScore ? .lhsFirst : .rhsFirst
+        }
+        if lhsKeywordRank != rhsKeywordRank {
+            return lhsKeywordRank > rhsKeywordRank ? .lhsFirst : .rhsFirst
+        }
+        if lhsIsSecure != rhsIsSecure {
+            return lhsIsSecure ? .lhsFirst : .rhsFirst
+        }
+        return .tied
+    }
+}

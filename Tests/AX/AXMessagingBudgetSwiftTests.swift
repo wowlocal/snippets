@@ -54,4 +54,67 @@ struct AXMessagingBudgetSwiftTests {
         #expect(!AXMessagingBudget.primingResultIsCacheable(.invalidUIElement))
         #expect(!AXMessagingBudget.primingResultIsCacheable(.illegalArgument))
     }
+
+    @Test("Secure Paste replaces a positively identified password field")
+    func securePastePrefersWholeSecureValue() {
+        #expect(SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: true,
+            valueIsSettable: true,
+            selectedTextIsSettable: true
+        ) == .replaceSecureValue)
+    }
+
+    @Test("Secure Paste uses selection insertion for an ordinary text field")
+    func securePasteUsesSelectionOutsidePasswordFields() {
+        #expect(SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: false,
+            valueIsSettable: true,
+            selectedTextIsSettable: true
+        ) == .replaceSelection)
+    }
+
+    @Test("Secure Paste never overwrites an ordinary unreadable field wholesale")
+    func securePasteRefusesUnsafeWholeValueFallback() {
+        #expect(SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: false,
+            valueIsSettable: true,
+            selectedTextIsSettable: false
+        ) == .unavailable)
+    }
+
+    @Test("Secure Paste keeps relevance ahead of security preference")
+    func securePasteRelevanceComesFirst() {
+        #expect(SecurePasteSuggestionRankingPolicy.decision(
+            lhsScore: 20,
+            lhsKeywordRank: 1,
+            lhsIsSecure: false,
+            rhsScore: 10,
+            rhsKeywordRank: 3,
+            rhsIsSecure: true
+        ) == .lhsFirst)
+    }
+
+    @Test("Secure Paste ranks secure snippets first when relevance ties")
+    func securePasteSecurityBreaksRelevanceTie() {
+        #expect(SecurePasteSuggestionRankingPolicy.decision(
+            lhsScore: 20,
+            lhsKeywordRank: 2,
+            lhsIsSecure: false,
+            rhsScore: 20,
+            rhsKeywordRank: 2,
+            rhsIsSecure: true
+        ) == .rhsFirst)
+    }
+
+    @Test("Secure Paste leaves equal security rows to normal ranking")
+    func securePasteRankingFallsThrough() {
+        #expect(SecurePasteSuggestionRankingPolicy.decision(
+            lhsScore: 20,
+            lhsKeywordRank: 2,
+            lhsIsSecure: true,
+            rhsScore: 20,
+            rhsKeywordRank: 2,
+            rhsIsSecure: true
+        ) == .tied)
+    }
 }

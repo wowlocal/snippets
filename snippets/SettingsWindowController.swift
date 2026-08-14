@@ -96,7 +96,7 @@ private final class GeneralSettingsViewController: NSViewController {
     private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let resetButton = NSButton(title: "Reset to Ask Every Time", target: nil, action: nil)
     private let globalHotkeyCheckbox = NSButton(
-        checkboxWithTitle: "Open Snippets with \(GlobalHotkeyManager.displayString) from anywhere",
+        checkboxWithTitle: "Enable \(GlobalHotkeyManager.displayString) and \(GlobalHotkeyManager.securePasteDisplayString) global shortcuts",
         target: nil,
         action: nil
     )
@@ -161,7 +161,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let hotkeySeparator = NSBox()
         hotkeySeparator.boxType = .separator
 
-        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) in any app to bring Snippets to the front, and again while Snippets is focused to hide it. Turn this off to leave the shortcut to other apps.")
+        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) to show or hide Snippets. In a text or password field, press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets and insert one without putting it on the clipboard. Secure snippets authenticate on every use. Turn this off to leave both shortcuts to other apps.")
 
         globalHotkeyCheckbox.target = self
         globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))
@@ -333,11 +333,15 @@ private final class GeneralSettingsViewController: NSViewController {
 
         globalHotkeyCheckbox.state = manager.isEnabled ? .on : .off
         if !manager.isEnabled {
-            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) is off. Open Snippets from the Dock or the menu bar item."
-        } else if manager.registrationFailed {
-            globalHotkeyStatusLabel.stringValue = "macOS wouldn't register \(GlobalHotkeyManager.displayString) — another app is already using it. Quit that app and reopen Settings to try again."
+            globalHotkeyStatusLabel.stringValue = "Global shortcuts are off. Open Snippets from the Dock or the menu bar item."
+        } else if manager.isActive && manager.isSecurePasteActive {
+            globalHotkeyStatusLabel.stringValue = "Both shortcuts work from any app while Snippets is hidden. Secure Paste requires Accessibility access; if macOS blocks shortcuts in a password field, use Secure Paste from the menu bar."
+        } else if manager.isActive {
+            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) works, but macOS wouldn't register \(GlobalHotkeyManager.securePasteDisplayString) — another app is probably using it."
+        } else if manager.isSecurePasteActive {
+            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.securePasteDisplayString) works, but macOS wouldn't register \(GlobalHotkeyManager.displayString) — another app is probably using it."
         } else {
-            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) works from any app, even while Snippets is hidden in the menu bar."
+            globalHotkeyStatusLabel.stringValue = "macOS wouldn't register either shortcut. Quit the conflicting app and reopen Settings to try again."
         }
     }
 

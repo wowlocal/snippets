@@ -75,6 +75,13 @@ final class SnippetExpansionEngine {
     /// Modifier+Space is user-configurable, so we compare this with actual keyboard
     /// focus after key-up instead of assigning meaning to Command/Control/Option.
     private var suggestionTargetPID: pid_t?
+    /// The exact focused object and its role are retained only for the live session.
+    /// Ghostty has no insertion-caret AX range, so its narrowly scoped local-tracking
+    /// exception must still prove that keyboard focus never moved to another surface.
+    private var suggestionTargetElement: AXUIElement?
+    private var suggestionTargetRole: String?
+    private var suggestionTargetBundleIdentifier: String?
+    private var suggestionHasAXConfirmedContext = false
     private var pendingSpaceShortcutFocusValidation = false
     private var pendingSpaceShortcutInputSourceID: String?
     private var suggestionSyncGeneration = 0
@@ -98,6 +105,10 @@ final class SnippetExpansionEngine {
     /// only until `expand()` consumes it. Never set on an auto-expand path.
     private var pendingSelectionMemoryQuery: String?
     private lazy var suggestionPanel = SuggestionPanelController()
+    /// Secure Paste borrows the suggestion panel's input-enabled mode. While its
+    /// search field owns focus, the global event tap must pass those keys through
+    /// instead of interpreting them as typing in the captured host field.
+    private var securePastePickerActive = false
     /// LocalAuthentication can return just before the host regains its focused AX
     /// element. During this bounded handoff, keep polling; only an exact fresh match
     /// authorizes deletion, so transient system-UI focus cannot cause a blind write.
@@ -200,6 +211,20 @@ final class SnippetExpansionEngine {
     private struct SecureExpansionFocusTarget {
         let element: AXUIElement
         let window: AXUIElement?
+    }
+
+    /// Opaque handle to the exact control that was focused when Secure Paste began.
+    /// The picker may keep metadata, but only the engine can inspect or write this target.
+    struct SecurePasteTarget {
+        fileprivate let targetPID: pid_t
+        fileprivate let focusedElement: AXUIElement
+        fileprivate let textElement: AXUIElement
+        fileprivate let window: AXUIElement?
+        let applicationName: String
+    }
+
+    var securePastePickerIsVisible: Bool {
+        securePastePickerActive && suggestionPanel.isSecurePasteVisible
     }
 
     init(store: SnippetStore, usage: SnippetUsageStore) {
@@ -517,6 +542,262 @@ final class SnippetExpansionEngine {
         }
     }
 
+    /// Captures a text destination before the Secure Paste search field takes focus.
+    /// No field value is read; password fields commonly refuse that read by design.
+    func captureSecurePasteTarget() -> SecurePasteTarget? {
+        guard !isPreparingForTermination else { return nil }
+        // The shortcut may be the first interaction after the user grants access in
+        // System Settings, so do not rely on the last UI refresh's cached answer.
+        refreshAccessibilityStatus(prompt: false)
+        guard accessibilityGranted else {
+            statusText = "Secure Paste needs Accessibility access."
+            return nil
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        else {
+            statusText = "Focus a field in another app before using Secure Paste."
+            return nil
+        }
+
+        let budget = AXMessagingBudget()
+        guard let focusedElement = frontmostFocusedElement(axBudget: budget),
+              let textElement = securePasteTextElement(
+                  startingAt: focusedElement,
+                  axBudget: budget
+              ),
+              processIdentifier(of: focusedElement) == app.processIdentifier,
+              processIdentifier(of: textElement) == app.processIdentifier
+        else {
+            statusText = "Secure Paste could not identify the focused text field."
+            return nil
+        }
+
+        resetTypingContext()
+        return SecurePasteTarget(
+            targetPID: app.processIdentifier,
+            focusedElement: focusedElement,
+            textElement: textElement,
+            window: elementAttribute(
+                of: focusedElement,
+                attribute: kAXWindowAttribute as CFString,
+                axBudget: budget
+            ),
+            applicationName: app.localizedName ?? "the target app"
+        )
+    }
+
+    /// Reuses the ordinary suggestion panel for an explicit, searchable paste.
+    /// Every library row is eligible: secure rows rank first when relevance is
+    /// otherwise comparable, but a plaintext snippet can still be delivered to a
+    /// password field without touching the pasteboard.
+    @discardableResult
+    func showSecurePastePicker(
+        for target: SecurePasteTarget,
+        onSelect: @escaping (Snippet) -> Void,
+        onCancel: @escaping (Bool) -> Void
+    ) -> Bool {
+        let snippets = store.snippetsSortedForDisplay()
+        guard !snippets.isEmpty else {
+            statusText = "There are no snippets to paste yet."
+            return false
+        }
+
+        let frecency = usage.makeRankingSnapshot()
+        let displayOrder = Dictionary(
+            uniqueKeysWithValues: snippets.enumerated().map { ($0.element.id, $0.offset) }
+        )
+        let makeItems: (String) -> [SuggestionItem] = { [weak self] query in
+            guard let self else { return [] }
+            return self.securePasteSuggestionItems(
+                query: query,
+                snippets: snippets,
+                frecency: frecency,
+                displayOrder: displayOrder
+            )
+        }
+
+        securePastePickerActive = true
+        suggestionPanel.showSecurePaste(
+            items: makeItems(""),
+            anchorFocusedElement: target.focusedElement,
+            onSearch: makeItems,
+            onSelect: { [weak self] snippet in
+                self?.securePastePickerActive = false
+                onSelect(snippet)
+            },
+            onCancel: { [weak self] shouldReturnFocus in
+                self?.securePastePickerActive = false
+                onCancel(shouldReturnFocus)
+            }
+        )
+        return true
+    }
+
+    func cancelSecurePastePicker(returnFocus: Bool) {
+        guard securePastePickerActive else { return }
+        suggestionPanel.cancelSecurePaste(returnFocus: returnFocus)
+    }
+
+    func dismissSecurePastePicker() {
+        guard securePastePickerActive else { return }
+        securePastePickerActive = false
+        suggestionPanel.dismissSecurePasteWithoutCallback()
+    }
+
+    /// Escape from the palette behaves like Quick Access: return keyboard focus without
+    /// decrypting anything. A click into a different app deliberately does not call this.
+    func returnFocusAfterCancellingSecurePaste(_ target: SecurePasteTarget) async {
+        secureExpansionActivationTargetPID = target.targetPID
+        defer {
+            if secureExpansionActivationTargetPID == target.targetPID {
+                secureExpansionActivationTargetPID = nil
+            }
+        }
+        _ = await restoreSecurePasteTarget(target)
+    }
+
+    /// Delivers either kind of snippet through the explicit AX-only route. Secure
+    /// records authenticate and decrypt one body; ordinary records resolve their
+    /// existing content directly. Neither path reads the destination or borrows the
+    /// pasteboard.
+    @discardableResult
+    func pasteSnippetUsingSecurePaste(_ snippet: Snippet, to target: SecurePasteTarget) async -> Bool {
+        if store.isSecure(snippet.id) {
+            return await pasteSecureSnippet(snippet, to: target)
+        }
+        return await pasteOrdinarySnippetUsingSecurePaste(snippet, to: target)
+    }
+
+    private func pasteOrdinarySnippetUsingSecurePaste(
+        _ snippet: Snippet,
+        to target: SecurePasteTarget
+    ) async -> Bool {
+        guard !isPreparingForTermination else { return false }
+        guard let targetApplication = NSRunningApplication(processIdentifier: target.targetPID),
+              !targetApplication.isTerminated,
+              target.targetPID != ProcessInfo.processInfo.processIdentifier,
+              processIdentifier(of: target.focusedElement) == target.targetPID,
+              processIdentifier(of: target.textElement) == target.targetPID
+        else {
+            statusText = "Secure Paste stopped because the original app is no longer available."
+            return false
+        }
+        // `{clipboard}` must resolve against the user's clipboard. This only
+        // completes restoration of an older lease; Secure Paste never creates one.
+        guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
+            statusText = "Secure Paste is waiting for your previous clipboard to be restored."
+            return false
+        }
+
+        secureExpansionActivationTargetPID = target.targetPID
+        beginInjection()
+        defer {
+            if secureExpansionActivationTargetPID == target.targetPID {
+                secureExpansionActivationTargetPID = nil
+            }
+            endInjection()
+        }
+
+        guard await restoreSecurePasteTarget(target) else {
+            statusText = "Skipped \(snippet.displayName): Snippets could not restore the original field."
+            return false
+        }
+
+        let resolvedText = PlaceholderResolver.resolve(template: snippet.content)
+        guard !resolvedText.isEmpty else {
+            statusText = "\(snippet.displayName) is empty — nothing to paste."
+            return false
+        }
+        guard pasteSecureTextUsingAccessibility(resolvedText, to: target) else {
+            statusText = "The target field did not accept Secure Paste."
+            return false
+        }
+
+        usage.record(.pasteFromApp, snippetID: snippet.id)
+        lastExpansionName = snippet.displayName
+        statusText = "Pasted \(snippet.displayName)."
+        return true
+    }
+
+    /// Authenticates one secure shell and writes it directly to the captured control.
+    private func pasteSecureSnippet(_ shell: Snippet, to target: SecurePasteTarget) async -> Bool {
+        guard !isPreparingForTermination else { return false }
+        guard store.isSecure(shell.id), let resolver = secureSnippetContentResolver else {
+            statusText = "Secure Paste is not configured for this snippet."
+            return false
+        }
+        guard let targetApplication = NSRunningApplication(processIdentifier: target.targetPID),
+              !targetApplication.isTerminated,
+              target.targetPID != ProcessInfo.processInfo.processIdentifier,
+              processIdentifier(of: target.focusedElement) == target.targetPID,
+              processIdentifier(of: target.textElement) == target.targetPID
+        else {
+            statusText = "Secure Paste stopped because the original app is no longer available."
+            return false
+        }
+        guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
+            statusText = "Secure Paste is waiting for your previous clipboard to be restored."
+            return false
+        }
+
+        let reason = "Paste \u{201C}\(shell.displayName)\u{201D} into \(target.applicationName)"
+        statusText = "Waiting for authentication to paste \(shell.displayName)\u{2026}"
+        secureSuggestionAuthenticationTargetPID = target.targetPID
+        secureExpansionActivationTargetPID = target.targetPID
+        beginInjection()
+        defer {
+            if secureSuggestionAuthenticationTargetPID == target.targetPID {
+                secureSuggestionAuthenticationTargetPID = nil
+            }
+            if secureExpansionActivationTargetPID == target.targetPID {
+                secureExpansionActivationTargetPID = nil
+            }
+            endInjection()
+        }
+
+        let plaintext: SecurePlaintextLease
+        do {
+            plaintext = try await resolver(shell, reason)
+        } catch {
+            statusText = "Could not paste \(shell.displayName): \(error)"
+            return false
+        }
+        defer { plaintext.wipe() }
+
+        guard !Task.isCancelled else { return false }
+        guard await restoreSecurePasteTarget(target) else {
+            statusText = "Skipped \(shell.displayName): Snippets could not restore the original field after authentication."
+            return false
+        }
+
+        // Authentication is over. The Accessibility write below is synchronous, so there
+        // is no queued delete count or later paste event for a real keystroke to race with.
+        if secureSuggestionAuthenticationTargetPID == target.targetPID {
+            secureSuggestionAuthenticationTargetPID = nil
+        }
+
+        guard var resolvedText = resolvedSecureText(consuming: plaintext) else {
+            statusText = "Could not paste \(shell.displayName): its secure content is not valid UTF-8."
+            return false
+        }
+        defer { resolvedText.removeAll(keepingCapacity: false) }
+        guard !resolvedText.isEmpty else {
+            statusText = "\(shell.displayName) is empty — nothing to paste."
+            return false
+        }
+
+        guard pasteSecureTextUsingAccessibility(resolvedText, to: target) else {
+            statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
+            return false
+        }
+
+        usage.record(.pasteFromApp, snippetID: shell.id)
+        lastExpansionName = shell.displayName
+        statusText = "Pasted \(shell.displayName) securely."
+        return true
+    }
+
     /// Starts termination cleanup. `true` means the clipboard is already safe and termination can
     /// proceed. `false` means the caller must return `.terminateLater`; `onRecoveryComplete` then
     /// answers whether termination may continue after bounded delayed retries.
@@ -582,6 +863,11 @@ final class SnippetExpansionEngine {
     /// Returns `true` if the event was consumed and should be suppressed.
     @discardableResult
     private func handle(event: NSEvent, eventUserData: Int64?) -> Bool {
+        // The event tap still sees keys addressed to our non-activating search
+        // panel because the destination app remains frontmost. Let AppKit deliver
+        // them to NSSearchField; none belongs in the host typing buffer.
+        if securePastePickerActive { return false }
+
         // Keep observing real input while an already-started paste drains: it still needs normal
         // generation invalidation if the user changes the host text. With no such critical
         // section, Quit gates the event path completely.
@@ -677,6 +963,15 @@ final class SnippetExpansionEngine {
         suggestionContextState = .localDisplayOnly
         suggestionTargetPID = processIdentifier(of: anchorFocusedElement)
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+        suggestionTargetElement = anchorFocusedElement
+        suggestionTargetRole = stringAttribute(
+            of: anchorFocusedElement,
+            attribute: kAXRoleAttribute as CFString,
+            axBudget: axBudget)
+        suggestionTargetBundleIdentifier = suggestionTargetPID.flatMap {
+            NSRunningApplication(processIdentifier: $0)?.bundleIdentifier
+        }
+        suggestionHasAXConfirmedContext = false
         pendingSpaceShortcutFocusValidation = false
         pendingSpaceShortcutInputSourceID = nil
         suggestionObserverAllowsAutoExpand = false
@@ -957,9 +1252,10 @@ final class SnippetExpansionEngine {
     /// panel). The snippet must be captured by the caller BEFORE any context
     /// refresh so that re-ranking can never change what the user picked.
     ///
-    /// The delete count is taken from one fresh exact AX read. There is no
-    /// retry delay and no locally tracked deletion fallback: an unconfirmed
-    /// panel remains responsive, but cannot authorize edits in another app.
+    /// The delete count is normally taken from one fresh exact AX read. There
+    /// is no retry delay. The only local fallback is the separately guarded
+    /// caretless-Ghostty policy; every other unconfirmed panel remains
+    /// display-only and cannot authorize edits in another app.
     private func acceptSelectedSuggestion(_ snippet: Snippet) {
         let localQuery = suggestionQuery
         let stateBefore = suggestionContextState
@@ -978,7 +1274,7 @@ final class SnippetExpansionEngine {
             return
         }
 
-        let context: SuggestionTriggerContext
+        let deletion: TriggerDeletion
         switch readAcceptContext(
             matchingQuery: localQuery,
             axBudget: AXMessagingBudget(
@@ -986,8 +1282,9 @@ final class SnippetExpansionEngine {
                 perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
         ) {
         case .confirmed(let confirmed):
-            context = confirmed
+            deletion = .confirmed(confirmed)
             suggestionContextState = .axConfirmed
+            suggestionHasAXConfirmedContext = true
             recordExpansionAccessibility(
                 operation: .acceptance,
                 outcome: .confirmed,
@@ -1003,24 +1300,49 @@ final class SnippetExpansionEngine {
             dismissSuggestions()
             return
         case .missingTrigger:
-            recordExpansionAccessibility(
-                operation: .acceptance,
-                outcome: .missingTrigger,
-                stateBefore: stateBefore,
-                stateAfter: stateBefore)
-            pendingSelectionMemoryQuery = nil
-            dismissSuggestions()
-            return
+            if canUseCaretlessTerminalLocalTracking(
+                state: stateBefore,
+                isSecureSnippet: store.isSecure(snippet.id)
+            ) {
+                deletion = .localTracking(query: localQuery)
+                recordExpansionAccessibility(
+                    operation: .acceptance,
+                    outcome: .localTracking,
+                    stateBefore: stateBefore,
+                    stateAfter: stateBefore)
+            } else {
+                recordExpansionAccessibility(
+                    operation: .acceptance,
+                    outcome: .missingTrigger,
+                    stateBefore: stateBefore,
+                    stateAfter: stateBefore)
+                pendingSelectionMemoryQuery = nil
+                dismissSuggestions()
+                return
+            }
         case .unavailable(let unavailable):
-            recordExpansionAccessibility(
-                operation: .acceptance,
-                outcome: .unavailable,
-                stateBefore: stateBefore,
-                stateAfter: stateBefore,
-                unavailable: unavailable)
-            pendingSelectionMemoryQuery = nil
-            dismissSuggestions()
-            return
+            if canUseCaretlessTerminalLocalTracking(
+                state: stateBefore,
+                isSecureSnippet: store.isSecure(snippet.id)
+            ) {
+                deletion = .localTracking(query: localQuery)
+                recordExpansionAccessibility(
+                    operation: .acceptance,
+                    outcome: .localTracking,
+                    stateBefore: stateBefore,
+                    stateAfter: stateBefore,
+                    unavailable: unavailable)
+            } else {
+                recordExpansionAccessibility(
+                    operation: .acceptance,
+                    outcome: .unavailable,
+                    stateBefore: stateBefore,
+                    stateAfter: stateBefore,
+                    unavailable: unavailable)
+                pendingSelectionMemoryQuery = nil
+                dismissSuggestions()
+                return
+            }
         case .unsafe:
             recordExpansionAccessibility(
                 operation: .acceptance,
@@ -1037,8 +1359,6 @@ final class SnippetExpansionEngine {
         let acceptedFocusTarget = store.isSecure(snippet.id)
             ? captureSecureExpansionFocusTarget(targetPID: acceptedTargetPID)
             : nil
-        let deletion = TriggerDeletion.confirmed(context)
-
         // Captured before `dismissSuggestions()` clears the query. Only an
         // explicit accept teaches selection memory; auto-expansions never do.
         pendingSelectionMemoryQuery = localQuery
@@ -1315,6 +1635,10 @@ final class SnippetExpansionEngine {
         stopSuggestionSecureInputWatchdog()
         stopSuggestionAccessibilityObserver()
         suggestionTargetPID = nil
+        suggestionTargetElement = nil
+        suggestionTargetRole = nil
+        suggestionTargetBundleIdentifier = nil
+        suggestionHasAXConfirmedContext = false
         pendingSpaceShortcutFocusValidation = false
         pendingSpaceShortcutInputSourceID = nil
 
@@ -1459,6 +1783,28 @@ final class SnippetExpansionEngine {
         // Let the host apply printable text, then resync from the focused AX text.
         if isValidKeywordCharacter(character) {
             appendLocalSuggestionCharacter(character)
+
+            // Ghostty exposes its rendered screen and mouse selection through AX,
+            // but no insertion caret. For a clean, unchanged terminal session we
+            // can therefore use the same suppressed-final-key strategy as the
+            // panel-less typed-buffer fallback. Prefix collisions still keep the
+            // panel open for an explicit Tab/Return choice.
+            if let snippet = unambiguousExactMatch(for: suggestionQuery),
+               canUseCaretlessTerminalLocalTracking(
+                   state: suggestionContextState,
+                   isSecureSnippet: store.isSecure(snippet.id)
+               ) {
+                recordExpansionAccessibility(
+                    operation: .printableEdit,
+                    outcome: .localTracking,
+                    stateBefore: suggestionContextState,
+                    stateAfter: suggestionContextState)
+                selectSuggestion(
+                    snippet,
+                    deletion: .pendingLastCharacter(query: suggestionQuery))
+                return true
+            }
+
             scheduleSuggestionContextRefresh(
                 operation: .printableEdit,
                 expectedQuery: suggestionQuery,
@@ -1580,6 +1926,7 @@ final class SnippetExpansionEngine {
             suggestionQuery = context.query
             suggestionDeleteCount = context.triggerLength
             suggestionContextState = .axConfirmed
+            suggestionHasAXConfirmedContext = true
             // One printable key grants at most one opportunity to auto-expand.
             // Duplicate or later programmatic AX notifications may still
             // reconcile the panel, but cannot spend the same authorization.
@@ -1660,6 +2007,37 @@ final class SnippetExpansionEngine {
         return true
     }
 
+    /// Ghostty deliberately models `AXSelectedTextRange` as the rendered terminal's
+    /// mouse selection, not the command-line insertion point. Keep its compatibility
+    /// path much narrower than the ordinary AX-confirmed path: known bundle, terminal
+    /// text-area role, no ambiguous edit, no earlier AX confirmation, same process,
+    /// and the exact same focused AX object.
+    private func canUseCaretlessTerminalLocalTracking(
+        state: SuggestionContextState,
+        isSecureSnippet: Bool
+    ) -> Bool {
+        guard CaretlessTerminalSuggestionPolicy.isSupportedHost(
+            bundleIdentifier: suggestionTargetBundleIdentifier
+        ) else { return false }
+
+        let targetStillMatches: Bool
+        if let targetPID = suggestionTargetPID,
+           let targetElement = suggestionTargetElement,
+           NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID {
+            targetStillMatches = currentFocusMatches(targetElement)
+        } else {
+            targetStillMatches = false
+        }
+
+        return CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
+            bundleIdentifier: suggestionTargetBundleIdentifier,
+            focusedRole: suggestionTargetRole,
+            contextState: state,
+            hasAXConfirmedContext: suggestionHasAXConfirmedContext,
+            isSecureSnippet: isSecureSnippet,
+            targetStillMatches: targetStillMatches)
+    }
+
     private func trailingKeywordQuery(from buffer: String) -> String? {
         guard let slashIndex = buffer.lastIndex(of: "\\") else { return nil }
         let queryStart = buffer.index(after: slashIndex)
@@ -1669,6 +2047,96 @@ final class SnippetExpansionEngine {
         guard !query.isEmpty else { return nil }
         guard query.allSatisfy({ isValidKeywordCharacter($0) }) else { return nil }
         return query
+    }
+
+    private func securePasteSuggestionItems(
+        query rawQuery: String,
+        snippets: [Snippet],
+        frecency: FrecencySnapshot,
+        displayOrder: [UUID: Int]
+    ) -> [SuggestionItem] {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if query.isEmpty {
+            return snippets
+                .enumerated()
+                .map { offset, snippet in
+                    (
+                        item: SuggestionItem(
+                            snippet: snippet,
+                            isSecure: store.isSecure(snippet.id),
+                            score: 0,
+                            frecency: frecency.value(for: snippet.id)
+                        ),
+                        order: offset
+                    )
+                }
+                .sorted { lhs, rhs in
+                    if lhs.item.isSecure != rhs.item.isSecure {
+                        return lhs.item.isSecure
+                    }
+                    return SnippetFrecency.emptyQueryRanks(
+                        lhsPinned: lhs.item.snippet.isPinned,
+                        lhsFrecency: lhs.item.frecency,
+                        lhsOrder: lhs.order,
+                        rhsPinned: rhs.item.snippet.isPinned,
+                        rhsFrecency: rhs.item.frecency,
+                        rhsOrder: rhs.order
+                    )
+                }
+                .map(\.item)
+        }
+
+        let foldedQuery = SnippetFrecency.foldedForMatching(query)
+        let binding = frecency.bindingTable(forQuery: query)
+        return snippets.compactMap { snippet -> SuggestionItem? in
+            let nameResult = FuzzyMatch.score(query: query, target: snippet.displayName)
+            let keywordResult = FuzzyMatch.score(query: query, target: snippet.normalizedKeyword)
+            var tagMatched = false
+            var tagScore = Int.min
+            for tag in snippet.tags {
+                let result = FuzzyMatch.score(query: query, target: tag)
+                if result.matched {
+                    tagMatched = true
+                    tagScore = max(tagScore, result.score)
+                }
+            }
+
+            guard nameResult.matched || keywordResult.matched || tagMatched else { return nil }
+            return SuggestionItem(
+                snippet: snippet,
+                isSecure: store.isSecure(snippet.id),
+                score: max(max(nameResult.score, keywordResult.score), tagScore),
+                nameMatchRanges: nameResult.matchedRanges,
+                keywordMatchRanges: keywordResult.matchedRanges,
+                keywordRank: SnippetFrecency.keywordRank(
+                    foldedKeyword: SnippetFrecency.foldedForMatching(snippet.normalizedKeyword),
+                    foldedQuery: foldedQuery,
+                    hasKeywordMatchRanges: !keywordResult.matchedRanges.isEmpty
+                ),
+                bindingWeight: binding[snippet.id] ?? 0,
+                frecency: frecency.value(for: snippet.id)
+            )
+        }
+        .map { (key: rankingKey(for: $0, displayOrder: displayOrder), item: $0) }
+        .sorted { lhs, rhs in
+            switch SecurePasteSuggestionRankingPolicy.decision(
+                lhsScore: lhs.key.score,
+                lhsKeywordRank: lhs.key.keywordRank,
+                lhsIsSecure: lhs.item.isSecure,
+                rhsScore: rhs.key.score,
+                rhsKeywordRank: rhs.key.keywordRank,
+                rhsIsSecure: rhs.item.isSecure
+            ) {
+            case .lhsFirst:
+                return true
+            case .rhsFirst:
+                return false
+            case .tied:
+                return SnippetFrecency.ranks(lhs.key, before: rhs.key)
+            }
+        }
+        .map(\.item)
     }
 
     private func updateSuggestionResults(
@@ -2722,6 +3190,39 @@ final class SnippetExpansionEngine {
         return nil
     }
 
+    /// Finds the actual writable text element while preserving the separately captured
+    /// deepest focused element for identity checks. Prefer a secure ancestor over a generic
+    /// editable child: web accessibility trees sometimes split those two responsibilities.
+    private func securePasteTextElement(
+        startingAt focused: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> AXUIElement? {
+        var firstTextInput: AXUIElement?
+        var current = focused
+
+        for depth in 0...4 {
+            let subrole = stringAttribute(
+                of: current,
+                attribute: kAXSubroleAttribute as CFString,
+                axBudget: axBudget
+            )
+            if subrole == (kAXSecureTextFieldSubrole as String) {
+                return current
+            }
+            if firstTextInput == nil,
+               elementAcceptsTextInput(current, axBudget: axBudget) {
+                firstTextInput = current
+            }
+
+            guard depth < 4,
+                  let parent = parentElement(of: current, axBudget: axBudget)
+            else { break }
+            current = parent
+        }
+
+        return firstTextInput
+    }
+
     private func focusedTextInputHasSelectedText() -> Bool {
         return focusedTextInputSelection().hasSelection
     }
@@ -3163,12 +3664,70 @@ final class SnippetExpansionEngine {
         targetPID: pid_t?
     ) -> Bool {
         guard let targetPID,
-              !secureEventInputEnabled,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
+              !secureEventInputEnabled
         else { return false }
 
+        return reassertKeyboardFocus(
+            element: focusTarget.element,
+            window: focusTarget.window,
+            targetPID: targetPID
+        )
+    }
+
+    /// Secure Paste intentionally restores a password field while Secure Event Input is
+    /// enabled. Unlike trigger expansion, it posts no key events and performs no blind
+    /// deletion, so the global secure-input flag is not a reason to reject this AX-only path.
+    private func restoreSecurePasteTarget(_ focusTarget: SecurePasteTarget) async -> Bool {
+        guard let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
+              !target.isTerminated
+        else { return false }
+
+        _ = target.activate()
+        var consecutiveFocusConfirmations = 0
+        for delay in [
+            Duration.milliseconds(80),
+            .milliseconds(100),
+            .milliseconds(160),
+            .milliseconds(300),
+            .milliseconds(500),
+            .milliseconds(500),
+        ] {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, !target.isTerminated else { return false }
+
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+                    == focusTarget.targetPID
+            else {
+                _ = target.activate()
+                continue
+            }
+
+            if reassertKeyboardFocus(
+                element: focusTarget.focusedElement,
+                window: focusTarget.window,
+                targetPID: focusTarget.targetPID
+            ) {
+                consecutiveFocusConfirmations += 1
+                if consecutiveFocusConfirmations >= 2 { return true }
+            } else {
+                consecutiveFocusConfirmations = 0
+                _ = target.activate()
+            }
+        }
+        return false
+    }
+
+    private func reassertKeyboardFocus(
+        element: AXUIElement,
+        window: AXUIElement?,
+        targetPID: pid_t
+    ) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
+            return false
+        }
+
         let appElement = withBoundedMessagingTimeout(AXUIElementCreateApplication(targetPID))
-        if let window = focusTarget.window {
+        if let window {
             _ = AXUIElementSetAttributeValue(
                 appElement,
                 kAXFocusedWindowAttribute as CFString,
@@ -3177,11 +3736,73 @@ final class SnippetExpansionEngine {
             _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         }
         _ = AXUIElementSetAttributeValue(
-            focusTarget.element,
+            element,
             kAXFocusedAttribute as CFString,
             kCFBooleanTrue
         )
-        return currentFocusMatches(focusTarget.element)
+        return currentFocusMatches(element)
+    }
+
+    /// Executes exactly one write chosen by `SecurePasteAccessibilityPolicy`.
+    /// In particular, no read of `AXValue` is used to confirm or construct a password.
+    private func pasteSecureTextUsingAccessibility(
+        _ text: String,
+        to target: SecurePasteTarget
+    ) -> Bool {
+        guard accessibilityGranted,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
+              processIdentifier(of: target.textElement) == target.targetPID,
+              currentFocusMatches(target.focusedElement)
+        else { return false }
+
+        let budget = AXMessagingBudget()
+        let targetIsSecureTextField = stringAttribute(
+            of: target.textElement,
+            attribute: kAXSubroleAttribute as CFString,
+            axBudget: budget
+        ) == (kAXSecureTextFieldSubrole as String)
+        let valueIsSettable = targetIsSecureTextField && attributeIsSettable(
+            kAXValueAttribute as CFString,
+            on: target.textElement,
+            axBudget: budget
+        )
+        let selectedTextIsSettable = attributeIsSettable(
+            kAXSelectedTextAttribute as CFString,
+            on: target.textElement,
+            axBudget: budget
+        )
+
+        switch SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: targetIsSecureTextField,
+            valueIsSettable: valueIsSettable,
+            selectedTextIsSettable: selectedTextIsSettable
+        ) {
+        case .replaceSecureValue:
+            return budget.setAttributeValue(
+                of: target.textElement,
+                attribute: kAXValueAttribute as CFString,
+                value: text as CFString
+            ) == .success
+        case .replaceSelection:
+            return budget.setAttributeValue(
+                of: target.textElement,
+                attribute: kAXSelectedTextAttribute as CFString,
+                value: text as CFString
+            ) == .success
+        case .unavailable:
+            return false
+        }
+    }
+
+    private func attributeIsSettable(
+        _ attribute: CFString,
+        on element: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> Bool {
+        guard axBudget.bind(element) else { return false }
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success
+            && settable.boolValue
     }
 
     private func currentFocusMatches(_ expected: AXUIElement) -> Bool {
@@ -3243,13 +3864,22 @@ final class SnippetExpansionEngine {
         return nil
     }
 
-    private func elementAttribute(of element: AXUIElement, attribute: CFString) -> AXUIElement? {
+    private func elementAttribute(
+        of element: AXUIElement,
+        attribute: CFString,
+        axBudget: AXMessagingBudget? = nil
+    ) -> AXUIElement? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+        guard copyAttributeValue(
+            of: element,
+            attribute: attribute,
+            into: &value,
+            axBudget: axBudget
+        ) == .success,
               let value,
               CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
-        return withBoundedMessagingTimeout(value as! AXUIElement)
+        return withBoundedMessagingTimeout(value as! AXUIElement, axBudget: axBudget)
     }
 
     /// Applies the engine's bounded messaging timeout to an element we are

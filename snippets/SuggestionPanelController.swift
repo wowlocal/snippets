@@ -1,5 +1,17 @@
 import AppKit
 
+private final class SuggestionPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+private final class SuggestionSearchField: NSSearchField {
+    /// A non-activating panel normally refuses key status for incidental clicks.
+    /// Secure Paste is the deliberate exception: its search field is the one view
+    /// that must be able to take keyboard focus without activating Snippets.
+    override var needsPanelToBecomeKey: Bool { true }
+}
+
 struct SuggestionItem {
     let snippet: Snippet
     let isSecure: Bool
@@ -33,14 +45,30 @@ struct SuggestionItem {
 }
 
 @MainActor
-final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+final class SuggestionPanelController: NSObject,
+    NSTableViewDataSource,
+    NSTableViewDelegate,
+    NSSearchFieldDelegate,
+    NSWindowDelegate
+{
+    private enum PresentationMode {
+        case suggestions
+        case securePaste
+    }
+
     private let panel: NSPanel
     private let tableView: NSTableView
     private let scrollView: NSScrollView
+    private let searchField = SuggestionSearchField()
+    private let searchContainer = NSView()
+    private let emptyLabel = NSTextField(labelWithString: "No matching snippets")
+    private var searchContainerHeightConstraint: NSLayoutConstraint!
     private(set) var items: [SuggestionItem] = []
     private let maxVisible = 8
     private let singleLineRowHeight: CGFloat = 46
     private let wrappedNameRowHeight: CGFloat = 62
+    private let securePasteSearchHeight: CGFloat = 42
+    private let securePasteEmptyListHeight: CGFloat = 52
     /// Static so the panel and its column can size themselves during init.
     private static let panelWidth: CGFloat = 320
     /// The cell's leading/trailing inset doubled: 6pt of it is the highlight pill's
@@ -63,7 +91,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         // Subtract scroll insets.
         let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
-        let usable = max(0, maxHeight - insets)
+        let searchHeight = presentationMode == .securePaste ? securePasteSearchHeight : 0
+        let usable = max(0, maxHeight - insets - searchHeight)
 
         return max(1, Int(floor(usable / perRow)))
     }
@@ -71,6 +100,15 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     var onSelect: ((Snippet) -> Void)?
     var onDismiss: (() -> Void)?
     var hasSelectableItems: Bool { !items.isEmpty }
+    private var presentationMode: PresentationMode = .suggestions
+    private var securePasteSearch: ((String) -> [SuggestionItem])?
+    private var securePasteSelection: ((Snippet) -> Void)?
+    private var securePasteCancellation: ((Bool) -> Void)?
+    /// `orderFrontRegardless()` temporarily unhides an application. When Secure
+    /// Paste starts from a Cmd-H-hidden Snippets, keep only this panel exempt from
+    /// application hiding and immediately restore the original hidden state.
+    private var securePasteStartedWithHiddenApplication = false
+    private var isEndingSecurePaste = false
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
     private var anchor: PanelAnchor?
@@ -111,7 +149,7 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
     }
 
     override init() {
-        panel = NSPanel(
+        panel = SuggestionPanel(
             contentRect: NSRect(x: 0, y: 0, width: SuggestionPanelController.panelWidth, height: 200),
             styleMask: [.nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
@@ -133,8 +171,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         // system insets or decoration are wanted.
         tableView.style = .plain
         tableView.backgroundColor = .clear
-        // The panel is never key, so AppKit's own selection would paint the
-        // unemphasized grey bar. SuggestionTableRowView draws the pill instead.
+        // Ordinary suggestions are non-key and Secure Paste becomes key for its
+        // search field. Drawing our own pill keeps both modes visually identical.
         tableView.selectionHighlightStyle = .none
         tableView.intercellSpacing = NSSize(width: 0, height: 4)
         tableView.rowHeight = singleLineRowHeight
@@ -152,11 +190,54 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
         // 4 here plus the row view's half-spacing inset of 2 makes the gap above the
         // first pill and below the last one match the 6pt gap at the sides.
         scrollView.contentInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
 
-        let surface = LiquidGlassDesign.makeFloatingPanelSurface(containing: scrollView)
+        searchField.placeholderString = "Search snippets"
+        searchField.sendsSearchStringImmediately = true
+        searchField.setAccessibilityLabel("Search snippets for Secure Paste")
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+
+        searchContainer.translatesAutoresizingMaskIntoConstraints = false
+        searchContainer.isHidden = true
+        searchContainer.addSubview(searchField)
+        NSLayoutConstraint.activate([
+            searchField.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 8),
+            searchField.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -8),
+            searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+        ])
+
+        emptyLabel.font = .systemFont(ofSize: 12)
+        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.alignment = .center
+        emptyLabel.isHidden = true
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let panelBody = NSView()
+        panelBody.translatesAutoresizingMaskIntoConstraints = false
+        panelBody.addSubview(searchContainer)
+        panelBody.addSubview(scrollView)
+        panelBody.addSubview(emptyLabel)
+        searchContainerHeightConstraint = searchContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            searchContainer.leadingAnchor.constraint(equalTo: panelBody.leadingAnchor),
+            searchContainer.trailingAnchor.constraint(equalTo: panelBody.trailingAnchor),
+            searchContainer.topAnchor.constraint(equalTo: panelBody.topAnchor),
+            searchContainerHeightConstraint,
+
+            scrollView.leadingAnchor.constraint(equalTo: panelBody.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: panelBody.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: searchContainer.bottomAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: panelBody.bottomAnchor),
+
+            emptyLabel.leadingAnchor.constraint(equalTo: panelBody.leadingAnchor, constant: 16),
+            emptyLabel.trailingAnchor.constraint(equalTo: panelBody.trailingAnchor, constant: -16),
+            emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
+        ])
+
+        let surface = LiquidGlassDesign.makeFloatingPanelSurface(containing: panelBody)
 
         // The surface is Auto Layout driven and has no size of its own, so pinning
         // it is mandatory. Setting `frame`/`autoresizingMask` on it instead is what
@@ -173,10 +254,12 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
         super.init()
 
+        panel.delegate = self
         tableView.dataSource = self
         tableView.delegate = self
         tableView.target = self
         tableView.action = #selector(rowClicked)
+        searchField.delegate = self
     }
 
     @objc private func rowClicked() {
@@ -184,22 +267,119 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         guard row >= 0, row < items.count else { return }
         selectionWasUserDriven = true
         let snippet = items[row].snippet
-        onSelect?(snippet)
+        select(snippet)
     }
 
     var isVisible: Bool { panel.isVisible }
+    var isSecurePasteVisible: Bool {
+        presentationMode == .securePaste && panel.isVisible
+    }
 
     func show(
         items: [SuggestionItem],
         anchorFocusedElement: AXUIElement? = nil,
         axBudget: AXMessagingBudget? = nil
     ) {
+        guard presentationMode == .suggestions else { return }
+        present(
+            items: items,
+            anchorFocusedElement: anchorFocusedElement,
+            axBudget: axBudget,
+            keepsPanelVisibleWhenEmpty: false,
+            acceptsKeyboardInput: false
+        )
+    }
+
+    /// Presents Secure Paste as an input-enabled mode of the same compact panel
+    /// used for backslash suggestions. It deliberately does not activate or unhide
+    /// Snippets; a non-activating panel can become key on its search field while the
+    /// destination app remains frontmost.
+    func showSecurePaste(
+        items: [SuggestionItem],
+        anchorFocusedElement: AXUIElement,
+        onSearch: @escaping (String) -> [SuggestionItem],
+        onSelect: @escaping (Snippet) -> Void,
+        onCancel: @escaping (Bool) -> Void
+    ) {
+        if presentationMode == .suggestions {
+            dismiss()
+        } else {
+            dismissSecurePasteWithoutCallback()
+        }
+
+        presentationMode = .securePaste
+        securePasteSearch = onSearch
+        securePasteSelection = onSelect
+        securePasteCancellation = onCancel
+        securePasteStartedWithHiddenApplication = NSApp.isHidden
+        panel.canHide = false
+        searchField.stringValue = ""
+        searchContainer.isHidden = false
+        searchContainerHeightConstraint.constant = securePasteSearchHeight
+        emptyLabel.stringValue = "No matching snippets"
+        panel.setAccessibilityTitle("Secure Paste")
+        tableView.setAccessibilityLabel("Snippets available for Secure Paste")
+
+        present(
+            items: items,
+            anchorFocusedElement: anchorFocusedElement,
+            axBudget: AXMessagingBudget(),
+            keepsPanelVisibleWhenEmpty: true,
+            acceptsKeyboardInput: true
+        )
+    }
+
+    func cancelSecurePaste(returnFocus: Bool) {
+        guard presentationMode == .securePaste else { return }
+        let cancellation = securePasteCancellation
+        dismissSecurePasteWithoutCallback()
+        cancellation?(returnFocus)
+    }
+
+    func dismissSecurePasteWithoutCallback() {
+        guard presentationMode == .securePaste else { return }
+        let shouldRemainHidden = securePasteStartedWithHiddenApplication
+        isEndingSecurePaste = true
+        hidePanel()
+        if shouldRemainHidden {
+            // Losing key status to an outside click can make AppKit clear the
+            // application's hidden state after the non-hideable panel is removed.
+            // Reassert Cmd-H before returning to that click's event tracking.
+            NSApp.hide(nil)
+        }
+        anchor = nil
+        panel.makeFirstResponder(nil)
+        searchField.stringValue = ""
+        searchContainer.isHidden = true
+        searchContainerHeightConstraint.constant = 0
+        emptyLabel.isHidden = true
+        securePasteSearch = nil
+        securePasteSelection = nil
+        securePasteCancellation = nil
+        panel.canHide = true
+        securePasteStartedWithHiddenApplication = false
+        presentationMode = .suggestions
+        panel.setAccessibilityTitle("Snippet suggestions")
+        tableView.setAccessibilityLabel("Snippet suggestions")
+        isEndingSecurePaste = false
+    }
+
+    private func present(
+        items: [SuggestionItem],
+        anchorFocusedElement: AXUIElement?,
+        axBudget: AXMessagingBudget?,
+        keepsPanelVisibleWhenEmpty: Bool,
+        acceptsKeyboardInput: Bool
+    ) {
         let previouslySelectedSnippetID = selectionWasUserDriven ? selectedSnippet()?.id : nil
         self.items = items
         tableView.reloadData()
 
         let count = items.count
-        guard count > 0 else { dismiss(); return }
+        guard count > 0 || keepsPanelVisibleWhenEmpty else {
+            dismiss()
+            return
+        }
 
         // Resolve the anchor from the caret BEFORE computing the visible-row cap,
         // so screen metrics come from the caret's screen rather than falling back
@@ -244,18 +424,21 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         tableView.layoutSubtreeIfNeeded()
         scrollView.layoutSubtreeIfNeeded()
 
-        // Compute exact content height using real row rects.
-        let lastRowIndex = visibleCount - 1
-        let lastRowRect = tableView.rect(ofRow: lastRowIndex)
-
         let insets = scrollView.contentInsets.top + scrollView.contentInsets.bottom
 
-        // `rect(ofRow:)` already carries half of `intercellSpacing.height` above and
-        // below every row, so `maxY` is the exact document height for the visible
-        // prefix. `ceil` only guards a fractional row height landing on a half
-        // point; the old +4 fudge dated from the visual effect view and would now
-        // show as a strip of bare glass under the last row.
-        let height = ceil(lastRowRect.maxY + insets)
+        let listHeight: CGFloat
+        if visibleCount > 0 {
+            // `rect(ofRow:)` already carries half of `intercellSpacing.height` above and
+            // below every row, so `maxY` is the exact document height for the visible
+            // prefix. `ceil` only guards a fractional row height landing on a half
+            // point; the old +4 fudge dated from the visual effect view and would now
+            // show as a strip of bare glass under the last row.
+            let lastRowRect = tableView.rect(ofRow: visibleCount - 1)
+            listHeight = ceil(lastRowRect.maxY + insets)
+        } else {
+            listHeight = securePasteEmptyListHeight
+        }
+        let height = listHeight + (presentationMode == .securePaste ? securePasteSearchHeight : 0)
 
         panel.setContentSize(NSSize(width: Self.panelWidth, height: height))
 
@@ -267,11 +450,32 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         // window shadow keeps the outline of the previous size.
         panel.invalidateShadow()
 
-        scrollView.hasVerticalScroller = (count > visibleCount)
+        scrollView.hasVerticalScroller = count > visibleCount
+        emptyLabel.isHidden = presentationMode != .securePaste || count > 0
 
         if !panel.isVisible {
-            panel.orderFront(nil)
+            if acceptsKeyboardInput {
+                panel.orderFrontRegardless()
+                if securePasteStartedWithHiddenApplication {
+                    // `canHide == false` leaves just the picker on screen. Ordinary
+                    // app windows obey Cmd-H and remain hidden throughout the flow.
+                    NSApp.hide(nil)
+                    panel.orderFrontRegardless()
+                }
+                panel.makeKey()
+            } else {
+                panel.orderFront(nil)
+            }
             installClickMonitors()
+        }
+
+        guard count > 0 else {
+            tableView.deselectAll(nil)
+            selectionWasUserDriven = false
+            if acceptsKeyboardInput {
+                panel.makeFirstResponder(searchField)
+            }
+            return
         }
 
         let selectedRow = previouslySelectedSnippetID
@@ -284,11 +488,19 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         } else {
             selectionWasUserDriven = false
         }
+        if acceptsKeyboardInput {
+            panel.makeFirstResponder(searchField)
+        }
     }
 
 
     /// Temporarily hide the panel (e.g. no results), preserving anchor position.
     func hide() {
+        guard presentationMode == .suggestions else { return }
+        hidePanel()
+    }
+
+    private func hidePanel() {
         removeClickMonitors()
         panel.orderOut(nil)
         items = []
@@ -301,7 +513,8 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
 
     /// Fully end the suggestion session — clears anchor so next activation repositions.
     func dismiss() {
-        hide()
+        guard presentationMode == .suggestions else { return }
+        hidePanel()
         anchor = nil
     }
 
@@ -331,6 +544,74 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         return items[row].snippet
     }
 
+    private func select(_ snippet: Snippet) {
+        if presentationMode == .securePaste {
+            let selection = securePasteSelection
+            dismissSecurePasteWithoutCallback()
+            selection?(snippet)
+        } else {
+            onSelect?(snippet)
+        }
+    }
+
+    // MARK: - Secure Paste Search
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard presentationMode == .securePaste,
+              let securePasteSearch else { return }
+        present(
+            items: securePasteSearch(searchField.stringValue),
+            anchorFocusedElement: nil,
+            axBudget: nil,
+            keepsPanelVisibleWhenEmpty: true,
+            acceptsKeyboardInput: false
+        )
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        guard presentationMode == .securePaste else { return false }
+        switch commandSelector {
+        case #selector(NSResponder.moveUp(_:)):
+            moveSelectionUp()
+            return true
+        case #selector(NSResponder.moveDown(_:)):
+            moveSelectionDown()
+            return true
+        case #selector(NSResponder.insertNewline(_:)):
+            guard let snippet = selectedSnippet() else {
+                NSSound.beep()
+                return true
+            }
+            select(snippet)
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            cancelSecurePaste(returnFocus: true)
+            return true
+        default:
+            return false
+        }
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard presentationMode == .securePaste,
+              panel.isVisible,
+              !isEndingSecurePaste else { return }
+        // A click can be in flight when AppKit posts this notification. Let the
+        // clicked control finish first, then cancel without pulling focus back from
+        // the destination the user just chose.
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.presentationMode == .securePaste,
+                  self.panel.isVisible,
+                  !self.panel.isKeyWindow else { return }
+            self.cancelSecurePaste(returnFocus: false)
+        }
+    }
+
     func resetAccessibilityPrimingCache() {
         accessibilityPrimedPIDs.removeAll()
         enhancedAccessibilityPrimedPIDs.removeAll()
@@ -357,7 +638,11 @@ final class SuggestionPanelController: NSObject, NSTableViewDataSource, NSTableV
         guard panel.isVisible else { return }
         let mouseLocation = NSEvent.mouseLocation
         if panelShapeContains(mouseLocation) { return }
-        onDismiss?()
+        if presentationMode == .securePaste {
+            cancelSecurePaste(returnFocus: false)
+        } else {
+            onDismiss?()
+        }
     }
 
     /// `panel.frame` is a rectangle but the surface is a rounded rect, so the four
