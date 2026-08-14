@@ -168,7 +168,7 @@ Handled intentionally:
 - This is what handles browser autocomplete correctly: deleting a host-owned completion may produce a temporary local `jaz`, while the following AX notification confirms that the real field still contains `jazz` and restores the displayed query without ever authorizing the wrong delete count.
 - Cmd/Option combos mostly dismiss suggestion mode.
 - Cmd+Shift+3/4/5/6 are ignored (do not dismiss) to avoid interfering with screenshots.
-- Input-source switching shortcuts (for example Cmd+Space) do not dismiss.
+- Modifier+Space is classified after key-up by comparing the actual keyboard input-source identifier and reading the system-wide AX focused application. An input-source change preserves the panel even if the system switcher briefly owns focus; otherwise Spotlight, Raycast, or any custom launcher that takes keyboard focus dismisses it. The shortcut modifiers are not hardcoded.
 
 ## Expansion and pasteboard timing quirks
 

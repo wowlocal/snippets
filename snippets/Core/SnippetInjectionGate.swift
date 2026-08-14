@@ -18,6 +18,28 @@ nonisolated enum SnippetInputDisposition: Equatable {
 }
 
 nonisolated enum SnippetInjectionGate {
+    /// A Space shortcut is user-configurable, so its modifiers cannot tell us
+    /// whether it changed the input source or opened a launcher. The focused
+    /// application after key-up is the semantic answer.
+    nonisolated static func spaceShortcutFocusInvalidatesContext(
+        inputSourceChanged: Bool,
+        expectedTargetPID: Int32?,
+        focusedApplicationPID: Int32?,
+        frontmostApplicationPID: Int32?
+    ) -> Bool {
+        // The input-source identifier is the strongest semantic signal. A
+        // system switcher may briefly own focus while completing the change.
+        if inputSourceChanged { return false }
+        guard let expectedTargetPID else { return true }
+        if let focusedApplicationPID {
+            return focusedApplicationPID != expectedTargetPID
+        }
+        if let frontmostApplicationPID {
+            return frontmostApplicationPID != expectedTargetPID
+        }
+        return false
+    }
+
     /// Evaluated before an expansion starts and again after every suspension point, so a flag that
     /// flips mid-injection cannot leave the host's text half deleted.
     nonisolated static func refusal(

@@ -186,6 +186,57 @@ struct InjectionGateTests {
     @Suite("Input disposition")
     struct InputDispositionTests {
 
+        @Test func aSpaceShortcutUsesActualFocusInsteadOfItsModifiers() {
+            #expect(
+                !SnippetInjectionGate.spaceShortcutFocusInvalidatesContext(
+                    inputSourceChanged: false,
+                    expectedTargetPID: targetPID,
+                    focusedApplicationPID: targetPID,
+                    frontmostApplicationPID: targetPID),
+                "a shortcut that leaves keyboard focus in the target preserves the context"
+            )
+            #expect(
+                SnippetInjectionGate.spaceShortcutFocusInvalidatesContext(
+                    inputSourceChanged: false,
+                    expectedTargetPID: targetPID,
+                    focusedApplicationPID: 30,
+                    frontmostApplicationPID: targetPID),
+                "system-wide keyboard focus catches a nonactivating launcher"
+            )
+            #expect(
+                SnippetInjectionGate.spaceShortcutFocusInvalidatesContext(
+                    inputSourceChanged: false,
+                    expectedTargetPID: targetPID,
+                    focusedApplicationPID: nil,
+                    frontmostApplicationPID: 30),
+                "NSWorkspace remains the fallback when AX focus is unavailable"
+            )
+            #expect(
+                !SnippetInjectionGate.spaceShortcutFocusInvalidatesContext(
+                    inputSourceChanged: false,
+                    expectedTargetPID: targetPID,
+                    focusedApplicationPID: nil,
+                    frontmostApplicationPID: nil),
+                "an unavailable post-shortcut observation does not guess that focus moved"
+            )
+            #expect(
+                SnippetInjectionGate.spaceShortcutFocusInvalidatesContext(
+                    inputSourceChanged: false,
+                    expectedTargetPID: nil,
+                    focusedApplicationPID: targetPID,
+                    frontmostApplicationPID: targetPID),
+                "without an original target there is no context safe to retain"
+            )
+            #expect(
+                !SnippetInjectionGate.spaceShortcutFocusInvalidatesContext(
+                    inputSourceChanged: true,
+                    expectedTargetPID: targetPID,
+                    focusedApplicationPID: 30,
+                    frontmostApplicationPID: targetPID),
+                "an actual input-source change wins over transient switcher focus"
+            )
+        }
+
         @Test func ourOwnEventsAreIgnoredEvenWhenNothingElseWouldSkipThem() {
             #expect(
                 SnippetInjectionGate.inputDisposition(

@@ -71,6 +71,12 @@ final class SnippetExpansionEngine {
     private var suggestionQuery = ""
     private var suggestionDeleteCount = 1
     private var suggestionContextState: SuggestionContextState = .localDisplayOnly
+    /// The process that owned the focused field when this suggestion session started.
+    /// Modifier+Space is user-configurable, so we compare this with actual keyboard
+    /// focus after key-up instead of assigning meaning to Command/Control/Option.
+    private var suggestionTargetPID: pid_t?
+    private var pendingSpaceShortcutFocusValidation = false
+    private var pendingSpaceShortcutInputSourceID: String?
     private var suggestionSyncGeneration = 0
     private var suggestionSessionGeneration: UInt = 0
     private var suggestionAXObserver: AXObserver?
@@ -287,7 +293,10 @@ final class SnippetExpansionEngine {
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,          // active tap — can modify/suppress events
-            eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
+            eventsOfInterest: CGEventMask(
+                (1 << CGEventType.keyDown.rawValue)
+                    | (1 << CGEventType.keyUp.rawValue)
+            ),
             callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let engine = Unmanaged<SnippetExpansionEngine>.fromOpaque(refcon).takeUnretainedValue()
@@ -297,6 +306,10 @@ final class SnippetExpansionEngine {
                 // dead until app restart and expansion silently stops.
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     engine.reenableEventTap()
+                    return Unmanaged.passUnretained(event)
+                }
+                if type == .keyUp {
+                    engine.handleEventTapKeyUp(event)
                     return Unmanaged.passUnretained(event)
                 }
                 guard type == .keyDown else { return Unmanaged.passUnretained(event) }
@@ -341,6 +354,24 @@ final class SnippetExpansionEngine {
         return MainActor.assumeIsolated {
             guard let nsEvent = NSEvent(cgEvent: cgEvent) else { return false }
             return handle(event: nsEvent, eventUserData: eventUserData)
+        }
+    }
+
+    /// A head-insert tap sees key-up before the rest of the event pipeline. Queue the
+    /// focus read onto the main run loop so the key can be delivered first, without
+    /// adding a timer or making the shortcut feel delayed.
+    nonisolated private func handleEventTapKeyUp(_ cgEvent: CGEvent) {
+        let eventUserData = cgEvent.getIntegerValueField(.eventSourceUserData)
+        guard SnippetSyntheticEvent.origin(eventUserData: eventUserData) == .user,
+              cgEvent.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Space)
+        else { return }
+        let shouldValidate = MainActor.assumeIsolated {
+            pendingSpaceShortcutFocusValidation
+        }
+        guard shouldValidate else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.validatePendingSpaceShortcutFocus()
         }
     }
 
@@ -644,6 +675,10 @@ final class SnippetExpansionEngine {
         suggestionQuery = ""
         suggestionDeleteCount = 1
         suggestionContextState = .localDisplayOnly
+        suggestionTargetPID = processIdentifier(of: anchorFocusedElement)
+            ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+        pendingSpaceShortcutFocusValidation = false
+        pendingSpaceShortcutInputSourceID = nil
         suggestionObserverAllowsAutoExpand = false
         suggestionFrecency = usage.makeRankingSnapshot()
         pendingSelectionMemoryQuery = nil
@@ -838,6 +873,34 @@ final class SnippetExpansionEngine {
             allowAutoExpand: suggestionObserverAllowsAutoExpand,
             dismissOnMissingTrigger: true,
             notificationStage: stage)
+    }
+
+    private func validatePendingSpaceShortcutFocus() {
+        guard pendingSpaceShortcutFocusValidation else { return }
+        pendingSpaceShortcutFocusValidation = false
+        guard suggestionActive else { return }
+
+        let inputSourceIDBeforeShortcut = pendingSpaceShortcutInputSourceID
+        pendingSpaceShortcutInputSourceID = nil
+        let inputSourceIDAfterShortcut = currentKeyboardInputSourceIdentifier()
+        let inputSourceChanged = inputSourceIDBeforeShortcut != nil
+            && inputSourceIDAfterShortcut != nil
+            && inputSourceIDBeforeShortcut != inputSourceIDAfterShortcut
+
+        let axBudget = AXMessagingBudget(
+            totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+            perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+        let focusedApplicationPID = systemWideFocusedApplicationPID(axBudget: axBudget)
+        let frontmostApplicationPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+        if SnippetInjectionGate.spaceShortcutFocusInvalidatesContext(
+            inputSourceChanged: inputSourceChanged,
+            expectedTargetPID: suggestionTargetPID,
+            focusedApplicationPID: focusedApplicationPID,
+            frontmostApplicationPID: frontmostApplicationPID
+        ) {
+            resetTypingContext()
+        }
     }
 
     private func selectSuggestion(_ snippet: Snippet, deletion overrideDeletion: TriggerDeletion? = nil) {
@@ -1251,6 +1314,9 @@ final class SnippetExpansionEngine {
         // would then outlive the session it belongs to.
         stopSuggestionSecureInputWatchdog()
         stopSuggestionAccessibilityObserver()
+        suggestionTargetPID = nil
+        pendingSpaceShortcutFocusValidation = false
+        pendingSpaceShortcutInputSourceID = nil
 
         guard suggestionActive else { return }
         suggestionActive = false
@@ -1302,9 +1368,13 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Language/input-source switch (Cmd+Space, Ctrl+Space, Option+Space) - ignore without dismissing
-        if event.keyCode == UInt16(kVK_Space) &&
-            !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+        // Modifier+Space is user-configurable: it may change the input source or
+        // open a launcher. Pass it through, then classify the result by actual
+        // keyboard focus after key-up rather than hardcoding its modifiers.
+        if event.keyCode == UInt16(kVK_Space),
+           !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            pendingSpaceShortcutFocusValidation = true
+            pendingSpaceShortcutInputSourceID = currentKeyboardInputSourceIdentifier()
             return false
         }
 
@@ -3125,13 +3195,33 @@ final class SnippetExpansionEngine {
     /// NSWorkspace's frontmost process can remain the host throughout a system
     /// authentication sheet. This attribute follows the application that actually
     /// owns keyboard focus, which is the distinction secure insertion needs.
-    private func systemWideFocusedApplicationPID() -> pid_t? {
+    private func systemWideFocusedApplicationPID(
+        axBudget: AXMessagingBudget? = nil
+    ) -> pid_t? {
         let systemWide = AXUIElementCreateSystemWide()
-        guard let focusedApplication = elementAttribute(
+        var value: CFTypeRef?
+        guard copyAttributeValue(
             of: systemWide,
-            attribute: kAXFocusedApplicationAttribute as CFString
-        ) else { return nil }
-        return processIdentifier(of: focusedApplication)
+            attribute: kAXFocusedApplicationAttribute as CFString,
+            into: &value,
+            axBudget: axBudget
+        ) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        return processIdentifier(of: value as! AXUIElement)
+    }
+
+    private func currentKeyboardInputSourceIdentifier() -> String? {
+        guard let inputSource = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let identifierPointer = TISGetInputSourceProperty(
+                  inputSource,
+                  kTISPropertyInputSourceID
+              )
+        else { return nil }
+        return Unmanaged<CFString>
+            .fromOpaque(identifierPointer)
+            .takeUnretainedValue() as String
     }
 
     private func processIdentifier(of element: AXUIElement) -> pid_t? {
