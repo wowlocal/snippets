@@ -33,7 +33,8 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     private let keywordField = UITextField()
     private let keywordPrefixLabel = UILabel()
-    private let keywordStatusLabel = UILabel()
+    private let keywordWarningButton = UIButton(type: .system)
+    private let keywordWarningToolTip = UIToolTipInteraction(defaultToolTip: "")
     private let suggestionsStack = UIStackView()
     private let keywordSuggestionsOverlay = UIView()
     private let tagField = TagTokenField()
@@ -42,6 +43,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private let footerStatusLabel = UILabel()
 
     private var isBinding = false
+    private var keywordWarningMessage: String?
     private var isPublishingEditorChange = false
     private var secureRevealPolicy = SecureSnippetRevealPolicy()
     private var secureAuthenticationTask: Task<Void, Never>?
@@ -208,7 +210,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         keywordRow.axis = .horizontal
         keywordRow.alignment = .center
         keywordRow.spacing = 5
-        let keywordStack = UIStackView(arrangedSubviews: [keywordRow, keywordStatusLabel])
+        let keywordStack = UIStackView(arrangedSubviews: [keywordRow])
         keywordStack.axis = .vertical
         keywordStack.spacing = 8
         let keywordEditorSection = section(title: "Keyword", content: keywordStack)
@@ -289,10 +291,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         keywordPrefixLabel.textColor = .secondaryLabel
         keywordPrefixLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        keywordStatusLabel.font = AppTheme.scaledFont(size: 12, textStyle: .footnote)
-        keywordStatusLabel.adjustsFontForContentSizeCategory = true
-        keywordStatusLabel.textColor = AppTheme.warning
-        keywordStatusLabel.numberOfLines = 0
+        configureKeywordWarningAccessory()
 
         suggestionsStack.axis = .horizontal
         suggestionsStack.spacing = 8
@@ -693,7 +692,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private func applyDerivedUI(for snippet: Snippet) {
         title = snippet.displayName
         updateNamePlaceholder(for: snippet)
-        updateKeywordStatus(for: snippet)
+        updateKeywordWarning(for: snippet)
         updateSuggestions(for: snippet)
         updatePreview()
         updateNavigationActions(for: snippet)
@@ -780,21 +779,19 @@ final class PhoneSnippetEditorViewController: UIViewController {
         )
     }
 
-    private func updateKeywordStatus(for snippet: Snippet) {
+    private func updateKeywordWarning(for snippet: Snippet) {
         let keyword = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
         let trigger = "\\\(snippet.normalizedKeyword)"
-        keywordStatusLabel.textColor = AppTheme.warning
         guard !keyword.isEmpty else {
-            keywordStatusLabel.textColor = .secondaryLabel
-            keywordStatusLabel.text = "Add a keyword to make this available for expansion on Mac."
+            setKeywordWarning("Add a keyword to make this available for expansion on Mac.")
             return
         }
         guard snippet.isEnabled else {
-            keywordStatusLabel.text = "Disabled — \(trigger) won’t expand."
+            setKeywordWarning("Disabled — \(trigger) won’t expand.")
             return
         }
         guard !snippet.normalizedKeyword.contains(where: { $0.unicodeScalars.count > 1 }) else {
-            keywordStatusLabel.text = "\(trigger) needs letters, digits, or hyphens."
+            setKeywordWarning("\(trigger) needs letters, digits, or hyphens.")
             return
         }
 
@@ -803,19 +800,42 @@ final class PhoneSnippetEditorViewController: UIViewController {
         for other in candidates where other.id != snippet.id {
             switch KeywordRelation.between(keyword, SnippetTagging.filterKey(for: other.normalizedKeyword)) {
             case .duplicate:
-                keywordStatusLabel.text = "\(trigger) is already used by \(other.displayName)."
+                setKeywordWarning("\(trigger) is already used by \(other.displayName).")
                 return
             case .blockedByLonger:
-                keywordStatusLabel.text = "\(trigger) is blocked by \\\(other.normalizedKeyword)."
+                setKeywordWarning("\(trigger) is blocked by \\\(other.normalizedKeyword).")
                 return
             case .blocksShorter:
-                keywordStatusLabel.text = "This prevents \\\(other.normalizedKeyword) from expanding."
+                setKeywordWarning("This prevents \\\(other.normalizedKeyword) from expanding.")
                 return
             case .unrelated:
                 continue
             }
         }
-        keywordStatusLabel.text = ""
+        setKeywordWarning(nil)
+    }
+
+    private func setKeywordWarning(_ message: String?) {
+        keywordWarningMessage = message
+        let visibleMessage = keywordField.isFirstResponder ? nil : message
+        keywordWarningButton.isHidden = visibleMessage == nil
+        keywordWarningToolTip.defaultToolTip = visibleMessage
+        keywordWarningButton.accessibilityLabel = visibleMessage.map {
+            "Keyword warning: \($0)"
+        }
+        keywordField.accessibilityHint = visibleMessage
+    }
+
+    @objc private func showKeywordWarning() {
+        guard !keywordWarningButton.isHidden,
+              let keywordWarningMessage,
+              presentedViewController == nil else { return }
+        let alert = UIAlertController(
+            title: "Keyword Warning",
+            message: keywordWarningMessage,
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     private func updateSuggestions(for snippet: Snippet) {
@@ -1400,6 +1420,31 @@ final class PhoneSnippetEditorViewController: UIViewController {
         field.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 1))
         field.rightViewMode = .always
         field.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
+    }
+
+    private func configureKeywordWarningAccessory() {
+        let accessory = UIView(frame: CGRect(x: 0, y: 0, width: 36, height: 48))
+        keywordWarningButton.frame = accessory.bounds
+        keywordWarningButton.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        keywordWarningButton.setImage(
+            UIImage(
+                systemName: "exclamationmark.triangle.fill",
+                withConfiguration: UIImage.SymbolConfiguration(
+                    pointSize: 16,
+                    weight: .medium)),
+            for: .normal)
+        keywordWarningButton.tintColor = AppTheme.warning.withAlphaComponent(0.62)
+        keywordWarningButton.isHidden = true
+        keywordWarningButton.accessibilityIdentifier = "keyword-expansion-warning"
+        keywordWarningButton.accessibilityHint = "Shows why this keyword cannot expand."
+        keywordWarningButton.addTarget(
+            self,
+            action: #selector(showKeywordWarning),
+            for: .touchUpInside)
+        keywordWarningButton.addInteraction(keywordWarningToolTip)
+        accessory.addSubview(keywordWarningButton)
+        keywordField.rightView = accessory
+        keywordField.rightViewMode = .always
     }
 
     private func section(title: String, content: UIView) -> UIStackView {

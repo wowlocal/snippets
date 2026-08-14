@@ -59,6 +59,7 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         } else if field == nameField || field == keywordField || field == tagsField {
             store.beginEditTransaction()
             if field == keywordField {
+                updateKeywordStatus(for: editingSnippet)
                 updateSuggestedKeywordsRow(for: editingSnippet)
             }
         }
@@ -77,6 +78,10 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
         } else if field == nameField || field == keywordField || field == tagsField {
             if field == keywordField {
                 keywordSuggestionsOverlay.isHidden = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    updateKeywordStatus(for: editingSnippet)
+                }
             }
             if field == tagsField {
                 // The trailing token is only finalized when editing ends, so

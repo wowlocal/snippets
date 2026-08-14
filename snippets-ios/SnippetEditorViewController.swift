@@ -1,5 +1,41 @@
 import UIKit
 
+/// `UIToolTipInteraction` uses the system's intentionally relaxed hover delay.
+/// Validation feedback should feel attached to the field, so the iPad editor
+/// reports pointer entry immediately and presents its own compact bubble.
+final class ImmediateHoverButton: UIButton {
+    var onHoverChange: ((Bool) -> Void)?
+    private(set) var isHovering = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addGestureRecognizer(UIHoverGestureRecognizer(
+            target: self,
+            action: #selector(hoverChanged(_:))))
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func hoverChanged(_ recognizer: UIHoverGestureRecognizer) {
+        switch recognizer.state {
+        case .began, .changed:
+            setHovering(true)
+        case .ended, .cancelled, .failed:
+            setHovering(false)
+        default:
+            break
+        }
+    }
+
+    func setHovering(_ hovering: Bool) {
+        guard hovering != isHovering else { return }
+        isHovering = hovering
+        onHoverChange?(hovering)
+    }
+}
+
 final class SnippetEditorViewController: UIViewController {
     weak var delegate: SnippetEditorViewControllerDelegate?
 
@@ -19,7 +55,9 @@ final class SnippetEditorViewController: UIViewController {
     private let previewLabel = UILabel()
     private let keywordField = UITextField()
     private let keywordPrefixLabel = UILabel()
-    private let keywordStatusLabel = UILabel()
+    private let keywordWarningButton = ImmediateHoverButton()
+    private let keywordWarningTooltipView = UIView()
+    private let keywordWarningTooltipLabel = UILabel()
     private let suggestionsStack = UIStackView()
     private let keywordSuggestionsOverlay = UIView()
     private let nameField = UITextField()
@@ -32,6 +70,7 @@ final class SnippetEditorViewController: UIViewController {
 
     private var selectedID: UUID?
     private var isBinding = false
+    private var keywordWarningMessage: String?
     private var isPublishingEditorChange = false
     private var secureRevealPolicy = SecureSnippetRevealPolicy()
     private var secureAuthenticationTask: Task<Void, Never>?
@@ -276,6 +315,7 @@ final class SnippetEditorViewController: UIViewController {
         footerStatusLabel.accessibilityIdentifier = "editor-status"
         formStack.addArrangedSubview(footerStatusLabel)
         configureKeywordSuggestionsOverlay(in: formStack, below: keywordEditorSection)
+        configureKeywordWarningTooltip(in: formStack)
     }
 
     private func configureBody() {
@@ -416,10 +456,7 @@ final class SnippetEditorViewController: UIViewController {
         keywordPrefixLabel.textColor = .tertiaryLabel
         keywordPrefixLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        keywordStatusLabel.font = AppTheme.scaledFont(size: 11, textStyle: .caption1)
-        keywordStatusLabel.adjustsFontForContentSizeCategory = true
-        keywordStatusLabel.textColor = AppTheme.warning
-        keywordStatusLabel.numberOfLines = 0
+        configureKeywordWarningAccessory()
         suggestionsStack.axis = .horizontal
         suggestionsStack.alignment = .center
         suggestionsStack.spacing = 8
@@ -547,10 +584,83 @@ final class SnippetEditorViewController: UIViewController {
         fieldRow.axis = .horizontal
         fieldRow.alignment = .center
         fieldRow.spacing = 4
-        let stack = UIStackView(arrangedSubviews: [fieldRow, keywordStatusLabel])
+        let stack = UIStackView(arrangedSubviews: [fieldRow])
         stack.axis = .vertical
         stack.spacing = 7
         return stack
+    }
+
+    private func configureKeywordWarningAccessory() {
+        let accessory = UIView(frame: CGRect(x: 0, y: 0, width: 34, height: 44))
+        keywordWarningButton.frame = accessory.bounds
+        keywordWarningButton.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        keywordWarningButton.setImage(
+            UIImage(
+                systemName: "exclamationmark.triangle.fill",
+                withConfiguration: UIImage.SymbolConfiguration(
+                    pointSize: 15,
+                    weight: .medium)),
+            for: .normal)
+        keywordWarningButton.tintColor = AppTheme.warning.withAlphaComponent(0.62)
+        keywordWarningButton.isHidden = true
+        keywordWarningButton.accessibilityIdentifier = "keyword-expansion-warning"
+        keywordWarningButton.accessibilityHint =
+            "Tap, or hover with a pointer, to learn why this keyword cannot expand."
+        keywordWarningButton.onHoverChange = { [weak self] _ in
+            self?.updateKeywordWarningTooltipVisibility()
+        }
+        keywordWarningButton.addTarget(
+            self,
+            action: #selector(showKeywordWarning),
+            for: .touchUpInside)
+        accessory.addSubview(keywordWarningButton)
+        keywordField.rightView = accessory
+        keywordField.rightViewMode = .always
+    }
+
+    private func configureKeywordWarningTooltip(in container: UIView) {
+        keywordWarningTooltipView.translatesAutoresizingMaskIntoConstraints = false
+        keywordWarningTooltipView.layer.zPosition = 20
+        keywordWarningTooltipView.isHidden = true
+        keywordWarningTooltipView.isUserInteractionEnabled = false
+        keywordWarningTooltipView.accessibilityIdentifier = "keyword-warning-tooltip"
+        AppTheme.configureSurface(
+            keywordWarningTooltipView,
+            cornerRadius: 8,
+            backgroundColor: .secondarySystemBackground)
+
+        keywordWarningTooltipLabel.translatesAutoresizingMaskIntoConstraints = false
+        keywordWarningTooltipLabel.font = AppTheme.scaledFont(
+            size: 13,
+            textStyle: .footnote)
+        keywordWarningTooltipLabel.adjustsFontForContentSizeCategory = true
+        keywordWarningTooltipLabel.textColor = .label
+        keywordWarningTooltipLabel.numberOfLines = 0
+        keywordWarningTooltipView.addSubview(keywordWarningTooltipLabel)
+        container.addSubview(keywordWarningTooltipView)
+
+        NSLayoutConstraint.activate([
+            keywordWarningTooltipView.trailingAnchor.constraint(
+                equalTo: keywordField.trailingAnchor),
+            keywordWarningTooltipView.leadingAnchor.constraint(
+                greaterThanOrEqualTo: keywordField.leadingAnchor),
+            keywordWarningTooltipView.topAnchor.constraint(
+                equalTo: keywordField.bottomAnchor,
+                constant: 4),
+            keywordWarningTooltipLabel.leadingAnchor.constraint(
+                equalTo: keywordWarningTooltipView.leadingAnchor,
+                constant: 10),
+            keywordWarningTooltipLabel.trailingAnchor.constraint(
+                equalTo: keywordWarningTooltipView.trailingAnchor,
+                constant: -10),
+            keywordWarningTooltipLabel.topAnchor.constraint(
+                equalTo: keywordWarningTooltipView.topAnchor,
+                constant: 8),
+            keywordWarningTooltipLabel.bottomAnchor.constraint(
+                equalTo: keywordWarningTooltipView.bottomAnchor,
+                constant: -8),
+            keywordWarningTooltipLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+        ])
     }
 
     private func configureKeywordSuggestionsOverlay(in container: UIView, below anchor: UIView) {
@@ -730,7 +840,7 @@ final class SnippetEditorViewController: UIViewController {
         title = snippet.displayName
         updateNamePlaceholder(for: snippet)
         updatePreview()
-        updateKeywordStatus(for: snippet)
+        updateKeywordWarning(for: snippet)
         updateSuggestions(for: snippet)
         if environment.store.isSecure(snippet.id) {
             if secureRevealPolicy.isCaptureBlocked {
@@ -776,19 +886,19 @@ final class SnippetEditorViewController: UIViewController {
         )
     }
 
-    private func updateKeywordStatus(for snippet: Snippet) {
+    private func updateKeywordWarning(for snippet: Snippet) {
         let keyword = SnippetTagging.filterKey(for: snippet.normalizedKeyword)
         let trigger = "\\\(snippet.normalizedKeyword)"
         guard !keyword.isEmpty else {
-            keywordStatusLabel.text = "Add a keyword to make this available for expansion on Mac."
+            setKeywordWarning("Add a keyword to make this available for expansion on Mac.")
             return
         }
         guard snippet.isEnabled else {
-            keywordStatusLabel.text = "Disabled — \(trigger) won’t expand."
+            setKeywordWarning("Disabled — \(trigger) won’t expand.")
             return
         }
         guard !snippet.normalizedKeyword.contains(where: { $0.unicodeScalars.count > 1 }) else {
-            keywordStatusLabel.text = "\(trigger) needs letters, digits, or hyphens."
+            setKeywordWarning("\(trigger) needs letters, digits, or hyphens.")
             return
         }
 
@@ -797,19 +907,53 @@ final class SnippetEditorViewController: UIViewController {
         for other in candidates where other.id != snippet.id {
             switch KeywordRelation.between(keyword, SnippetTagging.filterKey(for: other.normalizedKeyword)) {
             case .duplicate:
-                keywordStatusLabel.text = "\(trigger) is already used by \(other.displayName)."
+                setKeywordWarning("\(trigger) is already used by \(other.displayName).")
                 return
             case .blockedByLonger:
-                keywordStatusLabel.text = "\(trigger) is blocked by \\(other.normalizedKeyword)."
+                setKeywordWarning("\(trigger) is blocked by \\(other.normalizedKeyword).")
                 return
             case .blocksShorter:
-                keywordStatusLabel.text = "This prevents \\(other.normalizedKeyword) from expanding."
+                setKeywordWarning("This prevents \\(other.normalizedKeyword) from expanding.")
                 return
             case .unrelated:
                 continue
             }
         }
-        keywordStatusLabel.text = ""
+        setKeywordWarning(nil)
+    }
+
+    private func setKeywordWarning(_ message: String?) {
+        keywordWarningMessage = message
+        let visibleMessage = keywordField.isFirstResponder ? nil : message
+        keywordWarningButton.isHidden = visibleMessage == nil
+        keywordWarningButton.accessibilityLabel = visibleMessage.map {
+            "Keyword warning: \($0)"
+        }
+        keywordField.accessibilityHint = visibleMessage
+        keywordWarningTooltipLabel.text = visibleMessage
+        keywordWarningTooltipView.accessibilityLabel = visibleMessage
+        updateKeywordWarningTooltipVisibility()
+    }
+
+    private func updateKeywordWarningTooltipVisibility() {
+        keywordWarningTooltipView.isHidden =
+            !keywordWarningButton.isHovering
+            || keywordWarningButton.isHidden
+            || keywordWarningMessage == nil
+            || keywordField.isFirstResponder
+    }
+
+    @objc private func showKeywordWarning() {
+        guard !keywordWarningButton.isHidden,
+              let keywordWarningMessage,
+              presentedViewController == nil else { return }
+        keywordWarningButton.setHovering(false)
+        let alert = UIAlertController(
+            title: "Keyword Warning",
+            message: keywordWarningMessage,
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     private func updateSuggestions(for snippet: Snippet) {

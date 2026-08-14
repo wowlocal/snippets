@@ -1000,15 +1000,52 @@ extension ViewController {
         keywordPrefixLabel.setContentHuggingPriority(.required, for: .horizontal)
         keywordPrefixLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        keywordField.cell = KeywordTextFieldCell(textCell: "")
+        // Replacing NSTextField's factory-created cell also replaces the
+        // factory defaults. NSTextFieldCell(textCell:) is display-only until
+        // these are restored, which made the keyword field stop accepting
+        // focus and edits.
+        keywordField.isEditable = true
+        keywordField.isSelectable = true
+        keywordField.isEnabled = true
+        keywordField.isBezeled = true
+        keywordField.drawsBackground = true
         keywordField.delegate = self
         keywordField.placeholderString = "sig"
         keywordField.controlSize = .large
+        keywordField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        keywordField.setContentCompressionResistancePriority(
+            .fittingSizeCompression,
+            for: .horizontal)
 
         // A keyword that cannot expand — empty, duplicated, or in a prefix
-        // collision — says so through the field's own tooltip rather than a line
-        // of prose under it. The sentence was permanent furniture for a state
-        // most snippets are never in. The compact slot below is reserved for
-        // keyword references; it does not repeat that status prose.
+        // collision — gets a compact warning inside the field. Its tooltip carries
+        // the explanation without making a sentence permanent furniture under
+        // every healthy field.
+        keywordWarningImageView.image = NSImage(
+            systemSymbolName: "exclamationmark.triangle.fill",
+            accessibilityDescription: "Keyword warning")
+        keywordWarningImageView.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 13,
+            weight: .medium)
+        keywordWarningImageView.contentTintColor = NSColor.systemOrange.withAlphaComponent(0.62)
+        keywordWarningImageView.imageScaling = .scaleProportionallyDown
+        keywordWarningImageView.alphaValue = 0
+        keywordWarningImageView.translatesAutoresizingMaskIntoConstraints = false
+        keywordWarningImageView.setAccessibilityIdentifier("keyword-expansion-warning")
+        keywordWarningImageView.setAccessibilityHidden(true)
+        keywordWarningImageView.onHoverChange = { [weak self] _ in
+            self?.updateKeywordWarningTooltipVisibility()
+        }
+        keywordField.addSubview(keywordWarningImageView)
+        NSLayoutConstraint.activate([
+            keywordWarningImageView.trailingAnchor.constraint(
+                equalTo: keywordField.trailingAnchor,
+                constant: -9),
+            keywordWarningImageView.centerYAnchor.constraint(equalTo: keywordField.centerYAnchor),
+            keywordWarningImageView.widthAnchor.constraint(equalToConstant: 15),
+            keywordWarningImageView.heightAnchor.constraint(equalToConstant: 15),
+        ])
 
         // Existing keywords and generated candidates live in a transient overlay
         // below the field. It does not participate in the form stack, so showing
@@ -1057,10 +1094,28 @@ extension ViewController {
 
         previewSectionStack.isHidden = true
 
-        let keywordRow = NSStackView(views: [keywordPrefixLabel, keywordField])
-        keywordRow.orientation = .horizontal
-        keywordRow.spacing = 2
-        keywordRow.alignment = .firstBaseline
+        // A plain constrained row is intentional here. NSStackView sizes an
+        // empty NSTextField from its cell's intrinsic width; once the warning
+        // became an in-field overlay that let the field collapse around the
+        // symbol. Pinning both edges makes the field own all remaining width,
+        // with or without text.
+        let keywordRow = NSView()
+        keywordRow.translatesAutoresizingMaskIntoConstraints = false
+        keywordPrefixLabel.translatesAutoresizingMaskIntoConstraints = false
+        keywordField.translatesAutoresizingMaskIntoConstraints = false
+        keywordRow.addSubview(keywordPrefixLabel)
+        keywordRow.addSubview(keywordField)
+        NSLayoutConstraint.activate([
+            keywordPrefixLabel.leadingAnchor.constraint(equalTo: keywordRow.leadingAnchor),
+            keywordPrefixLabel.firstBaselineAnchor.constraint(
+                equalTo: keywordField.firstBaselineAnchor),
+            keywordField.leadingAnchor.constraint(
+                equalTo: keywordPrefixLabel.trailingAnchor,
+                constant: 2),
+            keywordField.trailingAnchor.constraint(equalTo: keywordRow.trailingAnchor),
+            keywordField.topAnchor.constraint(equalTo: keywordRow.topAnchor),
+            keywordField.bottomAnchor.constraint(equalTo: keywordRow.bottomAnchor),
+        ])
 
         // Content leads: it is the only field a snippet cannot do without, and
         // the keyword follows because it is the only one that makes it fire.
@@ -1133,6 +1188,25 @@ extension ViewController {
         keywordSuggestionsOverlay.addSubview(editorSuggestedKeywordsFlow)
         stack.addSubview(keywordSuggestionsOverlay, positioned: .above, relativeTo: nil)
 
+        keywordWarningTooltipView.translatesAutoresizingMaskIntoConstraints = false
+        keywordWarningTooltipView.material = .popover
+        keywordWarningTooltipView.blendingMode = .withinWindow
+        keywordWarningTooltipView.state = .active
+        keywordWarningTooltipView.wantsLayer = true
+        keywordWarningTooltipView.layer?.cornerRadius = 7
+        keywordWarningTooltipView.layer?.masksToBounds = true
+        keywordWarningTooltipView.layer?.borderWidth = 0.5
+        keywordWarningTooltipView.layer?.borderColor = NSColor.separatorColor.cgColor
+        keywordWarningTooltipView.isHidden = true
+
+        keywordWarningTooltipLabel.translatesAutoresizingMaskIntoConstraints = false
+        keywordWarningTooltipLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        keywordWarningTooltipLabel.textColor = .labelColor
+        keywordWarningTooltipLabel.maximumNumberOfLines = 0
+        keywordWarningTooltipLabel.preferredMaxLayoutWidth = 280
+        keywordWarningTooltipView.addSubview(keywordWarningTooltipLabel)
+        stack.addSubview(keywordWarningTooltipView, positioned: .above, relativeTo: nil)
+
         NSLayoutConstraint.activate([
             keywordSuggestionsOverlay.leadingAnchor.constraint(equalTo: keywordField.leadingAnchor),
             keywordSuggestionsOverlay.trailingAnchor.constraint(equalTo: keywordField.trailingAnchor),
@@ -1145,6 +1219,27 @@ extension ViewController {
                 equalTo: keywordSuggestionsOverlay.topAnchor, constant: 6),
             editorSuggestedKeywordsFlow.bottomAnchor.constraint(
                 equalTo: keywordSuggestionsOverlay.bottomAnchor, constant: -6),
+
+            keywordWarningTooltipView.trailingAnchor.constraint(
+                equalTo: keywordField.trailingAnchor),
+            keywordWarningTooltipView.leadingAnchor.constraint(
+                greaterThanOrEqualTo: keywordField.leadingAnchor),
+            keywordWarningTooltipView.topAnchor.constraint(
+                equalTo: keywordField.bottomAnchor,
+                constant: 4),
+            keywordWarningTooltipLabel.leadingAnchor.constraint(
+                equalTo: keywordWarningTooltipView.leadingAnchor,
+                constant: 9),
+            keywordWarningTooltipLabel.trailingAnchor.constraint(
+                equalTo: keywordWarningTooltipView.trailingAnchor,
+                constant: -9),
+            keywordWarningTooltipLabel.topAnchor.constraint(
+                equalTo: keywordWarningTooltipView.topAnchor,
+                constant: 7),
+            keywordWarningTooltipLabel.bottomAnchor.constraint(
+                equalTo: keywordWarningTooltipView.bottomAnchor,
+                constant: -7),
+            keywordWarningTooltipLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280),
         ])
 
         previewContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true

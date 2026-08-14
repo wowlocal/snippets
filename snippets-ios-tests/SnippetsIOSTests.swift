@@ -369,6 +369,80 @@ final class SnippetsIOSTests: XCTestCase {
         }
     }
 
+    func testKeywordConflictWarningAppearsInFieldOnlyAfterEditingEnds() throws {
+        UIView.setAnimationsEnabled(false)
+        addTeardownBlock { UIView.setAnimationsEnabled(true) }
+
+        let environment = AppEnvironment()
+        var existing = environment.store.addSnippet(name: "Existing", content: "Existing")
+        existing.keyword = "gr.dynamics.ui"
+        environment.store.update(existing)
+        var conflict = environment.store.addSnippet(name: "Conflict", content: "Conflict")
+        conflict.keyword = "gr.dynamics.ui"
+        environment.store.update(conflict)
+
+        let tablet = SnippetEditorViewController(environment: environment)
+        let tabletWindow = testWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        tabletWindow.rootViewController = tablet
+        tabletWindow.makeKeyAndVisible()
+        tablet.bind(to: conflict.id)
+        tablet.view.layoutIfNeeded()
+        addTeardownBlock {
+            tabletWindow.isHidden = true
+            tabletWindow.rootViewController = nil
+        }
+
+        let tabletKeyword = try XCTUnwrap(
+            tablet.view.descendant(withAccessibilityIdentifier: "snippet-keyword")
+                as? UITextField)
+        let tabletWarning = try XCTUnwrap(
+            tabletKeyword.rightView?.descendant(
+                withAccessibilityIdentifier: "keyword-expansion-warning")
+                as? UIButton)
+        let tabletTooltip = try XCTUnwrap(
+            tablet.view.descendant(withAccessibilityIdentifier: "keyword-warning-tooltip"))
+        try assertBlurOnlyKeywordWarning(
+            field: tabletKeyword,
+            warning: tabletWarning,
+            presenter: tablet,
+            customHoverTooltip: tabletTooltip,
+            expectsTapAlert: true,
+            expectedReasonFragment: "already used")
+
+        let phone = PhoneSnippetEditorViewController(
+            environment: environment,
+            snippetID: conflict.id)
+        let phoneNavigation = UINavigationController(rootViewController: phone)
+        let phoneWindow = testWindow(frame: CGRect(x: 0, y: 0, width: 430, height: 932))
+        phoneWindow.rootViewController = phoneNavigation
+        phoneWindow.makeKeyAndVisible()
+        phone.view.layoutIfNeeded()
+        addTeardownBlock {
+            phoneWindow.isHidden = true
+            phoneWindow.rootViewController = nil
+        }
+
+        let mode = try XCTUnwrap(
+            phone.view.descendant(withAccessibilityIdentifier: "phone-editor-mode")
+                as? UISegmentedControl)
+        mode.selectedSegmentIndex = 1
+        mode.sendActions(for: .valueChanged)
+        let phoneKeyword = try XCTUnwrap(
+            phone.view.descendant(withAccessibilityIdentifier: "snippet-keyword")
+                as? UITextField)
+        let phoneWarning = try XCTUnwrap(
+            phoneKeyword.rightView?.descendant(
+                withAccessibilityIdentifier: "keyword-expansion-warning")
+                as? UIButton)
+        try assertBlurOnlyKeywordWarning(
+            field: phoneKeyword,
+            warning: phoneWarning,
+            presenter: phone,
+            customHoverTooltip: nil,
+            expectsTapAlert: true,
+            expectedReasonFragment: "already used")
+    }
+
     func testSecureBodyNeverEntersOrdinaryPreviewLabels() throws {
         let environment = AppEnvironment()
         let secureID = UUID()
@@ -1491,6 +1565,68 @@ final class SnippetsIOSTests: XCTestCase {
         return condition()
     }
 
+    private func assertBlurOnlyKeywordWarning(
+        field: UITextField,
+        warning: UIButton,
+        presenter: UIViewController,
+        customHoverTooltip: UIView?,
+        expectsTapAlert: Bool,
+        expectedReasonFragment: String
+    ) throws {
+        XCTAssertNotNil(warning.image(for: .normal))
+        XCTAssertNil(warning.title(for: .normal))
+        XCTAssertFalse(warning.isHidden)
+        XCTAssertTrue(warning.accessibilityLabel?.contains(expectedReasonFragment) == true)
+        if let customHoverTooltip {
+            let hoverButton = try XCTUnwrap(warning as? ImmediateHoverButton)
+            XCTAssertNil(warning.keywordWarningToolTip)
+            XCTAssertTrue(customHoverTooltip.isHidden)
+            hoverButton.setHovering(true)
+            XCTAssertFalse(customHoverTooltip.isHidden)
+            XCTAssertTrue(
+                customHoverTooltip.accessibilityLabel?.contains(expectedReasonFragment) == true)
+            hoverButton.setHovering(false)
+            XCTAssertTrue(customHoverTooltip.isHidden)
+        } else {
+            XCTAssertTrue(
+                warning.keywordWarningToolTip?.contains(expectedReasonFragment) == true)
+        }
+        XCTAssertTrue(field.accessibilityHint?.contains(expectedReasonFragment) == true)
+
+        _ = field.becomeFirstResponder()
+        XCTAssertTrue(waitUntil { warning.isHidden })
+        XCTAssertNil(warning.keywordWarningToolTip)
+        if let customHoverTooltip {
+            XCTAssertTrue(customHoverTooltip.isHidden)
+        }
+        XCTAssertNil(field.accessibilityHint)
+
+        _ = field.resignFirstResponder()
+        XCTAssertTrue(waitUntil { !warning.isHidden })
+        XCTAssertTrue(warning.accessibilityLabel?.contains(expectedReasonFragment) == true)
+        if let customHoverTooltip {
+            let hoverButton = try XCTUnwrap(warning as? ImmediateHoverButton)
+            hoverButton.setHovering(true)
+            XCTAssertFalse(customHoverTooltip.isHidden)
+            hoverButton.setHovering(false)
+        } else {
+            XCTAssertTrue(
+                warning.keywordWarningToolTip?.contains(expectedReasonFragment) == true)
+        }
+        XCTAssertTrue(field.accessibilityHint?.contains(expectedReasonFragment) == true)
+
+        warning.sendActions(for: .touchUpInside)
+        if expectsTapAlert {
+            let alert = try XCTUnwrap(presenter.presentedViewController as? UIAlertController)
+            XCTAssertEqual(alert.preferredStyle, .alert)
+            XCTAssertTrue(alert.message?.contains(expectedReasonFragment) == true)
+            XCTAssertEqual(alert.actions.map(\.title), ["OK"])
+            presenter.dismiss(animated: false)
+        } else {
+            XCTAssertNil(presenter.presentedViewController)
+        }
+    }
+
     private func loadPendingSecurePlaintext(
         _ plaintext: String,
         into textView: SecureSnippetTextView
@@ -1544,6 +1680,13 @@ private final class TestSnippetPasteboard: SnippetPasteboard {
 
 @MainActor
 private extension UIView {
+    var keywordWarningToolTip: String? {
+        interactions
+            .compactMap { $0 as? UIToolTipInteraction }
+            .first?
+            .defaultToolTip
+    }
+
     func firstDescendant<T: UIView>(ofType type: T.Type) -> T? {
         if let match = self as? T { return match }
         for subview in subviews {

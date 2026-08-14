@@ -689,23 +689,9 @@ extension ViewController {
         return sanitizedKeyword
     }
 
-    /// The one line under Keyword. It never hides — the slot keeps its height so
-    /// the form cannot reflow while someone is typing — and it speaks only when
-    /// something is wrong or missing, because the keyword is the only field that
-    /// decides whether a snippet fires and nothing else on screen reports it.
-    ///
-    /// Silence therefore means "this works", and means only that. It used to be
-    /// ambiguous, because a snippet with no keyword at all was silent too; that
-    /// case now says so, which is what earns the working case its silence back.
-    /// "Type \sig in any app." was the app's whole mechanic restated on every
-    /// correctly configured snippet forever.
-    ///
-    /// Every sentence here is written to survive being cut off. The label is one
-    /// line pinned to the editor's width, which is 182pt on a default first-run
-    /// window — about five words — and `displayName` alone can be 51 characters,
-    /// so no wording fits at every width. What each sentence can do is put the
-    /// verdict first and the name of the other snippet last, so the ellipsis eats
-    /// the detail rather than the meaning; the tooltip carries the whole line.
+    /// Computes the explanation carried by the compact warning in the Keyword
+    /// row. Silence means "this works". The warning is suppressed while the
+    /// field editor is active, then restored after focus leaves the field.
     func updateKeywordStatus(for snippet: Snippet?) {
         guard let snippet else {
             setKeywordStatus("")
@@ -768,9 +754,7 @@ extension ViewController {
             setKeywordStatus("\(trigger) is taken, neither expands: \(duplicate.displayName)")
         } else if let blockedBy {
             // This snippet's own failure outranks the damage it does elsewhere:
-            // the line sits under this snippet's keyword, and naming only the
-            // other victim would read as "this one is fine". The line recomputes
-            // on every keystroke, so `blocks` surfaces the moment this is fixed.
+            // naming only the other victim would read as "this one is fine".
             //
             // The longer keyword trails the name because it is the one part a
             // user can reconstruct — something starting with this keyword is in
@@ -781,18 +765,30 @@ extension ViewController {
         } else if let blocks {
             setKeywordStatus("This stops \\\(blocks.normalizedKeyword) expanding: \(blocks.displayName)")
         } else {
-            // Nothing to report. The slot keeps its 15pt height, so this is a
-            // blank line and not a collapsed row.
             setKeywordStatus("")
         }
     }
 
-    /// The verdict rides on the keyword field itself rather than a line of prose
-    /// beneath it. Every sentence here describes a state most snippets are never
-    /// in, and a permanent row for them left a gap under every keyword that
-    /// already worked.
+    /// The verdict rides inside the keyword field rather than in a line of prose
+    /// beneath it. Hovering the symbol reveals the explanation; it has no click
+    /// action on macOS.
     private func setKeywordStatus(_ text: String) {
-        keywordField.toolTip = text.isEmpty ? nil : text
+        let message = text.isEmpty ? nil : text
+        let visibleText = keywordField.currentEditor() == nil ? message : nil
+        keywordWarningImageView.alphaValue = visibleText == nil ? 0 : 1
+        keywordWarningImageView.setAccessibilityHidden(visibleText == nil)
+        keywordWarningImageView.setAccessibilityLabel(
+            visibleText.map { "Keyword warning: \($0)" })
+        keywordWarningImageView.setAccessibilityHelp(visibleText)
+        keywordWarningTooltipLabel.stringValue = visibleText ?? ""
+        updateKeywordWarningTooltipVisibility()
+    }
+
+    func updateKeywordWarningTooltipVisibility() {
+        keywordWarningTooltipView.isHidden =
+            !keywordWarningImageView.isHovering
+            || keywordWarningImageView.alphaValue == 0
+            || keywordWarningTooltipLabel.stringValue.isEmpty
     }
 
     /// The row under Keyword has two deliberately different modes. An empty

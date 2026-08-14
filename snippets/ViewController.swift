@@ -67,6 +67,109 @@ final class SecureCopyWarningLabel: NSTextField {
     }
 }
 
+/// Leaves room for the warning symbol overlaid at the trailing edge of the
+/// keyword field. The accessory itself is a subview so it stays inside the
+/// bezel and never changes the form's column widths.
+final class KeywordTextFieldCell: NSTextFieldCell {
+    private let trailingAccessoryInset: CGFloat = 28
+
+    private func textRect(_ rect: NSRect) -> NSRect {
+        var textRect = rect
+        textRect.size.width = max(0, textRect.width - trailingAccessoryInset)
+        return textRect
+    }
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        textRect(super.drawingRect(forBounds: rect))
+    }
+
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        textRect(super.titleRect(forBounds: rect))
+    }
+
+    override func edit(
+        withFrame rect: NSRect,
+        in controlView: NSView,
+        editor textObj: NSText,
+        delegate: Any?,
+        event: NSEvent?
+    ) {
+        super.edit(
+            withFrame: textRect(rect),
+            in: controlView,
+            editor: textObj,
+            delegate: delegate,
+            event: event)
+    }
+
+    override func select(
+        withFrame rect: NSRect,
+        in controlView: NSView,
+        editor textObj: NSText,
+        delegate: Any?,
+        start selStart: Int,
+        length selLength: Int
+    ) {
+        super.select(
+            withFrame: textRect(rect),
+            in: controlView,
+            editor: textObj,
+            delegate: delegate,
+            start: selStart,
+            length: selLength)
+    }
+}
+
+/// AppKit's built-in tooltips deliberately wait before appearing. Keyword
+/// conflicts are editing feedback, so this view reports hover immediately and
+/// lets the controller show its own compact bubble without a timer.
+final class KeywordWarningImageView: NSImageView {
+    var onHoverChange: ((Bool) -> Void)?
+    private var hoverTrackingArea: NSTrackingArea?
+    private(set) var isHovering = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        setHovering(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        setHovering(false)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            setHovering(false)
+        }
+    }
+
+    private func setHovering(_ hovering: Bool) {
+        guard hovering != isHovering else { return }
+        isHovering = hovering
+        onHoverChange?(hovering)
+    }
+}
+
+/// A tooltip is presentation only: it must never consume a click intended for
+/// the field or the form underneath it.
+final class KeywordWarningTooltipView: NSVisualEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 @MainActor
 final class ViewController: NSViewController {
     lazy var store: SnippetStore = {
@@ -218,6 +321,9 @@ final class ViewController: NSViewController {
     let secureDemoteStrip = NSStackView()
     let secureDemoteLabel = NSTextField(wrappingLabelWithString: "")
     let keywordField = NSTextField(string: "")
+    let keywordWarningImageView = KeywordWarningImageView()
+    let keywordWarningTooltipView = KeywordWarningTooltipView()
+    let keywordWarningTooltipLabel = NSTextField(wrappingLabelWithString: "")
     let tagsField = NSTokenField(string: "")
     let editorSuggestedTagsFlow = TagFlowView()
     let editorSuggestedKeywordsFlow = TagFlowView()
