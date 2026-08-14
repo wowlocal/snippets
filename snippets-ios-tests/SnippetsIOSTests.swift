@@ -837,6 +837,96 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(hosted.list.ownsFirstResponder)
     }
 
+    func testTabCompletesKeywordOnePartBeforeMovingFocus() throws {
+        let environment = AppEnvironment()
+        var existing = environment.store.addSnippet(name: "Frontend docs", content: "Reference")
+        existing.keyword = "doc.frontend"
+        environment.store.update(existing)
+        var editing = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        editing.keyword = "do"
+        environment.store.update(editing)
+
+        let hosted = hostMainSplit(environment: environment, selecting: editing.id)
+        let keyword = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-keyword"
+        ) as? UITextField)
+        let name = try XCTUnwrap(hosted.editor.view.descendant(
+            withAccessibilityIdentifier: "snippet-name"
+        ) as? UITextField)
+
+        XCTAssertTrue(keyword.becomeFirstResponder())
+        hosted.controller.nextFieldCommand()
+        XCTAssertEqual(keyword.text, "doc.")
+        XCTAssertTrue(keyword.isFirstResponder)
+        XCTAssertEqual(environment.store.snippet(id: editing.id)?.normalizedKeyword, "doc.")
+
+        hosted.controller.nextFieldCommand()
+        XCTAssertEqual(keyword.text, "doc.frontend")
+        XCTAssertTrue(keyword.isFirstResponder)
+
+        hosted.controller.nextFieldCommand()
+        XCTAssertTrue(name.isFirstResponder, "Tab navigates normally once completion is exhausted")
+    }
+
+    func testPhoneSpaceAndExternalTabCompleteTheNextKeywordPart() throws {
+        UIView.setAnimationsEnabled(false)
+        addTeardownBlock { UIView.setAnimationsEnabled(true) }
+        let environment = AppEnvironment()
+        var existing = environment.store.addSnippet(name: "Frontend docs", content: "Reference")
+        existing.keyword = "doc.frontend"
+        environment.store.update(existing)
+        var editing = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        editing.keyword = "do"
+        environment.store.update(editing)
+
+        let phone = PhoneSnippetEditorViewController(environment: environment, snippetID: editing.id)
+        let navigation = UINavigationController(rootViewController: phone)
+        let window = testWindow(frame: CGRect(x: 0, y: 0, width: 430, height: 932))
+        window.rootViewController = navigation
+        window.makeKeyAndVisible()
+        phone.loadViewIfNeeded()
+        phone.view.layoutIfNeeded()
+        addTeardownBlock {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let mode = try XCTUnwrap(phone.view.descendant(
+            withAccessibilityIdentifier: "phone-editor-mode"
+        ) as? UISegmentedControl)
+        mode.selectedSegmentIndex = 1
+        mode.sendActions(for: .valueChanged)
+        phone.view.layoutIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        let keyword = try XCTUnwrap(phone.view.descendant(
+            withAccessibilityIdentifier: "snippet-keyword"
+        ) as? UITextField)
+        XCTAssertTrue(keyword.becomeFirstResponder())
+
+        let spaceRange = NSRange(location: (keyword.text ?? "").utf16.count, length: 0)
+        XCTAssertFalse(phone.textField(
+            keyword,
+            shouldChangeCharactersIn: spaceRange,
+            replacementString: " "
+        ))
+        XCTAssertEqual(keyword.text, "doc.", "the software keyboard's Space key acts like Tab")
+        XCTAssertEqual(environment.store.snippet(id: editing.id)?.normalizedKeyword, "doc.")
+
+        keyword.text = "do"
+        if let end = keyword.position(from: keyword.beginningOfDocument, offset: 2) {
+            keyword.selectedTextRange = keyword.textRange(from: end, to: end)
+        }
+
+        let command = try XCTUnwrap(phone.keyCommands?.first { $0.title == "Complete Keyword" })
+        let action = try XCTUnwrap(command.action)
+        XCTAssertTrue(phone.canPerformAction(action, withSender: command))
+        XCTAssertTrue(keyword.target(forAction: action, withSender: command) as AnyObject? === phone)
+        XCTAssertTrue(UIApplication.shared.sendAction(action, to: phone, from: command, for: nil))
+        XCTAssertEqual(keyword.text, "doc.")
+        XCTAssertTrue(keyword.isFirstResponder)
+    }
+
     func testEscapeLeavesEveryEditorFieldForSnippetList() {
         let environment = AppEnvironment()
         let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")

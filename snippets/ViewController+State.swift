@@ -811,7 +811,7 @@ extension ViewController {
         if showsExisting {
             let label = TagChipView(fontSize: 11)
             label.configure(text: "Existing", color: .secondaryLabelColor, style: .plain)
-            label.toolTip = "Keywords already in this library"
+            label.toolTip = "Keywords already in this library. Tab completes the next unambiguous part."
             label.setAccessibility(label: "Existing keywords", isButton: false)
             chips.append(label)
         }
@@ -819,7 +819,7 @@ extension ViewController {
             let chip = TagChipView(fontSize: 11)
             if showsExisting {
                 chip.configure(text: "\\\(keyword)", color: .secondaryLabelColor, style: .muted)
-                chip.toolTip = "\\\(keyword) already exists in this library"
+                chip.toolTip = "\\\(keyword) already exists. Tab completes the next unambiguous part."
                 chip.setAccessibility(label: "Existing keyword \(keyword)", isButton: false)
             } else {
                 chip.configure(text: "\\\(keyword)", color: .controlAccentColor, style: .tinted)
@@ -874,16 +874,29 @@ extension ViewController {
         )
     }
 
+    func keywordTabCompletion(for query: String) -> String? {
+        guard let snippet = editingSnippet, keywordField.isEnabled else { return nil }
+        return KeywordSuggestions.tabCompletion(
+            query: query,
+            among: store.snippetsSortedForDisplay()
+                .filter { $0.id != snippet.id }
+                .map(\.normalizedKeyword)
+        )
+    }
+
     private func applySuggestedKeyword(_ keyword: String) {
+        applyKeywordEditorValue(keyword)
+    }
+
+    func applyKeywordEditorValue(_ keyword: String) {
         guard editingSnippet != nil, keywordField.isEnabled else { return }
 
-        // Write through the field rather than the store: a chip is a shortcut
-        // for typing, so it has to land where typing lands, or the status line
-        // and the stored snippet stop agreeing about what the keyword is.
+        // Write through the field rather than the store: a chip or Tab completion
+        // is a shortcut for typing, so it has to land where typing lands, or the
+        // status line and the stored snippet stop agreeing about the keyword.
         // The cell is written first because `stringValue` is what the commit
-        // below reads, and a field editor filled in on its own posts nothing
-        // back — then the editor is matched to it, since the chip never becomes
-        // first responder and the caret is still sitting in the field.
+        // below reads, and changing the cell does not rewrite an already-active
+        // field editor — then the editor and its caret are matched to the cell.
         keywordField.stringValue = keyword
         if let editor = keywordField.currentEditor() {
             if editor.string != keyword {

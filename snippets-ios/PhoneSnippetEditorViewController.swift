@@ -119,6 +119,48 @@ final class PhoneSnippetEditorViewController: UIViewController {
         _ = environment.store.discardBlankDraft(id: snippetID)
     }
 
+    override var keyCommands: [UIKeyCommand]? {
+        let command = UIKeyCommand(
+            title: "Complete Keyword",
+            action: #selector(completeKeywordCommand),
+            input: "\t"
+        )
+        command.wantsPriorityOverSystemBehavior = true
+        return (super.keyCommands ?? []) + [command]
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(completeKeywordCommand) {
+            return isViewLoaded && keywordField.isFirstResponder && keywordCompletionAtEnd() != nil
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    @objc private func completeKeywordCommand() {
+        guard let completion = keywordCompletionAtEnd() else { return }
+        applyKeywordCompletion(completion)
+    }
+
+    private func applyKeywordCompletion(_ completion: String) {
+        keywordField.text = completion
+        if let end = keywordField.position(from: keywordField.beginningOfDocument, offset: completion.utf16.count) {
+            keywordField.selectedTextRange = keywordField.textRange(from: end, to: end)
+        }
+        editorChanged()
+    }
+
+    private func keywordCompletionAtEnd() -> String? {
+        guard let selection = keywordField.selectedTextRange,
+              selection.isEmpty,
+              selection.end == keywordField.endOfDocument else { return nil }
+        return KeywordSuggestions.tabCompletion(
+            query: keywordField.text ?? "",
+            among: environment.store.snippetsSortedForDisplay()
+                .filter { $0.id != snippetID }
+                .map(\.normalizedKeyword)
+        )
+    }
+
     func refreshFromStore(change: SnippetStore.Change) {
         guard isViewLoaded else { return }
         guard change.affects(snippetID) else { return }
@@ -277,6 +319,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         keywordField.autocapitalizationType = .none
         keywordField.autocorrectionType = .no
         keywordField.spellCheckingType = .no
+        keywordField.delegate = self
         keywordField.addTarget(self, action: #selector(fieldChanged), for: .editingChanged)
         keywordField.addTarget(self, action: #selector(editingBegan), for: .editingDidBegin)
         keywordField.addTarget(self, action: #selector(editingEnded), for: .editingDidEnd)
@@ -905,6 +948,7 @@ final class PhoneSnippetEditorViewController: UIViewController {
         references.lineBreakMode = .byTruncatingTail
         references.accessibilityLabel = "Existing keywords: " + visible.joined(separator: ", ")
             + (hiddenCount > 0 ? ", and \(hiddenCount) more" : "")
+        references.accessibilityHint = "Space or Tab completes the next unambiguous keyword part."
         suggestionsStack.addArrangedSubview(references)
         keywordSuggestionsOverlay.isUserInteractionEnabled = false
         keywordSuggestionsOverlay.isHidden = !keywordField.isFirstResponder
@@ -1641,6 +1685,28 @@ final class PhoneSnippetEditorViewController: UIViewController {
             self.scrollView.contentInset.bottom = bottomInset
             self.scrollView.verticalScrollIndicatorInsets.bottom = bottomInset
         }
+    }
+}
+
+extension PhoneSnippetEditorViewController: UITextFieldDelegate {
+    func textField(
+        _ textField: UITextField,
+        shouldChangeCharactersIn range: NSRange,
+        replacementString string: String
+    ) -> Bool {
+        guard textField === keywordField,
+              string == " ",
+              textField.markedTextRange == nil else { return true }
+
+        // The phone keyboard has no Tab key, and whitespace is not representable
+        // in a stored keyword anyway. Treat its Space key as the touch equivalent
+        // of Tab: complete only a deterministic next part and never insert a space.
+        if range.length == 0,
+           range.location == (textField.text ?? "").utf16.count,
+           let completion = keywordCompletionAtEnd() {
+            applyKeywordCompletion(completion)
+        }
+        return false
     }
 }
 

@@ -213,6 +213,7 @@ final class SnippetEditorViewController: UIViewController {
             return forward ? keywordField.becomeFirstResponder() : false
         }
         if keywordField.isFirstResponder {
+            if forward, completeKeywordAtEnd() { return true }
             return forward ? nameField.becomeFirstResponder() : focusBody()
         }
         if nameField.isFirstResponder {
@@ -222,6 +223,26 @@ final class SnippetEditorViewController: UIViewController {
             return forward ? focusFirstEditorField() : nameField.becomeFirstResponder()
         }
         return false
+    }
+
+    private func completeKeywordAtEnd() -> Bool {
+        guard let id = selectedID,
+              let selection = keywordField.selectedTextRange,
+              selection.isEmpty,
+              selection.end == keywordField.endOfDocument,
+              let completion = KeywordSuggestions.tabCompletion(
+                query: keywordField.text ?? "",
+                among: environment.store.snippetsSortedForDisplay()
+                    .filter { $0.id != id }
+                    .map(\.normalizedKeyword)
+              ) else { return false }
+
+        keywordField.text = completion
+        if let end = keywordField.position(from: keywordField.beginningOfDocument, offset: completion.utf16.count) {
+            keywordField.selectedTextRange = keywordField.textRange(from: end, to: end)
+        }
+        editorChanged()
+        return true
     }
 
     func prepareForModalPresentation() {
@@ -1024,6 +1045,7 @@ final class SnippetEditorViewController: UIViewController {
         references.lineBreakMode = .byTruncatingTail
         references.accessibilityLabel = "Existing keywords: " + visible.joined(separator: ", ")
             + (hiddenCount > 0 ? ", and \(hiddenCount) more" : "")
+        references.accessibilityHint = "Tab completes the next unambiguous keyword part."
         suggestionsStack.addArrangedSubview(references)
         keywordSuggestionsOverlay.isUserInteractionEnabled = false
         keywordSuggestionsOverlay.isHidden = !keywordField.isFirstResponder

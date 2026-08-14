@@ -144,10 +144,25 @@ extension ViewController: NSTextFieldDelegate, NSTextViewDelegate, NSSearchField
     /// subviews, which kept dropping the multi-line snippet view out of the
     /// loop, so the hops are wired by hand instead.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard let forward = tabDirection(for: commandSelector),
-              let next = editorNeighbor(of: control, forward: forward) else { return false }
+        guard let forward = tabDirection(for: commandSelector) else { return false }
+
+        if forward, control === keywordField, completeKeyword(atEndOf: textView) {
+            return true
+        }
+
+        guard let next = editorNeighbor(of: control, forward: forward) else { return false }
 
         moveFocus(to: next)
+        return true
+    }
+
+    private func completeKeyword(atEndOf editor: NSTextView) -> Bool {
+        let selection = editor.selectedRange
+        guard selection.length == 0,
+              selection.location == (editor.string as NSString).length,
+              let completion = keywordTabCompletion(for: editor.string) else { return false }
+
+        applyKeywordEditorValue(completion)
         return true
     }
 

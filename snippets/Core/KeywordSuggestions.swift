@@ -70,6 +70,49 @@ nonisolated enum KeywordSuggestions {
         }.map(\.keyword)
     }
 
+    /// The deterministic part of a shell-style Tab completion against existing
+    /// library keywords.
+    ///
+    /// This deliberately has stricter semantics than `existingMatches`: the
+    /// reference row may find a component in the middle of a keyword or in a
+    /// different order, but completion must only extend a prefix the person has
+    /// actually typed. It never picks one candidate over another. Instead it
+    /// inserts their common continuation, capped at the next dot or hyphen (the
+    /// latter is how `Snippet.sanitizedKeyword` stores a typed space). A later
+    /// Tab can therefore advance one human-readable part at a time.
+    ///
+    /// Returning `nil` means there is no safe progress, so the platform keeps
+    /// Tab's ordinary focus-navigation behavior.
+    static func tabCompletion(query rawQuery: String, among rawKeywords: [String]) -> String? {
+        let query = Snippet.sanitizedKeyword(rawQuery)
+        let foldedQuery = foldedKeyword(query)
+        guard !foldedQuery.isEmpty else { return nil }
+
+        var seen = Set<String>()
+        let targets = rawKeywords.compactMap { rawKeyword -> String? in
+            let candidate = Snippet.sanitizedKeyword(rawKeyword)
+            let foldedCandidate = foldedKeyword(candidate)
+            guard !foldedCandidate.isEmpty,
+                  seen.insert(foldedCandidate).inserted,
+                  let suffixStart = suffixStart(in: candidate, matching: foldedQuery),
+                  suffixStart < candidate.endIndex else { return nil }
+
+            let suffix = candidate[suffixStart...]
+            let boundary = suffix.firstIndex(where: isCompletionBoundary)
+            let end = boundary.map { candidate.index(after: $0) } ?? candidate.endIndex
+            return query + candidate[suffixStart..<end]
+        }
+        guard let first = targets.first else { return nil }
+
+        let commonFoldedPrefix = targets.dropFirst().reduce(foldedKeyword(first)) {
+            sharedFoldedPrefix($0, foldedKeyword($1))
+        }
+        guard commonFoldedPrefix.count > foldedQuery.count,
+              let result = prefix(in: first, foldingTo: commonFoldedPrefix),
+              foldedKeyword(result) != foldedQuery else { return nil }
+        return result
+    }
+
     /// Ordered best-first, deduplicated, and already folded the way
     /// `KeywordRelation` needs. Nothing here is measured against the library —
     /// the caller does that, because only it knows what is enabled.
@@ -125,6 +168,40 @@ nonisolated enum KeywordSuggestions {
 
     private static func foldedKeyword(_ keyword: String) -> String {
         SnippetTagging.filterKey(for: Snippet.sanitizedKeyword(keyword))
+    }
+
+    /// Finds the source-string boundary corresponding to a folded query. Walking
+    /// real Character boundaries avoids assuming that case/diacritic folding
+    /// preserves either UTF-8 or UTF-16 length.
+    private static func suffixStart(in candidate: String, matching foldedQuery: String) -> String.Index? {
+        var end = candidate.startIndex
+        while end < candidate.endIndex {
+            end = candidate.index(after: end)
+            let foldedPrefix = foldedKeyword(String(candidate[..<end]))
+            if foldedPrefix == foldedQuery { return end }
+            if !foldedQuery.hasPrefix(foldedPrefix) { return nil }
+        }
+        return nil
+    }
+
+    private static func isCompletionBoundary(_ character: Character) -> Bool {
+        character == "." || character == "-" || character.isWhitespace
+    }
+
+    private static func sharedFoldedPrefix(_ lhs: String, _ rhs: String) -> String {
+        String(zip(lhs, rhs).prefix { $0.0 == $0.1 }.map(\.0))
+    }
+
+    private static func prefix(in source: String, foldingTo foldedPrefix: String) -> String? {
+        var end = source.startIndex
+        while end < source.endIndex {
+            end = source.index(after: end)
+            let candidate = String(source[..<end])
+            let foldedCandidate = foldedKeyword(candidate)
+            if foldedCandidate == foldedPrefix { return candidate }
+            if !foldedPrefix.hasPrefix(foldedCandidate) { return nil }
+        }
+        return foldedKeyword(source) == foldedPrefix ? source : nil
     }
 
     /// Smaller is better. Whole-keyword relationships lead, followed by a

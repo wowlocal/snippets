@@ -662,6 +662,67 @@ struct TextReplacementTests {
             )
         }
 
+        @Test func tabCompletionAdvancesOnlyToTheNextKeywordPart() {
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "do",
+                    among: ["doc.frontend", "doc.backend"]
+                ) == "doc."
+            )
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "doc.front",
+                    among: ["doc.frontend.controls"]
+                ) == "doc.frontend."
+            )
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "my",
+                    among: ["my-signature.work"]
+                ) == "my-",
+                "a sanitized space boundary is completed as a hyphen"
+            )
+        }
+
+        @Test func tabCompletionOnlyAddsThePrefixSharedByEveryOption() {
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "doc.f",
+                    among: ["doc.frontend", "doc.framework"]
+                ) == "doc.fr"
+            )
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "doc.",
+                    among: ["doc.frontend", "doc.backend"]
+                ) == nil,
+                "Tab must not choose an arbitrary existing keyword"
+            )
+        }
+
+        @Test func tabCompletionIsPrefixOnlyAndPreservesTheTypedPrefix() {
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "frontend",
+                    among: ["doc.frontend"]
+                ) == nil,
+                "the broad reference matcher must not reorder completion text"
+            )
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "CAF",
+                    among: ["café.docs"]
+                ) == "CAFé."
+            )
+            #expect(
+                KeywordSuggestions.tabCompletion(
+                    query: "doc.frontend",
+                    among: ["doc.frontend"]
+                ) == nil,
+                "an exact keyword has no continuation"
+            )
+        }
+
         @Test func anEmptyKeywordQueryShowsNoExistingReferences() {
             #expect(
                 KeywordSuggestions.existingMatches(query: "  ", among: ["doc.frontend"]).isEmpty
