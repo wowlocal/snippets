@@ -136,6 +136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var statusMenuSecurePasteDestination: SecurePasteDestination?
     private var securePasteDestination: SecurePasteDestination?
     private var securePasteTask: Task<Void, Never>?
+    /// AppKit marks a launch performed on behalf of a Service as non-default.
+    /// Consume that fact in the first routed launch action so Command-Backslash
+    /// can stay a background picker without changing later Service requests.
+    private var initialNonDefaultLaunchActionPending = false
+    /// A cold Secure Paste Service launch can also deliver a normal reopen event.
+    /// Keep that event from resurrecting the storyboard window behind the picker.
+    private var suppressMainWindowForColdServicePicker = false
     private var postLaunchServicesWorkItem: DispatchWorkItem?
     private var postLaunchServicesStarted = false
     private var shouldTerminateForReal = false
@@ -192,6 +199,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         #endif
 
+        // This documented launch flag is false for Service launches (and other
+        // explicitly routed launches). The matching Service/deep-link callback
+        // below consumes it once, so it cannot affect a later shortcut.
+        initialNonDefaultLaunchActionPending =
+            notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == false
+
         // Consulted only when the usage file hits its record cap, so that a
         // forced eviction drops UUIDs of deleted snippets before live ones.
         usageStore.liveSnippetIDs = { [weak store] in
@@ -240,9 +253,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         store.onChange?(.init(source: .external))
 
         if launchedAsLoginItem {
+            initialNonDefaultLaunchActionPending = false
             hideToBackground()
         }
         schedulePostLaunchServices()
+
+        // A Service request can arrive immediately after its provider is set,
+        // including before this method returns. Register once the stores are fully
+        // attached and background startup is scheduled so a cold Command-Backslash
+        // launch can suppress the storyboard window before its first routed event.
+        NSApp.servicesProvider = self
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            // Non-default also covers restored-state and file launches. A pending
+            // Service is delivered as soon as the provider above is registered;
+            // expire the candidate afterward so an unrelated later Service cannot
+            // be mistaken for the launch request.
+            self?.initialNonDefaultLaunchActionPending = false
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -424,6 +451,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if suppressMainWindowForColdServicePicker {
+            return false
+        }
         if !flag {
             showMainWindow()
         }
@@ -431,6 +461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        initialNonDefaultLaunchActionPending = false
         let deepLinks = urls.filter { SnippetDeepLink.canHandle($0) }
         guard !deepLinks.isEmpty else { return }
 
@@ -627,6 +658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
+        initialNonDefaultLaunchActionPending = false
         guard let selection = pboard.string(forType: .string),
               !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             error.pointee = "Select some text to make a snippet from it." as NSString
@@ -644,6 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
+        initialNonDefaultLaunchActionPending = false
         guard GlobalHotkeyManager.shared.isEnabled else { return }
         // Let the source application finish its synchronous Services command
         // before Snippets activates and makes its main window key.
@@ -660,6 +693,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
+        let isColdServiceLaunch = initialNonDefaultLaunchActionPending
+        initialNonDefaultLaunchActionPending = false
         guard GlobalHotkeyManager.shared.isEnabled else { return }
         if expansionEngine.securePastePickerIsVisible {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
@@ -679,13 +714,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
 
+        if isColdServiceLaunch {
+            prepareForColdServicePicker()
+        }
+
         // A Services key equivalent is dispatched synchronously by the source
         // app. Giving Safari one run-loop turn was not sufficient: after our
         // panel became key, Safari finished the service command, reclaimed key
         // status, and `windowDidResignKey` immediately dismissed the picker.
         // Capture the destination above, then wait for that hand-off to settle.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.beginSecurePaste(for: destination)
+            guard let self else { return }
+            if isColdServiceLaunch {
+                // Window restoration and the open-application event may finish
+                // after the Service callback. Reassert the background state at
+                // the same boundary where the picker is presented.
+                guard self.suppressMainWindowForColdServicePicker else { return }
+                self.prepareForColdServicePicker()
+            }
+            self.beginSecurePaste(for: destination)
         }
     }
 
@@ -880,12 +927,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         )
         guard didShow else {
             securePasteDestination = nil
+            suppressMainWindowForColdServicePicker = false
             NSSound.beep()
             return
         }
     }
 
     private func securePasteSnippetSelected(_ snippet: Snippet) {
+        suppressMainWindowForColdServicePicker = false
         guard let destination = securePasteDestination else { return }
         securePasteDestination = nil
 
@@ -927,6 +976,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func securePasteCancelled(shouldReturnFocus: Bool) {
+        suppressMainWindowForColdServicePicker = false
         guard let destination = securePasteDestination else { return }
         securePasteDestination = nil
         guard shouldReturnFocus,
@@ -960,6 +1010,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func openFromGlobalHotkey() {
+        suppressMainWindowForColdServicePicker = false
         // Coming from the menu bar means the Dock icon is being added just for
         // this visit; remember that so hiding can put it back the way it was.
         hotkeyPromotedFromAccessory = NSApp.activationPolicy() == .accessory
@@ -1286,8 +1337,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NSApp.setActivationPolicy(.accessory)
     }
 
+    /// A Service-launched process starts with the regular activation policy and
+    /// AppKit may restore its storyboard window even though Command-Backslash is
+    /// an overlay-only action. Move the process to the same menu-bar background
+    /// state used by login launch before the non-activating picker is shown.
+    private func prepareForColdServicePicker() {
+        suppressMainWindowForColdServicePicker = true
+        for window in NSApp.windows {
+            window.orderOut(nil)
+        }
+        NSApp.setActivationPolicy(.accessory)
+        // Let SuggestionPanelController use its hidden-application presentation:
+        // the picker is exempted from hiding while every ordinary app window stays out.
+        NSApp.hide(nil)
+    }
+
     @discardableResult
     private func showMainWindow() -> ViewController? {
+        suppressMainWindowForColdServicePicker = false
         NSApp.setActivationPolicy(.regular)
 
         let window: NSWindow?
