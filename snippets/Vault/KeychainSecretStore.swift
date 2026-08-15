@@ -64,6 +64,11 @@ nonisolated struct KeychainItemOperations: @unchecked Sendable {
 @MainActor
 final class KeychainSecretStore {
 
+    enum ItemAccessibility: Equatable {
+        case whenUnlocked
+        case afterFirstUnlock
+    }
+
     enum Tier: Equatable {
         /// Login keychain. Works everywhere, never leaves this Mac.
         case deviceOnly
@@ -103,6 +108,7 @@ final class KeychainSecretStore {
 
     private let service: String
     private let keychainOperations: KeychainItemOperations
+    private let itemAccessibility: ItemAccessibility
     /// Instance-local test backend. Production always leaves this `nil` and reaches
     /// Security.framework; unsigned simulator tests can exercise vault ordering without
     /// requiring or mutating a real keychain access group.
@@ -112,11 +118,13 @@ final class KeychainSecretStore {
     init(
         tier: Tier? = nil,
         service: String = "com.khm.snippets.vault",
+        itemAccessibility: ItemAccessibility = .whenUnlocked,
         inMemory: Bool = false,
         keychainOperations: KeychainItemOperations = .live
     ) {
         self.tier = tier ?? Self.detectTier()
         self.service = service
+        self.itemAccessibility = itemAccessibility
         self.inMemoryItems = inMemory ? [:] : nil
         self.keychainOperations = keychainOperations
     }
@@ -450,12 +458,12 @@ final class KeychainSecretStore {
 
     // MARK: - Query construction
 
-    /// Vault and identity items stay `WhenUnlocked`; only the fixed wire-key account is
-    /// available after first unlock so CKSyncEngine can run while the device is locked.
+    /// Vault and identity stores default to `WhenUnlocked`; the fixed wire-key account
+    /// and explicitly configured background-session stores use `AfterFirstUnlock`.
     /// Local-tier variants remain device-only, while a synchronizable item cannot use a
     /// `ThisDeviceOnly` protection class by definition.
     private func accessibility(for account: String) -> CFString {
-        if account == SyncKeyStore.account {
+        if account == SyncKeyStore.account || itemAccessibility == .afterFirstUnlock {
             return tier.syncsBetweenDevices
                 ? kSecAttrAccessibleAfterFirstUnlock
                 : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly

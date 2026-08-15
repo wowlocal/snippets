@@ -21,6 +21,26 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
 - Snippets Cloud pull/push with paged cursors, per-record CAS generations, batch
   outcomes, response limits, TLS-only URLs, bearer authentication, and sticky scope
   coordinates. A binding/dataset/feed mismatch stops instead of applying data.
+- OIDC Authorization Code + PKCE in the system browser on Android, macOS, and iOS.
+  Discovery is HTTPS-only and bounded, state/nonce/claimed-HTTPS redirect are checked,
+  RFC 8707 binds each JWT to the one pinned API resource, and a minimal access/refresh-
+  token session stays in device-bound secret storage. ID tokens and profile claims are
+  discarded; the personal space is selected or created automatically. Every distribution,
+  including a self-hosted one, injects its canonical service URL and verified callback
+  host at build time; an unconfigured build keeps cloud sign-in disabled.
+- Passkey-first zero-knowledge onboarding on Android, iPhone/iPad and macOS. A new
+  device either displays a five-minute QR invitation for approval by a trusted device,
+  or restores from an offline recovery QR/52-character random code. Pairing uses
+  ephemeral P-256 ECDH, HKDF-SHA-256 and AES-256-GCM with an eight-character comparison
+  code; recovery uses a separate HKDF/AES-GCM domain. Neither QR contains the library
+  key. The server's approved envelope is redacted from polling and atomically taken once.
+- Device-owner authentication plus a fresh phishing-resistant OIDC step-up protects
+  pairing approval and recovery replacement. Every installation has a distinct
+  device-only refresh credential. Sign-out durably journals every refresh generation,
+  calls resource logout plus RFC 7009, then removes the local cloud root before OAuth
+  state; interrupted remote or local phases resume automatically on launch. Pending
+  recovery kits are encrypted at rest and their QR/code presentation is one-screen:
+  every later reveal requires new device-owner authentication.
 - Single-writer provider selection. Switching to Snippets Cloud performs pull, shared
   three-way merge, encrypted offer generation, CAS push, pull-to-confirm, and only then
   advances the local base. Device-only mode never deletes either cloud.
@@ -32,12 +52,13 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
 
 - The HTTP service receives the existing wire fields `id`, `rev`, `deleted`, and
   encrypted `blob`. It never receives snippet plaintext or the library key.
-- A newly installed Android client creates a random `sync-v1` key locally. To open an
-  existing Apple library it must import the same portable key bundle through an
-  approved pairing/recovery flow. The current screen accepts that bundle; automating
-  the pairing UX is the next increment.
-- OIDC token entry is available for development and self-hosted integration. Production
-  must replace manual token entry with Authorization Code + PKCE and issuer discovery.
+- A new installation never mints a key merely because sync starts. Only a truly empty
+  personal space may create a provisional random `sync-v1` bundle, and it is installed
+  only after its nil-CAS recovery envelope wins. Existing spaces require approved
+  pairing or recovery. Lost-response recovery compares the stored opaque envelope
+  byte-for-byte, closing the first-device crash window without accepting a rival key.
+- Manual bearer-token configuration remains only as a test seam for the disposable E2E
+  harness; the shipping settings UI never asks for a token or space UUID.
 - Diagnostic errors are closed codes. HTTP bodies, tokens, keys, snippet text, UUIDs,
   paths, and server exception strings are not logged.
 
@@ -50,8 +71,21 @@ r27d or newer, Android SDK 36, and JDK 25 for publishing swift-java's Java runti
 ./scripts/bootstrap-android.sh
 
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
-  ./gradlew :app:assembleDebug
+  ./gradlew :app:assembleDebug \
+  -PSNIPPETS_CLOUD_URL=https://sync.example.com \
+  -PSNIPPETS_OAUTH_CALLBACK_HOST=auth.example.com
 ```
+
+Apple builds use the equivalent public build settings
+`SNIPPETS_CLOUD_BASE_URL=https://sync.example.com` and
+`SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST=auth.example.com`. The OIDC public native client
+registers `https://auth.example.com/oauth2redirect/android` and
+`https://auth.example.com/oauth2redirect/apple`; neither platform embeds a client
+secret. The callback host must publish Android Digital Asset Links for the release
+package/certificate and Apple associated-web-credentials metadata for
+`H8QG3CBM96.com.khm.snippets` (plus the debug identifiers only on non-production hosts).
+Omitting either pin disables sign-in; there is no runtime textbox that can redirect a
+bearer token to an arbitrary origin.
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. The Gradle module
 builds `arm64-v8a` and `x86_64`, generates the Java JNI wrapper, and packages the Swift,
@@ -73,8 +107,8 @@ swift test --package-path CorePackage
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-Before production rollout, complete PKCE/pairing UI, add WorkManager scheduling,
+Before production rollout, add WorkManager scheduling,
 run the existing instrumentation boundary suite on the supported phone/tablet matrix,
-complete size optimization and release signing. macOS and iOS settings already select
-between unchanged CloudKit and `SnippetsCloudTransport`; production authentication UX
-remains tracked in the implementation plan rather than hidden behind placeholder behavior.
+complete size optimization and release signing, and provision the production OIDC tenant
+and canonical service URL. macOS and iOS keep unchanged CloudKit while sharing the same
+browser-based Snippets Cloud sign-in and automatic token refresh.

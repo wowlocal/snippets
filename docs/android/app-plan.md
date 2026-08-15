@@ -91,7 +91,9 @@ backup classes requires a separate privacy and restore-consistency design.
 
 ### Onboarding
 
-1. Choose Local Only, Snippets Cloud, or Custom Server.
+1. Choose Local Only or the HTTP service pinned into this app distribution. A self-hosted
+   operator ships a correspondingly pinned build; the app does not accept a runtime OAuth
+   credential destination.
 2. For HTTP, authenticate with the provider using OIDC Authorization Code + PKCE in a
    system browser/Credential Manager flow.
 3. Choose an existing sync space or create one.
@@ -131,18 +133,28 @@ Apple app's provider flow. Never accept iCloud credentials in Android.
 
 ## HTTP authentication and endpoint handling
 
-The app discovers OIDC and protocol capabilities from a canonical HTTPS origin. It uses
-Authorization Code + PKCE and validates authorization responses against the initiated
-state/nonce and exact redirect URI. Passkeys can be offered by the chosen identity
-provider through Android Credential Manager; they do not replace protocol encryption.
+The app discovers OIDC and protocol capabilities from its build-pinned canonical HTTPS
+origin. It uses Authorization Code + PKCE and validates authorization responses against
+the initiated state/nonce and exact domain-claimed HTTPS redirect. RFC 8707 binds the
+token's sole audience to that origin before the token is disclosed. Passkeys can be
+offered first by the chosen identity provider, with Apple/Google as alternatives; they
+do not replace protocol encryption. Snippets has no account password, does not require
+email, and ignores email/profile claims. Key-granting actions require a fresh passkey
+step-up plus local device-owner authentication.
 
-Kotlin stores refresh/access credentials under an Android Keystore-backed credential
-store and injects short-lived access tokens through OkHttp. Swift receives only HTTP
+Kotlin stores a separate per-installation refresh/access credential under an Android
+Keystore-backed credential store. Sign-out revokes both through the provider's RFC 7009
+endpoint before local deletion. Swift receives only HTTP
 status, allow-listed headers, and body bytes. It maps 401/403 to typed authentication or
 authorization state without seeing or logging token contents.
 
 Custom Server rules:
 
+- The API origin and callback host are pinned when that distribution is built. Dynamic
+  runtime server entry is excluded unless a future design adds equivalent origin and
+  sender binding.
+- Android Digital Asset Links and Apple associated-web-credentials metadata bind the
+  callback domain to the exact signed applications; custom URI schemes are not used.
 - HTTPS is mandatory outside explicitly marked local developer builds.
 - Canonical origin changes create a different provider identity and require review.
 - Redirects may not cross origins; credentials are never forwarded to a new host.

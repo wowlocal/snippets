@@ -42,6 +42,17 @@ final class SnippetsIOSTests: XCTestCase {
         )
     }
 
+    func testPairingApprovalPromptBindsTheExactConfirmationCode() {
+        let code = "Q7Z2M9KP"
+        XCTAssertTrue(SnippetsCloudPairingApprovalCopy.message(
+            code: code,
+            localAuthentication: "Face ID").contains(code))
+        XCTAssertEqual(
+            SnippetsCloudPairingApprovalCopy.approveButtonTitle(code: code),
+            "Approve \(code)"
+        )
+    }
+
     func testFreshIOSLibraryStartsEmptyAndPersistsCRUD() throws {
         var store: SnippetStore? = SnippetStore(configuration: .iOS)
         XCTAssertTrue(store?.snippets.isEmpty == true)

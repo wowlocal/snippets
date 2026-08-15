@@ -10,6 +10,7 @@ final class AppEnvironment {
     let diagnostics: DiagnosticsService
     let store: SnippetStore
     let keychain: KeychainSecretStore
+    let backendSelection: SyncBackendSelectionStore
     let vaultSession: VaultSession
     let secureStore: SecureSnippetStore
     let syncLibrary: SnippetLibraryBridge
@@ -52,6 +53,7 @@ final class AppEnvironment {
         diagnostics = DiagnosticsService.shared
         store = SnippetStore(configuration: .iOS)
         keychain = KeychainSecretStore()
+        backendSelection = SyncBackendSelectionStore()
         #if DEBUG
         let usesDeterministicUITestAuthentication =
             CommandLine.arguments.contains("--ui-testing-reset")
@@ -75,10 +77,15 @@ final class AppEnvironment {
             deviceID: store.deviceID
         )
         syncLibrary = SnippetLibraryBridge(store: store, secureStore: secureStore)
+        let selectedBackend = backendSelection
         syncCoordinator = SyncCoordinator(
             library: syncLibrary,
-            keys: SyncKeyStore(keychain: keychain),
-            device: store.deviceID
+            keys: SyncKeyStore(
+                keychain: keychain,
+                cloudKeys: backendSelection.cloudKeys,
+                usesSnippetsCloud: { selectedBackend.provider == .snippetsCloud }),
+            device: store.deviceID,
+            backendSelection: backendSelection
         )
         snippetActions = SnippetActionService(
             store: store,

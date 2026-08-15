@@ -1,5 +1,10 @@
 import AppKit
+import AuthenticationServices
+import CoreImage
+import CoreImage.CIFilterBuiltins
+import LocalAuthentication
 import UniformTypeIdentifiers
+import Vision
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
@@ -1232,6 +1237,10 @@ private final class SyncSettingsViewController: NSViewController {
     private let syncNowButton = NSButton(title: "Sync Now", target: nil, action: nil)
     private let clearHaltButton = NSButton(title: "Resume After Review", target: nil, action: nil)
     private let secondMacLabel = NSTextField(wrappingLabelWithString: "")
+    private var presentedRecoveryAlert: NSAlert?
+    private lazy var cloudBootstrap = SnippetsCloudAccountBootstrap(
+        selection: (NSApp.delegate as? AppDelegate)?.backendSelection
+            ?? SyncBackendSelectionStore())
 
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
@@ -1403,50 +1412,407 @@ private final class SyncSettingsViewController: NSViewController {
     }
 
     @objc private func configureSnippetsCloud() {
-        let selection = SyncBackendSelectionStore()
-        let current = selection.cloudCoordinates
-        let alert = NSAlert()
-        alert.messageText = "Configure Snippets Cloud"
-        alert.informativeText = "Enter an HTTPS server, space ID, and OIDC access token. The token stays in this Mac’s device-only Keychain."
-        alert.addButton(withTitle: "Switch and Sync")
-        alert.addButton(withTitle: "Cancel")
-
-        let server = NSTextField(string: current?.serverURL.absoluteString ?? "")
-        server.placeholderString = "https://sync.example.com"
-        let space = NSTextField(string: current?.spaceID.uuidString.lowercased() ?? "")
-        space.placeholderString = "Space UUID"
-        let token = NSSecureTextField(string: "")
-        token.placeholderString = "OIDC access token"
-        for field in [server, space, token] {
-            field.translatesAutoresizingMaskIntoConstraints = false
-            field.widthAnchor.constraint(equalToConstant: 420).isActive = true
-        }
-        let fields = NSStackView(views: [server, space, token])
-        fields.orientation = .vertical
-        fields.spacing = 8
-        alert.accessoryView = fields
-
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            reloadFromStorage()
+        let selection = (NSApp.delegate as? AppDelegate)?.backendSelection
+            ?? SyncBackendSelectionStore()
+        if selection.hasCloudSession {
+            do {
+                try presentCloudState(cloudBootstrap.state())
+            } catch {
+                showCloudError("Couldn’t Open Snippets Cloud", error: error)
+            }
             return
         }
-        defer { token.stringValue = "" }
-        do {
-            guard let url = URL(string: server.stringValue),
-                  let spaceID = UUID(uuidString: space.stringValue) else {
-                throw SyncBackendSelectionStore.Failure.missingConfiguration
+        guard let bundled = SyncBackendSelectionStore.bundledServerURL,
+              SyncBackendSelectionStore.bundledOAuthRedirectURL != nil else {
+            let unavailable = NSAlert()
+            unavailable.messageText = "Snippets Cloud Isn’t Configured"
+            unavailable.informativeText = "This build has no verified cloud endpoint and HTTPS sign-in callback. A self-hosted build must pin both at build time."
+            unavailable.runModal()
+            return
+        }
+        signInToSnippetsCloud(bundled, selection: selection)
+    }
+
+    private func signInToSnippetsCloud(
+        _ serverURL: URL,
+        selection: SyncBackendSelectionStore
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let state = try await cloudBootstrap.signIn(
+                    serverURL: serverURL,
+                    presentationContext: self)
+                try presentCloudState(state)
+            } catch {
+                showCloudError("Couldn’t Sign In to Snippets Cloud", error: error)
             }
-            try selection.selectSnippetsCloud(
-                serverURL: url,
-                spaceID: spaceID,
-                accessToken: token.stringValue)
+            reloadFromStorage()
+        }
+    }
+
+    private func presentCloudState(_ state: SnippetsCloudAccountBootstrap.State) throws {
+        switch state {
+        case .signedOut:
+            configureSnippetsCloud()
+        case .ready:
             Self.coordinator?.reloadProviderSelection()
+            Self.coordinator?.syncNow()
+            reloadFromStorage()
+            presentCloudReadyMenu()
+        case .needsTrustedDeviceOrRecovery:
+            presentCloudUnlockMenu()
+        case .waitingForApproval(let payload, let code):
+            presentPairingQR(payload: payload, confirmationCode: code)
+        case .approvalReady(let code):
+            confirmPairingApproval(code: code)
+        case .strongAuthenticationRequired(let action):
+            requestStrongAuthentication(for: action)
+        case .recoveryKitAuthenticationRequired:
+            authenticateRecoveryKitPresentation()
+        case .recoveryKitReady(let payload, let code):
+            presentRecoveryKit(payload: payload, longCode: code)
+        }
+    }
+
+    private func authenticateRecoveryKitPresentation() {
+        runCloudTask("Couldn’t Reveal Recovery Kit") { [weak self] in
+            guard let self else { return }
+            try await requireMacOwnerAuthentication(
+                reason: "Reveal your Snippets Cloud recovery kit")
+            try self.presentCloudState(
+                self.cloudBootstrap.revealRecoveryKitAfterLocalAuthentication())
+        }
+    }
+
+    private func presentCloudUnlockMenu() {
+        let alert = NSAlert()
+        alert.messageText = "Unlock Your Encrypted Library"
+        alert.informativeText = "Use a device that already has this library, or your offline recovery kit. Snippets Cloud cannot read or recover the library key."
+        alert.addButton(withTitle: "Use Nearby Device")
+        alert.addButton(withTitle: "Recovery Kit…")
+        alert.addButton(withTitle: "I Have Neither")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            runCloudTask("Couldn’t Create Invitation") { [weak self] in
+                guard let self else { return }
+                try self.presentCloudState(try await self.cloudBootstrap.beginPairing())
+            }
+        case .alertSecondButtonReturn:
+            promptForRecoveryInput()
+        case .alertThirdButtonReturn:
+            let warning = NSAlert()
+            warning.alertStyle = .critical
+            warning.messageText = "Old Data Cannot Be Recovered"
+            warning.informativeText = "The account can still be used, but without any approved device or the recovery kit, old encrypted snippets are mathematically unrecoverable. Snippets Cloud has no decryption key."
+            warning.runModal()
+        default:
+            break
+        }
+    }
+
+    private func presentCloudReadyMenu() {
+        let alert = NSAlert()
+        alert.messageText = "Snippets Cloud Is Ready"
+        alert.informativeText = "No Snippets password or required email. This Mac has its own login session and a device-only copy of the encrypted library key."
+        alert.addButton(withTitle: "Add Another Device")
+        alert.addButton(withTitle: "Replace Recovery Kit")
+        alert.addButton(withTitle: "Sign Out on This Mac")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            promptForPairingInvitation()
+        case .alertSecondButtonReturn:
+            runCloudTask("Couldn’t Replace Recovery Kit") { [weak self] in
+                guard let self else { return }
+                try self.presentCloudState(
+                    try await self.cloudBootstrap.prepareRecoveryReplacement())
+            }
+        case .alertThirdButtonReturn:
+            confirmCloudSignOut()
+        default:
+            break
+        }
+    }
+
+    private func presentPairingQR(payload: String, confirmationCode: String) {
+        let alert = cloudQRAlert(
+            title: "Add This Mac",
+            message: "Scan this one-time QR on a device that already has the library. Compare the code on both devices. It expires in about five minutes.",
+            payload: payload,
+            displayedCode: confirmationCode,
+            warning: "The QR contains only a nonce and this Mac’s ephemeral public key — never the library key.")
+        alert.addButton(withTitle: "Check Approval")
+        alert.addButton(withTitle: "Cancel Pairing")
+        if alert.runModal() == .alertFirstButtonReturn {
+            runCloudTask("Pairing Isn’t Ready") { [weak self] in
+                guard let self else { return }
+                try self.presentCloudState(try await self.cloudBootstrap.checkPairing())
+            }
+        } else {
+            runCloudTask("Couldn’t Cancel Pairing") { [weak self] in
+                try await self?.cloudBootstrap.cancelPairing()
+            }
+        }
+    }
+
+    private func presentRecoveryKit(payload: String, longCode: String) {
+        let alert = cloudQRAlert(
+            title: "Save Your Recovery Kit",
+            message: "Keep this QR or long code offline. It is the only fallback if every approved device is lost.",
+            payload: payload,
+            displayedCode: longCode,
+            warning: "If you lose this kit and every approved device, old encrypted snippets are permanently unrecoverable — including by Snippets Cloud.")
+        alert.addButton(withTitle: "I Saved It")
+        alert.addButton(withTitle: "Reveal Again Later")
+        presentedRecoveryAlert = alert
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(relockRecoveryPresentation),
+            name: NSApplication.didResignActiveNotification,
+            object: nil)
+        defer {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSApplication.didResignActiveNotification,
+                object: nil)
+            presentedRecoveryAlert = nil
+        }
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try cloudBootstrap.acknowledgeRecoveryKitSaved()
+            Self.coordinator?.reloadProviderSelection()
+            Self.coordinator?.syncNow()
         } catch {
-            let failure = NSAlert(error: error)
-            failure.messageText = "Couldn’t Configure Snippets Cloud"
-            failure.runModal()
+            showCloudError("Couldn’t Finish Setup", error: error)
         }
         reloadFromStorage()
+    }
+
+    @objc private func relockRecoveryPresentation() {
+        guard let alert = presentedRecoveryAlert,
+              NSApp.modalWindow === alert.window else { return }
+        // Remove recovery material before AppKit snapshots inactive windows. The
+        // durable encrypted presentation remains pending for a fresh biometric reveal.
+        alert.window.orderOut(nil)
+        NSApp.abortModal()
+    }
+
+    private func promptForPairingInvitation() {
+        promptForCloudPayload(
+            title: "New Device Invitation",
+            message: "Paste the invitation copied from the new device, or read a saved QR image.",
+            actionTitle: "Review Device",
+            supportsImage: true
+        ) { [weak self] payload in
+            self?.runCloudTask("Couldn’t Read Invitation") {
+                guard let self else { return }
+                try self.presentCloudState(
+                    try await self.cloudBootstrap.prepareApproval(qrPayload: payload))
+            }
+        }
+    }
+
+    private func promptForRecoveryInput() {
+        promptForCloudPayload(
+            title: "Recovery Kit",
+            message: "Enter the long recovery code, paste the recovery QR payload, or read a saved QR image.",
+            actionTitle: "Restore",
+            supportsImage: true
+        ) { [weak self] value in
+            self?.runCloudTask("Couldn’t Restore Library") {
+                guard let self else { return }
+                try self.presentCloudState(
+                    try await self.cloudBootstrap.restore(recoveryCodeOrQR: value))
+            }
+        }
+    }
+
+    private func promptForCloudPayload(
+        title: String,
+        message: String,
+        actionTitle: String,
+        supportsImage: Bool,
+        completion: @escaping (String) -> Void
+    ) {
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 480, height: 24))
+        field.placeholderString = "Code or QR payload"
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.accessoryView = field
+        alert.addButton(withTitle: actionTitle)
+        if supportsImage { alert.addButton(withTitle: "Read QR Image…") }
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value.utf8.count <= 4_096 else { return }
+            completion(value)
+        case .alertSecondButtonReturn where supportsImage:
+            readQRImage(completion: completion)
+        default:
+            break
+        }
+    }
+
+    private func readQRImage(completion: @escaping (String) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let image = NSImage(contentsOf: url) else { return }
+        var rect = NSRect(origin: .zero, size: image.size)
+        guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
+            showCloudError("Couldn’t Read QR Image", error: SnippetsCloudAccountBootstrap.Failure.invalidInvitation)
+            return
+        }
+        let request = VNDetectBarcodesRequest()
+        request.symbologies = [.qr]
+        do {
+            try VNImageRequestHandler(cgImage: cgImage).perform([request])
+            guard let payload = request.results?.first?.payloadStringValue,
+                  !payload.isEmpty, payload.utf8.count <= 4_096 else {
+                throw SnippetsCloudAccountBootstrap.Failure.invalidInvitation
+            }
+            completion(payload)
+        } catch {
+            showCloudError("Couldn’t Read QR Image", error: error)
+        }
+    }
+
+    private func confirmPairingApproval(code: String) {
+        let alert = NSAlert()
+        alert.messageText = "Add This iPhone or Mac?"
+        alert.informativeText = SnippetsCloudPairingApprovalCopy.message(
+            code: code,
+            localAuthentication: "Touch ID or the Mac password")
+        alert.addButton(
+            withTitle: SnippetsCloudPairingApprovalCopy.approveButtonTitle(code: code))
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            authenticateAndContinue(action: .approveDevice)
+        } else {
+            try? cloudBootstrap.cancelApproval()
+        }
+    }
+
+    private func requestStrongAuthentication(for action: SnippetsCloudAccountBootstrap.StrongAction) {
+        if action == .createInitialRecovery {
+            let alert = NSAlert()
+            alert.messageText = "Protect Your Recovery Kit"
+            alert.informativeText = "Finish with a fresh passkey check. Apple or Google may identify the account, but they never become the key to your snippets."
+            alert.addButton(withTitle: "Continue")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { continueWithStrongCloudSignIn() }
+        } else {
+            authenticateAndContinue(action: action)
+        }
+    }
+
+    private func authenticateAndContinue(action: SnippetsCloudAccountBootstrap.StrongAction) {
+        runCloudTask("Approval Failed") { [weak self] in
+            guard let self else { return }
+            try await requireMacOwnerAuthentication(reason: action == .approveDevice
+                ? "Approve a new device for your encrypted Snippets library"
+                : "Replace your Snippets Cloud recovery kit")
+            self.continueWithStrongCloudSignIn()
+        }
+    }
+
+    private func continueWithStrongCloudSignIn() {
+        guard let server = cloudBootstrap.selection.cloudCoordinates?.serverURL else {
+            showCloudError("Couldn’t Continue", error: SnippetsCloudAccountBootstrap.Failure.invalidState)
+            return
+        }
+        runCloudTask("Secure Approval Failed") { [weak self] in
+            guard let self else { return }
+            try self.presentCloudState(try await self.cloudBootstrap.signIn(
+                serverURL: server,
+                strong: true,
+                presentationContext: self))
+        }
+    }
+
+    private func confirmCloudSignOut() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Sign Out on This Mac?"
+        alert.informativeText = "This removes this Mac’s login credential and device-only library key. Cloud ciphertext is not deleted. You will need another approved device or the recovery kit to reconnect."
+        alert.addButton(withTitle: "Sign Out")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        runCloudTask("Couldn’t Sign Out") { [weak self] in
+            guard let self else { return }
+            try await self.cloudBootstrap.signOutThisDevice()
+            Self.coordinator?.reloadProviderSelection()
+            self.reloadFromStorage()
+        }
+    }
+
+    private func cloudQRAlert(
+        title: String,
+        message: String,
+        payload: String,
+        displayedCode: String,
+        warning: String
+    ) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 10
+        if let image = cloudQRCode(payload) {
+            let view = NSImageView(image: image)
+            view.imageScaling = .scaleProportionallyUpOrDown
+            view.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                view.widthAnchor.constraint(equalToConstant: 260),
+                view.heightAnchor.constraint(equalToConstant: 260),
+            ])
+            stack.addArrangedSubview(view)
+        }
+        let code = NSTextField(wrappingLabelWithString: displayedCode)
+        code.font = .monospacedSystemFont(ofSize: 15, weight: .semibold)
+        code.alignment = .center
+        code.maximumNumberOfLines = 4
+        code.preferredMaxLayoutWidth = 440
+        stack.addArrangedSubview(code)
+        let caution = NSTextField(wrappingLabelWithString: warning)
+        caution.textColor = .systemRed
+        caution.alignment = .center
+        caution.preferredMaxLayoutWidth = 440
+        stack.addArrangedSubview(caution)
+        stack.frame = NSRect(x: 0, y: 0, width: 480, height: 340)
+        alert.accessoryView = stack
+        return alert
+    }
+
+    private func cloudQRCode(_ value: String) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(value.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        guard let image = CIContext().createCGImage(scaled, from: scaled.extent) else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: 260, height: 260))
+    }
+
+    private func runCloudTask(
+        _ title: String,
+        operation: @escaping @MainActor () async throws -> Void
+    ) {
+        Task { @MainActor [weak self] in
+            do { try await operation() }
+            catch { self?.showCloudError(title, error: error) }
+        }
+    }
+
+    private func showCloudError(_ title: String, error: Error) {
+        let alert = NSAlert(error: error)
+        alert.messageText = title
+        alert.runModal()
     }
 
     @objc private func syncNow() {
@@ -1457,6 +1823,28 @@ private final class SyncSettingsViewController: NSViewController {
     @objc private func clearHalt() {
         Self.coordinator?.clearHaltAfterUserReview()
         reloadFromStorage()
+    }
+}
+
+extension SyncSettingsViewController: ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        _ = session
+        return view.window!
+    }
+}
+
+@MainActor
+private func requireMacOwnerAuthentication(reason: String) async throws {
+    let context = LAContext()
+    context.touchIDAuthenticationAllowableReuseDuration = 0
+    var error: NSError?
+    guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+        throw error ?? SnippetsCloudAccountBootstrap.Failure.invalidState
+    }
+    guard try await context.evaluatePolicy(
+        .deviceOwnerAuthentication,
+        localizedReason: reason) else {
+        throw SnippetsCloudAccountBootstrap.Failure.invalidState
     }
 }
 

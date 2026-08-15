@@ -1,4 +1,4 @@
-# HTTP sync service and protocol plan
+# HTTP sync service and protocol
 
 ## Service contract
 
@@ -31,7 +31,7 @@ restored.
 
 ## Technology and repository shape
 
-The planned service is Swift on Linux:
+The implemented service is Swift on Linux:
 
 - Hummingbird, pinned to a reviewed stable release, for HTTP/lifecycle/middleware;
 - Swift OpenAPI Generator and its Hummingbird transport;
@@ -104,15 +104,19 @@ bounded document containing:
 - optional capabilities such as FCM hints;
 - public policy/support/deletion URLs.
 
-The app canonicalizes the HTTPS origin and pins the discovered instance to the saved
-provider. An instance change is review-required. Discovery cannot ask a client to accept
-plaintext, upload keys, raise hard limits, change crypto, or redirect credentials.
+The distribution pins its canonical HTTPS origin at build time and then pins the
+discovered instance to the saved provider. An instance change is review-required.
+Discovery cannot ask a client to accept plaintext, upload keys, raise hard limits,
+change crypto, or redirect credentials. OAuth authorization and refresh requests carry
+that origin as an RFC 8707 `resource`; clients require the JWT `aud` to contain exactly
+that one origin before sending it, and the API repeats the same check.
 
 The paths below express the intended resource model; final spelling is frozen only in
 the reviewed OpenAPI v1 document:
 
 ```text
 GET    /.well-known/snippets-sync
+DELETE /v1/session
 GET    /v1/spaces
 POST   /v1/spaces
 GET    /v1/spaces/{space}/scope
@@ -123,9 +127,12 @@ PUT    /v1/spaces/{space}/key-envelopes/recovery
 POST   /v1/spaces/{space}/pairings
 PUT    /v1/spaces/{space}/pairings/{pairing}/approval
 GET    /v1/spaces/{space}/pairings/{pairing}
-DELETE /v1/spaces/{space}/devices/{device}
-DELETE /v1/spaces/{space}
+POST   /v1/spaces/{space}/pairings/{pairing}/consume
+DELETE /v1/spaces/{space}/pairings/{pairing}
 ```
+
+Device-list, push-registration, account export and account/space deletion APIs remain
+future operational work and are not advertised by protocol v1.
 
 All authenticated responses carry the current opaque scope binding and dataset
 generation. `HTTPTransport` revalidates them around awaited operations before applying
@@ -223,7 +230,7 @@ semantics, and a proof that an old client cannot resurrect data.
 
 ## PostgreSQL model and tenant isolation
 
-The initial logical tables are:
+The implemented v1 logical tables are:
 
 ```text
 users                 internal account status only
@@ -232,11 +239,8 @@ spaces                personal sync spaces and dataset/feed generations
 space_memberships     user, role, random scope binding
 records               latest opaque record by (space, record ID)
 changes               ordered immutable outer record snapshots
-devices               membership, revocation and encrypted push routing
-key_envelopes          encrypted recovery/device bundles and versions
+key_envelopes          encrypted recovery bundle and CAS version
 pairings               short-lived one-use pairing state
-idempotency            bounded optional request-result cache
-deletion_jobs          cooling-period and verified purge state
 ```
 
 Every space-owned row carries `space_id`; membership-derived `user_id` is taken from the
@@ -269,21 +273,34 @@ expose raw subjects, access tokens, space/device/record IDs, blob bytes, or key 
 ## Account authentication and authorization
 
 The service accepts standard OIDC access tokens. Hosted Snippets Cloud configures an
-identity provider that can offer passkeys and the required platform sign-in methods;
-self-hosters configure a trusted OIDC issuer. The sync service itself does not store user
-passwords.
+identity provider with passkey first and Apple/Google as alternatives; self-hosters
+configure a trusted OIDC issuer. Snippets stores no password, requires no email address,
+and ignores email/profile claims.
 
 Token validation is strict:
 
 - exact HTTPS issuer and audience/client binding;
 - allow-listed signature algorithms, verified signature and keyed/JWKS cache rotation;
-- expiry, not-before, issued-at/maximum age where applicable;
+- expiry, not-before, issued-at/maximum age and a five-minute production lifetime cap;
+- fresh `auth_time` plus allow-listed passkey/WebAuthn `amr` or `acr` assurance before
+  recovery-envelope replacement or approval of a new device;
 - no algorithm downgrade or key URL taken from an untrusted token header;
 - normalized immutable subject mapping;
 - authorization based on current server membership/revocation, not token claims alone.
 
-Native apps use Authorization Code + PKCE; refresh credentials remain in platform secret
-storage. Server errors distinguish reauthentication, forbidden membership, rate limit,
+Native apps use Authorization Code + PKCE with domain-claimed HTTPS App/Universal Links,
+not impersonable custom schemes. Every installation keeps a separate refresh credential
+in device-only platform secret storage. The provider must publish RFC 7009 token
+revocation. Signing out first places a keyed digest of that installation's exact access
+JWT (with equivalent ES256 signatures canonicalized) in the shared resource-server
+denylist. Logout and data-plane transactions take the same PostgreSQL credential lock,
+so the logout response is a strict boundary across server instances. The client then
+revokes all access and refresh generations retained by its crash-safe logout journal.
+The local erase journal deletes the library root and pairing/
+recovery intermediates before credentials and account coordinates, and startup resumes
+either phase after process death. No bearer token or raw provider subject is persisted by
+the sync service.
+Server errors distinguish reauthentication, forbidden membership, rate limit,
 quota, conflict, cursor invalidation, and remote reset with closed codes and safe numeric
 fields. Arbitrary provider/database exception text never crosses the API.
 
@@ -294,41 +311,36 @@ account takeover is insufficient without a paired device or recovery key.
 
 ### Portable library key bundle
 
-The plaintext bundle exists only inside clients and is versioned/domain-bound. It
-contains:
+The plaintext bundle exists only inside clients. Schema 1 contains exactly:
 
-- the provider-neutral library wire key material and salt;
-- a random portable library identifier;
-- optional vault `kid`, vault salt, `K_lib`, and shareable vault identity without records,
-  passphrase wrap, or device-local receipts;
-- bundle schema/crypto-suite version and key epoch.
+- 32 random bytes of provider-neutral `sync-v1` wire key material;
+- 32 random bytes of HKDF salt;
+- the fixed `sync-v1` scope and bundle schema version.
 
-The portable plaintext is provider-neutral. The encrypted envelope—not the bundle
-payload—binds the target server instance, membership, space, pairing/recovery purpose and
-protocol version as associated data. Moving the same library to another authorized
-server creates a new target-bound envelope without changing its library keys.
+The portable plaintext is provider-neutral and never contains OAuth credentials,
+snippet records, the secure-vault key, or device identifiers. Each encrypted envelope
+binds its canonical server, space, purpose and pairing or key epoch as associated data.
 
-For an existing iCloud library, the wire material is its current `sync-v1` key. It enters
-the service only inside the end-to-end encrypted pairing/recovery envelope after the user
-opts into Snippets Cloud; the service never receives the plaintext key. Reusing it lets
-iCloud and HTTP carry identical encrypted blobs. A library created on HTTP installs the
-same material into an empty compatible Apple synchronizable Keychain slot when the user
-switches to iCloud. The bundle never contains OAuth tokens or snippet records.
+The iCloud and Snippets Cloud keys occupy separate Keychain slots. The iCloud key remains
+synchronizable through iCloud Keychain; the Snippets Cloud copy is device-only and can be
+installed only by first-library creation, approved pairing, or recovery. Sync startup is
+not allowed to mint a missing Snippets Cloud key.
 
 ### Trusted-device pairing
 
 1. The new device authenticates to the same membership and creates a short-lived pairing
    offer with an ephemeral recipient public key.
-2. Its QR/deep-link carries canonical server instance, space, pairing ID, recipient key,
-   expiry and a short authentication display. It carries no secret key bundle.
+2. Its QR carries only canonical server, space/pairing IDs, a 256-bit nonce, the
+   uncompressed ephemeral P-256 public key and expiry. It carries no library key. Both
+   devices derive the same eight-character comparison code from the nonce and key.
 3. A trusted device scans it, re-resolves membership/space, displays both endpoints and
    the authentication value, and requires local user authentication.
-4. The trusted device encrypts the bundle directly to the scanned recipient key using a
-   reviewed RFC 9180 HPKE suite (or a separately reviewed, test-vector-compatible
-   implementation), binding server/space/pairing/bundle version as associated data.
-5. It uploads only ciphertext. The new device downloads once, verifies/decrypts, stores
-   keys through its platform adapters, acknowledges, and the server destroys the offer
-   on use/expiry.
+4. The trusted device uses an ephemeral sender P-256 ECDH key, HKDF-SHA-256 and
+   AES-256-GCM (`snippets-pairing-p256-hkdf-sha256-aes256gcm-v1`). Associated data binds
+   the suite label, server, space, pairing ID, nonce and recipient public key.
+5. It uploads only the bounded ciphertext envelope after device-owner authentication
+   and fresh phishing-resistant OIDC step-up. Poll/approval responses redact the
+   envelope. The recipient obtains it only from the atomic take-and-delete endpoint.
 
 The direct QR key prevents a malicious service from silently substituting its own public
 key. Pairing IDs are high entropy, one-use, short-lived, membership-bound, rate-limited,
@@ -337,9 +349,9 @@ and never logged. Neither device name nor a stable hardware identifier is needed
 ### Recovery envelope
 
 At portable-library creation or first HTTP enablement, the client generates a high-
-entropy printable recovery secret and
+entropy 256-bit printable recovery secret and
 encrypts the same bundle under a domain-separated key. The service may store this
-ciphertext because the recovery secret has at least 128 random bits; it is not a
+ciphertext because the recovery secret has 256 random bits; it is not a
 human-chosen password/offline guessing target. The user must confirm saving it before the
 app calls the space recoverable.
 
@@ -348,15 +360,24 @@ offline encrypted export remains a second path. Hosted support cannot reveal or 
 key. Rotating a recovery envelope is explicit and leaves a clear warning that old copies
 may still unlock old exported ciphertext.
 
-Use a maintained implementation and published vectors for HPKE/HKDF/AEAD. Do not invent
-an ad-hoc ECDH concatenation, derive encryption keys from biometrics, or reuse the vault's
-passphrase wrap for server bootstrap.
+Recovery v1 derives an AES-256-GCM key with HKDF-SHA-256 and domain-separated associated
+data (`snippets-recovery-hkdf-sha256-aes256gcm-v1`). Biometrics authorize a local action;
+they are never key-derivation input. A pending kit survives interruption only in
+device-bound encrypted storage. Its QR and long code are disclosed for one current
+screen after device-owner authentication, are not retained in shared UI state, and
+relock when that screen closes or the app backgrounds.
 
 ### Revocation and rotation
 
-Device revocation removes membership device state, pairing eligibility, refresh sessions
-where supported, and push token. It prevents future server access but cannot erase keys
-or plaintext already held by a compromised device. The UI states this.
+V1 device sign-out immediately rejects replay of the presented OAuth access JWT across
+all server instances, revokes that installation's access and refresh tokens at the
+provider, and deletes its device-only key. Refresh rotation during logout journals both
+the old and new token before replacing local session state. Remote revocation intent is
+durable before network I/O; after it succeeds, a second durable phase removes the root
+key first and credentials last. Both phases retry idempotently on launch. A different
+installation's credential is not revoked. It cannot erase a key or plaintext already
+copied from a compromised device; the UI states this. A remote device inventory and
+push-token registry are not implemented by the v1 sync service.
 
 Cryptographic revocation needs a new key epoch and re-encryption of every outer record;
 revoking access to secure bodies may additionally require vault rekey. This is post-v1
@@ -379,8 +400,8 @@ poll/manual-sync.
 ## Quotas, abuse and deletion
 
 Initial limits are per account/space and cover records, raw stored bytes, batch/page
-sizes, request rate, concurrent requests, pairing attempts, devices, and key-envelope
-size. Rejections are closed codes with safe counts/limits. Quota calculation uses outer
+sizes, request rate, concurrent requests, pairing attempts, and key-envelope size.
+Rejections are closed codes with safe counts/limits. Quota calculation uses outer
 sizes only; the service never decompresses or parses blobs.
 
 Rate limiting is layered at edge and authenticated application scopes. Authentication,
@@ -436,6 +457,13 @@ Publish a versioned container image, example Docker Compose deployment (service 
 PostgreSQL), migration command, health checks, reverse-proxy/TLS guidance, OIDC
 configuration, backup/restore runbook, and upgrade compatibility table. Example secrets
 are placeholders; no real `.env` is committed.
+
+A self-hosted app distribution is built with its API origin and OAuth callback host
+pinned. That callback host publishes `assetlinks.json`/Apple associated-web-credentials
+metadata for the exact signing identities, and its OIDC provider registers only those
+claimed-HTTPS redirects. The provider honors RFC 8707 and issues a single audience equal
+to the deployment's canonical API base. Runtime entry of an arbitrary server is excluded
+because a native client cannot safely decide where to disclose an existing bearer token.
 
 The public conformance suite runs against hosted and self-hosted endpoints and verifies:
 

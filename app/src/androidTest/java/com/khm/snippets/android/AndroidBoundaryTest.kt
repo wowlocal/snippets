@@ -27,7 +27,8 @@ class AndroidBoundaryTest {
 
         assertEquals(value, store.read(name))
         assertTrue(!file.readBytes().containsSubsequence(value.toByteArray()))
-        file.delete()
+        store.delete(name)
+        assertEquals(null, store.read(name))
     }
 
     @Test
@@ -40,7 +41,15 @@ class AndroidBoundaryTest {
         val packageInfo = context.packageManager.getPackageInfo(
             context.packageName,
             PackageManager.PackageInfoFlags.of(PackageManager.GET_SERVICES.toLong()))
-        assertTrue(packageInfo.services.isNullOrEmpty())
+        val services = packageInfo.services.orEmpty()
+        // Scanner/transport libraries contribute internal services. The security
+        // boundary is that none is exported and Snippets cannot act as an input
+        // method or accessibility service capable of observing other apps.
+        assertTrue(services.none { it.exported })
+        assertTrue(services.none {
+            it.permission == "android.permission.BIND_INPUT_METHOD" ||
+                it.permission == "android.permission.BIND_ACCESSIBILITY_SERVICE"
+        })
 
         val processText = ComponentName(context, ProcessTextActivity::class.java)
         assertTrue(context.packageManager.getActivityInfo(processText, 0).exported)
