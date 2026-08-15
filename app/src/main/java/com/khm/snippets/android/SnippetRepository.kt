@@ -19,7 +19,10 @@ import java.security.SecureRandom
 import java.time.Instant
 import java.util.UUID
 
-class SnippetRepository(context: Context) {
+class SnippetRepository(
+    context: Context,
+    private val snippetsCloudEnabled: Boolean = BuildConfig.SNIPPETS_CLOUD_ENABLED,
+) {
     private val store = EncryptedStore(context)
     private val bridge = CoreBridge()
     private val client = HttpSyncClient()
@@ -60,6 +63,11 @@ class SnippetRepository(context: Context) {
                 remoteRecordsJSON = store.read(REMOTE) ?: "[]"
                 configuration = store.read(CONFIG)?.let(::cloudConfiguration)
                     ?: CloudConfiguration()
+                if (!snippetsCloudEnabled && configuration.provider == SyncProvider.SNIPPETS_CLOUD) {
+                    // Preserve the durable development selection for a later opt-in build,
+                    // but never let a shipping dark-launch build enter the HTTP data plane.
+                    configuration = configuration.copy(provider = SyncProvider.DEVICE)
+                }
                 keys = store.read(KEYS)?.let(::keyBundle)
                 keyBinding = store.read(KEY_BINDING)?.let(::cloudKeyBinding)
                 deviceID = store.read(DEVICE_ID) ?: freshDeviceID().also {
@@ -145,6 +153,7 @@ class SnippetRepository(context: Context) {
     }
 
     suspend fun configureCloud(serverURL: String, accessToken: String, spaceID: String) = mutate {
+        requireCloudFeature()
         val changedScope = configuration.serverURL != serverURL.trim().trimEnd('/') ||
             configuration.spaceID != spaceID.trim()
         configuration = configuration.copy(
@@ -165,6 +174,7 @@ class SnippetRepository(context: Context) {
 
     suspend fun beginCloudSignIn(serverURL: String, stepUp: Boolean = false): Intent? {
         initialization.await()
+        if (!snippetsCloudEnabled) return null
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
@@ -188,6 +198,7 @@ class SnippetRepository(context: Context) {
 
     internal suspend fun completeCloudSignIn(result: Intent?): CloudSignInCompletion {
         initialization.await()
+        if (!snippetsCloudEnabled) return CloudSignInCompletion(succeeded = false)
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
@@ -256,7 +267,7 @@ class SnippetRepository(context: Context) {
     }
 
     fun isCloudSignedIn(): Boolean =
-        didInitialize && cloudSessionAvailable &&
+        snippetsCloudEnabled && didInitialize && cloudSessionAvailable &&
             configuration.serverURL.isNotBlank() && cloudKeyStatus != CloudKeyStatus.SIGNED_OUT
 
     suspend fun useDeviceOnly() = mutate {
@@ -265,6 +276,7 @@ class SnippetRepository(context: Context) {
     }
 
     suspend fun useSnippetsCloud() = mutate {
+        requireCloudFeature()
         if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation() ||
             configuration.serverURL.isBlank() || configuration.spaceID.isBlank() ||
             (configuration.accessToken.isBlank() && !authenticator.hasSession(configuration.serverURL))) {
@@ -281,7 +293,8 @@ class SnippetRepository(context: Context) {
         require(Base64.decode(imported.salt, Base64.DEFAULT).size == 32)
         require(imported.scopeID == "sync-v1")
         keys = imported
-        if (configuration.serverURL.isNotBlank() && configuration.spaceID.isNotBlank()) {
+        if (snippetsCloudEnabled &&
+            configuration.serverURL.isNotBlank() && configuration.spaceID.isNotBlank()) {
             bindCurrentKey(configuration.serverURL, configuration.spaceID)
             configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
             cloudKeyStatus = CloudKeyStatus.READY
@@ -509,6 +522,7 @@ class SnippetRepository(context: Context) {
      */
     internal suspend fun revealPendingRecoveryKit(): RecoveryKitPresentation? {
         initialization.await()
+        if (!snippetsCloudEnabled) return null
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
@@ -538,7 +552,8 @@ class SnippetRepository(context: Context) {
     suspend fun syncNow() {
         initialization.await()
         mutex.withLock {
-            if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation() ||
+            if (!snippetsCloudEnabled || store.read(PENDING_LOCAL_ERASE) != null ||
+                authenticator.hasPendingRevocation() ||
                 configuration.provider != SyncProvider.SNIPPETS_CLOUD) return
             if (!hasBoundKey()) {
                 publish(errorCode = "library_key_required")
@@ -627,6 +642,7 @@ class SnippetRepository(context: Context) {
         mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
+                requireCloudFeature()
                 withContext(Dispatchers.IO) { operation() }
                 persistSyncState()
                 publish()
@@ -638,6 +654,10 @@ class SnippetRepository(context: Context) {
                 publish(errorCode = "secure_setup_failed")
             }
         }
+    }
+
+    private fun requireCloudFeature() {
+        if (!snippetsCloudEnabled) throw CloudAuthFailure("cloud_feature_disabled")
     }
 
     private fun finishPostAuthorization(accessToken: String): RecoveryKitPresentation? {

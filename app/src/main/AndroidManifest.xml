@@ -42,6 +42,7 @@
              Link. The callback host must serve a matching assetlinks.json. -->
         <activity
             android:name="net.openid.appauth.RedirectUriReceiverActivity"
+            android:enabled="${snippetsCloudEnabled}"
             android:exported="true"
             tools:node="replace">
             <intent-filter android:autoVerify="true">

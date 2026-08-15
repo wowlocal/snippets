@@ -154,11 +154,14 @@ production host):
 {"webcredentials":{"apps":["H8QG3CBM96.com.khm.snippets"]}}
 ```
 
-Serve both directly as `application/json` over HTTPS without redirects. Apple builds set
-`SNIPPETS_CLOUD_BASE_URL` and `SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST`; Android builds set
-the equivalent Gradle properties `SNIPPETS_CLOUD_URL` and
+Serve both directly as `application/json` over HTTPS without redirects. Snippets Cloud
+is dark-launched, so endpoints alone never enable it. Internal Apple builds must set
+`SNIPPETS_CLOUD_ENABLED=YES`, `SNIPPETS_CLOUD_BASE_URL`, and
+`SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST`; Android builds use
+`SNIPPETS_CLOUD_ENABLED=true`, `SNIPPETS_CLOUD_URL`, and
 `SNIPPETS_OAUTH_CALLBACK_HOST`. The associated-domain capability must be present in the
-Apple provisioning profiles used to sign both app targets.
+Apple provisioning profiles used to sign both app targets. Normal builds leave the
+feature flag off and expose no Snippets Cloud account or provider UI.
 
 Allow `openid offline_access`, set `OIDC_AUDIENCE` to the exact canonical
 `PUBLIC_BASE_URL`, and use a distinct `OIDC_CLIENT_ID`. The provider must honor the

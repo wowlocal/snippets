@@ -1238,9 +1238,11 @@ private final class SyncSettingsViewController: NSViewController {
     private let clearHaltButton = NSButton(title: "Resume After Review", target: nil, action: nil)
     private let secondMacLabel = NSTextField(wrappingLabelWithString: "")
     private var presentedRecoveryAlert: NSAlert?
+    private var backendSelection: SyncBackendSelectionStore {
+        (NSApp.delegate as? AppDelegate)?.backendSelection ?? SyncBackendSelectionStore()
+    }
     private lazy var cloudBootstrap = SnippetsCloudAccountBootstrap(
-        selection: (NSApp.delegate as? AppDelegate)?.backendSelection
-            ?? SyncBackendSelectionStore())
+        selection: backendSelection)
 
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
@@ -1249,13 +1251,17 @@ private final class SyncSettingsViewController: NSViewController {
         let title = NSTextField(labelWithString: "Cloud Sync")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
-        let intro = makeSecondaryLabel(
-            "Choose iCloud or Snippets Cloud without migrating away from either one. "
-            + "Only the selected provider is writable. Every snippet is encrypted on this Mac "
-            + "before it leaves; both providers carry the same opaque wire records.")
+        let cloudFeatureEnabled = backendSelection.snippetsCloudEnabled
+        let intro = makeSecondaryLabel(cloudFeatureEnabled
+            ? "Choose iCloud or Snippets Cloud without migrating away from either one. "
+                + "Only the selected provider is writable. Every snippet is encrypted on this Mac "
+                + "before it leaves; both providers carry the same opaque wire records."
+            : "Snippets are encrypted on this Mac before iCloud sync sends them. "
+                + "How often you use each snippet always remains local.")
 
-        providerPopup.addItems(withTitles: SyncBackendSelectionStore.Provider.allCases.map(\.displayName))
-        for (index, provider) in SyncBackendSelectionStore.Provider.allCases.enumerated() {
+        let providers = backendSelection.availableProviders
+        providerPopup.addItems(withTitles: providers.map(\.displayName))
+        for (index, provider) in providers.enumerated() {
             providerPopup.item(at: index)?.representedObject = provider.rawValue
         }
         providerPopup.target = self
@@ -1269,6 +1275,11 @@ private final class SyncSettingsViewController: NSViewController {
         providerRow.orientation = .horizontal
         providerRow.alignment = .centerY
         providerRow.spacing = 8
+        providerRow.isHidden = !cloudFeatureEnabled
+
+        if !cloudFeatureEnabled {
+            enableCheckbox.title = "Sync snippets with iCloud"
+        }
 
         enableCheckbox.target = self
         enableCheckbox.action = #selector(handleEnabledChanged(_:))
@@ -1332,13 +1343,14 @@ private final class SyncSettingsViewController: NSViewController {
         guard isViewLoaded, let coordinator = Self.coordinator else { return }
 
         enableCheckbox.state = SyncCoordinator.isEnabled ? .on : .off
-        let selection = SyncBackendSelectionStore()
+        let selection = backendSelection
         if let item = providerPopup.itemArray.first(where: {
             ($0.representedObject as? String) == selection.provider.rawValue
         }) {
             providerPopup.select(item)
         }
-        configureCloudButton.isHidden = selection.provider != .snippetsCloud
+        configureCloudButton.isHidden = !selection.snippetsCloudEnabled
+            || selection.provider != .snippetsCloud
         statusLabel.stringValue = coordinator.statusDescription
 
         // Shown whenever sync is on, not only when an engine exists: a start that failed
@@ -1363,7 +1375,7 @@ private final class SyncSettingsViewController: NSViewController {
     /// worth naming precisely rather than covering with one paragraph of hedging.
     private func secondMacAdvice() -> String {
         guard SyncCoordinator.isEnabled, let app = NSApp.delegate as? AppDelegate else { return "" }
-        if SyncBackendSelectionStore().provider == .snippetsCloud {
+        if backendSelection.provider == .snippetsCloud {
             return "Another device joins this library through approved pairing or recovery. "
                 + "The server never receives the portable sync-v1 key. Switching back to "
                 + "iCloud keeps using the existing CloudKit container and implementation."
@@ -1403,17 +1415,18 @@ private final class SyncSettingsViewController: NSViewController {
               let provider = SyncBackendSelectionStore.Provider(rawValue: rawValue) else { return }
         switch provider {
         case .iCloud:
-            SyncBackendSelectionStore().selectICloud()
+            backendSelection.selectICloud()
             Self.coordinator?.reloadProviderSelection()
             reloadFromStorage()
         case .snippetsCloud:
+            guard backendSelection.snippetsCloudEnabled else { return }
             configureSnippetsCloud()
         }
     }
 
     @objc private func configureSnippetsCloud() {
-        let selection = (NSApp.delegate as? AppDelegate)?.backendSelection
-            ?? SyncBackendSelectionStore()
+        let selection = backendSelection
+        guard selection.snippetsCloudEnabled else { return }
         if selection.hasCloudSession {
             do {
                 try presentCloudState(cloudBootstrap.state())

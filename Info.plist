@@ -17,6 +17,8 @@
 	</array>
 	<key>SnippetsCloudBaseURL</key>
 	<string>$(SNIPPETS_CLOUD_BASE_URL)</string>
+	<key>SnippetsCloudEnabled</key>
+	<string>$(SNIPPETS_CLOUD_ENABLED)</string>
 	<key>SnippetsCloudOAuthCallbackHost</key>
 	<string>$(SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST)</string>
 	<key>UTExportedTypeDeclarations</key>

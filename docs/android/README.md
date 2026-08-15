@@ -1,8 +1,10 @@
 # Android and cross-cloud implementation plan
 
-Status: design proposal, 2026-08-13. This directory is an implementation plan, not a
-claim that the Android app or HTTP service already ships. The existing Apple apps and
-their CloudKit implementation remain the code authority until each phase below lands.
+Status: Android and the HTTP service foundation are implemented in the repository, but
+Snippets Cloud is a dark launch. Normal builds expose the Android app as local-only and
+keep Apple apps on iCloud; the HTTP provider and account UI require the explicit internal
+build flag described in [IMPLEMENTATION.md](IMPLEMENTATION.md). This is not a claim that
+the hosted service ships.
 
 ## Product decision
 
@@ -14,8 +16,8 @@ Snippets will support one active writable sync provider for a local library at a
 | --- | --- | --- | --- |
 | Local only | Yes | Yes | None |
 | iCloud | Yes | No | Apple/private CloudKit database |
-| Snippets Cloud | Yes | Yes | Snippets-hosted HTTP service |
-| Custom Server | Yes | Yes | User or organization, same open HTTP protocol |
+| Snippets Cloud | Implemented, disabled by default | Implemented, disabled by default | Snippets-hosted HTTP service |
+| Custom Server | Protocol foundation only | Protocol foundation only | User or organization, same open HTTP protocol |
 
 iCloud remains a first-class option on Apple devices, with the existing private
 database, CloudKit zone, wire format, and synchronizable Keychain bootstrap. It is not

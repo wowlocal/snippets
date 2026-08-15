@@ -238,7 +238,7 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
             twoPane || screen == Screen.LIBRARY -> "Snippets"
             screen == Screen.EDITOR && editing?.name.isNullOrBlank() -> "New snippet"
             screen == Screen.EDITOR -> "Edit snippet"
-            else -> "Cloud & storage"
+            else -> if (BuildConfig.SNIPPETS_CLOUD_ENABLED) "Cloud & storage" else "Storage"
         }
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -273,8 +273,18 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
                                     },
                                 ) {
                                     Icon(
-                                        painterResource(R.drawable.ic_cloud),
-                                        contentDescription = "Cloud settings",
+                                        painterResource(
+                                            if (BuildConfig.SNIPPETS_CLOUD_ENABLED) {
+                                                R.drawable.ic_cloud
+                                            } else {
+                                                R.drawable.ic_phone
+                                            },
+                                        ),
+                                        contentDescription = if (BuildConfig.SNIPPETS_CLOUD_ENABLED) {
+                                            "Cloud settings"
+                                        } else {
+                                            "Storage settings"
+                                        },
                                     )
                                 }
                             }
@@ -1062,7 +1072,8 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val activity = LocalActivity.current as? MainActivity
-    val cloudConfigured = BuildConfig.SNIPPETS_CLOUD_URL.isNotBlank() &&
+    val cloudConfigured = BuildConfig.SNIPPETS_CLOUD_ENABLED &&
+        BuildConfig.SNIPPETS_CLOUD_URL.isNotBlank() &&
         !BuildConfig.SNIPPETS_OAUTH_REDIRECT_URI.contains(".invalid/")
     // Recovery input is a decryption secret: never serialize it into SavedState.
     var recoveryCode by remember { mutableStateOf("") }
@@ -1140,9 +1151,16 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            Text("Cloud & storage", style = MaterialTheme.typography.titleLarge)
             Text(
-                "Choose the active writable provider without migrating or deleting the other cloud.",
+                if (BuildConfig.SNIPPETS_CLOUD_ENABLED) "Cloud & storage" else "Storage",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                if (BuildConfig.SNIPPETS_CLOUD_ENABLED) {
+                    "Choose the active writable provider without migrating or deleting the other cloud."
+                } else {
+                    "Snippets stay encrypted on this device."
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -1154,16 +1172,18 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                         onClick = { scope.launch { repository.useDeviceOnly() } },
                         label = { Text("On device") },
                     )
-                    FilterChip(
-                        selected = state.provider == SyncProvider.SNIPPETS_CLOUD,
-                        onClick = {
-                            scope.launch {
-                                repository.useSnippetsCloud()
-                                repository.syncNow()
-                            }
-                        },
-                        label = { Text("Snippets Cloud") },
-                    )
+                    if (BuildConfig.SNIPPETS_CLOUD_ENABLED) {
+                        FilterChip(
+                            selected = state.provider == SyncProvider.SNIPPETS_CLOUD,
+                            onClick = {
+                                scope.launch {
+                                    repository.useSnippetsCloud()
+                                    repository.syncNow()
+                                }
+                            },
+                            label = { Text("Snippets Cloud") },
+                        )
+                    }
                 }
                 Text(
                     state.syncLabel,
@@ -1172,7 +1192,7 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                 )
             }
         }
-        item {
+        if (BuildConfig.SNIPPETS_CLOUD_ENABLED) item {
             SettingsCard(title = "Snippets Cloud") {
                 Text(
                     if (signedIn) "Signed in. Your personal space and session renew automatically."
@@ -1364,7 +1384,7 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                 }
             }
         }
-        item {
+        if (BuildConfig.SNIPPETS_CLOUD_ENABLED) item {
             Text(
                 "iCloud remains available and unchanged in the Apple apps. Snippets Cloud uses the same encrypted record format, so switching providers is a sync operation rather than a data migration.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1424,6 +1444,7 @@ private fun SettingsCard(
 }
 
 private fun cloudErrorDescription(code: String): String = when (code) {
+    "cloud_feature_disabled" -> "Snippets Cloud is disabled in this build."
     "authorization_cancelled" -> "Sign-in was cancelled. Nothing changed."
     "sign_in_required", "authentication_required" -> "Please sign in again to continue syncing."
     "reauthentication_required" -> "Confirm this sensitive action with your passkey."

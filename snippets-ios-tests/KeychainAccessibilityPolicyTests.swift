@@ -153,7 +153,8 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             defaults: defaults,
             keychain: credentials,
             cloudKeys: cloudKeys,
-            bootstrapSecrets: bootstrap)
+            bootstrapSecrets: bootstrap,
+            snippetsCloudEnabled: true)
         try selection.selectSnippetsCloud(
             serverURL: server,
             spaceID: space,
@@ -173,7 +174,8 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             defaults: defaults,
             keychain: credentials,
             cloudKeys: cloudKeys,
-            bootstrapSecrets: bootstrap)
+            bootstrapSecrets: bootstrap,
+            snippetsCloudEnabled: true)
 
         XCTAssertNil(try cloudKeys.material(serverURL: server, spaceID: space))
         XCTAssertNil(try bootstrap.loadItem(account: SnippetsCloudAccountBootstrap.pairingAccount))
@@ -182,6 +184,39 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         XCTAssertEqual(resumed.provider, .iCloud)
         XCTAssertNil(resumed.cloudCoordinates)
         XCTAssertFalse(resumed.hasCloudSession)
+    }
+
+    func testDarkLaunchGateKeepsStoredCloudSelectionOffTheDataPlane() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.cloud-gate.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        defaults.set(
+            SyncBackendSelectionStore.Provider.snippetsCloud.rawValue,
+            forKey: SyncBackendSelectionStore.providerDefaultsKey)
+        defaults.set(true, forKey: SyncBackendSelectionStore.pendingSwitchDefaultsKey)
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.cloud-gate-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: false)
+
+        XCTAssertEqual(selection.availableProviders, [.iCloud])
+        XCTAssertEqual(selection.provider, .iCloud)
+        XCTAssertFalse(selection.hasPendingProviderSwitch)
+        XCTAssertFalse(defaults.bool(forKey: SyncBackendSelectionStore.pendingSwitchDefaultsKey))
+        XCTAssertThrowsError(try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            accessToken: "test-access-token")) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .featureDisabled = failure else {
+                return XCTFail("Expected the dark-launch gate, got \(type(of: error))")
+            }
+        }
     }
 
     func testLogoutJournalWinsAfterRefreshCrashBeforeSessionReplacement() {

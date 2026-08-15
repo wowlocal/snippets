@@ -26,6 +26,15 @@ android {
             "SNIPPETS_OAUTH_CALLBACK_HOST must be an ASCII DNS host"
         }
         manifestPlaceholders["snippetsOAuthCallbackHost"] = oauthCallbackHost
+        val snippetsCloudEnabledValue = providers.gradleProperty("SNIPPETS_CLOUD_ENABLED")
+            .orElse("false")
+            .get()
+            .lowercase()
+        require(snippetsCloudEnabledValue == "true" || snippetsCloudEnabledValue == "false") {
+            "SNIPPETS_CLOUD_ENABLED must be true or false"
+        }
+        val snippetsCloudEnabled = snippetsCloudEnabledValue == "true"
+        manifestPlaceholders["snippetsCloudEnabled"] = snippetsCloudEnabled.toString()
         // Satisfies AppAuth's lower-priority library manifest; the activity is
         // replaced below with a verified HTTPS App Link, so this scheme is not exported.
         manifestPlaceholders["appAuthRedirectScheme"] = "snippets-oauth-disabled"
@@ -35,6 +44,7 @@ android {
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
         buildConfigField("String", "SNIPPETS_CLOUD_URL", "\"$snippetsCloudURL\"")
+        buildConfigField("boolean", "SNIPPETS_CLOUD_ENABLED", snippetsCloudEnabled.toString())
         buildConfigField(
             "String",
             "SNIPPETS_OAUTH_REDIRECT_URI",

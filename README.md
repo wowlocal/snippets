@@ -311,9 +311,9 @@ More detail:
 - [docs/cloud-sync.md](docs/cloud-sync.md) — sync safety and secure-snippet design. Its
   older phase/status table predates the shipping CloudKit transport and iOS target; the
   current code is authoritative for implementation status.
-- [docs/android/README.md](docs/android/README.md) — implementation plan for the native
-  Android app, shared Swift core, fully compatible iCloud/HTTP provider switching, and
-  the self-hostable sync service. It is a design proposal, not shipping status.
+- [docs/android/README.md](docs/android/README.md) — implementation and remaining delivery
+  plan for the native Android app, shared Swift core, iCloud/HTTP provider switching, and
+  the self-hostable sync service. Snippets Cloud remains dark-launched, not shipping.
 - [docs/android/testing-strategy.md](docs/android/testing-strategy.md) — executable test
   levels, cross-platform/provider matrices, CloudKit canaries, chaos coverage, and release
   gates for Android, Apple clients, and the sync service.

@@ -124,7 +124,9 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             cell.accessoryType = .disclosureIndicator
         case .syncToggle:
             cell.textLabel?.text = "Sync this library"
-            cell.detailTextLabel?.text = "Encrypted before it is sent. Only one cloud provider is writable at a time."
+            cell.detailTextLabel?.text = environment.backendSelection.snippetsCloudEnabled
+                ? "Encrypted before it is sent. Only one cloud provider is writable at a time."
+                : "Encrypted before it is sent to iCloud."
             let control = UISwitch()
             control.isOn = SyncCoordinator.isEnabled
             control.accessibilityIdentifier = "icloud-sync"
@@ -230,7 +232,9 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     private func rows(in section: Section) -> [Row] {
         switch section {
         case .sync:
-            var rows: [Row] = [.syncProvider, .syncToggle, .syncStatus]
+            var rows: [Row] = environment.backendSelection.snippetsCloudEnabled
+                ? [.syncProvider, .syncToggle, .syncStatus]
+                : [.syncToggle, .syncStatus]
             if SyncCoordinator.isEnabled { rows.append(.syncNow) }
             if case .halted(let reason, _) = environment.syncCoordinator.state,
                reason.isUserRecoverable {
@@ -253,6 +257,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
 
     private func chooseSyncProvider() {
         let selection = environment.backendSelection
+        guard selection.snippetsCloudEnabled else { return }
         let alert = UIAlertController(
             title: "Cloud Provider",
             message: "Switch and Sync preserves the local library and the other cloud. iCloud continues using the existing CloudKit implementation.",
@@ -285,6 +290,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
 
     private func configureSnippetsCloud() {
         let selection = environment.backendSelection
+        guard selection.snippetsCloudEnabled else { return }
         guard let bundled = SyncBackendSelectionStore.bundledServerURL,
               SyncBackendSelectionStore.bundledOAuthRedirectURL != nil else {
             let unavailable = UIAlertController(

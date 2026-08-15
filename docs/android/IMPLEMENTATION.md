@@ -72,20 +72,23 @@ r27d or newer, Android SDK 36, and JDK 25 for publishing swift-java's Java runti
 
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew :app:assembleDebug \
+  -PSNIPPETS_CLOUD_ENABLED=true \
   -PSNIPPETS_CLOUD_URL=https://sync.example.com \
   -PSNIPPETS_OAUTH_CALLBACK_HOST=auth.example.com
 ```
 
 Apple builds use the equivalent public build settings
-`SNIPPETS_CLOUD_BASE_URL=https://sync.example.com` and
+`SNIPPETS_CLOUD_ENABLED=YES`,
+`SNIPPETS_CLOUD_BASE_URL=https://sync.example.com`, and
 `SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST=auth.example.com`. The OIDC public native client
 registers `https://auth.example.com/oauth2redirect/android` and
 `https://auth.example.com/oauth2redirect/apple`; neither platform embeds a client
 secret. The callback host must publish Android Digital Asset Links for the release
 package/certificate and Apple associated-web-credentials metadata for
 `H8QG3CBM96.com.khm.snippets` (plus the debug identifiers only on non-production hosts).
-Omitting either pin disables sign-in; there is no runtime textbox that can redirect a
-bearer token to an arbitrary origin.
+The feature flag defaults to off on every platform. Omitting the flag or either pin
+disables sign-in; there is no runtime textbox that can redirect a bearer token to an
+arbitrary origin.
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. The Gradle module
 builds `arm64-v8a` and `x86_64`, generates the Java JNI wrapper, and packages the Swift,

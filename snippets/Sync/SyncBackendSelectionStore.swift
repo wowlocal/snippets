@@ -3,6 +3,27 @@ import AuthenticationServices
 import CryptoKit
 import Security
 
+/// Build-time dark-launch gate for the first-party Snippets Cloud service.
+///
+/// Shipping builds leave `SNIPPETS_CLOUD_ENABLED` at `NO`. Supplying endpoints alone
+/// is deliberately insufficient: an internal build must opt in to both the feature and
+/// its pinned OAuth coordinates before any account UI or HTTP data plane can run.
+nonisolated enum SnippetsCloudFeature {
+    static let infoDictionaryKey = "SnippetsCloudEnabled"
+
+    static var isEnabled: Bool {
+        switch Bundle.main.object(forInfoDictionaryKey: infoDictionaryKey) {
+        case let value as NSNumber:
+            return value.boolValue
+        case let value as String:
+            return ["1", "true", "yes"].contains(
+                value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        default:
+            return false
+        }
+    }
+}
+
 /// The durable revocation journal is authoritative when a refresh rotated credentials
 /// but process death happened before the primary session could be replaced.
 struct SnippetsCloudCredentialRevocationPlan: Equatable {
@@ -85,12 +106,14 @@ final class SyncBackendSelectionStore {
     }
 
     enum Failure: Error, LocalizedError, CustomStringConvertible {
+        case featureDisabled
         case missingConfiguration
         case missingCredential
         case invalidCredential
 
         var description: String {
             switch self {
+            case .featureDisabled: "Snippets Cloud is disabled in this build"
             case .missingConfiguration: "Snippets Cloud is not configured"
             case .missingCredential: "Snippets Cloud needs sign-in"
             case .invalidCredential: "the stored Snippets Cloud credential is invalid"
@@ -113,15 +136,18 @@ final class SyncBackendSelectionStore {
     private let defaults: UserDefaults
     private let keychain: KeychainSecretStore
     private let bootstrapSecretsForRecovery: KeychainSecretStore
+    let snippetsCloudEnabled: Bool
     let cloudKeys: SnippetsCloudKeyStore
 
     init(
         defaults: UserDefaults = .standard,
         keychain: KeychainSecretStore? = nil,
         cloudKeys: SnippetsCloudKeyStore? = nil,
-        bootstrapSecrets: KeychainSecretStore? = nil
+        bootstrapSecrets: KeychainSecretStore? = nil,
+        snippetsCloudEnabled: Bool = SnippetsCloudFeature.isEnabled
     ) {
         self.defaults = defaults
+        self.snippetsCloudEnabled = snippetsCloudEnabled
         self.keychain = keychain ?? KeychainSecretStore(
             tier: .deviceOnly,
             service: Self.credentialService,
@@ -133,6 +159,12 @@ final class SyncBackendSelectionStore {
         self.cloudKeys = cloudKeys ?? SnippetsCloudKeyStore(coordinates: {
             Self.cloudCoordinates(in: defaults)
         })
+        if !snippetsCloudEnabled {
+            // A provider-switch journal is one-shot review authority. Never carry an
+            // unfinished development transition through a build that cannot expose or
+            // complete that transition, then revive it if the feature is enabled later.
+            defaults.set(false, forKey: Self.pendingSwitchDefaultsKey)
+        }
         // A successful remote logout writes this journal before deleting any local
         // secret. Finishing it during normal app construction makes process death at
         // every subsequent deletion boundary recoverable and fail-closed.
@@ -148,8 +180,16 @@ final class SyncBackendSelectionStore {
     }
 
     var provider: Provider {
-        get { Provider(rawValue: defaults.string(forKey: Self.providerDefaultsKey) ?? "") ?? .iCloud }
+        get {
+            let stored = Provider(
+                rawValue: defaults.string(forKey: Self.providerDefaultsKey) ?? "") ?? .iCloud
+            return stored == .snippetsCloud && !snippetsCloudEnabled ? .iCloud : stored
+        }
         set { defaults.set(newValue.rawValue, forKey: Self.providerDefaultsKey) }
+    }
+
+    var availableProviders: [Provider] {
+        snippetsCloudEnabled ? Provider.allCases : [.iCloud]
     }
 
     var cloudCoordinates: CloudCoordinates? {
@@ -174,7 +214,7 @@ final class SyncBackendSelectionStore {
     }
 
     var hasPendingProviderSwitch: Bool {
-        defaults.bool(forKey: Self.pendingSwitchDefaultsKey)
+        snippetsCloudEnabled && defaults.bool(forKey: Self.pendingSwitchDefaultsKey)
     }
 
     func selectICloud() {
@@ -186,6 +226,7 @@ final class SyncBackendSelectionStore {
         spaceID: UUID,
         accessToken: String
     ) throws {
+        guard snippetsCloudEnabled else { throw Failure.featureDisabled }
         guard !hasPendingLocalErase, !hasPendingRemoteRevocation else {
             throw Failure.missingCredential
         }
@@ -204,6 +245,7 @@ final class SyncBackendSelectionStore {
         requiresStrongAuthentication: Bool = false,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws {
+        guard snippetsCloudEnabled else { throw Failure.featureDisabled }
         try resumePendingLocalErase()
         guard let pinnedServerURL = Self.bundledServerURL,
               let redirectURL = Self.bundledOAuthRedirectURL,
@@ -304,6 +346,7 @@ final class SyncBackendSelectionStore {
     }
 
     func freshCloudAccessToken(forceRefresh: Bool = false) async throws -> String {
+        guard snippetsCloudEnabled else { throw Failure.featureDisabled }
         guard !hasPendingLocalErase, !hasPendingRemoteRevocation else {
             throw Failure.missingCredential
         }
@@ -321,6 +364,7 @@ final class SyncBackendSelectionStore {
     }
 
     func activateSnippetsCloud() {
+        guard snippetsCloudEnabled else { return }
         guard !hasPendingLocalErase, !hasPendingRemoteRevocation else { return }
         markSwitch(to: .snippetsCloud)
     }
@@ -330,7 +374,9 @@ final class SyncBackendSelectionStore {
     }
 
     var hasCloudSession: Bool {
-        !hasPendingLocalErase && keychain.hasItem(account: Self.oauthSessionAccount)
+        snippetsCloudEnabled
+            && !hasPendingLocalErase
+            && keychain.hasItem(account: Self.oauthSessionAccount)
     }
 
     static var bundledServerURL: URL? {
@@ -407,10 +453,11 @@ final class SyncBackendSelectionStore {
     }
 
     private func markSwitch(to selected: Provider) {
+        guard selected != .snippetsCloud || snippetsCloudEnabled else { return }
         // Setting the same provider after changing its endpoint/token can still be an
         // account-scope transition and needs the exact same journal-first handoff.
         provider = selected
-        defaults.set(true, forKey: Self.pendingSwitchDefaultsKey)
+        defaults.set(snippetsCloudEnabled, forKey: Self.pendingSwitchDefaultsKey)
     }
 }
 

@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.pm.PackageManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,6 +65,20 @@ class AndroidBoundaryTest {
         val mainActivity = ComponentName(context, MainActivity::class.java)
         val activityInfo = context.packageManager.getActivityInfo(mainActivity, 0)
         assertEquals(R.style.Theme_Snippets_Starting, activityInfo.themeResource)
+    }
+
+    @Test
+    fun disabledCloudFeatureFailsClosedBeforeNetworking() = runBlocking {
+        val repository = SnippetRepository(context, snippetsCloudEnabled = false)
+
+        repository.configureCloud(
+            serverURL = "https://sync.example",
+            accessToken = "test-access-token",
+            spaceID = "00000000-0000-4000-8000-000000000001",
+        )
+
+        assertEquals(SyncProvider.DEVICE, repository.state.value.provider)
+        assertEquals("cloud_feature_disabled", repository.state.value.errorCode)
     }
 
     private fun ByteArray.containsSubsequence(needle: ByteArray): Boolean {

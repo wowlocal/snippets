@@ -152,7 +152,7 @@ class CloudEndToEndTest {
         accessToken: String,
         spaceID: String,
     ): SnippetRepository {
-        val client = SnippetRepository(context)
+        val client = SnippetRepository(context, snippetsCloudEnabled = true)
         assertTrue(client.state.value.snippets.isEmpty())
         client.importPortableKeyBundle(keyBundle)
         assertNull(client.state.value.errorCode)

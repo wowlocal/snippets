@@ -85,7 +85,10 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
 
         let keychain = KeychainSecretStore(tier: .deviceOnly, inMemory: true)
         try keychain.storeItem(Self.portableSyncMaterial, account: SyncKeyStore.account)
-        let selection = SyncBackendSelectionStore(defaults: defaults, keychain: keychain)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: keychain,
+            snippetsCloudEnabled: true)
         XCTAssertEqual(selection.provider, .iCloud)
         try selection.selectSnippetsCloud(
             serverURL: try XCTUnwrap(URL(string: serverText)),
