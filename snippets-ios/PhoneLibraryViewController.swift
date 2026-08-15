@@ -54,7 +54,7 @@ final class PhoneLibraryViewController: UIViewController {
         return button
     }()
     private let toastPresenter = AppToastPresenter()
-    private let copyFeedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
+    private lazy var copyFeedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
     private var filterItem: UIBarButtonItem?
     private var activeTagKeys = Set<String>()
     private var sections: [Section] = []
@@ -101,7 +101,9 @@ final class PhoneLibraryViewController: UIViewController {
             self.updateSyncPresentation()
             self.updateEmptyState()
         }
-        reload()
+        // `viewWillAppear` follows immediately on first presentation and performs the
+        // same reload. Doing it here as well sorted, filtered and reloaded the complete
+        // library twice before the first frame.
     }
 
     override func viewWillAppear(_ animated: Bool) {

@@ -25,8 +25,6 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
         incomingLinkCoordinator = IncomingSnippetLinkCoordinator(store: environment.store)
         super.init(rootViewController: library)
 
-        TemporaryExportFiles.removeStale()
-
         library.delegate = self
         AppTheme.configureNavigationBar(navigationBar)
         AppTheme.configureToolbar(toolbar)

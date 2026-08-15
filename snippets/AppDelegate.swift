@@ -119,12 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         return engine
     }()
-    private lazy var settingsWindowController = SettingsWindowController()
     private lazy var transientScreenMessageController = TransientScreenMessageController()
+    private var settingsWindowController: SettingsWindowController?
     #if !NO_SPARKLE
-    private lazy var updaterController = SPUStandardUpdaterController(
-        startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil
-    )
+    private var updaterController: SPUStandardUpdaterController?
     #endif
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
@@ -138,6 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var statusMenuSecurePasteDestination: SecurePasteDestination?
     private var securePasteDestination: SecurePasteDestination?
     private var securePasteTask: Task<Void, Never>?
+    private var postLaunchServicesWorkItem: DispatchWorkItem?
+    private var postLaunchServicesStarted = false
     private var shouldTerminateForReal = false
     private var terminationReplyPending = false
     #if !NO_SPARKLE
@@ -216,9 +216,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // The plaintext store shows secure records in the list, counts their tags, and
         // enforces keyword uniqueness against them — but can never reach their content.
         store.secureProvider = secureStore
-        // Plaintext edits and external writers such as `snippets-cli` share one trailing
-        // outbound-sync debounce. Assign this before publishing the initial attachment.
-        store.syncDelegate = syncCoordinator
         secureStore.onChange = { [weak self] in
             guard let self else { return }
             // A vault change alters the merged display list, so the same channel a
@@ -241,12 +238,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // completed attachment explicitly; otherwise existing secure shells remain
         // invisible until some unrelated library change forces another reload.
         store.onChange?(.init(source: .external))
+
+        if launchedAsLoginItem {
+            hideToBackground()
+        }
+        schedulePostLaunchServices()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Diagnostics.record(.lifecycle(.becameActive))
+        guard postLaunchServicesStarted else { return }
+        _ = syncCoordinator.syncNow(trigger: .becameActive)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Diagnostics.record(.lifecycle(.willTerminate))
+        // First: give the user's clipboard back before writing anything of our own. A snippet
+        // borrowed for a paste would otherwise outlive the process.
+        // Before anything else: remove the socket, so a CLI invocation racing our exit
+        // gets "not running" rather than a connection that dies mid-request.
+        // Before the library flush: a queued secure edit exists only in the editor, and
+        // the process is about to end.
+        (NSApp.windows.compactMap { $0.contentViewController as? ViewController }.first)?
+            .flushPendingSecureEdit()
+        postLaunchServicesWorkItem?.cancel()
+        postLaunchServicesWorkItem = nil
+        if postLaunchServicesStarted {
+            controlServer.stop()
+            _ = expansionEngine.prepareForTermination()
+        }
+        // Synchronous on purpose: this method returns and the process dies long
+        // before an async write would run, so an async flush here writes nothing.
+        usageStore.flush(synchronously: true)
+        store.flushPendingWrites()
+        Diagnostics.flush()
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    /// Work that does not contribute pixels to the main window starts just after the
+    /// first frame. The small bound keeps the status item, hotkeys, CLI socket, sync and
+    /// updater effectively immediate to a person while removing their keychain, event
+    /// tap, LaunchServices and window-server setup from AppKit's launch transaction.
+    private func schedulePostLaunchServices() {
+        let item = DispatchWorkItem { [weak self] in
+            self?.startPostLaunchServices()
+        }
+        postLaunchServicesWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
+    }
+
+    private func startPostLaunchServices() {
+        guard !postLaunchServicesStarted else { return }
+        postLaunchServicesWorkItem = nil
+        postLaunchServicesStarted = true
+
+        // Plaintext edits and external writers such as `snippets-cli` share one trailing
+        // outbound-sync debounce. No editing is possible before the first frame.
+        store.syncDelegate = syncCoordinator
         controlServer.start()
-
-        // Opt-in. Returns immediately without touching CloudKit, without writing `Sync/`,
-        // and without scheduling anything unless the user has ticked the box in Settings.
         syncCoordinator.startIfEnabled()
-
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
         configureFileMenuItems()
@@ -256,9 +307,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         setupStatusItem()
         setupGlobalHotkey()
         setupServicesProvider()
-        #if !NO_SPARKLE
-        updaterController.updater.automaticallyDownloadsUpdates = true
-        #endif
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleChromiumBundleIDsChanged),
@@ -284,41 +332,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             name: NSWindow.willCloseNotification,
             object: nil
         )
+        let updater = ensureUpdaterController()
+        updater.updater.automaticallyDownloadsUpdates = true
+        #if !DEBUG
+        updater.updater.checkForUpdatesInBackground()
         #endif
-
-        if launchedAsLoginItem {
-            hideToBackground()
-        }
-
-        #if !DEBUG && !NO_SPARKLE
-        updaterController.updater.checkForUpdatesInBackground()
         #endif
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        Diagnostics.record(.lifecycle(.becameActive))
-        _ = syncCoordinator.syncNow(trigger: .becameActive)
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        Diagnostics.record(.lifecycle(.willTerminate))
-        // First: give the user's clipboard back before writing anything of our own. A snippet
-        // borrowed for a paste would otherwise outlive the process.
-        // Before anything else: remove the socket, so a CLI invocation racing our exit
-        // gets "not running" rather than a connection that dies mid-request.
-        // Before the library flush: a queued secure edit exists only in the editor, and
-        // the process is about to end.
-        (NSApp.windows.compactMap { $0.contentViewController as? ViewController }.first)?
-            .flushPendingSecureEdit()
-        controlServer.stop()
-        _ = expansionEngine.prepareForTermination()
-        // Synchronous on purpose: this method returns and the process dies long
-        // before an async write would run, so an async flush here writes nothing.
-        usageStore.flush(synchronously: true)
-        store.flushPendingWrites()
-        Diagnostics.flush()
-        NotificationCenter.default.removeObserver(self)
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     /// Expanding a snippet means some other app is frontmost, so resigning
@@ -463,7 +482,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @IBAction func openSettings(_ sender: Any?) {
         NSApp.setActivationPolicy(.regular)
-        settingsWindowController.showSettings()
+        let controller = settingsWindowController ?? SettingsWindowController()
+        settingsWindowController = controller
+        controller.showSettings()
         #if !NO_SPARKLE
         refreshWindowUpdateAccessories()
         #endif
@@ -518,7 +539,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         #if !NO_SPARKLE
         if menuItem.action == #selector(checkForUpdates(_:)) {
-            return updaterController.updater.canCheckForUpdates && !isApplyingPendingUpdate
+            return ensureUpdaterController().updater.canCheckForUpdates
+                && !isApplyingPendingUpdate
         }
         if menuItem.action == #selector(installPendingUpdateAndRestart(_:)) {
             return pendingUpdateInstallHandler != nil && !isApplyingPendingUpdate
@@ -1157,7 +1179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         userInitiatedUpdateCheck = true
         setUpdateStatus("Checking for updates…", showProgress: true, autoClearAfter: nil)
-        updaterController.updater.checkForUpdatesInBackground()
+        ensureUpdaterController().updater.checkForUpdatesInBackground()
     }
 
     @IBAction func installPendingUpdateAndRestart(_ sender: Any?) {
@@ -1521,8 +1543,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Update UI State
 
     #if !NO_SPARKLE
+    private func ensureUpdaterController() -> SPUStandardUpdaterController {
+        if let updaterController { return updaterController }
+        let controller = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: self,
+            userDriverDelegate: nil
+        )
+        updaterController = controller
+        return controller
+    }
+
     private func refreshAppMenuUpdateState() {
-        appMenuCheckForUpdatesItem?.isEnabled = updaterController.updater.canCheckForUpdates && !isApplyingPendingUpdate
+        appMenuCheckForUpdatesItem?.isEnabled =
+            (updaterController?.updater.canCheckForUpdates ?? false)
+            && !isApplyingPendingUpdate
 
         if let version = pendingUpdateVersion, !version.isEmpty {
             appMenuRestartToUpdateItem?.title = "Restart to Apply Update \(version)"
@@ -1612,7 +1647,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func updateAccessoryCandidateWindows() -> [NSWindow] {
-        let settingsWindow = settingsWindowController.window
+        let settingsWindow = settingsWindowController?.window
         return NSApp.windows.filter { window in
             window.canBecomeMain
                 && !window.isMiniaturized

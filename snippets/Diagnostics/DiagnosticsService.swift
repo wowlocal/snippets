@@ -156,7 +156,6 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
     static let maximumExportSize: UInt64 = 25 * 1_024 * 1_024
     private static let timestampFormatter = DiagnosticsTimestampFormatter()
 
-    let appContext: DiagnosticAppContext
     let expansionVerboseLogging: ExpansionVerboseLoggingPreference
 
     private let fileManager: FileManager
@@ -166,6 +165,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
     private let sessionIdentifier = UUID().uuidString.lowercased()
     private let startedAtUptime = ProcessInfo.processInfo.systemUptime
     private let stateLock = NSLock()
+    private let appContextLock = NSLock()
+    private var cachedAppContext: DiagnosticAppContext?
     private let maintenanceQueue = DispatchQueue(
         label: "com.khm.snippets.diagnostics.maintenance",
         qos: .utility)
@@ -192,8 +193,6 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         retentionDayCount = max(1, retentionDays)
         registersGlobally = registerGlobally
         mirrorsToOSLog = mirrorToOSLog
-        appContext = Self.makeAppContext()
-
         let diagnosticsURL = SnippetStorageLocations.diagnosticsFolderURL
         let logsURL = SnippetStorageLocations.diagnosticsLogsFolderURL
         var created = true
@@ -251,14 +250,38 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         if registerGlobally {
             Diagnostics.install(self)
         }
-        removeStaleTemporaryExports()
-        hardenAndPrune()
-        migrateLegacyAuditIfNeeded()
         startMaintenanceTimer()
+        // Directory creation above is launch-critical: SnippetStore's macOS vnode
+        // observer must see the final folder layout. Retention scans, legacy migration,
+        // timestamp formatter warm-up, and a synchronous logger flush are not. Keep
+        // their ordering, but run them on the existing serial maintenance queue so
+        // neither AppKit nor UIKit waits for disk housekeeping before its first frame.
         if registerGlobally {
-            MXMetricManager.shared.add(self)
+            maintenanceQueue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self else { return }
+                MXMetricManager.shared.add(self)
+                self.emit(.appStarted(self.appContext), level: .info, synchronous: true)
+                self.removeStaleTemporaryExports()
+                self.hardenAndPrune()
+                self.migrateLegacyAuditIfNeeded()
+            }
+        } else {
+            // Isolated services are test/support tools with synchronous construction
+            // semantics: callers may inspect retention or migration immediately.
+            emit(.appStarted(appContext), level: .info, synchronous: true)
+            removeStaleTemporaryExports()
+            hardenAndPrune()
+            migrateLegacyAuditIfNeeded()
         }
-        emit(.appStarted(appContext), level: .info, synchronous: true)
+    }
+
+    private var appContext: DiagnosticAppContext {
+        appContextLock.lock()
+        defer { appContextLock.unlock() }
+        if let cachedAppContext { return cachedAppContext }
+        let context = Self.makeAppContext()
+        cachedAppContext = context
+        return context
     }
 
     deinit {

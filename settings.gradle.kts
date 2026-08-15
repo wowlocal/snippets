@@ -17,5 +17,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "Snippets Android"
 include(":app")
+include(":baselineprofile")
 include(":swiftcore")
 project(":swiftcore").projectDir = file("AndroidCorePackage")

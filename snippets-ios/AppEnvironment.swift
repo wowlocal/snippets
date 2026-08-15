@@ -5,6 +5,7 @@ import Foundation
 final class AppEnvironment {
     #if DEBUG
     static let emptyLibraryLaunchArgument = "--empty-library"
+    static let launchPerformanceArgument = "--ui-testing-launch-performance"
     #endif
 
     let diagnostics: DiagnosticsService
@@ -32,10 +33,15 @@ final class AppEnvironment {
         secureContentLoader: SnippetActionService.SecureContentLoader? = nil
     ) {
         #if DEBUG
-        if CommandLine.arguments.contains("--ui-testing-reset") {
+        let isUITestReset = CommandLine.arguments.contains("--ui-testing-reset")
+        let isLaunchPerformanceRun =
+            CommandLine.arguments.contains(Self.launchPerformanceArgument)
+        if isUITestReset || isLaunchPerformanceRun {
             let root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("Snippets-iOS-UI-Tests", isDirectory: true)
-            try? FileManager.default.removeItem(at: root)
+            if isUITestReset {
+                try? FileManager.default.removeItem(at: root)
+            }
             setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, root.path, 1)
             UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
         } else if CommandLine.arguments.contains(Self.emptyLibraryLaunchArgument) {
@@ -56,7 +62,7 @@ final class AppEnvironment {
         backendSelection = SyncBackendSelectionStore()
         #if DEBUG
         let usesDeterministicUITestAuthentication =
-            CommandLine.arguments.contains("--ui-testing-reset")
+            isUITestReset
             && CommandLine.arguments.contains("--ui-testing-authentication-succeeds")
         let authenticationEvaluator: VaultSession.AuthenticationEvaluator?
         if usesDeterministicUITestAuthentication {
@@ -111,6 +117,9 @@ final class AppEnvironment {
         hasStarted = true
         store.onChange?(.init(source: .external))
         syncCoordinator.startIfEnabled()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
+            TemporaryExportFiles.removeStale()
+        }
     }
 
     func becameActive() {

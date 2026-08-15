@@ -116,6 +116,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -133,6 +135,10 @@ class MainActivity : ComponentActivity() {
         val repository = (application as SnippetsApplication).repository
         val initialQuery = intent.getStringExtra(EXTRA_SEARCH_QUERY).orEmpty()
         setContent { SnippetsTheme { SnippetsApp(repository, initialQuery) } }
+        lifecycleScope.launch {
+            repository.state.first { !it.isBusy }
+            reportFullyDrawn()
+        }
     }
 
     fun scanSnippetsQRCode(onResult: (String) -> Unit, onFailure: () -> Unit) {
@@ -272,10 +278,13 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
                                     )
                                 }
                             }
-                            FilledTonalIconButton(onClick = {
-                                editingID = SnippetRepository.newSnippet().id
-                                screen = Screen.EDITOR
-                            }) {
+                            FilledTonalIconButton(
+                                onClick = {
+                                    editingID = SnippetRepository.newSnippet().id
+                                    screen = Screen.EDITOR
+                                },
+                                enabled = !state.isBusy,
+                            ) {
                                 Icon(
                                     painterResource(R.drawable.ic_add),
                                     contentDescription = "New snippet",
@@ -521,7 +530,12 @@ internal fun LibraryScreen(
             }
         }
         AnimatedVisibility(visible = state.isBusy) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
+            LinearProgressIndicator(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .semantics { contentDescription = "Loading library" },
+            )
         }
 
         Spacer(Modifier.height(10.dp))

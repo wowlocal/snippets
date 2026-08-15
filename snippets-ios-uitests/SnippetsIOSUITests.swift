@@ -12,6 +12,20 @@ final class SnippetsIOSUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testLaunchPerformance() throws {
+        let preparation = XCUIApplication()
+        preparation.launchArguments = ["--ui-testing-reset"]
+        preparation.launch()
+        preparation.terminate()
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-launch-performance"]
+
+        measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)]) {
+            app.launch()
+        }
+    }
+
     func testEmptyOnboardingCreatesAndSearchesSnippet() throws {
         _ = try createGreetingSnippetAndFocusSearch()
     }

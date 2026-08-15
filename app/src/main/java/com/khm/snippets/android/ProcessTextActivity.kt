@@ -20,15 +20,15 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 
 /** Explicit Android text action; intentionally not an IME, Accessibility service or overlay. */
 class ProcessTextActivity : ComponentActivity() {
@@ -43,16 +43,18 @@ class ProcessTextActivity : ComponentActivity() {
         val readOnly = intent.getBooleanExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false)
         setContent {
             SnippetsTheme {
-                val scope = rememberCoroutineScope()
+                val state by repository.state.collectAsState()
                 var query by remember { mutableStateOf(selected) }
-                var results by remember { mutableStateOf(repository.state.value.snippets) }
+                var results by remember { mutableStateOf(emptyList<SnippetItem>()) }
+                LaunchedEffect(query, state.snippets) {
+                    results = if (query.isBlank()) state.snippets else repository.search(query)
+                }
                 Column(Modifier.fillMaxSize().padding(16.dp)) {
                     Text("Insert Snippet", style = MaterialTheme.typography.titleLarge)
                     OutlinedTextField(
                         query,
                         {
                             query = it
-                            scope.launch { results = repository.search(it) }
                         },
                         Modifier.fillMaxWidth(),
                         label = { Text("Search") })

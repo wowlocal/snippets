@@ -272,10 +272,23 @@ nonisolated enum SnippetStorageLocations {
     /// them lazily on first use would fire the folder monitor at an arbitrary later
     /// moment — the exact bug the `Usage/` comment above was written to prevent.
     static func createAllDirectories(fileManager: FileManager = .default) {
+        // Resolve the sandbox/application-support root once. Each computed path above
+        // intentionally stays dynamic for tests that redirect storage between cases,
+        // but resolving it nine times during process launch needlessly repeats
+        // ProcessInfo and FileManager work on the main thread.
+        let root = supportFolderURL
+        let sync = root.appendingPathComponent("Sync", isDirectory: true)
+        let diagnostics = root.appendingPathComponent("Diagnostics", isDirectory: true)
         for folder in [
-            supportFolderURL, usageFolderURL, syncFolderURL,
-            syncQuarantineFolderURL, vaultFolderURL, diagnosticsFolderURL,
-            diagnosticsLogsFolderURL, backupsFolderURL, tmpFolderURL,
+            root,
+            root.appendingPathComponent("Usage", isDirectory: true),
+            sync,
+            sync.appendingPathComponent("Quarantine", isDirectory: true),
+            root.appendingPathComponent("Vault", isDirectory: true),
+            diagnostics,
+            diagnostics.appendingPathComponent("Logs", isDirectory: true),
+            root.appendingPathComponent("Backups", isDirectory: true),
+            root.appendingPathComponent("Tmp", isDirectory: true),
         ] {
             try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         }

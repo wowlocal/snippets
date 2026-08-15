@@ -22,6 +22,9 @@ class EncryptedStore(context: Context) {
         check(mkdirs() || isDirectory)
     }
     private val alias = "com.khm.snippets.android.local-v1"
+    private val cachedSecretKey: SecretKey by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        loadOrCreateSecretKey()
+    }
 
     fun read(name: String): String? {
         val file = File(root, safeName(name))
@@ -38,13 +41,14 @@ class EncryptedStore(context: Context) {
 
     @Synchronized
     fun write(name: String, value: String) {
+        val plaintext = value.toByteArray(Charsets.UTF_8)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
         cipher.updateAAD(name.toByteArray(Charsets.UTF_8))
-        val payload = ByteBuffer.allocate(4 + NONCE_BYTES + value.toByteArray().size + 16)
+        val payload = ByteBuffer.allocate(4 + NONCE_BYTES + plaintext.size + 16)
             .put(MAGIC)
             .put(cipher.iv)
-            .put(cipher.doFinal(value.toByteArray(Charsets.UTF_8)))
+            .put(cipher.doFinal(plaintext))
             .array()
 
         val destination = File(root, safeName(name))
@@ -90,7 +94,9 @@ class EncryptedStore(context: Context) {
         }
     }
 
-    private fun secretKey(): SecretKey {
+    private fun secretKey(): SecretKey = cachedSecretKey
+
+    private fun loadOrCreateSecretKey(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (keyStore.getKey(alias, null) as? SecretKey)?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")

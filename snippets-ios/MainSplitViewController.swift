@@ -77,8 +77,6 @@ final class MainSplitViewController: UISplitViewController {
         editorNavigationController = UINavigationController(rootViewController: editorController)
         super.init(style: .doubleColumn)
 
-        TemporaryExportFiles.removeStale()
-
         preferredDisplayMode = .oneBesideSecondary
         preferredSplitBehavior = .tile
         primaryBackgroundStyle = .sidebar

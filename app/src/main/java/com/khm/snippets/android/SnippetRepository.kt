@@ -3,6 +3,7 @@ package com.khm.snippets.android
 import android.content.Context
 import android.content.Intent
 import android.util.Base64
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -37,78 +38,92 @@ class SnippetRepository(context: Context) {
     private var pairingConfirmationCode: String? = null
     private var approvalConfirmationCode: String? = null
 
-    private val mutableState = MutableStateFlow(LibraryState())
+    private val mutableState = MutableStateFlow(LibraryState(isBusy = true))
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
+    private val initialization = CompletableDeferred<Unit>()
+    @Volatile private var didInitialize = false
+    @Volatile private var cloudSessionAvailable = false
 
     init {
-        try {
-            if (store.read(PENDING_LOCAL_ERASE) != null) {
-                completePendingLocalErase()
-            }
-            libraryJSON = store.read(LIBRARY) ?: "[]"
-            baseJSON = store.read(BASE) ?: "[]"
-            remoteRecordsJSON = store.read(REMOTE) ?: "[]"
-            configuration = store.read(CONFIG)?.let(::cloudConfiguration) ?: CloudConfiguration()
-            keys = store.read(KEYS)?.let(::keyBundle)
-            keyBinding = store.read(KEY_BINDING)?.let(::cloudKeyBinding)
-            deviceID = store.read(DEVICE_ID) ?: freshDeviceID().also {
-                store.write(DEVICE_ID, it)
-            }
-            cloudKeyStatus = when {
-                !authenticator.hasSession(configuration.serverURL.takeIf(String::isNotBlank)) ->
-                    CloudKeyStatus.SIGNED_OUT
-                hasBoundKey() -> CloudKeyStatus.READY
-                else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
-            }
-            store.read(PENDING_PAIRING)?.let { raw ->
-                runCatching { LibraryKeyBootstrap.PendingPairing.fromJSON(raw) }
-                    .onSuccess { pending ->
-                        pairingQRCode = pending.invitation.toQRPayload()
-                        pairingConfirmationCode = pending.invitation.confirmationCode
-                        cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
-                    }
-                    .onFailure { store.delete(PENDING_PAIRING) }
-            }
-            store.read(PENDING_APPROVAL)?.let { raw ->
-                runCatching { LibraryKeyBootstrap.PairingInvitation.fromQRPayload(raw) }
-                    .onSuccess { invitation ->
-                        approvalConfirmationCode = invitation.confirmationCode
-                        cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
-                    }
-                    .onFailure { store.delete(PENDING_APPROVAL) }
-            }
-            store.read(RECOVERY_PRESENTATION)?.let { payload ->
-                runCatching { LibraryKeyBootstrap.RecoveryKit.fromQRPayload(payload) }
-                    .onSuccess { kit ->
-                        if (kit.serverURL == configuration.serverURL &&
-                            kit.spaceID.equals(configuration.spaceID, ignoreCase = true)) {
-                            // Validate the durable value, but do not publish either
-                            // secret until this new process gets local user presence.
-                            cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
-                        } else {
-                            store.delete(RECOVERY_PRESENTATION)
+        // The activity can compose its first, responsive frame while device-bound
+        // files and AndroidKeyStore are opened on the I/O dispatcher. Every mutating
+        // API awaits this one-shot barrier, so the loading frame can never overwrite
+        // durable state with the temporary empty snapshot.
+        recoveryScope.launch {
+            var remoteLogoutPending = false
+            try {
+                if (store.read(PENDING_LOCAL_ERASE) != null) {
+                    completePendingLocalErase()
+                }
+                libraryJSON = store.read(LIBRARY) ?: "[]"
+                baseJSON = store.read(BASE) ?: "[]"
+                remoteRecordsJSON = store.read(REMOTE) ?: "[]"
+                configuration = store.read(CONFIG)?.let(::cloudConfiguration)
+                    ?: CloudConfiguration()
+                keys = store.read(KEYS)?.let(::keyBundle)
+                keyBinding = store.read(KEY_BINDING)?.let(::cloudKeyBinding)
+                deviceID = store.read(DEVICE_ID) ?: freshDeviceID().also {
+                    store.write(DEVICE_ID, it)
+                }
+                cloudSessionAvailable = authenticator.hasSession(
+                    configuration.serverURL.takeIf(String::isNotBlank))
+                cloudKeyStatus = when {
+                    !cloudSessionAvailable -> CloudKeyStatus.SIGNED_OUT
+                    hasBoundKey() -> CloudKeyStatus.READY
+                    else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+                }
+                store.read(PENDING_PAIRING)?.let { raw ->
+                    runCatching { LibraryKeyBootstrap.PendingPairing.fromJSON(raw) }
+                        .onSuccess { pending ->
+                            pairingQRCode = pending.invitation.toQRPayload()
+                            pairingConfirmationCode = pending.invitation.confirmationCode
+                            cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
                         }
-                    }
-                    .onFailure { store.delete(RECOVERY_PRESENTATION) }
-            }
-            if (store.read(PENDING_RECOVERY) != null) {
-                if (cloudKeyStatus != CloudKeyStatus.RECOVERY_KIT_LOCKED) {
+                        .onFailure { store.delete(PENDING_PAIRING) }
+                }
+                store.read(PENDING_APPROVAL)?.let { raw ->
+                    runCatching { LibraryKeyBootstrap.PairingInvitation.fromQRPayload(raw) }
+                        .onSuccess { invitation ->
+                            approvalConfirmationCode = invitation.confirmationCode
+                            cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
+                        }
+                        .onFailure { store.delete(PENDING_APPROVAL) }
+                }
+                store.read(RECOVERY_PRESENTATION)?.let { payload ->
+                    runCatching { LibraryKeyBootstrap.RecoveryKit.fromQRPayload(payload) }
+                        .onSuccess { kit ->
+                            if (kit.serverURL == configuration.serverURL &&
+                                kit.spaceID.equals(configuration.spaceID, ignoreCase = true)) {
+                                // Validate the durable value, but do not publish either
+                                // secret until this new process gets local user presence.
+                                cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
+                            } else {
+                                store.delete(RECOVERY_PRESENTATION)
+                            }
+                        }
+                        .onFailure { store.delete(RECOVERY_PRESENTATION) }
+                }
+                if (store.read(PENDING_RECOVERY) != null &&
+                    cloudKeyStatus != CloudKeyStatus.RECOVERY_KIT_LOCKED) {
                     cloudKeyStatus = CloudKeyStatus.RECOVERY_AUTH_REQUIRED
                 }
+                remoteLogoutPending = authenticator.hasPendingRevocation()
+                if (remoteLogoutPending) {
+                    // Keep the root only long enough to retry remote revocation; never let
+                    // an interrupted logout re-enter the cloud data plane.
+                    configuration = configuration.copy(provider = SyncProvider.DEVICE)
+                    cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
+                    cloudSessionAvailable = false
+                }
+                didInitialize = true
+                publish()
+            } catch (_: Exception) {
+                didInitialize = true
+                mutableState.value = LibraryState(errorCode = "local_store_unreadable")
+            } finally {
+                initialization.complete(Unit)
             }
-            val remoteLogoutPending = authenticator.hasPendingRevocation()
-            if (remoteLogoutPending) {
-                // Keep the root only long enough to retry remote revocation; never let
-                // an interrupted logout re-enter the cloud data plane.
-                configuration = configuration.copy(provider = SyncProvider.DEVICE)
-                cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
-            }
-            publish()
-            if (remoteLogoutPending) {
-                recoveryScope.launch { disconnectCloudAccount() }
-            }
-        } catch (_: Exception) {
-            mutableState.value = LibraryState(errorCode = "local_store_unreadable")
+            if (remoteLogoutPending) disconnectCloudAccount()
         }
     }
 
@@ -122,8 +137,11 @@ class SnippetRepository(context: Context) {
         store.write(LIBRARY, libraryJSON)
     }
 
-    suspend fun search(query: String): List<SnippetItem> = withContext(Dispatchers.Default) {
-        parseLibrary(bridge.search(libraryJSON, query))
+    suspend fun search(query: String): List<SnippetItem> {
+        initialization.await()
+        return withContext(Dispatchers.Default) {
+            parseLibrary(bridge.search(libraryJSON, query))
+        }
     }
 
     suspend fun configureCloud(serverURL: String, accessToken: String, spaceID: String) = mutate {
@@ -146,6 +164,7 @@ class SnippetRepository(context: Context) {
     }
 
     suspend fun beginCloudSignIn(serverURL: String, stepUp: Boolean = false): Intent? {
+        initialization.await()
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
@@ -168,11 +187,13 @@ class SnippetRepository(context: Context) {
     }
 
     internal suspend fun completeCloudSignIn(result: Intent?): CloudSignInCompletion {
+        initialization.await()
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
                 val recoveryKit = withContext(Dispatchers.IO) {
                     val authorization = authenticator.completeAuthorization(result)
+                    cloudSessionAvailable = true
                     val existingSpace = configuration.takeIf {
                         it.serverURL == authorization.serverURL
                     }?.spaceID?.takeIf(String::isNotBlank)
@@ -235,8 +256,8 @@ class SnippetRepository(context: Context) {
     }
 
     fun isCloudSignedIn(): Boolean =
-        store.read(PENDING_LOCAL_ERASE) == null &&
-            configuration.serverURL.isNotBlank() && authenticator.hasSession(configuration.serverURL)
+        didInitialize && cloudSessionAvailable &&
+            configuration.serverURL.isNotBlank() && cloudKeyStatus != CloudKeyStatus.SIGNED_OUT
 
     suspend fun useDeviceOnly() = mutate {
         configuration = configuration.copy(provider = SyncProvider.DEVICE)
@@ -410,7 +431,8 @@ class SnippetRepository(context: Context) {
         cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
     }
 
-    fun hasPendingPairingApproval(): Boolean = store.read(PENDING_APPROVAL) != null
+    fun hasPendingPairingApproval(): Boolean =
+        didInitialize && approvalConfirmationCode != null
 
     suspend fun cancelPairingApproval() = bootstrap {
         store.delete(PENDING_APPROVAL)
@@ -486,6 +508,7 @@ class SnippetRepository(context: Context) {
      * current Settings composition and is never retained in the process-wide StateFlow.
      */
     internal suspend fun revealPendingRecoveryKit(): RecoveryKitPresentation? {
+        initialization.await()
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
@@ -513,6 +536,7 @@ class SnippetRepository(context: Context) {
     }
 
     suspend fun syncNow() {
+        initialization.await()
         mutex.withLock {
             if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation() ||
                 configuration.provider != SyncProvider.SNIPPETS_CLOUD) return
@@ -595,9 +619,11 @@ class SnippetRepository(context: Context) {
         throw SyncFailure("sync_did_not_converge")
     }
 
-    fun configuration(): CloudConfiguration = configuration
+    fun configuration(): CloudConfiguration =
+        if (didInitialize) configuration else CloudConfiguration()
 
     private suspend fun bootstrap(operation: suspend () -> Unit) {
+        initialization.await()
         mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
@@ -880,6 +906,7 @@ class SnippetRepository(context: Context) {
         clearBootstrapState()
 
         authenticator.forgetLocalSession()
+        cloudSessionAvailable = false
 
         configuration = CloudConfiguration(provider = SyncProvider.DEVICE)
         baseJSON = "[]"
@@ -890,6 +917,7 @@ class SnippetRepository(context: Context) {
     }
 
     private suspend fun mutate(operation: suspend () -> Unit) {
+        initialization.await()
         mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
