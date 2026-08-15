@@ -8,7 +8,8 @@ import Carbon.HIToolbox
 /// needs no Accessibility trust and works regardless of activation policy —
 /// including while the app is hidden to the menu bar. Keep registrations live
 /// while Secure Event Input is active, matching Tinycast's Carbon hotkey layer;
-/// the frontmost application's Services menu supplies the protected-field path.
+/// the frontmost application's Services menu supplies the Command-Backslash
+/// protected-field path.
 @MainActor
 final class GlobalHotkeyManager {
     static let shared = GlobalHotkeyManager()

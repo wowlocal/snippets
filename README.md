@@ -88,9 +88,10 @@ date placeholders. Offsets can contain several terms, for example
   snippets do not. A password field is replaced; an ordinary text field uses its
   selection or caret.
 - macOS Secure Event Input can suppress third-party global shortcuts while a real
-  password field is focused. Snippets keeps its Carbon registrations live and also
-  gives two uniquely named Services menu items the same AppKit key equivalents in the
-  frontmost app: `⌘\` still opens the app, and `⌥\` still opens Secure Paste.
+  password field is focused. Snippets keeps its Carbon registrations live, while a
+  frontmost-app Services fallback lets `⌘\` open or launch Snippets. The Services
+  format cannot express an Option-only fallback, so `⌥\` may remain unavailable while
+  Secure Event Input is active.
 - A recovery key can restore the vault key if it is missing from Keychain.
 - On iPhone and iPad, secure copies are device-local and expire from the clipboard after
   60 seconds.

@@ -110,10 +110,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     #endif
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
-    private static let openServiceTitle = "Open Snippets App"
-    private static let securePasteServiceTitle = "Secure Paste with Snippets…"
-    private static let openServiceKeyEquivalent = "@\\"
-    private static let securePasteServiceKeyEquivalent = "~\\"
     private var statusItem: NSStatusItem!
     private weak var statusMenuOpenItem: NSMenuItem?
     private weak var statusMenuSecurePasteItem: NSMenuItem?
@@ -523,19 +519,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func setupServicesProvider() {
         NSApp.servicesProvider = self
-        syncServiceShortcuts()
+        removeObsoleteServiceShortcuts()
         // The Services cache is keyed off the bundle's own NSServices, and a
         // build that has never lived in /Applications is not scanned on its own.
         // This is what gives the entry a chance to appear without a login cycle.
         NSUpdateDynamicServices()
     }
 
-    /// Secure Event Input delivers keyboard events only inside the frontmost
-    /// application. AppKit user key equivalents therefore bind the two unique
-    /// Services menu items in that application, while Carbon remains the fast
-    /// path everywhere else. Unlike `NSServices.NSKeyEquivalent`, this supported
-    /// menu mechanism can represent an Option-only shortcut.
-    private func syncServiceShortcuts() {
+    /// Build 87 tried to bind Services through global menu-item preferences.
+    /// Those entries do not become shortcuts in an already-running frontmost
+    /// application, so remove only the exact values Snippets wrote.
+    private func removeObsoleteServiceShortcuts() {
         let preference = "NSUserKeyEquivalents" as CFString
         let application = kCFPreferencesAnyApplication
         let user = kCFPreferencesCurrentUser
@@ -543,30 +537,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         var keyEquivalents = CFPreferencesCopyValue(preference, application, user, host)
             as? [String: Any] ?? [:]
-        let shortcuts = [
-            Self.openServiceTitle: Self.openServiceKeyEquivalent,
-            Self.securePasteServiceTitle: Self.securePasteServiceKeyEquivalent,
+        let obsoleteShortcuts = [
+            "Open Snippets App": "@\\",
+            "Secure Paste with Snippets…": "~\\",
         ]
 
-        if GlobalHotkeyManager.shared.isEnabled {
-            for (title, keyEquivalent) in shortcuts {
-                keyEquivalents[title] = keyEquivalent
-            }
-        } else {
-            for (title, keyEquivalent) in shortcuts
-            where keyEquivalents[title] as? String == keyEquivalent {
-                keyEquivalents.removeValue(forKey: title)
-            }
+        var changed = false
+        for (title, keyEquivalent) in obsoleteShortcuts
+        where keyEquivalents[title] as? String == keyEquivalent {
+            keyEquivalents.removeValue(forKey: title)
+            changed = true
         }
 
-        CFPreferencesSetValue(
-            preference,
-            keyEquivalents as CFDictionary,
-            application,
-            user,
-            host
-        )
-        _ = CFPreferencesSynchronize(application, user, host)
+        if changed {
+            CFPreferencesSetValue(
+                preference,
+                keyEquivalents as CFDictionary,
+                application,
+                user,
+                host
+            )
+            _ = CFPreferencesSynchronize(application, user, host)
+        }
         removeLegacySecurePasteServiceShortcut()
     }
 
@@ -620,9 +612,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    /// Option-Backslash normally arrives through Carbon. Its AppKit user key
-    /// equivalent is installed above because the Info plist Services format
-    /// cannot express Option; this is the matching Secure Event Input fallback.
+    /// Option-Backslash normally arrives through Carbon. Secure Event Input can
+    /// prevent macOS from delivering that cross-process shortcut; the Services
+    /// format cannot express an Option-only fallback.
     @objc func securePasteFromService(
         _ pboard: NSPasteboard,
         userData: String?,
@@ -908,7 +900,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     @objc private func handleGlobalHotkeyChanged() {
-        syncServiceShortcuts()
         refreshGlobalHotkeyMenuHint()
     }
 
