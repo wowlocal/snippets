@@ -170,6 +170,7 @@ final class SuggestionPanelController: NSObject,
     private enum PanelAnchor {
         case rect(NSRect)
         case mouse(NSPoint)
+        case screenCenter(NSRect)
 
         var screenPoint: NSPoint {
             switch self {
@@ -177,6 +178,8 @@ final class SuggestionPanelController: NSObject,
                 return NSPoint(x: rect.midX, y: rect.midY)
             case .mouse(let point):
                 return point
+            case .screenCenter(let visibleFrame):
+                return NSPoint(x: visibleFrame.midX, y: visibleFrame.midY)
             }
         }
     }
@@ -348,13 +351,14 @@ final class SuggestionPanelController: NSObject,
             anchorFocusedElement: anchorFocusedElement,
             axBudget: axBudget,
             keepsPanelVisibleWhenEmpty: false,
-            acceptsKeyboardInput: false
+            acceptsKeyboardInput: false,
+            centersOnPointerScreen: false
         )
     }
 
     /// Presents the Command-Backslash picker as an input-enabled mode of the same
-    /// compact panel used for backslash suggestions. With no text target, anchoring
-    /// falls back to the focused element or pointer and selection becomes Copy.
+    /// compact panel used for backslash suggestions. With no text target, the picker
+    /// centers on the pointer's display and selection becomes Copy.
     /// The non-activating panel leaves the destination app frontmost in either mode.
     func showSecurePaste(
         items: [SuggestionItem],
@@ -396,7 +400,8 @@ final class SuggestionPanelController: NSObject,
             anchorFocusedElement: anchorFocusedElement,
             axBudget: AXMessagingBudget(),
             keepsPanelVisibleWhenEmpty: true,
-            acceptsKeyboardInput: true
+            acceptsKeyboardInput: true,
+            centersOnPointerScreen: copiesToClipboard
         )
     }
 
@@ -442,7 +447,8 @@ final class SuggestionPanelController: NSObject,
         anchorFocusedElement: AXUIElement?,
         axBudget: AXMessagingBudget?,
         keepsPanelVisibleWhenEmpty: Bool,
-        acceptsKeyboardInput: Bool
+        acceptsKeyboardInput: Bool,
+        centersOnPointerScreen: Bool
     ) {
         let previouslySelectedSnippetID = selectionWasUserDriven ? selectedSnippet()?.id : nil
         self.items = items
@@ -464,10 +470,12 @@ final class SuggestionPanelController: NSObject,
             // the panel. Persistent diagnostics make the bounded timeout observable and
             // say which path placed the panel when a host is slow.
             let budget = axBudget ?? AXMessagingBudget()
-            let resolution = resolveAnchor(
-                focusedElement: anchorFocusedElement,
-                axBudget: budget
-            )
+            let resolution = centersOnPointerScreen
+                ? resolveScreenCenterAnchor()
+                : resolveAnchor(
+                    focusedElement: anchorFocusedElement,
+                    axBudget: budget
+                )
             anchor = resolution.anchor
             // For the normal activation path this starts in the engine, before text-input
             // detection. Reporting only the panel slice would hide the very cumulative stall the
@@ -637,7 +645,8 @@ final class SuggestionPanelController: NSObject,
             anchorFocusedElement: nil,
             axBudget: nil,
             keepsPanelVisibleWhenEmpty: true,
-            acceptsKeyboardInput: false
+            acceptsKeyboardInput: false,
+            centersOnPointerScreen: false
         )
     }
 
@@ -751,6 +760,12 @@ final class SuggestionPanelController: NSObject,
         guard let anchor else { return }
 
         switch anchor {
+        case .screenCenter(let visibleFrame):
+            let origin = NSPoint(
+                x: visibleFrame.midX - (panel.frame.width / 2),
+                y: visibleFrame.midY - (panel.frame.height / 2)
+            )
+            panel.setFrameOrigin(clampedPanelOrigin(origin, in: visibleFrame))
         case .mouse(let point):
             // Captured once with the rest of the anchor, so filtering the list cannot make a
             // mouse fallback jump around after the user moves the pointer.
@@ -779,6 +794,29 @@ final class SuggestionPanelController: NSObject,
 
             panel.setFrameOrigin(origin)
         }
+    }
+
+    /// Copy mode has no text destination to anchor to. Center it on the display
+    /// where the pointer currently is instead of treating the pointer itself as a
+    /// caret; the latter pins a full-height picker to a screen edge when invoked
+    /// from a game, the menu bar, or another non-text surface.
+    private func resolveScreenCenterAnchor() -> AnchorResolution {
+        let pointer = mousePosition()
+        guard let screen = screenContaining(point: pointer)
+                ?? NSScreen.main
+                ?? NSScreen.screens.first else {
+            return AnchorResolution(
+                anchor: .mouse(pointer),
+                source: .mouse,
+                reason: "focus-unavailable"
+            )
+        }
+
+        return AnchorResolution(
+            anchor: .screenCenter(screen.visibleFrame),
+            source: .mouse,
+            reason: "none"
+        )
     }
 
     private func resolveAnchor(
