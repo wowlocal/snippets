@@ -4,6 +4,35 @@ import ServiceManagement
 import Sparkle
 #endif
 
+/// Holds the one ambiguous bit of AppKit launch routing. A non-default launch may
+/// be a cold Services request, but Sparkle and other LaunchServices routes use the
+/// same flag without delivering a Service callback. The timeout is therefore a
+/// foreground fallback, not just an expiry: otherwise the storyboard window stays
+/// ordered with `alphaValue == 0` and AppKit considers it visible forever.
+nonisolated struct InitialLaunchRoutingState {
+    private(set) var isWaitingForRoutedAction = false
+
+    mutating func begin(isDefaultLaunch: Bool) {
+        isWaitingForRoutedAction = !isDefaultLaunch
+    }
+
+    mutating func cancel() {
+        isWaitingForRoutedAction = false
+    }
+
+    /// Returns whether the consumed callback belongs to the cold non-default launch.
+    mutating func consumeRoutedAction() -> Bool {
+        let wasWaiting = isWaitingForRoutedAction
+        isWaitingForRoutedAction = false
+        return wasWaiting
+    }
+
+    /// With no routed action, fail back to the ordinary foreground window.
+    mutating func shouldShowMainWindowAfterTimeout() -> Bool {
+        consumeRoutedAction()
+    }
+}
+
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     enum QuitBehaviorPreference: String, CaseIterable {
@@ -139,7 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// AppKit marks a launch performed on behalf of a Service as non-default.
     /// Consume that fact in the first routed launch action so Command-Backslash
     /// can stay a background picker without changing later Service requests.
-    private var initialNonDefaultLaunchActionPending = false
+    private var initialLaunchRouting = InitialLaunchRoutingState()
     /// A cold Secure Paste Service launch can also deliver a normal reopen event.
     /// Keep that event from resurrecting the storyboard window behind the picker.
     private var suppressMainWindowForColdServicePicker = false
@@ -212,7 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // below consumes it once, so it cannot affect a later shortcut.
         let isDefaultLaunch =
             notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
-        initialNonDefaultLaunchActionPending = !isDefaultLaunch
+        initialLaunchRouting.begin(isDefaultLaunch: isDefaultLaunch)
 
         // Consulted only when the usage file hits its record cap, so that a
         // forced eviction drops UUIDs of deleted snippets before live ones.
@@ -262,7 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         store.onChange?(.init(source: .external))
 
         if launchedAsLoginItem {
-            initialNonDefaultLaunchActionPending = false
+            initialLaunchRouting.cancel()
             hideToBackground()
         } else if isDefaultLaunch {
             showMainWindow()
@@ -275,11 +304,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // launch can suppress the storyboard window before its first routed event.
         NSApp.servicesProvider = self
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            // Non-default also covers restored-state and file launches. A pending
-            // Service is delivered as soon as the provider above is registered;
-            // expire the candidate afterward so an unrelated later Service cannot
-            // be mistaken for the launch request.
-            self?.initialNonDefaultLaunchActionPending = false
+            guard let self,
+                  self.initialLaunchRouting.shouldShowMainWindowAfterTimeout()
+            else { return }
+            // Non-default also covers Sparkle relaunches, restored state and file
+            // launches. If no routed callback consumed the candidate, this was not
+            // a cold Service request. Restore the storyboard window whose alpha was
+            // held at zero in `applicationWillFinishLaunching`.
+            self.showMainWindow()
         }
     }
 
@@ -462,17 +494,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if initialNonDefaultLaunchActionPending || suppressMainWindowForColdServicePicker {
+        if initialLaunchRouting.isWaitingForRoutedAction || suppressMainWindowForColdServicePicker {
             return false
         }
-        if !flag {
+        let mainWindow = NSApp.windows.first { $0.contentViewController is ViewController }
+        if !flag || mainWindow?.alphaValue == 0 {
             showMainWindow()
         }
         return true
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        initialNonDefaultLaunchActionPending = false
+        initialLaunchRouting.cancel()
         let deepLinks = urls.filter { SnippetDeepLink.canHandle($0) }
         guard !deepLinks.isEmpty else { return }
 
@@ -708,7 +741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
-        initialNonDefaultLaunchActionPending = false
+        initialLaunchRouting.cancel()
         guard let selection = pboard.string(forType: .string),
               !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             error.pointee = "Select some text to make a snippet from it." as NSString
@@ -726,7 +759,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
-        initialNonDefaultLaunchActionPending = false
+        initialLaunchRouting.cancel()
         guard GlobalHotkeyManager.shared.isEnabled else { return }
         // Let the source application finish its synchronous Services command
         // before Snippets activates and makes its main window key.
@@ -743,8 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
-        let isColdServiceLaunch = initialNonDefaultLaunchActionPending
-        initialNonDefaultLaunchActionPending = false
+        let isColdServiceLaunch = initialLaunchRouting.consumeRoutedAction()
         guard GlobalHotkeyManager.shared.isEnabled else { return }
         if expansionEngine.securePastePickerIsVisible {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
@@ -1405,6 +1437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @discardableResult
     private func showMainWindow() -> ViewController? {
+        initialLaunchRouting.cancel()
         suppressMainWindowForColdServicePicker = false
         NSApp.setActivationPolicy(.regular)
 
