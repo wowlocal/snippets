@@ -1,25 +1,37 @@
 import AppKit
 
+struct TransientScreenMessage {
+    let title: String
+    let detail: String?
+    let accessibilityText: String
+
+    init(title: String, detail: String? = nil, accessibilityText: String? = nil) {
+        self.title = title
+        self.detail = detail
+        self.accessibilityText = accessibilityText ?? [title, detail]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+    }
+}
+
 enum ClipboardCopyFeedback {
     static let secureSnippetBlocked =
         "Copy blocked. Secure snippets can\u{2019}t be copied. The clipboard was not changed."
     static let failed = "Couldn\u{2019}t copy the snippet to the clipboard."
 
-    static func copied(_ snippet: Snippet) -> String {
+    static func copied(_ snippet: Snippet) -> TransientScreenMessage {
         let name = boundedMetadata(snippet.name, maximumCharacters: 80)
         let keyword = boundedMetadata(snippet.normalizedKeyword, maximumCharacters: 48)
         let trigger = keyword.isEmpty ? "" : "\\\(keyword)"
+        let title = name.isEmpty ? "Copied snippet" : "Copied \u{201C}\(name)\u{201D}"
+        let detail = trigger.isEmpty ? nil : trigger
+        let accessibilityText = detail.map { "\(title). Keyword \($0)" } ?? title
 
-        switch (name.isEmpty, trigger.isEmpty) {
-        case (false, false):
-            return "Copied \u{201C}\(name)\u{201D} (\(trigger))"
-        case (false, true):
-            return "Copied \u{201C}\(name)\u{201D}"
-        case (true, false):
-            return "Copied \(trigger)"
-        case (true, true):
-            return "Copied snippet"
-        }
+        return TransientScreenMessage(
+            title: title,
+            detail: detail,
+            accessibilityText: accessibilityText
+        )
     }
 
     /// Synced metadata can predate today's single-line editor constraints. Keep a
@@ -64,6 +76,7 @@ final class TransientScreenMessageController {
 
     private static let horizontalPadding: CGFloat = 18
     private static let verticalPadding: CGFloat = 10
+    private static let detailSpacing: CGFloat = 3
     private static let maximumTextWidth: CGFloat = 520
     private static let minimumPanelWidth: CGFloat = 180
     private static let screenMargin: CGFloat = 20
@@ -72,6 +85,7 @@ final class TransientScreenMessageController {
 
     private let panel: NSPanel
     private let label = NSTextField(wrappingLabelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
     private var dismissWorkItem: DispatchWorkItem?
     private var presentationGeneration = 0
 
@@ -102,9 +116,25 @@ final class TransientScreenMessageController {
         label.isSelectable = false
         label.translatesAutoresizingMaskIntoConstraints = false
 
+        detailLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.alignment = .center
+        detailLabel.lineBreakMode = .byTruncatingMiddle
+        detailLabel.maximumNumberOfLines = 1
+        detailLabel.isSelectable = false
+        detailLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let messageStack = NSStackView(views: [label, detailLabel])
+        messageStack.orientation = .vertical
+        messageStack.alignment = .centerX
+        messageStack.distribution = .gravityAreas
+        messageStack.spacing = Self.detailSpacing
+        messageStack.detachesHiddenViews = true
+        messageStack.translatesAutoresizingMaskIntoConstraints = false
+
         let messageContent = NSView()
         messageContent.translatesAutoresizingMaskIntoConstraints = false
-        messageContent.addSubview(label)
+        messageContent.addSubview(messageStack)
 
         let surface = LiquidGlassDesign.makeFloatingPanelSurface(
             containing: messageContent,
@@ -120,22 +150,24 @@ final class TransientScreenMessageController {
         panelContent.addSubview(surface)
 
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(
+            messageStack.leadingAnchor.constraint(
                 equalTo: messageContent.leadingAnchor,
                 constant: Self.horizontalPadding
             ),
-            label.trailingAnchor.constraint(
+            messageStack.trailingAnchor.constraint(
                 equalTo: messageContent.trailingAnchor,
                 constant: -Self.horizontalPadding
             ),
-            label.topAnchor.constraint(
+            messageStack.topAnchor.constraint(
                 equalTo: messageContent.topAnchor,
                 constant: Self.verticalPadding
             ),
-            label.bottomAnchor.constraint(
+            messageStack.bottomAnchor.constraint(
                 equalTo: messageContent.bottomAnchor,
                 constant: -Self.verticalPadding
             ),
+            label.widthAnchor.constraint(lessThanOrEqualTo: messageStack.widthAnchor),
+            detailLabel.widthAnchor.constraint(lessThanOrEqualTo: messageStack.widthAnchor),
             surface.leadingAnchor.constraint(equalTo: panelContent.leadingAnchor),
             surface.trailingAnchor.constraint(equalTo: panelContent.trailingAnchor),
             surface.topAnchor.constraint(equalTo: panelContent.topAnchor),
@@ -144,6 +176,10 @@ final class TransientScreenMessageController {
     }
 
     func show(_ message: String, kind: Kind) {
+        show(TransientScreenMessage(title: message), kind: kind)
+    }
+
+    func show(_ message: TransientScreenMessage, kind: Kind) {
         presentationGeneration += 1
         let generation = presentationGeneration
         dismissWorkItem?.cancel()
@@ -153,10 +189,14 @@ final class TransientScreenMessageController {
         // the display where it appeared. The pointer is the fallback for hosts that
         // provide no focused element and therefore no screen-space anchor.
         guard let screen = NSScreen.main ?? screenContainingMouse() ?? NSScreen.screens.first,
-              let font = label.font else { return }
+              let font = label.font,
+              let detailFont = detailLabel.font else { return }
 
-        label.stringValue = message
-        label.setAccessibilityLabel(message)
+        label.stringValue = message.title
+        label.setAccessibilityLabel(message.title)
+        detailLabel.stringValue = message.detail ?? ""
+        detailLabel.isHidden = message.detail == nil
+        detailLabel.setAccessibilityLabel(message.detail.map { "Keyword \($0)" })
 
         let availablePanelWidth = max(
             Self.minimumPanelWidth,
@@ -169,16 +209,24 @@ final class TransientScreenMessageController {
                 availablePanelWidth - (Self.horizontalPadding * 2)
             )
         )
-        let idealTextBounds = (message as NSString).boundingRect(
+        let idealTitleBounds = (message.title as NSString).boundingRect(
             with: NSSize(width: maximumTextWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font]
         )
+        let idealDetailBounds = message.detail.map {
+            ($0 as NSString).boundingRect(
+                with: NSSize(width: maximumTextWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: detailFont]
+            )
+        } ?? .zero
         let panelWidth = min(
             availablePanelWidth,
             max(
                 Self.minimumPanelWidth,
-                ceil(idealTextBounds.width) + (Self.horizontalPadding * 2) + 2
+                ceil(max(idealTitleBounds.width, idealDetailBounds.width))
+                    + (Self.horizontalPadding * 2) + 2
             )
         )
         // The minimum panel width can still be narrower than the ideal one-line
@@ -186,14 +234,18 @@ final class TransientScreenMessageController {
         // label will actually receive so a wrapped second line gets real height.
         let actualTextWidth = max(1, panelWidth - (Self.horizontalPadding * 2))
         label.preferredMaxLayoutWidth = actualTextWidth
-        let laidOutTextBounds = (message as NSString).boundingRect(
+        let laidOutTitleBounds = (message.title as NSString).boundingRect(
             with: NSSize(width: actualTextWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font]
         )
+        detailLabel.preferredMaxLayoutWidth = actualTextWidth
+        let detailHeight = message.detail == nil ? 0 : ceil(idealDetailBounds.height)
+        let detailSpacing = message.detail == nil ? 0 : Self.detailSpacing
         let panelHeight = max(
             40,
-            ceil(laidOutTextBounds.height) + (Self.verticalPadding * 2)
+            ceil(laidOutTitleBounds.height) + detailSpacing + detailHeight
+                + (Self.verticalPadding * 2)
         )
         panel.setContentSize(NSSize(width: panelWidth, height: panelHeight))
         panel.contentView?.layoutSubtreeIfNeeded()
@@ -230,7 +282,7 @@ final class TransientScreenMessageController {
             element: label,
             notification: .announcementRequested,
             userInfo: [
-                .announcement: message,
+                .announcement: message.accessibilityText,
                 .priority: kind.accessibilityPriority.rawValue,
             ]
         )
