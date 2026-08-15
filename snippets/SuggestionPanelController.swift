@@ -149,10 +149,11 @@ final class SuggestionPanelController: NSObject,
     private var securePasteSearch: ((String) -> [SuggestionItem])?
     private var securePasteSelection: ((Snippet) -> Void)?
     private var securePasteCancellation: ((Bool) -> Void)?
-    /// `orderFrontRegardless()` temporarily unhides an application. When Secure
-    /// Paste starts from a Cmd-H-hidden Snippets, keep only this panel exempt from
-    /// application hiding and immediately restore the original hidden state.
-    private var securePasteStartedWithHiddenApplication = false
+    /// Showing any panel can make AppKit unhide Snippets. Terminal.app exposes this
+    /// for ordinary backslash suggestions even though Safari and Ghostty normally do
+    /// not. Remember the state for the whole suggestion session, keep only this panel
+    /// exempt from hiding, and never allow the main window to come back with it.
+    private var presentationStartedWithHiddenApplication = false
     private var isEndingSecurePaste = false
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
@@ -346,6 +347,10 @@ final class SuggestionPanelController: NSObject,
         axBudget: AXMessagingBudget? = nil
     ) {
         guard presentationMode == .suggestions else { return }
+        if anchor == nil {
+            presentationStartedWithHiddenApplication = NSApp.isHidden
+            panel.canHide = !presentationStartedWithHiddenApplication
+        }
         present(
             items: items,
             anchorFocusedElement: anchorFocusedElement,
@@ -378,7 +383,7 @@ final class SuggestionPanelController: NSObject,
         securePasteSearch = onSearch
         securePasteSelection = onSelect
         securePasteCancellation = onCancel
-        securePasteStartedWithHiddenApplication = NSApp.isHidden
+        presentationStartedWithHiddenApplication = NSApp.isHidden
         panel.canHide = false
         keyAppearanceCompensationView.isEnabled = true
         searchField.stringValue = ""
@@ -414,7 +419,7 @@ final class SuggestionPanelController: NSObject,
 
     func dismissSecurePasteWithoutCallback() {
         guard presentationMode == .securePaste else { return }
-        let shouldRemainHidden = securePasteStartedWithHiddenApplication
+        let shouldRemainHidden = presentationStartedWithHiddenApplication
         isEndingSecurePaste = true
         hidePanel()
         if shouldRemainHidden {
@@ -434,7 +439,7 @@ final class SuggestionPanelController: NSObject,
         securePasteSelection = nil
         securePasteCancellation = nil
         panel.canHide = true
-        securePasteStartedWithHiddenApplication = false
+        presentationStartedWithHiddenApplication = false
         presentationMode = .suggestions
         searchField.setAccessibilityLabel("Search snippets for Secure Paste")
         panel.setAccessibilityTitle("Snippet suggestions")
@@ -535,17 +540,20 @@ final class SuggestionPanelController: NSObject,
         emptyLabel.isHidden = presentationMode != .securePaste || count > 0
 
         if !panel.isVisible {
-            if acceptsKeyboardInput {
+            if presentationStartedWithHiddenApplication {
+                // `orderFrontRegardless()` may transiently unhide the process.
+                // Exempt only the picker, then immediately reassert Cmd-H so the
+                // main Snippets window never joins it on screen.
                 panel.orderFrontRegardless()
-                if securePasteStartedWithHiddenApplication {
-                    // `canHide == false` leaves just the picker on screen. Ordinary
-                    // app windows obey Cmd-H and remain hidden throughout the flow.
-                    NSApp.hide(nil)
-                    panel.orderFrontRegardless()
-                }
-                panel.makeKey()
+                NSApp.hide(nil)
+                panel.orderFrontRegardless()
+            } else if acceptsKeyboardInput {
+                panel.orderFrontRegardless()
             } else {
                 panel.orderFront(nil)
+            }
+            if acceptsKeyboardInput {
+                panel.makeKey()
             }
             installClickMonitors()
         }
@@ -579,6 +587,9 @@ final class SuggestionPanelController: NSObject,
     func hide() {
         guard presentationMode == .suggestions else { return }
         hidePanel()
+        if presentationStartedWithHiddenApplication {
+            NSApp.hide(nil)
+        }
     }
 
     private func hidePanel() {
@@ -595,7 +606,13 @@ final class SuggestionPanelController: NSObject,
     /// Fully end the suggestion session — clears anchor so next activation repositions.
     func dismiss() {
         guard presentationMode == .suggestions else { return }
+        let shouldRemainHidden = presentationStartedWithHiddenApplication
         hidePanel()
+        if shouldRemainHidden {
+            NSApp.hide(nil)
+        }
+        panel.canHide = true
+        presentationStartedWithHiddenApplication = false
         anchor = nil
     }
 
