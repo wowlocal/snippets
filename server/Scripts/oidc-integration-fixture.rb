@@ -33,7 +33,7 @@ def jwks(key)
 end
 
 command, key_path, *arguments = ARGV
-abort "usage: #{$PROGRAM_NAME} serve KEY_PATH PORT | token KEY_PATH ISSUER AUDIENCE SUBJECT" unless key_path
+abort "usage: #{$PROGRAM_NAME} serve KEY_PATH PORT | token KEY_PATH ISSUER AUDIENCE SUBJECT CLIENT_ID" unless key_path
 
 case command
 when "serve"
@@ -59,17 +59,20 @@ when "serve"
   %w[INT TERM].each { |signal| trap(signal) { server.shutdown } }
   server.start
 when "token"
-  issuer, audience, subject = arguments
-  abort "token requires issuer, audience, and subject" unless subject
+  issuer, audience, subject, client_id = arguments
+  abort "token requires issuer, audience, subject, and client ID" unless client_id
   now = Time.now.to_i
   header = base64url(JSON.generate(alg: "RS256", kid: KEY_ID, typ: "JWT"))
   payload = base64url(JSON.generate(
     iss: issuer,
     sub: subject,
     aud: audience,
+    azp: client_id,
     iat: now,
     nbf: now - 5,
-    exp: now + 900
+    exp: now + 300,
+    auth_time: now,
+    amr: ["webauthn"]
   ))
   signed = "#{header}.#{payload}"
   signature = load_key(key_path).sign(OpenSSL::Digest::SHA256.new, signed)

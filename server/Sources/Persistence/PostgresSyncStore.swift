@@ -113,6 +113,13 @@ public final class PostgresSyncStore: SyncStore, Sendable {
     ) async throws -> Result {
         do {
             return try await client.withTransaction(logger: disabledPostgresLogger) { connection in
+                try await self.lockAccessCredential(connection: connection, principal: principal)
+                let revoked = try await queryScalar(
+                    Bool.self,
+                    connection: connection,
+                    query: "SELECT snippets_private.is_access_token_revoked(\(principal.credentialDigest))"
+                ) ?? true
+                guard !revoked else { throw SyncServiceError.authenticationRequired }
                 let candidate = UUID()
                 guard let userID = try await queryScalar(
                     UUID.self,

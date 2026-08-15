@@ -1,18 +1,24 @@
 name: snippets-sync
 
-x-database-environment: &database-environment
+x-database-common: &database-common
   DATABASE_HOST: postgres
   DATABASE_PORT: "5432"
   DATABASE_NAME: ${POSTGRES_DB:?set POSTGRES_DB}
+  DATABASE_TLS_MODE: disable
+
+x-database-owner-environment: &database-owner-environment
+  <<: *database-common
   DATABASE_OWNER_USER: ${POSTGRES_USER:?set POSTGRES_USER}
   DATABASE_OWNER_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+
+x-database-runtime-environment: &database-runtime-environment
+  <<: *database-common
   DATABASE_RUNTIME_USER: snippets_runtime
   DATABASE_RUNTIME_PASSWORD: ${SNIPPETS_RUNTIME_PASSWORD:?set SNIPPETS_RUNTIME_PASSWORD}
-  DATABASE_TLS_MODE: disable
 
 services:
   postgres:
-    image: postgres:17.10-bookworm
+    image: postgres:17.10-bookworm@sha256:9b18b78397054fce88a9552e9d5a3ad5bb7fd258c5b3cc1c5028e46373d6ea8f
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
@@ -33,9 +39,9 @@ services:
   migrate:
     build:
       context: .
-    entrypoint: ["snippets-migrate"]
+      target: migrate
     environment:
-      <<: *database-environment
+      <<: *database-owner-environment
       MIGRATIONS_DIR: /opt/snippets/Migrations
     depends_on:
       postgres:
@@ -45,8 +51,9 @@ services:
   server:
     build:
       context: .
+      target: server
     environment:
-      <<: *database-environment
+      <<: *database-runtime-environment
       SNIPPETS_ENV: ${SNIPPETS_ENV:?set SNIPPETS_ENV}
       BIND_HOST: 0.0.0.0
       PORT: "8080"
@@ -61,6 +68,22 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID}
       OIDC_SCOPES: ${OIDC_SCOPES:-openid offline_access}
       OIDC_ALLOWED_ALGORITHMS: ${OIDC_ALLOWED_ALGORITHMS:-RS256}
+      OIDC_MAX_TOKEN_AGE_SECONDS: ${OIDC_MAX_TOKEN_AGE_SECONDS:-300}
+      OIDC_STEP_UP_AMR_VALUES: ${OIDC_STEP_UP_AMR_VALUES-}
+      OIDC_STEP_UP_ACR_VALUES: ${OIDC_STEP_UP_ACR_VALUES:-}
+      OIDC_STEP_UP_MAX_AGE_SECONDS: ${OIDC_STEP_UP_MAX_AGE_SECONDS:-300}
+      OIDC_JWKS_REFRESH_SECONDS: ${OIDC_JWKS_REFRESH_SECONDS:-900}
+      OIDC_UNKNOWN_KID_REFRESH_SECONDS: ${OIDC_UNKNOWN_KID_REFRESH_SECONDS:-60}
+      OIDC_UNKNOWN_KID_TTL_SECONDS: ${OIDC_UNKNOWN_KID_TTL_SECONDS:-300}
+      HTTP_IDLE_TIMEOUT_SECONDS: ${HTTP_IDLE_TIMEOUT_SECONDS:-30}
+      HTTP_BODY_TIMEOUT_SECONDS: ${HTTP_BODY_TIMEOUT_SECONDS:-15}
+      HTTP_MAX_CONNECTIONS: ${HTTP_MAX_CONNECTIONS:-256}
+      HTTP_MAX_CONCURRENT_REQUESTS: ${HTTP_MAX_CONCURRENT_REQUESTS:-128}
+      HTTP_BODY_MEMORY_BUDGET_BYTES: ${HTTP_BODY_MEMORY_BUDGET_BYTES:-268435456}
+      HTTP_GLOBAL_REQUESTS_PER_SECOND: ${HTTP_GLOBAL_REQUESTS_PER_SECOND:-256}
+      HTTP_GLOBAL_REQUEST_BURST: ${HTTP_GLOBAL_REQUEST_BURST:-512}
+      HTTP_PRINCIPAL_REQUESTS_PER_SECOND: ${HTTP_PRINCIPAL_REQUESTS_PER_SECOND:-30}
+      HTTP_PRINCIPAL_REQUEST_BURST: ${HTTP_PRINCIPAL_REQUEST_BURST:-60}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

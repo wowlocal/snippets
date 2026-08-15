@@ -6,6 +6,51 @@ final class MemorySyncStoreTests: XCTestCase {
     private let instanceID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
     private let tokenSecret = Data(repeating: 0x41, count: 32)
 
+    func testChangeHistoryQuotaRejectsWriteWithoutAdvancingState() async throws {
+        let quota = SyncStorageQuota(
+            maxBytesPerSpace: 10_000_000,
+            maxBytesPerUser: 10_000_000,
+            maxRecordsPerSpace: 10,
+            maxChangesPerSpace: 2
+        )
+        let store = try MemorySyncStore(
+            serverInstanceID: instanceID,
+            tokenSecret: tokenSecret,
+            storageQuota: quota
+        )
+        let user = try principal(42)
+        let space = try await store.createSpace(for: user, idempotencyKey: nil)
+        let recordID = UUID()
+        let created = try await store.submit(
+            for: user,
+            spaceID: space.scope.spaceID,
+            items: [.init(record: wire(id: recordID, rev: "1", byte: 1), expectedRecordVersion: nil)]
+        )
+        let firstVersion = try acceptedVersion(created.outcomes[0])
+        let updated = try await store.submit(
+            for: user,
+            spaceID: space.scope.spaceID,
+            items: [.init(record: wire(id: recordID, rev: "2", byte: 2), expectedRecordVersion: firstVersion)]
+        )
+        let secondVersion = try acceptedVersion(updated.outcomes[0])
+
+        let rejected = try await store.submit(
+            for: user,
+            spaceID: space.scope.spaceID,
+            items: [.init(record: wire(id: recordID, rev: "3", byte: 3), expectedRecordVersion: secondVersion)]
+        )
+        XCTAssertEqual(rejected.outcomes, [.rejected(code: .quotaExceeded)])
+
+        let snapshot = try await store.fetchChanges(
+            for: user,
+            spaceID: space.scope.spaceID,
+            cursor: nil,
+            limit: 50
+        )
+        XCTAssertEqual(snapshot.records.first?.record.rev, "2")
+        XCTAssertEqual(snapshot.records.first?.recordVersion, secondVersion)
+    }
+
     func testCASConflictReturnsAuthoritativeRecordAndPartialBatchCommitsIndependentItem() async throws {
         let store = try MemorySyncStore(serverInstanceID: instanceID, tokenSecret: tokenSecret)
         let user = try principal(1)
@@ -213,40 +258,63 @@ final class MemorySyncStoreTests: XCTestCase {
         let envelope = try await store.putKeyEnvelope(
             for: user,
             spaceID: space.scope.spaceID,
-            request: PutKeyEnvelope(expectedVersion: nil, keyEpoch: 1, algorithm: "HPKE-v1", ciphertext: encryptedBundle)
+            request: PutKeyEnvelope(
+                expectedVersion: nil,
+                keyEpoch: 1,
+                algorithm: "snippets-recovery-hkdf-sha256-aes256gcm-v1",
+                ciphertext: encryptedBundle)
         )
         XCTAssertEqual(envelope.version, 1)
         await XCTAssertThrowsSyncError(.conflict) {
             _ = try await store.putKeyEnvelope(
                 for: user,
                 spaceID: space.scope.spaceID,
-                request: PutKeyEnvelope(expectedVersion: nil, keyEpoch: 1, algorithm: "HPKE-v1", ciphertext: encryptedBundle)
+                request: PutKeyEnvelope(
+                    expectedVersion: nil,
+                    keyEpoch: 1,
+                    algorithm: "snippets-recovery-hkdf-sha256-aes256gcm-v1",
+                    ciphertext: encryptedBundle)
             )
         }
 
-        let recipientKey = Data(repeating: 0x22, count: 32)
+        let recipientKey = Data(base64Encoded:
+            "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=")!
+        let nonce = Data(repeating: 0x33, count: 32)
         let pairing = try await store.createPairing(
             for: user,
             spaceID: space.scope.spaceID,
-            request: CreatePairing(recipientPublicKey: recipientKey, authenticationTag: "ABCD23", expiresInSeconds: 120)
+            request: CreatePairing(
+                recipientPublicKey: recipientKey,
+                nonce: nonce,
+                expiresInSeconds: 120)
         )
         await XCTAssertThrowsSyncError(.conflict) {
             _ = try await store.approvePairing(
                 for: user,
                 spaceID: space.scope.spaceID,
                 pairingID: pairing.pairingID,
-                request: ApprovePairing(recipientKeyHash: Data(repeating: 0, count: 32), algorithm: "HPKE-v1", ciphertext: encryptedBundle)
+                request: ApprovePairing(
+                    recipientKeyHash: Data(repeating: 0, count: 32),
+                    algorithm: "snippets-pairing-p256-hkdf-sha256-aes256gcm-v1",
+                    ciphertext: encryptedBundle)
             )
         }
         let approved = try await store.approvePairing(
             for: user,
             spaceID: space.scope.spaceID,
             pairingID: pairing.pairingID,
-            request: ApprovePairing(recipientKeyHash: sha256(recipientKey), algorithm: "HPKE-v1", ciphertext: encryptedBundle)
+            request: ApprovePairing(
+                recipientKeyHash: sha256(recipientKey),
+                algorithm: "snippets-pairing-p256-hkdf-sha256-aes256gcm-v1",
+                ciphertext: encryptedBundle)
         )
         XCTAssertEqual(approved.state, .approved)
         XCTAssertEqual(approved.ciphertext, encryptedBundle)
-        try await store.consumePairing(for: user, spaceID: space.scope.spaceID, pairingID: pairing.pairingID)
+        let taken = try await store.takeApprovedPairing(
+            for: user,
+            spaceID: space.scope.spaceID,
+            pairingID: pairing.pairingID)
+        XCTAssertEqual(taken.ciphertext, encryptedBundle)
         await XCTAssertThrowsSyncError(.notFound) {
             _ = try await store.pairing(for: user, spaceID: space.scope.spaceID, pairingID: pairing.pairingID)
         }
@@ -263,8 +331,36 @@ final class MemorySyncStoreTests: XCTestCase {
         XCTAssertEqual(spaces.count, 1)
     }
 
+    func testLogoutLinearizesAgainstPreviouslyAdmittedReferenceStoreOperation() async throws {
+        let store = try MemorySyncStore(serverInstanceID: instanceID, tokenSecret: tokenSecret)
+        let user = try principal(18)
+        let space = try await store.createSpace(for: user, idempotencyKey: nil)
+
+        // Model middleware admitting the request before a concurrent logout. The
+        // store boundary must recheck after logout and reject the later mutation.
+        let initiallyRevoked = try await store.isAccessTokenRevoked(for: user)
+        XCTAssertFalse(initiallyRevoked)
+        try await store.revokeAccessToken(for: user)
+
+        await XCTAssertThrowsSyncError(.authenticationRequired) {
+            _ = try await store.createSpace(for: user, idempotencyKey: nil)
+        }
+        await XCTAssertThrowsSyncError(.authenticationRequired) {
+            _ = try await store.submit(
+                for: user,
+                spaceID: space.scope.spaceID,
+                items: [.init(
+                    record: self.wire(id: UUID(), rev: "post-logout", byte: 0x91),
+                    expectedRecordVersion: nil)])
+        }
+    }
+
     private func principal(_ value: UInt8) throws -> AuthenticatedPrincipal {
-        try AuthenticatedPrincipal(identityDigest: Data(repeating: value, count: 32))
+        try AuthenticatedPrincipal(
+            identityDigest: Data(repeating: value, count: 32),
+            credentialDigest: Data(repeating: value, count: 32),
+            credentialExpiresAt: Date().addingTimeInterval(300)
+        )
     }
 
     private func wire(id: UUID, rev: String, byte: UInt8) -> OpaqueWireRecord {

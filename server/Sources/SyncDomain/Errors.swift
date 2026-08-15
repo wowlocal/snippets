@@ -8,6 +8,7 @@ public enum InvalidRecordReason: Sendable {
 public enum SyncErrorCode: String, Codable, Sendable {
     case invalidRequest = "invalid_request"
     case authenticationRequired = "authentication_required"
+    case reauthenticationRequired = "reauthentication_required"
     case forbidden
     case notFound = "not_found"
     case conflict
@@ -26,6 +27,7 @@ public enum SyncServiceError: Error, Sendable {
     case invalidRequest
     case invalidRecord(InvalidRecordReason)
     case authenticationRequired
+    case reauthenticationRequired
     case forbidden
     case notFound
     case conflict
@@ -43,6 +45,7 @@ public enum SyncServiceError: Error, Sendable {
         switch self {
         case .invalidRequest, .invalidRecord: .invalidRequest
         case .authenticationRequired: .authenticationRequired
+        case .reauthenticationRequired: .reauthenticationRequired
         case .forbidden: .forbidden
         case .notFound: .notFound
         case .conflict: .conflict

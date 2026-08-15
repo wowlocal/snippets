@@ -105,6 +105,15 @@ extension PostgresSyncStore {
         return try await withAuthorizedTransaction(principal) { connection, userID in
             let space = try await self.loadScope(connection: connection, userID: userID, spaceID: spaceID)
             guard space.role.canWrite else { throw SyncServiceError.forbidden }
+            // Lock quota rows before any per-record advisory lock. Every writer
+            // uses this order, avoiding a space-lock/record-lock deadlock while
+            // making the owner and space quota checks linearizable.
+            let quotaLocked = try await queryScalar(
+                Bool.self,
+                connection: connection,
+                query: "SELECT snippets_private.lock_storage_quota(\(spaceID))"
+            ) ?? false
+            guard quotaLocked else { throw SyncServiceError.forbidden }
             var results: [Int: BatchOutcome] = [:]
             let ordered = items.enumerated().sorted { $0.element.record.id.uuidString < $1.element.record.id.uuidString }
 
@@ -144,11 +153,6 @@ extension PostgresSyncStore {
                     continue
                 }
 
-                guard let sequence = try await queryScalar(
-                    Int64.self,
-                    connection: connection,
-                    query: "UPDATE spaces SET next_sequence = next_sequence + 1 WHERE id = \(spaceID) RETURNING next_sequence"
-                ) else { throw SyncServiceError.notFound }
                 let generation = (current?.generation ?? 0) + 1
                 let version = try self.tokenCodec.encode(RecordVersionPayload(
                     serverInstanceID: self.serverInstanceID,
@@ -157,23 +161,48 @@ extension PostgresSyncStore {
                     recordID: item.record.id,
                     generation: generation
                 ))
-                try await drain(connection.querySanitized("""
-                    INSERT INTO records(
-                        space_id, record_id, rev, deleted, blob,
-                        record_generation, record_version, last_sequence, updated_at
-                    ) VALUES (
-                        \(spaceID), \(item.record.id), \(item.record.rev), \(item.record.deleted), \(item.record.blob),
-                        \(generation), \(version), \(sequence), clock_timestamp()
-                    )
-                    ON CONFLICT (space_id, record_id) DO UPDATE SET
-                        rev = EXCLUDED.rev,
-                        deleted = EXCLUDED.deleted,
-                        blob = EXCLUDED.blob,
-                        record_generation = EXCLUDED.record_generation,
-                        record_version = EXCLUDED.record_version,
-                        last_sequence = EXCLUDED.last_sequence,
-                        updated_at = clock_timestamp()
-                    """))
+                let newStorageBytes = self.storageBytes(record: item.record, recordVersion: version)
+                let currentStorageBytes = current.map {
+                    self.storageBytes(record: $0.value.record, recordVersion: $0.value.recordVersion)
+                } ?? 0
+                let withinQuota = try await queryScalar(
+                    Bool.self,
+                    connection: connection,
+                    query: "SELECT snippets_private.record_write_within_quota(\(spaceID), \(newStorageBytes - currentStorageBytes), \(newStorageBytes), \(current == nil ? Int64(1) : Int64(0)))"
+                ) ?? false
+                guard withinQuota else {
+                    results[index] = .rejected(code: .quotaExceeded)
+                    continue
+                }
+
+                guard let sequence = try await queryScalar(
+                    Int64.self,
+                    connection: connection,
+                    query: "UPDATE spaces SET next_sequence = next_sequence + 1 WHERE id = \(spaceID) RETURNING next_sequence"
+                ) else { throw SyncServiceError.notFound }
+                if current == nil {
+                    try await drain(connection.querySanitized("""
+                        INSERT INTO records(
+                            space_id, record_id, rev, deleted, blob,
+                            record_generation, record_version, last_sequence, updated_at
+                        ) VALUES (
+                            \(spaceID), \(item.record.id), \(item.record.rev), \(item.record.deleted), \(item.record.blob),
+                            \(generation), \(version), \(sequence), clock_timestamp()
+                        )
+                        """))
+                } else {
+                    try await drain(connection.querySanitized("""
+                        UPDATE records
+                           SET rev = \(item.record.rev),
+                               deleted = \(item.record.deleted),
+                               blob = \(item.record.blob),
+                               record_generation = \(generation),
+                               record_version = \(version),
+                               last_sequence = \(sequence),
+                               updated_at = clock_timestamp()
+                         WHERE space_id = \(spaceID) AND record_id = \(item.record.id)
+                        """))
+                }
                 try await drain(connection.querySanitized("""
                     INSERT INTO changes(
                         space_id, sequence, record_id, rev, deleted, blob,
@@ -193,6 +222,12 @@ extension PostgresSyncStore {
             }
             return BatchSubmission(scope: space.scope, outcomes: outcomes, partial: partial)
         }
+    }
+
+    private func storageBytes(record: OpaqueWireRecord, recordVersion: String) -> Int64 {
+        Int64(record.blob.count)
+            + Int64(record.rev.lengthOfBytes(using: .utf8))
+            + Int64(recordVersion.lengthOfBytes(using: .utf8))
     }
 
     func snapshotPage(

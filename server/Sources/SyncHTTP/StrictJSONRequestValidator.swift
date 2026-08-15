@@ -4,7 +4,7 @@ import SyncDomain
 enum StrictJSONRequestValidator {
     static func validate(_ data: Data, operationID: String) throws {
         do {
-            var scanner = JSONScanner(bytes: Array(data))
+            var scanner = JSONScanner(bytes: data)
             try scanner.validate()
 
             // JSONDecoder cannot distinguish a missing nullable property from
@@ -40,11 +40,11 @@ enum StrictJSONRequestValidator {
 }
 
 private struct JSONScanner {
-    private let bytes: [UInt8]
+    private let bytes: Data
     private var index = 0
     private let maximumDepth = 32
 
-    init(bytes: [UInt8]) {
+    init(bytes: Data) {
         self.bytes = bytes
     }
 
@@ -158,7 +158,7 @@ private struct JSONScanner {
 
     private mutating func consumeLiteral(_ literal: [UInt8]) throws {
         guard index <= bytes.count - literal.count,
-              Array(bytes[index..<(index + literal.count)]) == literal
+              bytes[index..<(index + literal.count)].elementsEqual(literal)
         else { throw SyncServiceError.invalidRequest }
         index += literal.count
     }

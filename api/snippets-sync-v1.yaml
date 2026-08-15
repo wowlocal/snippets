@@ -41,6 +41,14 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/session:
+    delete:
+      operationId: revokeCurrentSession
+      parameters: [{ $ref: '#/components/parameters/Authorization' }]
+      responses:
+        '204':
+          description: The presented access token is immediately revoked at this resource server.
+        default: { $ref: '#/components/responses/Error' }
   /v1/spaces:
     get:
       operationId: listSpaces
@@ -185,7 +193,7 @@ paths:
         - { $ref: '#/components/parameters/Pairing' }
       responses:
         '200':
-          description: Pairing state and opaque approved envelope.
+          description: Pairing state. The approved envelope remains redacted and is returned only by the atomic consume operation.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Pairing' }
@@ -214,6 +222,20 @@ paths:
       responses:
         '200':
           description: Approved pairing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pairing' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/spaces/{space}/pairings/{pairing}/consume:
+    post:
+      operationId: takeApprovedPairing
+      parameters:
+        - { $ref: '#/components/parameters/Authorization' }
+        - { $ref: '#/components/parameters/Space' }
+        - { $ref: '#/components/parameters/Pairing' }
+      responses:
+        '200':
+          description: Atomically returns and removes one approved encrypted key envelope.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Pairing' }
@@ -272,15 +294,33 @@ components:
     OIDCDiscovery:
       type: object
       additionalProperties: false
-      required: [issuer, clientId, scopes]
+      required: [issuer, resource, clientId, scopes, authorizationFlow, maxAccessTokenAgeSeconds, stepUpMaxAgeSeconds, stepUpAMRValues, stepUpACRValues]
       properties:
         issuer: { type: string, format: uri, maxLength: 2048 }
+        resource:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Exact RFC 8707 resource identifier; equal to the canonical apiBase.
         clientId: { type: string, minLength: 1, maxLength: 256 }
         scopes:
           type: array
           minItems: 1
           maxItems: 16
           items: { type: string, maxLength: 64 }
+        authorizationFlow: { type: string, const: authorization_code_pkce }
+        maxAccessTokenAgeSeconds: { type: integer, minimum: 60, maximum: 86400 }
+        stepUpMaxAgeSeconds: { type: integer, minimum: 60, maximum: 3600 }
+        stepUpAMRValues:
+          type: array
+          description: At least one of stepUpAMRValues and stepUpACRValues is non-empty.
+          maxItems: 16
+          items: { type: string, maxLength: 64 }
+        stepUpACRValues:
+          type: array
+          description: At least one of stepUpAMRValues and stepUpACRValues is non-empty.
+          maxItems: 16
+          items: { type: string, maxLength: 256 }
     Limits:
       type: object
       additionalProperties: false
@@ -292,7 +332,7 @@ components:
         maxPageRecords: { type: integer, maximum: 50 }
         maxRequestBytes: { type: integer, maximum: 16777216 }
         maxResponseBytes: { type: integer, maximum: 67108864 }
-        maxKeyEnvelopeBytes: { type: integer, maximum: 262144 }
+        maxKeyEnvelopeBytes: { type: integer, maximum: 4096 }
         maxPairingSeconds: { type: integer, maximum: 600 }
     Health:
       type: object
@@ -416,7 +456,7 @@ components:
         version: { type: integer, minimum: 1 }
         keyEpoch: { type: integer, minimum: 1 }
         algorithm: { type: string, minLength: 1, maxLength: 64 }
-        ciphertext: { type: string, format: byte, maxLength: 349526 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
         createdAt: { type: string, format: date-time }
     PutKeyEnvelopeRequest:
       type: object
@@ -425,36 +465,42 @@ components:
       properties:
         expectedVersion: { type: [integer, 'null'], minimum: 1 }
         keyEpoch: { type: integer, minimum: 1 }
-        algorithm: { type: string, minLength: 1, maxLength: 64 }
-        ciphertext: { type: string, format: byte, maxLength: 349526 }
+        algorithm: { type: string, const: snippets-recovery-hkdf-sha256-aes256gcm-v1 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
     CreatePairingRequest:
       type: object
       additionalProperties: false
-      required: [recipientPublicKey, authenticationTag, expiresInSeconds]
+      required: [recipientPublicKey, nonce, expiresInSeconds]
       properties:
-        recipientPublicKey: { type: string, format: byte, maxLength: 512 }
-        authenticationTag: { type: string, pattern: '^[A-Z2-9]{6,12}$' }
+        recipientPublicKey:
+          type: string
+          format: byte
+          minLength: 88
+          maxLength: 88
+          description: Uncompressed P-256 X9.63 public key; the private key never leaves the recipient device.
+        nonce: { type: string, format: byte, minLength: 44, maxLength: 44 }
         expiresInSeconds: { type: integer, minimum: 60, maximum: 600 }
     ApprovePairingRequest:
       type: object
       additionalProperties: false
       required: [recipientKeyHash, algorithm, ciphertext]
       properties:
-        recipientKeyHash: { type: string, format: byte, minLength: 43, maxLength: 44 }
-        algorithm: { type: string, minLength: 1, maxLength: 64 }
-        ciphertext: { type: string, format: byte, maxLength: 349526 }
+        recipientKeyHash: { type: string, format: byte, minLength: 44, maxLength: 44 }
+        algorithm: { type: string, const: snippets-pairing-p256-hkdf-sha256-aes256gcm-v1 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
     Pairing:
       type: object
       additionalProperties: false
-      required: [pairingId, spaceId, recipientPublicKey, authenticationTag, state, expiresAt]
+      required: [pairingId, spaceId, recipientPublicKey, nonce, authenticationTag, state, expiresAt]
       properties:
         pairingId: { type: string, format: uuid }
         spaceId: { type: string, format: uuid }
         recipientPublicKey: { type: string, format: byte, maxLength: 512 }
+        nonce: { type: string, format: byte, minLength: 44, maxLength: 44 }
         authenticationTag: { type: string, pattern: '^[A-Z2-9]{6,12}$' }
         state: { type: string, enum: [pending, approved] }
         algorithm: { type: string, minLength: 1, maxLength: 64 }
-        ciphertext: { type: string, format: byte, maxLength: 349526 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
         expiresAt: { type: string, format: date-time }
     Error:
       type: object
@@ -467,4 +513,4 @@ components:
         limit: { type: integer, minimum: 0 }
     ErrorCode:
       type: string
-      enum: [invalid_request, authentication_required, forbidden, not_found, conflict, cursor_invalid, dataset_reset, incompatible_version, payload_too_large, quota_exceeded, rate_limited, pairing_expired, dependency_unavailable, internal_error]
+      enum: [invalid_request, authentication_required, reauthentication_required, forbidden, not_found, conflict, cursor_invalid, dataset_reset, incompatible_version, payload_too_large, quota_exceeded, rate_limited, pairing_expired, dependency_unavailable, internal_error]

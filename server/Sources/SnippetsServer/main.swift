@@ -30,9 +30,17 @@ enum SnippetsServerMain {
         )
         let app = Application(
             router: router,
+            server: .http1(configuration: .init(
+                idleTimeout: .seconds(Int64(configuration.httpIdleTimeoutSeconds))
+            )),
             configuration: .init(
                 address: .hostname(configuration.bindHost, port: configuration.port),
-                serverName: "snippets-sync"
+                serverName: "snippets-sync",
+                backlog: min(configuration.httpMaximumConnections, 256),
+                availableConnectionsDelegate: .maximum(
+                    configuration.httpMaximumConnections,
+                    logger: logger
+                )
             ),
             services: [client],
             logger: logger

@@ -16,7 +16,17 @@ public enum SyncApplicationFactory {
             on: router,
             serverURL: URL(string: "/")!,
             configuration: .init(jsonEncodingOptions: [.sortedKeys, .withoutEscapingSlashes]),
-            middlewares: [RequestSecurityMiddleware(tokenValidator: tokenValidator)]
+            middlewares: [RequestSecurityMiddleware(
+                tokenValidator: tokenValidator,
+                store: store,
+                bodyTimeoutSeconds: configuration.httpBodyTimeoutSeconds,
+                maximumConcurrentRequests: configuration.httpMaximumConcurrentRequests,
+                bodyMemoryBudgetBytes: configuration.httpBodyMemoryBudgetBytes,
+                globalRequestsPerSecond: configuration.httpGlobalRequestsPerSecond,
+                globalRequestBurst: configuration.httpGlobalRequestBurst,
+                principalRequestsPerSecond: configuration.httpPrincipalRequestsPerSecond,
+                principalRequestBurst: configuration.httpPrincipalRequestBurst
+            )]
         )
         return router
     }

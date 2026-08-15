@@ -24,6 +24,7 @@ public actor MemorySyncStore: SyncStore {
     }
 
     private struct SpaceState: Sendable {
+        let ownerIdentityDigest: Data
         var datasetGeneration: UUID
         var feedEpoch: UUID
         var keyEpoch: Int
@@ -37,24 +38,41 @@ public actor MemorySyncStore: SyncStore {
 
     private let serverInstanceID: UUID
     private let tokenCodec: OpaqueTokenCodec
+    private let storageQuota: SyncStorageQuota
     private var spaces: [UUID: SpaceState] = [:]
     private var idempotentSpaces: [Data: [UUID: UUID]] = [:]
+    private var revokedCredentials: Set<Data> = []
 
-    public init(serverInstanceID: UUID, tokenSecret: Data) throws {
+    public init(
+        serverInstanceID: UUID,
+        tokenSecret: Data,
+        storageQuota: SyncStorageQuota = .production
+    ) throws {
         self.serverInstanceID = serverInstanceID
         self.tokenCodec = try OpaqueTokenCodec(secret: tokenSecret)
+        self.storageQuota = storageQuota
     }
 
     public func readiness() async throws {}
 
+    public func isAccessTokenRevoked(for principal: AuthenticatedPrincipal) async throws -> Bool {
+        revokedCredentials.contains(principal.credentialDigest)
+    }
+
+    public func revokeAccessToken(for principal: AuthenticatedPrincipal) async throws {
+        revokedCredentials.insert(principal.credentialDigest)
+    }
+
     public func listSpaces(for principal: AuthenticatedPrincipal) async throws -> [SpaceDescriptor] {
-        spaces.compactMap { spaceID, state in
+        try requireCredentialActive(principal)
+        return spaces.compactMap { spaceID, state in
             guard let membership = state.memberships[principal.identityDigest] else { return nil }
             return descriptor(spaceID: spaceID, state: state, membership: membership)
         }.sorted { $0.scope.spaceID.uuidString < $1.scope.spaceID.uuidString }
     }
 
     public func createSpace(for principal: AuthenticatedPrincipal, idempotencyKey: UUID?) async throws -> SpaceDescriptor {
+        try requireCredentialActive(principal)
         if let idempotencyKey,
            let existingID = idempotentSpaces[principal.identityDigest]?[idempotencyKey],
            let existing = spaces[existingID],
@@ -69,6 +87,7 @@ public actor MemorySyncStore: SyncStore {
         let spaceID = UUID()
         let membership = Membership(role: .owner, scopeBinding: randomBytes(count: 32).base64URL)
         let state = SpaceState(
+            ownerIdentityDigest: principal.identityDigest,
             datasetGeneration: UUID(),
             feedEpoch: UUID(),
             keyEpoch: 1,
@@ -186,7 +205,6 @@ public actor MemorySyncStore: SyncStore {
             }
 
             let generation = (current?.generation ?? 0) + 1
-            state.nextSequence += 1
             let versionPayload = RecordVersionPayload(
                 serverInstanceID: serverInstanceID,
                 spaceID: spaceID,
@@ -196,6 +214,23 @@ public actor MemorySyncStore: SyncStore {
             )
             let version = try tokenCodec.encode(versionPayload)
             let serverRecord = ServerRecord(record: item.record, recordVersion: version)
+            let previousBytes = current.map { storageBytes(for: $0.value) } ?? 0
+            let newBytes = storageBytes(for: serverRecord)
+            let spaceBytes = totalStorageBytes(in: state) - previousBytes + newBytes + newBytes
+            let userBytes = totalStorageBytes(
+                ownedBy: state.ownerIdentityDigest,
+                replacing: spaceID,
+                with: state
+            ) - previousBytes + newBytes + newBytes
+            guard spaceBytes <= storageQuota.maxBytesPerSpace,
+                  userBytes <= storageQuota.maxBytesPerUser,
+                  Int64(state.records.count) + (current == nil ? 1 : 0) <= storageQuota.maxRecordsPerSpace,
+                  Int64(state.changes.count) + 1 <= storageQuota.maxChangesPerSpace
+            else {
+                indexedOutcomes[index] = .rejected(code: .quotaExceeded)
+                continue
+            }
+            state.nextSequence += 1
             state.records[item.record.id] = StoredRecord(value: serverRecord, generation: generation)
             state.changes.append(Change(sequence: state.nextSequence, value: serverRecord))
             indexedOutcomes[index] = .accepted(recordVersion: version, revision: item.record.rev)
@@ -262,7 +297,10 @@ public actor MemorySyncStore: SyncStore {
             pairingID: UUID(),
             spaceID: spaceID,
             recipientPublicKey: request.recipientPublicKey,
-            authenticationTag: request.authenticationTag,
+            nonce: request.nonce,
+            authenticationTag: pairingAuthenticationTag(
+                nonce: request.nonce,
+                recipientPublicKey: request.recipientPublicKey),
             state: .pending,
             algorithm: nil,
             ciphertext: nil,
@@ -294,6 +332,7 @@ public actor MemorySyncStore: SyncStore {
             pairingID: pairingID,
             spaceID: spaceID,
             recipientPublicKey: stored.value.recipientPublicKey,
+            nonce: stored.value.nonce,
             authenticationTag: stored.value.authenticationTag,
             state: .approved,
             algorithm: request.algorithm,
@@ -314,6 +353,21 @@ public actor MemorySyncStore: SyncStore {
         guard let pairing = state.pairings[pairingID] else { throw SyncServiceError.notFound }
         guard pairing.value.expiresAt > Date() else { throw SyncServiceError.pairingExpired }
         return pairing.value
+    }
+
+    public func takeApprovedPairing(
+        for principal: AuthenticatedPrincipal,
+        spaceID: UUID,
+        pairingID: UUID
+    ) async throws -> Pairing {
+        let (initial, _) = try authorizedState(principal: principal, spaceID: spaceID)
+        guard let stored = initial.pairings[pairingID] else { throw SyncServiceError.notFound }
+        guard stored.value.expiresAt > Date() else { throw SyncServiceError.pairingExpired }
+        guard stored.value.state == .approved else { throw SyncServiceError.conflict }
+        var state = initial
+        state.pairings[pairingID] = nil
+        spaces[spaceID] = state
+        return stored.value
     }
 
     public func consumePairing(
@@ -407,11 +461,21 @@ public actor MemorySyncStore: SyncStore {
         principal: AuthenticatedPrincipal,
         spaceID: UUID
     ) throws -> (SpaceState, Membership) {
+        try requireCredentialActive(principal)
         guard let state = spaces[spaceID], let membership = state.memberships[principal.identityDigest] else {
             // Do not reveal whether another tenant owns the identifier.
             throw SyncServiceError.notFound
         }
         return (state, membership)
+    }
+
+    private func requireCredentialActive(_ principal: AuthenticatedPrincipal) throws {
+        // Keep the reference store's authorization boundary linearizable too. The
+        // actor serializes this check with revokeAccessToken, so a handler admitted by
+        // an earlier middleware check cannot mutate state after logout completes.
+        guard !revokedCredentials.contains(principal.credentialDigest) else {
+            throw SyncServiceError.authenticationRequired
+        }
     }
 
     private func descriptor(spaceID: UUID, state: SpaceState, membership: Membership) -> SpaceDescriptor {
@@ -426,4 +490,35 @@ public actor MemorySyncStore: SyncStore {
             keyEpoch: state.keyEpoch
         )
     }
+
+    private func storageBytes(for record: ServerRecord) -> Int64 {
+        Int64(record.record.blob.count)
+            + Int64(record.record.rev.lengthOfBytes(using: .utf8))
+            + Int64(record.recordVersion.lengthOfBytes(using: .utf8))
+    }
+
+    private func totalStorageBytes(in state: SpaceState) -> Int64 {
+        state.records.values.reduce(0) { $0 + storageBytes(for: $1.value) }
+            + state.changes.reduce(0) { $0 + storageBytes(for: $1.value) }
+    }
+
+    private func totalStorageBytes(
+        ownedBy ownerIdentityDigest: Data,
+        replacing spaceID: UUID,
+        with replacement: SpaceState
+    ) -> Int64 {
+        spaces.reduce(0) { partial, entry in
+            let state = entry.key == spaceID ? replacement : entry.value
+            guard state.ownerIdentityDigest == ownerIdentityDigest else { return partial }
+            return partial + totalStorageBytes(in: state)
+        }
+    }
+}
+
+private func pairingAuthenticationTag(nonce: Data, recipientPublicKey: Data) -> String {
+    let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    var material = Data("snippets-pairing-confirm-v1".utf8)
+    material.append(nonce)
+    material.append(recipientPublicKey)
+    return sha256(material).prefix(8).map { String(alphabet[Int($0) & 31]) }.joined()
 }

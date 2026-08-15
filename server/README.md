@@ -13,8 +13,15 @@ verify that it has not drifted.
 ## Implemented boundary
 
 - Hummingbird 2 and Swift OpenAPI generated server routing;
-- strict OIDC JWT validation with HTTPS issuer/JWKS, exact audience, asymmetric
-  RS256/ES256 allow-listing, bounded JWKS, token age and keyed subject pseudonyms;
+- strict OIDC JWT validation with HTTPS issuer/JWKS, one exact resource audience, asymmetric
+  RS256/ES256 allow-listing, bounded JWKS, single-flight refresh with unknown-key
+  cooldown/negative caching, token age, native-client binding and keyed subject
+  pseudonyms (email claims are ignored);
+- fresh phishing-resistant OIDC step-up for recovery-envelope replacement and pairing
+  approval, with a closed `reauthentication_required` client signal;
+- immediate resource-server logout through a PostgreSQL-backed denylist of keyed JWT
+  digests, including ES256 low-S canonicalization, followed by RFC 7009 access/refresh
+  revocation at the identity provider;
 - personal spaces and membership-derived authorization;
 - exact per-record create/update CAS with authoritative conflicts and positional partial
   batch results;
@@ -22,21 +29,28 @@ verify that it has not drifted.
 - HMAC-bound opaque record versions and cursors scoped to server, space, dataset and
   feed generation;
 - opaque recovery-key envelope CAS and short-lived, key-substitution-resistant pairing;
+- pairing v2 with a 256-bit nonce, validated uncompressed P-256 recipient key,
+  server-derived comparison code, P-256 ECDH/HKDF-SHA-256/AES-256-GCM client envelopes,
+  redacted polling, and atomic one-use retrieval;
 - PostgreSQL constraints, transactions, immutable changes, `FORCE ROW LEVEL SECURITY`,
   and separate migration/runtime roles;
 - checksum-pinned migrations and an operator-only restore-generation rotation;
 - closed API errors, a 16 MiB pre-decoding request cap, compression rejection, and no
   arbitrary database/identity-provider error text in responses;
-- non-root, read-only Compose service packaging.
+- pre-authentication before request-body collection, body/idle timeouts, connection and
+  in-flight caps, plus global and per-principal token-bucket request limits;
+- hard per-space/per-owner payload and row-count quotas maintained by PostgreSQL triggers;
+- digest-pinned, non-root, read-only Compose service packaging with separate runtime and
+  migration images and credentials.
 
 `MemorySyncStore` is a deterministic test/reference implementation. The production
 executable always constructs `PostgresSyncStore` and a real OIDC validator; there is no
 environment switch to a fake identity or in-memory production backend.
 
-This is the service foundation, not yet the public hosted product. Per-account storage
-quotas, general request-rate limiting, device/push registration, opaque export,
-account/space deletion workflow, metrics/tracing, hosted infrastructure, and retention
-jobs are intentionally still absent. Pairing has a small per-space active-offer limit.
+This is the service foundation, not yet the public hosted product. Device/push
+registration, opaque export, account/space deletion workflow, metrics/tracing, hosted
+infrastructure, automatic quota reclamation, and retention jobs are intentionally still
+absent. Pairing has a transactionally enforced per-space active-offer limit.
 Do not describe this build as a complete public Snippets Cloud deployment until those
 gaps and the external security/operations gates are closed.
 
@@ -76,7 +90,96 @@ curl http://127.0.0.1:8080/.well-known/snippets-sync
 
 OIDC JWKS are fetched and parsed before the HTTP service starts. JWT-provided `jku`,
 `x5u`, critical headers, symmetric algorithms, redirecting JWKS responses, unknown key
-IDs, stale/future token times, and non-exact issuer/audience values fail closed.
+IDs, stale/future token times, and non-exact issuer/audience values fail closed. Unknown
+key IDs cannot cause an unbounded provider fetch: refresh is single-flight, globally
+cooled down, and bounded by a negative cache.
+
+## Account and sign-in boundary
+
+The sync server is an OIDC resource server, not a password database. Native clients use
+Authorization Code with PKCE in the system browser and request `offline_access`; the
+identity provider owns passkey enrollment, Sign in with Apple/Google, abuse controls and
+account recovery. Snippets has no password and does not require or store an email
+address. The provider must put the following
+claims into the **access token** issued for `OIDC_AUDIENCE`:
+
+- stable pairwise `sub`, plus the standard issuer/audience/time claims;
+- `azp` or `client_id` equal to `OIDC_CLIENT_ID`, binding the token to the official
+  public native client;
+- `auth_time` and `amr` and/or `acr` for a fresh passkey/WebAuthn step-up.
+
+Replacing a recovery envelope or approving a device pairing requires `auth_time` to be
+within `OIDC_STEP_UP_MAX_AGE_SECONDS` and an allow-listed phishing-resistant `amr` or
+`acr` value. Ordinary refresh-token use remains silent; only those key-granting actions
+open a fresh system-browser ceremony. Configure the identity provider to make passkey the
+primary action and Apple/Google the one-tap alternatives. Email claims are ignored:
+email is neither an account key nor MFA. Never merge accounts by matching email; linking
+must be an authenticated provider operation that preserves the same stable subject.
+
+The discovery document advertises protocol minor 4 with `oidc-pkce`,
+`oauth-resource-indicators`, `oauth-token-revocation`,
+`resource-session-revocation`,
+`account-without-required-email`, `phishing-resistant-step-up`, `pairing-v2`, and
+`offline-recovery-v1`. It contains policy, issuer, the exact RFC 8707 resource, public
+native client ID, scopes, and the server's maximum access-token age—never a client
+secret. Clients refresh before the stricter of provider expiry and that age.
+
+Register `OIDC_CLIENT_ID` as a **public native client** with no client secret, mandatory
+Authorization Code + S256 PKCE, RFC 7009 token revocation, refresh-token
+rotation/reuse detection, RFC 8707
+resource indicators, and these exact claimed-HTTPS redirect URIs (substitute the
+callback host compiled into the apps):
+
+```text
+https://<callback-host>/oauth2redirect/android
+https://<callback-host>/oauth2redirect/apple
+```
+
+The callback host must bind the Android signing certificate through
+`/.well-known/assetlinks.json` and the Apple application identifiers through
+`/.well-known/apple-app-site-association`; custom URI schemes are intentionally not
+accepted. Official and self-hosted distributions pin both their API origin and callback
+host at build time. A generic build with either value absent stays fail-closed instead of
+asking a user to trust an arbitrary credential destination.
+
+The production association documents have this minimal shape (replace the Android
+fingerprint with the release signing certificate; do not put a debug fingerprint on the
+production host):
+
+```json
+[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"com.khm.snippets.android","sha256_cert_fingerprints":["<RELEASE-SHA256-FINGERPRINT>"]}}]
+```
+
+```json
+{"webcredentials":{"apps":["H8QG3CBM96.com.khm.snippets"]}}
+```
+
+Serve both directly as `application/json` over HTTPS without redirects. Apple builds set
+`SNIPPETS_CLOUD_BASE_URL` and `SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST`; Android builds set
+the equivalent Gradle properties `SNIPPETS_CLOUD_URL` and
+`SNIPPETS_OAUTH_CALLBACK_HOST`. The associated-domain capability must be present in the
+Apple provisioning profiles used to sign both app targets.
+
+Allow `openid offline_access`, set `OIDC_AUDIENCE` to the exact canonical
+`PUBLIC_BASE_URL`, and use a distinct `OIDC_CLIENT_ID`. The provider must honor the
+`resource` parameter on authorization-code and refresh grants and issue a JWT access
+token whose `aud` contains exactly that one resource. Both clients check this before
+sending the token to the API, and the server verifies it again. Keep token lifetime at
+or below `OIDC_MAX_TOKEN_AGE_SECONDS` (default and production maximum: five minutes).
+On sign-out, clients first call `DELETE /v1/session`; the server stores only a keyed
+digest of that verified JWT's canonical signature form until expiry and rejects its
+replay across every server instance. The middleware checks revocation both before
+reading a request body and immediately before the handler, so a slow upload cannot cross
+the logout boundary. PostgreSQL additionally serializes logout and every data-plane
+transaction on the credential digest and rechecks the denylist inside that transaction,
+making the returned `204` a strict multi-instance boundary. The same logout request is
+idempotently retryable after a lost response without repeating the database write.
+Clients then revoke every journaled access/refresh generation at the provider before
+deleting local credentials.
+Provider policy—not
+the sync database—must offer passkey first, prevent automatic email-based account
+linking, publish a secure `revocation_endpoint`, and require a passkey/WebAuthn ceremony
+when the native client sends `prompt=login&max_age=0` (plus configured `acr_values`).
 
 The PostgreSQL initialization script creates only `snippets_runtime`, with
 `NOSUPERUSER NOBYPASSRLS` and no schema ownership. It runs only when a Compose database
@@ -127,20 +230,49 @@ The server fails startup on missing or malformed values.
 | `TOKEN_HMAC_SECRET` | Base64/base64url 32–64 byte secret for cursors and CAS versions |
 | `IDENTITY_PEPPER` | Independent base64/base64url 32–64 byte key for OIDC identity digests |
 | `OIDC_ISSUER` / `OIDC_JWKS_URL` | Exact HTTPS issuer and fixed HTTPS JWKS endpoint |
-| `OIDC_AUDIENCE` / `OIDC_CLIENT_ID` | Access-token audience and native client discovery value |
+| `OIDC_AUDIENCE` | Exact canonical `PUBLIC_BASE_URL`; the sole JWT audience and RFC 8707 resource |
+| `OIDC_CLIENT_ID` | Public native-client identifier; must differ from the resource |
 | `OIDC_SCOPES` | Space-separated native client scopes |
 | `OIDC_ALLOWED_ALGORITHMS` | Comma-separated subset of `RS256,ES256` |
+| `OIDC_MAX_TOKEN_AGE_SECONDS` | Maximum access-token age and `exp - iat` lifetime; default `300`, and production rejects larger values |
+| `OIDC_STEP_UP_AMR_VALUES` | Space-separated provider values that specifically prove a passkey/WebAuthn ceremony; production must explicitly configure this and/or ACR values |
+| `OIDC_STEP_UP_ACR_VALUES` | Optional space-separated provider-specific phishing-resistant `acr` values; production must explicitly configure this and/or AMR values |
+| `OIDC_STEP_UP_MAX_AGE_SECONDS` | Maximum age of the strong ceremony for key-granting operations; default `300` |
+| `OIDC_JWKS_REFRESH_SECONDS` | Successful-key-set refresh interval; default `900` |
+| `OIDC_UNKNOWN_KID_REFRESH_SECONDS` / `OIDC_UNKNOWN_KID_TTL_SECONDS` | Unknown-key network cooldown and bounded negative-cache TTL; defaults `60` / `300` |
 | `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME` | PostgreSQL location |
 | `DATABASE_RUNTIME_USER`, `DATABASE_RUNTIME_PASSWORD` | Data-plane login |
 | `DATABASE_OWNER_USER`, `DATABASE_OWNER_PASSWORD` | Migration-only login |
 | `DATABASE_TLS_MODE` | `require` or development-only `disable` |
+| `HTTP_IDLE_TIMEOUT_SECONDS` / `HTTP_BODY_TIMEOUT_SECONDS` | HTTP idle and total body-read deadlines; defaults `30` / `15` |
+| `HTTP_MAX_CONNECTIONS` / `HTTP_MAX_CONCURRENT_REQUESTS` | Process-wide connection and in-flight request caps; defaults `256` / `128` |
+| `HTTP_BODY_MEMORY_BUDGET_BYTES` | Process-wide reservation budget for live request bodies; default 256 MiB |
+| `HTTP_GLOBAL_REQUESTS_PER_SECOND` / `HTTP_GLOBAL_REQUEST_BURST` | Process-wide token-bucket rate and burst; defaults `256` / `512` |
+| `HTTP_PRINCIPAL_REQUESTS_PER_SECOND` / `HTTP_PRINCIPAL_REQUEST_BURST` | Per-authenticated-principal token-bucket rate and burst; defaults `30` / `60` |
 
 Terminate public TLS at a reviewed edge/load balancer, require TLS to PostgreSQL, inject
 secrets from a secret manager, restrict outbound traffic to the configured OIDC endpoint
 and required dependencies, and keep database backups encrypted. The included image is
-non-root and the Compose service drops capabilities and uses a read-only filesystem, but
-image signing, digest pinning, SBOM/scanning and orchestrator policy remain deployment
-work.
+non-root, the Compose service drops capabilities and uses a read-only filesystem, and
+base images are pinned to reviewed registry digests. Image signing, SBOM/scanning,
+digest-update automation, and orchestrator admission policy remain deployment work.
+The in-process token buckets are a last-resort safety ceiling; production ingress must
+also enforce distributed per-source limits before traffic reaches an application socket.
+
+## Storage quotas
+
+Record payload accounting includes the current record plus every retained change copy.
+PostgreSQL enforces 512 MiB, 100,000 current rows, and 250,000 change rows per space, and
+2 GiB across all spaces owned by one account. The application preflights a write while
+holding the same owner/space locks used by the trigger-maintained counters; a rejected
+item returns `quota_exceeded` without consuming a feed sequence. These are availability
+boundaries, not billing estimates, because PostgreSQL row/index/WAL overhead is bounded
+separately by the row counts and infrastructure limits.
+
+Migration `0003_storage_quotas.sql` backfills counters and fails closed if retained data
+already exceeds a new hard boundary. Measure aggregate record/change bytes and counts
+before applying it to an existing deployment; do not delete current records or arbitrary
+change ranges merely to force the migration through.
 
 ## Migrations and restore safety
 

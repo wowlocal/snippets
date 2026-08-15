@@ -1,4 +1,5 @@
 import Foundation
+import Crypto
 import Hummingbird
 import HummingbirdTesting
 import Logging
@@ -565,8 +566,33 @@ final class PostgresIntegrationTests: XCTestCase {
             serverInstanceID: serverID,
             tokenSecret: Data(repeating: 0x42, count: 32)
         )
-        let alice = try AuthenticatedPrincipal(identityDigest: Data(repeating: 0x01, count: 32))
-        let mallory = try AuthenticatedPrincipal(identityDigest: Data(repeating: 0x02, count: 32))
+        let aliceRevokedCredential = try AuthenticatedPrincipal(
+            identityDigest: Data(repeating: 0x01, count: 32),
+            credentialDigest: Data(repeating: 0x11, count: 32),
+            credentialExpiresAt: Date().addingTimeInterval(300))
+        let alice = try AuthenticatedPrincipal(
+            identityDigest: aliceRevokedCredential.identityDigest,
+            credentialDigest: Data(repeating: 0x12, count: 32),
+            credentialExpiresAt: Date().addingTimeInterval(300))
+        let mallory = try AuthenticatedPrincipal(
+            identityDigest: Data(repeating: 0x02, count: 32),
+            credentialDigest: Data(repeating: 0x22, count: 32),
+            credentialExpiresAt: Date().addingTimeInterval(300))
+        let aliceInitiallyRevoked = try await store.isAccessTokenRevoked(
+            for: aliceRevokedCredential)
+        XCTAssertFalse(aliceInitiallyRevoked)
+        try await store.revokeAccessToken(for: aliceRevokedCredential)
+        let aliceRevoked = try await store.isAccessTokenRevoked(for: aliceRevokedCredential)
+        XCTAssertTrue(aliceRevoked)
+        do {
+            _ = try await store.listSpaces(for: aliceRevokedCredential)
+            XCTFail("A revoked credential must fail inside the authorized transaction")
+        } catch let error as SyncServiceError {
+            XCTAssertEqual(error.code, .authenticationRequired)
+        }
+        let otherCredentialRevoked = try await store.isAccessTokenRevoked(
+            for: alice)
+        XCTAssertFalse(otherCredentialRevoked)
         let aliceSpace = try await store.createSpace(for: alice, idempotencyKey: UUID())
         let mallorySpace = try await store.createSpace(for: mallory, idempotencyKey: UUID())
 
@@ -713,6 +739,43 @@ final class PostgresIntegrationTests: XCTestCase {
         XCTAssertEqual(roleProperties?.1, false, "runtime role must not bypass RLS")
         XCTAssertEqual(roleProperties?.2, false, "runtime role must not own protected tables")
 
+        let validRecipientPublicKey = Data(
+            P256.KeyAgreement.PrivateKey().publicKey.x963Representation)
+        let pairingResults = try await withThrowingTaskGroup(
+            of: SyncErrorCode?.self,
+            returning: [SyncErrorCode?].self
+        ) { group in
+            for index in 0..<24 {
+                group.addTask {
+                    do {
+                        _ = try await store.createPairing(
+                            for: alice,
+                            spaceID: aliceSpace.scope.spaceID,
+                            request: .init(
+                                recipientPublicKey: validRecipientPublicKey,
+                                nonce: Data(repeating: UInt8(index + 1), count: 32),
+                                expiresInSeconds: 600
+                            )
+                        )
+                        return nil
+                    } catch let error as SyncServiceError {
+                        return error.code
+                    }
+                }
+            }
+            var results: [SyncErrorCode?] = []
+            for try await result in group { results.append(result) }
+            return results
+        }
+        XCTAssertEqual(
+            pairingResults.filter { $0 == nil }.count,
+            16,
+            "unexpected pairing outcomes: \(pairingResults)")
+        XCTAssertEqual(
+            pairingResults.filter { $0 == .rateLimited }.count,
+            8,
+            "unexpected pairing outcomes: \(pairingResults)")
+
         let cursorBeforeRestore = alicePage.cursor
         let recordVersionBeforeRestore = try XCTUnwrap(
             alicePage.records.first(where: { $0.record.id == sharedRecordID })?.recordVersion
@@ -742,6 +805,48 @@ final class PostgresIntegrationTests: XCTestCase {
             restoredSnapshot.records.first(where: { $0.record.id == sharedRecordID })?.recordVersion,
             recordVersionBeforeRestore
         )
+
+        // Put the accounting row exactly at its hard change quota without
+        // inserting a large fixture. The next application write must be a
+        // positional quota rejection and must not consume a feed sequence.
+        try await drain(ownerClient.query("""
+            UPDATE spaces
+               SET change_history_bytes = 536870912 - current_record_bytes,
+                   change_count = 250000
+             WHERE id = \(aliceSpace.scope.spaceID)
+            """))
+        try await drain(ownerClient.query("""
+            UPDATE users u
+               SET storage_bytes = usage.total_bytes
+              FROM (
+                  SELECT owner_user_id, sum(current_record_bytes + change_history_bytes) AS total_bytes
+                    FROM spaces
+                   GROUP BY owner_user_id
+              ) usage
+             WHERE u.id = usage.owner_user_id
+            """))
+        var sequenceBeforeQuota: Int64?
+        for try await value in try await ownerClient.query(
+            "SELECT next_sequence FROM spaces WHERE id = \(aliceSpace.scope.spaceID)"
+        ).decode(Int64.self) {
+            sequenceBeforeQuota = value
+        }
+        let quotaResult = try await store.submit(
+            for: alice,
+            spaceID: aliceSpace.scope.spaceID,
+            items: [.init(
+                record: .init(id: UUID(), rev: "quota", deleted: false, blob: Data([1])),
+                expectedRecordVersion: nil
+            )]
+        )
+        XCTAssertEqual(quotaResult.outcomes, [.rejected(code: .quotaExceeded)])
+        var sequenceAfterQuota: Int64?
+        for try await value in try await ownerClient.query(
+            "SELECT next_sequence FROM spaces WHERE id = \(aliceSpace.scope.spaceID)"
+        ).decode(Int64.self) {
+            sequenceAfterQuota = value
+        }
+        XCTAssertEqual(sequenceAfterQuota, sequenceBeforeQuota)
     }
 
     private var serverRoot: URL {
@@ -767,9 +872,15 @@ private struct IntegrationTokenValidator: AccessTokenValidating {
     func validate(bearerToken: String) async throws -> AuthenticatedPrincipal {
         switch bearerToken {
         case "tenant-a":
-            try AuthenticatedPrincipal(identityDigest: Data(repeating: 0xa1, count: 32))
+            try AuthenticatedPrincipal(
+                identityDigest: Data(repeating: 0xa1, count: 32),
+                credentialDigest: Data(repeating: 0xc1, count: 32),
+                credentialExpiresAt: Date().addingTimeInterval(300))
         case "tenant-b":
-            try AuthenticatedPrincipal(identityDigest: Data(repeating: 0xb2, count: 32))
+            try AuthenticatedPrincipal(
+                identityDigest: Data(repeating: 0xb2, count: 32),
+                credentialDigest: Data(repeating: 0xd2, count: 32),
+                credentialExpiresAt: Date().addingTimeInterval(300))
         default:
             throw SyncServiceError.authenticationRequired
         }

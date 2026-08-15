@@ -85,15 +85,19 @@ enum OpenAPIMapping {
         )
     }
 
-    static func pairing(_ value: SyncDomain.Pairing) -> Components.Schemas.Pairing {
+    static func pairing(
+        _ value: SyncDomain.Pairing,
+        includeApprovedEnvelope: Bool = false
+    ) -> Components.Schemas.Pairing {
         .init(
             pairingId: value.pairingID.uuidString.lowercased(),
             spaceId: value.spaceID.uuidString.lowercased(),
             recipientPublicKey: value.recipientPublicKey.base64EncodedString(),
+            nonce: value.nonce.base64EncodedString(),
             authenticationTag: value.authenticationTag,
             state: .init(rawValue: value.state.rawValue)!,
-            algorithm: value.algorithm,
-            ciphertext: value.ciphertext?.base64EncodedString(),
+            algorithm: includeApprovedEnvelope ? value.algorithm : nil,
+            ciphertext: includeApprovedEnvelope ? value.ciphertext?.base64EncodedString() : nil,
             expiresAt: value.expiresAt
         )
     }

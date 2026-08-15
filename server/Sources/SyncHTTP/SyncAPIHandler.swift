@@ -10,14 +10,20 @@ public struct SyncAPIHandler: APIProtocol {
         self.store = store
         self.discovery = .init(
             protocolMajor: ._1,
-            protocolMinor: 0,
+            protocolMinor: 4,
             serverVersion: configuration.serverVersion,
             serverInstanceId: configuration.serverInstanceID.uuidString.lowercased(),
             apiBase: configuration.publicBaseURL.absoluteString,
             oidc: .init(
                 issuer: configuration.oidc.issuer.absoluteString,
+                resource: configuration.publicBaseURL.absoluteString,
                 clientId: configuration.oidc.clientID,
-                scopes: configuration.oidc.scopes
+                scopes: configuration.oidc.scopes,
+                authorizationFlow: .authorizationCodePkce,
+                maxAccessTokenAgeSeconds: Int(configuration.oidc.maximumTokenAge),
+                stepUpMaxAgeSeconds: Int(configuration.oidc.stepUpMaximumAge),
+                stepUpAMRValues: configuration.oidc.stepUpAuthenticationMethods.sorted(),
+                stepUpACRValues: configuration.oidc.stepUpAuthenticationContexts.sorted()
             ),
             limits: .init(
                 maxBlobBytes: ._900000,
@@ -30,7 +36,16 @@ public struct SyncAPIHandler: APIProtocol {
                 maxPairingSeconds: SyncLimits.maxPairingSeconds
             ),
             recordProfile: .snippetsWireV1,
-            capabilities: []
+            capabilities: [
+                "oidc-pkce",
+                "oauth-resource-indicators",
+                "oauth-token-revocation",
+                "resource-session-revocation",
+                "account-without-required-email",
+                "phishing-resistant-step-up",
+                "pairing-v2",
+                "offline-recovery-v1",
+            ]
         )
     }
 
@@ -49,6 +64,14 @@ public struct SyncAPIHandler: APIProtocol {
         } catch {
             return .serviceUnavailable(.init(body: .json(OpenAPIMapping.error(.dependencyUnavailable))))
         }
+    }
+
+    public func revokeCurrentSession(
+        _ input: Operations.RevokeCurrentSession.Input
+    ) async throws -> Operations.RevokeCurrentSession.Output {
+        let principal = try OpenAPIMapping.requiredPrincipal()
+        try await store.revokeAccessToken(for: principal)
+        return .noContent(.init())
     }
 
     public func listSpaces(_ input: Operations.ListSpaces.Input) async throws -> Operations.ListSpaces.Output {
@@ -134,8 +157,10 @@ public struct SyncAPIHandler: APIProtocol {
         let request = PutKeyEnvelope(
             expectedVersion: body.expectedVersion,
             keyEpoch: body.keyEpoch,
-            algorithm: body.algorithm,
-            ciphertext: try OpenAPIMapping.canonicalBase64(body.ciphertext, maximumBytes: SyncLimits.maxKeyEnvelopeBytes)
+            algorithm: body.algorithm.rawValue,
+            ciphertext: try OpenAPIMapping.canonicalBase64(
+                body.ciphertext,
+                maximumBytes: SyncLimits.maxBootstrapEnvelopeBytes)
         )
         let stored = try await store.putKeyEnvelope(
             for: principal,
@@ -154,7 +179,7 @@ public struct SyncAPIHandler: APIProtocol {
                 body.recipientPublicKey,
                 maximumBytes: SyncLimits.maxPairingPublicKeyBytes
             ),
-            authenticationTag: body.authenticationTag,
+            nonce: try OpenAPIMapping.canonicalBase64(body.nonce, maximumBytes: 32),
             expiresInSeconds: body.expiresInSeconds
         )
         let created = try await store.createPairing(
@@ -185,14 +210,29 @@ public struct SyncAPIHandler: APIProtocol {
         return .noContent(.init())
     }
 
+    public func takeApprovedPairing(_ input: Operations.TakeApprovedPairing.Input) async throws -> Operations.TakeApprovedPairing.Output {
+        let principal = try OpenAPIMapping.requiredPrincipal()
+        let value = try await store.takeApprovedPairing(
+            for: principal,
+            spaceID: OpenAPIMapping.uuid(input.path.space),
+            pairingID: OpenAPIMapping.uuid(input.path.pairing)
+        )
+        return .ok(.init(body: .json(OpenAPIMapping.pairing(
+            value,
+            includeApprovedEnvelope: true
+        ))))
+    }
+
     public func approvePairing(_ input: Operations.ApprovePairing.Input) async throws -> Operations.ApprovePairing.Output {
         let principal = try OpenAPIMapping.requiredPrincipal()
         let body: Components.Schemas.ApprovePairingRequest
         switch input.body { case .json(let value): body = value }
         let request = ApprovePairing(
             recipientKeyHash: try OpenAPIMapping.canonicalBase64(body.recipientKeyHash, maximumBytes: 32),
-            algorithm: body.algorithm,
-            ciphertext: try OpenAPIMapping.canonicalBase64(body.ciphertext, maximumBytes: SyncLimits.maxKeyEnvelopeBytes)
+            algorithm: body.algorithm.rawValue,
+            ciphertext: try OpenAPIMapping.canonicalBase64(
+                body.ciphertext,
+                maximumBytes: SyncLimits.maxBootstrapEnvelopeBytes)
         )
         let value = try await store.approvePairing(
             for: principal,

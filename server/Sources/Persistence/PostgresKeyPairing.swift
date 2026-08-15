@@ -66,6 +66,10 @@ extension PostgresSyncStore {
         return try await withAuthorizedTransaction(principal) { connection, userID in
             let space = try await self.loadScope(connection: connection, userID: userID, spaceID: spaceID)
             guard space.role.canWrite else { throw SyncServiceError.forbidden }
+            let pairingLimitLock = "pairing-limit:\(spaceID.uuidString)"
+            try await drain(connection.querySanitized(
+                "SELECT pg_advisory_xact_lock(hashtextextended(\(pairingLimitLock), 0))"
+            ))
             try await drain(connection.querySanitized("DELETE FROM pairings WHERE space_id = \(spaceID) AND expires_at <= clock_timestamp()"))
             let count = try await queryScalar(
                 Int64.self,
@@ -76,20 +80,24 @@ extension PostgresSyncStore {
             let pairingID = UUID()
             let expiresAt = Date().addingTimeInterval(TimeInterval(request.expiresInSeconds))
             let keyHash = sha256(request.recipientPublicKey)
+            let authenticationTag = pairingAuthenticationTag(
+                nonce: request.nonce,
+                recipientPublicKey: request.recipientPublicKey)
             try await drain(connection.querySanitized("""
                 INSERT INTO pairings(
                     space_id, pairing_id, recipient_public_key, recipient_key_hash,
-                    authentication_tag, expires_at
+                    nonce, authentication_tag, expires_at
                 ) VALUES (
                     \(spaceID), \(pairingID), \(request.recipientPublicKey), \(keyHash),
-                    \(request.authenticationTag), \(expiresAt)
+                    \(request.nonce), \(authenticationTag), \(expiresAt)
                 )
                 """))
             return Pairing(
                 pairingID: pairingID,
                 spaceID: spaceID,
                 recipientPublicKey: request.recipientPublicKey,
-                authenticationTag: request.authenticationTag,
+                nonce: request.nonce,
+                authenticationTag: authenticationTag,
                 state: .pending,
                 algorithm: nil,
                 ciphertext: nil,
@@ -128,6 +136,7 @@ extension PostgresSyncStore {
                 pairingID: pairingID,
                 spaceID: spaceID,
                 recipientPublicKey: stored.value.recipientPublicKey,
+                nonce: stored.value.nonce,
                 authenticationTag: stored.value.authenticationTag,
                 state: .approved,
                 algorithm: request.algorithm,
@@ -169,6 +178,28 @@ extension PostgresSyncStore {
                 forUpdate: true
             ) != nil else { throw SyncServiceError.notFound }
             try await drain(connection.querySanitized("DELETE FROM pairings WHERE space_id = \(spaceID) AND pairing_id = \(pairingID)"))
+        }
+    }
+
+    public func takeApprovedPairing(
+        for principal: AuthenticatedPrincipal,
+        spaceID: UUID,
+        pairingID: UUID
+    ) async throws -> Pairing {
+        try await withAuthorizedTransaction(principal) { connection, userID in
+            _ = try await self.loadScope(connection: connection, userID: userID, spaceID: spaceID)
+            guard let stored = try await self.loadPairing(
+                connection: connection,
+                spaceID: spaceID,
+                pairingID: pairingID,
+                forUpdate: true
+            ) else { throw SyncServiceError.notFound }
+            guard stored.value.expiresAt > Date() else { throw SyncServiceError.pairingExpired }
+            guard stored.value.state == .approved else { throw SyncServiceError.conflict }
+            try await drain(connection.querySanitized(
+                "DELETE FROM pairings WHERE space_id = \(spaceID) AND pairing_id = \(pairingID)"
+            ))
+            return stored.value
         }
     }
 
@@ -221,7 +252,7 @@ extension PostgresSyncStore {
         let rows: PostgresRowSequence
         if forUpdate {
             rows = try await connection.querySanitized("""
-                SELECT recipient_public_key, recipient_key_hash, authentication_tag,
+                SELECT recipient_public_key, recipient_key_hash, nonce, authentication_tag,
                        algorithm, ciphertext, approved_at, expires_at
                   FROM pairings
                  WHERE space_id = \(spaceID) AND pairing_id = \(pairingID)
@@ -229,21 +260,22 @@ extension PostgresSyncStore {
                 """)
         } else {
             rows = try await connection.querySanitized("""
-                SELECT recipient_public_key, recipient_key_hash, authentication_tag,
+                SELECT recipient_public_key, recipient_key_hash, nonce, authentication_tag,
                        algorithm, ciphertext, approved_at, expires_at
                   FROM pairings
                  WHERE space_id = \(spaceID) AND pairing_id = \(pairingID)
                 """)
         }
         var result: StoredPairing?
-        for try await (publicKey, keyHash, tag, algorithm, ciphertext, approvedAt, expiresAt) in rows.decode(
-            (Data, Data, String, String?, Data?, Date?, Date).self
+        for try await (publicKey, keyHash, nonce, tag, algorithm, ciphertext, approvedAt, expiresAt) in rows.decode(
+            (Data, Data, Data, String, String?, Data?, Date?, Date).self
         ) {
             result = .init(
                 value: Pairing(
                     pairingID: pairingID,
                     spaceID: spaceID,
                     recipientPublicKey: publicKey,
+                    nonce: nonce,
                     authenticationTag: tag,
                     state: approvedAt == nil ? .pending : .approved,
                     algorithm: algorithm,
@@ -255,4 +287,12 @@ extension PostgresSyncStore {
         }
         return result
     }
+}
+
+private func pairingAuthenticationTag(nonce: Data, recipientPublicKey: Data) -> String {
+    let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    var material = Data("snippets-pairing-confirm-v1".utf8)
+    material.append(nonce)
+    material.append(recipientPublicKey)
+    return sha256(material).prefix(8).map { String(alphabet[Int($0) & 31]) }.joined()
 }

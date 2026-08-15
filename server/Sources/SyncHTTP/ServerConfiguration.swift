@@ -17,6 +17,14 @@ public struct OIDCConfiguration: Sendable {
     public let clockSkew: TimeInterval
     public let identityPepper: Data
     public let jwksRefreshInterval: TimeInterval
+    public let unknownKeyRefreshInterval: TimeInterval
+    public let unknownKeyCacheTTL: TimeInterval
+    /// Authentication methods that the identity provider maps to a
+    /// phishing-resistant authenticator (normally a passkey/WebAuthn ceremony).
+    public let stepUpAuthenticationMethods: Set<String>
+    /// Optional provider-specific assurance contexts with the same meaning.
+    public let stepUpAuthenticationContexts: Set<String>
+    public let stepUpMaximumAge: TimeInterval
 
     public init(
         issuer: URL,
@@ -28,11 +36,17 @@ public struct OIDCConfiguration: Sendable {
         maximumTokenAge: TimeInterval,
         clockSkew: TimeInterval,
         identityPepper: Data,
-        jwksRefreshInterval: TimeInterval = 900
+        jwksRefreshInterval: TimeInterval = 900,
+        unknownKeyRefreshInterval: TimeInterval = 60,
+        unknownKeyCacheTTL: TimeInterval = 300,
+        stepUpAuthenticationMethods: Set<String> = ["webauthn"],
+        stepUpAuthenticationContexts: Set<String> = [],
+        stepUpMaximumAge: TimeInterval = 300
     ) throws {
         try Self.requireHTTPS(issuer)
         try Self.requireHTTPS(jwksURL)
         guard issuer.absoluteString.utf8.count <= 2_048,
+              issuer.query == nil,
               jwksURL.absoluteString.utf8.count <= 2_048,
               !audience.isEmpty, audience.utf8.count <= 256,
               !clientID.isEmpty, clientID.utf8.count <= 256,
@@ -41,10 +55,18 @@ public struct OIDCConfiguration: Sendable {
               scopes.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
               !allowedAlgorithms.isEmpty,
               allowedAlgorithms.isSubset(of: ["RS256", "ES256"]),
-              maximumTokenAge > 0, maximumTokenAge <= 86_400,
+              maximumTokenAge >= 60, maximumTokenAge <= 86_400,
               clockSkew >= 0, clockSkew <= 300,
               (32...64).contains(identityPepper.count),
-              jwksRefreshInterval >= 60
+              jwksRefreshInterval >= 60, jwksRefreshInterval <= 86_400,
+              unknownKeyRefreshInterval >= 60, unknownKeyRefreshInterval <= jwksRefreshInterval,
+              unknownKeyCacheTTL >= unknownKeyRefreshInterval, unknownKeyCacheTTL <= 3_600,
+              !stepUpAuthenticationMethods.isEmpty || !stepUpAuthenticationContexts.isEmpty,
+              stepUpAuthenticationMethods.count <= 16,
+              stepUpAuthenticationContexts.count <= 16,
+              stepUpAuthenticationMethods.allSatisfy(Self.validAssuranceValue),
+              stepUpAuthenticationContexts.allSatisfy(Self.validAssuranceValue),
+              stepUpMaximumAge >= 60, stepUpMaximumAge <= 3_600
         else { throw ConfigurationError.invalidValue }
         self.issuer = issuer
         self.audience = audience
@@ -56,12 +78,25 @@ public struct OIDCConfiguration: Sendable {
         self.clockSkew = clockSkew
         self.identityPepper = identityPepper
         self.jwksRefreshInterval = jwksRefreshInterval
+        self.unknownKeyRefreshInterval = unknownKeyRefreshInterval
+        self.unknownKeyCacheTTL = unknownKeyCacheTTL
+        self.stepUpAuthenticationMethods = Set(stepUpAuthenticationMethods.map { $0.lowercased() })
+        self.stepUpAuthenticationContexts = stepUpAuthenticationContexts
+        self.stepUpMaximumAge = stepUpMaximumAge
     }
 
     private static func requireHTTPS(_ url: URL) throws {
         guard url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
               url.fragment == nil
         else { throw ConfigurationError.invalidValue }
+    }
+
+    private static func validAssuranceValue(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 256
+            && value.unicodeScalars.allSatisfy {
+                !CharacterSet.whitespacesAndNewlines.contains($0)
+                    && !CharacterSet.controlCharacters.contains($0)
+            }
     }
 }
 
@@ -74,6 +109,15 @@ public struct ServerConfiguration: Sendable {
     public let serverVersion: String
     public let tokenSecret: Data
     public let oidc: OIDCConfiguration
+    public let httpIdleTimeoutSeconds: Int
+    public let httpBodyTimeoutSeconds: Int
+    public let httpMaximumConnections: Int
+    public let httpMaximumConcurrentRequests: Int
+    public let httpBodyMemoryBudgetBytes: Int
+    public let httpGlobalRequestsPerSecond: Int
+    public let httpGlobalRequestBurst: Int
+    public let httpPrincipalRequestsPerSecond: Int
+    public let httpPrincipalRequestBurst: Int
 
     public init(
         environment: DeploymentEnvironment,
@@ -83,17 +127,40 @@ public struct ServerConfiguration: Sendable {
         serverInstanceID: UUID,
         serverVersion: String,
         tokenSecret: Data,
-        oidc: OIDCConfiguration
+        oidc: OIDCConfiguration,
+        httpIdleTimeoutSeconds: Int = 30,
+        httpBodyTimeoutSeconds: Int = 15,
+        httpMaximumConnections: Int = 256,
+        httpMaximumConcurrentRequests: Int = 128,
+        httpBodyMemoryBudgetBytes: Int = 256 * 1_024 * 1_024,
+        httpGlobalRequestsPerSecond: Int = 256,
+        httpGlobalRequestBurst: Int = 512,
+        httpPrincipalRequestsPerSecond: Int = 30,
+        httpPrincipalRequestBurst: Int = 60
     ) throws {
         guard !bindHost.isEmpty, bindHost.utf8.count <= 255, (1...65_535).contains(port),
               !serverVersion.isEmpty, serverVersion.utf8.count <= 64,
               (32...64).contains(tokenSecret.count),
               publicBaseURL.absoluteString.utf8.count <= 2_048,
+              !publicBaseURL.absoluteString.hasSuffix("/"),
               publicBaseURL.user == nil, publicBaseURL.password == nil,
-              publicBaseURL.query == nil, publicBaseURL.fragment == nil
+              publicBaseURL.query == nil, publicBaseURL.fragment == nil,
+              (5...300).contains(httpIdleTimeoutSeconds),
+              (5...120).contains(httpBodyTimeoutSeconds),
+              (16...10_000).contains(httpMaximumConnections),
+              (8...httpMaximumConnections).contains(httpMaximumConcurrentRequests),
+              (SyncLimits.maxRequestBytes...(4 * 1_024 * 1_024 * 1_024)).contains(httpBodyMemoryBudgetBytes),
+              (1...100_000).contains(httpGlobalRequestsPerSecond),
+              (httpGlobalRequestsPerSecond...200_000).contains(httpGlobalRequestBurst),
+              (1...10_000).contains(httpPrincipalRequestsPerSecond),
+              (httpPrincipalRequestsPerSecond...20_000).contains(httpPrincipalRequestBurst)
         else { throw ConfigurationError.invalidValue }
         if environment == .production {
-            guard publicBaseURL.scheme == "https", publicBaseURL.host != nil else {
+            guard publicBaseURL.scheme == "https", publicBaseURL.host != nil,
+                  oidc.audience == publicBaseURL.absoluteString,
+                  oidc.audience != oidc.clientID,
+                  oidc.maximumTokenAge <= 300,
+                  Set(oidc.scopes).isSuperset(of: ["openid", "offline_access"]) else {
                 throw ConfigurationError.invalidValue
             }
         } else {
@@ -109,6 +176,15 @@ public struct ServerConfiguration: Sendable {
         self.serverVersion = serverVersion
         self.tokenSecret = tokenSecret
         self.oidc = oidc
+        self.httpIdleTimeoutSeconds = httpIdleTimeoutSeconds
+        self.httpBodyTimeoutSeconds = httpBodyTimeoutSeconds
+        self.httpMaximumConnections = httpMaximumConnections
+        self.httpMaximumConcurrentRequests = httpMaximumConcurrentRequests
+        self.httpBodyMemoryBudgetBytes = httpBodyMemoryBudgetBytes
+        self.httpGlobalRequestsPerSecond = httpGlobalRequestsPerSecond
+        self.httpGlobalRequestBurst = httpGlobalRequestBurst
+        self.httpPrincipalRequestsPerSecond = httpPrincipalRequestsPerSecond
+        self.httpPrincipalRequestBurst = httpPrincipalRequestBurst
     }
 
     public static func load(environment values: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {
@@ -120,6 +196,17 @@ public struct ServerConfiguration: Sendable {
             guard let raw = values[key] else { return defaultValue }
             guard let value = Int(raw), value > 0 else { throw ConfigurationError.invalid(key) }
             return value
+        }
+        func strictBool(_ key: String, default defaultValue: Bool) throws -> Bool {
+            guard let raw = values[key] else { return defaultValue }
+            switch raw.lowercased() {
+            case "true", "1": return true
+            case "false", "0": return false
+            default: throw ConfigurationError.invalid(key)
+            }
+        }
+        func optionalValuesSet(_ key: String) -> Set<String> {
+            Set(values[key, default: ""].split(separator: " ").map(String.init))
         }
         func secret(_ key: String) throws -> Data {
             let value = try required(key)
@@ -144,6 +231,21 @@ public struct ServerConfiguration: Sendable {
             .unwrap(or: ConfigurationError.invalid("OIDC_JWKS_URL"))
         let algorithms = Set(try required("OIDC_ALLOWED_ALGORITHMS").split(separator: ",").map(String.init))
         let scopes = try required("OIDC_SCOPES").split(separator: " ").map(String.init)
+        let configuredStepUpMethods = optionalValuesSet("OIDC_STEP_UP_AMR_VALUES")
+        let configuredStepUpContexts = optionalValuesSet("OIDC_STEP_UP_ACR_VALUES")
+        let stepUpMethods: Set<String>
+        if values["OIDC_STEP_UP_AMR_VALUES"] != nil {
+            stepUpMethods = configuredStepUpMethods
+        } else if deployment == .production {
+            stepUpMethods = []
+        } else {
+            stepUpMethods = ["webauthn"]
+        }
+        if deployment == .production,
+           values["OIDC_STEP_UP_AMR_VALUES"] == nil,
+           values["OIDC_STEP_UP_ACR_VALUES"] == nil {
+            throw ConfigurationError.missing("OIDC_STEP_UP_AMR_VALUES or OIDC_STEP_UP_ACR_VALUES")
+        }
 
         let oidc = try OIDCConfiguration(
             issuer: issuer,
@@ -152,9 +254,15 @@ public struct ServerConfiguration: Sendable {
             scopes: scopes,
             jwksURL: jwksURL,
             allowedAlgorithms: algorithms,
-            maximumTokenAge: TimeInterval(try positiveInt("OIDC_MAX_TOKEN_AGE_SECONDS", default: 3_600)),
+            maximumTokenAge: TimeInterval(try positiveInt("OIDC_MAX_TOKEN_AGE_SECONDS", default: 300)),
             clockSkew: TimeInterval(try positiveInt("OIDC_CLOCK_SKEW_SECONDS", default: 60)),
-            identityPepper: secret("IDENTITY_PEPPER")
+            identityPepper: secret("IDENTITY_PEPPER"),
+            jwksRefreshInterval: TimeInterval(try positiveInt("OIDC_JWKS_REFRESH_SECONDS", default: 900)),
+            unknownKeyRefreshInterval: TimeInterval(try positiveInt("OIDC_UNKNOWN_KID_REFRESH_SECONDS", default: 60)),
+            unknownKeyCacheTTL: TimeInterval(try positiveInt("OIDC_UNKNOWN_KID_TTL_SECONDS", default: 300)),
+            stepUpAuthenticationMethods: stepUpMethods,
+            stepUpAuthenticationContexts: configuredStepUpContexts,
+            stepUpMaximumAge: TimeInterval(try positiveInt("OIDC_STEP_UP_MAX_AGE_SECONDS", default: 300))
         )
         return try ServerConfiguration(
             environment: deployment,
@@ -164,7 +272,16 @@ public struct ServerConfiguration: Sendable {
             serverInstanceID: instanceID,
             serverVersion: values["SERVER_VERSION"] ?? "dev",
             tokenSecret: secret("TOKEN_HMAC_SECRET"),
-            oidc: oidc
+            oidc: oidc,
+            httpIdleTimeoutSeconds: try positiveInt("HTTP_IDLE_TIMEOUT_SECONDS", default: 30),
+            httpBodyTimeoutSeconds: try positiveInt("HTTP_BODY_TIMEOUT_SECONDS", default: 15),
+            httpMaximumConnections: try positiveInt("HTTP_MAX_CONNECTIONS", default: 256),
+            httpMaximumConcurrentRequests: try positiveInt("HTTP_MAX_CONCURRENT_REQUESTS", default: 128),
+            httpBodyMemoryBudgetBytes: try positiveInt("HTTP_BODY_MEMORY_BUDGET_BYTES", default: 256 * 1_024 * 1_024),
+            httpGlobalRequestsPerSecond: try positiveInt("HTTP_GLOBAL_REQUESTS_PER_SECOND", default: 256),
+            httpGlobalRequestBurst: try positiveInt("HTTP_GLOBAL_REQUEST_BURST", default: 512),
+            httpPrincipalRequestsPerSecond: try positiveInt("HTTP_PRINCIPAL_REQUESTS_PER_SECOND", default: 30),
+            httpPrincipalRequestBurst: try positiveInt("HTTP_PRINCIPAL_REQUEST_BURST", default: 60)
         )
     }
 }

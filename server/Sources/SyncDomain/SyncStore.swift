@@ -2,6 +2,8 @@ import Foundation
 
 public protocol SyncStore: Sendable {
     func readiness() async throws
+    func isAccessTokenRevoked(for principal: AuthenticatedPrincipal) async throws -> Bool
+    func revokeAccessToken(for principal: AuthenticatedPrincipal) async throws
     func listSpaces(for principal: AuthenticatedPrincipal) async throws -> [SpaceDescriptor]
     func createSpace(for principal: AuthenticatedPrincipal, idempotencyKey: UUID?) async throws -> SpaceDescriptor
     func scope(for principal: AuthenticatedPrincipal, spaceID: UUID) async throws -> SpaceDescriptor
@@ -12,5 +14,6 @@ public protocol SyncStore: Sendable {
     func createPairing(for principal: AuthenticatedPrincipal, spaceID: UUID, request: CreatePairing) async throws -> Pairing
     func approvePairing(for principal: AuthenticatedPrincipal, spaceID: UUID, pairingID: UUID, request: ApprovePairing) async throws -> Pairing
     func pairing(for principal: AuthenticatedPrincipal, spaceID: UUID, pairingID: UUID) async throws -> Pairing
+    func takeApprovedPairing(for principal: AuthenticatedPrincipal, spaceID: UUID, pairingID: UUID) async throws -> Pairing
     func consumePairing(for principal: AuthenticatedPrincipal, spaceID: UUID, pairingID: UUID) async throws
 }

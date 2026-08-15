@@ -1,4 +1,5 @@
 import Foundation
+import Crypto
 
 public enum SyncLimits {
     public static let maxBlobBytes = 900_000
@@ -8,19 +9,66 @@ public enum SyncLimits {
     public static let maxRequestBytes = 16 * 1_024 * 1_024
     public static let maxResponseBytes = 64 * 1_024 * 1_024
     public static let maxSpacesPerUser = 100
-    public static let maxKeyEnvelopeBytes = 262_144
-    public static let maxPairingPublicKeyBytes = 384
+    public static let maxKeyEnvelopeBytes = 4_096
+    public static let maxBootstrapEnvelopeBytes = maxKeyEnvelopeBytes
+    public static let maxPairingPublicKeyBytes = 65
     public static let maxPairingSeconds = 600
+    // These payload quotas are mirrored by hard PostgreSQL constraints in
+    // 0003_storage_quotas.sql. Counts separately bound per-row database overhead.
+    public static let maxStorageBytesPerSpace: Int64 = 512 * 1_024 * 1_024
+    public static let maxStorageBytesPerUser: Int64 = 2 * 1_024 * 1_024 * 1_024
+    public static let maxRecordsPerSpace: Int64 = 100_000
+    public static let maxChangesPerSpace: Int64 = 250_000
+}
+
+public struct SyncStorageQuota: Sendable {
+    public let maxBytesPerSpace: Int64
+    public let maxBytesPerUser: Int64
+    public let maxRecordsPerSpace: Int64
+    public let maxChangesPerSpace: Int64
+
+    public static let production = SyncStorageQuota(
+        maxBytesPerSpace: SyncLimits.maxStorageBytesPerSpace,
+        maxBytesPerUser: SyncLimits.maxStorageBytesPerUser,
+        maxRecordsPerSpace: SyncLimits.maxRecordsPerSpace,
+        maxChangesPerSpace: SyncLimits.maxChangesPerSpace
+    )
+
+    public init(
+        maxBytesPerSpace: Int64,
+        maxBytesPerUser: Int64,
+        maxRecordsPerSpace: Int64,
+        maxChangesPerSpace: Int64
+    ) {
+        self.maxBytesPerSpace = maxBytesPerSpace
+        self.maxBytesPerUser = maxBytesPerUser
+        self.maxRecordsPerSpace = maxRecordsPerSpace
+        self.maxChangesPerSpace = maxChangesPerSpace
+    }
 }
 
 /// An authenticated identity reduced to a keyed, non-reversible lookup digest.
 /// Raw OIDC issuer/subject values never enter persistence or application logs.
 public struct AuthenticatedPrincipal: Hashable, Sendable {
     public let identityDigest: Data
+    /// Keyed digest of this exact bearer credential. It lets the resource server
+    /// revoke the current device's access token without persisting the JWT, its
+    /// claims, or a stable identity-provider identifier.
+    public let credentialDigest: Data
+    public let credentialExpiresAt: Date
 
-    public init(identityDigest: Data) throws {
-        guard identityDigest.count == 32 else { throw SyncServiceError.authenticationRequired }
+    public init(
+        identityDigest: Data,
+        credentialDigest: Data,
+        credentialExpiresAt: Date
+    ) throws {
+        guard identityDigest.count == 32,
+              credentialDigest.count == 32,
+              credentialExpiresAt.timeIntervalSince1970.isFinite
+        else { throw SyncServiceError.authenticationRequired }
         self.identityDigest = identityDigest
+        self.credentialDigest = credentialDigest
+        self.credentialExpiresAt = credentialExpiresAt
     }
 }
 
@@ -213,11 +261,12 @@ public struct PutKeyEnvelope: Codable, Equatable, Sendable {
     }
 
     public func validate() throws {
-        guard keyEpoch > 0, !algorithm.isEmpty, algorithm.utf8.count <= 64 else {
+        guard keyEpoch > 0,
+              algorithm == "snippets-recovery-hkdf-sha256-aes256gcm-v1" else {
             throw SyncServiceError.invalidRequest
         }
-        guard ciphertext.count <= SyncLimits.maxKeyEnvelopeBytes else {
-            throw SyncServiceError.payloadTooLarge(limit: SyncLimits.maxKeyEnvelopeBytes)
+        guard ciphertext.count <= SyncLimits.maxBootstrapEnvelopeBytes else {
+            throw SyncServiceError.payloadTooLarge(limit: SyncLimits.maxBootstrapEnvelopeBytes)
         }
     }
 }
@@ -228,6 +277,7 @@ public struct Pairing: Codable, Equatable, Sendable {
     public let pairingID: UUID
     public let spaceID: UUID
     public let recipientPublicKey: Data
+    public let nonce: Data
     public let authenticationTag: String
     public let state: PairingState
     public let algorithm: String?
@@ -238,6 +288,7 @@ public struct Pairing: Codable, Equatable, Sendable {
         pairingID: UUID,
         spaceID: UUID,
         recipientPublicKey: Data,
+        nonce: Data,
         authenticationTag: String,
         state: PairingState,
         algorithm: String?,
@@ -247,6 +298,7 @@ public struct Pairing: Codable, Equatable, Sendable {
         self.pairingID = pairingID
         self.spaceID = spaceID
         self.recipientPublicKey = recipientPublicKey
+        self.nonce = nonce
         self.authenticationTag = authenticationTag
         self.state = state
         self.algorithm = algorithm
@@ -257,20 +309,24 @@ public struct Pairing: Codable, Equatable, Sendable {
 
 public struct CreatePairing: Codable, Equatable, Sendable {
     public let recipientPublicKey: Data
-    public let authenticationTag: String
+    public let nonce: Data
     public let expiresInSeconds: Int
 
-    public init(recipientPublicKey: Data, authenticationTag: String, expiresInSeconds: Int) {
+    public init(recipientPublicKey: Data, nonce: Data, expiresInSeconds: Int) {
         self.recipientPublicKey = recipientPublicKey
-        self.authenticationTag = authenticationTag
+        self.nonce = nonce
         self.expiresInSeconds = expiresInSeconds
     }
 
     public func validate() throws {
-        guard !recipientPublicKey.isEmpty,
-              recipientPublicKey.count <= SyncLimits.maxPairingPublicKeyBytes,
-              (60...SyncLimits.maxPairingSeconds).contains(expiresInSeconds),
-              authenticationTag.range(of: "^[A-Z2-9]{6,12}$", options: .regularExpression) != nil
+        // Pairing v2 fixes the first interoperable suite to an uncompressed P-256
+        // X9.63 point. The private key stays only on the recipient device.
+        guard recipientPublicKey.count == 65,
+              recipientPublicKey.first == 0x04,
+              (try? P256.KeyAgreement.PublicKey(
+                x963Representation: recipientPublicKey)) != nil,
+              nonce.count == 32,
+              (60...SyncLimits.maxPairingSeconds).contains(expiresInSeconds)
         else { throw SyncServiceError.invalidRequest }
     }
 }
@@ -288,17 +344,25 @@ public struct ApprovePairing: Codable, Equatable, Sendable {
 
     public func validate() throws {
         guard recipientKeyHash.count == 32,
-              !algorithm.isEmpty,
-              algorithm.utf8.count <= 64,
-              ciphertext.count <= SyncLimits.maxKeyEnvelopeBytes
+              algorithm == "snippets-pairing-p256-hkdf-sha256-aes256gcm-v1",
+              ciphertext.count <= SyncLimits.maxBootstrapEnvelopeBytes
         else { throw SyncServiceError.invalidRequest }
     }
 }
 
 public struct OIDCClientDescription: Codable, Equatable, Sendable {
     public let issuer: URL
+    /// RFC 8707 resource identifier. It is the exact canonical API base URL,
+    /// so a token obtained for one Snippets deployment cannot be replayed at
+    /// another deployment.
+    public let resource: URL
     public let clientID: String
     public let scopes: [String]
+    public let authorizationFlow: String
+    public let maxAccessTokenAgeSeconds: Int
+    public let stepUpMaxAgeSeconds: Int
+    public let stepUpAMRValues: [String]
+    public let stepUpACRValues: [String]
 }
 
 public struct DiscoveryDocument: Codable, Equatable, Sendable {

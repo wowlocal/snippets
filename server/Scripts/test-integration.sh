@@ -21,7 +21,7 @@ compose() {
     IDENTITY_PEPPER=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI= \
     OIDC_ISSUER=https://identity.example.invalid/ \
     OIDC_JWKS_URL=https://identity.example.invalid/jwks \
-    OIDC_AUDIENCE=snippets-sync-test \
+    OIDC_AUDIENCE=http://127.0.0.1:8080 \
     OIDC_CLIENT_ID=snippets-test \
     docker compose \
         --file "$server_dir/docker-compose.yml" \
