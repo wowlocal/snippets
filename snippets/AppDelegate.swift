@@ -810,7 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let showsSecurePasteShortcut = manager.isEnabled && manager.isSecurePasteActive
         statusMenuSecurePasteItem?.keyEquivalent = showsSecurePasteShortcut ? "\\" : ""
         statusMenuSecurePasteItem?.keyEquivalentModifierMask = showsSecurePasteShortcut
-            ? [.command, .option]
+            ? [.option]
             : []
     }
 

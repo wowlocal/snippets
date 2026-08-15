@@ -81,7 +81,7 @@ date placeholders. Offsets can contain several terms, for example
   not, because secure insertion is used while another app is active.
 - Secure snippets never auto-expand, never appear in ordinary exports or share links,
   and show a lock marker wherever their searchable metadata appears.
-- On macOS, press `⌘⌥\` in a text or password field to open Secure Paste. It searches
+- On macOS, press `⌥\` in a text or password field to open Secure Paste. It searches
   the whole library, ranks secure snippets ahead of equally relevant ordinary snippets,
   restores the exact original field, and writes through Accessibility without exposing
   the body to the clipboard. Secure snippets authenticate on every use; ordinary
@@ -243,7 +243,7 @@ list.
 | Shortcut | Action |
 |---|---|
 | `⌘\` | Show or hide Snippets globally |
-| `⌘⌥\` | Secure Paste into the focused field |
+| `⌥\` | Secure Paste into the focused field |
 | `Return` | Copy selected snippet |
 | `⌘Return` | Paste selected snippet into the frontmost app |
 | `⌘F` | Search |

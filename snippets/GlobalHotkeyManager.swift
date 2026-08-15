@@ -17,13 +17,13 @@ final class GlobalHotkeyManager {
 
     /// How the shortcut is rendered in menus and settings copy.
     static let displayString = "⌘\\"
-    static let securePasteDisplayString = "⌘⌥\\"
+    static let securePasteDisplayString = "⌥\\"
 
     /// `\` by physical key position: Carbon matches virtual key codes, not the
     /// character the active keyboard layout produces.
     private static let keyCode = UInt32(kVK_ANSI_Backslash)
     private static let openModifierFlags = UInt32(cmdKey)
-    private static let securePasteModifierFlags = UInt32(cmdKey | optionKey)
+    private static let securePasteModifierFlags = UInt32(optionKey)
     private static let signature = OSType(0x534E5054) // 'SNPT'
     private static let openIdentifier: UInt32 = 1
     private static let securePasteIdentifier: UInt32 = 2

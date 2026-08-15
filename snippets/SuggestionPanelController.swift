@@ -12,6 +12,50 @@ private final class SuggestionSearchField: NSSearchField {
     override var needsPanelToBecomeKey: Bool { true }
 }
 
+/// Liquid Glass deliberately darkens when its window becomes key. Secure Paste
+/// must become key for its search field, while ordinary backslash suggestions
+/// must not steal keyboard input from the destination app. This adaptive wash
+/// keeps the same perceived panel surface across those two required states.
+private final class SuggestionPanelKeyCompensationView: NSView {
+    var isEnabled = false {
+        didSet {
+            if isEnabled != oldValue { updateBackgroundColor() }
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        updateBackgroundColor()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        updateBackgroundColor()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackgroundColor()
+    }
+
+    private func updateBackgroundColor() {
+        guard isEnabled,
+              #available(macOS 26.0, *),
+              !LiquidGlassDesign.forcesLegacyAppearance else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            return
+        }
+
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let color = isDark
+            ? NSColor.white.withAlphaComponent(0.052)
+            : NSColor.black.withAlphaComponent(0.035)
+        layer?.backgroundColor = color.cgColor
+    }
+}
+
 struct SuggestionItem {
     let snippet: Snippet
     let isSecure: Bool
@@ -61,6 +105,7 @@ final class SuggestionPanelController: NSObject,
     private let scrollView: NSScrollView
     private let searchField = SuggestionSearchField()
     private let searchContainer = NSView()
+    private let keyAppearanceCompensationView = SuggestionPanelKeyCompensationView()
     private let emptyLabel = NSTextField(labelWithString: "No matching snippets")
     private var searchContainerHeightConstraint: NSLayoutConstraint!
     private(set) var items: [SuggestionItem] = []
@@ -217,11 +262,18 @@ final class SuggestionPanelController: NSObject,
 
         let panelBody = NSView()
         panelBody.translatesAutoresizingMaskIntoConstraints = false
+        keyAppearanceCompensationView.translatesAutoresizingMaskIntoConstraints = false
+        panelBody.addSubview(keyAppearanceCompensationView)
         panelBody.addSubview(searchContainer)
         panelBody.addSubview(scrollView)
         panelBody.addSubview(emptyLabel)
         searchContainerHeightConstraint = searchContainer.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
+            keyAppearanceCompensationView.leadingAnchor.constraint(equalTo: panelBody.leadingAnchor),
+            keyAppearanceCompensationView.trailingAnchor.constraint(equalTo: panelBody.trailingAnchor),
+            keyAppearanceCompensationView.topAnchor.constraint(equalTo: panelBody.topAnchor),
+            keyAppearanceCompensationView.bottomAnchor.constraint(equalTo: panelBody.bottomAnchor),
+
             searchContainer.leadingAnchor.constraint(equalTo: panelBody.leadingAnchor),
             searchContainer.trailingAnchor.constraint(equalTo: panelBody.trailingAnchor),
             searchContainer.topAnchor.constraint(equalTo: panelBody.topAnchor),
@@ -323,6 +375,7 @@ final class SuggestionPanelController: NSObject,
         securePasteCancellation = onCancel
         securePasteStartedWithHiddenApplication = NSApp.isHidden
         panel.canHide = false
+        keyAppearanceCompensationView.isEnabled = true
         searchField.stringValue = ""
         searchContainer.isHidden = false
         searchContainerHeightConstraint.constant = securePasteSearchHeight
@@ -359,6 +412,7 @@ final class SuggestionPanelController: NSObject,
         }
         anchor = nil
         panel.makeFirstResponder(nil)
+        keyAppearanceCompensationView.isEnabled = false
         searchField.stringValue = ""
         searchContainer.isHidden = true
         searchContainerHeightConstraint.constant = 0
