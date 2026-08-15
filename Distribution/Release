@@ -56,6 +56,48 @@ if [ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]; then
     exit 1
 fi
 
+# A release is expensive to archive, notarize, and publish.  Refresh the
+# tracking branch before changing the version so we do not build a release
+# from a stale checkout and only discover a non-fast-forward push after the
+# DMG and appcast have already been uploaded.
+CURRENT_BRANCH=$(git -C "$PROJECT_DIR" symbolic-ref --quiet --short HEAD) || {
+    red_text
+    echo "Detached HEAD detected; check out a branch before releasing."
+    normal_text
+    exit 1
+}
+
+UPSTREAM_REF=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || {
+    red_text
+    echo "Branch $CURRENT_BRANCH has no upstream. Set one before releasing."
+    normal_text
+    exit 1
+}
+UPSTREAM_REMOTE=${UPSTREAM_REF%%/*}
+
+gray_text
+echo "Checking $CURRENT_BRANCH against $UPSTREAM_REF..."
+normal_text
+if ! git -C "$PROJECT_DIR" fetch --quiet "$UPSTREAM_REMOTE"; then
+    red_text
+    echo "Could not refresh $UPSTREAM_REMOTE. Resolve the fetch failure before releasing."
+    normal_text
+    exit 1
+fi
+
+read -r AHEAD_COUNT BEHIND_COUNT <<< "$(git -C "$PROJECT_DIR" rev-list --left-right --count "HEAD...$UPSTREAM_REF")"
+if [ "$BEHIND_COUNT" -gt 0 ]; then
+    red_text
+    echo "Local branch $CURRENT_BRANCH is behind $UPSTREAM_REF by $BEHIND_COUNT commit(s)."
+    if [ "$AHEAD_COUNT" -eq 0 ]; then
+        echo "Run 'git pull --ff-only' and review the result before releasing."
+    else
+        echo "Local and remote changes have diverged; run 'git pull --rebase' and resolve any conflicts before releasing."
+    fi
+    normal_text
+    exit 1
+fi
+
 ARCHIVE_PATH="archives/Snippets.xcarchive"
 APP_PATH="exported-apps/Snippets.app"
 ORIGINAL_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD)
