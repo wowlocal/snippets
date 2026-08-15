@@ -74,15 +74,10 @@
 			</array>
 		</dict>
 		<dict>
-			<key>NSKeyEquivalent</key>
-			<dict>
-				<key>default</key>
-				<string>\</string>
-			</dict>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Open Snippets</string>
+				<string>Open Snippets App</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>openSnippetsFromService</string>
@@ -95,7 +90,7 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Secure Paste…</string>
+				<string>Secure Paste with Snippets…</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>securePasteFromService</string>

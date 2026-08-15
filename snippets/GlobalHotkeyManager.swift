@@ -6,9 +6,9 @@ import Carbon.HIToolbox
 /// Carbon's `RegisterEventHotKey` is still the public API for a shortcut that
 /// fires while another app is frontmost and consumes an ordinary key event. It
 /// needs no Accessibility trust and works regardless of activation policy —
-/// including while the app is hidden to the menu bar. Secure Event Input is the
-/// intentional exception: macOS may suppress all third-party global shortcuts
-/// while a password field owns protected keyboard entry.
+/// including while the app is hidden to the menu bar. Keep registrations live
+/// while Secure Event Input is active, matching Tinycast's Carbon hotkey layer;
+/// the frontmost application's Services menu supplies the protected-field path.
 @MainActor
 final class GlobalHotkeyManager {
     static let shared = GlobalHotkeyManager()
@@ -65,8 +65,6 @@ final class GlobalHotkeyManager {
     private var openHotKeyRef: EventHotKeyRef?
     private var securePasteHotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
-    private var secureInputPollTimer: Timer?
-    private var secureInputIsEnabled = false
 
     private init() {}
 
@@ -87,65 +85,12 @@ final class GlobalHotkeyManager {
         let securePasteWasActive = isSecurePasteActive
 
         if isEnabled {
-            startSecureInputPolling()
-            secureInputIsEnabled = IsSecureEventInputEnabled()
-            if secureInputIsEnabled {
-                // A registered Carbon hot key still claims its keystroke while
-                // Secure Event Input prevents macOS from delivering the resulting
-                // event to us. Release both registrations so the frontmost app can
-                // route both shortcuts to their matching Services fallbacks instead.
-                unregister()
-            } else {
-                register()
-            }
+            register()
         } else {
-            stopSecureInputPolling()
-            secureInputIsEnabled = false
             unregister()
         }
 
         return isActive != openWasActive || isSecurePasteActive != securePasteWasActive
-    }
-
-    private func startSecureInputPolling() {
-        guard secureInputPollTimer == nil else { return }
-
-        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.refreshSecureInputRegistration()
-            }
-        }
-        timer.tolerance = 0.01
-        RunLoop.main.add(timer, forMode: .common)
-        secureInputPollTimer = timer
-    }
-
-    private func stopSecureInputPolling() {
-        secureInputPollTimer?.invalidate()
-        secureInputPollTimer = nil
-    }
-
-    private func refreshSecureInputRegistration() {
-        guard isEnabled else {
-            stopSecureInputPolling()
-            return
-        }
-
-        let isEnabledNow = IsSecureEventInputEnabled()
-        guard isEnabledNow != secureInputIsEnabled else { return }
-        secureInputIsEnabled = isEnabledNow
-
-        let openWasActive = isActive
-        let securePasteWasActive = isSecurePasteActive
-        if isEnabledNow {
-            unregister()
-        } else {
-            register()
-        }
-
-        if isActive != openWasActive || isSecurePasteActive != securePasteWasActive {
-            postChangeNotification()
-        }
     }
 
     private func postChangeNotification() {
