@@ -5,6 +5,20 @@ set -e
 cd "$(dirname "$0")"
 source common.sh
 
+ARCHIVE_ONLY=0
+case "${1:-}" in
+    "") ;;
+    --archive-only) ARCHIVE_ONLY=1 ;;
+    *)
+        echo "Usage: Distribution/ReleaseNoUpdate [--archive-only]" >&2
+        exit 2
+        ;;
+esac
+if [ "$#" -gt 1 ]; then
+    echo "Usage: Distribution/ReleaseNoUpdate [--archive-only]" >&2
+    exit 2
+fi
+
 ARCHIVE_PATH="archives/Snippets-NoUpdate.xcarchive"
 APP_PATH="exported-apps/Snippets.app"
 PACKAGE_RESOLVED="$PROJECT_DIR/Snippets.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
@@ -63,20 +77,41 @@ if [ -f "$PACKAGE_RESOLVED" ]; then
 fi
 trap restore_release_project_state EXIT
 
-# Remove all lines referencing Sparkle object IDs (single-line references)
+# Remove only Sparkle's two multi-line package objects. These sections also contain
+# CocoaLumberjack (and may gain more app-boundary dependencies later), so replacing
+# either whole section makes the no-update target uncompilable.
+/usr/bin/perl -0pi -e '
+    s{\n\t\t270SPK032F53000000000003 /\* XCRemoteSwiftPackageReference "Sparkle" \*/ = \{.*?\n\t\t\};\n}{\n}s;
+    s{\n\t\t270SPK022F53000000000002 /\* Sparkle \*/ = \{.*?\n\t\t\};\n}{\n}s;
+' "$PBXPROJ"
+
+# The remaining Sparkle build-file, target and project references are single lines.
 sed -i '' '/270SPK012F53000000000001/d' "$PBXPROJ"
 sed -i '' '/270SPK022F53000000000002/d' "$PBXPROJ"
 sed -i '' '/270SPK032F53000000000003/d' "$PBXPROJ"
 
-# Replace XCRemoteSwiftPackageReference section with empty section
-sed -i '' '/Begin XCRemoteSwiftPackageReference section/,/End XCRemoteSwiftPackageReference section/c\
-/* Begin XCRemoteSwiftPackageReference section */\
-/* End XCRemoteSwiftPackageReference section */' "$PBXPROJ"
-
-# Replace XCSwiftPackageProductDependency section with empty section
-sed -i '' '/Begin XCSwiftPackageProductDependency section/,/End XCSwiftPackageProductDependency section/c\
-/* Begin XCSwiftPackageProductDependency section */\
-/* End XCSwiftPackageProductDependency section */' "$PBXPROJ"
+# Fail before the expensive archive if the surgical patch stopped matching or removed
+# another package. The EXIT trap restores the original project in every failure case.
+if grep -qE '270SPK|sparkle-project|productName = Sparkle' "$PBXPROJ"; then
+    red_text
+    echo "ERROR: Failed to remove every Sparkle project reference"
+    normal_text
+    exit 1
+fi
+if ! grep -q 'XCRemoteSwiftPackageReference "CocoaLumberjack"' "$PBXPROJ" \
+    || ! grep -q 'productName = CocoaLumberjack;' "$PBXPROJ" \
+    || ! grep -q 'CocoaLumberjack in Frameworks' "$PBXPROJ"; then
+    red_text
+    echo "ERROR: No-update patch removed the diagnostics dependency"
+    normal_text
+    exit 1
+fi
+if ! plutil -lint "$PBXPROJ" >/dev/null; then
+    red_text
+    echo "ERROR: No-update patch produced an invalid Xcode project"
+    normal_text
+    exit 1
+fi
 
 # Add NO_SPARKLE compilation condition to project-level Release config
 sed -i '' '/272782E42F41F9F2000B9989.*Release/,/name = Release;/{
@@ -110,6 +145,13 @@ trap - EXIT
 green_text
 echo "Archived to $ARCHIVE_PATH (project files restored)"
 normal_text
+
+if [ "$ARCHIVE_ONLY" -eq 1 ]; then
+    green_text
+    echo "No-update archive verification complete; publishing steps skipped."
+    normal_text
+    exit 0
+fi
 
 # Step 3: Export
 orange_text
