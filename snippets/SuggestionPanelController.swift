@@ -312,6 +312,13 @@ final class SuggestionPanelController: NSObject,
         securePasteSelection = onSelect
         securePasteCancellation = onCancel
         securePasteStartedWithHiddenApplication = NSApp.isHidden
+        // The ordinary suggestion panel never becomes key, so its window-server
+        // shadow follows the translucent surface unobtrusively. Once Secure Paste
+        // becomes key for search, AppKit redraws that shadow as the panel's full
+        // rectangular bounds, leaving black "ears" outside the rounded glass.
+        // Native glass already draws its own rounded edge; keep the square window
+        // shadow out of this mode and restore it when returning to suggestions.
+        panel.hasShadow = false
         panel.canHide = false
         searchField.stringValue = ""
         searchContainer.isHidden = false
@@ -356,6 +363,8 @@ final class SuggestionPanelController: NSObject,
         securePasteSearch = nil
         securePasteSelection = nil
         securePasteCancellation = nil
+        panel.hasShadow = true
+        panel.invalidateShadow()
         panel.canHide = true
         securePasteStartedWithHiddenApplication = false
         presentationMode = .suggestions
