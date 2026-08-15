@@ -4,13 +4,20 @@ struct TransientScreenMessage {
     let title: String
     let detail: String?
     let accessibilityText: String
+    let keepsTitleOnSingleLine: Bool
 
-    init(title: String, detail: String? = nil, accessibilityText: String? = nil) {
+    init(
+        title: String,
+        detail: String? = nil,
+        accessibilityText: String? = nil,
+        keepsTitleOnSingleLine: Bool = false
+    ) {
         self.title = title
         self.detail = detail
         self.accessibilityText = accessibilityText ?? [title, detail]
             .compactMap { $0 }
             .joined(separator: ", ")
+        self.keepsTitleOnSingleLine = keepsTitleOnSingleLine
     }
 }
 
@@ -30,7 +37,8 @@ enum ClipboardCopyFeedback {
         return TransientScreenMessage(
             title: title,
             detail: detail,
-            accessibilityText: accessibilityText
+            accessibilityText: accessibilityText,
+            keepsTitleOnSingleLine: true
         )
     }
 
@@ -74,10 +82,12 @@ final class TransientScreenMessageController {
         }
     }
 
-    private static let horizontalPadding: CGFloat = 18
+    private static let horizontalPadding: CGFloat = 24
     private static let verticalPadding: CGFloat = 10
     private static let detailSpacing: CGFloat = 3
     private static let maximumTextWidth: CGFloat = 520
+    private static let maximumSingleLineTextWidth: CGFloat = 680
+    private static let textMeasurementAllowance: CGFloat = 8
     private static let minimumPanelWidth: CGFloat = 180
     private static let screenMargin: CGFloat = 20
     private static let bottomOffset: CGFloat = 28
@@ -194,6 +204,8 @@ final class TransientScreenMessageController {
 
         label.stringValue = message.title
         label.setAccessibilityLabel(message.title)
+        label.lineBreakMode = message.keepsTitleOnSingleLine ? .byTruncatingTail : .byWordWrapping
+        label.maximumNumberOfLines = message.keepsTitleOnSingleLine ? 1 : 0
         detailLabel.stringValue = message.detail ?? ""
         detailLabel.isHidden = message.detail == nil
         detailLabel.setAccessibilityLabel(message.detail.map { "Keyword \($0)" })
@@ -205,15 +217,25 @@ final class TransientScreenMessageController {
         let maximumTextWidth = max(
             80,
             min(
-                Self.maximumTextWidth,
+                message.keepsTitleOnSingleLine
+                    ? Self.maximumSingleLineTextWidth
+                    : Self.maximumTextWidth,
                 availablePanelWidth - (Self.horizontalPadding * 2)
             )
         )
-        let idealTitleBounds = (message.title as NSString).boundingRect(
-            with: NSSize(width: maximumTextWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font]
-        )
+        let idealTitleBounds: NSRect
+        if message.keepsTitleOnSingleLine {
+            idealTitleBounds = NSRect(
+                origin: .zero,
+                size: (message.title as NSString).size(withAttributes: [.font: font])
+            )
+        } else {
+            idealTitleBounds = (message.title as NSString).boundingRect(
+                with: NSSize(width: maximumTextWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            )
+        }
         let idealDetailBounds = message.detail.map {
             ($0 as NSString).boundingRect(
                 with: NSSize(width: maximumTextWidth, height: .greatestFiniteMagnitude),
@@ -226,19 +248,24 @@ final class TransientScreenMessageController {
             max(
                 Self.minimumPanelWidth,
                 ceil(max(idealTitleBounds.width, idealDetailBounds.width))
-                    + (Self.horizontalPadding * 2) + 2
+                    + (Self.horizontalPadding * 2) + Self.textMeasurementAllowance
             )
         )
-        // The minimum panel width can still be narrower than the ideal one-line
-        // measurement after its padding is removed. Measure again at the width the
-        // label will actually receive so a wrapped second line gets real height.
+        // Measure wrapping messages again at their actual width so a second line gets
+        // real height. Copy confirmations stay on one line and truncate only when their
+        // full title cannot fit within the screen-safe maximum width.
         let actualTextWidth = max(1, panelWidth - (Self.horizontalPadding * 2))
         label.preferredMaxLayoutWidth = actualTextWidth
-        let laidOutTitleBounds = (message.title as NSString).boundingRect(
-            with: NSSize(width: actualTextWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font]
-        )
+        let laidOutTitleBounds: NSRect
+        if message.keepsTitleOnSingleLine {
+            laidOutTitleBounds = idealTitleBounds
+        } else {
+            laidOutTitleBounds = (message.title as NSString).boundingRect(
+                with: NSSize(width: actualTextWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            )
+        }
         detailLabel.preferredMaxLayoutWidth = actualTextWidth
         let detailHeight = message.detail == nil ? 0 : ceil(idealDetailBounds.height)
         let detailSpacing = message.detail == nil ? 0 : Self.detailSpacing
