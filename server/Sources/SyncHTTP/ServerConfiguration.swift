@@ -111,6 +111,7 @@ public struct ServerConfiguration: Sendable {
     public let oidc: OIDCConfiguration
     public let httpIdleTimeoutSeconds: Int
     public let httpBodyTimeoutSeconds: Int
+    public let httpReadinessTimeoutSeconds: Int
     public let httpMaximumConnections: Int
     public let httpMaximumConcurrentRequests: Int
     public let httpBodyMemoryBudgetBytes: Int
@@ -130,6 +131,7 @@ public struct ServerConfiguration: Sendable {
         oidc: OIDCConfiguration,
         httpIdleTimeoutSeconds: Int = 30,
         httpBodyTimeoutSeconds: Int = 15,
+        httpReadinessTimeoutSeconds: Int = 3,
         httpMaximumConnections: Int = 256,
         httpMaximumConcurrentRequests: Int = 128,
         httpBodyMemoryBudgetBytes: Int = 256 * 1_024 * 1_024,
@@ -147,6 +149,7 @@ public struct ServerConfiguration: Sendable {
               publicBaseURL.query == nil, publicBaseURL.fragment == nil,
               (5...300).contains(httpIdleTimeoutSeconds),
               (5...120).contains(httpBodyTimeoutSeconds),
+              (1...30).contains(httpReadinessTimeoutSeconds),
               (16...10_000).contains(httpMaximumConnections),
               (8...httpMaximumConnections).contains(httpMaximumConcurrentRequests),
               (SyncLimits.maxRequestBytes...(4 * 1_024 * 1_024 * 1_024)).contains(httpBodyMemoryBudgetBytes),
@@ -178,6 +181,7 @@ public struct ServerConfiguration: Sendable {
         self.oidc = oidc
         self.httpIdleTimeoutSeconds = httpIdleTimeoutSeconds
         self.httpBodyTimeoutSeconds = httpBodyTimeoutSeconds
+        self.httpReadinessTimeoutSeconds = httpReadinessTimeoutSeconds
         self.httpMaximumConnections = httpMaximumConnections
         self.httpMaximumConcurrentRequests = httpMaximumConcurrentRequests
         self.httpBodyMemoryBudgetBytes = httpBodyMemoryBudgetBytes
@@ -275,6 +279,7 @@ public struct ServerConfiguration: Sendable {
             oidc: oidc,
             httpIdleTimeoutSeconds: try positiveInt("HTTP_IDLE_TIMEOUT_SECONDS", default: 30),
             httpBodyTimeoutSeconds: try positiveInt("HTTP_BODY_TIMEOUT_SECONDS", default: 15),
+            httpReadinessTimeoutSeconds: try positiveInt("HTTP_READINESS_TIMEOUT_SECONDS", default: 3),
             httpMaximumConnections: try positiveInt("HTTP_MAX_CONNECTIONS", default: 256),
             httpMaximumConcurrentRequests: try positiveInt("HTTP_MAX_CONCURRENT_REQUESTS", default: 128),
             httpBodyMemoryBudgetBytes: try positiveInt("HTTP_BODY_MEMORY_BUDGET_BYTES", default: 256 * 1_024 * 1_024),

@@ -248,6 +248,7 @@ The server fails startup on missing or malformed values.
 | `DATABASE_OWNER_USER`, `DATABASE_OWNER_PASSWORD` | Migration-only login |
 | `DATABASE_TLS_MODE` | `require` or development-only `disable` |
 | `HTTP_IDLE_TIMEOUT_SECONDS` / `HTTP_BODY_TIMEOUT_SECONDS` | HTTP idle and total body-read deadlines; defaults `30` / `15` |
+| `HTTP_READINESS_TIMEOUT_SECONDS` | Maximum PostgreSQL readiness-probe latency before a closed `503`; default `3` |
 | `HTTP_MAX_CONNECTIONS` / `HTTP_MAX_CONCURRENT_REQUESTS` | Process-wide connection and in-flight request caps; defaults `256` / `128` |
 | `HTTP_BODY_MEMORY_BUDGET_BYTES` | Process-wide reservation budget for live request bodies; default 256 MiB |
 | `HTTP_GLOBAL_REQUESTS_PER_SECOND` / `HTTP_GLOBAL_REQUEST_BURST` | Process-wide token-bucket rate and burst; defaults `256` / `512` |

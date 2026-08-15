@@ -5,9 +5,11 @@ import SyncOpenAPI
 public struct SyncAPIHandler: APIProtocol {
     private let store: any SyncStore
     private let discovery: Components.Schemas.Discovery
+    private let readinessTimeout: Duration
 
     public init(store: any SyncStore, configuration: ServerConfiguration) {
         self.store = store
+        self.readinessTimeout = .seconds(configuration.httpReadinessTimeoutSeconds)
         self.discovery = .init(
             protocolMajor: ._1,
             protocolMinor: 4,
@@ -59,7 +61,15 @@ public struct SyncAPIHandler: APIProtocol {
 
     public func getReadiness(_ input: Operations.GetReadiness.Input) async throws -> Operations.GetReadiness.Output {
         do {
-            try await store.readiness()
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { try await store.readiness() }
+                group.addTask {
+                    try await Task.sleep(for: readinessTimeout)
+                    throw ReadinessProbeError.timedOut
+                }
+                _ = try await group.next()
+                group.cancelAll()
+            }
             return .ok(.init(body: .json(.init(status: .ok))))
         } catch {
             return .serviceUnavailable(.init(body: .json(OpenAPIMapping.error(.dependencyUnavailable))))
@@ -242,4 +252,8 @@ public struct SyncAPIHandler: APIProtocol {
         )
         return .ok(.init(body: .json(OpenAPIMapping.pairing(value))))
     }
+}
+
+private enum ReadinessProbeError: Error {
+    case timedOut
 }

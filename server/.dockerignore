@@ -1,5 +1,4 @@
 .build
 .env
 .swiftpm
-Tests
 Package.resolved.tmp

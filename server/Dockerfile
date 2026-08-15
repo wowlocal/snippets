@@ -4,6 +4,7 @@ WORKDIR /source
 COPY Package.swift Package.resolved ./
 RUN swift package resolve
 COPY Sources ./Sources
+COPY Tests ./Tests
 COPY Migrations ./Migrations
 RUN swift build -c release --product snippets-server \
     && swift build -c release --product snippets-migrate \

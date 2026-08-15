@@ -40,6 +40,30 @@ final class SyncHTTPTests: XCTestCase {
         }
     }
 
+    func testReadinessFailsClosedWithinConfiguredTimeout() async throws {
+        let configuration = try testConfiguration(readinessTimeoutSeconds: 1)
+        let store = RevocationSequenceStore(results: [], readinessDelay: .seconds(60))
+        let router = try SyncApplicationFactory.makeRouter(
+            configuration: configuration,
+            store: store,
+            tokenValidator: TestTokenValidator()
+        )
+        let app = Application(router: router)
+        let clock = ContinuousClock()
+        let start = clock.now
+
+        try await app.test(.router) { client in
+            let response = try await client.execute(uri: "/health/ready", method: .get)
+            XCTAssertEqual(response.status, .serviceUnavailable)
+            XCTAssertEqual(
+                try decodeJSONObject(response.body)["code"] as? String,
+                "dependency_unavailable"
+            )
+        }
+
+        XCTAssertLessThan(start.duration(to: clock.now), .seconds(3))
+    }
+
     func testResourceLogoutImmediatelyRevokesOnlyPresentedAccessToken() async throws {
         let setup = try makeSetup()
         let app = Application(router: setup.router)
@@ -416,7 +440,13 @@ final class SyncHTTPTests: XCTestCase {
             contentsOf: serverRoot.appendingPathComponent("docker-compose.yml"),
             encoding: .utf8
         )
+        let dockerignore = try String(
+            contentsOf: serverRoot.appendingPathComponent(".dockerignore"),
+            encoding: .utf8
+        )
 
+        XCTAssertTrue(dockerfile.contains("COPY Tests ./Tests"))
+        XCTAssertFalse(dockerignore.split(separator: "\n").contains("Tests"))
         let serverStage = try XCTUnwrap(
             dockerfile.components(separatedBy: "FROM runtime AS server").last
         )
@@ -649,7 +679,8 @@ final class SyncHTTPTests: XCTestCase {
         globalRequestsPerSecond: Int = 256,
         globalRequestBurst: Int = 512,
         principalRequestsPerSecond: Int = 30,
-        principalRequestBurst: Int = 60
+        principalRequestBurst: Int = 60,
+        readinessTimeoutSeconds: Int = 3
     ) throws -> ServerConfiguration {
         let oidc = try OIDCConfiguration(
             issuer: URL(string: "https://issuer.example")!,
@@ -671,6 +702,7 @@ final class SyncHTTPTests: XCTestCase {
             serverVersion: "test",
             tokenSecret: Data(repeating: 0x22, count: 32),
             oidc: oidc,
+            httpReadinessTimeoutSeconds: readinessTimeoutSeconds,
             httpGlobalRequestsPerSecond: globalRequestsPerSecond,
             httpGlobalRequestBurst: globalRequestBurst,
             httpPrincipalRequestsPerSecond: principalRequestsPerSecond,
@@ -728,19 +760,25 @@ private struct TestTokenValidator: AccessTokenValidating {
 
 private actor RevocationSequenceStore: SyncStore {
     private var results: [Bool]
+    private let readinessDelay: Duration?
     private var checkCount = 0
     private var revocationCount = 0
     private var handlerCallCount = 0
 
-    init(results: [Bool]) {
+    init(results: [Bool], readinessDelay: Duration? = nil) {
         self.results = results
+        self.readinessDelay = readinessDelay
     }
 
     func metrics() -> (checks: Int, revocations: Int, handlerCalls: Int) {
         (checkCount, revocationCount, handlerCallCount)
     }
 
-    func readiness() async throws {}
+    func readiness() async throws {
+        if let readinessDelay {
+            try await Task.sleep(for: readinessDelay)
+        }
+    }
 
     func isAccessTokenRevoked(for principal: AuthenticatedPrincipal) async throws -> Bool {
         _ = principal
