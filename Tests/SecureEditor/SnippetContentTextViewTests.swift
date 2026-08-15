@@ -80,6 +80,61 @@ struct SnippetContentTextViewTests {
         )
     }
 
+    @Test func trailingLineBreakMarkersAreCountableWithoutChangingContent() throws {
+        let view = editor("word\n\n")
+
+        #expect(view.trailingLineBreakMarkerRangesForInspection == [
+            NSRange(location: 4, length: 1),
+            NSRange(location: 5, length: 1),
+        ])
+        let markerRects = view.trailingLineBreakMarkerRectsForInspection
+        #expect(markerRects.count == 2)
+        #expect(try #require(markerRects.last).minY > #require(markerRects.first).minY)
+        #expect(view.string == "word\n\n")
+
+        view.string = "word\ninside"
+        #expect(view.trailingLineBreakMarkerRangesForInspection.isEmpty)
+
+        view.string = "word\r\n"
+        #expect(view.trailingLineBreakMarkerRangesForInspection == [
+            NSRange(location: 4, length: 2),
+        ])
+    }
+
+    @Test func trailingLineBreakMarkersRecognizeFoundationNewlineScalars() {
+        let view = editor()
+        let separators = [
+            "\n", "\r", "\r\n", "\u{000B}", "\u{000C}", "\u{0085}",
+            "\u{2028}", "\u{2029}",
+        ]
+
+        for separator in separators {
+            view.string = "word\(separator)"
+            #expect(view.trailingLineBreakMarkerRangesForInspection.count == 1)
+        }
+    }
+
+    @Test func protectedRasterDrawsAMarkerForAnOtherwiseInvisibleTrailingBreak() throws {
+        _ = NSApplication.shared
+        let view = editor("\n")
+        view.font = .monospacedSystemFont(ofSize: 28, weight: .regular)
+        view.textColor = .black
+        view.appearance = NSAppearance(named: .aqua)
+        view.drawsBackground = false
+        view.textContainerInset = NSSize(width: 12, height: 12)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        scrollView.documentView = view
+
+        let plaintext = try #require(view.secureCaptureFrameForInspection(plaintext: true))
+        let redaction = try #require(view.secureCaptureFrameForInspection(plaintext: false))
+
+        #expect(rasterDifference(
+            plaintext: plaintext.pixelBuffer,
+            redaction: redaction.pixelBuffer
+        ) != nil)
+        #expect(view.string == "\n")
+    }
+
     @Test func protectedRasterUsesTopDownVideoOrientation() throws {
         _ = NSApplication.shared
         let view = SnippetContentTextView(

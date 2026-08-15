@@ -513,6 +513,116 @@ final class SecureSnippetTextView: UITextView {
         guard !isSecureContentMode,
               !secureCapturePhase.suppressesUIKitDrawing else { return }
         super.draw(rect)
+        drawTrailingLineBreakMarkers()
+    }
+
+    /// These marks are drawn on top of TextKit rather than inserted into it, so
+    /// saving, copying, expansion, selection, and undo continue to see the exact
+    /// original snippet body.
+    private static let trailingLineBreakMarker = "↵"
+    private static let trailingLineBreakMarkerSpacing: CGFloat = 3
+
+    private static func isLineBreakCodeUnit(_ value: unichar) -> Bool {
+        switch value {
+        case 0x000A, 0x000B, 0x000C, 0x000D, 0x0085, 0x2028, 0x2029:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func trailingLineBreakRanges(in text: String) -> [NSRange] {
+        let value = text as NSString
+        var end = value.length
+        var reversedRanges: [NSRange] = []
+
+        while end > 0 {
+            let lastCodeUnit = value.character(at: end - 1)
+            guard isLineBreakCodeUnit(lastCodeUnit) else { break }
+
+            let start: Int
+            if lastCodeUnit == 0x000A,
+               end >= 2,
+               value.character(at: end - 2) == 0x000D {
+                start = end - 2
+            } else {
+                start = end - 1
+            }
+            reversedRanges.append(NSRange(location: start, length: end - start))
+            end = start
+        }
+
+        return reversedRanges.reversed()
+    }
+
+    var trailingLineBreakMarkerRangesForInspection: [NSRange] {
+        Self.trailingLineBreakRanges(in: text ?? "")
+    }
+
+    var trailingLineBreakMarkerRectsForInspection: [CGRect] {
+        trailingLineBreakMarkerRects(attributes: trailingLineBreakMarkerAttributes)
+    }
+
+    private var trailingLineBreakMarkerAttributes: [NSAttributedString.Key: Any] {
+        let bodyFont = font ?? UIFont.preferredFont(forTextStyle: .body)
+        let markerFont = UIFont.monospacedSystemFont(
+            ofSize: max(9, bodyFont.pointSize * 0.78),
+            weight: .regular
+        )
+        return [
+            .font: markerFont,
+            .foregroundColor: UIColor.tertiaryLabel.resolvedColor(with: traitCollection),
+        ]
+    }
+
+    private func trailingLineBreakMarkerRects(
+        attributes: [NSAttributedString.Key: Any]
+    ) -> [CGRect] {
+        let ranges = Self.trailingLineBreakRanges(in: text ?? "")
+        guard !ranges.isEmpty else { return [] }
+
+        let markerSize = (Self.trailingLineBreakMarker as NSString).size(
+            withAttributes: attributes
+        )
+        let origin = CGPoint(x: textContainerInset.left, y: textContainerInset.top)
+        let padding = textContainer.lineFragmentPadding
+        let maximumX = bounds.maxX - textContainerInset.right - padding - markerSize.width
+
+        return ranges.compactMap { range in
+            // UITextInput supplies caret geometry through both TextKit 1 and 2.
+            // Using it here avoids forcing every ordinary editor into TextKit 1
+            // merely to place a presentation-only marker.
+            guard let position = position(
+                from: beginningOfDocument,
+                offset: range.location
+            ) else { return nil }
+            let caretRect = caretRect(for: position)
+            guard caretRect.minX.isFinite,
+                  caretRect.minY.isFinite,
+                  caretRect.height.isFinite,
+                  caretRect.height > 0 else { return nil }
+
+            let lineStartX = origin.x + padding
+            let markerX = max(
+                lineStartX,
+                min(
+                    maximumX,
+                    caretRect.maxX + Self.trailingLineBreakMarkerSpacing
+                )
+            )
+            let markerY = caretRect.minY + max(0, (caretRect.height - markerSize.height) / 2)
+            return CGRect(origin: CGPoint(x: markerX, y: markerY), size: markerSize)
+        }
+    }
+
+    func drawTrailingLineBreakMarkers() {
+        let attributes = trailingLineBreakMarkerAttributes
+        for rect in trailingLineBreakMarkerRects(attributes: attributes) {
+            (Self.trailingLineBreakMarker as NSString).draw(
+                at: rect.origin,
+                withAttributes: attributes
+            )
+        }
     }
 
     override func layoutSubviews() {

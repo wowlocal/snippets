@@ -539,6 +539,7 @@ final class SecureSnippetCaptureRenderer {
             origin: origin
         )
         layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
+        textView.drawTrailingLineBreakMarkers()
         drawCaret(layoutManager: layoutManager, textContainer: textContainer, origin: origin)
     }
 

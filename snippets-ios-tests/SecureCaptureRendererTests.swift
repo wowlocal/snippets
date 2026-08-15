@@ -62,6 +62,46 @@ final class SecureCaptureRendererTests: XCTestCase {
         XCTAssertTrue(pixelBufferContainsNonBackgroundPixels(frame.pixelBuffer))
     }
 
+    func testTrailingLineBreakMarkersAreCountableWithoutChangingContent() throws {
+        let textView = makeTextView()
+        textView.bindOrdinaryText("word\n\n")
+
+        XCTAssertEqual(textView.trailingLineBreakMarkerRangesForInspection, [
+            NSRange(location: 4, length: 1),
+            NSRange(location: 5, length: 1),
+        ])
+        let markerRects = textView.trailingLineBreakMarkerRectsForInspection
+        XCTAssertEqual(markerRects.count, 2)
+        XCTAssertGreaterThan(
+            try XCTUnwrap(markerRects.last).minY,
+            try XCTUnwrap(markerRects.first).minY
+        )
+        XCTAssertEqual(textView.text, "word\n\n")
+
+        textView.bindOrdinaryText("word\ninside")
+        XCTAssertTrue(textView.trailingLineBreakMarkerRangesForInspection.isEmpty)
+
+        textView.bindOrdinaryText("word\r\n")
+        XCTAssertEqual(textView.trailingLineBreakMarkerRangesForInspection, [
+            NSRange(location: 4, length: 2),
+        ])
+
+        textView.bindOrdinaryText("👩🏽‍💻\n")
+        XCTAssertEqual(textView.trailingLineBreakMarkerRectsForInspection.count, 1)
+    }
+
+    func testProtectedRasterDrawsMarkerForOtherwiseInvisibleTrailingBreak() throws {
+        let textView = makeTextView()
+        textView.setSceneCaptureStateForTesting(.inactive)
+        XCTAssertTrue(textView.bindSecureRedacted())
+        authorizePresentation(in: textView)
+        XCTAssertTrue(textView.displaySecurePlaintext("\n"))
+
+        let frame = try XCTUnwrap(textView.renderSecureFrameForInspection(plaintext: true))
+        XCTAssertTrue(pixelBufferContainsNonBackgroundPixels(frame.pixelBuffer))
+        XCTAssertEqual(textView.text, "\n")
+    }
+
     func testOrdinaryRebindClearsProtectedPresentationBeforeRestoringUIKit() {
         let textView = makeTextView()
         textView.setSceneCaptureStateForTesting(.inactive)

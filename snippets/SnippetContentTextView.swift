@@ -1147,12 +1147,132 @@ final class SnippetContentTextView: NSTextView {
     private static let tokenBoundaryCharacters = CharacterSet(charactersIn: "{}\n")
     private static let maximumTokenCompletionLength = 24
 
+    /// A return mark is presentation only: it makes otherwise invisible line
+    /// breaks at the very end of a snippet countable without ever inserting a
+    /// character into the stored body. Internal line breaks stay unmarked so
+    /// the editor remains quiet while typing ordinary multi-line content.
+    private static let trailingLineBreakMarker = "↵"
+    private static let trailingLineBreakMarkerSpacing: CGFloat = 3
+
+    private static func isLineBreakCodeUnit(_ value: unichar) -> Bool {
+        switch value {
+        case 0x000A, 0x000B, 0x000C, 0x000D, 0x0085, 0x2028, 0x2029:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func trailingLineBreakRanges(in text: String) -> [NSRange] {
+        let value = text as NSString
+        var end = value.length
+        var reversedRanges: [NSRange] = []
+
+        while end > 0 {
+            let lastCodeUnit = value.character(at: end - 1)
+            guard isLineBreakCodeUnit(lastCodeUnit) else { break }
+
+            // TextKit treats CRLF as one line break. Give it one marker too,
+            // rather than making a Windows-style ending look like two blanks.
+            let start: Int
+            if lastCodeUnit == 0x000A,
+               end >= 2,
+               value.character(at: end - 2) == 0x000D {
+                start = end - 2
+            } else {
+                start = end - 1
+            }
+            reversedRanges.append(NSRange(location: start, length: end - start))
+            end = start
+        }
+
+        return reversedRanges.reversed()
+    }
+
+    var trailingLineBreakMarkerRangesForInspection: [NSRange] {
+        Self.trailingLineBreakRanges(in: string)
+    }
+
+    var trailingLineBreakMarkerRectsForInspection: [NSRect] {
+        trailingLineBreakMarkerRects(attributes: trailingLineBreakMarkerAttributes)
+    }
+
+    private var trailingLineBreakMarkerAttributes: [NSAttributedString.Key: Any] {
+        let bodyFont = font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let markerFont = NSFont.monospacedSystemFont(
+            ofSize: max(9, bodyFont.pointSize * 0.78),
+            weight: .regular
+        )
+        return [
+            .font: markerFont,
+            .foregroundColor: NSColor.tertiaryLabelColor,
+        ]
+    }
+
+    private func trailingLineBreakMarkerRects(
+        attributes: [NSAttributedString.Key: Any]
+    ) -> [NSRect] {
+        let ranges = Self.trailingLineBreakRanges(in: string)
+        guard !ranges.isEmpty,
+              let layoutManager,
+              let textContainer else { return [] }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let markerSize = (Self.trailingLineBreakMarker as NSString).size(
+            withAttributes: attributes
+        )
+        let origin = textContainerOrigin
+        let padding = textContainer.lineFragmentPadding
+        let maximumX = bounds.maxX - textContainerInset.width - padding - markerSize.width
+
+        return ranges.compactMap { range in
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            guard glyphRange.length > 0,
+                  glyphRange.location < layoutManager.numberOfGlyphs else { return nil }
+
+            let glyphIndex = glyphRange.location
+            let lineRect = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: false
+            )
+            let glyphLocation = layoutManager.location(forGlyphAt: glyphIndex)
+            let lineStartX = origin.x + lineRect.minX
+            let markerX = max(
+                lineStartX,
+                min(
+                    maximumX,
+                    lineStartX + glyphLocation.x + Self.trailingLineBreakMarkerSpacing
+                )
+            )
+            let markerY = origin.y + lineRect.minY + max(0, (lineRect.height - markerSize.height) / 2)
+            return NSRect(origin: NSPoint(x: markerX, y: markerY), size: markerSize)
+        }
+    }
+
+    /// Used both by AppKit's ordinary draw pass and by the protected offscreen
+    /// renderer. Keeping one drawing path prevents secure reveals from silently
+    /// losing the same end-of-content information.
+    func drawTrailingLineBreakMarkers() {
+        let attributes = trailingLineBreakMarkerAttributes
+        for rect in trailingLineBreakMarkerRects(attributes: attributes) {
+            (Self.trailingLineBreakMarker as NSString).draw(
+                at: rect.origin,
+                withAttributes: attributes
+            )
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         // Do not call `super`: it draws glyphs, selection backgrounds, marked text,
         // and a blinking insertion point into the ordinary window backing store.
         // Secure pixels are drawn only by the offscreen renderer above.
         guard !secureCapturePolicy.suppressesUnprotectedDrawing else { return }
         super.draw(dirtyRect)
+        drawTrailingLineBreakMarkers()
 
         guard isEditable, !emptyStatePrompt.isEmpty, string.isEmpty else { return }
 
