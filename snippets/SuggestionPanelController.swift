@@ -244,6 +244,16 @@ final class SuggestionPanelController: NSObject,
         // collapsed the panel in the earlier glass attempt (d00b1ea, reverted in
         // 7c6e918).
         let panelContentView = panel.contentView!
+        // The inner clipper keeps table/search contents inside the glass, but the
+        // window server derives `NSWindow`'s shadow from the top-level window shape.
+        // Give that view the identical continuous mask as well: otherwise making
+        // Secure Paste key reveals a rectangular black shadow behind the rounded
+        // surface. `invalidateShadow()` in `present` then recomputes the retained
+        // system shadow from this rounded alpha shape after every resize.
+        panelContentView.wantsLayer = true
+        panelContentView.layer?.cornerRadius = LiquidGlassDesign.effectivePanelCornerRadius
+        panelContentView.layer?.cornerCurve = .continuous
+        panelContentView.layer?.masksToBounds = true
         panelContentView.addSubview(surface)
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: panelContentView.leadingAnchor),
@@ -312,13 +322,6 @@ final class SuggestionPanelController: NSObject,
         securePasteSelection = onSelect
         securePasteCancellation = onCancel
         securePasteStartedWithHiddenApplication = NSApp.isHidden
-        // The ordinary suggestion panel never becomes key, so its window-server
-        // shadow follows the translucent surface unobtrusively. Once Secure Paste
-        // becomes key for search, AppKit redraws that shadow as the panel's full
-        // rectangular bounds, leaving black "ears" outside the rounded glass.
-        // Native glass already draws its own rounded edge; keep the square window
-        // shadow out of this mode and restore it when returning to suggestions.
-        panel.hasShadow = false
         panel.canHide = false
         searchField.stringValue = ""
         searchContainer.isHidden = false
@@ -363,8 +366,6 @@ final class SuggestionPanelController: NSObject,
         securePasteSearch = nil
         securePasteSelection = nil
         securePasteCancellation = nil
-        panel.hasShadow = true
-        panel.invalidateShadow()
         panel.canHide = true
         securePasteStartedWithHiddenApplication = false
         presentationMode = .suggestions
@@ -603,6 +604,17 @@ final class SuggestionPanelController: NSObject,
         default:
             return false
         }
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === panel else { return }
+        // Key status is the transition that made AppKit replace the correctly
+        // rounded inactive shadow with a rectangular one. Ensure the root mask has
+        // reached the backing layer, then ask the window server to derive the key
+        // shadow from that final shape rather than the panel's frame rectangle.
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.contentView?.displayIfNeeded()
+        panel.invalidateShadow()
     }
 
     func windowDidResignKey(_ notification: Notification) {
