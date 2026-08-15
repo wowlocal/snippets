@@ -933,11 +933,11 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 secure: true,
                 deleted: false,
                 fields: SyncEnvelope.Fields(
-                    // Fix the name now, not later. `Snippet.displayName` falls back to
-                    // the first content line, which a secure shell no longer carries.
-                    name: snippet.name.trimmingCharacters(
-                        in: .whitespacesAndNewlines).isEmpty
-                        ? snippet.displayName : snippet.name,
+                    // Preserve only the explicit name. `Snippet.displayName` may derive
+                    // its fallback from the first plaintext content line, while vault
+                    // metadata is deliberately readable with the vault locked. Freezing
+                    // that fallback here would therefore disclose secure content.
+                    name: snippet.name,
                     keyword: snippet.normalizedKeyword,
                     content: Data(sealed.utf8),
                     tags: snippet.tags,

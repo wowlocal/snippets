@@ -113,6 +113,39 @@ final class SecureRemediationTests: XCTestCase {
         } == true)
     }
 
+    func testPromotionDoesNotCopyUnnamedSnippetBodyIntoPlaintextNameMetadata() async throws {
+        let components = makeComponents()
+        let pending = try XCTUnwrap(
+            components.secureStore.prepareVaultCreationIfNeeded())
+        _ = try components.secureStore.commitVaultCreation(pending)
+
+        let secret = "PRIVATE-FIRST-LINE-SENTINEL\nremaining body"
+        let snippet = components.store.addSnippet(name: "", content: secret)
+        components.store.flushPendingWrites()
+
+        _ = try await components.session.unlock(reason: "Test promotion metadata")
+        try SecureSnippetTransitionCoordinator.promote(
+            snippetID: snippet.id,
+            store: components.store,
+            secureStore: components.secureStore)
+
+        let record = try XCTUnwrap(components.secureStore.record(snippet.id))
+        XCTAssertEqual(record.name, "")
+        XCTAssertNotEqual(record.name, snippet.displayName)
+
+        let shell = try XCTUnwrap(
+            components.secureStore.secureShellsForDisplay().first { $0.id == snippet.id })
+        XCTAssertEqual(shell.name, "")
+        XCTAssertEqual(shell.displayName, "Untitled Snippet")
+
+        guard case .loaded(let metadata) = SyncBaseFile.load(
+            from: SnippetStorageLocations.syncLibraryMetadataFileURL)
+        else {
+            return XCTFail("expected transition metadata after promotion")
+        }
+        XCTAssertEqual(metadata.envelope(snippet.id)?.fields?.name, "")
+    }
+
     func testCoordinatedMovesPublishOnceOnlyAfterBothCachesAgreeOnOwnership() async throws {
         let components = makeComponents()
         let pending = try XCTUnwrap(
