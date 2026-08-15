@@ -161,7 +161,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let hotkeySeparator = NSBox()
         hotkeySeparator.boxType = .separator
 
-        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) to show or hide Snippets. In a text or password field, press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets and insert one without putting it on the clipboard. Secure snippets authenticate on every use. Turn this off to leave both shortcuts to other apps.")
+        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) to show or hide Snippets. In a text field, press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets and insert one without putting it on the clipboard. If macOS blocks global shortcuts in a password field, \(GlobalHotkeyManager.displayString) invokes Secure Paste there through Services. Secure snippets authenticate on every use. Turn this off to leave the global shortcuts to other apps.")
 
         globalHotkeyCheckbox.target = self
         globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))
@@ -335,7 +335,7 @@ private final class GeneralSettingsViewController: NSViewController {
         if !manager.isEnabled {
             globalHotkeyStatusLabel.stringValue = "Global shortcuts are off. Open Snippets from the Dock or the menu bar item."
         } else if manager.isActive && manager.isSecurePasteActive {
-            globalHotkeyStatusLabel.stringValue = "Both shortcuts work from any app while Snippets is hidden. Secure Paste requires Accessibility access; if macOS blocks shortcuts in a password field, use Secure Paste from the menu bar."
+            globalHotkeyStatusLabel.stringValue = "Both global shortcuts are registered. Secure Paste requires Accessibility access; in a password field, use \(GlobalHotkeyManager.displayString) or the menu-bar item if macOS blocks \(GlobalHotkeyManager.securePasteDisplayString)."
         } else if manager.isActive {
             globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) works, but macOS wouldn't register \(GlobalHotkeyManager.securePasteDisplayString) — another app is probably using it."
         } else if manager.isSecurePasteActive {

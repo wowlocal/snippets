@@ -543,6 +543,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         showMainWindow()?.createSnippet(seededContent: selection, seededName: nil)
     }
 
+    /// A Services key equivalent is resolved by the frontmost application, not
+    /// by our process. That makes Command-Backslash a keyboard path into Secure
+    /// Paste even while Secure Event Input suppresses external global hotkeys and
+    /// session event taps. The existing Carbon Command-Backslash wins in ordinary
+    /// fields; this service is the protected-field fallback.
+    @objc func securePasteFromService(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString>
+    ) {
+        if expansionEngine.securePastePickerIsVisible {
+            expansionEngine.cancelSecurePastePicker(returnFocus: true)
+            return
+        }
+        guard securePasteTask == nil else {
+            error.pointee = "Secure Paste is already in progress." as NSString
+            return
+        }
+        guard let target = expansionEngine.captureSecurePasteTarget() else {
+            error.pointee = "Focus a text or password field before using Secure Paste." as NSString
+            if !expansionEngine.accessibilityGranted {
+                expansionEngine.requestAccessibilityPermission()
+            }
+            return
+        }
+
+        // Finish Services dispatch before making the non-activating picker key.
+        DispatchQueue.main.async { [weak self] in
+            self?.beginSecurePaste(to: target)
+        }
+    }
+
     // MARK: - Status Bar Item
 
     private func setupStatusItem() {
