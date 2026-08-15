@@ -483,7 +483,7 @@ final class ViewController: NSViewController {
     ///
     /// `viewWillDisappear` looks like the place for this and is not: AppKit sends
     /// it for every trip off screen, so ⌘H, ⌘M, the yellow button and this app's
-    /// own ⌘\ round trip each took back the snippet the user had just made and
+    /// own ⇧⌘\ round trip each took back the snippet the user had just made and
     /// left the editor bound to an unrelated one on the way back in. Nothing
     /// inside that callback tells the four apart — the window still reports
     /// `isVisible` for all of them, close included — while this notification is

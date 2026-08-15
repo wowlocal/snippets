@@ -96,7 +96,7 @@ private final class GeneralSettingsViewController: NSViewController {
     private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let resetButton = NSButton(title: "Reset to Ask Every Time", target: nil, action: nil)
     private let globalHotkeyCheckbox = NSButton(
-        checkboxWithTitle: "Enable \(GlobalHotkeyManager.displayString) and \(GlobalHotkeyManager.securePasteDisplayString) global shortcuts",
+        checkboxWithTitle: "Enable \(GlobalHotkeyManager.securePasteDisplayString) and \(GlobalHotkeyManager.displayString) global shortcuts",
         target: nil,
         action: nil
     )
@@ -161,7 +161,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let hotkeySeparator = NSBox()
         hotkeySeparator.boxType = .separator
 
-        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.displayString) to show, hide, or launch Snippets. In any text or password field, press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets and insert one without putting it on the clipboard. Secure Input may block the Option-only Secure Paste shortcut; use the menu bar item in that case. Secure snippets authenticate on every use. Turn this off to leave the shortcuts to other apps.")
+        let hotkeyIntroLabel = makeSecondaryLabel("In any text or password field, press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets and insert one without putting it on the clipboard. Press \(GlobalHotkeyManager.displayString) to show, hide, or launch Snippets. Both shortcuts keep the same actions in Secure Input. Secure snippets authenticate on every use. Turn this off to leave the shortcuts to other apps.")
 
         globalHotkeyCheckbox.target = self
         globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))
@@ -335,7 +335,7 @@ private final class GeneralSettingsViewController: NSViewController {
         if !manager.isEnabled {
             globalHotkeyStatusLabel.stringValue = "Global shortcuts are off. Open Snippets from the Dock or the menu bar item."
         } else if manager.isActive && manager.isSecurePasteActive {
-            globalHotkeyStatusLabel.stringValue = "Both shortcuts are registered. Secure Input may still block the Option-only Secure Paste shortcut."
+            globalHotkeyStatusLabel.stringValue = "Both shortcuts are ready. Secure Paste requires Accessibility access."
         } else if manager.isActive {
             globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) works, but macOS wouldn't register \(GlobalHotkeyManager.securePasteDisplayString) — another app is probably using it."
         } else if manager.isSecurePasteActive {

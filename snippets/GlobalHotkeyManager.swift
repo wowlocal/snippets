@@ -8,8 +8,7 @@ import Carbon.HIToolbox
 /// needs no Accessibility trust and works regardless of activation policy —
 /// including while the app is hidden to the menu bar. Keep registrations live
 /// while Secure Event Input is active, matching Tinycast's Carbon hotkey layer;
-/// the frontmost application's Services menu supplies the Command-Backslash
-/// protected-field path.
+/// the frontmost application's Services menu supplies the protected-field paths.
 @MainActor
 final class GlobalHotkeyManager {
     static let shared = GlobalHotkeyManager()
@@ -17,14 +16,14 @@ final class GlobalHotkeyManager {
     static let defaultsKey = "globalOpenHotkeyEnabled"
 
     /// How the shortcut is rendered in menus and settings copy.
-    static let displayString = "⌘\\"
-    static let securePasteDisplayString = "⌥\\"
+    static let displayString = "⇧⌘\\"
+    static let securePasteDisplayString = "⌘\\"
 
     /// `\` by physical key position: Carbon matches virtual key codes, not the
     /// character the active keyboard layout produces.
     private static let keyCode = UInt32(kVK_ANSI_Backslash)
-    private static let openModifierFlags = UInt32(cmdKey)
-    private static let securePasteModifierFlags = UInt32(optionKey)
+    private static let openModifierFlags = UInt32(cmdKey | shiftKey)
+    private static let securePasteModifierFlags = UInt32(cmdKey)
     private static let signature = OSType(0x534E5054) // 'SNPT'
     private static let openIdentifier: UInt32 = 1
     private static let securePasteIdentifier: UInt32 = 2

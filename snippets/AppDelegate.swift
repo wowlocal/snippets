@@ -596,7 +596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         showMainWindow()?.createSnippet(seededContent: selection, seededName: nil)
     }
 
-    /// Command-Backslash normally arrives through Carbon. The frontmost
+    /// Command-Shift-Backslash normally arrives through Carbon. The frontmost
     /// application's matching Services item preserves the same action when
     /// Secure Event Input prevents cross-process keyboard delivery.
     @objc func openSnippetsFromService(
@@ -612,9 +612,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    /// Option-Backslash normally arrives through Carbon. Secure Event Input can
-    /// prevent macOS from delivering that cross-process shortcut; the Services
-    /// format cannot express an Option-only fallback.
+    /// Command-Backslash normally arrives through Carbon. The frontmost
+    /// application's matching Services item preserves Secure Paste when Secure
+    /// Event Input prevents cross-process keyboard delivery.
     @objc func securePasteFromService(
         _ pboard: NSPasteboard,
         userData: String?,
@@ -670,7 +670,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let openItem = NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: "")
         openItem.target = self
         LiquidGlassDesign.applyMenuSymbol("macwindow", to: openItem)
-        // `setupGlobalHotkey()` runs next and fills in the ⌘\ hint.
+        // `setupGlobalHotkey()` runs next and fills in the ⇧⌘\ hint.
         statusMenuOpenItem = openItem
         let securePasteItem = NSMenuItem(
             title: "Secure Paste…",
@@ -903,18 +903,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         refreshGlobalHotkeyMenuHint()
     }
 
-    /// The menu bar item is the only always-visible surface for the shortcut,
-    /// so it advertises ⌘\ — but only while the shortcut actually works.
+    /// The menu bar is the only always-visible surface for the shortcuts, so it
+    /// advertises each combination only while its Carbon registration is live.
     private func refreshGlobalHotkeyMenuHint() {
         let manager = GlobalHotkeyManager.shared
         let showsOpenShortcut = manager.isEnabled && manager.isActive
         statusMenuOpenItem?.keyEquivalent = showsOpenShortcut ? "\\" : ""
-        statusMenuOpenItem?.keyEquivalentModifierMask = showsOpenShortcut ? [.command] : []
+        statusMenuOpenItem?.keyEquivalentModifierMask = showsOpenShortcut
+            ? [.command, .shift]
+            : []
 
         let showsSecurePasteShortcut = manager.isEnabled && manager.isSecurePasteActive
         statusMenuSecurePasteItem?.keyEquivalent = showsSecurePasteShortcut ? "\\" : ""
         statusMenuSecurePasteItem?.keyEquivalentModifierMask = showsSecurePasteShortcut
-            ? [.option]
+            ? [.command]
             : []
     }
 
