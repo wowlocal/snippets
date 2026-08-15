@@ -352,13 +352,14 @@ final class SuggestionPanelController: NSObject,
         )
     }
 
-    /// Presents Secure Paste as an input-enabled mode of the same compact panel
-    /// used for backslash suggestions. It deliberately does not activate or unhide
-    /// Snippets; a non-activating panel can become key on its search field while the
-    /// destination app remains frontmost.
+    /// Presents the Command-Backslash picker as an input-enabled mode of the same
+    /// compact panel used for backslash suggestions. With no text target, anchoring
+    /// falls back to the focused element or pointer and selection becomes Copy.
+    /// The non-activating panel leaves the destination app frontmost in either mode.
     func showSecurePaste(
         items: [SuggestionItem],
-        anchorFocusedElement: AXUIElement,
+        anchorFocusedElement: AXUIElement?,
+        copiesToClipboard: Bool,
         onSearch: @escaping (String) -> [SuggestionItem],
         onSelect: @escaping (Snippet) -> Void,
         onCancel: @escaping (Bool) -> Void
@@ -380,8 +381,15 @@ final class SuggestionPanelController: NSObject,
         searchContainer.isHidden = false
         searchContainerHeightConstraint.constant = securePasteSearchHeight
         emptyLabel.stringValue = "No matching snippets"
-        panel.setAccessibilityTitle("Secure Paste")
-        tableView.setAccessibilityLabel("Snippets available for Secure Paste")
+        if copiesToClipboard {
+            searchField.setAccessibilityLabel("Search snippets to copy")
+            panel.setAccessibilityTitle("Copy Snippet")
+            tableView.setAccessibilityLabel("Snippets available to copy")
+        } else {
+            searchField.setAccessibilityLabel("Search snippets for Secure Paste")
+            panel.setAccessibilityTitle("Secure Paste")
+            tableView.setAccessibilityLabel("Snippets available for Secure Paste")
+        }
 
         present(
             items: items,
@@ -423,6 +431,7 @@ final class SuggestionPanelController: NSObject,
         panel.canHide = true
         securePasteStartedWithHiddenApplication = false
         presentationMode = .suggestions
+        searchField.setAccessibilityLabel("Search snippets for Secure Paste")
         panel.setAccessibilityTitle("Snippet suggestions")
         tableView.setAccessibilityLabel("Snippet suggestions")
         isEndingSecurePaste = false

@@ -22,8 +22,7 @@ private enum ActionStatusMessage {
 }
 
 private enum SecureCopyWarning {
-    static let message =
-        "Copy blocked. Secure snippets can\u{2019}t be copied. The clipboard was not changed."
+    static let message = ClipboardCopyFeedback.secureSnippetBlocked
     static let displayDuration: TimeInterval = 8
     static let fadeDuration: TimeInterval = 0.25
     static let preferredWidthPriority = NSLayoutConstraint.Priority(

@@ -40,6 +40,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         case cancel
     }
 
+    private enum SecurePasteDestination {
+        case textField(SnippetExpansionEngine.SecurePasteTarget)
+        case clipboard
+
+        var textFieldTarget: SnippetExpansionEngine.SecurePasteTarget? {
+            guard case .textField(let target) = self else { return nil }
+            return target
+        }
+    }
+
     // Declaration order is load-bearing: diagnostics creates `Diagnostics/` and
     // `Tmp/` first, then the usage store creates `Usage/`, and only then does
     // `SnippetStore.init()` install its support-folder DispatchSource. Creating
@@ -103,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return engine
     }()
     private lazy var settingsWindowController = SettingsWindowController()
+    private lazy var transientScreenMessageController = TransientScreenMessageController()
     #if !NO_SPARKLE
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil
@@ -117,8 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var hotkeyPromotedFromAccessory = false
     /// Captured as the status menu opens, before its menu window can disturb the
     /// password field that was focused in the frontmost app.
-    private var statusMenuSecurePasteTarget: SnippetExpansionEngine.SecurePasteTarget?
-    private var securePasteTarget: SnippetExpansionEngine.SecurePasteTarget?
+    private var statusMenuSecurePasteDestination: SecurePasteDestination?
+    private var securePasteDestination: SecurePasteDestination?
     private var securePasteTask: Task<Void, Never>?
     private var shouldTerminateForReal = false
     private var terminationReplyPending = false
@@ -357,11 +368,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // A LocalAuthentication request may outlive the panel that started it. Cancellation
         // makes the engine wipe any returned lease before termination is allowed to continue.
         securePasteTask?.cancel()
-        if securePasteTarget != nil {
+        if securePasteDestination != nil {
             expansionEngine.dismissSecurePastePicker()
         }
-        securePasteTarget = nil
-        statusMenuSecurePasteTarget = nil
+        securePasteDestination = nil
+        statusMenuSecurePasteDestination = nil
 
         let ready = expansionEngine.prepareForTermination { [weak self] canTerminate in
             guard let self else {
@@ -629,8 +640,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             error.pointee = "Secure Paste is already in progress." as NSString
             return
         }
-        guard let target = expansionEngine.captureSecurePasteTarget() else {
-            error.pointee = "Focus a text or password field before using Secure Paste." as NSString
+        guard let destination = captureSecurePasteDestination() else {
+            error.pointee = expansionEngine.accessibilityGranted
+                ? "Secure Paste is unavailable right now." as NSString
+                : "Secure Paste needs Accessibility access." as NSString
             if !expansionEngine.accessibilityGranted {
                 expansionEngine.requestAccessibilityPermission()
             }
@@ -643,7 +656,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // status, and `windowDidResignKey` immediately dismissed the picker.
         // Capture the destination above, then wait for that hand-off to settle.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.beginSecurePaste(to: target)
+            self?.beginSecurePaste(for: destination)
         }
     }
 
@@ -718,12 +731,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // registered global hotkey. Mouse tracking still works, so capture the
         // destination before this menu becomes the only reliable entry point.
         if securePasteTask == nil,
-           securePasteTarget == nil,
+           securePasteDestination == nil,
            NSWorkspace.shared.frontmostApplication?.processIdentifier
                 != ProcessInfo.processInfo.processIdentifier {
-            statusMenuSecurePasteTarget = expansionEngine.captureSecurePasteTarget()
+            statusMenuSecurePasteDestination = captureSecurePasteDestination()
         } else {
-            statusMenuSecurePasteTarget = nil
+            statusMenuSecurePasteDestination = nil
         }
         refreshStatusMenuClipboardItem()
     }
@@ -733,7 +746,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // Menu actions are delivered before this deferred cleanup. A dismissed
         // menu must not retain an AX target until its next opening.
         DispatchQueue.main.async { [weak self] in
-            self?.statusMenuSecurePasteTarget = nil
+            self?.statusMenuSecurePasteDestination = nil
         }
     }
 
@@ -765,6 +778,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         refreshGlobalHotkeyMenuHint()
     }
 
+    private func captureSecurePasteDestination() -> SecurePasteDestination? {
+        switch expansionEngine.captureSecurePasteTarget() {
+        case .target(let target):
+            return .textField(target)
+        case .noTextField:
+            return .clipboard
+        case .accessibilityRequired, .unavailable:
+            return nil
+        }
+    }
+
     private func toggleSecurePasteFromGlobalHotkey() {
         if expansionEngine.securePastePickerIsVisible {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
@@ -774,7 +798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             NSSound.beep()
             return
         }
-        guard let target = expansionEngine.captureSecurePasteTarget() else {
+        guard let destination = captureSecurePasteDestination() else {
             NSSound.beep()
             if !expansionEngine.accessibilityGranted {
                 expansionEngine.requestAccessibilityPermission()
@@ -783,7 +807,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
 
-        beginSecurePaste(to: target)
+        beginSecurePaste(for: destination)
     }
 
     @objc private func securePasteFromStatusBar(_ sender: Any?) {
@@ -796,9 +820,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
 
-        let target = statusMenuSecurePasteTarget ?? expansionEngine.captureSecurePasteTarget()
-        statusMenuSecurePasteTarget = nil
-        guard let target else {
+        let destination = statusMenuSecurePasteDestination ?? captureSecurePasteDestination()
+        statusMenuSecurePasteDestination = nil
+        guard let destination else {
             NSSound.beep()
             if !expansionEngine.accessibilityGranted {
                 expansionEngine.requestAccessibilityPermission()
@@ -810,14 +834,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // Let menu tracking release its temporary key window before asking the
         // non-activating suggestion panel to become key for search input.
         DispatchQueue.main.async { [weak self] in
-            self?.beginSecurePaste(to: target)
+            self?.beginSecurePaste(for: destination)
         }
     }
 
-    private func beginSecurePaste(to target: SnippetExpansionEngine.SecurePasteTarget) {
-        securePasteTarget = target
+    private func beginSecurePaste(for destination: SecurePasteDestination) {
+        securePasteDestination = destination
         let didShow = expansionEngine.showSecurePastePicker(
-            for: target,
+            for: destination.textFieldTarget,
             onSelect: { [weak self] snippet in
                 self?.securePasteSnippetSelected(snippet)
             },
@@ -826,31 +850,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
         )
         guard didShow else {
-            securePasteTarget = nil
+            securePasteDestination = nil
             NSSound.beep()
             return
         }
     }
 
     private func securePasteSnippetSelected(_ snippet: Snippet) {
-        guard let target = securePasteTarget else { return }
-        securePasteTarget = nil
+        guard let destination = securePasteDestination else { return }
+        securePasteDestination = nil
 
-        securePasteTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let inserted = await self.expansionEngine.pasteSnippetUsingSecurePaste(snippet, to: target)
-            if !inserted, !Task.isCancelled {
-                await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
-                NSSound.beep()
+        switch destination {
+        case .textField(let target):
+            securePasteTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                let inserted = await self.expansionEngine.pasteSnippetUsingSecurePaste(
+                    snippet,
+                    to: target
+                )
+                if !inserted, !Task.isCancelled {
+                    await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
+                    NSSound.beep()
+                }
+                self.securePasteTask = nil
             }
-            self.securePasteTask = nil
+        case .clipboard:
+            switch expansionEngine.copySnippetToClipboard(snippet) {
+            case .copied:
+                transientScreenMessageController.show(
+                    ClipboardCopyFeedback.copied,
+                    kind: .confirmation
+                )
+            case .secureSnippetBlocked:
+                NSSound.beep()
+                transientScreenMessageController.show(
+                    ClipboardCopyFeedback.secureSnippetBlocked,
+                    kind: .failure
+                )
+            case .failed:
+                NSSound.beep()
+                transientScreenMessageController.show(
+                    ClipboardCopyFeedback.failed,
+                    kind: .failure
+                )
+            }
         }
     }
 
     private func securePasteCancelled(shouldReturnFocus: Bool) {
-        guard let target = securePasteTarget else { return }
-        securePasteTarget = nil
-        guard shouldReturnFocus else { return }
+        guard let destination = securePasteDestination else { return }
+        securePasteDestination = nil
+        guard shouldReturnFocus,
+              case .textField(let target) = destination else { return }
 
         securePasteTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -860,7 +911,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func toggleFromGlobalHotkey() {
-        if securePasteTarget != nil {
+        if securePasteDestination != nil {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
             return
         }
@@ -1197,7 +1248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Activation Policy Switching
 
     private func hideToBackground() {
-        if securePasteTarget != nil {
+        if securePasteDestination != nil {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
         }
         for window in NSApp.windows {

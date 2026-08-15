@@ -223,6 +223,20 @@ final class SnippetExpansionEngine {
         let applicationName: String
     }
 
+    enum SecurePasteTargetCapture {
+        case target(SecurePasteTarget)
+        /// No safe text destination was focused; Copy is the non-destructive fallback.
+        case noTextField
+        case accessibilityRequired
+        case unavailable
+    }
+
+    enum ClipboardCopyResult {
+        case copied
+        case secureSnippetBlocked
+        case failed
+    }
+
     var securePastePickerIsVisible: Bool {
         securePastePickerActive && suggestionPanel.isSecurePasteVisible
     }
@@ -483,21 +497,33 @@ final class SnippetExpansionEngine {
     }
 
 
-    func copySnippetToClipboard(_ snippet: Snippet) {
-        guard !isPreparingForTermination else { return }
+    @discardableResult
+    func copySnippetToClipboard(_ snippet: Snippet) -> ClipboardCopyResult {
+        guard !isPreparingForTermination else { return .failed }
+        // Check the vault projection before resolving placeholders or touching the
+        // pasteboard. A secure shell carries no body, but fail closed here as well so
+        // no future caller can accidentally turn an empty shell into a clipboard write.
+        guard !store.isSecure(snippet.id) else {
+            statusText = ClipboardCopyFeedback.secureSnippetBlocked
+            return .secureSnippetBlocked
+        }
         // An explicit copy is the user taking the clipboard back; hand it over before reading
         // `{clipboard}`, or the snippet would resolve against a snippet we are still holding.
         guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
             statusText = "Still restoring your previous clipboard. Try Copy again in a moment."
-            return
+            return .failed
         }
         let rendered = PlaceholderResolver.resolve(template: snippet.content)
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(rendered, forType: .string)
+        guard NSPasteboard.general.setString(rendered, forType: .string) else {
+            statusText = ClipboardCopyFeedback.failed
+            return .failed
+        }
 
         usage.record(.copyFromApp, snippetID: snippet.id)
         lastExpansionName = snippet.displayName
-        statusText = "Copied \(snippet.displayName)."
+        statusText = "Copied \(snippet.displayName) to the clipboard."
+        return .copied
     }
 
     func pasteSnippetIntoFrontmostApp(_ snippet: Snippet) {
@@ -542,64 +568,85 @@ final class SnippetExpansionEngine {
         }
     }
 
-    /// Captures a text destination before the Secure Paste search field takes focus.
+    /// Captures a text destination before the picker search field takes focus, or
+    /// explicitly reports that Copy should be used because no safe field was found.
     /// No field value is read; password fields commonly refuse that read by design.
-    func captureSecurePasteTarget() -> SecurePasteTarget? {
-        guard !isPreparingForTermination else { return nil }
+    func captureSecurePasteTarget() -> SecurePasteTargetCapture {
+        guard !isPreparingForTermination else { return .unavailable }
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            resetTypingContext()
+            statusText = "No text field is focused. Choose an ordinary snippet to copy it."
+            return .noTextField
+        }
+        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            resetTypingContext()
+            if ownApplicationHasFocusedTextInput {
+                statusText = "Secure Paste targets text fields in other apps."
+                return .unavailable
+            }
+            statusText = "No text field is focused. Choose an ordinary snippet to copy it."
+            return .noTextField
+        }
         // The shortcut may be the first interaction after the user grants access in
         // System Settings, so do not rely on the last UI refresh's cached answer.
         refreshAccessibilityStatus(prompt: false)
         guard accessibilityGranted else {
             statusText = "Secure Paste needs Accessibility access."
-            return nil
-        }
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier
-        else {
-            statusText = "Focus a field in another app before using Secure Paste."
-            return nil
+            return .accessibilityRequired
         }
 
         let budget = AXMessagingBudget()
-        guard let focusedElement = frontmostFocusedElement(axBudget: budget),
-              let textElement = securePasteTextElement(
-                  startingAt: focusedElement,
-                  axBudget: budget
-              ),
-              processIdentifier(of: focusedElement) == app.processIdentifier,
-              processIdentifier(of: textElement) == app.processIdentifier
-        else {
-            statusText = "Secure Paste could not identify the focused text field."
-            return nil
+        guard let focusedElement = frontmostFocusedElement(axBudget: budget) else {
+            resetTypingContext()
+            statusText = "No text field is focused. Choose an ordinary snippet to copy it."
+            return .noTextField
+        }
+        guard processIdentifier(of: focusedElement) == app.processIdentifier else {
+            statusText = "Secure Paste could not safely capture the focused application."
+            return .unavailable
+        }
+        guard let textElement = securePasteTextElement(
+            startingAt: focusedElement,
+            axBudget: budget
+        ) else {
+            resetTypingContext()
+            statusText = "No text field is focused. Choose an ordinary snippet to copy it."
+            return .noTextField
+        }
+        guard processIdentifier(of: textElement) == app.processIdentifier else {
+            statusText = "Secure Paste could not safely capture the focused text field."
+            return .unavailable
         }
 
         resetTypingContext()
-        return SecurePasteTarget(
-            targetPID: app.processIdentifier,
-            focusedElement: focusedElement,
-            textElement: textElement,
-            window: elementAttribute(
-                of: focusedElement,
-                attribute: kAXWindowAttribute as CFString,
-                axBudget: budget
-            ),
-            applicationName: app.localizedName ?? "the target app"
+        return .target(
+            SecurePasteTarget(
+                targetPID: app.processIdentifier,
+                focusedElement: focusedElement,
+                textElement: textElement,
+                window: elementAttribute(
+                    of: focusedElement,
+                    attribute: kAXWindowAttribute as CFString,
+                    axBudget: budget
+                ),
+                applicationName: app.localizedName ?? "the target app"
+            )
         )
     }
 
-    /// Reuses the ordinary suggestion panel for an explicit, searchable paste.
-    /// Every library row is eligible: secure rows rank first when relevance is
-    /// otherwise comparable, but a plaintext snippet can still be delivered to a
-    /// password field without touching the pasteboard.
+    /// Reuses the ordinary suggestion panel for an explicit, searchable action.
+    /// With a captured target it performs Secure Paste. Without one it keeps every
+    /// row visible but allows only ordinary snippets to be copied; selecting a secure
+    /// shell is deliberately routed to the app-level refusal feedback.
     @discardableResult
     func showSecurePastePicker(
-        for target: SecurePasteTarget,
+        for target: SecurePasteTarget?,
         onSelect: @escaping (Snippet) -> Void,
         onCancel: @escaping (Bool) -> Void
     ) -> Bool {
         let snippets = store.snippetsSortedForDisplay()
         guard !snippets.isEmpty else {
-            statusText = "There are no snippets to paste yet."
+            statusText = "There are no snippets yet."
             return false
         }
 
@@ -620,7 +667,8 @@ final class SnippetExpansionEngine {
         securePastePickerActive = true
         suggestionPanel.showSecurePaste(
             items: makeItems(""),
-            anchorFocusedElement: target.focusedElement,
+            anchorFocusedElement: target?.focusedElement,
+            copiesToClipboard: target == nil,
             onSearch: makeItems,
             onSelect: { [weak self] snippet in
                 self?.securePastePickerActive = false
@@ -3169,6 +3217,14 @@ final class SnippetExpansionEngine {
 
     private func frontmostProcessIsThisApp() -> Bool {
         NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+    }
+
+    /// Carbon also delivers Command-Backslash while one of our own editors is active.
+    /// Preserve the existing refusal there: the clipboard fallback is specifically
+    /// for a context with no text input, not an alternate way to handle our editor.
+    private var ownApplicationHasFocusedTextInput: Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
+        return responder is NSTextView || responder is NSTextField
     }
 
     private func focusedTextInputElement(using axBudget: AXMessagingBudget) -> AXUIElement? {
