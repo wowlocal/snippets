@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// having it here means the translation between the stores and the wire format is
     /// exercised by the app's own object graph rather than only by tests.
     lazy var syncLibrary = SnippetLibraryBridge(store: store, secureStore: secureStore)
+    lazy var backendSelection = SyncBackendSelectionStore()
 
     /// Owns whether sync runs, and runs it. Opt-in: constructing this costs nothing and
     /// starts nothing.
@@ -87,8 +88,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// `SyncState.Backend.none` means.
     lazy var syncCoordinator = SyncCoordinator(
         library: syncLibrary,
-        keys: SyncKeyStore(keychain: KeychainSecretStore()),
-        device: store.deviceID)
+        keys: SyncKeyStore(
+            keychain: KeychainSecretStore(),
+            cloudKeys: backendSelection.cloudKeys,
+            usesSnippetsCloud: { [unowned self] in
+                self.backendSelection.provider == .snippetsCloud
+            }),
+        device: store.deviceID,
+        backendSelection: backendSelection)
 
     /// The engine, when one is running. Read by the settings pane; `nil` whenever the
     /// user has not opted in, or the keychain would not supply a wire key.

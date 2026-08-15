@@ -357,6 +357,10 @@ actual_keychain_groups="$(plist_value "$WORK_DIR/app-entitlements.plist" \
     keychain-access-groups || true)"
 actual_aps_environment="$(plist_value "$WORK_DIR/app-entitlements.plist" \
     aps-environment || true)"
+oauth_callback_host="$(plist_value "$APP_PATH/Info.plist" \
+    SnippetsCloudOAuthCallbackHost || true)"
+actual_associated_domains="$(plist_value "$WORK_DIR/app-entitlements.plist" \
+    com.apple.developer.associated-domains || true)"
 actual_background_modes="$(plist_value "$APP_PATH/Info.plist" \
     UIBackgroundModes || true)"
 
@@ -374,6 +378,8 @@ actual_background_modes="$(plist_value "$APP_PATH/Info.plist" \
     || fail "The signed app does not contain the shared keychain group"
 [ -n "$actual_aps_environment" ] \
     || fail "The signed app does not contain the APNs environment entitlement"
+[[ "$actual_associated_domains" == *"webcredentials:$oauth_callback_host"* ]] \
+    || fail "The signed app does not bind its HTTPS OAuth callback host"
 [[ "$actual_background_modes" == *"remote-notification"* ]] \
     || fail "The built app does not permit silent remote-notification background wakes"
 
@@ -389,6 +395,8 @@ profile_keychain_groups="$(plist_value "$WORK_DIR/profile.plist" \
     Entitlements:keychain-access-groups || true)"
 profile_aps_environment="$(plist_value "$WORK_DIR/profile.plist" \
     Entitlements:aps-environment || true)"
+profile_associated_domains="$(plist_value "$WORK_DIR/profile.plist" \
+    Entitlements:com.apple.developer.associated-domains || true)"
 
 [ "$profile_application_identifier" = "$actual_application_identifier" ] \
     || fail "The provisioning profile does not authorize the Release App ID"
@@ -403,6 +411,9 @@ profile_aps_environment="$(plist_value "$WORK_DIR/profile.plist" \
     || fail "The provisioning profile does not authorize the shared keychain group"
 [ "$profile_aps_environment" = "$actual_aps_environment" ] \
     || fail "The signed APNs environment does not match the provisioning profile"
+[[ "$profile_associated_domains" == *"webcredentials:$oauth_callback_host"* \
+    || "$profile_associated_domains" == *"*"* ]] \
+    || fail "The provisioning profile does not authorize the HTTPS OAuth callback domain"
 
 profile_expiry="$(plist_value "$WORK_DIR/profile.plist" ExpirationDate || true)"
 profile_expiry_seconds="$(date -j -f '%a %b %d %T %Z %Y' \
@@ -421,7 +432,7 @@ fi
 
 profile_vouches_for_signature "$APP_PATH" "$WORK_DIR/profile.plist" \
     || fail "The provisioning profile does not contain the app's signing certificate"
-success "Signature, certificate, Production CloudKit, APNs, and keychain profile are valid"
+success "Signature, certificate, Production CloudKit, APNs, associated domains, and keychain profile are valid"
 
 info "Installing $BUNDLE_IDENTIFIER in place"
 if ! run_redacted xcrun devicectl device install app \

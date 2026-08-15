@@ -11,6 +11,8 @@ import Crypto
 /// vault plaintext, or key material, and it deliberately uses Core's existing cursor,
 /// account-binding and record-CAS contracts instead of adding a second sync engine.
 actor SnippetsCloudTransport: SyncTransport {
+    typealias AccessTokenProvider = @Sendable (_ forceRefresh: Bool) async throws -> String
+
     nonisolated struct Configuration: Sendable, Equatable {
         let baseURL: URL
         let spaceID: UUID
@@ -46,12 +48,18 @@ actor SnippetsCloudTransport: SyncTransport {
 
     private let configuration: Configuration
     private let session: URLSession
+    private let accessTokenProvider: AccessTokenProvider?
     private var resolvedScope: ScopeDTO?
     private var resolvedIdentity: SyncAccountIdentity?
 
-    init(configuration: Configuration, session: URLSession = .shared) {
+    init(
+        configuration: Configuration,
+        session: URLSession? = nil,
+        accessTokenProvider: AccessTokenProvider? = nil
+    ) {
         self.configuration = configuration
-        self.session = session
+        self.session = session ?? Self.secureSession
+        self.accessTokenProvider = accessTokenProvider
         events = AsyncStream { $0.finish() }
     }
 
@@ -192,20 +200,36 @@ actor SnippetsCloudTransport: SyncTransport {
         request.timeoutInterval = 30
         request.httpBody = bodyData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Bearer \(configuration.accessToken)", forHTTPHeaderField: "Authorization")
+        let accessToken: String
+        do {
+            accessToken = try await accessTokenProvider?(false) ?? configuration.accessToken
+        } catch {
+            throw SyncTransportFailure.rejected(.authenticationRequired(detail: "sign_in_required"))
+        }
+        guard (8...16_384).contains(accessToken.utf8.count),
+              !accessToken.contains(where: \.isWhitespace) else {
+            throw SyncTransportFailure.rejected(.authenticationRequired(detail: "invalid_access_token"))
+        }
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("1", forHTTPHeaderField: "X-Snippets-Protocol")
         if bodyData != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw SyncTransportFailure.unreachable(detail: "network_request_failed")
-        }
-        guard data.count <= 16 * 1_024 * 1_024,
-              let http = response as? HTTPURLResponse else {
-            throw SyncTransportFailure.unreachable(detail: "invalid_http_response")
+        var (data, http) = try await perform(request)
+        if http.statusCode == 401,
+           (try? JSONDecoder().decode(ErrorDTO.self, from: data).code) == "authentication_required",
+           let accessTokenProvider {
+            let refreshedToken: String
+            do {
+                refreshedToken = try await accessTokenProvider(true)
+            } catch {
+                throw SyncTransportFailure.rejected(.authenticationRequired(detail: "sign_in_required"))
+            }
+            guard (8...16_384).contains(refreshedToken.utf8.count),
+                  !refreshedToken.contains(where: \.isWhitespace) else {
+                throw SyncTransportFailure.rejected(.authenticationRequired(detail: "invalid_access_token"))
+            }
+            request.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+            (data, http) = try await perform(request)
         }
         guard (200..<300).contains(http.statusCode) else {
             let error = (try? JSONDecoder().decode(ErrorDTO.self, from: data))
@@ -217,6 +241,43 @@ actor SnippetsCloudTransport: SyncTransport {
             throw SyncTransportFailure.unreachable(detail: "invalid_json_response")
         }
     }
+
+    private func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        do {
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  response.url == request.url,
+                  response.expectedContentLength <= Int64(Self.maximumResponseBytes) else {
+                throw SyncTransportFailure.unreachable(detail: "invalid_http_response")
+            }
+            var data = Data()
+            if response.expectedContentLength > 0 {
+                data.reserveCapacity(Int(response.expectedContentLength))
+            }
+            for try await byte in bytes {
+                guard data.count < Self.maximumResponseBytes else {
+                    throw SyncTransportFailure.unreachable(detail: "response_too_large")
+                }
+                data.append(byte)
+            }
+            return (data, http)
+        } catch let failure as SyncTransportFailure {
+            throw failure
+        } catch {
+            throw SyncTransportFailure.unreachable(detail: "network_request_failed")
+        }
+    }
+
+    private nonisolated static let maximumResponseBytes = 16 * 1_024 * 1_024
+    private nonisolated static let secureSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(
+            configuration: configuration,
+            delegate: SnippetsCloudNoRedirectDelegate(),
+            delegateQueue: nil)
+    }()
 
     private var scopePath: String { "v1/spaces/\(configuration.spaceID.uuidString.lowercased())/scope" }
     private var changesPath: String { "v1/spaces/\(configuration.spaceID.uuidString.lowercased())/changes" }
@@ -281,7 +342,7 @@ actor SnippetsCloudTransport: SyncTransport {
     private nonisolated static func failure(status: Int, error: ErrorDTO?) -> Error {
         let code = error?.code ?? "http_\(status)"
         switch code {
-        case "authentication_required":
+        case "authentication_required", "reauthentication_required":
             return SyncTransportFailure.rejected(.authenticationRequired(detail: code))
         case "rate_limited":
             return SyncTransportFailure.rejected(.rateLimited(
@@ -295,6 +356,24 @@ actor SnippetsCloudTransport: SyncTransport {
         default:
             return SyncTransportFailure.rejected(.permanent(detail: code))
         }
+    }
+}
+
+private nonisolated final class SnippetsCloudNoRedirectDelegate:
+    NSObject, URLSessionTaskDelegate, @unchecked Sendable
+{
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        _ = session
+        _ = task
+        _ = response
+        _ = request
+        completionHandler(nil)
     }
 }
 

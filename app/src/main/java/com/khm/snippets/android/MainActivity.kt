@@ -6,11 +6,21 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
 import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.Handler
+import android.os.Looper
 import android.os.PersistableBundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,6 +30,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -74,6 +85,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -87,6 +99,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -97,12 +110,19 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.launch
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -113,6 +133,56 @@ class MainActivity : ComponentActivity() {
         val repository = (application as SnippetsApplication).repository
         val initialQuery = intent.getStringExtra(EXTRA_SEARCH_QUERY).orEmpty()
         setContent { SnippetsTheme { SnippetsApp(repository, initialQuery) } }
+    }
+
+    fun scanSnippetsQRCode(onResult: (String) -> Unit, onFailure: () -> Unit) {
+        val options = GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .enableAutoZoom()
+            .build()
+        GmsBarcodeScanning.getClient(this, options).startScan()
+            .addOnSuccessListener { barcode ->
+                barcode.rawValue?.takeIf(String::isNotBlank)?.let(onResult) ?: onFailure()
+            }
+            .addOnCanceledListener(onFailure)
+            .addOnFailureListener { onFailure() }
+    }
+
+    fun confirmLibraryKeyDisclosure(
+        confirmationCode: String? = null,
+        onSuccess: () -> Unit,
+        onFailure: () -> Unit,
+    ) {
+        val builder = BiometricPrompt.Builder(this)
+            .setTitle("Approve encrypted library transfer")
+            .setSubtitle(
+                confirmationCode?.let { "Confirm code $it before adding this device" }
+                    ?: "Confirm this security-sensitive change",
+            )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setAllowedAuthenticators(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION")
+            builder.setDeviceCredentialAllowed(true)
+        } else {
+            builder.setNegativeButton("Cancel", mainExecutor) { _, _ -> onFailure() }
+        }
+        builder.build().authenticate(
+            CancellationSignal(),
+            mainExecutor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
+                    onSuccess()
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                    onFailure()
+                }
+            },
+        )
     }
 
     companion object { const val EXTRA_SEARCH_QUERY = "search_query" }
@@ -976,11 +1046,79 @@ internal fun EditorScreen(
 @Composable
 private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
     val scope = rememberCoroutineScope()
-    val initial = remember { repository.configuration() }
-    var server by rememberSaveable { mutableStateOf(initial.serverURL) }
-    var token by rememberSaveable { mutableStateOf(initial.accessToken) }
-    var spaceID by rememberSaveable { mutableStateOf(initial.spaceID) }
-    var keyBundle by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    val activity = LocalActivity.current as? MainActivity
+    val cloudConfigured = BuildConfig.SNIPPETS_CLOUD_URL.isNotBlank() &&
+        !BuildConfig.SNIPPETS_OAUTH_REDIRECT_URI.contains(".invalid/")
+    // Recovery input is a decryption secret: never serialize it into SavedState.
+    var recoveryCode by remember { mutableStateOf("") }
+    var scannerFailed by rememberSaveable { mutableStateOf(false) }
+    // Intentionally not saveable: leaving Settings or backgrounding the activity
+    // destroys this disclosed copy and the durable kit remains biometric-locked.
+    var recoveryPresentation by remember { mutableStateOf<RecoveryKitPresentation?>(null) }
+    DisposableEffect(activity) {
+        // Settings can contain a recovery secret. Keep the whole window out of
+        // screenshots and recents until this composition (and its secret state) dies.
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        val observer = object : DefaultLifecycleObserver {
+            override fun onPause(owner: LifecycleOwner) {
+                recoveryPresentation = null
+                recoveryCode = ""
+            }
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose {
+            activity?.lifecycle?.removeObserver(observer)
+            recoveryPresentation = null
+            recoveryCode = ""
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+    val signedIn = remember(state.provider, state.syncLabel, state.errorCode, state.cloudKeyStatus) {
+        repository.isCloudSignedIn()
+    }
+    val loginLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        scope.launch {
+            val completion = repository.completeCloudSignIn(result.data)
+            completion.recoveryKit?.let { recoveryPresentation = it }
+            if (completion.succeeded) repository.syncNow()
+        }
+    }
+
+    fun launchStepUp() {
+        scope.launch {
+            repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL, stepUp = true)
+                ?.let(loginLauncher::launch)
+        }
+    }
+
+    fun scan(onValue: suspend (String) -> Unit) {
+        scannerFailed = false
+        val scannerHost = activity
+        if (scannerHost == null) {
+            scannerFailed = true
+            return
+        }
+        scannerHost.scanSnippetsQRCode(
+            onResult = { value -> scope.launch { onValue(value) } },
+            onFailure = { scannerFailed = true },
+        )
+    }
+
+    fun authenticateThen(confirmationCode: String? = null, operation: () -> Unit) {
+        val authenticationHost = activity
+        if (authenticationHost == null) {
+            scannerFailed = true
+            return
+        }
+        authenticationHost.confirmLibraryKeyDisclosure(
+            confirmationCode = confirmationCode,
+            onSuccess = operation,
+            onFailure = { scannerFailed = true },
+        )
+    }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -1006,7 +1144,7 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                         selected = state.provider == SyncProvider.SNIPPETS_CLOUD,
                         onClick = {
                             scope.launch {
-                                repository.configureCloud(server, token, spaceID)
+                                repository.useSnippetsCloud()
                                 repository.syncNow()
                             }
                         },
@@ -1022,56 +1160,194 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
         }
         item {
             SettingsCard(title = "Snippets Cloud") {
-                OutlinedTextField(
-                    server, { server = it }, Modifier.fillMaxWidth(),
-                    label = { Text("Server URL (HTTPS)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    shape = MaterialTheme.shapes.medium,
-                )
-                OutlinedTextField(
-                    spaceID, { spaceID = it }, Modifier.fillMaxWidth(),
-                    label = { Text("Space ID") }, singleLine = true,
-                    shape = MaterialTheme.shapes.medium,
-                )
-                OutlinedTextField(
-                    token, { token = it }, Modifier.fillMaxWidth(),
-                    label = { Text("OIDC access token") }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    shape = MaterialTheme.shapes.medium,
-                )
-                Button(
-                    enabled = !state.isBusy,
-                    onClick = {
-                        scope.launch {
-                            repository.configureCloud(server, token, spaceID)
-                            repository.syncNow()
-                        }
-                    },
-                ) { Text("Switch and sync") }
-            }
-        }
-        item {
-            SettingsCard(title = "Portable library key") {
                 Text(
-                    "Import the encrypted-library key obtained by approved device pairing or recovery. The server never receives this key.",
+                    if (signedIn) "Signed in. Your personal space and session renew automatically."
+                    else "Continue in your browser with a passkey, Apple, or Google. Snippets has no password and does not require your email.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedTextField(
-                    keyBundle, { keyBundle = it }, Modifier.fillMaxWidth(),
-                    label = { Text("Portable key bundle") }, minLines = 3,
-                    visualTransformation = PasswordVisualTransformation(),
-                    shape = MaterialTheme.shapes.medium,
-                )
-                OutlinedButton(
-                    enabled = keyBundle.isNotBlank(),
+                if (cloudConfigured) {
+                    Text(
+                        BuildConfig.SNIPPETS_CLOUD_URL,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "This build has no pinned cloud endpoint and verified HTTPS sign-in callback.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Button(
+                    enabled = !state.isBusy && cloudConfigured,
                     onClick = {
                         scope.launch {
-                            repository.importPortableKeyBundle(keyBundle)
-                            keyBundle = ""
+                            repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL)
+                                ?.let(loginLauncher::launch)
                         }
                     },
-                ) { Text("Import key") }
+                ) { Text(if (signedIn) "Sign in again" else "Continue securely") }
+                if (signedIn) {
+                    OutlinedButton(
+                        enabled = !state.isBusy,
+                        onClick = { scope.launch { repository.disconnectCloudAccount() } },
+                    ) { Text("Sign out on this device") }
+                }
+                if (scannerFailed) {
+                    Text(
+                        "The secure system action was cancelled or unavailable.",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                state.errorCode?.let { code ->
+                    Text(
+                        cloudErrorDescription(code),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+        if (signedIn) item {
+            SettingsCard(title = "Encrypted library key") {
+                val visibleRecoveryKit = recoveryPresentation
+                if (visibleRecoveryKit != null) {
+                    Text(
+                        "Save this offline. It is the only fallback if every authorized device is lost.",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    SnippetsQRCode(visibleRecoveryKit.qrPayload, "Offline recovery kit QR")
+                    Text(visibleRecoveryKit.longCode, style = MaterialTheme.typography.bodyMedium)
+                    OutlinedButton(
+                        onClick = { copySensitiveText(context, visibleRecoveryKit.longCode) },
+                    ) { Text("Copy long code") }
+                    Button(
+                        onClick = {
+                            recoveryPresentation = null
+                            scope.launch { repository.acknowledgeRecoveryKitSaved() }
+                        },
+                    ) { Text("I saved it") }
+                } else when (state.cloudKeyStatus) {
+                    CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY -> {
+                        Text(
+                            "This account has encrypted data. Use a device that already opens it, or your offline recovery kit.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            enabled = !state.isBusy,
+                            onClick = { scope.launch { repository.beginDevicePairing() } },
+                        ) { Text("Use nearby device") }
+                        OutlinedButton(
+                            enabled = !state.isBusy,
+                            onClick = { scan(repository::restoreWithRecoveryKit) },
+                        ) { Text("Scan recovery kit") }
+                        OutlinedTextField(
+                            recoveryCode,
+                            { recoveryCode = it },
+                            Modifier.fillMaxWidth(),
+                            label = { Text("Long recovery code") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            shape = MaterialTheme.shapes.medium,
+                        )
+                        OutlinedButton(
+                            enabled = recoveryCode.isNotBlank() && !state.isBusy,
+                            onClick = {
+                                val value = recoveryCode
+                                recoveryCode = ""
+                                scope.launch { repository.restoreWithRecoveryKit(value) }
+                            },
+                        ) { Text("Restore encrypted library") }
+                        Text(
+                            "Without an authorized device or recovery kit, the account can be recovered but the old encrypted snippets cannot.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+
+                    CloudKeyStatus.WAITING_FOR_APPROVAL -> {
+                        Text("Scan this one-time QR on a device that already opens the library.")
+                        state.pairingQRCode?.let { SnippetsQRCode(it, "One-time device pairing QR") }
+                        state.pairingConfirmationCode?.let {
+                            Text("Check code: $it", style = MaterialTheme.typography.titleMedium)
+                        }
+                        Button(
+                            enabled = !state.isBusy,
+                            onClick = { scope.launch { repository.checkDevicePairing() } },
+                        ) { Text("I approved it") }
+                        TextButton(
+                            enabled = !state.isBusy,
+                            onClick = { scope.launch { repository.cancelDevicePairing() } },
+                        ) { Text("Cancel pairing") }
+                    }
+
+                    CloudKeyStatus.APPROVAL_READY -> {
+                        Text("Add this device to your encrypted library?")
+                        state.approvalConfirmationCode?.let {
+                            Text("Check code: $it", style = MaterialTheme.typography.titleMedium)
+                        }
+                        Button(
+                            enabled = !state.isBusy,
+                            onClick = {
+                                authenticateThen(state.approvalConfirmationCode, ::launchStepUp)
+                            },
+                        ) { Text("Approve with biometrics") }
+                        TextButton(
+                            onClick = { scope.launch { repository.cancelPairingApproval() } },
+                        ) { Text("Not this device") }
+                    }
+
+                    CloudKeyStatus.RECOVERY_AUTH_REQUIRED -> {
+                        Text(
+                            "Your library key is local. Confirm once to publish only its encrypted recovery envelope.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            enabled = !state.isBusy,
+                            onClick = { authenticateThen(operation = ::launchStepUp) },
+                        ) { Text("Finish secure setup") }
+                    }
+
+                    CloudKeyStatus.RECOVERY_KIT_LOCKED -> {
+                        Text(
+                            "Your recovery kit is still waiting to be saved. Authenticate to reveal it again.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            enabled = !state.isBusy,
+                            onClick = {
+                                authenticateThen {
+                                    scope.launch {
+                                        recoveryPresentation = repository.revealPendingRecoveryKit()
+                                    }
+                                }
+                            },
+                        ) { Text("Reveal with biometrics") }
+                    }
+
+                    CloudKeyStatus.READY -> {
+                        Text(
+                            "Ready. The server has encrypted snippets and envelopes only; this device holds its own credential and library key.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            enabled = !state.isBusy,
+                            onClick = { scan(repository::preparePairingApproval) },
+                        ) { Text("Add another device") }
+                        OutlinedButton(
+                            enabled = !state.isBusy,
+                            onClick = {
+                                authenticateThen {
+                                    scope.launch {
+                                        repository.prepareRecoveryKitReplacement()
+                                        launchStepUp()
+                                    }
+                                }
+                            },
+                        ) { Text("Replace recovery kit") }
+                    }
+
+                    CloudKeyStatus.SIGNED_OUT -> Unit
+                }
             }
         }
         item {
@@ -1082,6 +1358,34 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
             )
         }
     }
+}
+
+@Composable
+private fun SnippetsQRCode(payload: String, description: String) {
+    val image = remember(payload) { qrBitmap(payload) }
+    Image(
+        bitmap = image.asImageBitmap(),
+        contentDescription = description,
+        modifier = Modifier.size(240.dp),
+    )
+}
+
+private fun qrBitmap(payload: String): Bitmap {
+    require(payload.toByteArray().size <= 4_096)
+    val matrix = QRCodeWriter().encode(
+        payload,
+        BarcodeFormat.QR_CODE,
+        512,
+        512,
+        mapOf(EncodeHintType.MARGIN to 2),
+    )
+    val pixels = IntArray(matrix.width * matrix.height)
+    for (y in 0 until matrix.height) {
+        for (x in 0 until matrix.width) {
+            pixels[y * matrix.width + x] = if (matrix[x, y]) 0xff000000.toInt() else 0xffffffff.toInt()
+        }
+    }
+    return Bitmap.createBitmap(pixels, matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
 }
 
 @Composable
@@ -1102,6 +1406,43 @@ private fun SettingsCard(
             Text(title, style = MaterialTheme.typography.titleMedium)
             content()
         }
+    }
+}
+
+private fun cloudErrorDescription(code: String): String = when (code) {
+    "authorization_cancelled" -> "Sign-in was cancelled. Nothing changed."
+    "sign_in_required", "authentication_required" -> "Please sign in again to continue syncing."
+    "reauthentication_required" -> "Confirm this sensitive action with your passkey."
+    "library_key_required" -> "Unlock this library from a trusted device or recovery kit first."
+    "pairing_expired" -> "That one-time pairing expired. Create a new QR code."
+    "pairing_missing" -> "That pairing is no longer available. Create a new QR code."
+    "secure_setup_failed" -> "The QR, recovery code, or encrypted envelope did not validate. Nothing changed."
+    "refresh_token_missing" -> "The identity provider did not grant background access. Check its native-app offline_access policy."
+    "space_selection_required" -> "This account has multiple libraries. Space selection is required."
+    "server_auth_insecure" -> "This server does not advertise the required secure sign-in profile."
+    "identity_provider_unavailable", "server_discovery_failed", "dependency_unavailable" ->
+        "Snippets Cloud sign-in is temporarily unavailable. Try again shortly."
+    "scope_review_required" -> "The cloud account or library changed. Review it before resuming."
+    else -> "Snippets Cloud couldn’t complete the request. Try again."
+}
+
+@SuppressLint("InlinedApi")
+private fun copySensitiveText(context: Context, value: String) {
+    val marker = UUID.randomUUID().toString()
+    val clip = ClipData.newPlainText("Snippets recovery code", value)
+    clip.description.extras = PersistableBundle().apply {
+        putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        putString("com.khm.snippets.clipboard.marker", marker)
+    }
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(clip)
+    Handler(Looper.getMainLooper()).postDelayed({
+        val currentMarker = clipboard.primaryClipDescription?.extras
+            ?.getString("com.khm.snippets.clipboard.marker")
+        if (currentMarker == marker) clipboard.clearPrimaryClip()
+    }, 120_000L)
+    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
     }
 }
 

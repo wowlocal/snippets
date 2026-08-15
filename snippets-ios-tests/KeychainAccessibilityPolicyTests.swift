@@ -79,6 +79,170 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             "migration must narrowly update only the fixed K_sync account")
     }
 
+    func testDeviceOnlyBackgroundSessionUsesAfterFirstUnlockWithoutSynchronizing() throws {
+        let probe = KeychainOperationsProbe()
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.oauth-policy-tests",
+            itemAccessibility: .afterFirstUnlock,
+            keychainOperations: makeOperations(probe))
+
+        try keychain.storeItem(Data("refresh-token".utf8), account: "oidc-session-v1")
+
+        XCTAssertEqual(
+            probe.accessibility(for: "oidc-session-v1"),
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+    }
+
+    func testSnippetsCloudKeyIsDeviceOnlyBoundAndNeverMintedBySyncStartup() throws {
+        let probe = KeychainOperationsProbe()
+        let cloudKeychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: SnippetsCloudKeyStore.service,
+            itemAccessibility: .afterFirstUnlock,
+            keychainOperations: makeOperations(probe))
+        let server = try XCTUnwrap(URL(string: "https://sync.example"))
+        let space = UUID()
+        let cloudKeys = SnippetsCloudKeyStore(
+            keychain: cloudKeychain,
+            coordinates: { .init(serverURL: server, spaceID: space) })
+
+        let syncKeys = SyncKeyStore(
+            keychain: makeStore(KeychainOperationsProbe()),
+            cloudKeys: cloudKeys,
+            usesSnippetsCloud: { true })
+        XCTAssertThrowsError(try syncKeys.materialMintingIfNeeded()) { error in
+            XCTAssertEqual(error as? SyncKeyStore.Failure, .cloudBootstrapRequired)
+        }
+        XCTAssertTrue(probe.addedAccounts.isEmpty)
+
+        let material = Data(repeating: 0x91, count: 64)
+        try cloudKeys.install(material, serverURL: server, spaceID: space)
+        XCTAssertEqual(try syncKeys.material(), material)
+        XCTAssertNil(try cloudKeys.material(serverURL: server, spaceID: UUID()))
+        XCTAssertEqual(
+            probe.accessibility(for: SnippetsCloudKeyStore.account),
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+    }
+
+    func testPendingCloudLogoutResumesRootFirstCleanupDuringStartup() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.cloud-logout.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.logout-credentials-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let bootstrap = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.logout-bootstrap-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let cloudKeychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.logout-root-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let server = try XCTUnwrap(URL(string: "https://sync.example"))
+        let space = UUID()
+        let cloudKeys = SnippetsCloudKeyStore(
+            keychain: cloudKeychain,
+            coordinates: { .init(serverURL: server, spaceID: space) })
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            cloudKeys: cloudKeys,
+            bootstrapSecrets: bootstrap)
+        try selection.selectSnippetsCloud(
+            serverURL: server,
+            spaceID: space,
+            accessToken: "test-access-token")
+        try cloudKeys.install(Data(repeating: 0x81, count: 64), serverURL: server, spaceID: space)
+        try credentials.storeItem(
+            Data("saved OAuth session".utf8),
+            account: SyncBackendSelectionStore.oauthSessionAccount)
+        try bootstrap.storeItem(
+            Data("pairing private state".utf8),
+            account: SnippetsCloudAccountBootstrap.pairingAccount)
+        try credentials.storeItem(
+            Data("pending".utf8),
+            account: SyncBackendSelectionStore.pendingLocalEraseAccount)
+
+        let resumed = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            cloudKeys: cloudKeys,
+            bootstrapSecrets: bootstrap)
+
+        XCTAssertNil(try cloudKeys.material(serverURL: server, spaceID: space))
+        XCTAssertNil(try bootstrap.loadItem(account: SnippetsCloudAccountBootstrap.pairingAccount))
+        XCTAssertNil(try credentials.loadItem(account: SyncBackendSelectionStore.oauthSessionAccount))
+        XCTAssertNil(try credentials.loadItem(account: SyncBackendSelectionStore.pendingLocalEraseAccount))
+        XCTAssertEqual(resumed.provider, .iCloud)
+        XCTAssertNil(resumed.cloudCoordinates)
+        XCTAssertFalse(resumed.hasCloudSession)
+    }
+
+    func testLogoutJournalWinsAfterRefreshCrashBeforeSessionReplacement() {
+        let oldAccess = "old-access-token"
+        let newAccess = "new-access-token"
+        let oldRefresh = "old-refresh-token"
+        let newRefresh = "new-refresh-token"
+
+        // Fault-injection shape: refresh durably extended the journal, then the
+        // process died before AUTH_SESSION was replaced and it still reads as old.
+        let plan = SnippetsCloudCredentialRevocationPlan(
+            sessionAccessToken: oldAccess,
+            sessionRefreshToken: oldRefresh,
+            journalAccessTokens: [oldAccess, newAccess],
+            journalRefreshTokens: [oldRefresh, newRefresh])
+
+        XCTAssertEqual(plan.accessTokens, [oldAccess, newAccess])
+        XCTAssertEqual(plan.refreshTokens, [oldRefresh, newRefresh])
+    }
+
+    func testConcurrentCloudRefreshesShareOneCredentialRotation() async throws {
+        let gate = SnippetsCloudRefreshSingleFlight()
+        var rotations = 0
+        let first = Task { @MainActor in
+            try await gate.run {
+                rotations += 1
+                try await Task.sleep(for: .milliseconds(100))
+                return "one-rotated-access-token"
+            }
+        }
+        while !gate.isActive { await Task.yield() }
+        let second = Task { @MainActor in
+            try await gate.run {
+                rotations += 1
+                return "unexpected-second-token"
+            }
+        }
+
+        let firstValue = try await first.value
+        let secondValue = try await second.value
+        let values = [firstValue, secondValue]
+        XCTAssertEqual(values, ["one-rotated-access-token", "one-rotated-access-token"])
+        XCTAssertEqual(rotations, 1)
+        XCTAssertFalse(gate.isActive)
+    }
+
+    func testRecoveryPresentationAuthorityIsSingleUseAndRelocksAcrossProcesses() {
+        var firstProcess = SnippetsCloudRecoveryPresentationGate()
+        XCTAssertFalse(firstProcess.isAuthorized)
+        firstProcess.authorize()
+        XCTAssertTrue(firstProcess.isAuthorized)
+        XCTAssertTrue(firstProcess.consumeAuthorization())
+        XCTAssertFalse(firstProcess.consumeAuthorization())
+        XCTAssertFalse(firstProcess.isAuthorized)
+
+        let relaunchedProcess = SnippetsCloudRecoveryPresentationGate()
+        XCTAssertFalse(
+            relaunchedProcess.isAuthorized,
+            "durable pending recovery must not inherit UI disclosure authority")
+    }
+
     func testOpeningCheckpointCiphertextWithoutItsLocalKeyNeverMintsAReplacement() throws {
         let originalKey = SymmetricKey(data: Data(repeating: 0x71, count: 32))
         let sealed = try AES.GCM.seal(

@@ -13,10 +13,10 @@ mutation stream. This rule is enforced below the settings UI: constructing a new
 transport requires cancellation of platform scheduling and awaiting the old transport's
 round/shutdown barrier.
 
-One writer does not mean two incompatible library formats. iCloud and Snippets Cloud are
-fully compatible transports for the same logical encrypted library. Switching is a
-normal sync operation over another transport, not export/import, format conversion, or
-feature migration.
+One writer does not mean two incompatible library formats. iCloud and Snippets Cloud
+carry the same logical wire schema, but use independent provider key slots. Switching is
+a normal local decrypt/reseal sync operation, not export/import or feature migration;
+neither provider receives plaintext.
 
 The visible providers are:
 
@@ -103,7 +103,7 @@ the reviewed provider's cursor/offers/CAS state.
 The portable unit is the logical library, not a provider-specific projection. Both
 transports carry the same:
 
-- `WireRecord.id`, `rev`, `deleted`, and encrypted `blob` bytes;
+- `WireRecord.id`, `rev`, `deleted`, and encrypted `blob` shape and limits;
 - `SyncEnvelope` schema and extension preservation;
 - HLC, merge, conflict-copy, deletion-guard and tombstone semantics;
 - ordinary and secure snippets, vault `kid`/salt/`K_lib`, recovery metadata and feature
@@ -118,37 +118,33 @@ Only backend mechanics differ:
 - push subscription and background scheduling.
 
 Those values are opaque and provider-specific by design. They are never copied between
-providers. To copy an unchanged record, remove its source `recordVersion` and submit the
-same `id`, `rev`, `deleted`, and `blob` under the target's create/CAS rules. No plaintext
-round trip or re-encryption is required.
+providers. The app removes source `recordVersion`, opens the authenticated outer record
+locally and reseals it with the active provider key before target CAS submission. Secure
+snippet bodies remain independently sealed by the vault key throughout.
 
 The compatibility suite must prove iCloud -> Snippets Cloud -> iCloud round trips for
-every supported record kind with identical logical state and identical encrypted blob
-bytes, apart from records genuinely changed by merge. A feature cannot ship on one
-provider if the other would strip or reject it.
+every supported record kind with identical logical state and authenticated provider-
+specific ciphertext. A feature cannot ship on one provider if the other would strip or
+reject it.
 
 ## Portable library key bundle
 
-Wire and vault keys belong to the library:
+Each provider key protects the same logical library without becoming an account
+credential:
 
-- An existing iCloud library continues to use its current `SyncKeyStore` `sync-v1`
-  material. When the user first enables Snippets Cloud, the Apple client places that
-  material—never its raw plaintext at the service—inside an end-to-end encrypted
-  `PortableLibraryKeyBundle` for trusted-device pairing/recovery. Creating/publishing
-  that bundle is an explicit locally authenticated action; including a vault also
-  requires the existing vault authentication gate.
+- An existing iCloud library continues to use its synchronizable `SyncKeyStore`
+  `sync-v1` material. Snippets Cloud creates a separate 64-byte root in a device-only
+  slot after the empty-space recovery CAS succeeds.
 - This is opt-in key portability, not an iCloud migration. An iCloud-only user creates no
   HTTP bundle, account, or request and keeps the current Keychain behavior unchanged.
-- A library created on HTTP generates the same kind of provider-neutral wire material.
-  Switching it to an empty iCloud scope installs that material into the synchronizable
-  `sync-v1` Keychain slot after local authentication and confirmation.
+- A Snippets Cloud root reaches another device only through approved pairing or the
+  offline recovery kit; it is never synchronized through iCloud Keychain.
 - Local Only needs no wire key until the first remote provider is selected.
 
-The encrypted bundle contains a random portable library identifier, wire key material
-and salt, key epoch, and—when a vault exists—`K_lib` plus the shareable vault identity.
-The identity excludes records, device-local receipts, and `wrapPass`, following the
-existing Keychain publication boundary. The service stores only the encrypted envelope
-and cannot test or unwrap it.
+Bundle schema 1 contains only the fixed `sync-v1` scope, 32-byte wire key and 32-byte
+salt. It never contains OAuth tokens, records, `K_lib`, vault identity, device IDs, or
+receipts. The service stores only an encrypted recovery/pairing envelope and cannot test
+or unwrap it.
 
 For existing wire schema 1, the cryptographic scope remains the shipped `sync-v1`
 scope. The new portable identifier binds onboarding/provider state but does not silently
@@ -156,10 +152,9 @@ replace AAD and make production CloudKit blobs undecryptable. A future per-libra
 scope would require an explicitly versioned, journaled rekey rather than being bundled
 with Android support.
 
-Android stores the same wire material for background sync and wraps `K_lib` under its
-user-authenticated Keystore policy. Reusing the library key across its providers does not
-give either provider plaintext; every trusted device already has access to the local
-library, while the server receives only ciphertext.
+Android stores the cloud wire material under its non-exportable Keystore-backed local
+store. The outer wire key remains available after first unlock for background sync;
+`K_lib`, when Android vault support uses it, remains a separate user-authenticated key.
 
 If the target's records cannot be authenticated with the portable key, its Keychain slot
 contains different material, or its vault has another `kid`/salt, this is not an ordinary
@@ -278,7 +273,7 @@ receipts. It never guesses from whichever provider preference happened to be wri
 | HTTP -> empty iCloud | Resolve the signed CloudKit scope, install the portable key in an empty compatible Keychain slot, upload the same encrypted records, select iCloud. |
 | HTTP -> existing compatible iCloud | Revalidate Keychain/vault/account, automatically merge retained iCloud state and current intent, select iCloud. |
 | Any -> incompatible target key/vault | Halt before write and require account/space correction or advanced rival-library recovery. |
-| HTTP A -> HTTP B | Carry the same encrypted portable bundle and records to the new authorized server; keep provider cursors/CAS isolated. |
+| HTTP A -> HTTP B | Requires a separately pinned/associated app distribution today; carry the same encrypted portable bundle and records to the new authorized server and keep provider cursors/CAS isolated. |
 | Remote -> Local Only | Stop/shutdown transport and keep current local projection; do not delete remote/provider state or keys. |
 | Local Only -> previous provider | Revalidate account/key/base, capture offline edits, fetch and automatically merge. |
 | Account changed in active provider | Sticky account-review halt before local data-plane access; never auto-attach the new account. |

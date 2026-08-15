@@ -1,6 +1,6 @@
 # Snippets Privacy Policy
 
-Last updated: August 12, 2026
+Last updated: August 13, 2026
 
 Snippets is designed so the developer does not receive or read your snippet library.
 
@@ -30,6 +30,51 @@ device before storing records in your private CloudKit database. The synchroniza
 is stored through iCloud Keychain. The developer does not operate a synchronization
 server and cannot view the contents of your private CloudKit database. Apple's handling
 of iCloud data is governed by Apple's privacy policy and your iCloud agreement.
+
+## Optional Snippets Cloud and custom-server sync
+
+Snippets Cloud sync is optional. Before upload, the app encrypts the library on your
+device; the sync service receives opaque records and encrypted key envelopes, not
+snippet plaintext or library keys. It stores a keyed pseudonymous account identifier,
+space membership and bounded routing, quota, cursor, and concurrency metadata needed to
+operate synchronization.
+
+Account sign-in runs at the configured OpenID Connect identity provider in the system
+browser. Snippets has no account password and does not require an email address. The
+sync service validates a provider-signed access token, including recent passkey
+assurance for key-granting actions, but does not retain email or profile claims, the raw
+provider subject, access token, or authentication-method details. Email is not treated
+as identity or multifactor authentication. The identity provider handles passkeys,
+Apple or Google sign-in, abuse prevention, and account recovery under that provider's
+privacy terms.
+
+Each app keeps only the build-pinned server and selected space coordinates plus a
+short-lived access token, refresh token, public client identifier, provider endpoints,
+resource identifier, and expiry time in
+device-bound secret storage. ID tokens and profile claims are discarded. On Apple
+platforms this session is in the device-only Keychain; on Android it is encrypted with a
+non-exportable Android Keystore key and excluded from backup and device transfer. Each
+installation has a separate refresh credential. During sign-out, a device-only encrypted
+journal may temporarily retain the old and rotated access/refresh generations until all
+have been revoked. A second journal removes the local library-key copy first and account
+credentials last; interrupted cleanup resumes on the next launch.
+
+The library encryption key is created locally. A new device receives it through a
+short-lived, one-time encrypted QR pairing approved with device-owner authentication and
+a fresh passkey check, or decrypts it with the user's offline recovery kit. Pairing QR
+codes contain only server/space coordinates, a nonce, an expiry and the new device's
+ephemeral public key—never the library key. The recovery QR and long random code are
+secrets that should be stored offline; the service keeps only their encrypted envelope.
+If setup is interrupted, the pending kit remains encrypted on the device and every later
+on-screen reveal requires Face ID, Touch ID, or the device's equivalent authentication.
+If every approved device and the recovery kit are lost, the account can still be
+recovered, but the old encrypted library is permanently unrecoverable by the developer,
+the identity provider and Snippets Cloud.
+
+A custom-server distribution pins its own server, OAuth resource and domain-verified
+callback at build time. Its operator receives the same protocol data and resource-bound
+authentication tokens as the hosted service and controls that server's retention and
+infrastructure. Review that operator's policy before installing that distribution.
 
 ## Diagnostics
 

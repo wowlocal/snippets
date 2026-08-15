@@ -58,9 +58,10 @@ final class SyncKeyStore {
     private nonisolated static let materialByteCount =
         SnippetCrypto.keyByteCount + SnippetCrypto.saltByteCount
 
-    enum Failure: Error, CustomStringConvertible {
+    enum Failure: Error, Equatable, CustomStringConvertible {
         case malformedMaterial(Int)
         case keychainUnavailable
+        case cloudBootstrapRequired
 
         var description: String {
             switch self {
@@ -68,6 +69,8 @@ final class SyncKeyStore {
                 return "the stored sync key must be \(SyncKeyStore.materialByteCount) bytes; found \(count)"
             case .keychainUnavailable:
                 return "the keychain could not provide the sync key"
+            case .cloudBootstrapRequired:
+                return "approve this device or restore the Snippets Cloud recovery kit first"
             }
         }
     }
@@ -75,9 +78,17 @@ final class SyncKeyStore {
     var scopeID: String { Self.account }
 
     private let keychain: KeychainSecretStore
+    private let cloudKeys: SnippetsCloudKeyStore?
+    private let usesSnippetsCloud: () -> Bool
 
-    init(keychain: KeychainSecretStore) {
+    init(
+        keychain: KeychainSecretStore,
+        cloudKeys: SnippetsCloudKeyStore? = nil,
+        usesSnippetsCloud: @escaping () -> Bool = { false }
+    ) {
         self.keychain = keychain
+        self.cloudKeys = cloudKeys
+        self.usesSnippetsCloud = usesSnippetsCloud
     }
 
     /// The stored key material, or `nil` when this Mac has none yet.
@@ -86,6 +97,10 @@ final class SyncKeyStore {
     /// against what its engine was built with. A `SymmetricKey` is not `Equatable` in a
     /// way that helps, and the comparison is the whole point.
     func material() throws -> Data? {
+        if usesSnippetsCloud() {
+            guard let cloudKeys else { throw Failure.cloudBootstrapRequired }
+            return try cloudKeys.materialForConfiguredAccount()
+        }
         do {
             guard let stored = try keychain.loadItem(
                 account: Self.account, expectedByteCount: Self.materialByteCount)
@@ -110,6 +125,7 @@ final class SyncKeyStore {
     /// whatever the user is actually doing.
     func materialMintingIfNeeded() throws -> Data {
         if let existing = try material() { return existing }
+        if usesSnippetsCloud() { throw Failure.cloudBootstrapRequired }
 
         var minted = Data(capacity: Self.materialByteCount)
         minted.append(SnippetCrypto.randomBytes(SnippetCrypto.keyByteCount))
@@ -151,5 +167,124 @@ final class SyncKeyStore {
                 failure: DiagnosticFailure(error),
                 attempt: nil))
         }
+    }
+}
+
+/// Device-local copy of the Snippets Cloud library root.
+///
+/// It is deliberately a single authenticated Keychain record containing both the
+/// 64-byte wire material and its exact server/space binding. Unlike the iCloud key,
+/// it is never synchronizable: another device must receive it through an approved
+/// pairing or decrypt it with the user's offline recovery kit.
+@MainActor
+final class SnippetsCloudKeyStore {
+    static let service = "com.khm.snippets.cloud-library-key"
+    static let account = "sync-v1"
+
+    enum Failure: Error, CustomStringConvertible {
+        case malformedRecord
+        case wrongAccount
+        case keychainUnavailable
+
+        var description: String {
+            switch self {
+            case .malformedRecord: "the saved Snippets Cloud key is invalid"
+            case .wrongAccount: "the saved key belongs to a different Snippets Cloud library"
+            case .keychainUnavailable: "the keychain could not provide the Snippets Cloud key"
+            }
+        }
+    }
+
+    private struct Record: Codable {
+        let schemaVersion: Int
+        let serverURL: String
+        let spaceID: String
+        let material: Data
+    }
+
+    private let keychain: KeychainSecretStore
+    private let coordinates: @MainActor () -> SyncBackendSelectionStore.CloudCoordinates?
+
+    init(
+        keychain: KeychainSecretStore? = nil,
+        coordinates: @escaping @MainActor () -> SyncBackendSelectionStore.CloudCoordinates? = {
+            SyncBackendSelectionStore().cloudCoordinates
+        }
+    ) {
+        self.keychain = keychain ?? KeychainSecretStore(
+            tier: .deviceOnly,
+            service: Self.service,
+            itemAccessibility: .afterFirstUnlock)
+        self.coordinates = coordinates
+    }
+
+    func materialForConfiguredAccount() throws -> Data? {
+        guard let coordinates = coordinates() else { return nil }
+        return try material(serverURL: coordinates.serverURL, spaceID: coordinates.spaceID)
+    }
+
+    func material(serverURL: URL, spaceID: UUID) throws -> Data? {
+        guard let data = try loadRecordData() else { return nil }
+        let record = try decode(data)
+        guard record.serverURL == serverURL.absoluteString,
+              record.spaceID == spaceID.uuidString.lowercased() else {
+            return nil
+        }
+        return record.material
+    }
+
+    func install(_ material: Data, serverURL: URL, spaceID: UUID) throws {
+        guard material.count == 64,
+              serverURL.scheme?.lowercased() == "https",
+              serverURL.host != nil,
+              serverURL.user == nil,
+              serverURL.password == nil,
+              serverURL.query == nil,
+              serverURL.fragment == nil,
+              !serverURL.absoluteString.hasSuffix("/") else {
+            throw Failure.malformedRecord
+        }
+        let record = Record(
+            schemaVersion: 1,
+            serverURL: serverURL.absoluteString,
+            spaceID: spaceID.uuidString.lowercased(),
+            material: material)
+        do {
+            try keychain.storeItem(try JSONEncoder().encode(record), account: Self.account)
+        } catch {
+            throw Failure.keychainUnavailable
+        }
+    }
+
+    func forget() throws {
+        do { try keychain.deleteItem(account: Self.account) }
+        catch { throw Failure.keychainUnavailable }
+    }
+
+    private func loadRecordData() throws -> Data? {
+        do { return try keychain.loadItem(account: Self.account) }
+        catch { throw Failure.keychainUnavailable }
+    }
+
+    private func decode(_ data: Data) throws -> Record {
+        guard data.count <= 2_048,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["schemaVersion", "serverURL", "spaceID", "material"],
+              let record = try? JSONDecoder().decode(Record.self, from: data),
+              record.schemaVersion == 1,
+              record.material.count == 64,
+              let server = URL(string: record.serverURL),
+              server.scheme?.lowercased() == "https",
+              server.host != nil,
+              server.user == nil,
+              server.password == nil,
+              server.query == nil,
+              server.fragment == nil,
+              !record.serverURL.hasSuffix("/"),
+              let space = UUID(uuidString: record.spaceID),
+              space.uuidString.lowercased() == record.spaceID else {
+            throw Failure.malformedRecord
+        }
+        return record
     }
 }

@@ -72,6 +72,66 @@ struct SnippetsCloudTransportTests {
                 == recordVersion)
     }
 
+    @Test func requestUsesFreshCredentialProviderWithoutPersistingItInConfiguration() async throws {
+        let space = UUID()
+        let dataset = UUID()
+        let feed = UUID()
+        let configuration = try SnippetsCloudTransport.Configuration(
+            baseURL: #require(URL(string: "https://sync.example.test")),
+            spaceID: space,
+            accessToken: "expired-access-token")
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [CloudURLProtocol.self]
+        CloudURLProtocol.handler = { request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh-access-token")
+            return (200, try JSONSerialization.data(withJSONObject:
+                Self.scope(space: space, dataset: dataset, feed: feed)))
+        }
+
+        let transport = SnippetsCloudTransport(
+            configuration: configuration,
+            session: URLSession(configuration: sessionConfiguration),
+            accessTokenProvider: { _ in "fresh-access-token" })
+        _ = try #require(try await transport.resolveAccountIdentity())
+    }
+
+    @Test func authenticationFailureRefreshesAndRetriesExactlyOnce() async throws {
+        let space = UUID()
+        let dataset = UUID()
+        let feed = UUID()
+        let configuration = try SnippetsCloudTransport.Configuration(
+            baseURL: #require(URL(string: "https://sync.example.test")),
+            spaceID: space,
+            accessToken: "expired-access-token")
+        let probe = AuthRetryProbe()
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [CloudURLProtocol.self]
+        CloudURLProtocol.handler = { request in
+            let attempt = probe.nextRequest()
+            if attempt == 1 {
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer cached-access-token")
+                return (401, try JSONEncoder().encode([
+                    "code": "authentication_required",
+                    "requestId": UUID().uuidString.lowercased(),
+                ]))
+            }
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer refreshed-access-token")
+            return (200, try JSONSerialization.data(withJSONObject:
+                Self.scope(space: space, dataset: dataset, feed: feed)))
+        }
+
+        let transport = SnippetsCloudTransport(
+            configuration: configuration,
+            session: URLSession(configuration: sessionConfiguration),
+            accessTokenProvider: { forceRefresh in
+                probe.recordRefresh(forceRefresh)
+                return forceRefresh ? "refreshed-access-token" : "cached-access-token"
+            })
+        _ = try #require(try await transport.resolveAccountIdentity())
+        #expect(probe.requestCount == 2)
+        #expect(probe.refreshFlags == [false, true])
+    }
+
     @Test func createEncodesRequiredExpectedVersionAsExplicitNull() async throws {
         let space = UUID()
         let dataset = UUID()
@@ -195,6 +255,26 @@ struct SnippetsCloudTransportTests {
     private static let appleRecordID = UUID(
         uuidString: "a11ce001-0000-4000-8000-000000000001")!
     private static let applePlaintextProbe = "snippets-apple-e2e-plaintext-probe-8d134f53"
+}
+
+private final class AuthRetryProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+    private var flags: [Bool] = []
+
+    var requestCount: Int { lock.withLock { requests } }
+    var refreshFlags: [Bool] { lock.withLock { flags } }
+
+    func nextRequest() -> Int {
+        lock.withLock {
+            requests += 1
+            return requests
+        }
+    }
+
+    func recordRefresh(_ value: Bool) {
+        lock.withLock { flags.append(value) }
+    }
 }
 
 private extension Data {

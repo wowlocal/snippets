@@ -15,6 +15,16 @@ data class SnippetItem(
 
 enum class SyncProvider { DEVICE, SNIPPETS_CLOUD }
 
+enum class CloudKeyStatus {
+    SIGNED_OUT,
+    READY,
+    NEEDS_TRUSTED_DEVICE_OR_RECOVERY,
+    WAITING_FOR_APPROVAL,
+    APPROVAL_READY,
+    RECOVERY_AUTH_REQUIRED,
+    RECOVERY_KIT_LOCKED,
+}
+
 data class CloudConfiguration(
     val provider: SyncProvider = SyncProvider.DEVICE,
     val serverURL: String = "",
@@ -32,12 +42,32 @@ data class KeyBundle(
     val scopeID: String = "sync-v1",
 )
 
+data class CloudKeyBinding(
+    val serverURL: String,
+    val spaceID: String,
+)
+
 data class LibraryState(
     val snippets: List<SnippetItem> = emptyList(),
     val provider: SyncProvider = SyncProvider.DEVICE,
     val syncLabel: String = "On device",
     val isBusy: Boolean = false,
     val errorCode: String? = null,
+    val cloudKeyStatus: CloudKeyStatus = CloudKeyStatus.SIGNED_OUT,
+    val pairingQRCode: String? = null,
+    val pairingConfirmationCode: String? = null,
+    val approvalConfirmationCode: String? = null,
+)
+
+/** A one-screen value. It must never be placed in LibraryState or saved by Compose. */
+internal data class RecoveryKitPresentation(
+    val qrPayload: String,
+    val longCode: String,
+)
+
+internal data class CloudSignInCompletion(
+    val succeeded: Boolean,
+    val recoveryKit: RecoveryKitPresentation? = null,
 )
 
 fun parseLibrary(json: String): List<SnippetItem> {
@@ -101,6 +131,18 @@ fun keyBundle(json: String): KeyBundle {
         salt = value.getString("salt"),
         scopeID = value.optString("scopeID", "sync-v1"),
     )
+}
+
+fun CloudKeyBinding.toJSON(): String = JSONObject()
+    .put("schemaVersion", 1)
+    .put("serverURL", serverURL)
+    .put("spaceID", spaceID)
+    .toString()
+
+fun cloudKeyBinding(json: String): CloudKeyBinding {
+    val value = JSONObject(json)
+    require(value.getInt("schemaVersion") == 1)
+    return CloudKeyBinding(value.getString("serverURL"), value.getString("spaceID"))
 }
 
 private fun JSONObject.optNullableString(name: String): String? =

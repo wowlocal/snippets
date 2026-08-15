@@ -1,44 +1,112 @@
 package com.khm.snippets.android
 
 import android.content.Context
+import android.content.Intent
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.security.SecureRandom
+import java.time.Instant
 import java.util.UUID
 
 class SnippetRepository(context: Context) {
     private val store = EncryptedStore(context)
     private val bridge = CoreBridge()
     private val client = HttpSyncClient()
+    private val authenticator = CloudAuthenticator(context, store)
     private val mutex = Mutex()
+    private val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var libraryJSON = "[]"
     private var baseJSON = "[]"
     private var remoteRecordsJSON = "[]"
     private var configuration = CloudConfiguration()
-    private var keys = freshKeyBundle()
+    private var keys: KeyBundle? = null
+    private var keyBinding: CloudKeyBinding? = null
     private var deviceID = ""
+    private var cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
+    private var pairingQRCode: String? = null
+    private var pairingConfirmationCode: String? = null
+    private var approvalConfirmationCode: String? = null
 
     private val mutableState = MutableStateFlow(LibraryState())
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
 
     init {
         try {
+            if (store.read(PENDING_LOCAL_ERASE) != null) {
+                completePendingLocalErase()
+            }
             libraryJSON = store.read(LIBRARY) ?: "[]"
             baseJSON = store.read(BASE) ?: "[]"
             remoteRecordsJSON = store.read(REMOTE) ?: "[]"
             configuration = store.read(CONFIG)?.let(::cloudConfiguration) ?: CloudConfiguration()
-            keys = store.read(KEYS)?.let(::keyBundle) ?: keys.also { store.write(KEYS, it.toJSON()) }
+            keys = store.read(KEYS)?.let(::keyBundle)
+            keyBinding = store.read(KEY_BINDING)?.let(::cloudKeyBinding)
             deviceID = store.read(DEVICE_ID) ?: freshDeviceID().also {
                 store.write(DEVICE_ID, it)
             }
+            cloudKeyStatus = when {
+                !authenticator.hasSession(configuration.serverURL.takeIf(String::isNotBlank)) ->
+                    CloudKeyStatus.SIGNED_OUT
+                hasBoundKey() -> CloudKeyStatus.READY
+                else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+            }
+            store.read(PENDING_PAIRING)?.let { raw ->
+                runCatching { LibraryKeyBootstrap.PendingPairing.fromJSON(raw) }
+                    .onSuccess { pending ->
+                        pairingQRCode = pending.invitation.toQRPayload()
+                        pairingConfirmationCode = pending.invitation.confirmationCode
+                        cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
+                    }
+                    .onFailure { store.delete(PENDING_PAIRING) }
+            }
+            store.read(PENDING_APPROVAL)?.let { raw ->
+                runCatching { LibraryKeyBootstrap.PairingInvitation.fromQRPayload(raw) }
+                    .onSuccess { invitation ->
+                        approvalConfirmationCode = invitation.confirmationCode
+                        cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
+                    }
+                    .onFailure { store.delete(PENDING_APPROVAL) }
+            }
+            store.read(RECOVERY_PRESENTATION)?.let { payload ->
+                runCatching { LibraryKeyBootstrap.RecoveryKit.fromQRPayload(payload) }
+                    .onSuccess { kit ->
+                        if (kit.serverURL == configuration.serverURL &&
+                            kit.spaceID.equals(configuration.spaceID, ignoreCase = true)) {
+                            // Validate the durable value, but do not publish either
+                            // secret until this new process gets local user presence.
+                            cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
+                        } else {
+                            store.delete(RECOVERY_PRESENTATION)
+                        }
+                    }
+                    .onFailure { store.delete(RECOVERY_PRESENTATION) }
+            }
+            if (store.read(PENDING_RECOVERY) != null) {
+                if (cloudKeyStatus != CloudKeyStatus.RECOVERY_KIT_LOCKED) {
+                    cloudKeyStatus = CloudKeyStatus.RECOVERY_AUTH_REQUIRED
+                }
+            }
+            val remoteLogoutPending = authenticator.hasPendingRevocation()
+            if (remoteLogoutPending) {
+                // Keep the root only long enough to retry remote revocation; never let
+                // an interrupted logout re-enter the cloud data plane.
+                configuration = configuration.copy(provider = SyncProvider.DEVICE)
+                cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
+            }
             publish()
+            if (remoteLogoutPending) {
+                recoveryScope.launch { disconnectCloudAccount() }
+            }
         } catch (_: Exception) {
             mutableState.value = LibraryState(errorCode = "local_store_unreadable")
         }
@@ -71,65 +139,415 @@ class SnippetRepository(context: Context) {
             datasetGeneration = if (changedScope) null else configuration.datasetGeneration,
             feedEpoch = if (changedScope) null else configuration.feedEpoch)
         if (changedScope) remoteRecordsJSON = "[]"
+        if (keys == null) keys = freshKeyBundle().also { store.write(KEYS, it.toJSON()) }
+        bindCurrentKey(serverURL.trim().trimEnd('/'), spaceID.trim())
+        cloudKeyStatus = CloudKeyStatus.READY
         persistSyncState()
     }
+
+    suspend fun beginCloudSignIn(serverURL: String, stepUp: Boolean = false): Intent? {
+        return mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                val intent = withContext(Dispatchers.IO) {
+                    if (store.read(PENDING_LOCAL_ERASE) != null) {
+                        completePendingLocalErase()
+                    }
+                    authenticator.authorizationIntent(serverURL, stepUp)
+                }
+                publish()
+                intent
+            } catch (error: CloudAuthFailure) {
+                publish(errorCode = error.code)
+                null
+            } catch (_: Exception) {
+                publish(errorCode = "sign_in_failed")
+                null
+            }
+        }
+    }
+
+    internal suspend fun completeCloudSignIn(result: Intent?): CloudSignInCompletion {
+        return mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                val recoveryKit = withContext(Dispatchers.IO) {
+                    val authorization = authenticator.completeAuthorization(result)
+                    val existingSpace = configuration.takeIf {
+                        it.serverURL == authorization.serverURL
+                    }?.spaceID?.takeIf(String::isNotBlank)
+                    val spaceID = client.resolvePersonalSpace(
+                        authorization.serverURL,
+                        authorization.accessToken,
+                        existingSpace,
+                    )
+                    val changedScope = configuration.serverURL != authorization.serverURL ||
+                        configuration.spaceID != spaceID
+                    configuration = configuration.copy(
+                        provider = configuration.provider,
+                        serverURL = authorization.serverURL,
+                        accessToken = "",
+                        spaceID = spaceID,
+                        cursor = if (changedScope) null else configuration.cursor,
+                        scopeBinding = if (changedScope) null else configuration.scopeBinding,
+                        datasetGeneration = if (changedScope) null else configuration.datasetGeneration,
+                        feedEpoch = if (changedScope) null else configuration.feedEpoch,
+                    )
+                    if (changedScope) remoteRecordsJSON = "[]"
+                    val presentation = finishPostAuthorization(authorization.accessToken)
+                    persistSyncState()
+                    presentation
+                }
+                publish(label = if (cloudKeyStatus == CloudKeyStatus.READY ||
+                    cloudKeyStatus == CloudKeyStatus.RECOVERY_KIT_LOCKED) {
+                    "Connected — encrypted library ready"
+                } else {
+                    "Signed in — unlock this library"
+                })
+                CloudSignInCompletion(succeeded = true, recoveryKit = recoveryKit)
+            } catch (error: CloudAuthFailure) {
+                publish(errorCode = error.code)
+                CloudSignInCompletion(succeeded = false)
+            } catch (error: SyncFailure) {
+                publish(errorCode = error.code)
+                CloudSignInCompletion(succeeded = false)
+            } catch (_: Exception) {
+                publish(errorCode = "sign_in_failed")
+                CloudSignInCompletion(succeeded = false)
+            }
+        }
+    }
+
+    suspend fun disconnectCloudAccount() = mutate {
+        if (store.read(PENDING_LOCAL_ERASE) == null) {
+            authenticator.revokeCurrentSession()
+            // This marker is the commit point between confirmed remote revocation and
+            // local deletion. It is encrypted and fsync/rename durable.
+            store.write(PENDING_LOCAL_ERASE, "pending")
+        }
+        // Disable the cloud data plane immediately in memory, even if a later local
+        // deletion fails and this process remains alive.
+        keys = null
+        keyBinding = null
+        configuration = CloudConfiguration(provider = SyncProvider.DEVICE)
+        cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
+        completePendingLocalErase()
+    }
+
+    fun isCloudSignedIn(): Boolean =
+        store.read(PENDING_LOCAL_ERASE) == null &&
+            configuration.serverURL.isNotBlank() && authenticator.hasSession(configuration.serverURL)
 
     suspend fun useDeviceOnly() = mutate {
         configuration = configuration.copy(provider = SyncProvider.DEVICE)
         store.write(CONFIG, configuration.toJSON())
     }
 
+    suspend fun useSnippetsCloud() = mutate {
+        if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation() ||
+            configuration.serverURL.isBlank() || configuration.spaceID.isBlank() ||
+            (configuration.accessToken.isBlank() && !authenticator.hasSession(configuration.serverURL))) {
+            throw CloudAuthFailure("sign_in_required")
+        }
+        if (!hasBoundKey()) throw SyncFailure("library_key_required")
+        configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
+        store.write(CONFIG, configuration.toJSON())
+    }
+
     suspend fun importPortableKeyBundle(bundleJSON: String) = mutate {
         val imported = keyBundle(bundleJSON.trim())
         require(Base64.decode(imported.key, Base64.DEFAULT).size == 32)
-        require(Base64.decode(imported.salt, Base64.DEFAULT).isNotEmpty())
+        require(Base64.decode(imported.salt, Base64.DEFAULT).size == 32)
         require(imported.scopeID == "sync-v1")
         keys = imported
+        if (configuration.serverURL.isNotBlank() && configuration.spaceID.isNotBlank()) {
+            bindCurrentKey(configuration.serverURL, configuration.spaceID)
+            configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
+            cloudKeyStatus = CloudKeyStatus.READY
+        }
         baseJSON = "[]"
         remoteRecordsJSON = "[]"
         configuration = configuration.copy(
             cursor = null, scopeBinding = null, datasetGeneration = null, feedEpoch = null)
-        store.write(KEYS, keys.toJSON())
+        store.write(KEYS, imported.toJSON())
         persistSyncState()
+    }
+
+    /** Starts a five-minute recipient invitation. Its private key is device-only. */
+    suspend fun beginDevicePairing() = bootstrap {
+        requireSignedInCoordinates()
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val draft = LibraryKeyBootstrap.createPairingDraft()
+        val created = client.createPairing(
+            configuration.serverURL,
+            configuration.spaceID,
+            token,
+            draft,
+        )
+        validatePairing(
+            created,
+            created.pairingID,
+            draft.recipientPublicKey,
+            draft.nonce,
+        )
+        require(created.state == "pending")
+        require(created.algorithm == null && created.ciphertext == null)
+        val invitation = LibraryKeyBootstrap.PairingInvitation(
+            serverURL = configuration.serverURL,
+            spaceID = configuration.spaceID.lowercase(),
+            pairingID = created.pairingID,
+            nonce = created.nonce,
+            recipientPublicKey = created.recipientPublicKey,
+            expiresAtEpochSeconds = created.expiresAtEpochSeconds,
+        )
+        require(created.authenticationTag == invitation.confirmationCode)
+        val pending = LibraryKeyBootstrap.PendingPairing(draft, invitation)
+        store.write(PENDING_PAIRING, pending.toJSON())
+        pairingQRCode = invitation.toQRPayload()
+        pairingConfirmationCode = invitation.confirmationCode
+        cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
+    }
+
+    /** Polls once; an approved envelope is returned-and-deleted atomically. */
+    suspend fun checkDevicePairing() = bootstrap {
+        val pending = pendingPairing()
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val status = client.pairing(
+            configuration.serverURL,
+            configuration.spaceID,
+            pending.invitation.pairingID,
+            token,
+        )
+        validatePairing(
+            status,
+            pending.invitation.pairingID,
+            pending.draft.recipientPublicKey,
+            pending.draft.nonce,
+            pending.invitation.expiresAtEpochSeconds,
+        )
+        require(status.authenticationTag == pending.invitation.confirmationCode)
+        require(status.algorithm == null && status.ciphertext == null)
+        if (status.state == "pending") {
+            cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
+            return@bootstrap
+        }
+        val taken = client.takeApprovedPairing(
+            configuration.serverURL,
+            configuration.spaceID,
+            pending.invitation.pairingID,
+            token,
+        )
+        validatePairing(
+            taken,
+            pending.invitation.pairingID,
+            pending.draft.recipientPublicKey,
+            pending.draft.nonce,
+            pending.invitation.expiresAtEpochSeconds,
+        )
+        require(taken.authenticationTag == pending.invitation.confirmationCode)
+        require(taken.state == "approved")
+        require(taken.algorithm == LibraryKeyBootstrap.PAIRING_ALGORITHM)
+        val ciphertext = requireNotNull(taken.ciphertext)
+        val bundle = LibraryKeyBootstrap.openPairedEnvelope(pending, ciphertext)
+        installCloudKey(bundle)
+        store.delete(PENDING_PAIRING)
+        pairingQRCode = null
+        pairingConfirmationCode = null
+        cloudKeyStatus = CloudKeyStatus.READY
+    }
+
+    suspend fun cancelDevicePairing() = bootstrap {
+        val pending = pendingPairing()
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        runCatching {
+            client.cancelPairing(
+                configuration.serverURL,
+                configuration.spaceID,
+                pending.invitation.pairingID,
+                token,
+            )
+        }
+        store.delete(PENDING_PAIRING)
+        pairingQRCode = null
+        pairingConfirmationCode = null
+        cloudKeyStatus = CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+    }
+
+    /** Validates a scanned QR against the server before any approval is offered. */
+    suspend fun preparePairingApproval(qrPayload: String) = bootstrap {
+        require(hasBoundKey())
+        val invitation = LibraryKeyBootstrap.PairingInvitation.fromQRPayload(qrPayload.trim())
+        require(invitation.serverURL == configuration.serverURL)
+        require(invitation.spaceID.equals(configuration.spaceID, ignoreCase = true))
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val serverPairing = client.pairing(
+            invitation.serverURL,
+            invitation.spaceID,
+            invitation.pairingID,
+            token,
+        )
+        validatePairing(
+            serverPairing,
+            invitation.pairingID,
+            invitation.recipientPublicKey,
+            invitation.nonce,
+            invitation.expiresAtEpochSeconds,
+        )
+        require(serverPairing.authenticationTag == invitation.confirmationCode)
+        require(serverPairing.algorithm == null && serverPairing.ciphertext == null)
+        if (serverPairing.state == "approved") {
+            // Recover an approval whose success response was lost. Only the recipient
+            // can atomically take the redacted envelope from the consume endpoint.
+            store.delete(PENDING_APPROVAL)
+            approvalConfirmationCode = null
+            cloudKeyStatus = CloudKeyStatus.READY
+            return@bootstrap
+        }
+        require(serverPairing.state == "pending")
+        require(serverPairing.expiresAtEpochSeconds == invitation.expiresAtEpochSeconds)
+        store.write(PENDING_APPROVAL, invitation.toQRPayload())
+        approvalConfirmationCode = invitation.confirmationCode
+        cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
+    }
+
+    fun hasPendingPairingApproval(): Boolean = store.read(PENDING_APPROVAL) != null
+
+    suspend fun cancelPairingApproval() = bootstrap {
+        store.delete(PENDING_APPROVAL)
+        approvalConfirmationCode = null
+        cloudKeyStatus = if (hasBoundKey()) CloudKeyStatus.READY
+        else CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+    }
+
+    suspend fun restoreWithRecoveryKit(qrOrLongCode: String) = bootstrap {
+        requireSignedInCoordinates()
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val state = client.recoveryEnvelope(
+            configuration.serverURL,
+            configuration.spaceID,
+            token,
+        )
+        val recovery = requireNotNull(state.recovery)
+        require(recovery.algorithm == LibraryKeyBootstrap.RECOVERY_ALGORITHM)
+        val value = qrOrLongCode.trim()
+        val kit = if (value.startsWith("{")) {
+            LibraryKeyBootstrap.RecoveryKit.fromQRPayload(value)
+        } else {
+            LibraryKeyBootstrap.RecoveryKit.fromLongCode(
+                value,
+                configuration.serverURL,
+                configuration.spaceID,
+                recovery.keyEpoch,
+            )
+        }
+        require(kit.serverURL == configuration.serverURL)
+        require(kit.spaceID.equals(configuration.spaceID, ignoreCase = true))
+        require(kit.keyEpoch == recovery.keyEpoch && kit.keyEpoch == state.keyEpoch)
+        val bundle = LibraryKeyBootstrap.openRecoveryEnvelope(kit, recovery.ciphertext)
+        installCloudKey(bundle)
+        cloudKeyStatus = CloudKeyStatus.READY
+    }
+
+    /** Prepares a replacement kit; UI must require local biometrics then OIDC step-up. */
+    suspend fun prepareRecoveryKitReplacement() = bootstrap {
+        require(hasBoundKey())
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val current = client.recoveryEnvelope(
+            configuration.serverURL,
+            configuration.spaceID,
+            token,
+        )
+        val recovery = LibraryKeyBootstrap.createRecoveryEnvelope(
+            requireNotNull(keys).toJSON(),
+            configuration.serverURL,
+            configuration.spaceID,
+            current.keyEpoch,
+        )
+        store.write(
+            PENDING_RECOVERY,
+            PendingRecoveryUpload(
+                kitPayload = recovery.kit.toQRPayload(),
+                ciphertext = recovery.ciphertext,
+                expectedVersion = current.recovery?.version,
+                newLibraryBundleJSON = null,
+            ).toJSON(),
+        )
+        cloudKeyStatus = CloudKeyStatus.RECOVERY_AUTH_REQUIRED
+    }
+
+    suspend fun acknowledgeRecoveryKitSaved() = bootstrap {
+        store.delete(RECOVERY_PRESENTATION)
+        store.delete(PENDING_RECOVERY)
+        cloudKeyStatus = CloudKeyStatus.READY
+    }
+
+    /**
+     * Called only after BiometricPrompt succeeds. The secret is returned once to the
+     * current Settings composition and is never retained in the process-wide StateFlow.
+     */
+    internal suspend fun revealPendingRecoveryKit(): RecoveryKitPresentation? {
+        return mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                val presentation = withContext(Dispatchers.IO) {
+                    requireSignedInCoordinates()
+                    val payload = requireNotNull(store.read(RECOVERY_PRESENTATION))
+                    val kit = LibraryKeyBootstrap.RecoveryKit.fromQRPayload(payload)
+                    require(kit.serverURL == configuration.serverURL)
+                    require(kit.spaceID.equals(configuration.spaceID, ignoreCase = true))
+                    RecoveryKitPresentation(payload, kit.longCode)
+                }
+                publish()
+                presentation
+            } catch (error: CloudAuthFailure) {
+                publish(errorCode = error.code)
+                null
+            } catch (error: SyncFailure) {
+                publish(errorCode = error.code)
+                null
+            } catch (_: Exception) {
+                publish(errorCode = "secure_setup_failed")
+                null
+            }
+        }
     }
 
     suspend fun syncNow() {
         mutex.withLock {
-            if (configuration.provider != SyncProvider.SNIPPETS_CLOUD) return
+            if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation() ||
+                configuration.provider != SyncProvider.SNIPPETS_CLOUD) return
+            if (!hasBoundKey()) {
+                publish(errorCode = "library_key_required")
+                return
+            }
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             withContext(Dispatchers.IO) {
                 try {
-                    repeat(3) {
-                        val pull = client.pull(configuration, remoteRecordsJSON)
-                        remoteRecordsJSON = pull.records
-                        configuration = configuration.copy(
-                            cursor = pull.cursor,
-                            scopeBinding = pull.scopeBinding,
-                            datasetGeneration = pull.datasetGeneration,
-                            feedEpoch = pull.feedEpoch)
-
-                        val reconciliation = bridge.reconcile(
-                            libraryJSON, baseJSON, remoteRecordsJSON, keys, deviceID)
-                        libraryJSON = reconciliation.library
-                        store.write(LIBRARY, libraryJSON)
-
-                        if (reconciliation.offers == "[]") {
-                            baseJSON = libraryJSON
-                            remoteRecordsJSON = reconciliation.records
-                            persistSyncState()
-                            publish(
-                                label = if (reconciliation.needsUserAttention)
-                                    "Synced — review conflicts" else "Synced")
+                    val manualAccessToken = configuration.accessToken.takeIf(String::isNotBlank)
+                    var accessToken = manualAccessToken
+                        ?: authenticator.freshAccessToken(configuration.serverURL)
+                    var forcedRefreshAttempted = false
+                    while (true) {
+                        try {
+                            syncWithAccessToken(accessToken)
                             return@withContext
+                        } catch (error: SyncFailure) {
+                            if (manualAccessToken == null &&
+                                !forcedRefreshAttempted &&
+                                error.code == "authentication_required") {
+                                forcedRefreshAttempted = true
+                                accessToken = authenticator.freshAccessToken(
+                                    configuration.serverURL,
+                                    forceRefresh = true,
+                                )
+                                continue
+                            }
+                            throw error
                         }
-
-                        val pushed = client.push(
-                            configuration, remoteRecordsJSON, reconciliation.offers)
-                        remoteRecordsJSON = pushed.records
-                        persistSyncState()
                     }
-                    throw SyncFailure("sync_did_not_converge")
                 } catch (error: SyncFailure) {
+                    publish(errorCode = error.code)
+                } catch (error: CloudAuthFailure) {
                     publish(errorCode = error.code)
                 } catch (error: CoreFailure) {
                     publish(errorCode = error.code)
@@ -140,15 +558,348 @@ class SnippetRepository(context: Context) {
         }
     }
 
+    private fun syncWithAccessToken(accessToken: String) {
+        repeat(3) {
+            val pull = client.pull(configuration, remoteRecordsJSON, accessToken)
+            remoteRecordsJSON = pull.records
+            configuration = configuration.copy(
+                cursor = pull.cursor,
+                scopeBinding = pull.scopeBinding,
+                datasetGeneration = pull.datasetGeneration,
+                feedEpoch = pull.feedEpoch)
+
+            val reconciliation = bridge.reconcile(
+                libraryJSON,
+                baseJSON,
+                remoteRecordsJSON,
+                keys ?: throw SyncFailure("library_key_required"),
+                deviceID)
+            libraryJSON = reconciliation.library
+            store.write(LIBRARY, libraryJSON)
+
+            if (reconciliation.offers == "[]") {
+                baseJSON = libraryJSON
+                remoteRecordsJSON = reconciliation.records
+                persistSyncState()
+                publish(
+                    label = if (reconciliation.needsUserAttention)
+                        "Synced — review conflicts" else "Synced")
+                return
+            }
+
+            val pushed = client.push(
+                configuration, remoteRecordsJSON, reconciliation.offers, accessToken)
+            remoteRecordsJSON = pushed.records
+            persistSyncState()
+        }
+        throw SyncFailure("sync_did_not_converge")
+    }
+
     fun configuration(): CloudConfiguration = configuration
 
-    private suspend fun mutate(operation: () -> Unit) {
+    private suspend fun bootstrap(operation: suspend () -> Unit) {
+        mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                withContext(Dispatchers.IO) { operation() }
+                persistSyncState()
+                publish()
+            } catch (error: CloudAuthFailure) {
+                publish(errorCode = error.code)
+            } catch (error: SyncFailure) {
+                publish(errorCode = error.code)
+            } catch (_: Exception) {
+                publish(errorCode = "secure_setup_failed")
+            }
+        }
+    }
+
+    private fun finishPostAuthorization(accessToken: String): RecoveryKitPresentation? {
+        store.read(PENDING_APPROVAL)?.let { raw ->
+            finishPendingApproval(raw, accessToken)
+            return null
+        }
+        store.read(PENDING_RECOVERY)?.let { raw ->
+            val pending = PendingRecoveryUpload.fromJSON(raw)
+            try {
+                return finishPendingRecovery(pending, accessToken)
+            } catch (failure: SyncFailure) {
+                if (failure.code != "conflict") throw failure
+                store.delete(PENDING_RECOVERY)
+                cloudKeyStatus = if (pending.newLibraryBundleJSON == null && hasBoundKey()) {
+                    CloudKeyStatus.READY
+                } else {
+                    configuration = configuration.copy(provider = SyncProvider.DEVICE)
+                    CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+                }
+                return null
+            }
+        }
+
+        if (hasBoundKey()) {
+            configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
+            cloudKeyStatus = CloudKeyStatus.READY
+            return null
+        }
+
+        val envelope = client.recoveryEnvelope(
+            configuration.serverURL,
+            configuration.spaceID,
+            accessToken,
+        )
+        val hasRemoteRecords = client.hasRemoteRecords(
+            configuration.serverURL,
+            configuration.spaceID,
+            accessToken,
+        )
+        if (envelope.recovery != null || hasRemoteRecords) {
+            configuration = configuration.copy(provider = SyncProvider.DEVICE)
+            cloudKeyStatus = CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+            return null
+        }
+
+        // A truly empty personal space is the only state in which this device may
+        // author a root key without pairing. It remains provisional until its nil-CAS
+        // recovery envelope wins, closing the two-new-devices mint race.
+        val provisionalBundle = freshKeyBundle()
+        val recovery = LibraryKeyBootstrap.createRecoveryEnvelope(
+            provisionalBundle.toJSON(),
+            configuration.serverURL,
+            configuration.spaceID,
+            envelope.keyEpoch,
+        )
+        val pending = PendingRecoveryUpload(
+            kitPayload = recovery.kit.toQRPayload(),
+            ciphertext = recovery.ciphertext,
+            expectedVersion = null,
+            newLibraryBundleJSON = provisionalBundle.toJSON(),
+        )
+        store.write(PENDING_RECOVERY, pending.toJSON())
+        return try {
+            finishPendingRecovery(pending, accessToken)
+        } catch (failure: SyncFailure) {
+            if (failure.code == "conflict") {
+                store.delete(PENDING_RECOVERY)
+                configuration = configuration.copy(provider = SyncProvider.DEVICE)
+                cloudKeyStatus = CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+                return null
+            }
+            if (failure.code != "reauthentication_required") throw failure
+            configuration = configuration.copy(provider = SyncProvider.DEVICE)
+            cloudKeyStatus = CloudKeyStatus.RECOVERY_AUTH_REQUIRED
+            null
+        }
+    }
+
+    private fun finishPendingApproval(raw: String, accessToken: String) {
+        require(hasBoundKey())
+        val invitation = LibraryKeyBootstrap.PairingInvitation.fromQRPayload(raw)
+        require(invitation.serverURL == configuration.serverURL)
+        require(invitation.spaceID.equals(configuration.spaceID, ignoreCase = true))
+        val serverPairing = client.pairing(
+            invitation.serverURL,
+            invitation.spaceID,
+            invitation.pairingID,
+            accessToken,
+        )
+        validatePairing(
+            serverPairing,
+            invitation.pairingID,
+            invitation.recipientPublicKey,
+            invitation.nonce,
+            invitation.expiresAtEpochSeconds,
+        )
+        require(serverPairing.authenticationTag == invitation.confirmationCode)
+        require(serverPairing.algorithm == null && serverPairing.ciphertext == null)
+        if (serverPairing.state == "approved") {
+            // The approval may have committed even when its success response was lost.
+            // The recipient remains the only party able to consume and decrypt it.
+            store.delete(PENDING_APPROVAL)
+            approvalConfirmationCode = null
+            cloudKeyStatus = CloudKeyStatus.READY
+            return
+        }
+        require(serverPairing.state == "pending")
+        val ciphertext = LibraryKeyBootstrap.sealForPairing(
+            requireNotNull(keys).toJSON(),
+            invitation,
+        )
+        val approved = client.approvePairing(
+            invitation.serverURL,
+            invitation.spaceID,
+            invitation.pairingID,
+            invitation.recipientPublicKey,
+            ciphertext,
+            accessToken,
+        )
+        validatePairing(
+            approved,
+            invitation.pairingID,
+            invitation.recipientPublicKey,
+            invitation.nonce,
+            invitation.expiresAtEpochSeconds,
+        )
+        require(approved.state == "approved")
+        require(approved.authenticationTag == invitation.confirmationCode)
+        require(approved.algorithm == null && approved.ciphertext == null)
+        store.delete(PENDING_APPROVAL)
+        approvalConfirmationCode = null
+        cloudKeyStatus = CloudKeyStatus.READY
+    }
+
+    private fun finishPendingRecovery(
+        pending: PendingRecoveryUpload,
+        accessToken: String,
+    ): RecoveryKitPresentation {
+        val kit = LibraryKeyBootstrap.RecoveryKit.fromQRPayload(pending.kitPayload)
+        require(kit.serverURL == configuration.serverURL)
+        require(kit.spaceID.equals(configuration.spaceID, ignoreCase = true))
+        val stored = try {
+            client.putRecoveryEnvelope(
+                configuration.serverURL,
+                configuration.spaceID,
+                kit.keyEpoch,
+                pending.expectedVersion,
+                pending.ciphertext,
+                accessToken,
+            )
+        } catch (failure: SyncFailure) {
+            if (failure.code != "conflict") throw failure
+            // Recover a committed PUT whose response was lost. A different envelope
+            // remains a real CAS conflict and must never authorize this provisional key.
+            val current = client.recoveryEnvelope(
+                configuration.serverURL,
+                configuration.spaceID,
+                accessToken,
+            )
+            val existing = current.recovery
+            if (current.keyEpoch != kit.keyEpoch ||
+                existing?.algorithm != LibraryKeyBootstrap.RECOVERY_ALGORITHM ||
+                existing.ciphertext.contentEquals(pending.ciphertext).not()) {
+                throw failure
+            }
+            existing
+        }
+        require(stored.algorithm == LibraryKeyBootstrap.RECOVERY_ALGORITHM)
+        require(stored.keyEpoch == kit.keyEpoch)
+        pending.newLibraryBundleJSON?.let(::installCloudKey)
+        store.write(RECOVERY_PRESENTATION, pending.kitPayload)
+        store.delete(PENDING_RECOVERY)
+        configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
+        // Durable state is always locked. The freshly authenticated caller receives
+        // the only transient copy and owns its current on-screen presentation.
+        cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
+        return RecoveryKitPresentation(pending.kitPayload, kit.longCode)
+    }
+
+    private fun pendingPairing(): LibraryKeyBootstrap.PendingPairing =
+        store.read(PENDING_PAIRING)?.let(LibraryKeyBootstrap.PendingPairing::fromJSON)
+            ?: throw SyncFailure("pairing_missing")
+
+    private fun validatePairing(
+        pairing: HttpSyncClient.PairingRecord,
+        expectedPairingID: String,
+        recipientPublicKey: ByteArray,
+        nonce: ByteArray,
+        expectedExpiresAtEpochSeconds: Long? = null,
+    ) {
+        require(pairing.pairingID.equals(expectedPairingID, ignoreCase = true))
+        require(pairing.spaceID.equals(configuration.spaceID, ignoreCase = true))
+        require(pairing.recipientPublicKey.contentEquals(recipientPublicKey))
+        require(pairing.nonce.contentEquals(nonce))
+        val now = Instant.now().epochSecond
+        require(pairing.expiresAtEpochSeconds > now - 30)
+        require(pairing.expiresAtEpochSeconds <= now + 630)
+        expectedExpiresAtEpochSeconds?.let {
+            require(pairing.expiresAtEpochSeconds == it)
+        }
+    }
+
+    private fun installCloudKey(bundleJSON: String) {
+        val imported = keyBundle(bundleJSON)
+        require(Base64.decode(imported.key, Base64.DEFAULT).size == 32)
+        require(Base64.decode(imported.salt, Base64.DEFAULT).size == 32)
+        require(imported.scopeID == "sync-v1")
+        keys = imported
+        store.write(KEYS, imported.toJSON())
+        bindCurrentKey(configuration.serverURL, configuration.spaceID)
+        baseJSON = "[]"
+        remoteRecordsJSON = "[]"
+        configuration = configuration.copy(
+            provider = SyncProvider.SNIPPETS_CLOUD,
+            cursor = null,
+            scopeBinding = null,
+            datasetGeneration = null,
+            feedEpoch = null,
+        )
+    }
+
+    private fun bindCurrentKey(serverURL: String, spaceID: String) {
+        keyBinding = CloudKeyBinding(serverURL.trim().trimEnd('/'), UUID.fromString(spaceID).toString())
+        store.write(KEY_BINDING, requireNotNull(keyBinding).toJSON())
+    }
+
+    private fun hasBoundKey(): Boolean = keys != null && keyBinding?.let {
+        it.serverURL == configuration.serverURL.trim().trimEnd('/') &&
+            it.spaceID.equals(configuration.spaceID, ignoreCase = true)
+    } == true
+
+    private fun requireSignedInCoordinates() {
+        if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation() ||
+            configuration.serverURL.isBlank() || configuration.spaceID.isBlank() ||
+            !authenticator.hasSession(configuration.serverURL)) {
+            throw CloudAuthFailure("sign_in_required")
+        }
+    }
+
+    private fun clearBootstrapState() {
+        listOf(
+            PENDING_PAIRING,
+            PENDING_APPROVAL,
+            PENDING_RECOVERY,
+            RECOVERY_PRESENTATION,
+        ).forEach(store::delete)
+        pairingQRCode = null
+        pairingConfirmationCode = null
+        approvalConfirmationCode = null
+    }
+
+    /**
+     * Idempotent crash recovery for this-device logout. The remote library root is
+     * removed first, one-time bootstrap/recovery material second, OAuth credentials
+     * third, and visible account state last. The marker is always the final delete.
+     */
+    private fun completePendingLocalErase() {
+        if (store.read(PENDING_LOCAL_ERASE) == null) return
+
+        store.delete(KEYS)
+        store.delete(KEY_BINDING)
+        keys = null
+        keyBinding = null
+
+        clearBootstrapState()
+
+        authenticator.forgetLocalSession()
+
+        configuration = CloudConfiguration(provider = SyncProvider.DEVICE)
+        baseJSON = "[]"
+        remoteRecordsJSON = "[]"
+        cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
+        persistSyncState()
+        store.delete(PENDING_LOCAL_ERASE)
+    }
+
+    private suspend fun mutate(operation: suspend () -> Unit) {
         mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
                 withContext(Dispatchers.IO) { operation() }
                 publish()
             } catch (error: CoreFailure) {
+                publish(errorCode = error.code)
+            } catch (error: CloudAuthFailure) {
+                publish(errorCode = error.code)
+            } catch (error: SyncFailure) {
                 publish(errorCode = error.code)
             } catch (_: Exception) {
                 publish(errorCode = "operation_failed")
@@ -172,7 +923,11 @@ class SnippetRepository(context: Context) {
                 SyncProvider.SNIPPETS_CLOUD -> "Snippets Cloud"
             },
             isBusy = false,
-            errorCode = errorCode)
+            errorCode = errorCode,
+            cloudKeyStatus = cloudKeyStatus,
+            pairingQRCode = pairingQRCode,
+            pairingConfirmationCode = pairingConfirmationCode,
+            approvalConfirmationCode = approvalConfirmationCode)
     }
 
     private fun freshKeyBundle(): KeyBundle {
@@ -180,6 +935,46 @@ class SnippetRepository(context: Context) {
         return KeyBundle(
             key = ByteArray(32).also(random::nextBytes).base64(),
             salt = ByteArray(32).also(random::nextBytes).base64())
+    }
+
+    private data class PendingRecoveryUpload(
+        val kitPayload: String,
+        val ciphertext: ByteArray,
+        val expectedVersion: Int?,
+        val newLibraryBundleJSON: String?,
+    ) {
+        fun toJSON(): String = JSONObject()
+            .put("schemaVersion", 1)
+            .put("kitPayload", kitPayload)
+            .put("ciphertext", Base64.encodeToString(ciphertext, Base64.NO_WRAP))
+            .put("expectedVersion", expectedVersion ?: JSONObject.NULL)
+            .put("newLibraryBundle", newLibraryBundleJSON ?: JSONObject.NULL)
+            .toString()
+
+        companion object {
+            fun fromJSON(raw: String): PendingRecoveryUpload {
+                val value = JSONObject(raw)
+                require(value.getInt("schemaVersion") == 1)
+                val ciphertext = Base64.decode(value.getString("ciphertext"), Base64.DEFAULT)
+                require(ciphertext.size <= 4_096)
+                require(Base64.encodeToString(ciphertext, Base64.NO_WRAP) ==
+                    value.getString("ciphertext"))
+                val bundle = if (value.isNull("newLibraryBundle")) null
+                else value.getString("newLibraryBundle").also { candidate ->
+                    val parsed = keyBundle(candidate)
+                    require(Base64.decode(parsed.key, Base64.DEFAULT).size == 32)
+                    require(Base64.decode(parsed.salt, Base64.DEFAULT).size == 32)
+                    require(parsed.scopeID == "sync-v1")
+                }
+                return PendingRecoveryUpload(
+                    kitPayload = value.getString("kitPayload"),
+                    ciphertext = ciphertext,
+                    expectedVersion = if (value.isNull("expectedVersion")) null
+                    else value.getInt("expectedVersion"),
+                    newLibraryBundleJSON = bundle,
+                )
+            }
+        }
     }
 
     private fun freshDeviceID(): String {
@@ -201,5 +996,11 @@ class SnippetRepository(context: Context) {
         private const val CONFIG = "config.enc"
         private const val KEYS = "keys.enc"
         private const val DEVICE_ID = "device-id.enc"
+        private const val KEY_BINDING = "key-binding.enc"
+        private const val PENDING_PAIRING = "pending-pairing.enc"
+        private const val PENDING_APPROVAL = "pending-approval.enc"
+        private const val PENDING_RECOVERY = "pending-recovery.enc"
+        private const val RECOVERY_PRESENTATION = "recovery-presentation.enc"
+        private const val PENDING_LOCAL_ERASE = "cloud-local-erase.enc"
     }
 }

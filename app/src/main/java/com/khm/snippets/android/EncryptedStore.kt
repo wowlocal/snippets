@@ -3,6 +3,8 @@ package com.khm.snippets.android
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.system.Os
+import android.system.OsConstants
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -54,6 +56,38 @@ class EncryptedStore(context: Context) {
         Files.move(
             temporary.toPath(), destination.toPath(),
             StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        // fsync(temp) makes file contents durable; fsync(directory) makes the atomic
+        // publish durable. Logout journals and erase markers rely on both guarantees
+        // when power is lost between credential/root-key transitions.
+        syncRootDirectory()
+    }
+
+    @Synchronized
+    fun delete(name: String) {
+        val file = File(root, safeName(name))
+        if (file.exists()) {
+            if (!file.delete()) throw IllegalStateException("encrypted_store_delete_failed")
+            // Fence this deletion before a later journal/marker deletion. Otherwise
+            // filesystem recovery could resurrect a root key or session while losing
+            // the marker that says cleanup is incomplete.
+            syncRootDirectory()
+        }
+    }
+
+    private fun syncRootDirectory() {
+        val descriptor = Os.open(
+            root.absolutePath,
+            // Android's public OsConstants does not expose O_DIRECTORY. Opening an
+            // existing directory read-only still returns a directory descriptor on
+            // the Linux filesystems supported by Android, which fsync accepts.
+            OsConstants.O_RDONLY,
+            0,
+        )
+        try {
+            Os.fsync(descriptor)
+        } finally {
+            Os.close(descriptor)
+        }
     }
 
     private fun secretKey(): SecretKey {
