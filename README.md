@@ -92,7 +92,7 @@ date placeholders. Offsets can contain several terms, for example
   changing the clipboard.
 - macOS Secure Event Input can suppress third-party global shortcuts while a real
   password field is focused. Snippets keeps its Carbon registrations live and provides
-  matching frontmost-app Services fallbacks: `⌘\` opens Secure Paste and `⇧⌘\` opens
+  matching frontmost-app Services fallbacks: `⌘\` opens Secure Paste and `⌥⌘\` opens
   or launches Snippets.
 - A recovery key can restore the vault key if it is missing from Keychain.
 - On iPhone and iPad, secure copies are device-local and expire from the clipboard after
@@ -140,7 +140,7 @@ software on the same Mac remains outside this boundary.
 
 On macOS:
 
-- `⇧⌘\` brings Snippets forward from any app and hides it again when already focused.
+- `⌥⌘\` brings Snippets forward from any app and hides it again when already focused.
 - Run from the Dock, hide to a menu bar item, optionally launch at login, and choose
   whether `⌘Q` hides or quits.
 - Collapse the sidebar for a focused editor; search results become a keyboard-navigable
@@ -246,7 +246,7 @@ list.
 | Shortcut | Action |
 |---|---|
 | `⌘\` | Secure Paste into the focused field, or copy when no text field is focused |
-| `⇧⌘\` | Show or hide Snippets globally |
+| `⌥⌘\` | Show or hide Snippets globally |
 | `Return` | Copy selected snippet |
 | `⌘Return` | Paste selected snippet into the frontmost app |
 | `⌘F` | Search |

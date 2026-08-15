@@ -179,6 +179,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // AppKit orders the storyboard's initial window only after launch finishes.
+        // Keep it transparent until did-finish tells us whether this is a normal
+        // launch or a Service launch; otherwise the Service callback can only hide
+        // the window after its first frame has already reached the screen.
+        NSApp.windows
+            .first(where: { $0.contentViewController is ViewController })?
+            .alphaValue = 0
+
         // This must precede storyboard-driven editor population. If AppKit
         // refuses the protected-content contract, secure metadata remains
         // usable but the editor will refuse to decrypt and reveal the body.
@@ -202,8 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // This documented launch flag is false for Service launches (and other
         // explicitly routed launches). The matching Service/deep-link callback
         // below consumes it once, so it cannot affect a later shortcut.
-        initialNonDefaultLaunchActionPending =
-            notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == false
+        let isDefaultLaunch =
+            notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
+        initialNonDefaultLaunchActionPending = !isDefaultLaunch
 
         // Consulted only when the usage file hits its record cap, so that a
         // forced eviction drops UUIDs of deleted snippets before live ones.
@@ -255,6 +264,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if launchedAsLoginItem {
             initialNonDefaultLaunchActionPending = false
             hideToBackground()
+        } else if isDefaultLaunch {
+            showMainWindow()
         }
         schedulePostLaunchServices()
 
@@ -451,7 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if suppressMainWindowForColdServicePicker {
+        if initialNonDefaultLaunchActionPending || suppressMainWindowForColdServicePicker {
             return false
         }
         if !flag {
@@ -591,6 +602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func setupServicesProvider() {
         NSApp.servicesProvider = self
         removeObsoleteServiceShortcuts()
+        syncOpenServiceShortcut()
         // The Services cache is keyed off the bundle's own NSServices, and a
         // build that has never lived in /Applications is not scanned on its own.
         // This is what gives the entry a chance to appear without a login cycle.
@@ -649,6 +661,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         _ = CFPreferencesAppSynchronize(preferencesDomain)
     }
 
+    /// `NSServices.NSKeyEquivalent` can encode Command and Shift, but not Option.
+    /// Store the open action where System Settings keeps user-assigned Services
+    /// shortcuts so Command-Option-Backslash can also launch a stopped app.
+    private func syncOpenServiceShortcut() {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
+
+        let preferencesDomain = "pbs" as CFString
+        let statusesPreference = "NSServicesStatus" as CFString
+        let serviceIdentifier = "\(bundleIdentifier) - Open Snippets - openSnippetsFromService"
+        let keyEquivalent = "@~\\"
+
+        var statuses = CFPreferencesCopyAppValue(statusesPreference, preferencesDomain)
+            as? [String: Any] ?? [:]
+        var serviceStatus = statuses[serviceIdentifier] as? [String: Any] ?? [:]
+
+        if GlobalHotkeyManager.shared.isEnabled {
+            guard serviceStatus["key_equivalent"] as? String != keyEquivalent else { return }
+            serviceStatus["key_equivalent"] = keyEquivalent
+            statuses[serviceIdentifier] = serviceStatus
+            CFPreferencesSetAppValue(
+                "ServicesShortcutsPresent" as CFString,
+                kCFBooleanTrue,
+                preferencesDomain
+            )
+        } else {
+            guard serviceStatus["key_equivalent"] as? String == keyEquivalent else { return }
+            serviceStatus.removeValue(forKey: "key_equivalent")
+            if serviceStatus.isEmpty {
+                statuses.removeValue(forKey: serviceIdentifier)
+            } else {
+                statuses[serviceIdentifier] = serviceStatus
+            }
+        }
+
+        CFPreferencesSetAppValue(statusesPreference, statuses as CFDictionary, preferencesDomain)
+        _ = CFPreferencesAppSynchronize(preferencesDomain)
+    }
+
     /// Declared in every Info plist as `NSMessage = makeSnippetFromSelection`.
     /// The selection arrives as content and not as a name: it is the text the
     /// snippet has to expand to, and naming a snippet after its own body is what
@@ -668,7 +718,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         showMainWindow()?.createSnippet(seededContent: selection, seededName: nil)
     }
 
-    /// Command-Shift-Backslash normally arrives through Carbon. The frontmost
+    /// Command-Option-Backslash normally arrives through Carbon. The frontmost
     /// application's matching Services item preserves the same action when
     /// Secure Event Input prevents cross-process keyboard delivery.
     @objc func openSnippetsFromService(
@@ -759,7 +809,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let openItem = NSMenuItem(title: "Open Snippets", action: #selector(openFromStatusBar), keyEquivalent: "")
         openItem.target = self
         LiquidGlassDesign.applyMenuSymbol("macwindow", to: openItem)
-        // `setupGlobalHotkey()` runs next and fills in the ⇧⌘\ hint.
+        // `setupGlobalHotkey()` runs next and fills in the ⌥⌘\ hint.
         statusMenuOpenItem = openItem
         let securePasteItem = NSMenuItem(
             title: "Secure Paste…",
@@ -1031,6 +1081,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     @objc private func handleGlobalHotkeyChanged() {
+        syncOpenServiceShortcut()
         refreshGlobalHotkeyMenuHint()
     }
 
@@ -1041,7 +1092,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let showsOpenShortcut = manager.isEnabled && manager.isActive
         statusMenuOpenItem?.keyEquivalent = showsOpenShortcut ? "\\" : ""
         statusMenuOpenItem?.keyEquivalentModifierMask = showsOpenShortcut
-            ? [.command, .shift]
+            ? [.command, .option]
             : []
 
         let showsSecurePasteShortcut = manager.isEnabled && manager.isSecurePasteActive
@@ -1359,6 +1410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         let window: NSWindow?
         if let window = NSApp.windows.first(where: { $0.contentViewController is ViewController }) {
+            window.alphaValue = 1
             window.makeKeyAndOrderFront(nil)
             #if !NO_SPARKLE
             refreshWindowUpdateAccessories()
@@ -1368,6 +1420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         } else {
             let storyboard = NSStoryboard(name: "Main", bundle: nil)
             if let wc = storyboard.instantiateInitialController() as? NSWindowController {
+                wc.window?.alphaValue = 1
                 wc.showWindow(nil)
                 window = wc.window
             } else {

@@ -80,11 +80,6 @@
 			</array>
 		</dict>
 		<dict>
-			<key>NSKeyEquivalent</key>
-			<dict>
-				<key>default</key>
-				<string>|</string>
-			</dict>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
