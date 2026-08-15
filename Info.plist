@@ -68,6 +68,19 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
+				<string>Open Snippets</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>openSnippetsFromService</string>
+			<key>NSPortName</key>
+			<string>Snippets</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
 				<string>Secure Paste…</string>
 			</dict>
 			<key>NSMessage</key>

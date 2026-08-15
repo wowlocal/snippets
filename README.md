@@ -88,9 +88,9 @@ date placeholders. Offsets can contain several terms, for example
   snippets do not. A password field is replaced; an ordinary text field uses its
   selection or caret.
 - macOS Secure Event Input can suppress third-party global shortcuts while a real
-  password field is focused. In that case `⌘\` invokes Secure Paste through the
-  frontmost app's Services menu; the Snippets menu-bar item remains the mouse-driven
-  fallback. Both routes capture the same field before opening the same picker.
+  password field is focused. Snippets temporarily releases its Carbon registrations
+  there so the frontmost app's Services menu preserves both actions: `⌘\` still opens
+  the app, and `⌥\` still opens Secure Paste.
 - A recovery key can restore the vault key if it is missing from Keychain.
 - On iPhone and iPad, secure copies are device-local and expire from the clipboard after
   60 seconds.

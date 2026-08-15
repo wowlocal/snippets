@@ -519,10 +519,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func setupServicesProvider() {
         NSApp.servicesProvider = self
+        installSecurePasteServiceShortcut()
         // The Services cache is keyed off the bundle's own NSServices, and a
         // build that has never lived in /Applications is not scanned on its own.
         // This is what gives the entry a chance to appear without a login cycle.
         NSUpdateDynamicServices()
+    }
+
+    /// `NSServices.NSKeyEquivalent` always implies Command, so the Info plist
+    /// can express the Command-Backslash fallback but not Option-Backslash.
+    /// System Settings stores user-assigned Services shortcuts in the `pbs`
+    /// preferences domain. Merge only our entry so every other service choice
+    /// remains untouched, including whether the user disabled one explicitly.
+    private func installSecurePasteServiceShortcut() {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
+
+        let preferencesDomain = "pbs" as CFString
+        let statusesPreference = "NSServicesStatus" as CFString
+        let serviceIdentifier = "\(bundleIdentifier) - Secure Paste… - securePasteFromService"
+        let keyEquivalent = "~\\" // AppKit defaults notation: Option + Backslash.
+
+        var statuses = CFPreferencesCopyAppValue(statusesPreference, preferencesDomain)
+            as? [String: Any] ?? [:]
+        var serviceStatus = statuses[serviceIdentifier] as? [String: Any] ?? [:]
+        serviceStatus["key_equivalent"] = keyEquivalent
+        statuses[serviceIdentifier] = serviceStatus
+        CFPreferencesSetAppValue(statusesPreference, statuses as CFDictionary, preferencesDomain)
+        CFPreferencesSetAppValue(
+            "ServicesShortcutsPresent" as CFString,
+            kCFBooleanTrue,
+            preferencesDomain
+        )
+        _ = CFPreferencesAppSynchronize(preferencesDomain)
     }
 
     /// Declared in every Info plist as `NSMessage = makeSnippetFromSelection`.
@@ -543,11 +571,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         showMainWindow()?.createSnippet(seededContent: selection, seededName: nil)
     }
 
-    /// A Services key equivalent is resolved by the frontmost application, not
-    /// by our process. That makes Command-Backslash a keyboard path into Secure
-    /// Paste even while Secure Event Input suppresses external global hotkeys and
-    /// session event taps. The existing Carbon Command-Backslash wins in ordinary
-    /// fields; this service is the protected-field fallback.
+    /// Command-Backslash normally arrives through Carbon. During Secure Event
+    /// Input those registrations are temporarily released, so the frontmost
+    /// application's matching Services item preserves the same open-window action.
+    @objc func openSnippetsFromService(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString>
+    ) {
+        // Let the source application finish its synchronous Services command
+        // before Snippets activates and makes its main window key.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.openFromGlobalHotkey()
+        }
+    }
+
+    /// Option-Backslash normally arrives through Carbon. Its Services shortcut
+    /// is installed above because the Info plist format cannot express Option;
+    /// this callback is the matching Secure Event Input fallback.
     @objc func securePasteFromService(
         _ pboard: NSPasteboard,
         userData: String?,
@@ -569,8 +610,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
 
-        // Finish Services dispatch before making the non-activating picker key.
-        DispatchQueue.main.async { [weak self] in
+        // A Services key equivalent is dispatched synchronously by the source
+        // app. Giving Safari one run-loop turn was not sufficient: after our
+        // panel became key, Safari finished the service command, reclaimed key
+        // status, and `windowDidResignKey` immediately dismissed the picker.
+        // Capture the destination above, then wait for that hand-off to settle.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.beginSecurePaste(to: target)
         }
     }
