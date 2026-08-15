@@ -1625,6 +1625,18 @@ final class SnippetsIOSTests: XCTestCase {
                 queryLength: 4),
             level: .debug,
             synchronous: true)
+        service?.emit(
+            .expansionAccessibility(
+                operation: .acceptance,
+                outcome: .localTracking,
+                stateBefore: .localDisplayOnly,
+                stateAfter: .localDisplayOnly,
+                stage: nil,
+                failure: nil,
+                axErrorCode: nil,
+                queryLength: 3),
+            level: .debug,
+            synchronous: true)
         service?.flush()
 
         let summary = try XCTUnwrap(service?.summary())
@@ -1640,6 +1652,7 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(export.contains("approved-keyword"))
         XCTAssertTrue(export.contains("\"event\":\"secure_editor_transition\""))
         XCTAssertTrue(export.contains("\"event\":\"expansion_accessibility\""))
+        XCTAssertTrue(export.contains("\"outcome\":\"local_tracking\""))
         XCTAssertTrue(export.contains("\"state_before\":\"uncertain_after_host_edit\""))
         XCTAssertTrue(export.contains("\"failure\":\"attribute_unsupported\""))
         XCTAssertTrue(export.contains("\"ax_error_code\":-25205"))

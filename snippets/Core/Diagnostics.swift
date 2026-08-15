@@ -307,6 +307,7 @@ nonisolated enum DiagnosticExpansionAXOperation: String, Codable, Sendable {
 
 nonisolated enum DiagnosticExpansionAXOutcome: String, Codable, Sendable {
     case confirmed
+    case localTracking = "local_tracking"
     case missingTrigger = "missing_trigger"
     case unavailable
     case stale

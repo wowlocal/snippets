@@ -89,3 +89,38 @@ nonisolated enum SuggestionContextState: String, Codable, Equatable, Sendable {
         .uncertainAfterHostEdit
     }
 }
+
+/// The narrow exception for terminal surfaces whose Accessibility model exposes
+/// selection, but not the insertion caret.
+///
+/// Ghostty's `AXSelectedTextRange` describes a mouse selection in the rendered
+/// terminal buffer. It therefore cannot confirm the command-line text immediately
+/// before the shell cursor. Local tracking is allowed only while every other signal
+/// still proves that this is the same uninterrupted suggestion session. In
+/// particular, a Backspace or other host-owned edit moves the state to
+/// `uncertainAfterHostEdit`, and a host that has ever supplied a real AX context is
+/// never allowed to fall back to this exception.
+nonisolated enum CaretlessTerminalSuggestionPolicy {
+    private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
+    private static let textAreaRole = "AXTextArea"
+
+    static func isSupportedHost(bundleIdentifier: String?) -> Bool {
+        bundleIdentifier?.lowercased() == ghosttyBundleIdentifier
+    }
+
+    static func canAuthorizeLocalTracking(
+        bundleIdentifier: String?,
+        focusedRole: String?,
+        contextState: SuggestionContextState,
+        hasAXConfirmedContext: Bool,
+        isSecureSnippet: Bool,
+        targetStillMatches: Bool
+    ) -> Bool {
+        isSupportedHost(bundleIdentifier: bundleIdentifier)
+            && focusedRole == textAreaRole
+            && contextState == .localDisplayOnly
+            && !hasAXConfirmedContext
+            && !isSecureSnippet
+            && targetStillMatches
+    }
+}

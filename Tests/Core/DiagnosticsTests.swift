@@ -145,6 +145,7 @@ struct DiagnosticsTests {
             "operation", "outcome", "state_before", "state_after", "stage",
             "failure", "ax_error_code", "query_length",
         ])
+        #expect(DiagnosticExpansionAXOutcome.localTracking.rawValue == "local_tracking")
     }
 
     @Test func globalFacadeIsNoOpUntilInstalledAndIsThreadSafeAfterInstall() {
