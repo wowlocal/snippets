@@ -277,17 +277,14 @@ fi
 
 info "Checking the Xcode destination"
 set +e
-xcode_destinations="$(xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" \
-    -showdestinations 2>&1)"
+xcode_destination_output="$(xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -destination "platform=iOS,id=$XCODE_DESTINATION_IDENTIFIER" \
+    -showBuildSettings 2>&1)"
 xcode_destination_status=$?
 set -e
 if [ "$xcode_destination_status" -ne 0 ]; then
-    printf '%s\n' "$xcode_destinations" | redact_identifiers >&2
-    fail "Xcode could not enumerate destinations"
-fi
-xcode_destination_line="$(printf '%s\n' "$xcode_destinations" \
-    | grep -F "id:$XCODE_DESTINATION_IDENTIFIER" | head -1 || true)"
-if [ -z "$xcode_destination_line" ] || [[ "$xcode_destination_line" == *"error:"* ]]; then
+    printf '%s\n' "$xcode_destination_output" | redact_identifiers >&2
     fail "The paired device is not an eligible destination for the $SCHEME scheme"
 fi
 success "Eligible native iOS destination"
