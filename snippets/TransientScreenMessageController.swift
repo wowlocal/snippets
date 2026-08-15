@@ -1,10 +1,41 @@
 import AppKit
 
 enum ClipboardCopyFeedback {
-    static let copied = "Copied to the clipboard"
     static let secureSnippetBlocked =
         "Copy blocked. Secure snippets can\u{2019}t be copied. The clipboard was not changed."
     static let failed = "Couldn\u{2019}t copy the snippet to the clipboard."
+
+    static func copied(_ snippet: Snippet) -> String {
+        let name = boundedMetadata(snippet.name, maximumCharacters: 80)
+        let keyword = boundedMetadata(snippet.normalizedKeyword, maximumCharacters: 48)
+        let trigger = keyword.isEmpty ? "" : "\\\(keyword)"
+
+        switch (name.isEmpty, trigger.isEmpty) {
+        case (false, false):
+            return "Copied \u{201C}\(name)\u{201D} (\(trigger))"
+        case (false, true):
+            return "Copied \u{201C}\(name)\u{201D}"
+        case (true, false):
+            return "Copied \(trigger)"
+        case (true, true):
+            return "Copied snippet"
+        }
+    }
+
+    /// Synced metadata can predate today's single-line editor constraints. Keep a
+    /// malformed or unusually long value from turning a confirmation into a large
+    /// sheet while preserving enough of it to identify the selected row.
+    private static func boundedMetadata(
+        _ value: String,
+        maximumCharacters: Int
+    ) -> String {
+        let normalized = value
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard normalized.count > maximumCharacters else { return normalized }
+        return String(normalized.prefix(maximumCharacters)) + "\u{2026}"
+    }
 }
 
 /// A short-lived, non-activating HUD for actions that begin outside the main app
@@ -138,9 +169,7 @@ final class TransientScreenMessageController {
                 availablePanelWidth - (Self.horizontalPadding * 2)
             )
         )
-        label.preferredMaxLayoutWidth = maximumTextWidth
-
-        let measuredText = (message as NSString).boundingRect(
+        let idealTextBounds = (message as NSString).boundingRect(
             with: NSSize(width: maximumTextWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font]
@@ -149,12 +178,22 @@ final class TransientScreenMessageController {
             availablePanelWidth,
             max(
                 Self.minimumPanelWidth,
-                ceil(measuredText.width) + (Self.horizontalPadding * 2)
+                ceil(idealTextBounds.width) + (Self.horizontalPadding * 2) + 2
             )
+        )
+        // The minimum panel width can still be narrower than the ideal one-line
+        // measurement after its padding is removed. Measure again at the width the
+        // label will actually receive so a wrapped second line gets real height.
+        let actualTextWidth = max(1, panelWidth - (Self.horizontalPadding * 2))
+        label.preferredMaxLayoutWidth = actualTextWidth
+        let laidOutTextBounds = (message as NSString).boundingRect(
+            with: NSSize(width: actualTextWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
         )
         let panelHeight = max(
             40,
-            ceil(measuredText.height) + (Self.verticalPadding * 2)
+            ceil(laidOutTextBounds.height) + (Self.verticalPadding * 2)
         )
         panel.setContentSize(NSSize(width: panelWidth, height: panelHeight))
         panel.contentView?.layoutSubtreeIfNeeded()

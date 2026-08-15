@@ -878,7 +878,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             switch expansionEngine.copySnippetToClipboard(snippet) {
             case .copied:
                 transientScreenMessageController.show(
-                    ClipboardCopyFeedback.copied,
+                    ClipboardCopyFeedback.copied(snippet),
                     kind: .confirmation
                 )
             case .secureSnippetBlocked:
