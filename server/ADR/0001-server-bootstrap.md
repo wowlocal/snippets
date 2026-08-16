@@ -1,6 +1,6 @@
 # ADR 0001: Swift HTTP sync service bootstrap
 
-- Status: accepted for the service foundation
+- Status: superseded by ADR 0002
 - Date: 2026-08-13
 
 ## Decision
@@ -38,7 +38,7 @@ the hosted data plane from gaining a private compatibility extension unavailable
 self-hosters.
 
 The runtime database role is deliberately unprivileged and never owns tables. An
-offline migration/operator owner is separate and elevated for schema changes, policy
+offline database owner is separate and elevated for schema changes, policy
 helper ownership and restore-generation rotation.
 
 ## Consequences

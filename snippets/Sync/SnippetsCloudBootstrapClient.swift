@@ -48,8 +48,16 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     private struct RecoveryStateDTO: Decodable {
+        let scope: ScopeDTO
         let keyEpoch: Int
         let recovery: RecoveryEnvelopeDTO?
+    }
+
+    private struct ScopeDTO: Decodable {
+        let spaceId: UUID
+        let scopeBinding: String
+        let datasetGeneration: UUID
+        let feedEpoch: UUID
     }
 
     private struct RecoveryEnvelopeDTO: Decodable {
@@ -61,7 +69,6 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
 
     private struct PairingDTO: Decodable {
         let pairingId: UUID
-        let spaceId: UUID
         let recipientPublicKey: Data
         let nonce: Data
         let authenticationTag: String
@@ -69,6 +76,18 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         let algorithm: String?
         let ciphertext: Data?
         let expiresAt: String
+    }
+
+    private struct PairingResponseDTO: Decodable {
+        let scope: ScopeDTO
+        let pairing: PairingDTO
+    }
+
+    private struct ClaimPairingDTO: Decodable {
+        let scope: ScopeDTO
+        let pairingId: UUID
+        let algorithm: String
+        let ciphertext: Data
     }
 
     private struct CreatePairingDTO: Encodable {
@@ -136,7 +155,8 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
 
     func recoveryState() async throws -> RecoveryState {
         let dto: RecoveryStateDTO = try await request(
-            method: "GET", path: "key-envelopes/current")
+            method: "GET", path: "recovery-envelope")
+        try validate(dto.scope)
         guard dto.keyEpoch > 0 else { throw Failure.invalidResponse }
         let envelope = try dto.recovery.map { value in
             guard value.version > 0,
@@ -155,10 +175,11 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     func hasRemoteRecords() async throws -> Bool {
-        struct Changes: Decodable { let records: [Record] }
+        struct Changes: Decodable { let scope: ScopeDTO; let records: [Record] }
         struct Record: Decodable { let id: UUID }
         let response: Changes = try await request(
             method: "GET", path: "changes", query: "limit=1")
+        try validate(response.scope)
         return !response.records.isEmpty
     }
 
@@ -170,14 +191,16 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         guard keyEpoch > 0, ciphertext.count <= Self.maximumEnvelopeBytes else {
             throw Failure.invalidConfiguration
         }
-        let value: RecoveryEnvelopeDTO = try await request(
+        let response: RecoveryStateDTO = try await request(
             method: "PUT",
-            path: "key-envelopes/recovery",
+            path: "recovery-envelope",
             body: PutRecoveryDTO(
                 expectedVersion: expectedVersion,
                 keyEpoch: keyEpoch,
                 algorithm: LibraryKeyBootstrap.recoveryAlgorithm,
                 ciphertext: ciphertext))
+        try validate(response.scope)
+        guard let value = response.recovery else { throw Failure.invalidResponse }
         guard value.version > 0,
               value.keyEpoch == keyEpoch,
               value.algorithm == LibraryKeyBootstrap.recoveryAlgorithm,
@@ -192,15 +215,16 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     func createPairing(_ draft: LibraryKeyBootstrap.PairingDraft) async throws -> Pairing {
-        let value: PairingDTO = try await request(
+        let response: PairingResponseDTO = try await request(
             method: "POST",
             path: "pairings",
             body: CreatePairingDTO(
                 recipientPublicKey: draft.recipientPublicKey,
                 nonce: draft.nonce,
                 expiresInSeconds: LibraryKeyBootstrap.defaultPairingSeconds))
+        try validate(response.scope)
         return try validatedPairing(
-            value,
+            response.pairing,
             pairingID: nil,
             publicKey: draft.recipientPublicKey,
             nonce: draft.nonce,
@@ -208,9 +232,10 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     func pairing(_ pairingID: UUID, publicKey: Data, nonce: Data) async throws -> Pairing {
-        let value: PairingDTO = try await request(method: "GET", path: "pairings/\(pairingID.uuidString.lowercased())")
+        let response: PairingResponseDTO = try await request(method: "GET", path: "pairings/\(pairingID.uuidString.lowercased())")
+        try validate(response.scope)
         return try validatedPairing(
-            value,
+            response.pairing,
             pairingID: pairingID,
             publicKey: publicKey,
             nonce: nonce,
@@ -223,15 +248,16 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         nonce: Data,
         ciphertext: Data
     ) async throws -> Pairing {
-        let value: PairingDTO = try await request(
+        let response: PairingResponseDTO = try await request(
             method: "PUT",
             path: "pairings/\(pairingID.uuidString.lowercased())/approval",
             body: ApprovePairingDTO(
                 recipientKeyHash: LibraryKeyBootstrap.recipientKeyHash(publicKey),
                 algorithm: LibraryKeyBootstrap.pairingAlgorithm,
                 ciphertext: ciphertext))
+        try validate(response.scope)
         return try validatedPairing(
-            value,
+            response.pairing,
             pairingID: pairingID,
             publicKey: publicKey,
             nonce: nonce,
@@ -241,16 +267,35 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     func takeApprovedPairing(
         _ pairingID: UUID,
         publicKey: Data,
-        nonce: Data
+        nonce: Data,
+        expected: Pairing
     ) async throws -> Pairing {
-        let value: PairingDTO = try await request(
-            method: "POST", path: "pairings/\(pairingID.uuidString.lowercased())/consume")
-        return try validatedPairing(
-            value,
+        let value: ClaimPairingDTO = try await request(
+            method: "POST", path: "pairings/\(pairingID.uuidString.lowercased())/claim")
+        try validate(value.scope)
+        guard value.pairingId == pairingID,
+              value.algorithm == LibraryKeyBootstrap.pairingAlgorithm,
+              value.ciphertext.count <= Self.maximumEnvelopeBytes,
+              expected.pairingID == pairingID,
+              expected.spaceID == spaceID,
+              expected.recipientPublicKey == publicKey,
+              expected.nonce == nonce,
+              expected.state == "approved",
+              expected.algorithm == nil,
+              expected.ciphertext == nil,
+              expected.expiresAt.timeIntervalSinceNow > -30 else {
+            throw Failure.invalidResponse
+        }
+        return Pairing(
             pairingID: pairingID,
-            publicKey: publicKey,
+            spaceID: spaceID,
+            recipientPublicKey: publicKey,
             nonce: nonce,
-            requireEnvelope: true)
+            authenticationTag: expected.authenticationTag,
+            state: "approved",
+            algorithm: value.algorithm,
+            ciphertext: value.ciphertext,
+            expiresAt: expected.expiresAt)
     }
 
     func cancelPairing(_ pairingID: UUID) async throws {
@@ -270,7 +315,6 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     ) throws -> Pairing {
         guard let expiresAt = Self.parseServerDate(value.expiresAt),
               pairingID == nil || value.pairingId == pairingID,
-              value.spaceId == spaceID,
               value.recipientPublicKey == publicKey,
               value.nonce == nonce,
               value.recipientPublicKey.count == 65,
@@ -298,7 +342,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         }
         return Pairing(
             pairingID: value.pairingId,
-            spaceID: value.spaceId,
+            spaceID: spaceID,
             recipientPublicKey: value.recipientPublicKey,
             nonce: value.nonce,
             authenticationTag: value.authenticationTag,
@@ -306,6 +350,13 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
             algorithm: value.algorithm,
             ciphertext: value.ciphertext,
             expiresAt: expiresAt)
+    }
+
+    private func validate(_ scope: ScopeDTO) throws {
+        guard scope.spaceId == spaceID,
+              (32...256).contains(scope.scopeBinding.utf8.count),
+              scope.datasetGeneration != Self.zeroUUID,
+              scope.feedEpoch != Self.zeroUUID else { throw Failure.invalidResponse }
     }
 
     private func request<Response: Decodable>(
@@ -351,7 +402,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         body: Data?
     ) async throws -> Data {
         var components = URLComponents(
-            url: baseURL.appending(path: "v1/spaces/\(spaceID.uuidString.lowercased())/\(path)"),
+            url: baseURL.appending(path: "v2/spaces/\(spaceID.uuidString.lowercased())/\(path)"),
             resolvingAgainstBaseURL: false)
         components?.percentEncodedQuery = query
         guard let url = components?.url else { throw Failure.invalidConfiguration }
@@ -368,7 +419,6 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("1", forHTTPHeaderField: "X-Snippets-Protocol")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         do {
             let (bytes, response) = try await session.bytes(for: request)
@@ -397,6 +447,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
 
     private static let maximumEnvelopeBytes = 4_096
     private static let maximumResponseBytes = 64 * 1_024
+    private static let zeroUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
     private static let secureSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false

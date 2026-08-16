@@ -240,7 +240,8 @@ final class SnippetsCloudAccountBootstrap {
             try await client.takeApprovedPairing(
                 invitation.pairingID,
                 publicKey: invitation.recipientPublicKey,
-                nonce: invitation.nonce)
+                nonce: invitation.nonce,
+                expected: status)
         }
         guard taken.pairingID == invitation.pairingID,
               taken.authenticationTag == invitation.confirmationCode,

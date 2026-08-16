@@ -1,4 +1,9 @@
 .build
 .env
 .swiftpm
+Container
 Package.resolved.tmp
+Package.swift
+Package.resolved
+Sources
+Tests

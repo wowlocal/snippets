@@ -1,5 +1,6 @@
 import CloudKit
 import Foundation
+import Synchronization
 
 // App target only. This adapter lets CKSyncEngine own CloudKit scheduling while the
 // durable SyncJournal remains the sole source of outbound user intent.
@@ -780,18 +781,21 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
 /// if restart wins, stop follows it and retires the engine before shutdown returns.
 nonisolated final class CloudKitAdapterLifecycleGate: @unchecked Sendable {
     private let lock = NSLock()
-    private var active = true
+    private let active = Atomic(true)
 
-    var acceptsEvents: Bool { lock.withLock { active } }
+    // Driver construction may synchronously trigger an automatic CKSyncEngine
+    // callback. That callback must be able to observe the published lifecycle state
+    // without waiting on the restart critical section that is constructing its engine.
+    var acceptsEvents: Bool { active.load(ordering: .acquiring) }
 
     func stop() {
-        lock.withLock { active = false }
+        lock.withLock { active.store(false, ordering: .releasing) }
     }
 
     @discardableResult
     func restartIfActive(_ restart: () throws -> Void) rethrows -> Bool {
         try lock.withLock {
-            guard active else { return false }
+            guard active.load(ordering: .relaxed) else { return false }
             try restart()
             return true
         }

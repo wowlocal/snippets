@@ -35,13 +35,13 @@ prove it, and critical boundaries are repeated in the real cross-process lane.
 
 | Level | Scope | Runs | Primary evidence |
 | --- | --- | --- | --- |
-| L0 — static contract | OpenAPI generation diff, project/scheme validity, manifest permissions, ABI/native library inventory, migration lexer, dependency locks | Every relevant PR | No accidental protocol drift, IME/Accessibility/overlay component, missing ABI, or destructive migration |
+| L0 — static contract | OpenAPI generation diff, project/scheme validity, manifest permissions, ABI/native library inventory, schema review, dependency locks | Every relevant PR | No accidental protocol drift, IME/Accessibility/overlay component, missing ABI, or destructive schema change |
 | L1 — shared core | Canonical JSON, crypto vectors, envelopes, merge, HLC, journal, CAS, tombstones, deletion guard, account binding, fault injection and property tests | Every shared-core PR | `CorePackage` and Android shared-core tests use the canonical Swift sources |
 | L2 — platform integration | Apple stores/keychains/lifecycle/UI; Android encrypted store/Keystore/JNI/Compose/Process Text; app test hosts | Every platform PR | Real platform APIs with isolated storage and no live user data |
-| L3 — service integration | HTTP handlers, strict OIDC, real PostgreSQL migrations/transactions/runtime role/RLS, OpenAPI conformance | Every server PR; real-DB lane when PostgreSQL is available | Server response and database state agree under the restricted runtime role |
+| L3 — service integration | HTTP handlers, strict OIDC, fresh PostgreSQL schema/transactions/runtime role/RLS, OpenAPI conformance | Every server PR; real-DB lane when PostgreSQL is available | Server response and database state agree under the restricted runtime role |
 | L4 — disposable cross-platform E2E | Compiled macOS and iOS production object graphs, Android instrumentation, real server, OIDC, HTTPS, PostgreSQL | Sync/protocol PRs and nightly | Cross-process encrypted convergence and tenant/privacy assertions |
 | L5 — provider compatibility | Signed CloudKit Development canary and pre-release Production canary with a dedicated synthetic Apple ID, plus disposable HTTP | Nightly/weekly and release candidate | iCloud -> HTTP -> iCloud logical and ciphertext compatibility without touching real libraries |
-| L6 — operational resilience | Load/soak, network chaos, database backup/restore, migration upgrade/rollback, key loss, account revocation, deletion/export drill | Nightly/weekly/release | Recovery objectives, alerts, runbooks, and fail-closed client behavior |
+| L6 — operational resilience | Load/soak, network chaos, database backup/restore, clean schema bootstrap, key loss, account revocation, deletion/export drill | Nightly/weekly/release | Recovery objectives, alerts, runbooks, and fail-closed client behavior |
 
 L0-L3 should be deterministic and parallelizable. L4 owns disposable external processes
 and therefore runs serially per host. L5 and L6 are credentialed or destructive within a
@@ -215,7 +215,7 @@ claimed by the current E2E lane.
 | Every PR | Relevant L0 checks; CorePackage; Android shared-core/Gradle compile; server unit/OpenAPI; macOS and iOS builds |
 | Sync/protocol/security PR | All above plus real PostgreSQL integration and disposable four-way E2E |
 | Nightly | Full iPhone/iPad/Android emulator suites, L4 deterministic proxy chaos, fuzz/property corpus, self-host conformance |
-| Weekly | PostgreSQL backup/restore and migration drill, 8-24 hour soak, supported Android API/ABI/device matrix, CloudKit Development canary |
+| Weekly | PostgreSQL backup/restore and clean-bootstrap drill, 8-24 hour soak, supported Android API/ABI/device matrix, CloudKit Development canary |
 | Release candidate | Signed physical Apple/Android devices, CloudKit Production synthetic canary, clean self-host install/upgrade, deletion/export, dependency/SBOM, performance and battery budgets |
 
 Required jobs are fail-closed. A flaky retry is recorded as a flake even if the retry
@@ -233,7 +233,7 @@ exist for a release candidate.
 - E2E secrets and databases use mode `0600`/`0700`, are excluded from the repository, and
   are deleted on success, failure, interrupt, and timeout.
 - Retain sanitized JUnit/XCResult summaries, toolchain versions, commit IDs, OpenAPI hash,
-  migration version, platform/OS model, durations, and failure classification. Raw server
+  schema hash, platform/OS model, durations, and failure classification. Raw server
   or database logs require the same privacy review as product diagnostics.
 - A failure is triaged at the first violated boundary: client local state, wire codec,
   transport, HTTP authorization, transaction/CAS, or post-sync convergence. Never debug
@@ -248,6 +248,7 @@ reference lane is:
 ./scripts/test-cross-platform-sync.sh
 ```
 
-The server worktree has its own OpenAPI, Swift, and PostgreSQL commands. CI should invoke
-the version committed with the server rather than duplicating those commands here. A test
-strategy change is complete only when both repositories describe the same protocol gates.
+The `server/` directory owns its OpenAPI generation, Go race/vet, container-build, and
+PostgreSQL integration commands. CI should invoke those committed scripts rather than
+duplicating them here. A test-strategy change is complete only when the client and server
+documentation describe the same protocol gates.

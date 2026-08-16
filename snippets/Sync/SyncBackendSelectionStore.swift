@@ -102,6 +102,8 @@ final class SyncBackendSelectionStore {
 
     struct CloudCoordinates: Equatable {
         var serverURL: URL
+        var apiBaseURL: URL
+        var protocolMajor: Int
         var spaceID: UUID
     }
 
@@ -126,6 +128,8 @@ final class SyncBackendSelectionStore {
     static let providerDefaultsKey = "SnippetsSyncProvider"
     static let pendingSwitchDefaultsKey = "SnippetsSyncProviderSwitchPending"
     private static let serverDefaultsKey = "SnippetsCloudServerURL"
+    private static let apiBaseDefaultsKey = "SnippetsCloudAPIBaseURL"
+    private static let protocolDefaultsKey = "SnippetsCloudProtocolMajor"
     private static let spaceDefaultsKey = "SnippetsCloudSpaceID"
     private static let tokenAccount = "oidc-access-token-v1"
     static let oauthSessionAccount = "oidc-session-v1"
@@ -157,7 +161,7 @@ final class SyncBackendSelectionStore {
             service: SnippetsCloudAccountBootstrap.bootstrapService,
             itemAccessibility: .afterFirstUnlock)
         self.cloudKeys = cloudKeys ?? SnippetsCloudKeyStore(coordinates: {
-            Self.cloudCoordinates(in: defaults)
+            Self.cloudCoordinates(in: defaults, allowLegacyV1ForLogout: false)
         })
         if !snippetsCloudEnabled {
             // A provider-switch journal is one-shot review authority. Never carry an
@@ -206,11 +210,32 @@ final class SyncBackendSelectionStore {
     }
 
     private static func cloudCoordinates(in defaults: UserDefaults) -> CloudCoordinates? {
+        cloudCoordinates(in: defaults, allowLegacyV1ForLogout: false)
+    }
+
+    private static func cloudCoordinates(
+        in defaults: UserDefaults,
+        allowLegacyV1ForLogout: Bool
+    ) -> CloudCoordinates? {
         guard let rawURL = defaults.string(forKey: Self.serverDefaultsKey),
               let url = URL(string: rawURL),
               let rawSpace = defaults.string(forKey: Self.spaceDefaultsKey),
               let spaceID = UUID(uuidString: rawSpace) else { return nil }
-        return CloudCoordinates(serverURL: url, spaceID: spaceID)
+        let protocolMajor = defaults.integer(forKey: Self.protocolDefaultsKey)
+        let apiBase = defaults.string(forKey: Self.apiBaseDefaultsKey).flatMap(URL.init(string:))
+        if protocolMajor == 2, apiBase == url.appending(path: "v2") {
+            return CloudCoordinates(
+                serverURL: url,
+                apiBaseURL: apiBase!,
+                protocolMajor: protocolMajor,
+                spaceID: spaceID)
+        }
+        guard allowLegacyV1ForLogout else { return nil }
+        return CloudCoordinates(
+            serverURL: url,
+            apiBaseURL: url.appending(path: "v1"),
+            protocolMajor: 1,
+            spaceID: spaceID)
     }
 
     var hasPendingProviderSwitch: Bool {
@@ -236,6 +261,9 @@ final class SyncBackendSelectionStore {
             accessToken: accessToken)
         try keychain.storeItem(Data(configuration.accessToken.utf8), account: Self.tokenAccount)
         defaults.set(configuration.baseURL.absoluteString, forKey: Self.serverDefaultsKey)
+        defaults.set(configuration.baseURL.appending(path: "v2").absoluteString,
+                     forKey: Self.apiBaseDefaultsKey)
+        defaults.set(2, forKey: Self.protocolDefaultsKey)
         defaults.set(configuration.spaceID.uuidString.lowercased(), forKey: Self.spaceDefaultsKey)
         markSwitch(to: .snippetsCloud)
     }
@@ -261,6 +289,8 @@ final class SyncBackendSelectionStore {
             requiresStrongAuthentication: requiresStrongAuthentication,
             presentationContext: presentationContext)
         defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
+        defaults.set(result.apiBaseURL.absoluteString, forKey: Self.apiBaseDefaultsKey)
+        defaults.set(result.protocolMajor, forKey: Self.protocolDefaultsKey)
         defaults.set(result.spaceID.uuidString.lowercased(), forKey: Self.spaceDefaultsKey)
         try? keychain.deleteItem(account: Self.tokenAccount)
     }
@@ -288,7 +318,9 @@ final class SyncBackendSelectionStore {
     /// removed. Keeping this separate lets the bootstrap coordinator erase its own
     /// device-only journals only after the server-side credential is no longer usable.
     func revokeSnippetsCloudSession() async throws {
-        guard let coordinates = cloudCoordinates,
+        guard let coordinates = Self.cloudCoordinates(
+            in: defaults,
+            allowLegacyV1ForLogout: true),
               let redirectURL = Self.bundledOAuthRedirectURL else {
             throw Failure.missingConfiguration
         }
@@ -340,6 +372,8 @@ final class SyncBackendSelectionStore {
         if let firstFailure { throw firstFailure }
 
         defaults.removeObject(forKey: Self.serverDefaultsKey)
+        defaults.removeObject(forKey: Self.apiBaseDefaultsKey)
+        defaults.removeObject(forKey: Self.protocolDefaultsKey)
         defaults.removeObject(forKey: Self.spaceDefaultsKey)
         markSwitch(to: .iCloud)
         try keychain.deleteItem(account: Self.pendingLocalEraseAccount)
@@ -469,6 +503,8 @@ private final class SnippetsCloudOAuthClient {
 
     struct SignInResult {
         let serverURL: URL
+        let apiBaseURL: URL
+        let protocolMajor: Int
         let spaceID: UUID
     }
 
@@ -549,6 +585,8 @@ private final class SnippetsCloudOAuthClient {
 
     struct StoredSession: Codable {
         let schemaVersion: Int
+        let protocolMajor: Int?
+        let apiBase: URL?
         let serverURL: URL
         let issuer: URL
         let resource: URL
@@ -573,7 +611,12 @@ private final class SnippetsCloudOAuthClient {
     }
 
     struct SpacesResponse: Decodable { let spaces: [Space] }
-    struct Space: Decodable { let spaceId: UUID; let role: String }
+    struct Space: Decodable {
+        struct Scope: Decodable { let spaceId: UUID }
+        let scope: Scope
+        let role: String
+        var spaceId: UUID { scope.spaceId }
+    }
 
     private let keychain: KeychainSecretStore
     private let redirectURL: URL
@@ -604,8 +647,8 @@ private final class SnippetsCloudOAuthClient {
             discoveryURL,
             maximumBytes: 256 * 1_024,
             failure: .discoveryUnavailable)
-        guard discovery.protocolMajor == 1,
-              try validatedBaseURL(discovery.apiBase) == serverURL,
+        guard discovery.protocolMajor == 2,
+              discovery.apiBase == serverURL.appending(path: "v2"),
               try validatedBaseURL(discovery.oidc.resource) == serverURL,
               discovery.oidc.authorizationFlow == "authorization_code_pkce",
               discovery.capabilities.contains("oidc-pkce"),
@@ -743,7 +786,9 @@ private final class SnippetsCloudOAuthClient {
             accessToken: token.accessToken,
             existingSpaceID: existingSpaceID)
         let stored = StoredSession(
-            schemaVersion: 4,
+            schemaVersion: 5,
+            protocolMajor: 2,
+            apiBase: discovery.apiBase,
             serverURL: serverURL,
             issuer: issuer,
             resource: discovery.oidc.resource,
@@ -760,7 +805,11 @@ private final class SnippetsCloudOAuthClient {
         try keychain.storeItem(
             try JSONEncoder().encode(stored),
             account: SyncBackendSelectionStore.oauthSessionAccount)
-        return SignInResult(serverURL: serverURL, spaceID: spaceID)
+        return SignInResult(
+            serverURL: serverURL,
+            apiBaseURL: discovery.apiBase,
+            protocolMajor: discovery.protocolMajor,
+            spaceID: spaceID)
     }
 
     func currentAccessToken(expectedServerURL: URL) throws -> String? {
@@ -807,7 +856,9 @@ private final class SnippetsCloudOAuthClient {
         }
         try validateResourceAudience(accessToken: token.accessToken, resource: stored.resource)
         let updated = StoredSession(
-            schemaVersion: 4,
+            schemaVersion: 5,
+            protocolMajor: stored.protocolMajor,
+            apiBase: stored.apiBase,
             serverURL: stored.serverURL,
             issuer: stored.issuer,
             resource: stored.resource,
@@ -843,12 +894,16 @@ private final class SnippetsCloudOAuthClient {
         }
     }
 
-    private func loadSession() throws -> StoredSession? {
+    private func loadSession(allowLegacyV1ForLogout: Bool = false) throws -> StoredSession? {
         guard let data = try keychain.loadItem(
             account: SyncBackendSelectionStore.oauthSessionAccount) else { return nil }
         guard data.count <= 128 * 1_024,
               let value = try? JSONDecoder().decode(StoredSession.self, from: data),
-              value.schemaVersion == 4,
+              (value.schemaVersion == 5 || (allowLegacyV1ForLogout && value.schemaVersion == 4)),
+              value.schemaVersion == 4 || (
+                  value.protocolMajor == 2
+                      && value.apiBase == value.serverURL.appending(path: "v2")
+              ),
               !value.clientID.isEmpty, value.clientID.utf8.count <= 256,
               (60...86_400).contains(value.maximumAccessTokenAgeSeconds),
               (8...16_384).contains(value.accessToken.utf8.count),
@@ -868,7 +923,7 @@ private final class SnippetsCloudOAuthClient {
     }
 
     func revokeCurrentSession(expectedServerURL: URL) async throws {
-        guard var stored = try loadSession() else {
+        guard var stored = try loadSession(allowLegacyV1ForLogout: true) else {
             guard !keychain.hasItem(account: SyncBackendSelectionStore.oauthRevocationAccount)
             else { throw Failure.invalidStoredSession }
             return
@@ -884,21 +939,22 @@ private final class SnippetsCloudOAuthClient {
         // after adding both generations to that journal. No later ordinary refresh can
         // start while the journal exists.
         await Self.refreshGate.drain()
-        guard let latest = try loadSession() else { throw Failure.invalidStoredSession }
+        guard let latest = try loadSession(allowLegacyV1ForLogout: true) else {
+            throw Failure.invalidStoredSession
+        }
         try validateServerBinding(latest, expectedServerURL: expectedServerURL)
         stored = latest
         revocationJournal = try loadRevocationJournal(boundTo: stored)
 
         func revokeAtResource(serverURL: URL, accessToken: String) async throws -> Int {
             var request = URLRequest(
-                url: serverURL.appending(path: "v1/session"))
+                url: serverURL.appending(path: "v2/session"))
             request.httpMethod = "DELETE"
             request.timeoutInterval = 20
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             request.setValue(
                 "Bearer \(accessToken)",
                 forHTTPHeaderField: "Authorization")
-            request.setValue("1", forHTTPHeaderField: "X-Snippets-Protocol")
             let (body, response) = try await boundedResponse(
                 request,
                 maximumBytes: 256 * 1_024)
@@ -1088,7 +1144,7 @@ private final class SnippetsCloudOAuthClient {
         existingSpaceID: UUID?
     ) async throws -> UUID {
         let response: SpacesResponse = try await authorizedJSON(
-            url: serverURL.appending(path: "v1/spaces"),
+            url: serverURL.appending(path: "v2/spaces"),
             method: "GET",
             accessToken: accessToken)
         if let existingSpaceID, response.spaces.contains(where: { $0.spaceId == existingSpaceID }) {
@@ -1098,14 +1154,12 @@ private final class SnippetsCloudOAuthClient {
         let owned = response.spaces.filter { $0.role == "owner" }
         if owned.count == 1 { return owned[0].spaceId }
         guard response.spaces.isEmpty else { throw Failure.spaceSelectionRequired }
-        struct CreatedSpace: Decodable { let spaceId: UUID }
-        struct Request: Encodable { let idempotencyKey: UUID }
-        let created: CreatedSpace = try await authorizedJSON(
-            url: serverURL.appending(path: "v1/spaces"),
+        let idempotencyKey = UUID(uuidString: "7b28d156-77fd-4f7f-bdf3-234f7d97ac91")!
+        let created: Space = try await authorizedJSON(
+            url: serverURL.appending(path: "v2/spaces"),
             method: "POST",
             accessToken: accessToken,
-            body: try JSONEncoder().encode(Request(
-                idempotencyKey: UUID(uuidString: "7b28d156-77fd-4f7f-bdf3-234f7d97ac91")!)))
+            additionalHeaders: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()])
         return created.spaceId
     }
 
@@ -1137,7 +1191,8 @@ private final class SnippetsCloudOAuthClient {
         url: URL,
         method: String,
         accessToken: String,
-        body: Data? = nil
+        body: Data? = nil,
+        additionalHeaders: [String: String] = [:]
     ) async throws -> Response {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -1145,7 +1200,7 @@ private final class SnippetsCloudOAuthClient {
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("1", forHTTPHeaderField: "X-Snippets-Protocol")
+        for (name, value) in additionalHeaders { request.setValue(value, forHTTPHeaderField: name) }
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await boundedResponse(request, maximumBytes: 1 * 1_024 * 1_024)
         guard let http = response as? HTTPURLResponse else { throw Failure.discoveryUnavailable }

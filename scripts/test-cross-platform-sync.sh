@@ -3,17 +3,13 @@ set -euo pipefail
 umask 077
 
 CLIENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SERVER_WORKTREE="${SNIPPETS_SERVER_WORKTREE:-$(dirname "$CLIENT_DIR")/snippets-server}"
+SERVER_WORKTREE="${SNIPPETS_SERVER_WORKTREE:-$CLIENT_DIR}"
 SERVER_DIR="$SERVER_WORKTREE/server"
-PG_BIN="${SNIPPETS_POSTGRES_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
 JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 export JAVA_HOME
 
-for executable in ruby curl jq rg cloudflared xcodebuild xcrun uuidgen openssl adb; do
+for executable in ruby curl jq rg cloudflared xcodebuild xcrun uuidgen openssl adb docker; do
   command -v "$executable" >/dev/null || { echo "missing executable: $executable" >&2; exit 1; }
-done
-for executable in initdb pg_ctl createdb psql; do
-  test -x "$PG_BIN/$executable" || { echo "missing PostgreSQL executable: $PG_BIN/$executable" >&2; exit 1; }
 done
 test -d "$SERVER_DIR" || { echo "server worktree not found: $SERVER_DIR" >&2; exit 1; }
 
@@ -24,6 +20,7 @@ EDGE_PORT="$(ruby -rsocket -e 's=TCPServer.new("127.0.0.1", 0); puts s.addr[1]; 
 API_PORT="$(ruby -rsocket -e 's=TCPServer.new("127.0.0.1", 0); puts s.addr[1]; s.close')"
 OWNER_PASSWORD="$(openssl rand -hex 24)"
 RUNTIME_PASSWORD="$(openssl rand -hex 24)"
+COMPOSE_PROJECT="snippets-fourway"
 EDGE_PID=""
 API_TUNNEL_PID=""
 API_PID=""
@@ -35,6 +32,28 @@ MACOS_CONFIG_PATH="/tmp/snippets-cross-platform-e2e-macos.json"
 MACOS_CONFIG_OWNED=0
 CHAOS_CONFIGURATION_PATH="$RUN_ROOT/chaos.json"
 CHAOS_STATE_PATH="$RUN_ROOT/chaos-state.json"
+
+compose() {
+  POSTGRES_DB=snippets_fourway_test \
+  POSTGRES_USER=snippets_owner \
+  POSTGRES_PASSWORD="$OWNER_PASSWORD" \
+  SNIPPETS_RUNTIME_PASSWORD="$RUNTIME_PASSWORD" \
+  DATABASE_PORT="$PG_PORT" \
+  SERVER_BIND_PORT="$API_PORT" \
+  SNIPPETS_ENV=testing \
+  PUBLIC_BASE_URL="${API_ORIGIN:-http://127.0.0.1:$API_PORT}" \
+  SERVER_INSTANCE_ID="${SERVER_INSTANCE_ID:-00000000-0000-4000-8000-000000000001}" \
+  SERVER_VERSION=integration \
+  TOKEN_HMAC_SECRET="${TOKEN_HMAC_SECRET:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}" \
+  IDENTITY_PEPPER="${IDENTITY_PEPPER:-QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=}" \
+  OIDC_ISSUER="${OIDC_ORIGIN:-https://identity.example.invalid/}" \
+  OIDC_JWKS_URL="${OIDC_ORIGIN:-https://identity.example.invalid}/jwks" \
+  OIDC_AUDIENCE="${API_ORIGIN:-http://127.0.0.1:$API_PORT}" \
+  OIDC_CLIENT_ID=snippets-integration-test \
+  OIDC_STEP_UP_AMR_VALUES=webauthn \
+  docker compose --file "$SERVER_DIR/docker-compose.yml" \
+    --project-directory "$SERVER_DIR" --project-name "$COMPOSE_PROJECT" "$@"
+}
 
 cleanup() {
   set +e
@@ -55,11 +74,10 @@ cleanup() {
     "$ADB" emu kill >/dev/null 2>&1
     wait "$ANDROID_EMULATOR_PID" 2>/dev/null
   fi
-  for process_id in "$API_PID" "$API_TUNNEL_PID" "$EDGE_PID"; do
+  for process_id in "$API_TUNNEL_PID" "$EDGE_PID"; do
     [[ -z "$process_id" ]] || kill "$process_id" >/dev/null 2>&1
   done
-  "$PG_BIN/pg_ctl" -D "$RUN_ROOT/pgdata" status >/dev/null 2>&1 && \
-    "$PG_BIN/pg_ctl" -D "$RUN_ROOT/pgdata" -m fast stop >/dev/null 2>&1
+  compose down --volumes --remove-orphans >/dev/null 2>&1
   if [[ "$RUN_ROOT" == /tmp/snippets-fourway.* ]]; then
     rm -rf -- "$RUN_ROOT"
   fi
@@ -108,7 +126,7 @@ wait_system_resolution() {
 
 issue_token() {
   ruby "$SERVER_DIR/Scripts/oidc-integration-fixture.rb" token \
-    "$RUN_ROOT/oidc.pem" "$OIDC_ORIGIN" snippets-sync-test snippets-fourway-a
+    "$RUN_ROOT/oidc.pem" "$OIDC_ORIGIN" "$API_ORIGIN" snippets-fourway-a
 }
 
 set_ios_environment() {
@@ -172,7 +190,7 @@ assert_server_record_shape() {
   local token
   token="$(issue_token)"
   curl -fsS -H "Authorization: Bearer $token" \
-    "$API_ORIGIN/v1/spaces/$SPACE_ID/changes?limit=50" | \
+    "$API_ORIGIN/v2/spaces/$SPACE_ID/changes?limit=50" | \
     jq -e --argjson total "$expected_total" --argjson live "$expected_live" \
       --argjson deleted "$expected_deleted" \
       '(.records | length) == $total
@@ -227,31 +245,12 @@ xcodebuild -quiet -project "$CLIENT_DIR/Snippets.xcodeproj" -scheme 'Snippets iO
   CODE_SIGNING_ALLOWED=NO build-for-testing
 "$CLIENT_DIR/gradlew" -p "$CLIENT_DIR" :app:assembleDebug :app:assembleDebugAndroidTest
 
-printf '%s\n' "$OWNER_PASSWORD" > "$RUN_ROOT/owner.pw"
-chmod 600 "$RUN_ROOT/owner.pw"
 openssl genrsa -out "$RUN_ROOT/oidc.pem" 2048 >/dev/null 2>&1
 chmod 600 "$RUN_ROOT/oidc.pem"
 disable_chaos
 
 echo "Starting disposable PostgreSQL"
-"$PG_BIN/initdb" -D "$RUN_ROOT/pgdata" --username=snippets_owner \
-  --pwfile="$RUN_ROOT/owner.pw" --auth-local=trust --auth-host=scram-sha-256 >/dev/null
-"$PG_BIN/pg_ctl" -D "$RUN_ROOT/pgdata" -l "$RUN_ROOT/postgres.log" \
-  -o "-h 127.0.0.1 -p $PG_PORT" start >/dev/null
-PGPASSWORD="$OWNER_PASSWORD" "$PG_BIN/createdb" -h 127.0.0.1 -p "$PG_PORT" \
-  -U snippets_owner snippets_fourway_test
-PGPASSWORD="$OWNER_PASSWORD" "$PG_BIN/psql" -X -v ON_ERROR_STOP=1 \
-  -v runtime_password="$RUNTIME_PASSWORD" -h 127.0.0.1 -p "$PG_PORT" \
-  -U snippets_owner -d snippets_fourway_test >/dev/null <<'SQL'
-CREATE ROLE snippets_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD :'runtime_password';
-SQL
-
-export DATABASE_HOST=127.0.0.1 DATABASE_PORT="$PG_PORT" DATABASE_NAME=snippets_fourway_test
-export DATABASE_OWNER_USER=snippets_owner DATABASE_OWNER_PASSWORD="$OWNER_PASSWORD"
-export DATABASE_RUNTIME_USER=snippets_runtime DATABASE_RUNTIME_PASSWORD="$RUNTIME_PASSWORD"
-export DATABASE_TLS_MODE=disable
-(cd "$SERVER_DIR" && MIGRATIONS_DIR="$SERVER_DIR/Migrations" swift run snippets-migrate)
+compose up --detach postgres
 
 ruby "$CLIENT_DIR/scripts/cross-platform-tls-edge.rb" \
   "$RUN_ROOT/oidc.pem" "$EDGE_PORT" "$API_PORT" \
@@ -277,12 +276,9 @@ TOKEN_HMAC_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
 IDENTITY_PEPPER="$(openssl rand -base64 32 | tr -d '\n')"
 export TOKEN_HMAC_SECRET IDENTITY_PEPPER
 export OIDC_ISSUER="$OIDC_ORIGIN" OIDC_JWKS_URL="$OIDC_ORIGIN/jwks"
-export OIDC_AUDIENCE=snippets-sync-test OIDC_CLIENT_ID=snippets-integration-test
+export OIDC_AUDIENCE="$API_ORIGIN" OIDC_CLIENT_ID=snippets-integration-test
 export OIDC_SCOPES='openid offline_access' OIDC_ALLOWED_ALGORITHMS=RS256
-(cd "$SERVER_DIR" && swift build --product snippets-server)
-SERVER_BIN="$(cd "$SERVER_DIR" && swift build --show-bin-path)/snippets-server"
-"$SERVER_BIN" > "$RUN_ROOT/server.log" 2>&1 &
-API_PID=$!
+compose up --detach --build server
 
 for attempt in $(seq 1 120); do
   if curl --max-time 5 -fsS "$API_ORIGIN/health/ready" 2>/dev/null | \
@@ -295,37 +291,35 @@ done
 curl --max-time 5 -fsS "$API_ORIGIN/health/ready" | jq -e '.status == "ok"' >/dev/null
 
 NO_AUTH_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-  -H 'Content-Type: application/json' --data-binary '{}' "$API_ORIGIN/v1/spaces")"
+  -H 'Content-Type: application/json' --data-binary '{}' "$API_ORIGIN/v2/spaces")"
 test "$NO_AUTH_STATUS" = 401
 MALFORMED_AUTH_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
   -H 'Authorization: Bearer not-a-jwt' -H 'Content-Type: application/json' \
-  --data-binary '{}' "$API_ORIGIN/v1/spaces")"
+  --data-binary '{}' "$API_ORIGIN/v2/spaces")"
 test "$MALFORMED_AUTH_STATUS" = 401
 WRONG_AUDIENCE_TOKEN="$(ruby "$SERVER_DIR/Scripts/oidc-integration-fixture.rb" token \
   "$RUN_ROOT/oidc.pem" "$OIDC_ORIGIN" snippets-wrong-audience snippets-fourway-a)"
 WRONG_AUDIENCE_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $WRONG_AUDIENCE_TOKEN" -H 'Content-Type: application/json' \
-  --data-binary '{}' "$API_ORIGIN/v1/spaces")"
+  --data-binary '{}' "$API_ORIGIN/v2/spaces")"
 test "$WRONG_AUDIENCE_STATUS" = 401
 
 TOKEN_A="$(issue_token)"
 IDEMPOTENCY="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 SPACE_RESPONSE="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN_A" \
-  -H 'Content-Type: application/json' --data-binary "{\"idempotencyKey\":\"$IDEMPOTENCY\"}" \
-  "$API_ORIGIN/v1/spaces")"
-SPACE_ID="$(jq -er '.spaceId' <<< "$SPACE_RESPONSE")"
+  -H "Idempotency-Key: $IDEMPOTENCY" "$API_ORIGIN/v2/spaces")"
+SPACE_ID="$(jq -er '.scope.spaceId' <<< "$SPACE_RESPONSE")"
 REPLAYED_SPACE_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN_A" \
-  -H 'Content-Type: application/json' --data-binary "{\"idempotencyKey\":\"$IDEMPOTENCY\"}" \
-  "$API_ORIGIN/v1/spaces" | jq -er '.spaceId')"
+  -H "Idempotency-Key: $IDEMPOTENCY" "$API_ORIGIN/v2/spaces" | jq -er '.scope.spaceId')"
 test "$REPLAYED_SPACE_ID" = "$SPACE_ID"
 curl -fsS -H "Authorization: Bearer $TOKEN_A" \
-  "$API_ORIGIN/v1/spaces/$SPACE_ID/changes?limit=50" | \
-  jq -e --arg space "$SPACE_ID" '.spaceId == $space and (.records | length) == 0' >/dev/null
+  "$API_ORIGIN/v2/spaces/$SPACE_ID/changes?limit=50" | \
+  jq -e --arg space "$SPACE_ID" '.scope.spaceId == $space and (.records | length) == 0' >/dev/null
 
 TOKEN_B="$(ruby "$SERVER_DIR/Scripts/oidc-integration-fixture.rb" token \
-  "$RUN_ROOT/oidc.pem" "$OIDC_ORIGIN" snippets-sync-test snippets-fourway-b)"
+  "$RUN_ROOT/oidc.pem" "$OIDC_ORIGIN" "$API_ORIGIN" snippets-fourway-b)"
 OTHER_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' \
-  -H "Authorization: Bearer $TOKEN_B" "$API_ORIGIN/v1/spaces/$SPACE_ID/scope")"
+  -H "Authorization: Bearer $TOKEN_B" "$API_ORIGIN/v2/spaces/$SPACE_ID")"
 test "$OTHER_STATUS" = 404
 
 IOS_UDID="${IOS_SIMULATOR_UDID:-$(xcrun simctl list devices available -j | ruby -rjson -e '
@@ -375,7 +369,7 @@ run_macos_phase mac-verify
 run_ios_phase ios-verify
 LOST_ACK_GENERATION="lost-delete-ack"
 LOST_ACK_RULES="$(jq -cn --arg pattern \
-  "\\A/v1/spaces/$SPACE_ID/records:batch\\z" '[{
+  "\\A/v2/spaces/$SPACE_ID/records/batch\\z" '[{
     id: "lost-delete-ack",
     method: "POST",
     pathPattern: $pattern,
@@ -394,7 +388,7 @@ disable_chaos
 
 TRUNCATE_GENERATION="truncate-macos-change-page"
 TRUNCATE_RULES="$(jq -cn --arg pattern \
-  "\\A/v1/spaces/$SPACE_ID/changes(?:\\?.*)?\\z" '[{
+  "\\A/v2/spaces/$SPACE_ID/changes(?:\\?.*)?\\z" '[{
     id: "truncate-macos-change-page",
     method: "GET",
     pathPattern: $pattern,
@@ -408,8 +402,8 @@ disable_chaos
 
 STALE_CURSOR_GENERATION="stale-android-cursor"
 STALE_CURSOR_RULES="$(jq -cn --arg pattern \
-  "\\A/v1/spaces/$SPACE_ID/changes\\?limit=50&cursor=.+\\z" \
-  --arg path "/v1/spaces/$SPACE_ID/changes?limit=50&cursor=not-a-valid-cursor" '[{
+  "\\A/v2/spaces/$SPACE_ID/changes\\?limit=50&cursor=.+\\z" \
+  --arg path "/v2/spaces/$SPACE_ID/changes?limit=50&cursor=not-a-valid-cursor" '[{
     id: "stale-android-cursor",
     method: "GET",
     pathPattern: $pattern,
@@ -426,14 +420,14 @@ run_android_phase verify-deletion
 
 TOKEN_A="$(issue_token)"
 curl -fsS -H "Authorization: Bearer $TOKEN_A" \
-  "$API_ORIGIN/v1/spaces/$SPACE_ID/changes?limit=50" | \
+  "$API_ORIGIN/v2/spaces/$SPACE_ID/changes?limit=50" | \
   jq -e '(.records | length) == 3
     and ([.records[] | select(.deleted == false)] | length) == 2
     and ([.records[] | select(.deleted == true)] | length) == 1
     and .fullSnapshot == true and .hasMore == false' >/dev/null
 
-DB_SUMMARY="$(PGPASSWORD="$OWNER_PASSWORD" "$PG_BIN/psql" -XAt -h 127.0.0.1 \
-  -p "$PG_PORT" -U snippets_owner -d snippets_fourway_test -c "
+DB_SUMMARY="$(compose exec --no-TTY postgres psql -XAt \
+  -U snippets_owner -d snippets_fourway_test -c "
 SELECT count(*), bool_and(
   position(convert_to('snippets-macos-e2e-initial-8d134f53', 'UTF8') in blob) = 0 AND
   position(convert_to('snippets-macos-e2e-final-from-ios-8d134f53', 'UTF8') in blob) = 0 AND
@@ -443,16 +437,16 @@ SELECT count(*), bool_and(
 FROM records;")"
 test "$DB_SUMMARY" = "3|t"
 
-RLS_SUMMARY="$(PGPASSWORD="$OWNER_PASSWORD" "$PG_BIN/psql" -XAt -h 127.0.0.1 \
-  -p "$PG_PORT" -U snippets_owner -d snippets_fourway_test -c "
+RLS_SUMMARY="$(compose exec --no-TTY postgres psql -XAt \
+  -U snippets_owner -d snippets_fourway_test -c "
 SELECT count(*), bool_and(relrowsecurity), bool_and(relforcerowsecurity)
 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relname IN
-('users','identities','spaces','space_memberships','space_creation_requests','records','changes','key_envelopes','pairings');")"
+('users','identities','spaces','space_memberships','space_creation_requests','records','changes','recovery_envelopes','pairings');")"
 test "$RLS_SUMMARY" = "9|t|t"
 
-RUNTIME_SUMMARY="$(PGPASSWORD="$RUNTIME_PASSWORD" "$PG_BIN/psql" -XAt -h 127.0.0.1 \
-  -p "$PG_PORT" -U snippets_runtime -d snippets_fourway_test -c \
+RUNTIME_SUMMARY="$(compose exec --no-TTY --env PGPASSWORD="$RUNTIME_PASSWORD" postgres psql -XAt \
+  -U snippets_runtime -d snippets_fourway_test -c \
   "SELECT current_setting('app.user_id', true) IS NULL, count(*) FROM records;")"
 test "$RUNTIME_SUMMARY" = "t|0"
 

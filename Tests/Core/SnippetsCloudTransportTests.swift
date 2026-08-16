@@ -37,10 +37,8 @@ struct SnippetsCloudTransportTests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-access-token")
             let path = try #require(request.url?.path)
             let object: [String: Any]
-            if path.hasSuffix("/scope") {
-                object = Self.scope(space: space, dataset: dataset, feed: feed)
-            } else {
-                object = Self.scope(space: space, dataset: dataset, feed: feed).merging([
+            if path.hasSuffix("/changes") {
+                object = Self.scoped(space: space, dataset: dataset, feed: feed, values: [
                     "records": [[
                         "id": recordID.uuidString.lowercased(),
                         "rev": "opaque-rev",
@@ -51,7 +49,9 @@ struct SnippetsCloudTransportTests {
                     "cursor": "cursor-1",
                     "hasMore": false,
                     "fullSnapshot": true,
-                ], uniquingKeysWith: { _, new in new })
+                ])
+            } else {
+                object = Self.space(space: space, dataset: dataset, feed: feed)
             }
             return (200, try JSONSerialization.data(withJSONObject: object))
         }
@@ -85,7 +85,7 @@ struct SnippetsCloudTransportTests {
         CloudURLProtocol.handler = { request in
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh-access-token")
             return (200, try JSONSerialization.data(withJSONObject:
-                Self.scope(space: space, dataset: dataset, feed: feed)))
+                Self.space(space: space, dataset: dataset, feed: feed)))
         }
 
         let transport = SnippetsCloudTransport(
@@ -117,7 +117,7 @@ struct SnippetsCloudTransportTests {
             }
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer refreshed-access-token")
             return (200, try JSONSerialization.data(withJSONObject:
-                Self.scope(space: space, dataset: dataset, feed: feed)))
+                Self.space(space: space, dataset: dataset, feed: feed)))
         }
 
         let transport = SnippetsCloudTransport(
@@ -146,9 +146,9 @@ struct SnippetsCloudTransportTests {
         sessionConfiguration.protocolClasses = [CloudURLProtocol.self]
         CloudURLProtocol.handler = { request in
             let path = try #require(request.url?.path)
-            if path.hasSuffix("/scope") {
+            if !path.hasSuffix("/records/batch") {
                 return (200, try JSONSerialization.data(withJSONObject:
-                    Self.scope(space: space, dataset: dataset, feed: feed)))
+                    Self.space(space: space, dataset: dataset, feed: feed)))
             }
             let body = try Self.bodyData(request)
             let root = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -156,14 +156,14 @@ struct SnippetsCloudTransportTests {
             let item = try #require(items.first)
             #expect(item.keys.contains("expectedRecordVersion"))
             #expect(item["expectedRecordVersion"] is NSNull)
-            let response = Self.scope(space: space, dataset: dataset, feed: feed).merging([
+            let response = Self.scoped(space: space, dataset: dataset, feed: feed, values: [
                 "outcomes": [[
                     "kind": "accepted",
                     "revision": "opaque-rev",
                     "recordVersion": recordVersion,
                 ]],
                 "partial": false,
-            ], uniquingKeysWith: { _, new in new })
+            ])
             return (200, try JSONSerialization.data(withJSONObject: response))
         }
 
@@ -234,6 +234,25 @@ struct SnippetsCloudTransportTests {
             "datasetGeneration": dataset.uuidString.lowercased(),
             "feedEpoch": feed.uuidString.lowercased(),
         ]
+    }
+
+    private static func space(space: UUID, dataset: UUID, feed: UUID) -> [String: Any] {
+        [
+            "scope": scope(space: space, dataset: dataset, feed: feed),
+            "role": "owner",
+            "keyEpoch": 1,
+        ]
+    }
+
+    private static func scoped(
+        space: UUID,
+        dataset: UUID,
+        feed: UUID,
+        values: [String: Any]
+    ) -> [String: Any] {
+        values.merging([
+            "scope": scope(space: space, dataset: dataset, feed: feed),
+        ], uniquingKeysWith: { _, new in new })
     }
 
     private static func bodyData(_ request: URLRequest) throws -> Data {

@@ -105,7 +105,13 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         let space = UUID()
         let cloudKeys = SnippetsCloudKeyStore(
             keychain: cloudKeychain,
-            coordinates: { .init(serverURL: server, spaceID: space) })
+            coordinates: {
+                .init(
+                    serverURL: server,
+                    apiBaseURL: server.appending(path: "v2"),
+                    protocolMajor: 2,
+                    spaceID: space)
+            })
 
         let syncKeys = SyncKeyStore(
             keychain: makeStore(KeychainOperationsProbe()),
@@ -148,7 +154,13 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         let space = UUID()
         let cloudKeys = SnippetsCloudKeyStore(
             keychain: cloudKeychain,
-            coordinates: { .init(serverURL: server, spaceID: space) })
+            coordinates: {
+                .init(
+                    serverURL: server,
+                    apiBaseURL: server.appending(path: "v2"),
+                    protocolMajor: 2,
+                    spaceID: space)
+            })
         let selection = SyncBackendSelectionStore(
             defaults: defaults,
             keychain: credentials,

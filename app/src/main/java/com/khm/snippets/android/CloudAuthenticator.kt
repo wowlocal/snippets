@@ -69,6 +69,8 @@ class CloudAuthenticator(
     )
 
     private data class StoredSession(
+        val protocolMajor: Int,
+        val apiBaseURL: String,
         val serverURL: String,
         val issuer: String,
         val resource: String,
@@ -213,6 +215,7 @@ class CloudAuthenticator(
         val stored = loadSession() ?: throw CloudAuthFailure("sign_in_required")
         val pinnedServerURL = configuredServerURL()
         guard(
+            stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
             stored.serverURL == pinnedServerURL &&
                 normalizedBaseURL(expectedServerURL) == pinnedServerURL,
             "sign_in_required",
@@ -259,7 +262,8 @@ class CloudAuthenticator(
         return try {
             val stored = loadSession() ?: return false
             val pinnedServerURL = configuredServerURL()
-            stored.serverURL == pinnedServerURL &&
+            stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
+                stored.serverURL == pinnedServerURL &&
                 (serverURL == null || normalizedBaseURL(serverURL) == pinnedServerURL)
         } catch (_: Exception) {
             false
@@ -353,6 +357,8 @@ class CloudAuthenticator(
             "token_exchange_failed",
         )
         return StoredSession(
+            protocolMajor = 2,
+            apiBaseURL = normalizedBaseURL(serverURL) + "/v2",
             serverURL = normalizedBaseURL(serverURL),
             issuer = normalizedIssuer(issuer),
             resource = normalizedBaseURL(resource),
@@ -378,7 +384,9 @@ class CloudAuthenticator(
     }
 
     private fun StoredSession.toJSON(): String = JSONObject()
-        .put("schemaVersion", 4)
+        .put("schemaVersion", 5)
+        .put("protocolMajor", protocolMajor)
+        .put("apiBaseURL", apiBaseURL)
         .put("serverURL", serverURL)
         .put("issuer", issuer)
         .put("resource", resource)
@@ -398,7 +406,8 @@ class CloudAuthenticator(
         try {
             guard(raw.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid")
             val value = JSONObject(raw)
-            guard(value.optInt("schemaVersion") == 4, "authorization_state_invalid")
+            val schemaVersion = value.optInt("schemaVersion")
+            guard(schemaVersion == 4 || schemaVersion == 5, "authorization_state_invalid")
             val clientID = value.getString("clientID")
             guard(
                 clientID.isNotBlank() && clientID.toByteArray().size <= 256,
@@ -420,9 +429,18 @@ class CloudAuthenticator(
                 "authorization_state_invalid",
             )
             val serverURL = normalizedBaseURL(value.getString("serverURL"))
+            val protocolMajor = if (schemaVersion == 5) value.getInt("protocolMajor") else 1
+            val apiBaseURL = if (schemaVersion == 5) value.getString("apiBaseURL") else "$serverURL/v1"
+            guard(
+                (schemaVersion == 4 && protocolMajor == 1 && apiBaseURL == "$serverURL/v1") ||
+                    (schemaVersion == 5 && protocolMajor == 2 && apiBaseURL == "$serverURL/v2"),
+                "authorization_state_invalid",
+            )
             val resource = normalizedBaseURL(value.getString("resource"))
             guard(resource == serverURL, "authorization_state_invalid")
             return StoredSession(
+                protocolMajor = protocolMajor,
+                apiBaseURL = apiBaseURL,
                 serverURL = serverURL,
                 issuer = normalizedIssuer(value.getString("issuer")),
                 resource = resource,
@@ -490,9 +508,9 @@ class CloudAuthenticator(
         } catch (_: Exception) {
             throw CloudAuthFailure("server_discovery_invalid")
         }
-        guard(value.optInt("protocolMajor") == 1, "server_protocol_incompatible")
+        guard(value.optInt("protocolMajor") == 2, "server_protocol_incompatible")
         guard(
-            normalizedBaseURL(value.getString("apiBase")) == serverURL,
+            value.getString("apiBase") == "$serverURL/v2",
             "server_identity_mismatch",
         )
         val oidc = value.getJSONObject("oidc")
@@ -554,7 +572,7 @@ class CloudAuthenticator(
 
     private fun revokeResourceAccessToken(serverURL: String, accessToken: String): Int {
         try {
-            val connection = URI("$serverURL/v1/session").toURL()
+            val connection = URI("$serverURL/v2/session").toURL()
                 .openConnection() as HttpURLConnection
             connection.requestMethod = "DELETE"
             connection.connectTimeout = 15_000
@@ -562,7 +580,6 @@ class CloudAuthenticator(
             connection.instanceFollowRedirects = false
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Authorization", "Bearer $accessToken")
-            connection.setRequestProperty("X-Snippets-Protocol", "1")
             val status = connection.responseCode
             val body = readBounded(
                 if (status == 204) connection.inputStream else connection.errorStream,

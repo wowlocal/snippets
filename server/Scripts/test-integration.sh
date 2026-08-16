@@ -23,38 +23,27 @@ compose() {
     OIDC_JWKS_URL=https://identity.example.invalid/jwks \
     OIDC_AUDIENCE=http://127.0.0.1:8080 \
     OIDC_CLIENT_ID=snippets-test \
-    docker compose \
-        --file "$server_dir/docker-compose.yml" \
-        --project-directory "$server_dir" \
-        --project-name "$compose_project" \
-        "$@"
+    docker compose --file "$server_dir/docker-compose.yml" \
+        --project-directory "$server_dir" --project-name "$compose_project" "$@"
 }
 
-cleanup() {
-    compose down --volumes --remove-orphans
-}
+cleanup() { compose down --volumes --remove-orphans; }
 trap cleanup EXIT
 
-compose up --detach postgres
-for attempt in {1..60}; do
-    if compose exec --no-TTY postgres pg_isready --username snippets_owner --dbname snippets_sync_test >/dev/null; then
-        break
-    fi
-    if [[ "$attempt" == 60 ]]; then
-        echo "PostgreSQL did not become ready" >&2
-        exit 1
-    fi
-    sleep 1
-done
+compose up --detach --wait postgres
 
-cd "$server_dir"
-SNIPPETS_INTEGRATION_TESTS=1 \
-DATABASE_HOST=127.0.0.1 \
-DATABASE_PORT="$test_port" \
-DATABASE_NAME=snippets_sync_test \
-DATABASE_OWNER_USER=snippets_owner \
-DATABASE_OWNER_PASSWORD="$owner_password" \
-DATABASE_RUNTIME_USER=snippets_runtime \
-DATABASE_RUNTIME_PASSWORD="$runtime_password" \
-DATABASE_TLS_MODE=disable \
-swift test --filter PostgresIntegrationTests
+docker run --rm \
+    --network "${compose_project}_default" \
+    --volume "$server_dir:/source" \
+    --workdir /source \
+    --env SNIPPETS_INTEGRATION_TESTS=1 \
+    --env DATABASE_HOST=postgres \
+    --env DATABASE_PORT=5432 \
+    --env DATABASE_NAME=snippets_sync_test \
+    --env DATABASE_RUNTIME_USER=snippets_runtime \
+    --env DATABASE_RUNTIME_PASSWORD="$runtime_password" \
+    --env DATABASE_OWNER_USER=snippets_owner \
+    --env DATABASE_OWNER_PASSWORD="$owner_password" \
+    --env DATABASE_TLS_MODE=disable \
+    golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 \
+    sh -c 'go test -race ./internal/postgres'

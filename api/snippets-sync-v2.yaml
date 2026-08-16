@@ -1,0 +1,503 @@
+openapi: 3.1.0
+info:
+  title: Snippets Sync API
+  version: 2.0.0
+  description: >-
+    Version 2 blind-storage protocol. Record blobs and key envelopes are opaque,
+    client-encrypted bytes using the snippets-wire-v1 record profile.
+servers:
+  - url: https://sync.example.invalid
+security:
+  - bearerAuth: []
+paths:
+  /.well-known/snippets-sync:
+    get:
+      operationId: getDiscovery
+      security: []
+      responses:
+        '200':
+          description: Server identity, authentication metadata, and protocol limits.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Discovery' }
+        default: { $ref: '#/components/responses/Error' }
+  /health/live:
+    get:
+      operationId: getLiveness
+      security: []
+      responses:
+        '200':
+          description: Process is alive.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /health/ready:
+    get:
+      operationId: getReadiness
+      security: []
+      responses:
+        '200':
+          description: Dependencies are ready.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v2/session:
+    delete:
+      operationId: revokeCurrentSession
+      responses:
+        '204': { description: The presented credential is revoked at this resource server. }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces:
+    get:
+      operationId: listSpaces
+      responses:
+        '200':
+          description: Spaces visible to the authenticated identity.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SpacesResponse' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createSpace
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Created or replayed personal space.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Space' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}:
+    get:
+      operationId: getSpace
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+      responses:
+        '200':
+          description: Current scope and membership.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Space' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}/changes:
+    get:
+      operationId: getChanges
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string, maxLength: 4096 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+      responses:
+        '200':
+          description: Full snapshot page or ordered delta page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChangesPage' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}/records/batch:
+    post:
+      operationId: submitRecords
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BatchRequest' }
+      responses:
+        '200':
+          description: One positional outcome for every input record.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}/recovery-envelope:
+    get:
+      operationId: getRecoveryEnvelope
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+      responses:
+        '200':
+          description: Current opaque recovery envelope, if configured.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecoveryEnvelopeResponse' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putRecoveryEnvelope
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PutRecoveryEnvelopeRequest' }
+      responses:
+        '200':
+          description: Stored opaque recovery envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecoveryEnvelopeResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}/pairings:
+    post:
+      operationId: createPairing
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePairingRequest' }
+      responses:
+        '201':
+          description: Short-lived pairing offer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PairingResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}/pairings/{pairing}:
+    get:
+      operationId: getPairing
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+        - { $ref: '#/components/parameters/PairingID' }
+      responses:
+        '200':
+          description: Pairing state; approved ciphertext is redacted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PairingResponse' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: cancelPairing
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+        - { $ref: '#/components/parameters/PairingID' }
+      responses:
+        '204': { description: Pairing cancelled, already consumed, or already cancelled. }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}/pairings/{pairing}/approval:
+    put:
+      operationId: approvePairing
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+        - { $ref: '#/components/parameters/PairingID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovePairingRequest' }
+      responses:
+        '200':
+          description: Approved pairing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PairingResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/spaces/{space}/pairings/{pairing}/claim:
+    post:
+      operationId: claimPairing
+      parameters:
+        - { $ref: '#/components/parameters/SpaceID' }
+        - { $ref: '#/components/parameters/PairingID' }
+      responses:
+        '200':
+          description: Atomically returns and consumes the approved encrypted key envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClaimPairingResponse' }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    SpaceID:
+      name: space
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PairingID:
+      name: pairing
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Error:
+      description: Closed protocol error with no arbitrary exception text.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ServiceUnavailable:
+      description: A required dependency is unavailable.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Discovery:
+      type: object
+      additionalProperties: false
+      required: [protocolMajor, protocolMinor, serverVersion, serverInstanceId, apiBase, oidc, limits, recordProfile, capabilities]
+      properties:
+        protocolMajor: { type: integer, const: 2 }
+        protocolMinor: { type: integer, const: 0 }
+        serverVersion: { type: string, maxLength: 64 }
+        serverInstanceId: { type: string, format: uuid }
+        apiBase: { type: string, format: uri, maxLength: 2048 }
+        oidc: { $ref: '#/components/schemas/OIDCDiscovery' }
+        limits: { $ref: '#/components/schemas/Limits' }
+        recordProfile: { type: string, const: snippets-wire-v1 }
+        capabilities:
+          type: array
+          maxItems: 16
+          items: { type: string, maxLength: 64 }
+    OIDCDiscovery:
+      type: object
+      additionalProperties: false
+      required: [issuer, resource, clientId, scopes, authorizationFlow, maxAccessTokenAgeSeconds, stepUpMaxAgeSeconds, stepUpAMRValues, stepUpACRValues]
+      properties:
+        issuer: { type: string, format: uri, maxLength: 2048 }
+        resource: { type: string, format: uri, maxLength: 2048 }
+        clientId: { type: string, minLength: 1, maxLength: 256 }
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: { type: string, maxLength: 64 }
+        authorizationFlow: { type: string, const: authorization_code_pkce }
+        maxAccessTokenAgeSeconds: { type: integer, minimum: 60, maximum: 86400 }
+        stepUpMaxAgeSeconds: { type: integer, minimum: 60, maximum: 3600 }
+        stepUpAMRValues:
+          type: array
+          maxItems: 16
+          items: { type: string, maxLength: 64 }
+        stepUpACRValues:
+          type: array
+          maxItems: 16
+          items: { type: string, maxLength: 256 }
+    Limits:
+      type: object
+      additionalProperties: false
+      required: [maxBlobBytes, maxRevisionBytes, maxBatchRecords, maxPageRecords, maxRequestBytes, maxResponseBytes, maxKeyEnvelopeBytes, maxPairingSeconds]
+      properties:
+        maxBlobBytes: { type: integer, const: 900000 }
+        maxRevisionBytes: { type: integer, const: 256 }
+        maxBatchRecords: { type: integer, const: 50 }
+        maxPageRecords: { type: integer, const: 50 }
+        maxRequestBytes: { type: integer, const: 16777216 }
+        maxResponseBytes: { type: integer, const: 67108864 }
+        maxKeyEnvelopeBytes: { type: integer, const: 4096 }
+        maxPairingSeconds: { type: integer, const: 600 }
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: ok }
+    SpacesResponse:
+      type: object
+      additionalProperties: false
+      required: [spaces]
+      properties:
+        spaces:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/Space' }
+    Scope:
+      type: object
+      additionalProperties: false
+      required: [spaceId, scopeBinding, datasetGeneration, feedEpoch]
+      properties:
+        spaceId: { type: string, format: uuid }
+        scopeBinding: { type: string, minLength: 32, maxLength: 256 }
+        datasetGeneration: { type: string, format: uuid }
+        feedEpoch: { type: string, format: uuid }
+    Space:
+      type: object
+      additionalProperties: false
+      required: [scope, role, keyEpoch]
+      properties:
+        scope: { $ref: '#/components/schemas/Scope' }
+        role: { type: string, enum: [owner, writer, reader] }
+        keyEpoch: { type: integer, minimum: 1 }
+    WireRecord:
+      type: object
+      additionalProperties: false
+      required: [id, rev, deleted, blob]
+      properties:
+        id: { type: string, format: uuid }
+        rev: { type: string, minLength: 1, maxLength: 256 }
+        deleted: { type: boolean }
+        blob: { type: string, format: byte, maxLength: 1200000 }
+    ServerRecord:
+      type: object
+      additionalProperties: false
+      required: [id, rev, deleted, blob, recordVersion]
+      properties:
+        id: { type: string, format: uuid }
+        rev: { type: string, minLength: 1, maxLength: 256 }
+        deleted: { type: boolean }
+        blob: { type: string, format: byte, maxLength: 1200000 }
+        recordVersion: { type: string, minLength: 32, maxLength: 2048 }
+    ChangesPage:
+      type: object
+      additionalProperties: false
+      required: [scope, records, cursor, hasMore, fullSnapshot]
+      properties:
+        scope: { $ref: '#/components/schemas/Scope' }
+        records:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/ServerRecord' }
+        cursor: { type: string, minLength: 1, maxLength: 4096 }
+        hasMore: { type: boolean }
+        fullSnapshot: { type: boolean }
+    BatchRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: '#/components/schemas/BatchItem' }
+    BatchItem:
+      type: object
+      additionalProperties: false
+      required: [record, expectedRecordVersion]
+      properties:
+        record: { $ref: '#/components/schemas/WireRecord' }
+        expectedRecordVersion:
+          type: [string, 'null']
+          minLength: 32
+          maxLength: 2048
+    BatchResponse:
+      type: object
+      additionalProperties: false
+      required: [scope, outcomes, partial]
+      properties:
+        scope: { $ref: '#/components/schemas/Scope' }
+        outcomes:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: '#/components/schemas/BatchOutcome' }
+        partial: { type: boolean }
+    BatchOutcome:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [accepted, conflict, rejected] }
+        recordVersion: { type: string, minLength: 32, maxLength: 2048 }
+        revision: { type: string, minLength: 1, maxLength: 256 }
+        authoritativeRecord: { $ref: '#/components/schemas/ServerRecord' }
+        errorCode: { $ref: '#/components/schemas/ErrorCode' }
+        retryAfterSeconds: { type: integer, minimum: 1, maximum: 86400 }
+    RecoveryEnvelopeResponse:
+      type: object
+      additionalProperties: false
+      required: [scope, keyEpoch, recovery]
+      properties:
+        scope: { $ref: '#/components/schemas/Scope' }
+        keyEpoch: { type: integer, minimum: 1 }
+        recovery:
+          anyOf:
+            - { $ref: '#/components/schemas/RecoveryEnvelope' }
+            - { type: 'null' }
+    RecoveryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [purpose, version, keyEpoch, algorithm, ciphertext, createdAt]
+      properties:
+        purpose: { type: string, const: recovery }
+        version: { type: integer, minimum: 1 }
+        keyEpoch: { type: integer, minimum: 1 }
+        algorithm: { type: string, const: snippets-recovery-hkdf-sha256-aes256gcm-v1 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
+        createdAt: { type: string, format: date-time }
+    PutRecoveryEnvelopeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, keyEpoch, algorithm, ciphertext]
+      properties:
+        expectedVersion: { type: [integer, 'null'], minimum: 1 }
+        keyEpoch: { type: integer, minimum: 1 }
+        algorithm: { type: string, const: snippets-recovery-hkdf-sha256-aes256gcm-v1 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
+    CreatePairingRequest:
+      type: object
+      additionalProperties: false
+      required: [recipientPublicKey, nonce, expiresInSeconds]
+      properties:
+        recipientPublicKey:
+          type: string
+          format: byte
+          minLength: 88
+          maxLength: 88
+        nonce: { type: string, format: byte, minLength: 44, maxLength: 44 }
+        expiresInSeconds: { type: integer, minimum: 60, maximum: 600 }
+    ApprovePairingRequest:
+      type: object
+      additionalProperties: false
+      required: [recipientKeyHash, algorithm, ciphertext]
+      properties:
+        recipientKeyHash: { type: string, format: byte, minLength: 44, maxLength: 44 }
+        algorithm: { type: string, const: snippets-pairing-p256-hkdf-sha256-aes256gcm-v1 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
+    PairingResponse:
+      type: object
+      additionalProperties: false
+      required: [scope, pairing]
+      properties:
+        scope: { $ref: '#/components/schemas/Scope' }
+        pairing: { $ref: '#/components/schemas/Pairing' }
+    Pairing:
+      type: object
+      additionalProperties: false
+      required: [pairingId, recipientPublicKey, nonce, authenticationTag, state, expiresAt]
+      properties:
+        pairingId: { type: string, format: uuid }
+        recipientPublicKey: { type: string, format: byte, maxLength: 512 }
+        nonce: { type: string, format: byte, minLength: 44, maxLength: 44 }
+        authenticationTag: { type: string, pattern: '^[A-Z2-9]{6,12}$' }
+        state: { type: string, enum: [pending, approved] }
+        algorithm: { type: string, maxLength: 64 }
+        expiresAt: { type: string, format: date-time }
+    ClaimPairingResponse:
+      type: object
+      additionalProperties: false
+      required: [scope, pairingId, algorithm, ciphertext]
+      properties:
+        scope: { $ref: '#/components/schemas/Scope' }
+        pairingId: { type: string, format: uuid }
+        algorithm: { type: string, const: snippets-pairing-p256-hkdf-sha256-aes256gcm-v1 }
+        ciphertext: { type: string, format: byte, maxLength: 5464 }
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, status, code, requestId]
+      properties:
+        type: { type: string, pattern: '^urn:snippets:error:[a-z_]+$' }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        code: { $ref: '#/components/schemas/ErrorCode' }
+        requestId: { type: string, format: uuid }
+        retryAfterSeconds: { type: integer, minimum: 1, maximum: 86400 }
+        limit: { type: integer, minimum: 0 }
+    ErrorCode:
+      type: string
+      enum: [invalid_request, authentication_required, reauthentication_required, forbidden, not_found, conflict, cursor_invalid, dataset_reset, incompatible_version, payload_too_large, quota_exceeded, rate_limited, pairing_expired, dependency_unavailable, internal_error]

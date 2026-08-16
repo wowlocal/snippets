@@ -6,11 +6,6 @@ x-database-common: &database-common
   DATABASE_NAME: ${POSTGRES_DB:?set POSTGRES_DB}
   DATABASE_TLS_MODE: disable
 
-x-database-owner-environment: &database-owner-environment
-  <<: *database-common
-  DATABASE_OWNER_USER: ${POSTGRES_USER:?set POSTGRES_USER}
-  DATABASE_OWNER_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-
 x-database-runtime-environment: &database-runtime-environment
   <<: *database-common
   DATABASE_RUNTIME_USER: snippets_runtime
@@ -18,7 +13,7 @@ x-database-runtime-environment: &database-runtime-environment
 
 services:
   postgres:
-    image: postgres:17.10-bookworm@sha256:9b18b78397054fce88a9552e9d5a3ad5bb7fd258c5b3cc1c5028e46373d6ea8f
+    image: postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
@@ -27,7 +22,7 @@ services:
     ports:
       - "127.0.0.1:${DATABASE_PORT:-5432}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
       - ./Container/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
@@ -35,18 +30,6 @@ services:
       timeout: 3s
       retries: 30
     restart: unless-stopped
-
-  migrate:
-    build:
-      context: .
-      target: migrate
-    environment:
-      <<: *database-owner-environment
-      MIGRATIONS_DIR: /opt/snippets/Migrations
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
 
   server:
     build:
@@ -86,10 +69,10 @@ services:
       HTTP_PRINCIPAL_REQUESTS_PER_SECOND: ${HTTP_PRINCIPAL_REQUESTS_PER_SECOND:-30}
       HTTP_PRINCIPAL_REQUEST_BURST: ${HTTP_PRINCIPAL_REQUEST_BURST:-60}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${SERVER_BIND_PORT:-8080}:8080"
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777

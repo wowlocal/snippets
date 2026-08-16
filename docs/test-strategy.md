@@ -20,7 +20,7 @@ The strategy protects four product promises:
 | Gate | Trigger | Required environment | Purpose |
 |---|---|---|---|
 | Fast | Every pull request | Hermetic local/CI process | Contract, core semantics, parsing, crypto vectors, HTTP behavior, and platform compilation. |
-| Database | Any server persistence, migration, auth-context, cursor/CAS, or deployment change | Disposable PostgreSQL database ending in `_test`, separate owner/runtime roles | Transactions, concurrent CAS, migrations, runtime grants, and `FORCE ROW LEVEL SECURITY`. |
+| Database | Any server persistence, schema, auth-context, cursor/CAS, or deployment change | Disposable PostgreSQL database ending in `_test`, separate owner/runtime roles | Transactions, concurrent CAS, fresh schema bootstrap, runtime grants, and `FORCE ROW LEVEL SECURITY`. |
 | Platform | Shared model, persistence, crypto, merge, sync, vault, or UI boundary change | macOS runner, iPhone and iPad simulators, Android emulator | Proves that shared behavior still compiles and executes at each native boundary. |
 | Live compatibility | Protocol, provider switching, portable key, HTTP transport, CloudKit adapter, or release candidate | Disposable HTTPS/OIDC/API/PostgreSQL stack and empty test space | Cross-client encrypted record exchange and clean-install recovery. |
 | Release | Every release candidate | Signed staging artifacts plus physical Apple and Android devices | Entitlements, device keystores/keychain, backgrounding, networking, upgrade, restore, and operator drills. |
@@ -36,7 +36,7 @@ evidence but must not turn a nondeterministic result green.
 |---|---:|---:|---:|---:|---:|
 | Server docs only | required | — | — | — | — |
 | OpenAPI or HTTP mapping | required | required | required | required | required |
-| Migration, SQL, RLS, roles, cursor, CAS | required | required | conditional if contract unchanged | required | required |
+| Schema, SQL, RLS, roles, cursor, CAS | required | required | conditional if contract unchanged | required | required |
 | OIDC/JWKS validation or identity binding | required | required | conditional | required with two subjects | required |
 | Shared Swift model/codec/crypto/merge/vault | required | conditional if HTTP persistence is affected | required | required | required |
 | macOS/iOS CloudKit adapter | required | — | required | required iCloud regression plus provider switching | required |
@@ -57,17 +57,16 @@ Run from the repository root:
 ```sh
 cd server
 ./Scripts/check-openapi.sh
-swift build
-swift test
+docker run --rm -v "$PWD/..:/workspace" -w /workspace/server \
+  golang:1.26.6-bookworm \
+  sh -c 'go test -race ./... && go vet ./...'
 ```
 
-`check-openapi.sh` and `SyncHTTPTests.testNormativeOpenAPIAndPluginInputAreIdentical`
-both require the generator input to remain byte-for-byte identical to
-`api/snippets-sync-v1.yaml`. The normal test run builds the PostgreSQL integration target
-but skips its destructive test methods unless their explicit gate is enabled. The fast
-OIDC test signs a current ES256 token, serves its JWKS through an intercepted HTTPS
-request, verifies stable issuer/subject pseudonyms, and rejects wrong issuer/audience
-claims without contacting an external identity provider.
+`check-openapi.sh` regenerates the checked-in strict server interface from the single
+normative `api/snippets-sync-v2.yaml` and fails on a diff. The ordinary Go run skips the
+real PostgreSQL test unless its explicit gate is enabled. OIDC tests serve bounded JWKS
+fixtures locally and verify audience/client binding, assurance, prohibited headers,
+duplicate JSON, pseudonyms, and negative key handling without an external provider.
 
 ### PostgreSQL gate
 
@@ -76,28 +75,16 @@ cd server
 ./Scripts/test-integration.sh
 ```
 
-The helper owns a dedicated Compose project and volume and removes both on exit. An
-already-provisioned database may be used only when its name ends in `_test`:
-
-```sh
-cd server
-SNIPPETS_INTEGRATION_TESTS=1 \
-DATABASE_HOST=127.0.0.1 \
-DATABASE_PORT=55432 \
-DATABASE_NAME=snippets_sync_test \
-DATABASE_OWNER_USER=snippets_owner \
-DATABASE_OWNER_PASSWORD='<ephemeral-owner-password>' \
-DATABASE_RUNTIME_USER=snippets_runtime \
-DATABASE_RUNTIME_PASSWORD='<ephemeral-runtime-password>' \
-DATABASE_TLS_MODE=disable \
-swift test --filter PostgresIntegrationTests
-```
+The helper owns a dedicated PostgreSQL 18.4 Compose project and volume, initializes its
+brand-new database directly from the checked-in schema, runs
+`go test -race ./internal/postgres`, and removes the project on exit. It does not use the
+user's live database.
 
 This gate must cover both store-level concurrency and the HTTP-to-database identity
 boundary. Its minimum assertions are:
 
-- migrations are checksum-pinned and can be applied concurrently under the advisory
-  lock;
+- the first-boot schema creates the restricted runtime role grants and every protected
+  table on a completely empty database;
 - two identities can use the same record UUID while retrieving only their own exact
   blob bytes;
 - create-only concurrent CAS has exactly one accepted result and one conflict;
@@ -120,27 +107,13 @@ The fast in-memory check can be run on its own:
 
 ```sh
 cd server
-swift test --filter \
-  MemorySyncStoreTests.testLostResponseRetryAndDeltaReplayConvergeWithoutDuplicateChange
+docker run --rm -v "$PWD/..:/workspace" -w /workspace/server \
+  golang:1.26.6-bookworm go test -race ./internal/domain ./internal/httpapi
 ```
 
-With the disposable PostgreSQL environment from the previous section, run the full HTTP
-boundary check directly:
-
-```sh
-cd server
-SNIPPETS_INTEGRATION_TESTS=1 \
-DATABASE_HOST=127.0.0.1 \
-DATABASE_PORT=55432 \
-DATABASE_NAME=snippets_sync_test \
-DATABASE_OWNER_USER=snippets_owner \
-DATABASE_OWNER_PASSWORD='<ephemeral-owner-password>' \
-DATABASE_RUNTIME_USER=snippets_runtime \
-DATABASE_RUNTIME_PASSWORD='<ephemeral-runtime-password>' \
-DATABASE_TLS_MODE=disable \
-swift test --filter \
-  PostgresIntegrationTests.testHTTPNetworkChaosRetriesPartialBatchAndDeltaReplayStayConvergent
-```
+Run `./Scripts/test-integration.sh` for the real-database boundary. The live
+`../scripts/test-cross-platform-sync.sh` test adds the deterministic fault proxy and all
+three native clients against the Compose Go server.
 
 These tests inject failure at a deterministic durability boundary rather than using
 random delays. The update request is allowed to reach the router and complete its
@@ -245,7 +218,7 @@ portable sync-v1 test key bundle
 
 Execute the gate in this order:
 
-1. Apply migrations, start the API, verify readiness/discovery, and create one empty
+1. Initialize a fresh database schema, start the API, verify readiness/discovery, and create one empty
    space for subject A. Prove subject B cannot resolve it.
 2. Run the macOS/shared-Swift live transport test first. It asserts the space is empty,
    uploads a deterministic Apple-core encrypted record, reads it back, and confirms the
@@ -323,7 +296,7 @@ A release candidate additionally requires:
   Production CloudKit environment when Production compatibility is claimed;
 - a PostgreSQL backup/restore and dataset-rotation rehearsal;
 - hosted and clean self-host conformance against the same OpenAPI contract;
-- migration from the oldest supported v1 server and app state;
+- clean initialization from the checked-in schema with no legacy server state;
 - physical iPhone/iPad and Android clean-install/upgrade checks;
 - successful iCloud-only operation before and after Snippets Cloud tests;
 - no unresolved critical/high security finding or unexplained cross-platform fixture

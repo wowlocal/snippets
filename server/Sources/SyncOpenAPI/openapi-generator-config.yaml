@@ -1,5 +1,0 @@
-generate:
-  - types
-  - server
-accessModifier: public
-namingStrategy: idiomatic

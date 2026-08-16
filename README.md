@@ -298,6 +298,8 @@ looking like it authored a local record.
   and vault logic.
 - `snippets-cli/` contains the entitlement-free command-line client.
 - `CorePackage/` is a test overlay for the shared Foundation-only core.
+- `server/` is the Go 1.26.6/PostgreSQL 18.4 blind HTTP sync service; its normative
+  protocol is `api/snippets-sync-v2.yaml`.
 
 The CloudKit implementation stays at the app boundary. The shared core does not import
 CloudKit, AppKit, UIKit, CocoaLumberjack, or MetricKit unconditionally.
@@ -313,7 +315,7 @@ More detail:
   current code is authoritative for implementation status.
 - [docs/android/README.md](docs/android/README.md) — implementation and remaining delivery
   plan for the native Android app, shared Swift core, iCloud/HTTP provider switching, and
-  the self-hostable sync service. Snippets Cloud remains dark-launched, not shipping.
+  the Go self-hostable sync service. Snippets Cloud remains dark-launched, not shipping.
 - [docs/android/testing-strategy.md](docs/android/testing-strategy.md) — executable test
   levels, cross-platform/provider matrices, CloudKit canaries, chaos coverage, and release
   gates for Android, Apple clients, and the sync service.

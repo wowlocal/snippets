@@ -28,6 +28,8 @@ enum class CloudKeyStatus {
 data class CloudConfiguration(
     val provider: SyncProvider = SyncProvider.DEVICE,
     val serverURL: String = "",
+    val apiBaseURL: String = "",
+    val protocolMajor: Int = 0,
     val accessToken: String = "",
     val spaceID: String = "",
     val cursor: String? = null,
@@ -90,9 +92,11 @@ fun parseLibrary(json: String): List<SnippetItem> {
 fun tagsJSON(tags: List<String>): String = JSONArray(tags).toString()
 
 fun CloudConfiguration.toJSON(): String = JSONObject()
-    .put("schemaVersion", 1)
+    .put("schemaVersion", 2)
     .put("provider", provider.name)
     .put("serverURL", serverURL)
+    .put("apiBaseURL", apiBaseURL)
+    .put("protocolMajor", protocolMajor)
     .put("accessToken", accessToken)
     .put("spaceID", spaceID)
     .put("cursor", cursor)
@@ -103,10 +107,21 @@ fun CloudConfiguration.toJSON(): String = JSONObject()
 
 fun cloudConfiguration(json: String): CloudConfiguration {
     val objectValue = JSONObject(json)
+    val schemaVersion = objectValue.optInt("schemaVersion", 1)
+    val serverURL = objectValue.optString("serverURL")
+    val apiBaseURL = objectValue.optString("apiBaseURL")
+    val protocolMajor = objectValue.optInt("protocolMajor")
+    val storedProvider = runCatching { SyncProvider.valueOf(objectValue.getString("provider")) }
+        .getOrDefault(SyncProvider.DEVICE)
+    val hasCurrentHTTPBinding = schemaVersion == 2 && protocolMajor == 2 &&
+        apiBaseURL == serverURL.trimEnd('/') + "/v2"
     return CloudConfiguration(
-        provider = runCatching { SyncProvider.valueOf(objectValue.getString("provider")) }
-            .getOrDefault(SyncProvider.DEVICE),
-        serverURL = objectValue.optString("serverURL"),
+        provider = if (storedProvider == SyncProvider.SNIPPETS_CLOUD && !hasCurrentHTTPBinding) {
+            SyncProvider.DEVICE
+        } else storedProvider,
+        serverURL = serverURL,
+        apiBaseURL = apiBaseURL,
+        protocolMajor = protocolMajor,
         accessToken = objectValue.optString("accessToken"),
         spaceID = objectValue.optString("spaceID"),
         cursor = objectValue.optNullableString("cursor"),

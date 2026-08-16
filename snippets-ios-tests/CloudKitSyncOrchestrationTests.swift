@@ -1803,7 +1803,8 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         await XCTAssertThrowsErrorAsync {
             _ = try await fixture.adapter.submit([late], at: nil)
         }
-        XCTAssertEqual(fixture.driver.cancelCount, 1)
+        let didCancel = await eventually { fixture.driver.cancelCount == 1 }
+        XCTAssertTrue(didCancel)
         XCTAssertEqual(fixture.driver.manualCalls, [],
                        "a sticky failure must reject before invoking CKSyncEngine again")
     }
@@ -1825,7 +1826,8 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         await XCTAssertThrowsErrorAsync {
             _ = try await fixture.adapter.submit([offered], at: nil)
         }
-        XCTAssertEqual(fixture.driver.cancelCount, 1)
+        let didCancel = await eventually { fixture.driver.cancelCount == 1 }
+        XCTAssertTrue(didCancel)
         XCTAssertEqual(fixture.driver.manualCalls, [])
     }
 
@@ -1842,7 +1844,8 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         await XCTAssertThrowsErrorAsync {
             _ = try await fixture.adapter.submit([offered], at: nil)
         }
-        XCTAssertEqual(fixture.driver.cancelCount, 1)
+        let didCancel = await eventually { fixture.driver.cancelCount == 1 }
+        XCTAssertTrue(didCancel)
         XCTAssertEqual(fixture.driver.manualCalls, [])
     }
 

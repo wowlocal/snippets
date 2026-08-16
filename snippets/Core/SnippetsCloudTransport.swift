@@ -5,7 +5,7 @@ import CryptoKit
 import Crypto
 #endif
 
-/// Version-1 HTTP transport for Snippets Cloud and compatible self-hosted servers.
+/// Version-2 HTTP transport for Snippets Cloud and compatible self-hosted servers.
 ///
 /// The type only handles opaque `WireRecord` values. It never receives a `Snippet`, a
 /// vault plaintext, or key material, and it deliberately uses Core's existing cursor,
@@ -64,7 +64,8 @@ actor SnippetsCloudTransport: SyncTransport {
     }
 
     func resolveAccountIdentity() async throws -> SyncAccountIdentity? {
-        let scope: ScopeDTO = try await request(method: "GET", path: scopePath)
+        let descriptor: SpaceDTO = try await request(method: "GET", path: scopePath)
+        let scope = descriptor.scope
         guard scope.spaceId == configuration.spaceID else {
             throw SyncTransportFailure.unreachable(detail: "invalid_scope_response")
         }
@@ -211,7 +212,6 @@ actor SnippetsCloudTransport: SyncTransport {
             throw SyncTransportFailure.rejected(.authenticationRequired(detail: "invalid_access_token"))
         }
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("1", forHTTPHeaderField: "X-Snippets-Protocol")
         if bodyData != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
 
         var (data, http) = try await perform(request)
@@ -279,9 +279,9 @@ actor SnippetsCloudTransport: SyncTransport {
             delegateQueue: nil)
     }()
 
-    private var scopePath: String { "v1/spaces/\(configuration.spaceID.uuidString.lowercased())/scope" }
-    private var changesPath: String { "v1/spaces/\(configuration.spaceID.uuidString.lowercased())/changes" }
-    private var recordsPath: String { "v1/spaces/\(configuration.spaceID.uuidString.lowercased())/records:batch" }
+    private var scopePath: String { "v2/spaces/\(configuration.spaceID.uuidString.lowercased())" }
+    private var changesPath: String { "v2/spaces/\(configuration.spaceID.uuidString.lowercased())/changes" }
+    private var recordsPath: String { "v2/spaces/\(configuration.spaceID.uuidString.lowercased())/records/batch" }
 
     private nonisolated static func identity(
         configuration: Configuration,
@@ -386,6 +386,12 @@ private nonisolated struct ScopeDTO: Codable, Equatable, Sendable {
     let feedEpoch: UUID
 }
 
+private nonisolated struct SpaceDTO: Decodable, Sendable {
+    let scope: ScopeDTO
+    let role: String
+    let keyEpoch: Int
+}
+
 private nonisolated struct ServerRecordDTO: Codable, Sendable {
     let id: UUID
     let rev: String
@@ -412,20 +418,12 @@ private nonisolated struct ServerRecordDTO: Codable, Sendable {
 }
 
 private nonisolated struct ChangesPageDTO: Decodable, Sendable {
-    let spaceId: UUID
-    let scopeBinding: String
-    let datasetGeneration: UUID
-    let feedEpoch: UUID
+    let scope: ScopeDTO
     let records: [ServerRecordDTO]
     let cursor: String
     let hasMore: Bool
     let fullSnapshot: Bool
 
-    var scope: ScopeDTO { ScopeDTO(
-        spaceId: spaceId,
-        scopeBinding: scopeBinding,
-        datasetGeneration: datasetGeneration,
-        feedEpoch: feedEpoch) }
 }
 
 private nonisolated struct BatchRequestDTO: Encodable, Sendable { let items: [BatchItemDTO] }
@@ -443,7 +441,7 @@ private nonisolated struct BatchItemDTO: Encodable, Sendable {
         if let expectedRecordVersion {
             try container.encode(expectedRecordVersion, forKey: .expectedRecordVersion)
         } else {
-            // The v1 schema distinguishes a create's explicit null from a missing
+            // The v2 schema distinguishes a create's explicit null from a missing
             // member. Synthesized Encodable omits nil optionals, so spell it out.
             try container.encodeNil(forKey: .expectedRecordVersion)
         }
@@ -451,18 +449,9 @@ private nonisolated struct BatchItemDTO: Encodable, Sendable {
 }
 
 private nonisolated struct BatchResponseDTO: Decodable, Sendable {
-    let spaceId: UUID
-    let scopeBinding: String
-    let datasetGeneration: UUID
-    let feedEpoch: UUID
+    let scope: ScopeDTO
     let outcomes: [BatchOutcomeDTO]
     let partial: Bool
-
-    var scope: ScopeDTO { ScopeDTO(
-        spaceId: spaceId,
-        scopeBinding: scopeBinding,
-        datasetGeneration: datasetGeneration,
-        feedEpoch: feedEpoch) }
 }
 
 private nonisolated struct BatchOutcomeDTO: Decodable, Sendable {

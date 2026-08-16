@@ -54,9 +54,9 @@ Credential Manager, Android Keystore, BiometricPrompt, OkHttp)
 Shared Swift core (model, file formats, crypto, vault projection, journal,
 merge, deletion guard, SyncEngine, HTTP SyncTransport)
                               |
-                   Snippets HTTP protocol v1
+                   Snippets HTTP protocol v2
                               |
-Swift service (Hummingbird + OpenAPI + PostgreSQL)
+Go service (net/http + generated OpenAPI + PostgreSQL)
 ```
 
 This is deliberately not a SwiftUI wrapper and not a line-for-line port of the UIKit
@@ -77,8 +77,8 @@ The implementation phases add these roots without moving CloudKit into the share
 ```text
 AndroidCorePackage/          # SwiftPM Android build overlay over canonical shared files
 snippets-android/            # Gradle project, Kotlin/Compose app and Android adapters
-api/snippets-sync-v1.yaml    # protocol source of truth, generated client/server models
-server/                      # Swift HTTP service, migrations, container and tests
+api/snippets-sync-v2.yaml    # protocol source of truth and generated Go server models
+server/                      # Go HTTP service, fresh-database schema, container and tests
 docs/android/                # this design and its ADRs
 ```
 
@@ -107,7 +107,7 @@ Fixed now:
   same server.
 - Keep account authentication separate from end-to-end encryption keys.
 - Store only ciphertext and minimum routing/concurrency metadata on the server.
-- Implement the server in Swift and use PostgreSQL as the source of truth.
+- Implement the server in Go and use PostgreSQL as the source of truth.
 
 Must be proven in Phase 0 before product work depends on it:
 

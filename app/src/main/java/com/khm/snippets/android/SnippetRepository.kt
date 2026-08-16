@@ -159,6 +159,8 @@ class SnippetRepository(
         configuration = configuration.copy(
             provider = SyncProvider.SNIPPETS_CLOUD,
             serverURL = serverURL.trim().trimEnd('/'),
+            apiBaseURL = serverURL.trim().trimEnd('/') + "/v2",
+            protocolMajor = 2,
             accessToken = accessToken.trim(),
             spaceID = spaceID.trim(),
             cursor = if (changedScope) null else configuration.cursor,
@@ -218,6 +220,8 @@ class SnippetRepository(
                     configuration = configuration.copy(
                         provider = configuration.provider,
                         serverURL = authorization.serverURL,
+                        apiBaseURL = authorization.serverURL + "/v2",
+                        protocolMajor = 2,
                         accessToken = "",
                         spaceID = spaceID,
                         cursor = if (changedScope) null else configuration.cursor,
@@ -370,6 +374,7 @@ class SnippetRepository(
             configuration.spaceID,
             pending.invitation.pairingID,
             token,
+            status,
         )
         validatePairing(
             taken,

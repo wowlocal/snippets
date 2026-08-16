@@ -125,9 +125,9 @@ against test clients and synthetic keys.
 
 Work:
 
-- review/freeze OpenAPI v1 outer records, discovery, errors and limits;
-- bootstrap Hummingbird/PostgresNIO service and reproducible container;
-- SQL migrations, separate owner/runtime roles, `FORCE RLS`, transaction context;
+- review/freeze OpenAPI v2 outer records, discovery, errors and limits;
+- bootstrap the Go `net/http`/pgx service and reproducible container;
+- clean-database SQL bootstrap, separate owner/runtime roles, `FORCE RLS`, transaction context;
 - spaces/memberships, record CAS, immutable change feed, cursor/full snapshot;
 - authoritative conflict records, partial batches, quota/rate limiting;
 - OIDC validation and native-app staging client configuration;
@@ -146,7 +146,7 @@ Exit gate:
 
 ## Phase 3 — end-to-end HTTP vertical slice (5-7 weeks)
 
-Goal: Android, macOS/iOS, and the Swift service sync ordinary synthetic libraries through
+Goal: Android, macOS/iOS, and the Go service sync ordinary synthetic libraries through
 the existing shared engine.
 
 Work:
@@ -288,10 +288,10 @@ The implementation adds, with exact locked target names determined in Phase 0:
 Android SwiftPM cross-build for arm64 and x86_64
 Android shared-core/golden/fuzz tests on emulator and physical device
 Gradle unit, lint, Compose/Process Text instrumentation and macrobenchmarks
-Server Swift tests and PostgreSQL integration/RLS/property tests
+Server Go race/fuzz tests and PostgreSQL integration/RLS/property tests
 OpenAPI generation-diff and hosted/self-hosted conformance tests
 End-to-end Apple/Android/provider switching and encrypted fixture exchange
-Container/SBOM/dependency/image/migration/backup-restore checks
+Container/SBOM/dependency/image/schema-bootstrap/backup-restore checks
 ```
 
 No test writes to the user's live Apple support directory or a developer's real cloud

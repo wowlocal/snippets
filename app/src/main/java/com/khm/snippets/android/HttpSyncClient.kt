@@ -79,10 +79,11 @@ class HttpSyncClient {
             }
             val response = request(
                 configuration, "GET",
-                "v1/spaces/${configuration.spaceID}/changes$query",
+                "v2/spaces/${configuration.spaceID}/changes$query",
                 accessToken = accessToken)
             val page = JSONObject(response)
-            validateScope(configuration, page)
+            val pageScope = page.getJSONObject("scope")
+            validateScope(configuration, pageScope)
             if (firstPage && page.getBoolean("fullSnapshot")) recordsByID = linkedMapOf()
             val pageRecords = page.getJSONArray("records")
             for (index in 0 until pageRecords.length()) {
@@ -90,7 +91,7 @@ class HttpSyncClient {
                 recordsByID[wire.getString("id")] = wire
             }
             cursor = page.getString("cursor")
-            lastScope = page
+            lastScope = pageScope
             firstPage = false
             if (!page.getBoolean("hasMore")) break
         }
@@ -137,10 +138,10 @@ class HttpSyncClient {
 
             val response = JSONObject(request(
                 configuration, "POST",
-                "v1/spaces/${configuration.spaceID}/records:batch",
+                "v2/spaces/${configuration.spaceID}/records/batch",
                 JSONObject().put("items", items).toString(),
                 accessToken))
-            validateScope(configuration, response)
+            validateScope(configuration, response.getJSONObject("scope"))
             val outcomes = response.getJSONArray("outcomes")
             check(outcomes.length() == batch.size)
 
@@ -192,22 +193,23 @@ class HttpSyncClient {
     ): String {
         validatedBaseURL(serverURL)
         requireAccessToken(accessToken)
-        val spaces = JSONObject(request(serverURL, accessToken, "GET", "v1/spaces"))
+        val spaces = JSONObject(request(serverURL, accessToken, "GET", "v2/spaces"))
             .getJSONArray("spaces")
         val candidates = (0 until spaces.length()).map { spaces.getJSONObject(it) }
         existingSpaceID?.let { existing ->
             candidates.firstOrNull {
-                it.getString("spaceId").equals(existing, ignoreCase = true)
-            }?.let { return it.getString("spaceId") }
+                it.getJSONObject("scope").getString("spaceId").equals(existing, ignoreCase = true)
+            }?.let { return it.getJSONObject("scope").getString("spaceId") }
         }
-        if (candidates.size == 1) return candidates.single().getString("spaceId")
+        if (candidates.size == 1) return candidates.single().getJSONObject("scope").getString("spaceId")
         val owned = candidates.filter { it.optString("role") == "owner" }
-        if (owned.size == 1) return owned.single().getString("spaceId")
+        if (owned.size == 1) return owned.single().getJSONObject("scope").getString("spaceId")
         if (candidates.isNotEmpty()) throw SyncFailure("space_selection_required")
 
-        val body = JSONObject().put("idempotencyKey", PERSONAL_SPACE_IDEMPOTENCY_KEY).toString()
-        return JSONObject(request(serverURL, accessToken, "POST", "v1/spaces", body))
-            .getString("spaceId")
+        return JSONObject(request(
+            serverURL, accessToken, "POST", "v2/spaces",
+            headers = mapOf("Idempotency-Key" to PERSONAL_SPACE_IDEMPOTENCY_KEY),
+        )).getJSONObject("scope").getString("spaceId")
     }
 
     fun createPairing(
@@ -223,11 +225,11 @@ class HttpSyncClient {
             .put("nonce", draft.nonce.standardBase64())
             .put("expiresInSeconds", expiresInSeconds)
             .toString()
-        return pairingRecord(JSONObject(request(
+        return pairingResponse(spaceID, JSONObject(request(
             serverURL,
             accessToken,
             "POST",
-            "v1/spaces/${validatedUUID(spaceID)}/pairings",
+            "v2/spaces/${validatedUUID(spaceID)}/pairings",
             body,
         )))
     }
@@ -237,11 +239,11 @@ class HttpSyncClient {
         spaceID: String,
         pairingID: String,
         accessToken: String,
-    ): PairingRecord = pairingRecord(JSONObject(request(
+    ): PairingRecord = pairingResponse(spaceID, JSONObject(request(
         serverURL,
         accessToken,
         "GET",
-        "v1/spaces/${validatedUUID(spaceID)}/pairings/${validatedUUID(pairingID)}",
+        "v2/spaces/${validatedUUID(spaceID)}/pairings/${validatedUUID(pairingID)}",
     )))
 
     fun approvePairing(
@@ -260,11 +262,11 @@ class HttpSyncClient {
             .put("algorithm", LibraryKeyBootstrap.PAIRING_ALGORITHM)
             .put("ciphertext", ciphertext.standardBase64())
             .toString()
-        return pairingRecord(JSONObject(request(
+        return pairingResponse(spaceID, JSONObject(request(
             serverURL,
             accessToken,
             "PUT",
-            "v1/spaces/${validatedUUID(spaceID)}/pairings/${validatedUUID(pairingID)}/approval",
+            "v2/spaces/${validatedUUID(spaceID)}/pairings/${validatedUUID(pairingID)}/approval",
             body,
         )))
     }
@@ -274,12 +276,29 @@ class HttpSyncClient {
         spaceID: String,
         pairingID: String,
         accessToken: String,
-    ): PairingRecord = pairingRecord(JSONObject(request(
-        serverURL,
-        accessToken,
-        "POST",
-        "v1/spaces/${validatedUUID(spaceID)}/pairings/${validatedUUID(pairingID)}/consume",
-    )))
+        expected: PairingRecord,
+    ): PairingRecord {
+        val normalizedSpaceID = validatedUUID(spaceID)
+        val normalizedPairingID = validatedUUID(pairingID)
+        require(expected.spaceID == normalizedSpaceID)
+        require(expected.pairingID == normalizedPairingID)
+        require(expected.state == "approved")
+        require(expected.algorithm == null && expected.ciphertext == null)
+        require(expected.expiresAtEpochSeconds >= Instant.now().epochSecond - 30)
+        val response = JSONObject(request(
+            serverURL, accessToken, "POST",
+            "v2/spaces/$normalizedSpaceID/pairings/$normalizedPairingID/claim",
+        ))
+        validateScopeID(spaceID, response.getJSONObject("scope"))
+        require(validatedUUID(response.getString("pairingId")) == normalizedPairingID)
+        val algorithm = response.getString("algorithm")
+        require(algorithm == LibraryKeyBootstrap.PAIRING_ALGORITHM)
+        return expected.copy(
+            state = "approved",
+            algorithm = algorithm,
+            ciphertext = response.getString("ciphertext").canonicalStandardBase64(4_096),
+        )
+    }
 
     fun cancelPairing(
         serverURL: String,
@@ -291,7 +310,7 @@ class HttpSyncClient {
             serverURL,
             accessToken,
             "DELETE",
-            "v1/spaces/${validatedUUID(spaceID)}/pairings/${validatedUUID(pairingID)}",
+            "v2/spaces/${validatedUUID(spaceID)}/pairings/${validatedUUID(pairingID)}",
         )
     }
 
@@ -304,8 +323,9 @@ class HttpSyncClient {
             serverURL,
             accessToken,
             "GET",
-            "v1/spaces/${validatedUUID(spaceID)}/key-envelopes/current",
+            "v2/spaces/${validatedUUID(spaceID)}/recovery-envelope",
         ))
+        validateScopeID(spaceID, value.getJSONObject("scope"))
         val recovery = if (value.isNull("recovery")) null else {
             val envelope = value.getJSONObject("recovery")
             RecoveryEnvelopeRecord(
@@ -336,14 +356,16 @@ class HttpSyncClient {
             serverURL,
             accessToken,
             "PUT",
-            "v1/spaces/${validatedUUID(spaceID)}/key-envelopes/recovery",
+            "v2/spaces/${validatedUUID(spaceID)}/recovery-envelope",
             body,
         ))
+        validateScopeID(spaceID, value.getJSONObject("scope"))
+        val envelope = value.getJSONObject("recovery")
         return RecoveryEnvelopeRecord(
-            version = value.getInt("version"),
-            keyEpoch = value.getInt("keyEpoch"),
-            algorithm = value.getString("algorithm"),
-            ciphertext = value.getString("ciphertext").canonicalStandardBase64(4_096),
+            version = envelope.getInt("version"),
+            keyEpoch = envelope.getInt("keyEpoch"),
+            algorithm = envelope.getString("algorithm"),
+            ciphertext = envelope.getString("ciphertext").canonicalStandardBase64(4_096),
         )
     }
 
@@ -352,8 +374,9 @@ class HttpSyncClient {
             serverURL,
             accessToken,
             "GET",
-            "v1/spaces/${validatedUUID(spaceID)}/changes?limit=1",
+            "v2/spaces/${validatedUUID(spaceID)}/changes?limit=1",
         ))
+        validateScopeID(spaceID, value.getJSONObject("scope"))
         return value.getJSONArray("records").length() > 0
     }
 
@@ -363,6 +386,7 @@ class HttpSyncClient {
         method: String,
         path: String,
         body: String? = null,
+        headers: Map<String, String> = emptyMap(),
     ): String {
         val base = validatedBaseURL(serverURL)
         requireAccessToken(accessToken)
@@ -373,7 +397,7 @@ class HttpSyncClient {
         connection.instanceFollowRedirects = false
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("Authorization", "Bearer $accessToken")
-        connection.setRequestProperty("X-Snippets-Protocol", "1")
+        headers.forEach(connection::setRequestProperty)
         if (body != null) {
             val bytes = body.toByteArray(Charsets.UTF_8)
             require(bytes.size <= MAX_RESPONSE_BYTES)
@@ -395,7 +419,12 @@ class HttpSyncClient {
         return response
     }
 
-    private fun pairingRecord(value: JSONObject): PairingRecord {
+    private fun pairingResponse(spaceID: String, response: JSONObject): PairingRecord {
+        validateScopeID(spaceID, response.getJSONObject("scope"))
+        return pairingRecord(spaceID, response.getJSONObject("pairing"))
+    }
+
+    private fun pairingRecord(spaceID: String, value: JSONObject): PairingRecord {
         val publicKey = value.getString("recipientPublicKey").canonicalStandardBase64(65)
         val nonce = value.getString("nonce").canonicalStandardBase64(32)
         require(publicKey.size == 65 && publicKey.first() == 0x04.toByte())
@@ -409,7 +438,7 @@ class HttpSyncClient {
             ?.canonicalStandardBase64(4_096)
         return PairingRecord(
             pairingID = validatedUUID(value.getString("pairingId")),
-            spaceID = validatedUUID(value.getString("spaceId")),
+            spaceID = validatedUUID(spaceID),
             recipientPublicKey = publicKey,
             nonce = nonce,
             authenticationTag = tag,
@@ -418,6 +447,15 @@ class HttpSyncClient {
             ciphertext = ciphertext,
             expiresAtEpochSeconds = Instant.parse(value.getString("expiresAt")).epochSecond,
         )
+    }
+
+    private fun validateScopeID(spaceID: String, scope: JSONObject) {
+        if (!scope.getString("spaceId").equals(spaceID, ignoreCase = true) ||
+            scope.getString("scopeBinding").length !in 32..256) {
+            throw SyncFailure("invalid_scope_response")
+        }
+        require(validatedUUID(scope.getString("datasetGeneration")) != ZERO_UUID)
+        require(validatedUUID(scope.getString("feedEpoch")) != ZERO_UUID)
     }
 
     private fun validateScope(configuration: CloudConfiguration, value: JSONObject) {
@@ -480,6 +518,8 @@ class HttpSyncClient {
 
     private fun requireConfiguration(configuration: CloudConfiguration, accessToken: String) {
         validatedBaseURL(configuration.serverURL)
+        require(configuration.protocolMajor == 2)
+        require(configuration.apiBaseURL == configuration.serverURL.trimEnd('/') + "/v2")
         requireAccessToken(accessToken)
         require(UUID_PATTERN.matches(configuration.spaceID))
     }
@@ -527,6 +567,7 @@ class HttpSyncClient {
         const val MAX_RECORDS_PER_HTTP_MESSAGE = 10
         const val MAX_RESPONSE_BYTES = 16 * 1024 * 1024
         const val PERSONAL_SPACE_IDEMPOTENCY_KEY = "7b28d156-77fd-4f7f-bdf3-234f7d97ac91"
+        const val ZERO_UUID = "00000000-0000-0000-0000-000000000000"
         val UUID_PATTERN = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}")
     }
 }

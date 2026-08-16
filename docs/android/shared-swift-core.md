@@ -72,7 +72,7 @@ small DTO/error surface become visible to generated Java. This avoids turning an
 evolving JNI generator into the source-compatibility contract for every Swift struct.
 
 The server does not import this whole target. Protocol models are generated separately
-from `api/snippets-sync-v1.yaml`, which prevents a supposedly blind server from gaining
+from `api/snippets-sync-v2.yaml`, which prevents the blind Go server from gaining
 convenient access to envelope plaintext parsers or keys.
 
 ## Java/JNI boundary
