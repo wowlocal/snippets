@@ -111,6 +111,14 @@ final class AXMessagingBudget {
         return record(AXUIElementCopyAttributeNames(element, &value))
     }
 
+    func copyParameterizedAttributeNames(
+        of element: AXUIElement,
+        into value: inout CFArray?
+    ) -> AXError {
+        guard bind(element) else { return .cannotComplete }
+        return record(AXUIElementCopyParameterizedAttributeNames(element, &value))
+    }
+
     func setAttributeValue(
         of element: AXUIElement,
         attribute: CFString,
@@ -165,18 +173,25 @@ final class AXMessagingBudget {
     }
 }
 
-/// Chooses the one Accessibility write a Secure Paste attempt is allowed to make.
+/// Chooses the one plaintext-bearing Accessibility operation a Secure Paste attempt
+/// is allowed to make.
 ///
 /// A password field's current value is intentionally never read. That rules out the
 /// ordinary read/modify/write insertion path and also means a failed write must not be
 /// followed by a second strategy: the first call may have landed even if its reply was
 /// lost. For a positively identified secure field, replacing `AXValue` matches password
-/// manager fill semantics. Everywhere else, only `AXSelectedText` is narrow enough to be
-/// safe — it inserts at the caret or replaces the user's selection without overwriting an
-/// unreadable field wholesale.
+/// manager fill semantics. Ordinary web text fields may use an explicitly advertised,
+/// range-scoped browser operation; native fields keep `AXSelectedText`. Neither route
+/// overwrites an unreadable ordinary field wholesale.
 nonisolated enum SecurePasteAccessibilityPolicy {
+    private static let requiredWebRangeParameterizedAttributes: Set<String> = [
+        "AXReplaceRangeWithText",
+        kAXStringForRangeParameterizedAttribute as String,
+    ]
+
     enum Strategy: Equatable {
         case replaceSecureValue
+        case replaceWebRange
         case replaceSelection
         case unavailable
     }
@@ -184,15 +199,154 @@ nonisolated enum SecurePasteAccessibilityPolicy {
     static func strategy(
         targetIsSecureTextField: Bool,
         valueIsSettable: Bool,
+        targetIsInsideWebArea: Bool,
+        targetHasEligibleWebTextRole: Bool,
+        webRangeReplacementIsAvailable: Bool,
         selectedTextIsSettable: Bool
     ) -> Strategy {
-        if targetIsSecureTextField, valueIsSettable {
-            return .replaceSecureValue
+        if targetIsSecureTextField {
+            return valueIsSettable ? .replaceSecureValue : .unavailable
+        }
+        if targetIsInsideWebArea {
+            return targetHasEligibleWebTextRole && webRangeReplacementIsAvailable
+                ? .replaceWebRange
+                : .unavailable
         }
         if selectedTextIsSettable {
             return .replaceSelection
         }
         return .unavailable
+    }
+
+    static func isEligibleWebTextRole(
+        _ role: String?,
+        textAreaAdvertisesAutocomplete: Bool
+    ) -> Bool {
+        switch role {
+        case "AXTextField", "AXComboBox":
+            return true
+        case "AXTextArea":
+            return textAreaAdvertisesAutocomplete
+        default:
+            return false
+        }
+    }
+
+    static func supportsWebRangeReplacement(
+        advertisedParameterizedAttributes: Set<String>
+    ) -> Bool {
+        requiredWebRangeParameterizedAttributes.isSubset(
+            of: advertisedParameterizedAttributes
+        )
+    }
+}
+
+/// Once a plaintext-bearing AX request has been sent, neither an error reply nor a
+/// failed readback authorizes another transport. The request may have landed even
+/// when its reply was lost.
+nonisolated enum SecurePasteResult: Equatable {
+    case inserted
+    case failedBeforeAttempt
+    case attemptedAmbiguous
+}
+
+/// Keeps an uncertain, potentially successful request from being presented like a
+/// retryable preflight failure.
+nonisolated enum SecurePasteCompletionPolicy {
+    enum Reaction: Equatable {
+        case none
+        case restoreOriginalFocus
+        case warnWithoutRestoringFocus
+    }
+
+    static func reaction(after result: SecurePasteResult) -> Reaction {
+        switch result {
+        case .inserted:
+            return .none
+        case .failedBeforeAttempt:
+            return .restoreOriginalFocus
+        case .attemptedAmbiguous:
+            return .warnWithoutRestoringFocus
+        }
+    }
+}
+
+/// Pure validation for the browser-only Secure Paste transport.
+///
+/// Browser accessibility bridges express text offsets in UTF-16 code units. Keep all
+/// arithmetic in that coordinate space, bound every readback, and reject a replacement
+/// whose final state could already be present before the one plaintext-bearing request.
+nonisolated enum SecurePasteWebReplacementPolicy {
+    static let maximumFieldUTF16Count = 1_000_000
+    static let maximumReplacementUTF16Count = maximumFieldUTF16Count
+
+    struct Snapshot: Equatable {
+        let fieldUTF16Count: Int
+        let selectionLocation: Int
+        let selectionLength: Int
+        let selectedText: String
+    }
+
+    struct Plan: Equatable {
+        let replacementLocation: Int
+        let replacementLength: Int
+        let replacementUTF16Count: Int
+        let expectedFieldUTF16Count: Int
+        let caretLocation: Int
+    }
+
+    static func snapshot(
+        fieldUTF16Count: Int,
+        selectionLocation: Int,
+        selectionLength: Int,
+        selectedText: String
+    ) -> Snapshot? {
+        guard fieldUTF16Count >= 0,
+              fieldUTF16Count <= maximumFieldUTF16Count,
+              selectionLocation >= 0,
+              selectionLength >= 0,
+              selectionLocation <= fieldUTF16Count,
+              selectionLength <= fieldUTF16Count - selectionLocation,
+              selectionLength <= maximumReplacementUTF16Count,
+              selectedText.utf16.count == selectionLength
+        else { return nil }
+
+        return Snapshot(
+            fieldUTF16Count: fieldUTF16Count,
+            selectionLocation: selectionLocation,
+            selectionLength: selectionLength,
+            selectedText: selectedText
+        )
+    }
+
+    static func plan(replacing snapshot: Snapshot, with replacement: String) -> Plan? {
+        let replacementUTF16Count = replacement.utf16.count
+        guard replacementUTF16Count > 0,
+              replacementUTF16Count <= maximumReplacementUTF16Count,
+              !(snapshot.selectionLength == replacementUTF16Count
+                && utf16ContentsMatch(snapshot.selectedText, replacement))
+        else { return nil }
+
+        let retainedCount = snapshot.fieldUTF16Count - snapshot.selectionLength
+        guard replacementUTF16Count <= maximumFieldUTF16Count - retainedCount else {
+            return nil
+        }
+        let expectedFieldUTF16Count = retainedCount + replacementUTF16Count
+        guard replacementUTF16Count <= Int.max - snapshot.selectionLocation else {
+            return nil
+        }
+
+        return Plan(
+            replacementLocation: snapshot.selectionLocation,
+            replacementLength: snapshot.selectionLength,
+            replacementUTF16Count: replacementUTF16Count,
+            expectedFieldUTF16Count: expectedFieldUTF16Count,
+            caretLocation: snapshot.selectionLocation + replacementUTF16Count
+        )
+    }
+
+    static func utf16ContentsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf16.elementsEqual(rhs.utf16)
     }
 }
 

@@ -1024,13 +1024,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         case .textField(let target):
             securePasteTask = Task { @MainActor [weak self] in
                 guard let self else { return }
-                let inserted = await self.expansionEngine.pasteSnippetUsingSecurePaste(
+                let result = await self.expansionEngine.pasteSnippetUsingSecurePaste(
                     snippet,
                     to: target
                 )
-                if !inserted, !Task.isCancelled {
+                switch SecurePasteCompletionPolicy.reaction(after: result) {
+                case .none:
+                    break
+                case .restoreOriginalFocus where !Task.isCancelled:
                     await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
                     NSSound.beep()
+                case .warnWithoutRestoringFocus:
+                    NSSound.beep()
+                    self.transientScreenMessageController.show(
+                        SecurePasteFeedback.attemptedAmbiguous,
+                        kind: .failure
+                    )
+                case .restoreOriginalFocus:
+                    break
                 }
                 self.securePasteTask = nil
             }

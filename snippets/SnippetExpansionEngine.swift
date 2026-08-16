@@ -213,6 +213,17 @@ final class SnippetExpansionEngine {
         let window: AXUIElement?
     }
 
+    private struct SecurePasteWebPreparation {
+        let fieldUTF16Count: Int
+        let selection: CFRange
+    }
+
+    private enum SecurePasteAccessibilityPreparation {
+        case replaceSecureValue
+        case replaceWebRange(SecurePasteWebPreparation)
+        case replaceSelection
+    }
+
     /// Opaque handle to the exact control that was focused when Secure Paste began.
     /// The picker may keep metadata, but only the engine can inspect or write this target.
     struct SecurePasteTarget {
@@ -707,10 +718,13 @@ final class SnippetExpansionEngine {
 
     /// Delivers either kind of snippet through the explicit AX-only route. Secure
     /// records authenticate and decrypt one body; ordinary records resolve their
-    /// existing content directly. Neither path reads the destination or borrows the
-    /// pasteboard.
+    /// existing content directly. Browser delivery reads only bounded text state needed
+    /// to prove that its one request landed. Neither path borrows the pasteboard.
     @discardableResult
-    func pasteSnippetUsingSecurePaste(_ snippet: Snippet, to target: SecurePasteTarget) async -> Bool {
+    func pasteSnippetUsingSecurePaste(
+        _ snippet: Snippet,
+        to target: SecurePasteTarget
+    ) async -> SecurePasteResult {
         if store.isSecure(snippet.id) {
             return await pasteSecureSnippet(snippet, to: target)
         }
@@ -720,8 +734,8 @@ final class SnippetExpansionEngine {
     private func pasteOrdinarySnippetUsingSecurePaste(
         _ snippet: Snippet,
         to target: SecurePasteTarget
-    ) async -> Bool {
-        guard !isPreparingForTermination else { return false }
+    ) async -> SecurePasteResult {
+        guard !isPreparingForTermination else { return .failedBeforeAttempt }
         guard let targetApplication = NSRunningApplication(processIdentifier: target.targetPID),
               !targetApplication.isTerminated,
               target.targetPID != ProcessInfo.processInfo.processIdentifier,
@@ -729,13 +743,13 @@ final class SnippetExpansionEngine {
               processIdentifier(of: target.textElement) == target.targetPID
         else {
             statusText = "Secure Paste stopped because the original app is no longer available."
-            return false
+            return .failedBeforeAttempt
         }
         // `{clipboard}` must resolve against the user's clipboard. This only
         // completes restoration of an older lease; Secure Paste never creates one.
         guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
             statusText = "Secure Paste is waiting for your previous clipboard to be restored."
-            return false
+            return .failedBeforeAttempt
         }
 
         secureExpansionActivationTargetPID = target.targetPID
@@ -749,31 +763,42 @@ final class SnippetExpansionEngine {
 
         guard await restoreSecurePasteTarget(target) else {
             statusText = "Skipped \(snippet.displayName): Snippets could not restore the original field."
-            return false
+            return .failedBeforeAttempt
         }
 
         let resolvedText = PlaceholderResolver.resolve(template: snippet.content)
         guard !resolvedText.isEmpty else {
             statusText = "\(snippet.displayName) is empty — nothing to paste."
-            return false
+            return .failedBeforeAttempt
         }
-        guard pasteSecureTextUsingAccessibility(resolvedText, to: target) else {
+        guard let preparation = prepareSecurePasteAccessibilityTarget(target) else {
             statusText = "The target field did not accept Secure Paste."
-            return false
+            return .failedBeforeAttempt
         }
 
-        usage.record(.pasteFromApp, snippetID: snippet.id)
-        lastExpansionName = snippet.displayName
-        statusText = "Pasted \(snippet.displayName)."
-        return true
+        let result = deliverSecurePasteText(resolvedText, to: target, using: preparation)
+        switch result {
+        case .inserted:
+            usage.record(.pasteFromApp, snippetID: snippet.id)
+            lastExpansionName = snippet.displayName
+            statusText = "Pasted \(snippet.displayName)."
+        case .failedBeforeAttempt:
+            statusText = "The target field did not accept Secure Paste."
+        case .attemptedAmbiguous:
+            statusText = "Secure Paste may have inserted \(snippet.displayName). Check the field before trying again."
+        }
+        return result
     }
 
     /// Authenticates one secure shell and writes it directly to the captured control.
-    private func pasteSecureSnippet(_ shell: Snippet, to target: SecurePasteTarget) async -> Bool {
-        guard !isPreparingForTermination else { return false }
+    private func pasteSecureSnippet(
+        _ shell: Snippet,
+        to target: SecurePasteTarget
+    ) async -> SecurePasteResult {
+        guard !isPreparingForTermination else { return .failedBeforeAttempt }
         guard store.isSecure(shell.id), let resolver = secureSnippetContentResolver else {
             statusText = "Secure Paste is not configured for this snippet."
-            return false
+            return .failedBeforeAttempt
         }
         guard let targetApplication = NSRunningApplication(processIdentifier: target.targetPID),
               !targetApplication.isTerminated,
@@ -782,11 +807,11 @@ final class SnippetExpansionEngine {
               processIdentifier(of: target.textElement) == target.targetPID
         else {
             statusText = "Secure Paste stopped because the original app is no longer available."
-            return false
+            return .failedBeforeAttempt
         }
         guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
             statusText = "Secure Paste is waiting for your previous clipboard to be restored."
-            return false
+            return .failedBeforeAttempt
         }
 
         let reason = "Paste \u{201C}\(shell.displayName)\u{201D} into \(target.applicationName)"
@@ -809,14 +834,14 @@ final class SnippetExpansionEngine {
             plaintext = try await resolver(shell, reason)
         } catch {
             statusText = "Could not paste \(shell.displayName): \(error)"
-            return false
+            return .failedBeforeAttempt
         }
         defer { plaintext.wipe() }
 
-        guard !Task.isCancelled else { return false }
+        guard !Task.isCancelled else { return .failedBeforeAttempt }
         guard await restoreSecurePasteTarget(target) else {
             statusText = "Skipped \(shell.displayName): Snippets could not restore the original field after authentication."
-            return false
+            return .failedBeforeAttempt
         }
 
         // Authentication is over. The Accessibility write below is synchronous, so there
@@ -825,25 +850,39 @@ final class SnippetExpansionEngine {
             secureSuggestionAuthenticationTargetPID = nil
         }
 
+        // Establish the exact AX transport and capture only non-secret range metadata
+        // before materializing the authenticated bytes as a Swift String.
+        guard let preparation = prepareSecurePasteAccessibilityTarget(target) else {
+            statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
+            return .failedBeforeAttempt
+        }
+
         guard var resolvedText = resolvedSecureText(consuming: plaintext) else {
             statusText = "Could not paste \(shell.displayName): its secure content is not valid UTF-8."
-            return false
+            return .failedBeforeAttempt
         }
         defer { resolvedText.removeAll(keepingCapacity: false) }
         guard !resolvedText.isEmpty else {
             statusText = "\(shell.displayName) is empty — nothing to paste."
-            return false
+            return .failedBeforeAttempt
         }
 
-        guard pasteSecureTextUsingAccessibility(resolvedText, to: target) else {
+        let result = deliverSecurePasteText(
+            resolvedText,
+            to: target,
+            using: preparation
+        )
+        switch result {
+        case .inserted:
+            usage.record(.pasteFromApp, snippetID: shell.id)
+            lastExpansionName = shell.displayName
+            statusText = "Pasted \(shell.displayName) securely."
+        case .failedBeforeAttempt:
             statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
-            return false
+        case .attemptedAmbiguous:
+            statusText = "Secure Paste may have inserted \(shell.displayName). Check the field before trying again."
         }
-
-        usage.record(.pasteFromApp, snippetID: shell.id)
-        lastExpansionName = shell.displayName
-        statusText = "Pasted \(shell.displayName) securely."
-        return true
+        return result
     }
 
     /// Starts termination cleanup. `true` means the clipboard is already safe and termination can
@@ -2841,7 +2880,7 @@ final class SnippetExpansionEngine {
         expectedFocusedElement: AXUIElement? = nil
     ) async -> EventReplacementOutcome {
         guard injectionIsAllowed(generation: generation, targetPID: targetPID),
-              expectedFocusedElement.map(currentFocusMatches) ?? true
+              expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true
         else { return .failed }
         // Borrowed before a single character is deleted: a pasteboard we cannot borrow safely must
         // cost the user nothing, and once the trigger is gone "nothing" is no longer on the table.
@@ -2868,7 +2907,7 @@ final class SnippetExpansionEngine {
                 targetPID: targetPID,
                 allowingTerminationDrain: true
             ),
-                  expectedFocusedElement.map(currentFocusMatches) ?? true
+                  expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true
             else {
                 finishPendingPasteboardOwnership(
                     schedulingRetryOnFailure: true,
@@ -2892,7 +2931,7 @@ final class SnippetExpansionEngine {
             finishPendingPasteboardOwnership(finishingInFlightLease: lease)
             return .failed
         }
-        guard expectedFocusedElement.map(currentFocusMatches) ?? true else {
+        guard expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true else {
             finishPendingPasteboardOwnership(
                 schedulingRetryOnFailure: true,
                 finishingInFlightLease: lease
@@ -3630,7 +3669,11 @@ final class SnippetExpansionEngine {
         return stringValueBeforeCaret(of: element, caretLocation: caretLocation, maxCharacters: maxCharacters)
     }
 
-    private func stringForRange(of element: AXUIElement, range: CFRange) -> String? {
+    private func stringForRange(
+        of element: AXUIElement,
+        range: CFRange,
+        axBudget: AXMessagingBudget? = nil
+    ) -> String? {
         guard range.length > 0 else { return "" }
 
         var requestedRange = range
@@ -3639,12 +3682,23 @@ final class SnippetExpansionEngine {
         }
 
         var value: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(
-            element,
-            kAXStringForRangeParameterizedAttribute as CFString,
-            rangeValue,
-            &value
-        ) == .success else {
+        let result: AXError
+        if let axBudget {
+            result = axBudget.copyParameterizedAttributeValue(
+                of: element,
+                attribute: kAXStringForRangeParameterizedAttribute as CFString,
+                parameter: rangeValue,
+                into: &value
+            )
+        } else {
+            result = AXUIElementCopyParameterizedAttributeValue(
+                element,
+                kAXStringForRangeParameterizedAttribute as CFString,
+                rangeValue,
+                &value
+            )
+        }
+        guard result == .success else {
             return nil
         }
 
@@ -3799,19 +3853,24 @@ final class SnippetExpansionEngine {
         return currentFocusMatches(element)
     }
 
-    /// Executes exactly one write chosen by `SecurePasteAccessibilityPolicy`.
-    /// In particular, no read of `AXValue` is used to confirm or construct a password.
-    private func pasteSecureTextUsingAccessibility(
-        _ text: String,
-        to target: SecurePasteTarget
-    ) -> Bool {
+    /// Chooses an AX transport while the original field is freshly focused. No secure
+    /// snippet body has been materialized as a `String` when the secure call site enters
+    /// this method, and password values are never read.
+    private func prepareSecurePasteAccessibilityTarget(
+        _ target: SecurePasteTarget
+    ) -> SecurePasteAccessibilityPreparation? {
         guard accessibilityGranted,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
               processIdentifier(of: target.textElement) == target.targetPID,
-              currentFocusMatches(target.focusedElement)
-        else { return false }
+              let targetApplication = NSRunningApplication(processIdentifier: target.targetPID),
+              !targetApplication.isTerminated
+        else { return nil }
 
         let budget = AXMessagingBudget()
+        guard currentFocusMatches(target.focusedElement, axBudget: budget) else {
+            return nil
+        }
+
         let targetIsSecureTextField = stringAttribute(
             of: target.textElement,
             attribute: kAXSubroleAttribute as CFString,
@@ -3822,32 +3881,220 @@ final class SnippetExpansionEngine {
             on: target.textElement,
             axBudget: budget
         )
-        let selectedTextIsSettable = attributeIsSettable(
-            kAXSelectedTextAttribute as CFString,
-            on: target.textElement,
+        if targetIsSecureTextField {
+            return valueIsSettable ? .replaceSecureValue : nil
+        }
+
+        let role = stringAttribute(
+            of: target.textElement,
+            attribute: kAXRoleAttribute as CFString,
             axBudget: budget
         )
+        let targetIsInsideWebArea = elementIsInsideWebArea(
+            target.textElement,
+            axBudget: budget
+        )
+        let textAreaAdvertisesAutocomplete = role == (kAXTextAreaRole as String)
+            && hasAnyAttribute(
+                ["AXHasPopup", "AXAutocompleteValue"],
+                on: target.textElement,
+                axBudget: budget
+            )
+        let targetHasEligibleWebTextRole = targetIsInsideWebArea
+            && SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
+                role,
+                textAreaAdvertisesAutocomplete: textAreaAdvertisesAutocomplete
+            )
+        let advertisedParameterizedAttributes = targetHasEligibleWebTextRole
+            ? parameterizedAttributes(on: target.textElement, axBudget: budget)
+            : nil
+        let webRangeReplacementIsAvailable = advertisedParameterizedAttributes.map {
+            SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+                advertisedParameterizedAttributes: $0
+            )
+        } ?? false
+        let selectedTextIsSettable = !targetIsInsideWebArea
+            && attributeIsSettable(
+                kAXSelectedTextAttribute as CFString,
+                on: target.textElement,
+                axBudget: budget
+            )
 
         switch SecurePasteAccessibilityPolicy.strategy(
             targetIsSecureTextField: targetIsSecureTextField,
             valueIsSettable: valueIsSettable,
+            targetIsInsideWebArea: targetIsInsideWebArea,
+            targetHasEligibleWebTextRole: targetHasEligibleWebTextRole,
+            webRangeReplacementIsAvailable: webRangeReplacementIsAvailable,
             selectedTextIsSettable: selectedTextIsSettable
         ) {
         case .replaceSecureValue:
-            return budget.setAttributeValue(
+            return .replaceSecureValue
+        case .replaceWebRange:
+            guard let fieldUTF16Count = integerAttribute(
+                of: target.textElement,
+                attribute: kAXNumberOfCharactersAttribute as CFString,
+                axBudget: budget
+            ),
+                  let selection = selectedRange(
+                    of: target.textElement,
+                    axBudget: budget
+                  ),
+                  fieldUTF16Count >= 0,
+                  fieldUTF16Count <= SecurePasteWebReplacementPolicy.maximumFieldUTF16Count,
+                  selection.location >= 0,
+                  selection.length >= 0,
+                  selection.location <= fieldUTF16Count,
+                  selection.length <= fieldUTF16Count - selection.location,
+                  selection.length <= SecurePasteWebReplacementPolicy.maximumReplacementUTF16Count
+            else { return nil }
+
+            return .replaceWebRange(SecurePasteWebPreparation(
+                fieldUTF16Count: fieldUTF16Count,
+                selection: selection
+            ))
+        case .replaceSelection:
+            return .replaceSelection
+        case .unavailable:
+            return nil
+        }
+    }
+
+    /// Sends at most one plaintext-bearing AX request. A browser request is considered
+    /// delivered only after bounded range/count readback; an ambiguous reply is terminal
+    /// and never falls through to AXSelectedText, key events, or the pasteboard.
+    private func deliverSecurePasteText(
+        _ text: String,
+        to target: SecurePasteTarget,
+        using preparation: SecurePasteAccessibilityPreparation
+    ) -> SecurePasteResult {
+        guard accessibilityGranted,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
+              processIdentifier(of: target.textElement) == target.targetPID
+        else { return .failedBeforeAttempt }
+
+        let budget = AXMessagingBudget()
+        guard currentFocusMatches(target.focusedElement, axBudget: budget) else {
+            return .failedBeforeAttempt
+        }
+
+        switch preparation {
+        case .replaceSecureValue:
+            let result = budget.setAttributeValue(
                 of: target.textElement,
                 attribute: kAXValueAttribute as CFString,
                 value: text as CFString
-            ) == .success
+            )
+            return result == .success ? .inserted : .attemptedAmbiguous
+
         case .replaceSelection:
-            return budget.setAttributeValue(
+            let result = budget.setAttributeValue(
                 of: target.textElement,
                 attribute: kAXSelectedTextAttribute as CFString,
                 value: text as CFString
-            ) == .success
-        case .unavailable:
-            return false
+            )
+            return result == .success ? .inserted : .attemptedAmbiguous
+
+        case .replaceWebRange(let preparation):
+            return deliverWebSecurePasteText(
+                text,
+                to: target,
+                preparation: preparation,
+                axBudget: budget
+            )
         }
+    }
+
+    private func deliverWebSecurePasteText(
+        _ text: String,
+        to target: SecurePasteTarget,
+        preparation: SecurePasteWebPreparation,
+        axBudget: AXMessagingBudget
+    ) -> SecurePasteResult {
+        // Re-read all mutable, non-secret state after body materialization and immediately
+        // before the request. This closes the authentication/picker focus race without
+        // ever reading the field's whole value.
+        guard integerAttribute(
+            of: target.textElement,
+            attribute: kAXNumberOfCharactersAttribute as CFString,
+            axBudget: axBudget
+        ) == preparation.fieldUTF16Count,
+              let currentSelection = selectedRange(
+                of: target.textElement,
+                axBudget: axBudget
+              ),
+              currentSelection.location == preparation.selection.location,
+              currentSelection.length == preparation.selection.length,
+              let selectedText = stringForRange(
+                of: target.textElement,
+                range: currentSelection,
+                axBudget: axBudget
+              ),
+              let snapshot = SecurePasteWebReplacementPolicy.snapshot(
+                fieldUTF16Count: preparation.fieldUTF16Count,
+                selectionLocation: currentSelection.location,
+                selectionLength: currentSelection.length,
+                selectedText: selectedText
+              ),
+              let plan = SecurePasteWebReplacementPolicy.plan(
+                replacing: snapshot,
+                with: text
+              )
+        else { return .failedBeforeAttempt }
+
+        var replacementRange = CFRange(
+            location: plan.replacementLocation,
+            length: plan.replacementLength
+        )
+        guard let replacementRangeValue = AXValueCreate(.cfRange, &replacementRange) else {
+            return .failedBeforeAttempt
+        }
+        let parameters: NSDictionary = [
+            "AXReplacementRange": replacementRangeValue,
+            "AXReplacementText": text,
+        ]
+
+        guard currentFocusMatches(target.focusedElement, axBudget: axBudget) else {
+            return .failedBeforeAttempt
+        }
+
+        var operationResult: CFTypeRef?
+        let result = axBudget.copyParameterizedAttributeValue(
+            of: target.textElement,
+            attribute: "AXReplaceRangeWithText" as CFString,
+            parameter: parameters,
+            into: &operationResult
+        )
+        guard result == .success else { return .attemptedAmbiguous }
+
+        let insertedRange = CFRange(
+            location: plan.replacementLocation,
+            length: plan.replacementUTF16Count
+        )
+        guard integerAttribute(
+            of: target.textElement,
+            attribute: kAXNumberOfCharactersAttribute as CFString,
+            axBudget: axBudget
+        ) == plan.expectedFieldUTF16Count,
+              let insertedText = stringForRange(
+                of: target.textElement,
+                range: insertedRange,
+                axBudget: axBudget
+              ),
+              SecurePasteWebReplacementPolicy.utf16ContentsMatch(insertedText, text)
+        else { return .attemptedAmbiguous }
+
+        // Chromium currently leaves the replacement selected. This non-plaintext write
+        // happens only after delivery is proven; failure cannot authorize a retry.
+        var caretRange = CFRange(location: plan.caretLocation, length: 0)
+        if let caretRangeValue = AXValueCreate(.cfRange, &caretRange) {
+            _ = axBudget.setAttributeValue(
+                of: target.textElement,
+                attribute: kAXSelectedTextRangeAttribute as CFString,
+                value: caretRangeValue
+            )
+        }
+        return .inserted
     }
 
     private func attributeIsSettable(
@@ -3861,11 +4108,14 @@ final class SnippetExpansionEngine {
             && settable.boolValue
     }
 
-    private func currentFocusMatches(_ expected: AXUIElement) -> Bool {
+    private func currentFocusMatches(
+        _ expected: AXUIElement,
+        axBudget: AXMessagingBudget? = nil
+    ) -> Bool {
         guard let expectedPID = processIdentifier(of: expected),
-              systemWideFocusedApplicationPID() == expectedPID
+              systemWideFocusedApplicationPID(axBudget: axBudget) == expectedPID
         else { return false }
-        guard let current = frontmostFocusedElement() else { return false }
+        guard let current = frontmostFocusedElement(axBudget: axBudget) else { return false }
         return CFEqual(current, expected)
     }
 
@@ -4100,9 +4350,40 @@ final class SnippetExpansionEngine {
         return value as? Bool
     }
 
-    private func selectedRange(of element: AXUIElement) -> CFRange? {
+    private func integerAttribute(
+        of element: AXUIElement,
+        attribute: CFString,
+        axBudget: AXMessagingBudget? = nil
+    ) -> Int? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
+        guard copyAttributeValue(
+            of: element,
+            attribute: attribute,
+            into: &value,
+            axBudget: axBudget
+        ) == .success,
+              let number = value as? NSNumber
+        else { return nil }
+
+        let integer = number.int64Value
+        guard integer >= 0,
+              number.doubleValue == Double(integer),
+              integer <= Int64(Int.max)
+        else { return nil }
+        return Int(integer)
+    }
+
+    private func selectedRange(
+        of element: AXUIElement,
+        axBudget: AXMessagingBudget? = nil
+    ) -> CFRange? {
+        var value: CFTypeRef?
+        guard copyAttributeValue(
+            of: element,
+            attribute: kAXSelectedTextRangeAttribute as CFString,
+            into: &value,
+            axBudget: axBudget
+        ) == .success,
               let value,
               CFGetTypeID(value) == AXValueGetTypeID() else {
             return nil
@@ -4145,6 +4426,59 @@ final class SnippetExpansionEngine {
         }
 
         return attributes.contains(attribute as String)
+    }
+
+    private func parameterizedAttributes(
+        on element: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> Set<String>? {
+        var attributesValue: CFArray?
+        guard axBudget.copyParameterizedAttributeNames(
+            of: element,
+            into: &attributesValue
+        ) == .success,
+              let attributes = attributesValue as? [String]
+        else { return nil }
+
+        return Set(attributes)
+    }
+
+    private func hasAnyAttribute(
+        _ candidates: Set<String>,
+        on element: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> Bool {
+        var attributesValue: CFArray?
+        guard axBudget.copyAttributeNames(of: element, into: &attributesValue) == .success,
+              let attributes = attributesValue as? [String]
+        else { return false }
+
+        return attributes.contains(where: candidates.contains)
+    }
+
+    /// Positive browser evidence only. A missing role, failed parent read, cycle, or
+    /// excessive depth is not treated as web content.
+    private func elementIsInsideWebArea(
+        _ element: AXUIElement,
+        axBudget: AXMessagingBudget
+    ) -> Bool {
+        var current = element
+        for _ in 0..<16 {
+            guard let role = stringAttribute(
+                of: current,
+                attribute: kAXRoleAttribute as CFString,
+                axBudget: axBudget
+            ) else { return false }
+            if role == "AXWebArea" {
+                return true
+            }
+
+            guard let parent = parentElement(of: current, axBudget: axBudget),
+                  !CFEqual(parent, current)
+            else { return false }
+            current = parent
+        }
+        return false
     }
 
     private func parentElement(

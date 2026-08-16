@@ -171,6 +171,39 @@ Handled intentionally:
 - Cmd+Shift+3/4/5/6 are ignored (do not dismiss) to avoid interfering with screenshots.
 - Modifier+Space is classified after key-up by comparing the actual keyboard input-source identifier and reading the system-wide AX focused application. An input-source change preserves the panel even if the system switcher briefly owns focus; otherwise Spotlight, Raycast, or any custom launcher that takes keyboard focus dismisses it. The shortcut modifiers are not hardcoded.
 
+## Secure Paste delivery in browser fields
+
+`⌘\` remains Accessibility-only: it never moves a selected snippet through the
+pasteboard or a synthetic keyboard event. Password fields keep the established
+password-manager-style `AXValue` write, and native ordinary fields keep the narrow
+`AXSelectedText` write.
+
+Safari and Chromium can report success for `AXSelectedText` without updating the web
+page's real editing model. Inside a positively identified `AXWebArea`, an ordinary
+control is eligible only when surfaced as `AXTextField`, `AXComboBox`, or an `AXTextArea`
+that advertises popup/autocomplete semantics (the shape measured for Google Search in
+Chromium). Secure Paste then uses `AXReplaceRangeWithText` only when that operation and
+the `AXStringForRange` readback operation are both advertised by the focused control. The public
+`AXUIElementCopyParameterizedAttributeValue` function performs the request, but the
+attribute and its `AXReplacementRange` / `AXReplacementText` parameter keys are
+undocumented macOS Accessibility SPI. Every invocation is capability-gated so an OS or
+browser that removes it fails closed and retains the existing native/password behavior.
+
+The browser route has stricter delivery proof:
+
+1. Reconfirm the original PID, frontmost application, and exact focused AX object.
+2. Capture only the selected range and character count before secure bytes become a
+   Swift `String`; never read a password value or the whole ordinary field value.
+3. Reconfirm that range/count immediately before one plaintext-bearing request.
+4. Verify the resulting character count and read back only the bounded inserted range.
+5. Collapse Chromium's still-selected replacement to a caret after insertion is proven.
+
+An error or mismatched readback after step 3 is an ambiguous attempted delivery. It is
+terminal: there is no retry, `AXSelectedText` fallback, event fallback, or pasteboard
+fallback. Multiline snippets remain supported; range validation and readback are bounded
+to 1,000,000 UTF-16 units. Generic text areas, web groups, and contenteditable controls
+remain ineligible.
+
 ## Expansion and pasteboard timing quirks
 
 Replacement has two paths. The Accessibility path is preferred; delete+paste is the fallback.

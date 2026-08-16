@@ -58,6 +58,11 @@ enum ClipboardCopyFeedback {
     }
 }
 
+enum SecurePasteFeedback {
+    static let attemptedAmbiguous =
+        "Secure Paste may have inserted the snippet. Check the original field before trying again."
+}
+
 /// A short-lived, non-activating HUD for actions that begin outside the main app
 /// window. It never takes key status or intercepts a click, so the application the
 /// user was working in keeps its focus while the result is shown.

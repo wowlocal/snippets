@@ -60,8 +60,35 @@ struct AXMessagingBudgetSwiftTests {
         #expect(SecurePasteAccessibilityPolicy.strategy(
             targetIsSecureTextField: true,
             valueIsSettable: true,
+            targetIsInsideWebArea: true,
+            targetHasEligibleWebTextRole: true,
+            webRangeReplacementIsAvailable: true,
             selectedTextIsSettable: true
         ) == .replaceSecureValue)
+    }
+
+    @Test("Secure Paste fails closed for a password field without a writable value")
+    func securePasteRequiresWritableSecureValue() {
+        #expect(SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: true,
+            valueIsSettable: false,
+            targetIsInsideWebArea: true,
+            targetHasEligibleWebTextRole: true,
+            webRangeReplacementIsAvailable: true,
+            selectedTextIsSettable: true
+        ) == .unavailable)
+    }
+
+    @Test("Secure Paste prefers the advertised browser range operation in web text fields")
+    func securePasteUsesWebRangeReplacement() {
+        #expect(SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: false,
+            valueIsSettable: true,
+            targetIsInsideWebArea: true,
+            targetHasEligibleWebTextRole: true,
+            webRangeReplacementIsAvailable: true,
+            selectedTextIsSettable: true
+        ) == .replaceWebRange)
     }
 
     @Test("Secure Paste uses selection insertion for an ordinary text field")
@@ -69,8 +96,80 @@ struct AXMessagingBudgetSwiftTests {
         #expect(SecurePasteAccessibilityPolicy.strategy(
             targetIsSecureTextField: false,
             valueIsSettable: true,
+            targetIsInsideWebArea: false,
+            targetHasEligibleWebTextRole: false,
+            webRangeReplacementIsAvailable: false,
             selectedTextIsSettable: true
         ) == .replaceSelection)
+    }
+
+    @Test("Secure Paste fails closed when a web operation is not advertised")
+    func securePasteRequiresAdvertisedWebCapability() {
+        #expect(SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: false,
+            valueIsSettable: true,
+            targetIsInsideWebArea: true,
+            targetHasEligibleWebTextRole: true,
+            webRangeReplacementIsAvailable: false,
+            selectedTextIsSettable: true
+        ) == .unavailable)
+    }
+
+    @Test("Secure Paste refuses the native route for generic web controls")
+    func securePasteRefusesNoneligibleWebControls() {
+        #expect(SecurePasteAccessibilityPolicy.strategy(
+            targetIsSecureTextField: false,
+            valueIsSettable: true,
+            targetIsInsideWebArea: true,
+            targetHasEligibleWebTextRole: false,
+            webRangeReplacementIsAvailable: true,
+            selectedTextIsSettable: true
+        ) == .unavailable)
+    }
+
+    @Test("web eligibility includes the measured Safari and Chrome Google Search roles")
+    func securePasteRecognizesMeasuredGoogleSearchRoles() {
+        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
+            "AXTextField",
+            textAreaAdvertisesAutocomplete: false
+        ))
+        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
+            "AXComboBox",
+            textAreaAdvertisesAutocomplete: false
+        ))
+        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
+            "AXTextArea",
+            textAreaAdvertisesAutocomplete: true
+        ))
+        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
+            "AXTextArea",
+            textAreaAdvertisesAutocomplete: false
+        ))
+        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
+            "AXGroup",
+            textAreaAdvertisesAutocomplete: true
+        ))
+        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
+            nil,
+            textAreaAdvertisesAutocomplete: true
+        ))
+    }
+
+    @Test("web range delivery requires both replacement and readback capabilities")
+    func securePasteRequiresCompleteWebRangeCapabilities() {
+        #expect(SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+            advertisedParameterizedAttributes: [
+                "AXReplaceRangeWithText",
+                "AXStringForRange",
+                "AXBoundsForRange",
+            ]
+        ))
+        #expect(!SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+            advertisedParameterizedAttributes: ["AXReplaceRangeWithText"]
+        ))
+        #expect(!SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+            advertisedParameterizedAttributes: ["AXStringForRange"]
+        ))
     }
 
     @Test("Secure Paste never overwrites an ordinary unreadable field wholesale")
@@ -78,8 +177,95 @@ struct AXMessagingBudgetSwiftTests {
         #expect(SecurePasteAccessibilityPolicy.strategy(
             targetIsSecureTextField: false,
             valueIsSettable: true,
+            targetIsInsideWebArea: false,
+            targetHasEligibleWebTextRole: false,
+            webRangeReplacementIsAvailable: false,
             selectedTextIsSettable: false
         ) == .unavailable)
+    }
+
+    @Test("an ambiguous Secure Paste attempt is not treated as a retryable failure")
+    func securePasteAmbiguityDoesNotRestoreFocus() {
+        #expect(SecurePasteCompletionPolicy.reaction(after: .inserted) == .none)
+        #expect(SecurePasteCompletionPolicy.reaction(
+            after: .failedBeforeAttempt
+        ) == .restoreOriginalFocus)
+        #expect(SecurePasteCompletionPolicy.reaction(
+            after: .attemptedAmbiguous
+        ) == .warnWithoutRestoringFocus)
+    }
+
+    @Test("web replacement planning uses UTF-16 offsets")
+    func webReplacementUsesUTF16Offsets() throws {
+        let snapshot = try #require(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 10,
+            selectionLocation: 3,
+            selectionLength: 4,
+            selectedText: "3456"
+        ))
+        let plan = try #require(SecurePasteWebReplacementPolicy.plan(
+            replacing: snapshot,
+            with: "a😀b"
+        ))
+
+        #expect(plan.replacementLocation == 3)
+        #expect(plan.replacementLength == 4)
+        #expect(plan.replacementUTF16Count == 4)
+        #expect(plan.expectedFieldUTF16Count == 10)
+        #expect(plan.caretLocation == 7)
+    }
+
+    @Test("web replacement rejects an invalid or unreadable selection")
+    func webReplacementRejectsInvalidSelection() {
+        #expect(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 5,
+            selectionLocation: 4,
+            selectionLength: 2,
+            selectedText: "45"
+        ) == nil)
+        #expect(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 5,
+            selectionLocation: 1,
+            selectionLength: 2,
+            selectedText: "😀"
+        ) != nil)
+        #expect(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 5,
+            selectionLocation: 1,
+            selectionLength: 1,
+            selectedText: "😀"
+        ) == nil)
+    }
+
+    @Test("web replacement accepts multiline and bounded large payloads")
+    func webReplacementPreservesExistingSnippetShapes() throws {
+        let snapshot = try #require(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 3,
+            selectionLocation: 0,
+            selectionLength: 3,
+            selectedText: "old"
+        ))
+
+        #expect(SecurePasteWebReplacementPolicy.plan(replacing: snapshot, with: "old") == nil)
+        #expect(SecurePasteWebReplacementPolicy.plan(replacing: snapshot, with: "a\nb") != nil)
+        #expect(SecurePasteWebReplacementPolicy.plan(
+            replacing: snapshot,
+            with: String(repeating: "x", count: 999_999)
+        ) != nil)
+        #expect(SecurePasteWebReplacementPolicy.plan(
+            replacing: snapshot,
+            with: String(repeating: "x", count: 1_000_001)
+        ) == nil)
+    }
+
+    @Test("web replacement confirmation is exact instead of canonically equivalent")
+    func webReplacementConfirmationUsesExactUTF16() {
+        let first = "a\u{0301}\u{0327}"
+        let reordered = "a\u{0327}\u{0301}"
+
+        #expect(first == reordered)
+        #expect(!SecurePasteWebReplacementPolicy.utf16ContentsMatch(first, reordered))
+        #expect(SecurePasteWebReplacementPolicy.utf16ContentsMatch(first, first))
     }
 
     @Test("Secure Paste keeps relevance ahead of security preference")
