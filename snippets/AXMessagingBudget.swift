@@ -218,17 +218,12 @@ nonisolated enum SecurePasteAccessibilityPolicy {
         return .unavailable
     }
 
-    static func isEligibleWebTextRole(
-        _ role: String?,
-        textAreaAdvertisesAutocomplete: Bool
-    ) -> Bool {
+    static func isEligibleWebTextRole(_ role: String?) -> Bool {
         switch role {
-        case "AXTextField", "AXComboBox":
-            return true
-        case "AXTextArea":
-            return textAreaAdvertisesAutocomplete
+        case "AXTextField", "AXComboBox", "AXTextArea":
+            true
         default:
-            return false
+            false
         }
     }
 

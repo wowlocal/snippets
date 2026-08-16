@@ -127,32 +127,13 @@ struct AXMessagingBudgetSwiftTests {
         ) == .unavailable)
     }
 
-    @Test("web eligibility includes the measured Safari and Chrome Google Search roles")
-    func securePasteRecognizesMeasuredGoogleSearchRoles() {
-        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
-            "AXTextField",
-            textAreaAdvertisesAutocomplete: false
-        ))
-        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
-            "AXComboBox",
-            textAreaAdvertisesAutocomplete: false
-        ))
-        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
-            "AXTextArea",
-            textAreaAdvertisesAutocomplete: true
-        ))
-        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
-            "AXTextArea",
-            textAreaAdvertisesAutocomplete: false
-        ))
-        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
-            "AXGroup",
-            textAreaAdvertisesAutocomplete: true
-        ))
-        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
-            nil,
-            textAreaAdvertisesAutocomplete: true
-        ))
+    @Test("web eligibility includes standard single-line and multiline text roles")
+    func securePasteRecognizesStandardWebTextRoles() {
+        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXTextField"))
+        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXComboBox"))
+        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXTextArea"))
+        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXGroup"))
+        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(nil))
     }
 
     @Test("web range delivery requires both replacement and readback capabilities")

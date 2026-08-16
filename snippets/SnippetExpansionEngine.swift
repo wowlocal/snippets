@@ -3894,17 +3894,8 @@ final class SnippetExpansionEngine {
             target.textElement,
             axBudget: budget
         )
-        let textAreaAdvertisesAutocomplete = role == (kAXTextAreaRole as String)
-            && hasAnyAttribute(
-                ["AXHasPopup", "AXAutocompleteValue"],
-                on: target.textElement,
-                axBudget: budget
-            )
         let targetHasEligibleWebTextRole = targetIsInsideWebArea
-            && SecurePasteAccessibilityPolicy.isEligibleWebTextRole(
-                role,
-                textAreaAdvertisesAutocomplete: textAreaAdvertisesAutocomplete
-            )
+            && SecurePasteAccessibilityPolicy.isEligibleWebTextRole(role)
         let advertisedParameterizedAttributes = targetHasEligibleWebTextRole
             ? parameterizedAttributes(on: target.textElement, axBudget: budget)
             : nil
@@ -4441,19 +4432,6 @@ final class SnippetExpansionEngine {
         else { return nil }
 
         return Set(attributes)
-    }
-
-    private func hasAnyAttribute(
-        _ candidates: Set<String>,
-        on element: AXUIElement,
-        axBudget: AXMessagingBudget
-    ) -> Bool {
-        var attributesValue: CFArray?
-        guard axBudget.copyAttributeNames(of: element, into: &attributesValue) == .success,
-              let attributes = attributesValue as? [String]
-        else { return false }
-
-        return attributes.contains(where: candidates.contains)
     }
 
     /// Positive browser evidence only. A missing role, failed parent read, cycle, or

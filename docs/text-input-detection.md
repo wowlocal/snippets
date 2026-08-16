@@ -180,10 +180,10 @@ password-manager-style `AXValue` write, and native ordinary fields keep the narr
 
 Safari and Chromium can report success for `AXSelectedText` without updating the web
 page's real editing model. Inside a positively identified `AXWebArea`, an ordinary
-control is eligible only when surfaced as `AXTextField`, `AXComboBox`, or an `AXTextArea`
-that advertises popup/autocomplete semantics (the shape measured for Google Search in
-Chromium). Secure Paste then uses `AXReplaceRangeWithText` only when that operation and
-the `AXStringForRange` readback operation are both advertised by the focused control. The public
+control is eligible only when surfaced as the standard `AXTextField`, `AXComboBox`, or
+`AXTextArea` role. Secure Paste then uses `AXReplaceRangeWithText` only when that
+operation and the `AXStringForRange` readback operation are both advertised by the
+focused control. The public
 `AXUIElementCopyParameterizedAttributeValue` function performs the request, but the
 attribute and its `AXReplacementRange` / `AXReplacementText` parameter keys are
 undocumented macOS Accessibility SPI. Every invocation is capability-gated so an OS or
@@ -201,8 +201,8 @@ The browser route has stricter delivery proof:
 An error or mismatched readback after step 3 is an ambiguous attempted delivery. It is
 terminal: there is no retry, `AXSelectedText` fallback, event fallback, or pasteboard
 fallback. Multiline snippets remain supported; range validation and readback are bounded
-to 1,000,000 UTF-16 units. Generic text areas, web groups, and contenteditable controls
-remain ineligible.
+to 1,000,000 UTF-16 units. Web groups and non-text contenteditable controls remain
+ineligible.
 
 ## Expansion and pasteboard timing quirks
 
