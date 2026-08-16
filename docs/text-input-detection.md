@@ -175,6 +175,43 @@ Handled intentionally:
 
 Replacement has two paths. The Accessibility path is preferred; delete+paste is the fallback.
 
+### Command-Backslash Secure Paste
+
+Secure Paste is a separate, clipboard-free delivery path. It captures the exact focused AX
+object before opening the picker, restores that object after selection/authentication, and chooses
+one writer before the first destination write:
+
+- A positively identified password field gets one `AXValue` replacement. Its old value is never
+  read, and failure or timeout after dispatch is terminal.
+- An ordinary non-Chromium control gets one `AXSelectedText` replacement at its selection/caret.
+- An ordinary snippet going to an ordinary Chromium-family control gets targeted
+  `CGEventPostToPid` Unicode key events. Chromium web controls can acknowledge `AXSelectedText`
+  while leaving their edit model unchanged, so this route is selected before any AX write rather
+  than used as a fallback.
+- A secure snippet never takes that multi-event route. If an ordinary Chromium field exposes no
+  atomic Accessibility writer, insertion is refused: after one event the page/browser could move
+  focus and make a secret suffix land in another control in the same PID.
+
+The Chromium event plan is validated completely before its first post. It requires the original
+PID to be frontmost, the exact captured AX object to own system keyboard focus, Accessibility event
+posting permission, and Secure Event Input to be off. Text is sent one extended grapheme per event
+pair to stay below Quartz's effective 20-UTF-16-unit payload ceiling. The complete plan is bounded
+to 4,096 UTF-16 units and 1,024 event pairs. Newlines, tabs, C0/C1 controls, and macOS's
+U+F700–U+F8FF function-key range are refused before posting because keyboard semantics could
+activate a web-field action instead of behaving like paste.
+
+Confirmation is positive-only: the original element must remain focused, its caret must advance by
+the exact UTF-16 length, its selection must collapse, and a bounded range immediately before the
+caret must match the inserted tail. This never reads an entire field and never runs for a password
+field. Once any AX write or Unicode event has been attempted, an error, timeout, focus change, or
+unreadable confirmation is reported as ambiguous; Secure Paste does not retry, switch channels, or
+restore focus, because the first delivery may have landed. The user is told to inspect the field
+before trying again.
+
+Unlike trigger expansion's event fallback below, `⌘\` never writes the rendered body to
+`NSPasteboard.general` or creates a delivery lease. An ordinary `{clipboard}` placeholder may
+still read the user's current clipboard.
+
 ### Accessibility path
 
 One atomic replacement, no synthetic events and no clipboard involvement:
