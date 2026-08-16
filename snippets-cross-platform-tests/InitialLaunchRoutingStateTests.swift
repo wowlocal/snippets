@@ -1,5 +1,6 @@
 import XCTest
 
+#if os(macOS)
 @testable import Snippets_Debug
 
 final class InitialLaunchRoutingStateTests: XCTestCase {
@@ -32,3 +33,4 @@ final class InitialLaunchRoutingStateTests: XCTestCase {
         XCTAssertFalse(state.shouldShowMainWindowAfterTimeout())
     }
 }
+#endif
