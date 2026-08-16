@@ -56,6 +56,16 @@ function fail() {
     exit 1
 }
 
+function fail_device_unavailable() {
+    printf 'Error: %s is paired with this Mac, but Xcode cannot currently reach it.\n' \
+        "$DEVICE_NAME" >&2
+    printf 'Being on the same local network is not enough unless the Xcode device connection is active.\n' >&2
+    printf 'Connect and unlock the device over USB, or restore its wireless connection in:\n' >&2
+    printf '  Xcode > Window > Devices and Simulators\n' >&2
+    printf 'Wait until the device appears as Connected, then rerun the same command.\n' >&2
+    exit 1
+}
+
 function require_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
         fail "Required command not found: $1"
@@ -204,6 +214,7 @@ DEVICE_NAME=""
 DEVICE_MODEL=""
 DEVICE_OS_VERSION=""
 DEVICE_OS_NAME="iOS"
+DEVICE_TUNNEL_STATE=""
 COREDEVICE_IDENTIFIER=""
 XCODE_DESTINATION_IDENTIFIER=""
 
@@ -220,6 +231,8 @@ while coredevice_identifier="$(plutil -extract "result.devices.$device_index.ide
     device_os_version="$(plutil -extract "result.devices.$device_index.deviceProperties.osVersionNumber" \
         raw -o - "$WORK_DIR/devices.json" 2>/dev/null || true)"
     pairing_state="$(plutil -extract "result.devices.$device_index.connectionProperties.pairingState" \
+        raw -o - "$WORK_DIR/devices.json" 2>/dev/null || true)"
+    tunnel_state="$(plutil -extract "result.devices.$device_index.connectionProperties.tunnelState" \
         raw -o - "$WORK_DIR/devices.json" 2>/dev/null || true)"
     device_index=$((device_index + 1))
 
@@ -246,6 +259,7 @@ while coredevice_identifier="$(plutil -extract "result.devices.$device_index.ide
     DEVICE_NAME="$device_name"
     DEVICE_MODEL="$device_model"
     DEVICE_OS_VERSION="$device_os_version"
+    DEVICE_TUNNEL_STATE="$tunnel_state"
     if [[ "$device_model" == iPad* ]]; then
         DEVICE_OS_NAME="iPadOS"
     else
@@ -267,6 +281,9 @@ if [ "$matched_count" -eq 0 ]; then
 fi
 if [ "$matched_count" -gt 1 ]; then
     fail "The device selector matched more than one device; use an exact name"
+fi
+if [ "$DEVICE_TUNNEL_STATE" = "unavailable" ]; then
+    fail_device_unavailable
 fi
 
 if [ -n "$DEVICE_OS_VERSION" ]; then
