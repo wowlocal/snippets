@@ -22,6 +22,16 @@ ciphertext, keys, arbitrary error descriptions, or `NSError.userInfo`. Errors ar
 to a known family and numeric code. Secure-snippet keywords are explicitly approved
 metadata; they are normalized and bounded to 256 UTF-8 bytes.
 
+CloudKit ordering is recorded through `cloudkit_sync_event` and
+`cloudkit_scheduler_transition`. The former records only the closed callback kind, aggregate record
+count, fetch nesting depth, whether a submit overlapped, whether the scheduler epoch is a full
+resync, and whether that state update sealed a durable generation. The latter records closed
+scheduler actions and reasons plus total and not-yet-published generation counts. Initialization
+is recorded before the scheduler starts, so the first automatic callback cannot precede that
+baseline. Together their process sequence reconstructs state-update/fetch/send races without
+persisting record identifiers, opaque CKSyncEngine serialization, account identifiers, snippet
+metadata, or ciphertext.
+
 The `secure_editor_transition` event explains iPhone and iPad reveal behavior without
 identifying a snippet. It records only the editor surface, the closed reveal-policy states
 before and after the transition, a closed cause such as `store_refresh_remote_sync`,

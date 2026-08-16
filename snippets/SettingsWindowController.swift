@@ -1885,8 +1885,9 @@ private final class DiagnosticsSettingsViewController: NSViewController {
             + "whichever comes first, and use at most 24 MB on this device.")
         let privacy = makeTertiaryLabel(
             "Exports are plaintext JSON Lines. They can include app and OS versions, "
-            + "operation counts, error families and numeric codes, and secure-snippet "
-            + "keywords. When expansion verbose logging is enabled, they can also include "
+            + "operation counts, CloudKit callback and scheduler states, error families and "
+            + "numeric codes, and secure-snippet keywords. When expansion verbose logging is "
+            + "enabled, they can also include "
             + "content-free Accessibility stages, outcomes, state transitions, query lengths, "
             + "and numeric AX error codes. Snippet bodies, names, tags, paths, record IDs, keys and "
             + "ciphertext are never accepted by the logging API.")

@@ -148,6 +148,53 @@ struct DiagnosticsTests {
         #expect(DiagnosticExpansionAXOutcome.localTracking.rawValue == "local_tracking")
     }
 
+    @Test func cloudKitTracePersistsOnlyOrderingCountsAndClosedState() throws {
+        let eventRecord = DiagnosticRecord(
+            event: .cloudKitSyncEvent(
+                kind: .stateUpdate,
+                recordCount: 3,
+                fetchDepth: 2,
+                submitActive: true,
+                fullResync: false,
+                generationSealed: true),
+            timestamp: "2026-08-16T10:00:00.000Z",
+            elapsedMilliseconds: 8,
+            sessionIdentifier: "test-session",
+            sequence: 12)
+        let schedulerRecord = DiagnosticRecord(
+            event: .cloudKitSchedulerTransition(
+                action: .fullResyncStarted,
+                reason: .checkpointRepair,
+                fullResync: true,
+                pendingGenerationCount: 1,
+                unreadyGenerationCount: 1),
+            timestamp: "2026-08-16T10:00:00.001Z",
+            elapsedMilliseconds: 9,
+            sessionIdentifier: "test-session",
+            sequence: 13)
+
+        let eventObject = try #require(
+            JSONSerialization.jsonObject(with: eventRecord.jsonLine()) as? [String: Any])
+        let eventFields = try #require(eventObject["fields"] as? [String: Any])
+        #expect(eventObject["event"] as? String == "cloudkit_sync_event")
+        #expect(Set(eventFields.keys) == [
+            "kind", "record_count", "fetch_depth", "submit_active", "full_resync",
+            "generation_sealed",
+        ])
+        #expect(eventFields["kind"] as? String == "state_update")
+        #expect(eventFields["record_count"] as? Int == 3)
+
+        let schedulerObject = try #require(
+            JSONSerialization.jsonObject(with: schedulerRecord.jsonLine()) as? [String: Any])
+        let schedulerFields = try #require(schedulerObject["fields"] as? [String: Any])
+        #expect(schedulerObject["event"] as? String == "cloudkit_scheduler_transition")
+        #expect(Set(schedulerFields.keys) == [
+            "action", "reason", "full_resync", "pending_generation_count",
+            "unready_generation_count",
+        ])
+        #expect(schedulerFields["reason"] as? String == "checkpoint_repair")
+    }
+
     @Test func globalFacadeIsNoOpUntilInstalledAndIsThreadSafeAfterInstall() {
         Diagnostics.install(nil)
         Diagnostics.record(.lifecycle(.started))

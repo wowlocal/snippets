@@ -189,9 +189,9 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             cell.selectionStyle = .none
         case .exportDiagnostics:
             cell.textLabel?.text = "Export Diagnostic Logs"
-            cell.detailTextLabel?.text = "Plaintext JSON Lines. Secure-snippet keywords "
-                + "may be included; bodies, names, tags, IDs, paths, keys and ciphertext "
-                + "are excluded."
+            cell.detailTextLabel?.text = "Plaintext JSON Lines. Operation counts, CloudKit "
+                + "callback and scheduler states, and secure-snippet keywords may be included; "
+                + "bodies, names, tags, IDs, paths, keys and ciphertext are excluded."
             cell.imageView?.image = UIImage(systemName: "square.and.arrow.up")
             cell.textLabel?.textColor = AppTheme.tint
         case .deleteDiagnostics:

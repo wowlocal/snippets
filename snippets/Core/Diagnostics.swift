@@ -181,6 +181,33 @@ nonisolated enum DiagnosticCloudOperation: String, Codable, Sendable {
     case mapRecord = "map_record"
 }
 
+/// Content-free CKSyncEngine callback vocabulary. Persistent ordering of these events
+/// is sufficient to reconstruct send/fetch overlap without recording scheduler state,
+/// record identifiers, or payloads.
+nonisolated enum DiagnosticCloudSyncEventKind: String, Codable, Sendable {
+    case willFetch = "will_fetch"
+    case fetchedRecords = "fetched_records"
+    case stateUpdate = "state_update"
+    case didFetch = "did_fetch"
+    case sentRecords = "sent_records"
+    case didSend = "did_send"
+}
+
+nonisolated enum DiagnosticCloudSchedulerAction: String, Codable, Sendable {
+    case initialized
+    case fullResyncStarted = "full_resync_started"
+    case fullResyncCompleted = "full_resync_completed"
+    case durableInboxPreserved = "durable_inbox_preserved"
+    case retryRestarted = "retry_restarted"
+}
+
+nonisolated enum DiagnosticCloudSchedulerReason: String, Codable, Sendable {
+    case initial
+    case checkpointRepair = "checkpoint_repair"
+    case antiEntropy = "anti_entropy"
+    case retryableFailure = "retryable_failure"
+}
+
 nonisolated enum DiagnosticVaultAction: String, Codable, Sendable {
     case loaded
     case locked
@@ -469,6 +496,21 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
     case cloudKitFailure(operation: DiagnosticCloudOperation, failure: DiagnosticFailure)
     case cloudKitBatchSplit(recordCount: Int)
     case cloudKitRecordsIgnored(count: Int)
+    case cloudKitSyncEvent(
+        kind: DiagnosticCloudSyncEventKind,
+        recordCount: Int,
+        fetchDepth: Int,
+        submitActive: Bool,
+        fullResync: Bool,
+        generationSealed: Bool
+    )
+    case cloudKitSchedulerTransition(
+        action: DiagnosticCloudSchedulerAction,
+        reason: DiagnosticCloudSchedulerReason?,
+        fullResync: Bool,
+        pendingGenerationCount: Int,
+        unreadyGenerationCount: Int
+    )
     case vaultAction(DiagnosticVaultAction, count: Int?)
     case secureReveal(keyword: DiagnosticKeyword, outcome: DiagnosticSecureRevealOutcome, caller: DiagnosticCallerClass)
     case secureEditorTransition(
@@ -502,7 +544,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .appStarted, .lifecycle: .app
         case .storageFailure, .storageState, .libraryMerge: .persistence
         case .syncTriggered, .syncState, .syncRound: .sync
-        case .cloudKitFailure, .cloudKitBatchSplit, .cloudKitRecordsIgnored: .cloudKit
+        case .cloudKitFailure, .cloudKitBatchSplit, .cloudKitRecordsIgnored,
+             .cloudKitSyncEvent, .cloudKitSchedulerTransition: .cloudKit
         case .vaultAction, .secureReveal, .secureEditorTransition: .vault
         case .suggestionAnchor: .performance
         case .expansionAccessibility: .integration
@@ -524,6 +567,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .cloudKitFailure: "cloudkit_failure"
         case .cloudKitBatchSplit: "cloudkit_batch_split"
         case .cloudKitRecordsIgnored: "cloudkit_records_ignored"
+        case .cloudKitSyncEvent: "cloudkit_sync_event"
+        case .cloudKitSchedulerTransition: "cloudkit_scheduler_transition"
         case .vaultAction: "vault_action"
         case .secureReveal: "secure_reveal"
         case .secureEditorTransition: "secure_editor_transition"
@@ -620,6 +665,39 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             return ["record_count": .integer(Int64(recordCount))]
         case .cloudKitRecordsIgnored(let count):
             return ["count": .integer(Int64(count))]
+        case .cloudKitSyncEvent(
+            let kind,
+            let recordCount,
+            let fetchDepth,
+            let submitActive,
+            let fullResync,
+            let generationSealed
+        ):
+            return [
+                "kind": .string(kind.rawValue),
+                "record_count": .integer(Int64(max(0, recordCount))),
+                "fetch_depth": .integer(Int64(max(0, fetchDepth))),
+                "submit_active": .boolean(submitActive),
+                "full_resync": .boolean(fullResync),
+                "generation_sealed": .boolean(generationSealed),
+            ]
+        case .cloudKitSchedulerTransition(
+            let action,
+            let reason,
+            let fullResync,
+            let pendingGenerationCount,
+            let unreadyGenerationCount
+        ):
+            var fields: [String: DiagnosticJSONValue] = [
+                "action": .string(action.rawValue),
+                "full_resync": .boolean(fullResync),
+                "pending_generation_count": .integer(
+                    Int64(max(0, pendingGenerationCount))),
+                "unready_generation_count": .integer(
+                    Int64(max(0, unreadyGenerationCount))),
+            ]
+            if let reason { fields["reason"] = .string(reason.rawValue) }
+            return fields
         case .vaultAction(let action, let count):
             var fields: [String: DiagnosticJSONValue] = ["action": .string(action.rawValue)]
             if let count { fields["count"] = .integer(Int64(count)) }

@@ -37,7 +37,8 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         temporaryDirectory = nil
     }
 
-    func testStateUpdateOutsideFetchPersistsImmediately() async throws {
+    func testStandaloneStateUpdatePersistsSchedulerStateWithoutInventingCoreData() async throws {
+        try store().seedStateSerializationForTesting(Data("safe-state".utf8), for: account)
         let fixture = try makeAdapter()
 
         try await fixture.adapter.handle(
@@ -46,10 +47,282 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         let checkpoint = try loadedCheckpoint()
         XCTAssertEqual(checkpoint.serialization, Data("scheduled-state".utf8))
         XCTAssertTrue(checkpoint.generations.isEmpty)
+        XCTAssertFalse(checkpoint.requiresFullResync)
+    }
+
+    func testStandaloneStateUpdateDoesNotForceAFullReconciliation() async throws {
+        let safeState = Data("safe-before-ambiguous-update".utf8)
+        let prior = try store().appendFetched(
+            records: [],
+            physicalDeletionCount: 0,
+            stateSerialization: safeState,
+            for: account)
+        let before = try loadedCheckpoint()
+        let priorCursor = CloudKitSyncCursor(
+            epoch: before.epoch,
+            throughSequence: prior.sequence).syncCursor
+        let fixture = try makeAdapter()
+        let recovered = wire(
+            id: "01010101-0101-4101-8101-010101010101",
+            rev: "recovered-by-full-snapshot")
+        fixture.driver.onFetch = { [driver = fixture.driver] in
+            await driver.deliver(.willFetch)
+            await driver.deliver(.fetchedRecords([recovered], physicalDeletionCount: 0))
+            await driver.deliver(.stateUpdate(Data("safe-full-state".utf8)))
+            await driver.deliver(.didFetch)
+        }
+
+        await fixture.driver.deliver(.stateUpdate(Data("unpaired-state".utf8)))
+        let fetched = try await fixture.adapter.fetchChanges(since: priorCursor)
+
+        XCTAssertEqual(fetched.records, [recovered])
+        XCTAssertFalse(fetched.isFullResync)
+        XCTAssertEqual(fixture.driver.invalidationCount, 0)
+        XCTAssertEqual(fixture.driver.cancelCount, 0)
+        XCTAssertTrue(fixture.driver.restartSerializations.isEmpty)
+        let healed = try loadedCheckpoint()
+        XCTAssertFalse(healed.requiresFullResync)
+        XCTAssertNil(healed.lastFullResyncAt)
+        XCTAssertEqual(healed.generations.first?.records, [recovered])
+        XCTAssertFalse(healed.generations.first?.isFullResync == true)
+    }
+
+    func testFetchedRecordsDuringSubmitAreSealedAndDeliveredAfterFetchBoundary() async throws {
+        try store().seedStateSerializationForTesting(Data("S0".utf8), for: account)
+        let fixture = try makeAdapter()
+        let offered = wire(
+            id: "03030303-0303-4303-8303-030303030303", rev: "local-offer")
+        let remote = wire(
+            id: "04040404-0404-4404-8404-040404040404", rev: "remote-overlap")
+        fixture.driver.onSend = { [driver = fixture.driver] in
+            // Deliberately omit willFetch: submit activity is not provenance for the
+            // opaque state, and lifecycle bookkeeping cannot be a durability gate.
+            await driver.deliver(.fetchedRecords([remote], physicalDeletionCount: 0))
+            await driver.deliver(.stateUpdate(Data("S1-overlap".utf8)))
+            await driver.deliver(.sentRecords([.accepted(
+                id: offered.id,
+                rev: offered.rev,
+                recordVersion: SyncRecordVersion(Data("V1".utf8)))]))
+            await driver.deliver(.didSend)
+        }
+
+        _ = try await fixture.adapter.submit([offered], at: nil)
+
+        var checkpoint = try loadedCheckpoint()
+        XCTAssertEqual(checkpoint.serialization, Data("S1-overlap".utf8))
+        XCTAssertEqual(checkpoint.generations.first?.records, [remote])
+        XCTAssertFalse(checkpoint.generations.first?.isReadyForCore == true)
+
+        fixture.driver.onFetch = { [driver = fixture.driver] in
+            await driver.deliver(.willFetch)
+            await driver.deliver(.stateUpdate(Data("S2-boundary".utf8)))
+            await driver.deliver(.didFetch)
+        }
+        let fetched = try await fixture.adapter.fetchChanges(since: nil)
+
+        XCTAssertEqual(fetched.records, [remote])
+        checkpoint = try loadedCheckpoint()
+        XCTAssertTrue(checkpoint.generations.allSatisfy(\.isReadyForCore))
+    }
+
+    func testSealedPageSurvivesCrashButStaysHiddenUntilFetchCompletes() async throws {
+        try store().seedStateSerializationForTesting(Data("S0".utf8), for: account)
+        let first = try makeAdapter()
+        let remote = wire(
+            id: "05050505-0505-4505-8505-050505050505", rev: "sealed-before-crash")
+
+        await first.driver.deliver(.willFetch)
+        await first.driver.deliver(.fetchedRecords([remote], physicalDeletionCount: 0))
+        await first.driver.deliver(.stateUpdate(Data("S1-sealed".utf8)))
+
+        var checkpoint = try loadedCheckpoint()
+        XCTAssertEqual(checkpoint.generations.first?.records, [remote])
+        XCTAssertFalse(checkpoint.generations.first?.isReadyForCore == true)
+        await first.adapter.shutdown()
+
+        let restarted = try makeAdapter()
+        restarted.driver.onFetch = { [driver = restarted.driver] in
+            await driver.deliver(.willFetch)
+            // The prior state update is already durable and covers the sealed page.
+            // CKSyncEngine may resume that state and report an empty remainder without
+            // publishing another stateUpdate before the new fetch boundary.
+            await driver.deliver(.didFetch)
+        }
+        let replay = try await restarted.adapter.fetchChanges(since: nil)
+
+        XCTAssertEqual(replay.records, [remote])
+        checkpoint = try loadedCheckpoint()
+        XCTAssertTrue(checkpoint.generations.allSatisfy(\.isReadyForCore))
+    }
+
+    func testAutomaticPageAfterReplyValidationCannotAdvanceFrozenCursor() async throws {
+        let prior = try store().appendFetched(
+            records: [],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("S0-applied".utf8),
+            for: account)
+        let seeded = try loadedCheckpoint()
+        let priorCursor = CloudKitSyncCursor(
+            epoch: seeded.epoch,
+            throughSequence: prior.sequence).syncCursor
+        try store().acknowledge(
+            through: prior.sequence,
+            epoch: seeded.epoch,
+            for: account)
+
+        let fixture = try makeAdapter()
+        fixture.driver.onFetch = { [driver = fixture.driver] in
+            await driver.deliver(.willFetch)
+            await driver.deliver(.stateUpdate(Data("S1-manual".utf8)))
+            await driver.deliver(.didFetch)
+        }
+        let late = wire(
+            id: "07070707-0707-4707-8707-070707070707",
+            rev: "sealed-after-validation")
+        fixture.driver.onFetchReplySnapshotValidated = { [driver = fixture.driver] in
+            await driver.deliver(.willFetch)
+            await driver.deliver(.fetchedRecords([late], physicalDeletionCount: 0))
+            await driver.deliver(.stateUpdate(Data("S2-automatic".utf8)))
+        }
+
+        let reply = try await fixture.adapter.fetchChanges(since: priorCursor)
+
+        XCTAssertTrue(reply.records.isEmpty)
+        XCTAssertEqual(
+            CloudKitSyncCursor.decode(try XCTUnwrap(reply.cursor))?.throughSequence,
+            prior.sequence,
+            "the reply cursor must come from the same ready snapshot as its records")
+        var checkpoint = try loadedCheckpoint()
+        XCTAssertEqual(checkpoint.generations.first?.records, [late])
+        XCTAssertFalse(checkpoint.generations.first?.isReadyForCore == true)
+
+        try await fixture.adapter.acknowledgeFetched(through: reply.cursor)
+        checkpoint = try loadedCheckpoint()
+        XCTAssertEqual(
+            checkpoint.generations.first?.records,
+            [late],
+            "acknowledging the frozen reply must not compact the later sealed page")
+
+        fixture.driver.onFetchReplySnapshotValidated = nil
+        await fixture.driver.deliver(.didFetch)
+        let replay = try await fixture.adapter.fetchChanges(since: reply.cursor)
+
+        XCTAssertEqual(replay.records, [late])
+        XCTAssertEqual(
+            CloudKitSyncCursor.decode(try XCTUnwrap(replay.cursor))?.throughSequence,
+            checkpoint.generations.first?.sequence)
+    }
+
+    func testDailyAntiEntropyReconcilesEvenWhenIncrementalCursorLooksHealthy() async throws {
+        let old = Date(timeIntervalSince1970: 10_000)
+        let checkpointStore = CloudKitSyncCheckpointStore(
+            url: checkpointURL,
+            temporaryDirectory: temporaryDirectory,
+            cryptor: TestCloudKitSyncCheckpointCryptor(seed: 0xD7),
+            now: { old })
+        let prior = try checkpointStore.appendFetched(
+            records: [],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("old-full-state".utf8),
+            isFullResync: true,
+            for: account)
+        guard case .loaded(let before) = checkpointStore.load(for: account) else {
+            return XCTFail("expected seeded checkpoint")
+        }
+        let priorCursor = CloudKitSyncCursor(
+            epoch: before.epoch,
+            throughSequence: prior.sequence).syncCursor
+        let fixture = try makeAdapter(
+            now: { old.addingTimeInterval(24 * 60 * 60) },
+            fullResyncInterval: 24 * 60 * 60)
+        fixture.driver.onFetch = { [driver = fixture.driver] in
+            await driver.deliver(.willFetch)
+            await driver.deliver(.stateUpdate(Data("daily-full-state".utf8)))
+            await driver.deliver(.didFetch)
+        }
+
+        let fetched = try await fixture.adapter.fetchChanges(since: priorCursor)
+
+        XCTAssertTrue(fetched.isFullResync)
+        XCTAssertEqual(fixture.driver.restartSerializations, [Data()])
+        XCTAssertEqual(fixture.driver.manualCalls, [.fetchChanges])
+    }
+
+    func testFullModeIsPublishedBeforeRestartCanDeliverAutomaticCallbacks() async throws {
+        let old = Date(timeIntervalSince1970: 20_000)
+        let checkpointStore = CloudKitSyncCheckpointStore(
+            url: checkpointURL,
+            temporaryDirectory: temporaryDirectory,
+            cryptor: TestCloudKitSyncCheckpointCryptor(seed: 0xD7),
+            now: { old })
+        let prior = try checkpointStore.appendFetched(
+            records: [],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("old-full-state".utf8),
+            isFullResync: true,
+            for: account)
+        let before = try loadedCheckpoint()
+        let cursor = CloudKitSyncCursor(
+            epoch: before.epoch,
+            throughSequence: prior.sequence).syncCursor
+        let fixture = try makeAdapter(
+            now: { old.addingTimeInterval(24 * 60 * 60) },
+            fullResyncInterval: 24 * 60 * 60)
+        let remote = wire(
+            id: "06060606-0606-4606-8606-060606060606", rev: "early-automatic")
+        let callbackFinished = LockedBox(false)
+        fixture.driver.onRestart = { [driver = fixture.driver] in
+            let barrier = DispatchSemaphore(value: 0)
+            Task.detached {
+                await driver.deliver(.willFetch)
+                await driver.deliver(.fetchedRecords([remote], physicalDeletionCount: 0))
+                await driver.deliver(.stateUpdate(Data("new-full-state".utf8)))
+                await driver.deliver(.didFetch)
+                callbackFinished.set(true)
+                barrier.signal()
+            }
+            _ = barrier.wait(timeout: .now() + 5)
+        }
+
+        let fetched = try await fixture.adapter.fetchChanges(since: cursor)
+
+        XCTAssertTrue(callbackFinished.value)
+        XCTAssertEqual(fetched.records, [remote])
+        XCTAssertTrue(fetched.isFullResync)
+        XCTAssertTrue(try loadedCheckpoint().generations.allSatisfy(\.isFullResync))
+    }
+
+    func testFullResyncClassificationSurvivesCrashUntilCoreAcknowledgesIt() async throws {
+        let delta = try store().appendFetched(
+            records: [],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("delta-state".utf8),
+            for: account)
+        let fullRecord = wire(
+            id: "02020202-0202-4202-8202-020202020202",
+            rev: "durable-full-record")
+        _ = try store().appendFetched(
+            records: [fullRecord],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("full-state".utf8),
+            isFullResync: true,
+            for: account)
+        let checkpoint = try loadedCheckpoint()
+        let previouslyAppliedCursor = CloudKitSyncCursor(
+            epoch: checkpoint.epoch,
+            throughSequence: delta.sequence).syncCursor
+
+        let restarted = try makeAdapter()
+        let replay = try await restarted.adapter.fetchChanges(since: previouslyAppliedCursor)
+
+        XCTAssertEqual(replay.records, [fullRecord])
+        XCTAssertTrue(replay.isFullResync)
+        XCTAssertTrue(restarted.driver.manualCalls.isEmpty,
+                      "the durable inbox must replay before another CloudKit operation")
     }
 
     func testUnreadableEncryptedCheckpointRoutesTypedReviewedFailure() throws {
-        try store().saveStateSerialization(Data("authenticated-state".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("authenticated-state".utf8), for: account)
         let wrongKeyStore = CloudKitSyncCheckpointStore(
             url: checkpointURL,
             temporaryDirectory: temporaryDirectory,
@@ -69,8 +342,15 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testFetchEventsStageUntilDidFetchThenCommitLatestStateAndRecordsAtomically() async throws {
-        try store().saveStateSerialization(Data("old-state".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("old-state".utf8), for: account)
         let fixture = try makeAdapter()
+        let recordedEvents = LockedBox<[SyncTransportEvent]>([])
+        let eventTask = Task {
+            for await event in fixture.adapter.events {
+                recordedEvents.update { $0.append(event) }
+            }
+        }
+        defer { eventTask.cancel() }
         let r1 = wire(id: "11111111-1111-4111-8111-111111111111", rev: "R1")
         let r2 = wire(id: "22222222-2222-4222-8222-222222222222", rev: "R2")
 
@@ -83,22 +363,31 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         try await fixture.adapter.handle(.stateUpdate(Data("S1".utf8)))
 
         var checkpoint = try loadedCheckpoint()
-        XCTAssertEqual(checkpoint.serialization, Data("old-state".utf8))
-        XCTAssertTrue(checkpoint.generations.isEmpty,
-                      "a crash before didFetch must safely repeat the old fetch")
+        XCTAssertEqual(checkpoint.serialization, Data("S1".utf8))
+        XCTAssertEqual(checkpoint.generations.map(\.records), [[r1], [r2]])
+        XCTAssertTrue(checkpoint.generations.allSatisfy { !$0.isReadyForCore },
+                      "sealed pages must survive a crash but stay hidden until didFetch")
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(
+            recordedEvents.value.isEmpty,
+            "stateUpdate must not schedule a competing Core fetch before publication")
 
         try await fixture.adapter.handle(.didFetch)
 
         checkpoint = try loadedCheckpoint()
-        let generation = try XCTUnwrap(checkpoint.generations.first)
         XCTAssertEqual(checkpoint.serialization, Data("S1".utf8))
-        XCTAssertEqual(generation.serialization, Data("S1".utf8))
-        XCTAssertEqual(generation.records, [r1, r2])
-        XCTAssertEqual(generation.physicalDeletionCount, 0)
+        XCTAssertEqual(
+            checkpoint.generations.map(\.serialization),
+            [Data("intermediate".utf8), Data("S1".utf8)])
+        XCTAssertEqual(checkpoint.generations.map(\.records), [[r1], [r2]])
+        XCTAssertTrue(checkpoint.generations.allSatisfy(\.isReadyForCore))
+        let notifiedOnce = await eventually { recordedEvents.value.count == 1 }
+        XCTAssertTrue(notifiedOnce)
+        XCTAssertEqual(recordedEvents.value, [.changesAvailable])
     }
 
     func testStateUpdateAfterDidFetchCommitsExactlyOneGenerationWithNewWatermark() async throws {
-        try store().saveStateSerialization(Data("old-watermark".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("old-watermark".utf8), for: account)
         let fixture = try makeAdapter()
         let remote = wire(
             id: "12121212-1212-4212-8212-121212121212", rev: "late-state")
@@ -124,7 +413,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testEmptyManualFetchWithoutStateUpdateCreatesNoGeneration() async throws {
-        try store().saveStateSerialization(Data("unchanged-watermark".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("unchanged-watermark".utf8), for: account)
         let fixture = try makeAdapter()
         fixture.driver.onFetch = { [driver = fixture.driver] in
             await driver.deliver(.willFetch)
@@ -141,8 +430,8 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         XCTAssertTrue(checkpoint.generations.isEmpty)
     }
 
-    func testNonemptyManualFetchWithoutStateUpdateFailsClosed() async throws {
-        try store().saveStateSerialization(Data("old-watermark".utf8), for: account)
+    func testNonemptyManualFetchWithoutStateUpdateRetriesFromOldWatermark() async throws {
+        try store().seedStateSerializationForTesting(Data("old-watermark".utf8), for: account)
         let fixture = try makeAdapter()
         let remote = wire(
             id: "13131313-1313-4313-8313-131313131313", rev: "unsafe-no-state")
@@ -160,16 +449,17 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         XCTAssertEqual(checkpoint.serialization, Data("old-watermark".utf8))
         XCTAssertTrue(checkpoint.generations.isEmpty,
                       "records without their new CKSyncEngine state must never enter the inbox")
+        XCTAssertEqual(fixture.driver.restartSerializations, [Data("old-watermark".utf8)])
         await XCTAssertThrowsErrorAsync {
             _ = try await fixture.adapter.fetchChanges(since: nil)
         }
-        XCTAssertEqual(fixture.driver.manualCalls, [.fetchChanges],
-                       "the ambiguous fetch failure must remain sticky")
+        XCTAssertEqual(fixture.driver.manualCalls, [.fetchChanges, .fetchChanges],
+                       "the old watermark makes an incomplete fetch safely retryable")
     }
 
     func testPhysicalRecordDeletionIsStickyAndCannotAdvanceTheCheckpoint() async throws {
         try store().reset(for: account, allowsZoneBootstrap: false)
-        try store().saveStateSerialization(Data("before-physical-delete".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("before-physical-delete".utf8), for: account)
         let fixture = try makeAdapter()
         let before = try loadedCheckpoint()
         fixture.driver.onFetch = { [driver = fixture.driver] in
@@ -209,7 +499,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testEveryTypedRemoteDataLossEventUsesTheSameNonrecoverableFailure() async throws {
-        try store().saveStateSerialization(Data("before-remote-data-loss".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("before-remote-data-loss".utf8), for: account)
         let reasons: [CloudKitRemoteDataLoss] = [
             .physicalRecordDeletion,
             .zoneDeleted,
@@ -262,7 +552,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testScheduledAndManualFetchOverlapCommitsTheirUnionAtFinalWatermark() async throws {
-        try store().saveStateSerialization(Data("old-state".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("old-state".utf8), for: account)
         let fixture = try makeAdapter()
         let r1 = wire(id: "41414141-4141-4141-8141-414141414141", rev: "R1")
         let r2 = wire(id: "42424242-4242-4242-8242-424242424242", rev: "R2")
@@ -275,24 +565,33 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
             await driver.deliver(.didFetch)
         }
 
-        let manualResult = try await fixture.adapter.fetchChanges(since: nil)
-        XCTAssertTrue(manualResult.records.isEmpty)
-        XCTAssertEqual(try loadedCheckpoint().serialization, Data("old-state".utf8))
+        await XCTAssertThrowsErrorAsync {
+            _ = try await fixture.adapter.fetchChanges(since: nil)
+        }
+        var checkpoint = try loadedCheckpoint()
+        XCTAssertEqual(checkpoint.serialization, Data("S1".utf8))
+        XCTAssertEqual(checkpoint.generations.first?.records, [r1])
+        XCTAssertFalse(checkpoint.generations.first?.isReadyForCore == true)
+        XCTAssertEqual(fixture.driver.restartSerializations, [Data("S1".utf8)])
 
-        await fixture.driver.deliver(.fetchedRecords([r2], physicalDeletionCount: 0))
-        await fixture.driver.deliver(.stateUpdate(Data("S2".utf8)))
-        await fixture.driver.deliver(.didFetch)
+        fixture.driver.onFetch = { [driver = fixture.driver] in
+            await driver.deliver(.willFetch)
+            await driver.deliver(.fetchedRecords([r2], physicalDeletionCount: 0))
+            await driver.deliver(.stateUpdate(Data("S2".utf8)))
+            await driver.deliver(.didFetch)
+        }
+        let retried = try await fixture.adapter.fetchChanges(since: nil)
+        XCTAssertEqual(retried.records, [r1, r2])
 
-        let checkpoint = try loadedCheckpoint()
+        checkpoint = try loadedCheckpoint()
         XCTAssertEqual(checkpoint.serialization, Data("S2".utf8))
-        XCTAssertEqual(checkpoint.generations.count, 1)
-        XCTAssertEqual(checkpoint.generations.first?.records, [r1, r2])
-        XCTAssertEqual(checkpoint.generations.first?.serialization, Data("S2".utf8))
+        XCTAssertEqual(checkpoint.generations.map(\.records), [[r1], [r2]])
+        XCTAssertTrue(checkpoint.generations.allSatisfy(\.isReadyForCore))
     }
 
     func testTransientFailureDuringOverlapRetiresSchedulerBeforeSurvivorCallbacks() async throws {
         let durableState = Data("overlap-S0".utf8)
-        try store().saveStateSerialization(durableState, for: account)
+        try store().seedStateSerializationForTesting(durableState, for: account)
         let fixture = try makeAdapter()
         let cancellationGate = TransportReplacementGate()
         let cancellationStarted = LockedBox(false)
@@ -324,7 +623,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
 
     func testThrownManualFetchDuringScheduledFetchRestartsFromDurableState() async throws {
         let durableState = Data("throw-overlap-S0".utf8)
-        try store().saveStateSerialization(durableState, for: account)
+        try store().seedStateSerializationForTesting(durableState, for: account)
         let fixture = try makeAdapter()
         await fixture.driver.deliver(.willFetch)
         fixture.driver.onFetch = {
@@ -341,7 +640,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testRecordsArrivingAfterStateRequireANewerWatermarkBeforeCommit() async throws {
-        try store().saveStateSerialization(Data("old-durable-state".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("old-durable-state".utf8), for: account)
         let fixture = try makeAdapter()
         let r1 = wire(id: "45454545-4545-4545-8545-454545454545", rev: "R1")
         let r2 = wire(id: "46464646-4646-4646-8646-464646464646", rev: "R2")
@@ -358,9 +657,11 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         }
 
         let checkpoint = try loadedCheckpoint()
-        XCTAssertEqual(checkpoint.serialization, Data("old-durable-state".utf8))
-        XCTAssertTrue(checkpoint.generations.isEmpty,
-                      "R2 must never be persisted under the earlier S1 watermark")
+        XCTAssertEqual(checkpoint.serialization, Data("S1-before-R2".utf8))
+        XCTAssertEqual(checkpoint.generations.map(\.records), [[r1]])
+        XCTAssertTrue(checkpoint.generations.allSatisfy { !$0.isReadyForCore },
+                      "R1/S1 may be durable, but R2 must await a newer state update")
+        XCTAssertEqual(fixture.driver.restartSerializations, [Data("S1-before-R2".utf8)])
     }
 
     func testRestartReplaysAdvancedGenerationByteForByteUntilCursorIsAcknowledged() async throws {
@@ -574,7 +875,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testIncompatibleCursorCannotClaimFullResyncUsingRestoredIncrementalState() async throws {
-        try store().saveStateSerialization(
+        try store().seedStateSerializationForTesting(
             Data("restored-incremental-scheduler-state".utf8), for: account)
         let fixture = try makeAdapter()
         fixture.driver.onFetch = { [driver = fixture.driver] in
@@ -915,7 +1216,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testEstablishedDriverNeverRecreatesZoneBeforeFetch() async throws {
-        try store().saveStateSerialization(Data("established-state".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("established-state".utf8), for: account)
         let driver = FakeCloudKitSyncDriver(requiresZoneBootstrap: false)
         driver.onFetch = { [driver] in
             await driver.deliver(.willFetch)
@@ -1147,7 +1448,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testTransientFailureAfterR1S1CannotDropPrefixOrContinueFromInMemoryS1() async throws {
-        try store().saveStateSerialization(Data("S0-durable".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("S0-durable".utf8), for: account)
         let remote = wire(
             id: "31313131-3131-4131-8131-313131313131", rev: "R1-before-failure")
         let fixture = try makeAdapter()
@@ -1176,26 +1477,28 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         }
 
         let afterFailure = try loadedCheckpoint()
-        XCTAssertEqual(afterFailure.serialization, Data("S0-durable".utf8),
-                       "failed transaction cannot publish S1 without its complete prefix")
-        XCTAssertTrue(afterFailure.generations.isEmpty,
-                      "R1 is either atomically durable with S1 or must replay from S0")
+        XCTAssertEqual(afterFailure.serialization, Data("S1-in-memory".utf8),
+                       "stateUpdate must atomically seal R1 even before didFetch")
+        XCTAssertEqual(afterFailure.generations.first?.records, [remote])
+        XCTAssertFalse(afterFailure.generations.first?.isReadyForCore == true,
+                       "an interrupted transaction cannot expose its partial prefix")
         XCTAssertEqual(fixture.driver.cancelCount, 1,
                        "the engine holding in-memory S1 must be poisoned before retry")
-        XCTAssertEqual(fixture.driver.restartSerializations, [Data("S0-durable".utf8)],
-                       "retry must reconstruct scheduling from the last durable state")
+        XCTAssertEqual(fixture.driver.restartSerializations, [Data("S1-in-memory".utf8)],
+                       "retry resumes from the latest atomically sealed scheduler state")
 
         let retried = try await fixture.adapter.fetchChanges(since: nil)
 
-        XCTAssertEqual(retried.records, [remote],
-                       "the R1 prefix must survive exactly once through durable replay")
+        XCTAssertFalse(retried.records.isEmpty)
+        XCTAssertTrue(retried.records.allSatisfy { $0 == remote },
+                      "at-least-once replay may duplicate R1 but cannot lose or mutate it")
         XCTAssertEqual(try loadedCheckpoint().generations.first?.records, [remote])
         XCTAssertEqual(fixture.driver.manualCalls, [.fetchChanges, .fetchChanges])
     }
 
     func testShutdownPreventsLateRestartAfterSuspendedCallbackRecoveryCancellation() async throws {
         let durableState = Data("shutdown-before-late-restart-S0".utf8)
-        try store().saveStateSerialization(durableState, for: account)
+        try store().seedStateSerializationForTesting(durableState, for: account)
         let remote = wire(
             id: "32323232-3232-4232-8232-323232323232",
             rev: "late-restart-race")
@@ -1278,7 +1581,10 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
             "a callback recovery task must never construct an engine after shutdown")
         await fixture.driver.deliver(.stateUpdate(Data("post-shutdown-state".utf8)))
         XCTAssertEqual(fixture.driver.ignoredLateEventCount, 1)
-        XCTAssertEqual(try loadedCheckpoint().serialization, durableState)
+        XCTAssertEqual(
+            try loadedCheckpoint().serialization,
+            Data("in-memory-S1".utf8),
+            "the pre-failure state update remains durable across shutdown")
     }
 
     func testLifecycleGateStopDeterministicallyRejectsLateRecoveryRestart() async {
@@ -1477,7 +1783,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
     }
 
     func testAccountChangeViaProductionHandlerPoisonsDataPlaneAndCancels() async throws {
-        try store().saveStateSerialization(Data("account-A-state".utf8), for: account)
+        try store().seedStateSerializationForTesting(Data("account-A-state".utf8), for: account)
         let fixture = try makeAdapter()
         let late = wire(id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", rev: "late")
 
@@ -1486,8 +1792,11 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         await fixture.driver.deliver(.stateUpdate(Data("must-not-land".utf8)))
         await fixture.driver.deliver(.accountChange(.switchAccounts))
 
-        XCTAssertEqual(try loadedCheckpoint().serialization, Data("account-A-state".utf8))
-        XCTAssertTrue(try loadedCheckpoint().generations.isEmpty)
+        let checkpoint = try loadedCheckpoint()
+        XCTAssertEqual(checkpoint.serialization, Data("must-not-land".utf8))
+        XCTAssertEqual(checkpoint.generations.first?.records, [late])
+        XCTAssertFalse(checkpoint.generations.first?.isReadyForCore == true,
+                       "account review must fence the old scope before this inbox is exposed")
         await XCTAssertThrowsErrorAsync {
             _ = try await fixture.adapter.fetchChanges(since: nil)
         }
@@ -2036,12 +2345,17 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         let adapter: CloudKitSyncTransportAdapter
     }
 
-    private func makeAdapter() throws -> AdapterFixture {
+    private func makeAdapter(
+        now: @escaping @Sendable () -> Date = Date.init,
+        fullResyncInterval: TimeInterval = CloudKitSyncTransportAdapter.antiEntropyInterval
+    ) throws -> AdapterFixture {
         let driver = FakeCloudKitSyncDriver()
         let adapter = try CloudKitSyncTransportAdapter(
             accountIdentity: account,
             checkpointStore: store(),
-            driver: driver)
+            driver: driver,
+            now: now,
+            fullResyncInterval: fullResyncInterval)
         return AdapterFixture(driver: driver, adapter: adapter)
     }
 
@@ -2250,7 +2564,9 @@ private nonisolated final class FakeCloudKitSyncDriver: CloudKitSyncDriving, @un
 
     var onSend: (@Sendable () async throws -> Void)?
     var onFetch: (@Sendable () async throws -> Void)?
+    var onFetchReplySnapshotValidated: (@Sendable () async -> Void)?
     var onCancel: (@Sendable () async -> Void)?
+    var onRestart: (@Sendable () -> Void)?
 
     init(
         requiresZoneBootstrap: Bool = false,
@@ -2314,6 +2630,7 @@ private nonisolated final class FakeCloudKitSyncDriver: CloudKitSyncDriving, @un
             restartSerializationsStorage.append(stateSerialization ?? Data())
             acceptsEvents = true
         }
+        onRestart?()
     }
 
     func invalidate() {
@@ -2351,6 +2668,10 @@ private nonisolated final class FakeCloudKitSyncDriver: CloudKitSyncDriving, @un
             if callbackDepth > 0 { reentrantOperationsStorage.append(.fetchChanges) }
         }
         try await onFetch?()
+    }
+
+    func fetchReplySnapshotValidated() async {
+        await onFetchReplySnapshotValidated?()
     }
 
     func cancelOperations() async {

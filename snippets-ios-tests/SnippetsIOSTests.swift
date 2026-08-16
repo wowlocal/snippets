@@ -1637,6 +1637,25 @@ final class SnippetsIOSTests: XCTestCase {
             level: .debug,
             synchronous: true)
         service?.emit(
+            .cloudKitSyncEvent(
+                kind: .stateUpdate,
+                recordCount: 2,
+                fetchDepth: 1,
+                submitActive: true,
+                fullResync: false,
+                generationSealed: true),
+            level: .info,
+            synchronous: true)
+        service?.emit(
+            .cloudKitSchedulerTransition(
+                action: .fullResyncStarted,
+                reason: .checkpointRepair,
+                fullResync: true,
+                pendingGenerationCount: 1,
+                unreadyGenerationCount: 1),
+            level: .info,
+            synchronous: true)
+        service?.emit(
             .expansionAccessibility(
                 operation: .acceptance,
                 outcome: .localTracking,
@@ -1668,6 +1687,11 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(export.contains("\"failure\":\"attribute_unsupported\""))
         XCTAssertTrue(export.contains("\"ax_error_code\":-25205"))
         XCTAssertTrue(export.contains("\"reason\":\"store_refresh_remote_sync\""))
+        XCTAssertTrue(export.contains("\"event\":\"cloudkit_sync_event\""))
+        XCTAssertTrue(export.contains("\"generation_sealed\":true"))
+        XCTAssertTrue(export.contains("\"event\":\"cloudkit_scheduler_transition\""))
+        XCTAssertTrue(export.contains("\"reason\":\"checkpoint_repair\""))
+        XCTAssertTrue(export.contains("\"unready_generation_count\":1"))
         XCTAssertTrue(export.contains("\"vault_state\":\"unlocked\""))
         XCTAssertTrue(export.contains("\"error_code\":917"))
         XCTAssertFalse(export.contains("PRIVATE-BODY-SENTINEL"))

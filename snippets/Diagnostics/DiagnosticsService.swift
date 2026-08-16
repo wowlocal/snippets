@@ -483,6 +483,19 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             category: "cloudkit", required: ["record_count"]),
         "cloudkit_records_ignored": ExportEventSchema(
             category: "cloudkit", required: ["count"]),
+        "cloudkit_sync_event": ExportEventSchema(
+            category: "cloudkit",
+            required: [
+                "kind", "record_count", "fetch_depth", "submit_active",
+                "full_resync", "generation_sealed",
+            ]),
+        "cloudkit_scheduler_transition": ExportEventSchema(
+            category: "cloudkit",
+            required: [
+                "action", "full_resync", "pending_generation_count",
+                "unready_generation_count",
+            ],
+            optional: ["reason"]),
         "vault_action": ExportEventSchema(
             category: "vault", required: ["action"], optional: ["count"]),
         "secure_reveal": ExportEventSchema(
@@ -526,13 +539,15 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",
+        "submit_active", "generation_sealed",
     ]
     private static let exportNumericFields: Set<String> = [
         "error_code", "attempt", "value", "conflict_copies", "keyword_collisions",
         "duration_ms", "downloaded", "uploaded", "merged", "deferred", "quarantined",
         "record_count", "count", "exception_type", "exception_code", "signal",
         "file_count", "byte_count", "skipped_trailing_lines", "query_length",
-        "ax_error_code",
+        "ax_error_code", "fetch_depth", "pending_generation_count",
+        "unready_generation_count",
     ]
 
     private func makeExport(at destination: URL) throws -> DiagnosticsExportResult {

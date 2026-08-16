@@ -19,31 +19,42 @@ nonisolated protocol CloudKitSyncCheckpointCrypting: Sendable {
 /// The CKSyncEngine watermark and every fetched record covered by that watermark.
 ///
 /// A generation is retained until `SyncBase.cursor` comes back in a *later* round. The
-/// engine serialization can therefore advance immediately without losing records when
-/// the process dies before the domain merge and base fsync complete.
+/// engine serialization can therefore advance atomically with that generation without
+/// losing records when the process dies before the domain merge and base fsync complete.
 nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 3
 
     nonisolated struct Generation: Codable, Equatable, Sendable {
         var sequence: UInt64
         var serialization: Data
         var records: [WireRecord]
         var physicalDeletionCount: Int
+        /// Survives process death so Core never mistakes a complete remote snapshot
+        /// for an incremental delta after the scheduler generation is replayed.
+        var isFullResync: Bool
+        /// State updates may seal several pages before CKSyncEngine finishes the fetch.
+        /// Core sees none of them until the final didFetch marks the complete prefix ready.
+        var isReadyForCore: Bool
 
         init(
             sequence: UInt64,
             serialization: Data,
             records: [WireRecord],
-            physicalDeletionCount: Int
+            physicalDeletionCount: Int,
+            isFullResync: Bool = false,
+            isReadyForCore: Bool = true
         ) {
             self.sequence = sequence
             self.serialization = serialization
             self.records = records
             self.physicalDeletionCount = physicalDeletionCount
+            self.isFullResync = isFullResync
+            self.isReadyForCore = isReadyForCore
         }
 
         private enum CodingKeys: String, CodingKey, CaseIterable {
-            case sequence, serialization, records, physicalDeletionCount
+            case sequence, serialization, records, physicalDeletionCount, isFullResync
+            case isReadyForCore
         }
 
         init(from decoder: Decoder) throws {
@@ -54,6 +65,10 @@ nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
             serialization = try container.decode(Data.self, forKey: .serialization)
             records = try container.decode([WireRecord].self, forKey: .records)
             physicalDeletionCount = try container.decode(Int.self, forKey: .physicalDeletionCount)
+            isFullResync = try container.decodeIfPresent(
+                Bool.self, forKey: .isFullResync) ?? false
+            isReadyForCore = try container.decodeIfPresent(
+                Bool.self, forKey: .isReadyForCore) ?? true
             guard sequence > 0,
                   !serialization.isEmpty,
                   physicalDeletionCount >= 0 else {
@@ -72,6 +87,8 @@ nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
             try container.encode(serialization, forKey: .serialization)
             try container.encode(records, forKey: .records)
             try container.encode(physicalDeletionCount, forKey: .physicalDeletionCount)
+            try container.encode(isFullResync, forKey: .isFullResync)
+            try container.encode(isReadyForCore, forKey: .isReadyForCore)
         }
     }
 
@@ -81,6 +98,18 @@ nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
     var serialization: Data?
     var nextSequence: UInt64
     var generations: [Generation]
+    /// A sticky safety latch set when CKSyncEngine publishes opaque state outside a
+    /// recognized fetch transaction. The last known-safe serialization remains intact,
+    /// but it may not be used for another incremental fetch.
+    var requiresFullResync: Bool
+    /// True while the currently persisted CKSyncEngine ancestry started from nil and
+    /// has not yet delivered a complete fetch boundary backed by durable state. This is
+    /// distinct from `requiresFullResync`: an in-progress scan must resume from its
+    /// latest serialization, not repeatedly discard it and start over.
+    var fullResyncInProgress: Bool
+    /// Wall-clock time of the last complete remote snapshot. Used only to bound repair
+    /// latency; clock rollback conservatively schedules another snapshot.
+    var lastFullResyncAt: Date?
     /// True only until this account scope's custom zone has been saved once.
     ///
     /// A nil scheduler serialization is also used for reviewed checkpoint repair and
@@ -89,12 +118,34 @@ nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
     /// back into a scope CloudKit deliberately removed.
     var allowsZoneBootstrap: Bool
 
+    var unreadyGenerationCount: Int {
+        generations.reduce(into: 0) { count, generation in
+            if !generation.isReadyForCore { count += 1 }
+        }
+    }
+
+    /// Highest sequence whose records have actually been published to Core.
+    /// An unready first generation deliberately produces nil rather than falling
+    /// through to the scheduler's global sequence counter.
+    var readyThroughSequence: UInt64? {
+        if let ready = generations.prefix(while: \.isReadyForCore).last {
+            return ready.sequence
+        }
+        if let first = generations.first {
+            return first.sequence > 1 ? first.sequence - 1 : nil
+        }
+        return nextSequence > 1 ? nextSequence - 1 : nil
+    }
+
     init(
         accountIdentity: SyncAccountIdentity,
         epoch: UUID = UUID(),
         serialization: Data? = nil,
         nextSequence: UInt64 = 1,
         generations: [Generation] = [],
+        requiresFullResync: Bool = false,
+        fullResyncInProgress: Bool? = nil,
+        lastFullResyncAt: Date? = nil,
         allowsZoneBootstrap: Bool = true
     ) {
         schemaVersion = Self.currentSchemaVersion
@@ -103,26 +154,52 @@ nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
         self.serialization = serialization
         self.nextSequence = nextSequence
         self.generations = generations
+        self.requiresFullResync = requiresFullResync
+        self.fullResyncInProgress = fullResyncInProgress ?? (serialization == nil)
+        self.lastFullResyncAt = lastFullResyncAt
         self.allowsZoneBootstrap = allowsZoneBootstrap
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case schemaVersion, accountIdentity, epoch, serialization, nextSequence, generations
+        case requiresFullResync, fullResyncInProgress, lastFullResyncAt
         case allowsZoneBootstrap
     }
 
     init(from decoder: Decoder) throws {
         try Self.rejectUnknownFields(decoder, expected: CodingKeys.allCases.map(\.rawValue))
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        guard schemaVersion == Self.currentSchemaVersion else {
+        let storedSchemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard (1...Self.currentSchemaVersion).contains(storedSchemaVersion) else {
             throw CloudKitSyncCheckpointCodingFailure.unsupportedSchema
         }
+        schemaVersion = Self.currentSchemaVersion
         accountIdentity = try container.decode(SyncAccountIdentity.self, forKey: .accountIdentity)
         epoch = try container.decode(UUID.self, forKey: .epoch)
         serialization = try container.decodeIfPresent(Data.self, forKey: .serialization)
         nextSequence = try container.decode(UInt64.self, forKey: .nextSequence)
         generations = try container.decode([Generation].self, forKey: .generations)
+        if storedSchemaVersion == 1 {
+            // Schema 1 could advance a standalone CKSyncEngine state update without a
+            // durable record batch. Treat every established legacy watermark as suspect
+            // and heal it with one complete snapshot on the next safe fetch boundary.
+            requiresFullResync = serialization != nil
+            fullResyncInProgress = serialization == nil
+            lastFullResyncAt = nil
+        } else {
+            requiresFullResync = try container.decode(
+                Bool.self, forKey: .requiresFullResync)
+            if storedSchemaVersion == 2 {
+                // Schema 2 committed full generations only at didFetch, so a nil
+                // serialization with no repair latch is the only resumable full epoch.
+                fullResyncInProgress = serialization == nil && !requiresFullResync
+            } else {
+                fullResyncInProgress = try container.decode(
+                    Bool.self, forKey: .fullResyncInProgress)
+            }
+            lastFullResyncAt = try container.decodeIfPresent(
+                Date.self, forKey: .lastFullResyncAt)
+        }
         allowsZoneBootstrap = try container.decode(Bool.self, forKey: .allowsZoneBootstrap)
         try validate(decoder.codingPath)
     }
@@ -136,6 +213,9 @@ nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
         try container.encodeIfPresent(serialization, forKey: .serialization)
         try container.encode(nextSequence, forKey: .nextSequence)
         try container.encode(generations, forKey: .generations)
+        try container.encode(requiresFullResync, forKey: .requiresFullResync)
+        try container.encode(fullResyncInProgress, forKey: .fullResyncInProgress)
+        try container.encodeIfPresent(lastFullResyncAt, forKey: .lastFullResyncAt)
         try container.encode(allowsZoneBootstrap, forKey: .allowsZoneBootstrap)
     }
 
@@ -143,17 +223,31 @@ nonisolated struct CloudKitSyncCheckpoint: Codable, Equatable, Sendable {
         _ = codingPath
         guard schemaVersion == Self.currentSchemaVersion,
               nextSequence > 0,
-              serialization?.isEmpty != true else {
+              serialization?.isEmpty != true,
+              !(requiresFullResync && fullResyncInProgress) else {
             throw CloudKitSyncCheckpointCodingFailure.invalid
         }
         var previous: UInt64 = 0
+        var sawUnreadyGeneration = false
         for generation in generations {
             guard generation.sequence > previous,
-                  generation.sequence < nextSequence else {
+                  generation.sequence < nextSequence,
+                  !(sawUnreadyGeneration && generation.isReadyForCore) else {
                 throw CloudKitSyncCheckpointCodingFailure.invalid
             }
             previous = generation.sequence
+            sawUnreadyGeneration = sawUnreadyGeneration || !generation.isReadyForCore
         }
+    }
+
+    func needsFullResync(at now: Date, interval: TimeInterval) -> Bool {
+        if fullResyncInProgress { return false }
+        if requiresFullResync { return true }
+        guard serialization != nil else { return false }
+        guard interval.isFinite, interval > 0,
+              let lastFullResyncAt else { return false }
+        let age = now.timeIntervalSince(lastFullResyncAt)
+        return age < 0 || age >= interval
     }
 
     fileprivate static func rejectUnknownFields(
@@ -231,12 +325,14 @@ nonisolated final class CloudKitSyncCheckpointStore: @unchecked Sendable {
     private let temporaryDirectory: URL
     private let cryptor: any CloudKitSyncCheckpointCrypting
     private let applyFileProtection: @Sendable (URL) throws -> Void
+    private let now: @Sendable () -> Date
     private let lock = NSLock()
 
     init(
         url: URL = SnippetStorageLocations.cloudKitSyncCheckpointFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
         cryptor: any CloudKitSyncCheckpointCrypting = LocalCloudKitSyncCheckpointCryptor(),
+        now: @escaping @Sendable () -> Date = Date.init,
         applyFileProtection: @escaping @Sendable (URL) throws -> Void = { url in
             #if os(iOS)
             try FileManager.default.setAttributes(
@@ -250,6 +346,7 @@ nonisolated final class CloudKitSyncCheckpointStore: @unchecked Sendable {
         self.url = url
         self.temporaryDirectory = temporaryDirectory
         self.cryptor = cryptor
+        self.now = now
         self.applyFileProtection = applyFileProtection
     }
 
@@ -257,7 +354,10 @@ nonisolated final class CloudKitSyncCheckpointStore: @unchecked Sendable {
         lock.withLock { loadUnlocked(for: accountIdentity) }
     }
 
-    func saveStateSerialization(
+    #if DEBUG
+    /// Test fixture seam. Production code must publish a scheduler watermark only through
+    /// `appendFetched`, atomically with the complete inbound generation it covers.
+    func seedStateSerializationForTesting(
         _ serialization: Data,
         for accountIdentity: SyncAccountIdentity
     ) throws {
@@ -265,15 +365,35 @@ nonisolated final class CloudKitSyncCheckpointStore: @unchecked Sendable {
             guard !serialization.isEmpty else { throw Failure.unreadable }
             var checkpoint = try checkpointForMutation(accountIdentity)
             checkpoint.serialization = serialization
+            checkpoint.fullResyncInProgress = false
             try write(checkpoint)
         }
     }
+    #endif
 
+    /// Records suspicion without publishing the unpaired serialization. The durable
+    /// inbox and last known-safe watermark remain byte-for-byte recoverable.
+    @discardableResult
+    func markFullResyncRequired(for accountIdentity: SyncAccountIdentity) throws -> Bool {
+        try lock.withLock {
+            var checkpoint = try checkpointForMutation(accountIdentity)
+            guard !checkpoint.requiresFullResync else { return false }
+            checkpoint.requiresFullResync = true
+            checkpoint.fullResyncInProgress = false
+            try write(checkpoint)
+            return true
+        }
+    }
+
+    #if DEBUG
+    /// Test fixture seam for seeding an already-applied inbound generation. Production
+    /// callbacks must use `sealStateUpdate` so empty send state cannot become a Core ACK.
     @discardableResult
     func appendFetched(
         records: [WireRecord],
         physicalDeletionCount: Int,
         stateSerialization: Data,
+        isFullResync: Bool = false,
         for accountIdentity: SyncAccountIdentity
     ) throws -> CloudKitSyncCheckpoint.Generation {
         try lock.withLock {
@@ -284,13 +404,111 @@ nonisolated final class CloudKitSyncCheckpointStore: @unchecked Sendable {
                 sequence: checkpoint.nextSequence,
                 serialization: stateSerialization,
                 records: records,
-                physicalDeletionCount: physicalDeletionCount)
+                physicalDeletionCount: physicalDeletionCount,
+                isFullResync: isFullResync)
             checkpoint.nextSequence &+= 1
             guard checkpoint.nextSequence != 0 else { throw Failure.unreadable }
             checkpoint.serialization = stateSerialization
             checkpoint.generations.append(generation)
+            checkpoint.fullResyncInProgress = false
+            if isFullResync {
+                checkpoint.requiresFullResync = false
+                checkpoint.lastFullResyncAt = now()
+            }
             try write(checkpoint)
             return generation
+        }
+    }
+    #endif
+
+    /// Persists every CKSyncEngine state update. Records delivered earlier on the serial
+    /// delegate are sealed into the same atomic envelope. A send-only/empty update moves
+    /// scheduler ancestry without manufacturing a Core fetch generation.
+    @discardableResult
+    func sealStateUpdate(
+        records: [WireRecord],
+        physicalDeletionCount: Int,
+        stateSerialization: Data,
+        isFullResync: Bool,
+        for accountIdentity: SyncAccountIdentity
+    ) throws -> CloudKitSyncCheckpoint.Generation? {
+        try lock.withLock {
+            guard physicalDeletionCount >= 0,
+                  !stateSerialization.isEmpty else { throw Failure.unreadable }
+            var checkpoint = try checkpointForMutation(accountIdentity)
+            checkpoint.serialization = stateSerialization
+
+            let generation: CloudKitSyncCheckpoint.Generation?
+            if records.isEmpty, physicalDeletionCount == 0 {
+                generation = nil
+            } else {
+                let created = CloudKitSyncCheckpoint.Generation(
+                    sequence: checkpoint.nextSequence,
+                    serialization: stateSerialization,
+                    records: records,
+                    physicalDeletionCount: physicalDeletionCount,
+                    isFullResync: isFullResync,
+                    isReadyForCore: false)
+                checkpoint.nextSequence &+= 1
+                guard checkpoint.nextSequence != 0 else { throw Failure.unreadable }
+                checkpoint.generations.append(created)
+                generation = created
+            }
+            try write(checkpoint)
+            return generation
+        }
+    }
+
+    struct FetchCompletion: Equatable, Sendable {
+        var readiedGenerationCount: Int
+        var completedFullResync: Bool
+    }
+
+    /// Publishes the complete durable inbox prefix only after didFetch and a state update
+    /// jointly prove that every preceding fetched record is sealed. Full-scan completion
+    /// shares this atomic write so a crash cannot expose pages under the wrong semantics.
+    func completeFetch(
+        isFullResync: Bool,
+        for accountIdentity: SyncAccountIdentity
+    ) throws -> FetchCompletion {
+        try lock.withLock {
+            var checkpoint = try checkpointForMutation(accountIdentity)
+            var readiedCount = checkpoint.generations.reduce(into: 0) { count, generation in
+                if !generation.isReadyForCore { count += 1 }
+            }
+            if readiedCount > 0 {
+                for index in checkpoint.generations.indices {
+                    checkpoint.generations[index].isReadyForCore = true
+                }
+            }
+            let completedFullResync = isFullResync && checkpoint.fullResyncInProgress
+            if completedFullResync {
+                if readiedCount == 0, let serialization = checkpoint.serialization {
+                    let boundary = CloudKitSyncCheckpoint.Generation(
+                        sequence: checkpoint.nextSequence,
+                        serialization: serialization,
+                        records: [],
+                        physicalDeletionCount: 0,
+                        isFullResync: true,
+                        isReadyForCore: true)
+                    checkpoint.nextSequence &+= 1
+                    guard checkpoint.nextSequence != 0 else { throw Failure.unreadable }
+                    checkpoint.generations.append(boundary)
+                    readiedCount = 1
+                }
+                checkpoint.fullResyncInProgress = false
+                checkpoint.requiresFullResync = false
+                checkpoint.lastFullResyncAt = now()
+            }
+            guard readiedCount > 0 || completedFullResync else {
+                return FetchCompletion(
+                    readiedGenerationCount: 0,
+                    completedFullResync: false)
+            }
+            try write(checkpoint)
+            return FetchCompletion(
+                readiedGenerationCount: readiedCount,
+                completedFullResync: completedFullResync)
         }
     }
 
@@ -303,6 +521,13 @@ nonisolated final class CloudKitSyncCheckpointStore: @unchecked Sendable {
             var checkpoint = try checkpointForMutation(accountIdentity)
             guard checkpoint.epoch == epoch else { throw Failure.wrongEpoch }
             guard sequence > 0, sequence < checkpoint.nextSequence else {
+                throw Failure.invalidAcknowledgement
+            }
+            guard !checkpoint.generations.contains(where: {
+                $0.sequence <= sequence && !$0.isReadyForCore
+            }) else {
+                // A cursor is an ACK only for records that were actually published to
+                // Core. Even a fabricated or raced cursor may not compact a sealed page.
                 throw Failure.invalidAcknowledgement
             }
             if let first = checkpoint.generations.first,

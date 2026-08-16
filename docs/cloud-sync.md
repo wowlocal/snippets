@@ -554,6 +554,35 @@ that Core already wrote durably to `base.json`; the adapter exposes the complete
 key, failed authentication tag, account mismatch, zone deletion, purge, or encrypted-data reset
 fails closed and requires reviewed recovery; an established zone is never recreated automatically.
 
+The opaque serialization is a scheduler watermark, not a Core fetch cursor. CKSyncEngine's serial
+delegate is therefore treated as an ordered event log: every `fetchedRecordZoneChanges` appends to
+an in-memory accumulator, and every `stateUpdate` atomically persists the newest serialization
+with every accumulated record delivered before it. This rule is independent of will/did lifecycle
+bookkeeping and of whether a submit lease is active. An empty send-only state update advances the
+scheduler serialization but does not manufacture a Core inbox generation or an exhaustive empty
+delta.
+
+Each non-empty sealed page is durable immediately but remains marked unavailable to Core until the
+outermost `didFetch`. That final boundary atomically publishes the whole sealed prefix. A crash
+before `stateUpdate` keeps the old watermark and causes harmless redelivery; a crash after
+`stateUpdate` but before `didFetch` resumes from the new watermark while retaining the sealed,
+unpublished page. Core therefore never mistakes a partial incremental fetch for an exhaustive
+delta. Full-snapshot classification and its in-progress state are durable too, so a crash cannot
+replay a nil-origin page as an incremental delta or declare an incomplete scan successful.
+Every Core fetch reply derives both records and cursor from one frozen checkpoint snapshot. Its
+cursor advances only through the contiguous published prefix, and ACK rejects any cursor that
+would cover a still-unpublished generation. A scheduler callback arriving while the reply is being
+returned therefore remains queued for the next fetch instead of being silently acknowledged.
+
+Checkpoint schema 3 treats every established schema-1 watermark as suspect and requests a one-shot
+reconciliation. Before that repair the adapter retires the old CKSyncEngine, waits for its delegate
+callback and operation cancellation barriers, preserves any page sealed while those barriers
+drained, and only then starts a replacement from nil state. Scheduler full-mode is installed before
+the automatically-syncing replacement can emit its first callback. This repairs devices already
+stranded by the old algorithm without reinstall, account review, or deleting local data. After a
+confirmed full snapshot, a 24-hour anti-entropy deadline requests another complete snapshot; the
+existing six-hour health-check trigger bounds how late it can start while the app is able to sync.
+
 Before deriving that snapshot, the bridge synchronously makes pending ordinary edits durable in
 the primary `snippets.json`. A termination rescue copy is not sufficient: restart projects the
 primary file, so sync stops before journaling or transport if that file cannot accept the current

@@ -37,7 +37,7 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
         let account = identity(0x11)
         let store = makeStore()
 
-        try store.saveStateSerialization(Data("state-v1".utf8), for: account)
+        try store.seedStateSerializationForTesting(Data("state-v1".utf8), for: account)
         var checkpoint = try loaded(store.load(for: account))
         XCTAssertEqual(checkpoint.serialization, Data("state-v1".utf8))
         XCTAssertTrue(checkpoint.generations.isEmpty)
@@ -45,7 +45,7 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
         // A new instance models process restart and must recover the same engine epoch.
         checkpoint = try loaded(makeStore().load(for: account))
         let epoch = checkpoint.epoch
-        try makeStore().saveStateSerialization(Data("state-v2".utf8), for: account)
+        try makeStore().seedStateSerializationForTesting(Data("state-v2".utf8), for: account)
 
         checkpoint = try loaded(makeStore().load(for: account))
         XCTAssertEqual(checkpoint.epoch, epoch)
@@ -164,7 +164,7 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
             cryptor: TestCloudKitSyncCheckpointCryptor(seed: 0xC7),
             applyFileProtection: { url in protection.record(url) })
 
-        try store.saveStateSerialization(Data("protected-state".utf8), for: identity(0x1B))
+        try store.seedStateSerializationForTesting(Data("protected-state".utf8), for: identity(0x1B))
 
         XCTAssertEqual(
             protection.urls,
@@ -209,7 +209,7 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
     func testWrongScopeIsPreservedUntilExplicitAccountReviewReset() throws {
         let accountA = identity(0x31)
         let accountB = identity(0x32)
-        try makeStore().saveStateSerialization(Data("account-a-token".utf8), for: accountA)
+        try makeStore().seedStateSerializationForTesting(Data("account-a-token".utf8), for: accountA)
         let accountABytes = try Data(contentsOf: checkpointURL)
 
         guard case .scopeMismatch = makeStore().load(for: accountB) else {
@@ -232,7 +232,7 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
         let account = identity(0x41)
         let first = wire(id: "11111111-1111-4111-8111-111111111111", rev: "r1")
         let second = wire(id: "22222222-2222-4222-8222-222222222222", rev: "r2")
-        try makeStore().saveStateSerialization(Data("before-fetch".utf8), for: account)
+        try makeStore().seedStateSerializationForTesting(Data("before-fetch".utf8), for: account)
 
         let generation = try makeStore().appendFetched(
             records: [first, second],
@@ -248,6 +248,94 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
                        "physical deletes are ignored by merge but must remain auditable input")
         XCTAssertEqual(generation.serialization, Data("after-fetch".utf8))
         XCTAssertEqual(generation.sequence, 1)
+        XCTAssertFalse(generation.isFullResync)
+    }
+
+    func testEmptyStateUpdateAdvancesSchedulerWithoutCreatingCoreCursor() throws {
+        let account = identity(0x72)
+        let store = makeStore()
+        try store.reset(for: account, allowsZoneBootstrap: false)
+
+        let generation = try store.sealStateUpdate(
+            records: [],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("send-only-state".utf8),
+            isFullResync: false,
+            for: account)
+
+        XCTAssertNil(generation)
+        let checkpoint = try loaded(store.load(for: account))
+        XCTAssertEqual(checkpoint.serialization, Data("send-only-state".utf8))
+        XCTAssertTrue(checkpoint.generations.isEmpty)
+        XCTAssertTrue(checkpoint.fullResyncInProgress,
+                      "a send-only update cannot falsely complete a nil-origin fetch")
+    }
+
+    func testStateUpdateSealsPageBeforeDidFetchThenPublishesItAtomically() throws {
+        let account = identity(0x73)
+        let store = makeStore()
+        let remote = wire(
+            id: "73737373-7373-4373-8373-737373737373", rev: "sealed-page")
+
+        let sealed = try XCTUnwrap(store.sealStateUpdate(
+            records: [remote],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("page-state".utf8),
+            isFullResync: true,
+            for: account))
+        XCTAssertFalse(sealed.isReadyForCore)
+        let sealedCheckpoint = try loaded(store.load(for: account))
+        XCTAssertTrue(sealedCheckpoint.generations.allSatisfy { !$0.isReadyForCore })
+        XCTAssertNil(
+            sealedCheckpoint.readyThroughSequence,
+            "the scheduler sequence must never become a cursor through generation one")
+        XCTAssertThrowsError(try store.acknowledge(
+            through: sealed.sequence,
+            epoch: sealedCheckpoint.epoch,
+            for: account))
+        XCTAssertEqual(
+            try loaded(store.load(for: account)).generations.first?.records,
+            [remote],
+            "even a same-epoch cursor cannot acknowledge an unpublished generation")
+
+        let completion = try store.completeFetch(
+            isFullResync: true,
+            for: account)
+
+        XCTAssertEqual(completion.readiedGenerationCount, 1)
+        XCTAssertTrue(completion.completedFullResync)
+        let completed = try loaded(store.load(for: account))
+        XCTAssertTrue(completed.generations.allSatisfy(\.isReadyForCore))
+        XCTAssertEqual(completed.readyThroughSequence, sealed.sequence)
+        XCTAssertFalse(completed.fullResyncInProgress)
+        XCTAssertNotNil(completed.lastFullResyncAt)
+    }
+
+    func testFullResyncGenerationPersistsClassificationAndCompletionTime() throws {
+        let account = identity(0x42)
+        let completedAt = Date(timeIntervalSince1970: 42_000)
+        let store = makeStore(now: { completedAt })
+
+        let generation = try store.appendFetched(
+            records: [wire(
+                id: "42424242-4242-4242-8242-424242424242",
+                rev: "full-snapshot")],
+            physicalDeletionCount: 0,
+            stateSerialization: Data("full-state".utf8),
+            isFullResync: true,
+            for: account)
+
+        let checkpoint = try loaded(makeStore().load(for: account))
+        XCTAssertTrue(generation.isFullResync)
+        XCTAssertTrue(checkpoint.generations.first?.isFullResync == true)
+        XCTAssertEqual(checkpoint.lastFullResyncAt, completedAt)
+        XCTAssertFalse(checkpoint.requiresFullResync)
+        XCTAssertFalse(checkpoint.needsFullResync(
+            at: completedAt.addingTimeInterval(86_399),
+            interval: 86_400))
+        XCTAssertTrue(checkpoint.needsFullResync(
+            at: completedAt.addingTimeInterval(86_400),
+            interval: 86_400))
     }
 
     func testR1S1R2S2KeepExactWatermarksAndAckOnlyPrefix() throws {
@@ -359,7 +447,7 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
                        "the durable inbox preserves at-least-once delivery order")
     }
 
-    func testStateUpdateOutsideFetchNeverErasesUnacknowledgedGenerations() throws {
+    func testSuspiciousStateUpdateKeepsSafeWatermarkAndUnacknowledgedGenerations() throws {
         let account = identity(0x81)
         let store = makeStore()
         let generation = try store.appendFetched(
@@ -367,22 +455,85 @@ final class CloudKitSyncCheckpointTests: XCTestCase {
             physicalDeletionCount: 0,
             stateSerialization: Data("fetch-state".utf8), for: account)
 
-        try store.saveStateSerialization(Data("later-scheduler-state".utf8), for: account)
+        XCTAssertTrue(try store.markFullResyncRequired(for: account))
 
         let checkpoint = try loaded(makeStore().load(for: account))
-        XCTAssertEqual(checkpoint.serialization, Data("later-scheduler-state".utf8))
+        XCTAssertEqual(checkpoint.serialization, Data("fetch-state".utf8))
         XCTAssertEqual(checkpoint.generations, [generation])
+        XCTAssertTrue(checkpoint.requiresFullResync)
+        XCTAssertFalse(try store.markFullResyncRequired(for: account),
+                       "the repair latch must be sticky and idempotent")
+    }
+
+    func testSuspiciousStateUpdateAlsoPoisonsInMemoryFreshScheduler() throws {
+        let account = identity(0x82)
+        let store = makeStore()
+        try store.reset(for: account, allowsZoneBootstrap: false)
+
+        XCTAssertTrue(try store.markFullResyncRequired(for: account))
+
+        let checkpoint = try loaded(store.load(for: account))
+        XCTAssertNil(checkpoint.serialization)
+        XCTAssertTrue(checkpoint.requiresFullResync)
+        XCTAssertTrue(checkpoint.needsFullResync(
+            at: Date(timeIntervalSince1970: 0),
+            interval: 86_400),
+            "nil disk state does not prove the live scheduler is still at its origin")
+    }
+
+    func testSchemaOneCheckpointMigratesToOneShotFullResync() throws {
+        let account = identity(0x91)
+        let cryptor = TestCloudKitSyncCheckpointCryptor(seed: 0xC7)
+        let legacyGeneration = CloudKitSyncCheckpoint.Generation(
+            sequence: 1,
+            serialization: Data("legacy-S1".utf8),
+            records: [wire(
+                id: "91919191-9191-4191-8191-919191919191",
+                rev: "legacy-record")],
+            physicalDeletionCount: 0)
+        let current = CloudKitSyncCheckpoint(
+            accountIdentity: account,
+            serialization: Data("legacy-S1".utf8),
+            nextSequence: 2,
+            generations: [legacyGeneration],
+            allowsZoneBootstrap: false)
+        let encoded = try JSONEncoder().encode(current)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["schemaVersion"] = 1
+        object.removeValue(forKey: "requiresFullResync")
+        object.removeValue(forKey: "fullResyncInProgress")
+        object.removeValue(forKey: "lastFullResyncAt")
+        var generations = try XCTUnwrap(object["generations"] as? [[String: Any]])
+        generations[0].removeValue(forKey: "isFullResync")
+        generations[0].removeValue(forKey: "isReadyForCore")
+        object["generations"] = generations
+        let legacyPlaintext = try JSONSerialization.data(
+            withJSONObject: object, options: [.sortedKeys])
+        try cryptor.seal(legacyPlaintext).write(to: checkpointURL)
+
+        let migrated = try loaded(makeStore(cryptor: cryptor).load(for: account))
+        XCTAssertEqual(migrated.schemaVersion, CloudKitSyncCheckpoint.currentSchemaVersion)
+        XCTAssertEqual(migrated.serialization, Data("legacy-S1".utf8))
+        XCTAssertEqual(migrated.generations.first?.records, legacyGeneration.records)
+        XCTAssertFalse(migrated.generations.first?.isFullResync == true)
+        XCTAssertTrue(migrated.generations.first?.isReadyForCore == true)
+        XCTAssertTrue(migrated.requiresFullResync,
+                      "schema 1 may contain a watermark that skipped inbound records")
+        XCTAssertNil(migrated.lastFullResyncAt)
     }
 
     // MARK: - Fixtures
 
     private func makeStore(
-        cryptor: any CloudKitSyncCheckpointCrypting = TestCloudKitSyncCheckpointCryptor(seed: 0xC7)
+        cryptor: any CloudKitSyncCheckpointCrypting = TestCloudKitSyncCheckpointCryptor(seed: 0xC7),
+        now: @escaping @Sendable () -> Date = Date.init
     ) -> CloudKitSyncCheckpointStore {
         CloudKitSyncCheckpointStore(
             url: checkpointURL,
             temporaryDirectory: temporaryDirectory,
-            cryptor: cryptor)
+            cryptor: cryptor,
+            now: now)
     }
 
     private func identity(_ byte: UInt8) -> SyncAccountIdentity {

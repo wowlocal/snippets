@@ -81,7 +81,8 @@ infrastructure. Review that operator's policy before installing that distributio
 Snippets keeps bounded diagnostic logs locally for troubleshooting. It does not send
 those logs automatically. You decide whether to export and share them. Exported logs do
 not contain snippet bodies, display names, tags, record identifiers, filesystem paths,
-ciphertext, or encryption keys. A sanitized secure-snippet keyword may be present.
+ciphertext, or encryption keys. They may contain aggregate operation counts and closed
+CloudKit callback and scheduler states. A sanitized secure-snippet keyword may be present.
 
 ## Backups, exports, and sharing
 

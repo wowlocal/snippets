@@ -86,6 +86,10 @@ nonisolated protocol CloudKitSyncDriving: AnyObject, Sendable {
     func waitForEventHandlerReturn() async
     func sendChanges() async throws
     func fetchChanges() async throws
+    /// Deterministic concurrency seam after the adapter freezes a fetch reply snapshot.
+    /// Production drivers use the no-op default; strict fakes can deliver an automatic
+    /// callback here to prove that a later generation cannot leak into the frozen reply.
+    func fetchReplySnapshotValidated() async
     func cancelOperations() async
     func installBatchProvider(
         _ provider: nonisolated(nonsending) @escaping @Sendable (
@@ -105,12 +109,15 @@ nonisolated extension CloudKitSyncDriving {
     /// strict orchestration fake override this with an explicit callback-return fence.
     func waitForEventHandlerReturn() async {}
     func completeFirstFetchPreparation() throws {}
+    func fetchReplySnapshotValidated() async {}
 }
 
 /// Bridges the project transport contract to CKSyncEngine without creating a second
 /// outbox. A submit is an immutable in-memory lease over the exact `WireRecord`s already
 /// frozen in SyncJournal; `hasPendingUntrackedChanges` is only CKSyncEngine's wake hint.
 nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked Sendable {
+    static let antiEntropyInterval: TimeInterval = 24 * 60 * 60
+
     let identifier = "icloud"
     let supportsPush = true
     let pollInterval: TimeInterval = 6 * 60 * 60
@@ -120,6 +127,8 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
     private let checkpointStore: CloudKitSyncCheckpointStore
     private let driver: any CloudKitSyncDriving
     private let retrySleeper: @Sendable (TimeInterval) async throws -> Void
+    private let now: @Sendable () -> Date
+    private let fullResyncInterval: TimeInterval
     private let state: State
     private let eventReceiver: CloudKitSyncAdapterEventReceiver
     private let eventContinuation: AsyncStream<SyncTransportEvent>.Continuation
@@ -139,6 +148,8 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
         accountIdentity: SyncAccountIdentity,
         checkpointStore: CloudKitSyncCheckpointStore,
         driver: any CloudKitSyncDriving,
+        now: @escaping @Sendable () -> Date = Date.init,
+        fullResyncInterval: TimeInterval = CloudKitSyncTransportAdapter.antiEntropyInterval,
         retrySleeper: @escaping @Sendable (TimeInterval) async throws -> Void = { delay in
             let bounded = min(max(delay.isFinite ? delay : 5, 0.1), 6 * 60 * 60)
             try await Task.sleep(nanoseconds: UInt64(bounded * 1_000_000_000))
@@ -147,6 +158,8 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
         self.accountIdentity = accountIdentity
         self.checkpointStore = checkpointStore
         self.driver = driver
+        self.now = now
+        self.fullResyncInterval = fullResyncInterval
         self.retrySleeper = retrySleeper
         let eventReceiver = CloudKitSyncAdapterEventReceiver()
         self.eventReceiver = eventReceiver
@@ -167,7 +180,16 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
             throw SyncTransportFailure.checkpointUnreadable(
                 detail: "the encrypted CloudKit scheduler checkpoint is unreadable")
         }
-        state = State(accountIdentity: accountIdentity, checkpointStore: checkpointStore)
+        guard case .loaded(let initialCheckpoint) = checkpointStore.load(
+            for: accountIdentity) else {
+            throw SyncTransportFailure.checkpointUnreadable(
+                detail: "the encrypted CloudKit scheduler checkpoint disappeared")
+        }
+        state = State(
+            accountIdentity: accountIdentity,
+            checkpointStore: checkpointStore,
+            durableSerialization: initialCheckpoint.serialization,
+            schedulerFetchIsFullResync: initialCheckpoint.fullResyncInProgress)
 
         var continuation: AsyncStream<SyncTransportEvent>.Continuation!
         events = AsyncStream(bufferingPolicy: .unbounded) { continuation = $0 }
@@ -196,6 +218,12 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
         // permanently produce nil. Install it into a separately initialized weak box
         // only after every stored property is valid, and before CKSyncEngine can emit.
         eventReceiver.install(self)
+        Diagnostics.record(.cloudKitSchedulerTransition(
+            action: .initialized,
+            reason: initialCheckpoint.fullResyncInProgress ? .initial : nil,
+            fullResync: initialCheckpoint.fullResyncInProgress,
+            pendingGenerationCount: initialCheckpoint.generations.count,
+            unreadyGenerationCount: initialCheckpoint.unreadyGenerationCount))
         try driver.start()
     }
 
@@ -256,7 +284,7 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
         try state.requireUsable()
 
         var checkpoint = try checkpoint()
-        var isFullResync = cursor == nil || checkpoint.serialization == nil
+        var cursorRequiresFullResync = cursor == nil
         if let cursor {
             if let acknowledged = CloudKitSyncCursor.decode(cursor),
                acknowledged.epoch == checkpoint.epoch {
@@ -266,18 +294,47 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
                     for: accountIdentity)
                 checkpoint = try self.checkpoint()
             } else {
-                guard checkpoint.serialization == nil || !checkpoint.generations.isEmpty else {
+                guard checkpoint.serialization == nil
+                        || checkpoint.fullResyncInProgress
+                        || !checkpoint.generations.isEmpty else {
                     throw SyncTransportFailure.checkpointUnreadable(
                         detail: "the Core cursor is incompatible with restored CloudKit state")
                 }
-                isFullResync = true
+                cursorRequiresFullResync = true
             }
         }
 
-        if !checkpoint.generations.isEmpty {
-            return makeFetch(checkpoint, isFullResync: isFullResync)
+        if !checkpoint.generations.isEmpty,
+           checkpoint.generations.allSatisfy(\.isReadyForCore) {
+            return makeFetch(
+                checkpoint,
+                isFullResync: cursorRequiresFullResync
+                    || checkpoint.generations.contains(where: \.isFullResync))
         }
 
+        // This reset repairs a suspicious standalone state update and provides a
+        // bounded daily anti-entropy pass independent of pushes and change tokens. Core
+        // separately fences a missing/lost base through its journal-first reset path.
+        let fullResyncReason: DiagnosticCloudSchedulerReason? = if checkpoint.requiresFullResync {
+            .checkpointRepair
+        } else if checkpoint.needsFullResync(at: now(), interval: fullResyncInterval) {
+            .antiEntropy
+        } else {
+            nil
+        }
+        if let fullResyncReason {
+            checkpoint = try await resetSchedulerForFullResync(reason: fullResyncReason)
+            if !checkpoint.generations.isEmpty,
+               checkpoint.generations.allSatisfy(\.isReadyForCore) {
+                return makeFetch(
+                    checkpoint,
+                    isFullResync: checkpoint.generations.contains(where: \.isFullResync))
+            }
+        }
+
+        let isFullResync = checkpoint.fullResyncInProgress
+
+        var replyCheckpoint: CloudKitSyncCheckpoint?
         state.beginManualFetch()
         do {
             try await prepareDriver()
@@ -285,6 +342,13 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
             try await performPendingDriverRestartIfNeeded()
             try state.finishManualFetch()
             try state.consumeOperationFailure()
+            let settled = try self.checkpoint()
+            guard !state.hasIncompleteFetch,
+                  settled.generations.allSatisfy(\.isReadyForCore) else {
+                throw SyncTransportFailure.unreachable(
+                    detail: "CloudKit fetch pages are durable but the fetch boundary is incomplete")
+            }
+            replyCheckpoint = settled
         } catch {
             // CKSyncEngine can both deliver a retryable delegate failure and make the
             // enclosing fetchChanges() throw. Complete the rollback after the callback
@@ -299,7 +363,9 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
                 driver.invalidate()
                 await driver.cancelOperations()
                 do {
-                    _ = try restartDriverIfActive(from: rollback.serialization)
+                    _ = try restartDriverIfActive(
+                        from: rollback.serialization,
+                        isFullResync: rollback.isFullResync)
                 } catch {
                     let failure = error as? SyncTransportFailure
                         ?? .checkpointUnreadable(
@@ -316,8 +382,64 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
             throw error
         }
         try state.requireUsable()
-        checkpoint = try self.checkpoint()
-        return makeFetch(checkpoint, isFullResync: isFullResync)
+        guard let replyCheckpoint else {
+            throw SyncTransportFailure.checkpointUnreadable(
+                detail: "the verified CloudKit fetch reply snapshot disappeared")
+        }
+        await driver.fetchReplySnapshotValidated()
+        try state.requireUsable()
+        // Return exactly the snapshot whose ready prefix was checked above. An
+        // automatic callback may atomically append another sealed generation after
+        // that check, but it belongs to the next reply and cannot advance this cursor.
+        return makeFetch(replyCheckpoint, isFullResync: isFullResync)
+    }
+
+    /// Retires the old scheduler epoch before clearing its watermark. A callback that
+    /// completed while cancellation was draining wins atomically: its durable inbox is
+    /// returned first and the repair remains sticky for the following round.
+    private func resetSchedulerForFullResync(
+        reason: DiagnosticCloudSchedulerReason
+    ) async throws -> CloudKitSyncCheckpoint {
+        driver.invalidate()
+        await driver.waitForEventHandlerReturn()
+        await driver.cancelOperations()
+        await driver.waitForEventHandlerReturn()
+        try state.retireSchedulerForFullResync()
+
+        var settled = try checkpoint()
+        if !settled.generations.isEmpty {
+            try restartDriverIfActive(
+                from: settled.serialization,
+                isFullResync: settled.fullResyncInProgress)
+            Diagnostics.record(.cloudKitSchedulerTransition(
+                action: .durableInboxPreserved,
+                reason: reason,
+                fullResync: settled.fullResyncInProgress,
+                pendingGenerationCount: settled.generations.count,
+                unreadyGenerationCount: settled.unreadyGenerationCount))
+            return settled
+        }
+
+        try checkpointStore.reset(
+            for: accountIdentity,
+            allowsZoneBootstrap: false)
+        do {
+            try restartDriverIfActive(from: nil, isFullResync: true)
+        } catch {
+            let failure = error as? SyncTransportFailure
+                ?? .checkpointUnreadable(
+                    detail: "the CloudKit scheduler could not start a full reconciliation")
+            _ = state.recordCallbackFailure(failure)
+            throw failure
+        }
+        settled = try checkpoint()
+        Diagnostics.record(.cloudKitSchedulerTransition(
+            action: .fullResyncStarted,
+            reason: reason,
+            fullResync: true,
+            pendingGenerationCount: settled.generations.count,
+            unreadyGenerationCount: settled.unreadyGenerationCount))
+        return settled
     }
 
     func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
@@ -388,7 +510,9 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
             if let rollback = state.abortManualFetch() {
                 driver.invalidate()
                 await driver.cancelOperations()
-                _ = try restartDriverIfActive(from: rollback.serialization)
+                _ = try restartDriverIfActive(
+                    from: rollback.serialization,
+                    isFullResync: rollback.isFullResync)
             }
             if state.hasTerminalFailure { try state.requireUsable() }
             throw error
@@ -404,6 +528,9 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
 
     func handle(_ event: CloudKitSyncDriverEvent) async throws {
         let outcome = try state.handle(event)
+        if let diagnosticEvent = outcome.diagnosticEvent {
+            Diagnostics.record(diagnosticEvent)
+        }
         if outcome.cancelAfterCallback {
             invalidateTerminalDriverAfterCallback()
         } else if outcome.invalidateDriver {
@@ -500,7 +627,18 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
             // are one lifecycle critical section: either restart wins first and
             // shutdown subsequently retires it, or shutdown wins and no engine can be
             // created after retirement.
-            _ = try restartDriverIfActive(from: request.serialization)
+            let restarted = try restartDriverIfActive(
+                from: request.serialization,
+                isFullResync: request.isFullResync)
+            if restarted {
+                let restartedCheckpoint = try? checkpoint()
+                Diagnostics.record(.cloudKitSchedulerTransition(
+                    action: .retryRestarted,
+                    reason: .retryableFailure,
+                    fullResync: request.isFullResync,
+                    pendingGenerationCount: restartedCheckpoint?.generations.count ?? 0,
+                    unreadyGenerationCount: restartedCheckpoint?.unreadyGenerationCount ?? 0))
+            }
         } catch {
             let failure = error as? SyncTransportFailure
                 ?? .checkpointUnreadable(
@@ -511,8 +649,16 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
     }
 
     @discardableResult
-    private func restartDriverIfActive(from serialization: Data?) throws -> Bool {
+    private func restartDriverIfActive(
+        from serialization: Data?,
+        isFullResync: Bool
+    ) throws -> Bool {
         try lifecycle.restartIfActive {
+            // Publish scheduler mode before CKSyncEngine(configuration:) can start an
+            // automatic callback. A callback can therefore never inherit the old mode.
+            state.prepareSchedulerRestart(
+                serialization: serialization,
+                isFullResync: isFullResync)
             try driver.restart(from: serialization)
         }
     }
@@ -546,9 +692,10 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
         _ checkpoint: CloudKitSyncCheckpoint,
         isFullResync: Bool
     ) -> SyncFetch {
-        let records = checkpoint.generations.flatMap(\.records)
-        let throughSequence = checkpoint.generations.last?.sequence
-            ?? (checkpoint.nextSequence > 1 ? checkpoint.nextSequence - 1 : nil)
+        let visibleGenerations = Array(
+            checkpoint.generations.prefix(while: \.isReadyForCore))
+        let records = visibleGenerations.flatMap(\.records)
+        let throughSequence = checkpoint.readyThroughSequence
         // Once Core durably returns an inbox cursor, retain that watermark even after
         // its generation is compacted. Returning nil on a no-change fetch would make
         // Core erase the ACK, classify every later round as a full resync, and repeatedly
@@ -563,7 +710,8 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
             cursor: cursor,
             cursorKind: cursor == nil ? nil : .cloudKitSyncEngine,
             hasMore: false,
-            isFullResync: isFullResync,
+            isFullResync: isFullResync
+                || visibleGenerations.contains(where: \.isFullResync),
             accountIdentity: accountIdentity)
     }
 
@@ -788,18 +936,26 @@ private nonisolated final class State: @unchecked Sendable {
         var invalidateDriver = false
         var cancelAfterCallback = false
         var restartAfterCallback = false
+        var diagnosticEvent: DiagnosticEvent?
     }
 
     struct RestartRequest {
         var serialization: Data?
+        var isFullResync: Bool
     }
 
     private struct FetchStage {
+        var activeFetchCount = 1
+        var hasDurableStateAfterLatestRecords = false
+        var isFullResync: Bool
+    }
+
+    private struct PendingInbound {
         var records: [WireRecord] = []
         var physicalDeletionCount = 0
-        var serialization: Data?
-        var activeFetchCount = 1
-        var durableSerialization: Data?
+        var isFullResync = false
+
+        var isEmpty: Bool { records.isEmpty && physicalDeletionCount == 0 }
     }
 
     private struct SubmitLease {
@@ -813,16 +969,23 @@ private nonisolated final class State: @unchecked Sendable {
     private var terminalFailure: SyncTransportFailure?
     private var operationFailure: SyncTransportFailure?
     private var fetchStage: FetchStage?
+    private var pendingInbound = PendingInbound()
     private var manualFetchDepth = 0
     private var submitLease: SubmitLease?
     private var pendingRestart: RestartRequest?
+    private var durableSerialization: Data?
+    private var schedulerFetchIsFullResync: Bool
 
     init(
         accountIdentity: SyncAccountIdentity,
-        checkpointStore: CloudKitSyncCheckpointStore
+        checkpointStore: CloudKitSyncCheckpointStore,
+        durableSerialization: Data?,
+        schedulerFetchIsFullResync: Bool
     ) {
         self.accountIdentity = accountIdentity
         self.checkpointStore = checkpointStore
+        self.durableSerialization = durableSerialization
+        self.schedulerFetchIsFullResync = schedulerFetchIsFullResync
     }
 
     func requireUsable() throws {
@@ -833,6 +996,10 @@ private nonisolated final class State: @unchecked Sendable {
 
     var hasTerminalFailure: Bool {
         lock.withLock { terminalFailure != nil }
+    }
+
+    var hasIncompleteFetch: Bool {
+        lock.withLock { fetchStage != nil || !pendingInbound.isEmpty }
     }
 
     func takePendingRestart() -> RestartRequest? {
@@ -867,24 +1034,9 @@ private nonisolated final class State: @unchecked Sendable {
                     detail: "CloudKit completed an unpaired fetch transaction"))
             }
             manualFetchDepth -= 1
-            guard let stage = fetchStage else { return }
-
-            // The explicit fetch can finish while a scheduler-owned fetch remains open.
-            // Its later didFetch/stateUpdate will commit and notify Core; returning the
-            // current durable inbox now is safe and avoids turning legal overlap into a
-            // sticky protocol halt.
-            guard stage.activeFetchCount == 0 else { return }
-
-            // Empty completed fetches and completed fetches with a durable state update
-            // remove their stage in the callback path. A zero-depth stage left here has
-            // data that cannot be paired with a restorable scheduler state.
-            let failure = SyncTransportFailure.rejected(.permanent(
-                detail: "CloudKit finished fetching before a restorable scheduler state was persisted"))
-            terminalFailure = failure
-            operationFailure = nil
-            fetchStage = nil
-            submitLease = nil
-            throw failure
+            // State updates are their own durability boundaries. A late update may seal
+            // records after the explicit call returns; until then the old serialization
+            // guarantees at-least-once redelivery after a crash.
         }
     }
 
@@ -894,11 +1046,40 @@ private nonisolated final class State: @unchecked Sendable {
             // Another scheduler-owned fetch may still be alive even if this stage has
             // not delivered records or state yet. Retire the whole scheduler epoch so
             // its later callbacks cannot advance the durable watermark outside a stage.
-            let rollback = fetchStage.map {
-                RestartRequest(serialization: $0.durableSerialization)
+            let interrupted = fetchStage != nil || !pendingInbound.isEmpty
+            let rollback = interrupted ? RestartRequest(
+                serialization: durableSerialization,
+                isFullResync: schedulerFetchIsFullResync) : nil
+            fetchStage = nil
+            pendingInbound = PendingInbound()
+            return rollback
+        }
+    }
+
+    /// Called only after the driver has stopped accepting the retired engine's events.
+    /// Any uncommitted stage is intentionally discarded so its old-epoch watermark can
+    /// neither leak into nor poison the new complete snapshot.
+    func retireSchedulerForFullResync() throws {
+        try lock.withLock {
+            try requireUsable()
+            guard manualFetchDepth == 0, submitLease == nil else {
+                throw SyncTransportFailure.unreachable(
+                    detail: "CloudKit reconciliation overlapped another data-plane operation")
             }
             fetchStage = nil
-            return rollback
+            pendingInbound = PendingInbound()
+            pendingRestart = nil
+        }
+    }
+
+    /// Must run before a replacement driver constructs an automatically-syncing engine.
+    /// That ordering makes the scheduler mode immutable from its first possible callback.
+    func prepareSchedulerRestart(serialization: Data?, isFullResync: Bool) {
+        lock.withLock {
+            durableSerialization = serialization
+            schedulerFetchIsFullResync = isFullResync
+            fetchStage = nil
+            pendingInbound = PendingInbound()
         }
     }
 
@@ -982,6 +1163,7 @@ private nonisolated final class State: @unchecked Sendable {
             terminalFailure = .accountChanged
             operationFailure = nil
             fetchStage = nil
+            pendingInbound = PendingInbound()
             submitLease = nil
             pendingRestart = nil
             return HandleOutcome(
@@ -994,6 +1176,7 @@ private nonisolated final class State: @unchecked Sendable {
             terminalFailure = .remoteDataReset(detail: reason.failureDetail)
             operationFailure = nil
             fetchStage = nil
+            pendingInbound = PendingInbound()
             submitLease = nil
             pendingRestart = nil
             return HandleOutcome(
@@ -1011,106 +1194,166 @@ private nonisolated final class State: @unchecked Sendable {
         switch event {
         case .willFetch:
             if var stage = fetchStage {
-                // Automatic scheduling and an explicit startup/foreground fetch may
-                // overlap. CKSyncEngine serializes callbacks but can nest their fetch
-                // lifecycles, and its record callbacks do not identify the originating
-                // operation. Aggregate the nested lifecycles and commit their union only
-                // after the last didFetch under one sufficiently new state serialization.
                 stage.activeFetchCount += 1
+                stage.isFullResync = stage.isFullResync || schedulerFetchIsFullResync
                 fetchStage = stage
-                return HandleOutcome()
+            } else {
+                fetchStage = FetchStage(
+                    hasDurableStateAfterLatestRecords: durableSerialization != nil
+                        && pendingInbound.isEmpty,
+                    isFullResync: schedulerFetchIsFullResync)
             }
-            let durableSerialization: Data?
-            switch checkpointStore.load(for: accountIdentity) {
-            case .loaded(let checkpoint):
-                durableSerialization = checkpoint.serialization
-            case .missing:
-                throw SyncTransportFailure.checkpointUnreadable(
-                    detail: "the encrypted CloudKit scheduler checkpoint disappeared")
-            case .scopeMismatch:
-                throw SyncTransportFailure.accountChanged
-            case .unreadable:
-                throw SyncTransportFailure.checkpointUnreadable(
-                    detail: "the encrypted CloudKit scheduler checkpoint is unreadable")
-            }
-            fetchStage = FetchStage(durableSerialization: durableSerialization)
-            return HandleOutcome()
+            return observedOutcome(kind: .willFetch)
 
         case .fetchedRecords(let records, let deletionCount):
-            guard var stage = fetchStage, deletionCount >= 0 else {
+            guard deletionCount >= 0 else {
                 throw SyncTransportFailure.rejected(.permanent(
-                    detail: "CloudKit delivered records outside a fetch transaction"))
+                    detail: "CloudKit delivered an invalid physical deletion count"))
             }
-            stage.records.append(contentsOf: records)
-            stage.physicalDeletionCount += deletionCount
+            pendingInbound.records.append(contentsOf: records)
+            pendingInbound.physicalDeletionCount += deletionCount
+            pendingInbound.isFullResync = pendingInbound.isFullResync
+                || fetchStage?.isFullResync == true
+                || schedulerFetchIsFullResync
             if !records.isEmpty || deletionCount > 0 {
-                // A previously received state update only covers changes delivered
-                // before it. Never attach later records to that older watermark.
-                stage.serialization = nil
+                fetchStage?.hasDurableStateAfterLatestRecords = false
             }
-            fetchStage = stage
-            return HandleOutcome()
+            // Apple defines stateUpdate, not will/did callbacks, as the durability
+            // boundary. Accepting records outside our lifecycle bookkeeping prevents a
+            // lifecycle mismatch from turning into silent watermark advancement.
+            return observedOutcome(
+                kind: .fetchedRecords,
+                recordCount: records.count)
 
         case .stateUpdate(let serialization):
+            let sealed = pendingInbound
+            let fetchDepth = fetchStage?.activeFetchCount ?? 0
+            let stateUpdateIsFullResync = sealed.isFullResync
+                || fetchStage?.isFullResync == true
+            let generation = try checkpointStore.sealStateUpdate(
+                records: sealed.records,
+                physicalDeletionCount: sealed.physicalDeletionCount,
+                stateSerialization: serialization,
+                isFullResync: sealed.isFullResync,
+                for: accountIdentity)
+            durableSerialization = serialization
+            pendingInbound = PendingInbound()
+            var publishedGeneration = false
             if var stage = fetchStage {
-                stage.serialization = serialization
+                stage.hasDurableStateAfterLatestRecords = true
                 fetchStage = stage
-                if stage.activeFetchCount == 0 {
-                    try commitFetch(stage)
-                    fetchStage = nil
-                    return HandleOutcome(notifyCore: manualFetchDepth == 0)
-                }
-            } else {
-                try checkpointStore.saveStateSerialization(
-                    serialization, for: accountIdentity)
+                publishedGeneration = try completeFetchIfPossible()
             }
-            return HandleOutcome()
+            return observedOutcome(
+                kind: .stateUpdate,
+                recordCount: sealed.records.count,
+                generationSealed: generation != nil,
+                notifyCore: publishedGeneration && manualFetchDepth == 0,
+                fullResyncOverride: stateUpdateIsFullResync,
+                fetchDepthOverride: fetchDepth)
 
         case .didFetch:
-            guard var stage = fetchStage else { return HandleOutcome() }
-            guard stage.activeFetchCount > 0 else {
-                throw SyncTransportFailure.rejected(.permanent(
-                    detail: "CloudKit completed an unpaired fetch transaction"))
+            guard var stage = fetchStage else {
+                return observedOutcome(kind: .didFetch)
             }
+            guard stage.activeFetchCount > 0 else { return observedOutcome(kind: .didFetch) }
             stage.activeFetchCount -= 1
-            if stage.activeFetchCount > 0 {
+            let didFetchWasFullResync = stage.isFullResync
+            let didFetchDepth = stage.activeFetchCount
+            if stage.activeFetchCount == 0,
+               !stage.hasDurableStateAfterLatestRecords,
+               pendingInbound.isEmpty {
+                // CKSyncEngine can complete a genuinely empty fetch without publishing
+                // new state. The old watermark remains valid; a nil-origin epoch stays
+                // marked in progress and will be retried rather than falsely completed.
+                fetchStage = nil
+            } else {
                 fetchStage = stage
-                return HandleOutcome()
             }
-            if stage.serialization == nil {
-                if stage.records.isEmpty, stage.physicalDeletionCount == 0 {
-                    fetchStage = nil
-                    return HandleOutcome()
-                }
-                fetchStage = stage
-                return HandleOutcome()
-            }
-            try commitFetch(stage)
-            fetchStage = nil
-            return HandleOutcome(notifyCore: manualFetchDepth == 0)
+            let completedFullResync = try completeFetchIfPossible()
+            return observedOutcome(
+                kind: .didFetch,
+                notifyCore: completedFullResync && manualFetchDepth == 0,
+                fullResyncOverride: didFetchWasFullResync,
+                fetchDepthOverride: didFetchDepth)
 
         case .sentRecords(let results):
-            guard var lease = submitLease else { return HandleOutcome() }
+            guard var lease = submitLease else {
+                return observedOutcome(kind: .sentRecords, recordCount: results.count)
+            }
             let offeredIDs = Set(lease.records.map(\.id))
             for result in results where offeredIDs.contains(result.id) {
                 lease.results[result.id] = result
             }
             submitLease = lease
-            return HandleOutcome()
+            return observedOutcome(kind: .sentRecords, recordCount: results.count)
 
         case .didSend:
-            return HandleOutcome()
+            return observedOutcome(kind: .didSend)
 
         case .accountChange, .operationFailed, .remoteDataLoss:
             return HandleOutcome()
         }
     }
 
+    private func observedOutcome(
+        kind: DiagnosticCloudSyncEventKind,
+        recordCount: Int = 0,
+        generationSealed: Bool = false,
+        notifyCore: Bool = false,
+        fullResyncOverride: Bool? = nil,
+        fetchDepthOverride: Int? = nil
+    ) -> HandleOutcome {
+        HandleOutcome(
+            notifyCore: notifyCore,
+            diagnosticEvent: .cloudKitSyncEvent(
+                kind: kind,
+                recordCount: recordCount,
+                fetchDepth: fetchDepthOverride ?? fetchStage?.activeFetchCount ?? 0,
+                submitActive: submitLease != nil,
+                fullResync: fullResyncOverride
+                    ?? fetchStage?.isFullResync
+                    ?? schedulerFetchIsFullResync,
+                generationSealed: generationSealed))
+    }
+
+    /// Returns true when this boundary published records or completed a full scan.
+    private func completeFetchIfPossible() throws -> Bool {
+        guard let stage = fetchStage,
+              stage.activeFetchCount == 0,
+              stage.hasDurableStateAfterLatestRecords,
+              pendingInbound.isEmpty else { return false }
+        fetchStage = nil
+        let completion = try checkpointStore.completeFetch(
+            isFullResync: stage.isFullResync,
+            for: accountIdentity)
+        if completion.completedFullResync {
+            schedulerFetchIsFullResync = false
+            let generationCounts: (pending: Int, unready: Int)
+            switch checkpointStore.load(for: accountIdentity) {
+            case .loaded(let checkpoint):
+                generationCounts = (
+                    checkpoint.generations.count,
+                    checkpoint.unreadyGenerationCount)
+            default:
+                generationCounts = (0, 0)
+            }
+            Diagnostics.record(.cloudKitSchedulerTransition(
+                action: .fullResyncCompleted,
+                reason: nil,
+                fullResync: true,
+                pendingGenerationCount: generationCounts.pending,
+                unreadyGenerationCount: generationCounts.unready))
+        }
+        return completion.readiedGenerationCount > 0
+            || completion.completedFullResync
+    }
+
     private func recordFailureUnlocked(_ failure: SyncTransportFailure) -> HandleOutcome {
         guard terminalFailure == nil else { return HandleOutcome() }
-        let interruptedFetch = fetchStage != nil
-        let durableSerialization = fetchStage?.durableSerialization
+        let interruptedFetch = fetchStage != nil || !pendingInbound.isEmpty
         fetchStage = nil
+        pendingInbound = PendingInbound()
         switch failure {
         case .accountChanged, .checkpointUnreadable, .remoteDataReset,
              .rejected(.permanent):
@@ -1125,7 +1368,9 @@ private nonisolated final class State: @unchecked Sendable {
         case .unreachable, .pushUnsupported, .rejected:
             operationFailure = failure
             if interruptedFetch {
-                pendingRestart = RestartRequest(serialization: durableSerialization)
+                pendingRestart = RestartRequest(
+                    serialization: durableSerialization,
+                    isFullResync: schedulerFetchIsFullResync)
                 return HandleOutcome(
                     notifyCore: true,
                     invalidateDriver: true,
@@ -1135,15 +1380,4 @@ private nonisolated final class State: @unchecked Sendable {
         }
     }
 
-    private func commitFetch(_ stage: FetchStage) throws {
-        guard let serialization = stage.serialization else {
-            throw SyncTransportFailure.rejected(.permanent(
-                detail: "CloudKit advanced a fetch without a restorable engine state"))
-        }
-        _ = try checkpointStore.appendFetched(
-            records: stage.records,
-            physicalDeletionCount: stage.physicalDeletionCount,
-            stateSerialization: serialization,
-            for: accountIdentity)
-    }
 }
