@@ -18,6 +18,7 @@ ALLOW_DIRTY=0
 SKIP_TESTS=0
 KEEP_ARTIFACTS=0
 BUILD_NUMBER=""
+MARKETING_VERSION_OVERRIDE=""
 USES_NON_EXEMPT_ENCRYPTION=""
 WORK_DIR=""
 RUN_SUCCEEDED=0
@@ -39,6 +40,9 @@ Options:
   --create-group          Create --group as an internal group if it does not exist.
   --build-number <n>      Use an explicit positive integer CFBundleVersion.
                           Default: the project value or the next unused value, whichever is newer.
+  --marketing-version <v> Archive and upload with this CFBundleShortVersionString
+                          without editing the project. Use only to replace a build
+                          on an existing App Store version.
   --uses-non-exempt-encryption <true|false>
                           Record the confirmed export-compliance answer after upload.
   --skip-tests            Skip Core, macOS build, and iPhone/iPad simulator tests.
@@ -165,13 +169,18 @@ function verify_app_record() {
 
 function read_build_settings() {
     local settings_json
-    settings_json="$(xcodebuild \
-        -project "$PROJECT_PATH" \
-        -scheme "$SCHEME" \
-        -configuration "$CONFIGURATION" \
-        -destination 'generic/platform=iOS' \
-        -showBuildSettings \
-        -json)"
+    local settings_args=(
+        -project "$PROJECT_PATH"
+        -scheme "$SCHEME"
+        -configuration "$CONFIGURATION"
+        -destination 'generic/platform=iOS'
+        -showBuildSettings
+        -json
+    )
+    if [ -n "$MARKETING_VERSION_OVERRIDE" ]; then
+        settings_args+=("MARKETING_VERSION=$MARKETING_VERSION_OVERRIDE")
+    fi
+    settings_json="$(xcodebuild "${settings_args[@]}")"
     MARKETING_VERSION="$(jq -r 'map(select(.target == "Snippets iOS"))[0].buildSettings.MARKETING_VERSION // empty' \
         <<<"$settings_json")"
     PROJECT_BUILD_NUMBER="$(jq -r 'map(select(.target == "Snippets iOS"))[0].buildSettings.CURRENT_PROJECT_VERSION // empty' \
@@ -453,6 +462,7 @@ function archive_and_export() {
         -authenticationKeyPath "$ASC_KEY_PATH" \
         -authenticationKeyID "$ASC_KEY_ID" \
         -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+        MARKETING_VERSION="$MARKETING_VERSION" \
         CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
         -quiet
     [ -d "$ARCHIVE_PATH" ] || fail "Xcode did not create the archive"
@@ -709,6 +719,13 @@ while [ "$#" -gt 0 ]; do
         --build-number)
             [ "$#" -ge 2 ] || fail "--build-number requires a value"
             BUILD_NUMBER="$2"
+            shift 2
+            ;;
+        --marketing-version)
+            [ "$#" -ge 2 ] || fail "--marketing-version requires a value"
+            [[ "$2" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] \
+                || fail "--marketing-version must contain two or three numeric components"
+            MARKETING_VERSION_OVERRIDE="$2"
             shift 2
             ;;
         --uses-non-exempt-encryption)
