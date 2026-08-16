@@ -705,14 +705,12 @@ final class SnippetExpansionEngine {
         _ = await restoreSecurePasteTarget(target)
     }
 
-    /// Delivers either kind of snippet through one clipboard-free route selected
-    /// before the first write. Secure records authenticate and decrypt one body;
-    /// ordinary records resolve their existing content directly.
+    /// Delivers either kind of snippet through the explicit AX-only route. Secure
+    /// records authenticate and decrypt one body; ordinary records resolve their
+    /// existing content directly. Neither path reads the destination or borrows the
+    /// pasteboard.
     @discardableResult
-    func pasteSnippetUsingSecurePaste(
-        _ snippet: Snippet,
-        to target: SecurePasteTarget
-    ) async -> SecurePasteDeliveryOutcome {
+    func pasteSnippetUsingSecurePaste(_ snippet: Snippet, to target: SecurePasteTarget) async -> Bool {
         if store.isSecure(snippet.id) {
             return await pasteSecureSnippet(snippet, to: target)
         }
@@ -722,8 +720,8 @@ final class SnippetExpansionEngine {
     private func pasteOrdinarySnippetUsingSecurePaste(
         _ snippet: Snippet,
         to target: SecurePasteTarget
-    ) async -> SecurePasteDeliveryOutcome {
-        guard !isPreparingForTermination else { return .failedBeforeAttempt }
+    ) async -> Bool {
+        guard !isPreparingForTermination else { return false }
         guard let targetApplication = NSRunningApplication(processIdentifier: target.targetPID),
               !targetApplication.isTerminated,
               target.targetPID != ProcessInfo.processInfo.processIdentifier,
@@ -731,13 +729,13 @@ final class SnippetExpansionEngine {
               processIdentifier(of: target.textElement) == target.targetPID
         else {
             statusText = "Secure Paste stopped because the original app is no longer available."
-            return .failedBeforeAttempt
+            return false
         }
         // `{clipboard}` must resolve against the user's clipboard. This only
         // completes restoration of an older lease; Secure Paste never creates one.
         guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
             statusText = "Secure Paste is waiting for your previous clipboard to be restored."
-            return .failedBeforeAttempt
+            return false
         }
 
         secureExpansionActivationTargetPID = target.targetPID
@@ -751,50 +749,31 @@ final class SnippetExpansionEngine {
 
         guard await restoreSecurePasteTarget(target) else {
             statusText = "Skipped \(snippet.displayName): Snippets could not restore the original field."
-            return .failedBeforeAttempt
+            return false
         }
 
         let resolvedText = PlaceholderResolver.resolve(template: snippet.content)
         guard !resolvedText.isEmpty else {
             statusText = "\(snippet.displayName) is empty — nothing to paste."
-            return .failedBeforeAttempt
+            return false
         }
-
-        let delivery = await deliverSecurePasteText(
-            resolvedText,
-            to: target,
-            targetApplication: targetApplication,
-            payloadIsSecure: false
-        )
-        switch delivery {
-        case .failedBeforeAttempt:
+        guard pasteSecureTextUsingAccessibility(resolvedText, to: target) else {
             statusText = "The target field did not accept Secure Paste."
-            return delivery
-        case .securePayloadRequiresAtomicField:
-            statusText = "Secure Paste blocked this secure snippet because the Chromium field has no atomic Accessibility writer."
-            return delivery
-        case .attemptedAmbiguous:
-            statusText = "Snippets sent the text but could not confirm insertion. Check the field before trying again."
-            return delivery
-        case .confirmed:
-            break
+            return false
         }
 
         usage.record(.pasteFromApp, snippetID: snippet.id)
         lastExpansionName = snippet.displayName
         statusText = "Pasted \(snippet.displayName)."
-        return .confirmed
+        return true
     }
 
     /// Authenticates one secure shell and writes it directly to the captured control.
-    private func pasteSecureSnippet(
-        _ shell: Snippet,
-        to target: SecurePasteTarget
-    ) async -> SecurePasteDeliveryOutcome {
-        guard !isPreparingForTermination else { return .failedBeforeAttempt }
+    private func pasteSecureSnippet(_ shell: Snippet, to target: SecurePasteTarget) async -> Bool {
+        guard !isPreparingForTermination else { return false }
         guard store.isSecure(shell.id), let resolver = secureSnippetContentResolver else {
             statusText = "Secure Paste is not configured for this snippet."
-            return .failedBeforeAttempt
+            return false
         }
         guard let targetApplication = NSRunningApplication(processIdentifier: target.targetPID),
               !targetApplication.isTerminated,
@@ -803,39 +782,11 @@ final class SnippetExpansionEngine {
               processIdentifier(of: target.textElement) == target.targetPID
         else {
             statusText = "Secure Paste stopped because the original app is no longer available."
-            return .failedBeforeAttempt
+            return false
         }
         guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else {
             statusText = "Secure Paste is waiting for your previous clipboard to be restored."
-            return .failedBeforeAttempt
-        }
-
-        // Refuse before authentication and plaintext materialization unless Chromium
-        // proves that this exact target is a password field with one settable AXValue
-        // writer. Unknown classification and capability timeouts fail closed too.
-        let hostIsChromiumFamily = ChromiumBundleIDSettings.isChromiumFamily(
-            bundleIdentifier: targetApplication.bundleIdentifier
-        )
-        if hostIsChromiumFamily {
-            let preflightBudget = AXMessagingBudget()
-            let targetIsSecureTextField = securePasteFieldIsSecure(
-                target.textElement,
-                axBudget: preflightBudget
-            )
-            let secureValueIsSettable = targetIsSecureTextField == true
-                && attributeIsSettable(
-                    kAXValueAttribute as CFString,
-                    on: target.textElement,
-                    axBudget: preflightBudget
-                )
-            guard SecurePasteDeliveryPolicy.mayMaterializeSecurePayload(
-                hostIsChromiumFamily: hostIsChromiumFamily,
-                targetIsSecureTextField: targetIsSecureTextField,
-                secureValueIsSettable: secureValueIsSettable
-            ) else {
-                statusText = "Secure Paste did not authenticate or decrypt the secure body because this Chromium field has no verified atomic Accessibility writer."
-                return .securePayloadRequiresAtomicField
-            }
+            return false
         }
 
         let reason = "Paste \u{201C}\(shell.displayName)\u{201D} into \(target.applicationName)"
@@ -858,14 +809,14 @@ final class SnippetExpansionEngine {
             plaintext = try await resolver(shell, reason)
         } catch {
             statusText = "Could not paste \(shell.displayName): \(error)"
-            return .failedBeforeAttempt
+            return false
         }
         defer { plaintext.wipe() }
 
-        guard !Task.isCancelled else { return .failedBeforeAttempt }
+        guard !Task.isCancelled else { return false }
         guard await restoreSecurePasteTarget(target) else {
             statusText = "Skipped \(shell.displayName): Snippets could not restore the original field after authentication."
-            return .failedBeforeAttempt
+            return false
         }
 
         // Authentication is over. The Accessibility write below is synchronous, so there
@@ -876,38 +827,23 @@ final class SnippetExpansionEngine {
 
         guard var resolvedText = resolvedSecureText(consuming: plaintext) else {
             statusText = "Could not paste \(shell.displayName): its secure content is not valid UTF-8."
-            return .failedBeforeAttempt
+            return false
         }
         defer { resolvedText.removeAll(keepingCapacity: false) }
         guard !resolvedText.isEmpty else {
             statusText = "\(shell.displayName) is empty — nothing to paste."
-            return .failedBeforeAttempt
+            return false
         }
 
-        let delivery = await deliverSecurePasteText(
-            resolvedText,
-            to: target,
-            targetApplication: targetApplication,
-            payloadIsSecure: true
-        )
-        switch delivery {
-        case .failedBeforeAttempt:
+        guard pasteSecureTextUsingAccessibility(resolvedText, to: target) else {
             statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
-            return delivery
-        case .securePayloadRequiresAtomicField:
-            statusText = "Secure Paste blocked keyboard delivery of the secure body because this Chromium field has no atomic Accessibility writer."
-            return delivery
-        case .attemptedAmbiguous:
-            statusText = "Snippets sent the authenticated text but could not confirm insertion. Check the field before trying again."
-            return delivery
-        case .confirmed:
-            break
+            return false
         }
 
         usage.record(.pasteFromApp, snippetID: shell.id)
         lastExpansionName = shell.displayName
         statusText = "Pasted \(shell.displayName) securely."
-        return .confirmed
+        return true
     }
 
     /// Starts termination cleanup. `true` means the clipboard is already safe and termination can
@@ -3795,9 +3731,8 @@ final class SnippetExpansionEngine {
     }
 
     /// Secure Paste intentionally restores a password field while Secure Event Input is
-    /// enabled. That field's delivery remains AX-only and performs no blind deletion; the
-    /// later delivery policy independently refuses Chromium's event route while secure
-    /// input is active.
+    /// enabled. Unlike trigger expansion, it posts no key events and performs no blind
+    /// deletion, so the global secure-input flag is not a reason to reject this AX-only path.
     private func restoreSecurePasteTarget(_ focusTarget: SecurePasteTarget) async -> Bool {
         guard let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
               !target.isTerminated
@@ -3864,319 +3799,54 @@ final class SnippetExpansionEngine {
         return currentFocusMatches(element)
     }
 
-    /// Selects exactly one delivery channel before the first write. In particular,
-    /// no read of `AXValue` is used to confirm or construct a password, and Chromium
-    /// never receives an AX write followed by an event fallback.
-    private func deliverSecurePasteText(
+    /// Executes exactly one write chosen by `SecurePasteAccessibilityPolicy`.
+    /// In particular, no read of `AXValue` is used to confirm or construct a password.
+    private func pasteSecureTextUsingAccessibility(
         _ text: String,
-        to target: SecurePasteTarget,
-        targetApplication: NSRunningApplication,
-        payloadIsSecure: Bool
-    ) async -> SecurePasteDeliveryOutcome {
-        guard securePasteTargetIsCurrent(target, application: targetApplication) else {
-            return .failedBeforeAttempt
-        }
+        to target: SecurePasteTarget
+    ) -> Bool {
+        guard accessibilityGranted,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
+              processIdentifier(of: target.textElement) == target.targetPID,
+              currentFocusMatches(target.focusedElement)
+        else { return false }
 
         let budget = AXMessagingBudget()
-        guard let targetIsSecureTextField = securePasteFieldIsSecure(
-            target.textElement,
+        let targetIsSecureTextField = stringAttribute(
+            of: target.textElement,
+            attribute: kAXSubroleAttribute as CFString,
             axBudget: budget
-        ) else { return .failedBeforeAttempt }
+        ) == (kAXSecureTextFieldSubrole as String)
         let valueIsSettable = targetIsSecureTextField && attributeIsSettable(
             kAXValueAttribute as CFString,
             on: target.textElement,
             axBudget: budget
         )
-        let hostIsChromiumFamily = ChromiumBundleIDSettings.isChromiumFamily(
-            bundleIdentifier: targetApplication.bundleIdentifier
+        let selectedTextIsSettable = attributeIsSettable(
+            kAXSelectedTextAttribute as CFString,
+            on: target.textElement,
+            axBudget: budget
         )
-        // Chromium is routed to events before an AX text write, so asking whether
-        // AXSelectedText is settable there would provide no useful capability proof.
-        let selectedTextIsSettable = !targetIsSecureTextField
-            && !hostIsChromiumFamily
-            && attributeIsSettable(
-                kAXSelectedTextAttribute as CFString,
-                on: target.textElement,
-                axBudget: budget
-            )
 
-        switch SecurePasteDeliveryPolicy.strategy(
-            payloadIsSecure: payloadIsSecure,
+        switch SecurePasteAccessibilityPolicy.strategy(
             targetIsSecureTextField: targetIsSecureTextField,
             valueIsSettable: valueIsSettable,
-            selectedTextIsSettable: selectedTextIsSettable,
-            hostIsChromiumFamily: hostIsChromiumFamily,
-            secureEventInputEnabled: secureEventInputEnabled
+            selectedTextIsSettable: selectedTextIsSettable
         ) {
         case .replaceSecureValue:
-            // Binding happens before the write so a timeout-configuration failure is
-            // distinguishable from an AX call whose reply was lost after dispatch.
-            guard budget.bind(target.textElement),
-                  securePasteTargetIsCurrent(target, application: targetApplication)
-            else { return .failedBeforeAttempt }
-            let result = AXUIElementSetAttributeValue(
-                target.textElement,
-                kAXValueAttribute as CFString,
-                text as CFString
-            )
-            return result == .success ? .confirmed : .attemptedAmbiguous
+            return budget.setAttributeValue(
+                of: target.textElement,
+                attribute: kAXValueAttribute as CFString,
+                value: text as CFString
+            ) == .success
         case .replaceSelection:
-            guard budget.bind(target.textElement),
-                  securePasteTargetIsCurrent(target, application: targetApplication)
-            else { return .failedBeforeAttempt }
-            let result = AXUIElementSetAttributeValue(
-                target.textElement,
-                kAXSelectedTextAttribute as CFString,
-                text as CFString
-            )
-            return result == .success ? .confirmed : .attemptedAmbiguous
-        case .postUnicodeText:
-            return await postUnicodeTextForSecurePaste(text, to: target)
-        case .securePayloadRequiresAtomicField:
-            return .securePayloadRequiresAtomicField
+            return budget.setAttributeValue(
+                of: target.textElement,
+                attribute: kAXSelectedTextAttribute as CFString,
+                value: text as CFString
+            ) == .success
         case .unavailable:
-            return .failedBeforeAttempt
-        }
-    }
-
-    private func securePasteTargetIsCurrent(
-        _ target: SecurePasteTarget,
-        application: NSRunningApplication
-    ) -> Bool {
-        !Task.isCancelled
-            && !isPreparingForTermination
-            && accessibilityGranted
-            && !application.isTerminated
-            && application.processIdentifier == target.targetPID
-            && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID
-            && processIdentifier(of: target.focusedElement) == target.targetPID
-            && processIdentifier(of: target.textElement) == target.targetPID
-            && currentFocusMatches(target.focusedElement)
-    }
-
-    /// Chromium turns `AXSelectedText` into an asynchronous action that can report
-    /// success without changing the page model. For ordinary snippets only, a bounded
-    /// targeted Unicode event burst follows the browser's normal editing path without
-    /// exposing the text to the pasteboard. Once the first event is posted, every
-    /// unconfirmed result is terminal. Secure bodies are rejected by the policy above.
-    private func postUnicodeTextForSecurePaste(
-        _ text: String,
-        to target: SecurePasteTarget
-    ) async -> SecurePasteDeliveryOutcome {
-        guard !text.isEmpty,
-              SecurePasteUnicodeEventPolicy.canDeliver(text),
-              !Task.isCancelled,
-              !isPreparingForTermination,
-              !secureEventInputEnabled,
-              CGPreflightPostEventAccess(),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
-              currentFocusMatches(target.focusedElement),
-              let source = CGEventSource(stateID: .hidSystemState),
-              let eventPairs = securePasteUnicodeEventPairs(for: text, source: source)
-        else { return .failedBeforeAttempt }
-        defer {
-            for (keyDown, keyUp) in eventPairs {
-                keyDown.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
-                keyUp.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
-            }
-        }
-
-        // The potentially expensive event construction above precedes the last focus
-        // proof. Nothing after this guard may fall back to another writer.
-        guard !Task.isCancelled,
-              !secureEventInputEnabled,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
-              let before = securePasteSelectionSnapshot(of: target.textElement),
-              currentFocusMatches(target.focusedElement)
-        else { return .failedBeforeAttempt }
-
-        // One uninterrupted burst avoids both suspending mid-insertion and Quartz's
-        // roughly 20-UTF-16-unit payload ceiling. Space is the least surprising
-        // virtual-key fallback if a framework ignores the overridden Unicode string.
-        for (keyDown, keyUp) in eventPairs {
-            keyDown.postToPid(target.targetPID)
-            keyUp.postToPid(target.targetPID)
-            keyDown.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
-            keyUp.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
-        }
-
-        let confirmed = await waitForSecurePasteUnicodeConfirmation(
-            text: text,
-            before: before,
-            target: target
-        )
-        return confirmed ? .confirmed : .attemptedAmbiguous
-    }
-
-    /// Builds every event before the first post, so allocation failure cannot turn a
-    /// preflight refusal into a partial insertion. Temporary UTF-16 buffers are wiped
-    /// after Core Graphics copies them into the events.
-    private func securePasteUnicodeEventPairs(
-        for text: String,
-        source: CGEventSource
-    ) -> [(CGEvent, CGEvent)]? {
-        guard SecurePasteUnicodeEventPolicy.canDeliver(text) else { return nil }
-
-        var pairs: [(CGEvent, CGEvent)] = []
-        pairs.reserveCapacity(text.count)
-        for character in text {
-            guard let keyDown = CGEvent(
-                keyboardEventSource: source,
-                virtualKey: UInt16(kVK_Space),
-                keyDown: true
-            ),
-                  let keyUp = CGEvent(
-                      keyboardEventSource: source,
-                      virtualKey: UInt16(kVK_Space),
-                      keyDown: false
-                  )
-            else {
-                for (preparedDown, preparedUp) in pairs {
-                    preparedDown.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
-                    preparedUp.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
-                }
-                return nil
-            }
-
-            keyDown.flags = []
-            keyUp.flags = []
-            var utf16 = Array(String(character).utf16)
-            utf16.withUnsafeBufferPointer { buffer in
-                keyDown.keyboardSetUnicodeString(
-                    stringLength: buffer.count,
-                    unicodeString: buffer.baseAddress
-                )
-                keyUp.keyboardSetUnicodeString(
-                    stringLength: buffer.count,
-                    unicodeString: buffer.baseAddress
-                )
-            }
-            utf16.withUnsafeMutableBufferPointer { buffer in
-                guard let baseAddress = buffer.baseAddress else { return }
-                SecureMemory.wipe(
-                    baseAddress,
-                    byteCount: buffer.count * MemoryLayout<UInt16>.stride
-                )
-            }
-            utf16.removeAll(keepingCapacity: false)
-            tag(keyDown)
-            tag(keyUp)
-            pairs.append((keyDown, keyUp))
-        }
-        return pairs
-    }
-
-    private func waitForSecurePasteUnicodeConfirmation(
-        text: String,
-        before: SecurePasteSelectionSnapshot,
-        target: SecurePasteTarget
-    ) async -> Bool {
-        let expectedTail = String(text.suffix(pasteConfirmationTuning.fingerprintTailLength))
-        let expectedTailLength = expectedTail.utf16.count
-        guard !expectedTail.isEmpty, expectedTailLength > 0 else { return false }
-
-        let start = ContinuousClock.now
-        var attempt = 0
-        while attempt <= pasteConfirmationTuning.maxAttempts,
-              start.duration(to: .now) < pasteConfirmationTuning.maxWait {
-            guard !Task.isCancelled,
-                  !isPreparingForTermination,
-                  !secureEventInputEnabled,
-                  NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
-                  currentFocusMatches(target.focusedElement)
-            else { return false }
-
-            if let after = securePasteSelectionSnapshot(of: target.textElement),
-               after.location >= expectedTailLength {
-                let tailRange = CFRange(
-                    location: after.location - expectedTailLength,
-                    length: expectedTailLength
-                )
-                let observedTail = securePasteStringForRange(
-                    of: target.textElement,
-                    range: tailRange
-                )
-                if SecurePasteUnicodeConfirmationPolicy.confirms(
-                    before: before,
-                    after: after,
-                    replacementUTF16Length: text.utf16.count,
-                    replacementTailMatches: observedTail == expectedTail
-                ) {
-                    return true
-                }
-            }
-
-            await settle(for: pasteConfirmationTuning.pollInterval)
-            attempt += 1
-        }
-        return false
-    }
-
-    private func securePasteSelectionSnapshot(
-        of element: AXUIElement
-    ) -> SecurePasteSelectionSnapshot? {
-        let budget = AXMessagingBudget(
-            totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
-            perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds
-        )
-        switch detailedSelectedRange(of: element, axBudget: budget) {
-        case .value(let range):
-            guard range.location >= 0, range.length >= 0 else { return nil }
-            return SecurePasteSelectionSnapshot(
-                location: range.location,
-                length: range.length
-            )
-        case .unavailable:
-            return nil
-        }
-    }
-
-    /// Reads only the bounded range that should contain the inserted tail, never the
-    /// destination's whole value. The returned string is compared in memory and is not
-    /// persisted, surfaced, or logged.
-    private func securePasteStringForRange(
-        of element: AXUIElement,
-        range: CFRange
-    ) -> String? {
-        guard range.location >= 0, range.length > 0 else { return nil }
-        var requestedRange = range
-        guard let rangeValue = AXValueCreate(.cfRange, &requestedRange) else { return nil }
-
-        let budget = AXMessagingBudget(
-            totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
-            perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds
-        )
-        var value: CFTypeRef?
-        guard budget.copyParameterizedAttributeValue(
-            of: element,
-            attribute: kAXStringForRangeParameterizedAttribute as CFString,
-            parameter: rangeValue,
-            into: &value
-        ) == .success else { return nil }
-        return value as? String
-    }
-
-    /// `nil` means the host did not give a trustworthy classification. A timeout or
-    /// malformed subrole must not silently route a possible password field to events.
-    private func securePasteFieldIsSecure(
-        _ element: AXUIElement,
-        axBudget: AXMessagingBudget
-    ) -> Bool? {
-        var value: CFTypeRef?
-        let result = axBudget.copyAttributeValue(
-            of: element,
-            attribute: kAXSubroleAttribute as CFString,
-            into: &value
-        )
-        switch result {
-        case .success:
-            guard let value else { return false }
-            guard let subrole = value as? String else { return nil }
-            return subrole == (kAXSecureTextFieldSubrole as String)
-        case .noValue, .attributeUnsupported:
             return false
-        default:
-            return nil
         }
     }
 

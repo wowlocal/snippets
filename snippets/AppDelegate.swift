@@ -1024,37 +1024,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         case .textField(let target):
             securePasteTask = Task { @MainActor [weak self] in
                 guard let self else { return }
-                defer { self.securePasteTask = nil }
-                let outcome = await self.expansionEngine.pasteSnippetUsingSecurePaste(
+                let inserted = await self.expansionEngine.pasteSnippetUsingSecurePaste(
                     snippet,
                     to: target
                 )
-                if outcome.shouldRestoreCapturedFocus, !Task.isCancelled {
+                if !inserted, !Task.isCancelled {
                     await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
-                }
-                guard !Task.isCancelled else { return }
-                switch outcome {
-                case .failedBeforeAttempt:
                     NSSound.beep()
-                case .securePayloadRequiresAtomicField:
-                    self.transientScreenMessageController.show(
-                        TransientScreenMessage(
-                            title: "Secure snippet not inserted",
-                            detail: "Snippets could not verify one atomic Accessibility write for this Chromium field, so keyboard delivery was blocked."
-                        ),
-                        kind: .failure
-                    )
-                case .attemptedAmbiguous:
-                    self.transientScreenMessageController.show(
-                        TransientScreenMessage(
-                            title: "Check the target field",
-                            detail: "Snippets sent the text but could not confirm insertion. Check before trying again."
-                        ),
-                        kind: .failure
-                    )
-                case .confirmed:
-                    break
                 }
+                self.securePasteTask = nil
             }
         case .clipboard:
             switch expansionEngine.copySnippetToClipboard(snippet) {

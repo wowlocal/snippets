@@ -165,143 +165,34 @@ final class AXMessagingBudget {
     }
 }
 
-/// Chooses Secure Paste's one and only delivery channel before any plaintext write.
+/// Chooses the one Accessibility write a Secure Paste attempt is allowed to make.
 ///
-/// A password field's current value is intentionally never read. Chromium is also
-/// selected up front: its web controls can report a successful `AXSelectedText` write
-/// that never reaches the page's edit model. Trying AX first and an event second is not
-/// safe because a delayed AX action could then insert the same text twice. Secure bodies
-/// never take Chromium's multi-event route because a page handler can move focus between
-/// events and redirect the suffix.
-nonisolated enum SecurePasteDeliveryPolicy {
+/// A password field's current value is intentionally never read. That rules out the
+/// ordinary read/modify/write insertion path and also means a failed write must not be
+/// followed by a second strategy: the first call may have landed even if its reply was
+/// lost. For a positively identified secure field, replacing `AXValue` matches password
+/// manager fill semantics. Everywhere else, only `AXSelectedText` is narrow enough to be
+/// safe — it inserts at the caret or replaces the user's selection without overwriting an
+/// unreadable field wholesale.
+nonisolated enum SecurePasteAccessibilityPolicy {
     enum Strategy: Equatable {
         case replaceSecureValue
         case replaceSelection
-        case postUnicodeText
-        case securePayloadRequiresAtomicField
         case unavailable
     }
 
     static func strategy(
-        payloadIsSecure: Bool,
         targetIsSecureTextField: Bool,
         valueIsSettable: Bool,
-        selectedTextIsSettable: Bool,
-        hostIsChromiumFamily: Bool,
-        secureEventInputEnabled: Bool
+        selectedTextIsSettable: Bool
     ) -> Strategy {
-        if targetIsSecureTextField {
-            return valueIsSettable ? .replaceSecureValue : .unavailable
-        }
-        if hostIsChromiumFamily {
-            if payloadIsSecure { return .securePayloadRequiresAtomicField }
-            return secureEventInputEnabled ? .unavailable : .postUnicodeText
+        if targetIsSecureTextField, valueIsSettable {
+            return .replaceSecureValue
         }
         if selectedTextIsSettable {
             return .replaceSelection
         }
         return .unavailable
-    }
-
-    /// Chromium may require multi-event delivery for an ordinary field. A secure body
-    /// must not even be materialized unless the captured control has already been
-    /// positively identified as a password field with one settable atomic writer.
-    static func mayMaterializeSecurePayload(
-        hostIsChromiumFamily: Bool,
-        targetIsSecureTextField: Bool?,
-        secureValueIsSettable: Bool
-    ) -> Bool {
-        guard hostIsChromiumFamily else { return true }
-        return targetIsSecureTextField == true && secureValueIsSettable
-    }
-}
-
-/// The caller must distinguish a refusal before delivery from uncertainty after a
-/// write. An attempted write is terminal: timeout or an unchanged immediate read-back
-/// never authorizes a second channel or an automatic retry.
-nonisolated enum SecurePasteDeliveryOutcome: Equatable {
-    case confirmed
-    case failedBeforeAttempt
-    case securePayloadRequiresAtomicField
-    case attemptedAmbiguous
-
-    var writeWasAttempted: Bool {
-        switch self {
-        case .confirmed, .attemptedAmbiguous:
-            true
-        case .failedBeforeAttempt, .securePayloadRequiresAtomicField:
-            false
-        }
-    }
-
-    var shouldRestoreCapturedFocus: Bool {
-        self == .failedBeforeAttempt || self == .securePayloadRequiresAtomicField
-    }
-}
-
-nonisolated struct SecurePasteSelectionSnapshot: Equatable {
-    let location: Int
-    let length: Int
-}
-
-/// Positive confirmation for Chromium's clipboard-free Unicode event path. Caret
-/// movement alone is insufficient because a host that ignores the Unicode payload may
-/// translate the event's virtual key instead. The bounded inserted-text read must agree
-/// too; an absent or stale read remains ambiguous and is never retried.
-nonisolated enum SecurePasteUnicodeConfirmationPolicy {
-    static func confirms(
-        before: SecurePasteSelectionSnapshot,
-        after: SecurePasteSelectionSnapshot,
-        replacementUTF16Length: Int,
-        replacementTailMatches: Bool
-    ) -> Bool {
-        guard before.location >= 0,
-              before.length >= 0,
-              after.location >= 0,
-              replacementUTF16Length > 0,
-              replacementTailMatches,
-              after.length == 0
-        else { return false }
-        let (expectedLocation, overflow) = before.location.addingReportingOverflow(
-            replacementUTF16Length
-        )
-        return !overflow && after.location == expectedLocation
-    }
-}
-
-/// Quartz text events are intentionally planned before the first post. Chromium's own
-/// macOS injector treats roughly 20 UTF-16 code units as the per-event ceiling and
-/// emits one extended grapheme at a time. Control characters are refused up front:
-/// representing a newline as a keyboard event can submit a single-line web form,
-/// which is not equivalent to pasting text.
-nonisolated enum SecurePasteUnicodeEventPolicy {
-    static let maximumUTF16CodeUnitsPerEvent = 20
-    static let maximumTotalUTF16CodeUnits = 4_096
-    static let maximumEventCount = 1_024
-
-    static func canDeliver(_ text: String) -> Bool {
-        guard !text.isEmpty,
-              text.utf16.count <= maximumTotalUTF16CodeUnits
-        else { return false }
-
-        var eventCount = 0
-        for character in text {
-            eventCount += 1
-            guard eventCount <= maximumEventCount else { return false }
-            let chunk = String(character)
-            guard chunk.utf16.count <= maximumUTF16CodeUnitsPerEvent,
-                  !character.isNewline
-            else { return false }
-
-            let containsActionLikeScalar = chunk.unicodeScalars.contains { scalar in
-                let value = scalar.value
-                return value <= 0x1F
-                    || (0x7F...0x9F).contains(value)
-                    || (0xF700...0xF8FF).contains(value)
-            }
-            guard !containsActionLikeScalar else { return false }
-        }
-        return true
     }
 }
 

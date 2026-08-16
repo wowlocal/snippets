@@ -166,7 +166,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let hotkeySeparator = NSBox()
         hotkeySeparator.boxType = .separator
 
-        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets: with a text or password field focused, it inserts without using the clipboard; with no text field focused, it copies an ordinary snippet instead. Ordinary snippets can use bounded keyboard delivery in Chromium web fields; secure snippets require one atomic Accessibility write and fail closed when the field cannot provide it. Press \(GlobalHotkeyManager.displayString) to show, hide, or launch Snippets. Secure snippets authenticate before every eligible insertion and are never copied. Secure Input never relaxes these field-safety rules. Turn this off to leave the shortcuts to other apps.")
+        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets: with a text or password field focused, it inserts without using the clipboard; with no text field focused, it copies an ordinary snippet instead. Press \(GlobalHotkeyManager.displayString) to show, hide, or launch Snippets. Secure snippets authenticate on every insertion and are never copied. Both shortcuts keep the same actions in Secure Input. Turn this off to leave the shortcuts to other apps.")
 
         globalHotkeyCheckbox.target = self
         globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))

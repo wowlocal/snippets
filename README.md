@@ -83,17 +83,10 @@ date placeholders. Offsets can contain several terms, for example
   and show a lock marker wherever their searchable metadata appears.
 - On macOS, press `⌘\` in a text or password field to open Secure Paste. It searches
   the whole library, ranks secure snippets ahead of equally relevant ordinary snippets,
-  restores the exact original field, and inserts without exposing the body to the
-  clipboard. Native controls and password fields use Accessibility; ordinary snippets
-  in Chromium web controls use bounded, targeted Unicode events because selected-text
-  Accessibility writes there can report success without reaching the page's edit model.
-  Secure snippets never use that multi-event route: an ordinary Chromium field without
-  an atomic Accessibility writer is refused rather than risking a secret suffix moving
-  to another control. Secure snippets authenticate before every eligible insertion;
-  ordinary snippets do not. A password field is replaced; an ordinary native text field
-  uses its selection or caret. Action-like control characters and oversized payloads are
-  refused on the Chromium event route rather than risking a form submission or an unbounded event
-  burst. With no text field focused, the same picker copies an ordinary
+  restores the exact original field, and writes through Accessibility without exposing
+  the body to the clipboard. Secure snippets authenticate on every use; ordinary
+  snippets do not. A password field is replaced; an ordinary text field uses its
+  selection or caret. With no text field focused, the same picker copies an ordinary
   snippet to the clipboard instead and shows a transient confirmation at the bottom of
   the screen. Secure snippets remain visible in the search but refuse Copy without
   changing the clipboard.
