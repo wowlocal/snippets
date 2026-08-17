@@ -180,6 +180,164 @@ struct SyncJournalTests {
         #expect(changed.modifiedAt == time(30))
     }
 
+    @Test func reviewedPrimaryExistenceSurvivesRestartAndMakesLaterAbsenceADeletion() throws {
+        let scratch = try ScratchDirectory("reviewed-existence")
+        defer { scratch.remove() }
+        let snippetID = id(20)
+        let reviewed = envelope(snippetID, revision: 100, content: "reviewed")
+        var journal = SyncJournal()
+        journal.reconcile(
+            current: [snippetID: reviewed],
+            confirmed: SyncBase(),
+            deviceID: Self.device,
+            now: time(10))
+        journal.markReviewedLocalSnapshot([reviewed])
+
+        let url = scratch.file("journal.json")
+        try SyncJournalFile.write(
+            journal, to: url, temporaryDirectory: scratch.file("Tmp"))
+        guard case .loaded(var restarted) = SyncJournalFile.load(from: url) else {
+            Issue.record("reviewed existence must survive restart")
+            return
+        }
+        #expect(restarted.entry(snippetID)?.reviewedLocalExistence == true)
+        #expect(restarted.entry(snippetID)?.reviewedLocalAncestor == reviewed)
+
+        restarted.reconcile(
+            current: [:],
+            confirmed: SyncBase(),
+            deviceID: Self.device,
+            now: time(20))
+        let deletion = try #require(restarted.entry(snippetID)?.desired)
+        #expect(deletion.deleted)
+        #expect(restarted.entry(snippetID)?.reviewedLocalExistence == true)
+        #expect(restarted.entry(snippetID)?.reviewedLocalAncestor == reviewed)
+    }
+
+    @Test func aSecondExplicitRecoverySupersedesTheOlderReviewedAncestor() throws {
+        let snippetID = id(22)
+        let firstReview = envelope(snippetID, revision: 100, content: "first review")
+        let secondReview = envelope(snippetID, revision: 200, content: "second review")
+        var journal = SyncJournal()
+        journal.reconcile(
+            current: [snippetID: firstReview], confirmed: SyncBase(),
+            deviceID: Self.device, now: time(10))
+        journal.replaceReviewedLocalSnapshot([firstReview])
+
+        let reviewedBase = SyncBase(
+            envelopes: [SyncBase.key(snippetID): secondReview],
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true,
+            nonDestructiveMergeMode: .reviewedLocalSnapshot)
+        try journal.reconcileAfterReviewedLocalSnapshot(
+            current: [:], reviewedSnapshot: reviewedBase,
+            deviceID: Self.device, now: time(20))
+
+        #expect(journal.entry(snippetID)?.desired.deleted == true)
+        #expect(journal.entry(snippetID)?.reviewedLocalAncestor == secondReview)
+    }
+
+    @Test func aSecondReviewOfTheSameSnapshotGetsANewAuthorityEpoch() throws {
+        let snippetID = id(24)
+        let valueCreatedAfterFirstReview = envelope(
+            snippetID, revision: 100, content: "created after first review")
+        var journal = SyncJournal()
+        journal.reconcile(
+            current: [snippetID: valueCreatedAfterFirstReview],
+            confirmed: SyncBase(),
+            deviceID: Self.device,
+            now: time(10))
+
+        let firstReview = SyncBase(
+            envelopes: [:],
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true,
+            nonDestructiveMergeMode: .reviewedLocalSnapshot)
+        try journal.reconcileAfterReviewedLocalSnapshot(
+            current: [:],
+            reviewedSnapshot: firstReview,
+            deviceID: Self.device,
+            now: time(20))
+        // The journal-only row was then materialized under the first review. This fact
+        // must not make its absence authoritative in a later partial restore.
+        journal.markReviewedLocalSnapshot([valueCreatedAfterFirstReview])
+        #expect(journal.entry(snippetID)?.reviewedLocalSnapshotKnown == true)
+
+        let secondReview = SyncBase(
+            envelopes: [:],
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true,
+            nonDestructiveMergeMode: .reviewedLocalSnapshot)
+        #expect(firstReview.nonDestructiveReviewID != secondReview.nonDestructiveReviewID)
+        #expect(firstReview.nonDestructiveReviewFingerprint()
+            != secondReview.nonDestructiveReviewFingerprint())
+
+        try journal.reconcileAfterReviewedLocalSnapshot(
+            current: [:],
+            reviewedSnapshot: secondReview,
+            deviceID: Self.device,
+            now: time(30))
+
+        let survivor = try #require(journal.entry(snippetID))
+        #expect(!survivor.desired.deleted,
+                "the identical partial backup must not tombstone a post-first-review row")
+        #expect(!survivor.reviewedLocalSnapshotKnown,
+                "absence in primary recovery remains unknown in the new review epoch")
+    }
+
+    @Test func accountChangeDropsReviewedAncestorAuthority() throws {
+        let snippetID = id(23)
+        let reviewed = envelope(snippetID, revision: 100, content: "old account")
+        var journal = SyncJournal()
+        journal.reconcile(
+            current: [snippetID: reviewed], confirmed: SyncBase(),
+            deviceID: Self.device, now: time(10))
+        journal.replaceReviewedLocalSnapshot([reviewed])
+        let oldAccountBase = SyncBase(
+            envelopes: [SyncBase.key(snippetID): reviewed])
+        journal.reconcile(
+            current: [:], confirmed: oldAccountBase,
+            deviceID: Self.device, now: time(15))
+        #expect(journal.entry(snippetID)?.desired.deleted == true)
+
+        try journal.prepareForAccountChange(
+            current: [:], confirmed: oldAccountBase,
+            deviceID: Self.device, now: time(20))
+
+        #expect(journal.entry(snippetID)?.desired.deleted == true)
+        #expect(journal.entry(snippetID)?.reviewedLocalAncestor == nil)
+    }
+
+    @Test func schemaFourRequiresEveryReviewedExistenceFact() throws {
+        let scratch = try ScratchDirectory("reviewed-existence-schema")
+        defer { scratch.remove() }
+        let snippetID = id(21)
+        let reviewed = envelope(snippetID, revision: 100, content: "reviewed")
+        var journal = SyncJournal()
+        journal.reconcile(
+            current: [snippetID: reviewed],
+            confirmed: SyncBase(),
+            deviceID: Self.device,
+            now: time(10))
+        let url = scratch.file("journal.json")
+        try SyncJournalFile.write(
+            journal, to: url, temporaryDirectory: scratch.file("Tmp"))
+
+        var object = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var entries = try #require(object["entries"] as? [String: Any])
+        var stored = try #require(entries[SyncBase.key(snippetID)] as? [String: Any])
+        stored.removeValue(forKey: "reviewedLocalExistence")
+        entries[SyncBase.key(snippetID)] = stored
+        object["entries"] = entries
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+
+        guard case .unreadable = SyncJournalFile.load(from: url) else {
+            Issue.record("schema 4 must not silently erase a reviewed existence witness")
+            return
+        }
+    }
+
     // MARK: - Deletes after an ambiguous commit
 
     @Test func deleteAfterLostCreateAckIsDerivedFromOfferedEvenWithNoConfirmedBase() throws {

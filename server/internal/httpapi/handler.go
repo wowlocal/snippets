@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wowlocal/snippets/server/internal/api"
 	"github.com/wowlocal/snippets/server/internal/config"
 	"github.com/wowlocal/snippets/server/internal/domain"
@@ -36,7 +37,7 @@ func NewHandler(configuration config.Server, store domain.Store) *Handler {
 func (h *Handler) GetDiscovery(context.Context, api.GetDiscoveryRequestObject) (api.GetDiscoveryResponseObject, error) {
 	amr := setValues(h.configuration.OIDC.StepUpAMR)
 	acr := setValues(h.configuration.OIDC.StepUpACR)
-	capabilities := []string{"account-without-required-email", "offline-recovery-v1", "oauth-resource-indicators", "oauth-token-revocation", "oidc-pkce", "pairing-v2", "phishing-resistant-step-up", "resource-session-revocation"}
+	capabilities := []string{"account-without-required-email", "offline-recovery-v1", "oauth-refresh-token-rotation", "oauth-resource-indicators", "oauth-token-revocation", "oidc-pkce", "pairing-v2", "phishing-resistant-step-up", "resource-session-revocation"}
 	return api.GetDiscovery200JSONResponse{
 		ProtocolMajor: api.N2, ProtocolMinor: api.N0, ServerVersion: h.configuration.ServerVersion,
 		ServerInstanceId: h.configuration.ServerInstanceID, ApiBase: h.configuration.PublicBaseURL.String() + "/v2",
@@ -82,7 +83,7 @@ func (h *Handler) ListSpaces(ctx context.Context, _ api.ListSpacesRequestObject)
 	}
 	result := make([]api.Space, len(spaces))
 	for i, value := range spaces {
-		result[i] = mapSpace(value)
+		result[i] = mapSpace(value, h.configuration.ServerInstanceID)
 	}
 	return api.ListSpaces200JSONResponse{Spaces: result}, nil
 }
@@ -96,7 +97,7 @@ func (h *Handler) CreateSpace(ctx context.Context, request api.CreateSpaceReques
 	if err != nil {
 		return createSpaceError(err), nil
 	}
-	return api.CreateSpace201JSONResponse(mapSpace(space)), nil
+	return api.CreateSpace201JSONResponse(mapSpace(space, h.configuration.ServerInstanceID)), nil
 }
 
 func (h *Handler) GetSpace(ctx context.Context, request api.GetSpaceRequestObject) (api.GetSpaceResponseObject, error) {
@@ -108,7 +109,7 @@ func (h *Handler) GetSpace(ctx context.Context, request api.GetSpaceRequestObjec
 	if err != nil {
 		return getSpaceError(err), nil
 	}
-	return api.GetSpace200JSONResponse(mapSpace(space)), nil
+	return api.GetSpace200JSONResponse(mapSpace(space, h.configuration.ServerInstanceID)), nil
 }
 
 func (h *Handler) GetChanges(ctx context.Context, request api.GetChangesRequestObject) (api.GetChangesResponseObject, error) {
@@ -128,7 +129,7 @@ func (h *Handler) GetChanges(ctx context.Context, request api.GetChangesRequestO
 	for i, value := range page.Records {
 		records[i] = mapServerRecord(value)
 	}
-	return api.GetChanges200JSONResponse{Scope: mapScope(page.Scope), Records: records, Cursor: page.Cursor, HasMore: page.HasMore, FullSnapshot: page.FullSnapshot}, nil
+	return api.GetChanges200JSONResponse{Scope: mapScope(page.Scope, h.configuration.ServerInstanceID), Records: records, Cursor: page.Cursor, HasMore: page.HasMore, FullSnapshot: page.FullSnapshot}, nil
 }
 
 func (h *Handler) SubmitRecords(ctx context.Context, request api.SubmitRecordsRequestObject) (api.SubmitRecordsResponseObject, error) {
@@ -139,11 +140,20 @@ func (h *Handler) SubmitRecords(ctx context.Context, request api.SubmitRecordsRe
 	if request.Body == nil {
 		return submitError(domain.NewError(domain.InvalidRequest)), nil
 	}
+	if request.Body.ExpectedScope.ServerInstanceId != h.configuration.ServerInstanceID {
+		return submitError(domain.NewError(domain.Forbidden)), nil
+	}
 	items := make([]domain.BatchItem, len(request.Body.Items))
 	for i, value := range request.Body.Items {
 		items[i] = domain.BatchItem{Record: domain.WireRecord{ID: value.Record.Id, Rev: value.Record.Rev, Deleted: value.Record.Deleted, Blob: append([]byte(nil), value.Record.Blob...)}, ExpectedRecordVersion: value.ExpectedRecordVersion}
 	}
-	submission, err := h.store.Submit(ctx, principal, request.Space, items)
+	expectedScope := domain.Scope{
+		SpaceID:           request.Body.ExpectedScope.SpaceId,
+		ScopeBinding:      request.Body.ExpectedScope.ScopeBinding,
+		DatasetGeneration: request.Body.ExpectedScope.DatasetGeneration,
+		FeedEpoch:         request.Body.ExpectedScope.FeedEpoch,
+	}
+	submission, err := h.store.Submit(ctx, principal, request.Space, expectedScope, items)
 	if err != nil {
 		return submitError(err), nil
 	}
@@ -151,7 +161,7 @@ func (h *Handler) SubmitRecords(ctx context.Context, request api.SubmitRecordsRe
 	for i, value := range submission.Outcomes {
 		outcomes[i] = mapOutcome(value)
 	}
-	return api.SubmitRecords200JSONResponse{Scope: mapScope(submission.Scope), Outcomes: outcomes, Partial: submission.Partial}, nil
+	return api.SubmitRecords200JSONResponse{Scope: mapScope(submission.Scope, h.configuration.ServerInstanceID), Outcomes: outcomes, Partial: submission.Partial}, nil
 }
 
 func (h *Handler) GetRecoveryEnvelope(ctx context.Context, request api.GetRecoveryEnvelopeRequestObject) (api.GetRecoveryEnvelopeResponseObject, error) {
@@ -163,7 +173,7 @@ func (h *Handler) GetRecoveryEnvelope(ctx context.Context, request api.GetRecove
 	if err != nil {
 		return getRecoveryError(err), nil
 	}
-	return api.GetRecoveryEnvelope200JSONResponse(mapRecoveryResponse(space, envelope)), nil
+	return api.GetRecoveryEnvelope200JSONResponse(mapRecoveryResponse(space, envelope, h.configuration.ServerInstanceID)), nil
 }
 
 func (h *Handler) PutRecoveryEnvelope(ctx context.Context, request api.PutRecoveryEnvelopeRequestObject) (api.PutRecoveryEnvelopeResponseObject, error) {
@@ -178,7 +188,7 @@ func (h *Handler) PutRecoveryEnvelope(ctx context.Context, request api.PutRecove
 	if err != nil {
 		return putRecoveryError(err), nil
 	}
-	return api.PutRecoveryEnvelope200JSONResponse(mapRecoveryResponse(space, &envelope)), nil
+	return api.PutRecoveryEnvelope200JSONResponse(mapRecoveryResponse(space, &envelope, h.configuration.ServerInstanceID)), nil
 }
 
 func (h *Handler) CreatePairing(ctx context.Context, request api.CreatePairingRequestObject) (api.CreatePairingResponseObject, error) {
@@ -193,7 +203,7 @@ func (h *Handler) CreatePairing(ctx context.Context, request api.CreatePairingRe
 	if err != nil {
 		return createPairingError(err), nil
 	}
-	return api.CreatePairing201JSONResponse{Scope: mapScope(space.Scope), Pairing: mapPairing(pairing)}, nil
+	return api.CreatePairing201JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), Pairing: mapPairing(pairing)}, nil
 }
 
 func (h *Handler) GetPairing(ctx context.Context, request api.GetPairingRequestObject) (api.GetPairingResponseObject, error) {
@@ -205,7 +215,7 @@ func (h *Handler) GetPairing(ctx context.Context, request api.GetPairingRequestO
 	if err != nil {
 		return getPairingError(err), nil
 	}
-	return api.GetPairing200JSONResponse{Scope: mapScope(space.Scope), Pairing: mapPairing(pairing)}, nil
+	return api.GetPairing200JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), Pairing: mapPairing(pairing)}, nil
 }
 
 func (h *Handler) CancelPairing(ctx context.Context, request api.CancelPairingRequestObject) (api.CancelPairingResponseObject, error) {
@@ -231,7 +241,7 @@ func (h *Handler) ApprovePairing(ctx context.Context, request api.ApprovePairing
 	if err != nil {
 		return approvePairingError(err), nil
 	}
-	return api.ApprovePairing200JSONResponse{Scope: mapScope(space.Scope), Pairing: mapPairing(pairing)}, nil
+	return api.ApprovePairing200JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), Pairing: mapPairing(pairing)}, nil
 }
 
 func (h *Handler) ClaimPairing(ctx context.Context, request api.ClaimPairingRequestObject) (api.ClaimPairingResponseObject, error) {
@@ -246,14 +256,14 @@ func (h *Handler) ClaimPairing(ctx context.Context, request api.ClaimPairingRequ
 	if pairing.Algorithm == nil {
 		return claimPairingError(domain.NewError(domain.InternalError)), nil
 	}
-	return api.ClaimPairing200JSONResponse{Scope: mapScope(space.Scope), PairingId: pairing.ID, Algorithm: api.ClaimPairingResponseAlgorithm(*pairing.Algorithm), Ciphertext: append([]byte(nil), pairing.Ciphertext...)}, nil
+	return api.ClaimPairing200JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), PairingId: pairing.ID, Algorithm: api.ClaimPairingResponseAlgorithm(*pairing.Algorithm), Ciphertext: append([]byte(nil), pairing.Ciphertext...)}, nil
 }
 
-func mapScope(value domain.Scope) api.Scope {
-	return api.Scope{SpaceId: value.SpaceID, ScopeBinding: value.ScopeBinding, DatasetGeneration: value.DatasetGeneration, FeedEpoch: value.FeedEpoch}
+func mapScope(value domain.Scope, serverInstanceID uuid.UUID) api.Scope {
+	return api.Scope{ServerInstanceId: serverInstanceID, SpaceId: value.SpaceID, ScopeBinding: value.ScopeBinding, DatasetGeneration: value.DatasetGeneration, FeedEpoch: value.FeedEpoch}
 }
-func mapSpace(value domain.Space) api.Space {
-	return api.Space{Scope: mapScope(value.Scope), Role: api.SpaceRole(value.Role), KeyEpoch: value.KeyEpoch}
+func mapSpace(value domain.Space, serverInstanceID uuid.UUID) api.Space {
+	return api.Space{Scope: mapScope(value.Scope, serverInstanceID), Role: api.SpaceRole(value.Role), KeyEpoch: value.KeyEpoch}
 }
 func mapServerRecord(value domain.ServerRecord) api.ServerRecord {
 	return api.ServerRecord{Id: value.Record.ID, Rev: value.Record.Rev, Deleted: value.Record.Deleted, Blob: append([]byte(nil), value.Record.Blob...), RecordVersion: value.RecordVersion}
@@ -270,8 +280,8 @@ func mapOutcome(value domain.BatchOutcome) api.BatchOutcome {
 	}
 	return result
 }
-func mapRecoveryResponse(space domain.Space, value *domain.RecoveryEnvelope) api.RecoveryEnvelopeResponse {
-	result := api.RecoveryEnvelopeResponse{Scope: mapScope(space.Scope), KeyEpoch: space.KeyEpoch}
+func mapRecoveryResponse(space domain.Space, value *domain.RecoveryEnvelope, serverInstanceID uuid.UUID) api.RecoveryEnvelopeResponse {
+	result := api.RecoveryEnvelopeResponse{Scope: mapScope(space.Scope, serverInstanceID), KeyEpoch: space.KeyEpoch}
 	if value != nil {
 		result.Recovery = &api.RecoveryEnvelope{Purpose: api.Recovery, Version: value.Version, KeyEpoch: value.KeyEpoch, Algorithm: api.RecoveryEnvelopeAlgorithm(value.Algorithm), Ciphertext: append([]byte(nil), value.Ciphertext...), CreatedAt: value.CreatedAt}
 	}

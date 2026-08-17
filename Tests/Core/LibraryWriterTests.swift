@@ -749,6 +749,38 @@ import Darwin
         }
     }
 
+    @Test func explicitRecoveryPreservesAndReplacesAnUndecodablePrimaryWithoutDecodingIt() throws {
+        let sandbox = try Sandbox("raw-quarantine-recovery")
+        defer { sandbox.destroy() }
+        let damaged = Data("{not-a-library".utf8)
+        try AtomicFileWriter.write(
+            damaged,
+            to: sandbox.library,
+            temporaryDirectory: sandbox.tmpFolder)
+        try seedState(sandbox, generation: 7)
+        let replacement = [makeSnippet(index: 1, name: "Recovered", keyword: "recovered")]
+
+        let outcome = try LibraryWriter.replaceQuarantinedPrimary(
+            with: replacement,
+            libraryURL: sandbox.library,
+            stateURL: sandbox.stateFile,
+            lockURL: sandbox.lockFile,
+            temporaryDirectory: sandbox.tmpFolder,
+            lockTimeout: 10,
+            expectedDigest: SnippetLibraryCodec.digest(of: damaged))
+
+        #expect(outcome.snippets == replacement)
+        #expect(try SnippetLibraryCodec.decode(Data(contentsOf: sandbox.library)) == replacement)
+        let preservedNames = entries(of: sandbox.root).filter {
+            $0.hasPrefix("snippets.json.recovery-preserved-")
+        }
+        #expect(preservedNames.count == 1)
+        let preserved = sandbox.root.appendingPathComponent(try #require(preservedNames.first))
+        #expect(try Data(contentsOf: preserved) == damaged)
+        #expect(permissions(of: preserved) == 0o600)
+        #expect(loadState(sandbox)?.generation == 8)
+    }
+
     /// The other half of the same rule: a file that is simply *absent* is a genuine
     /// empty library — first launch — and must not throw, or the app could never
     /// write its starter snippet. `SnippetLibraryCodec.read` reports the same

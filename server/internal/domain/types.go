@@ -70,6 +70,26 @@ type Scope struct {
 	FeedEpoch         uuid.UUID `json:"feedEpoch"`
 }
 
+// RequireCurrentMutationScope validates the scope observed by a client inside the
+// same transaction that will perform its first record mutation. Per-record CAS cannot
+// protect create-only writes after an operator rotates the dataset or feed.
+func (expected Scope) RequireCurrentMutationScope(current Scope) error {
+	if expected.SpaceID == uuid.Nil || expected.ScopeBinding == "" ||
+		expected.DatasetGeneration == uuid.Nil || expected.FeedEpoch == uuid.Nil {
+		return NewError(InvalidRequest)
+	}
+	if expected.SpaceID != current.SpaceID || expected.ScopeBinding != current.ScopeBinding {
+		return NewError(Forbidden)
+	}
+	if expected.DatasetGeneration != current.DatasetGeneration {
+		return NewError(DatasetReset)
+	}
+	if expected.FeedEpoch != current.FeedEpoch {
+		return NewError(CursorInvalid)
+	}
+	return nil
+}
+
 type Space struct {
 	Scope    Scope
 	Role     SpaceRole
@@ -231,7 +251,7 @@ type Store interface {
 	CreateSpace(context.Context, Principal, *uuid.UUID) (Space, error)
 	GetSpace(context.Context, Principal, uuid.UUID) (Space, error)
 	FetchChanges(context.Context, Principal, uuid.UUID, *string, int) (ChangesPage, error)
-	Submit(context.Context, Principal, uuid.UUID, []BatchItem) (BatchSubmission, error)
+	Submit(context.Context, Principal, uuid.UUID, Scope, []BatchItem) (BatchSubmission, error)
 	GetRecoveryEnvelope(context.Context, Principal, uuid.UUID) (Space, *RecoveryEnvelope, error)
 	PutRecoveryEnvelope(context.Context, Principal, uuid.UUID, PutRecoveryEnvelope) (Space, RecoveryEnvelope, error)
 	CreatePairing(context.Context, Principal, uuid.UUID, CreatePairing) (Space, Pairing, error)

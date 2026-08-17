@@ -1261,7 +1261,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
             "a fresh local record cannot be sent until custom-zone creation completes")
     }
 
-    func testSchemaTwoCloudKitTokenGetsOneFullResyncThenWritesSchemaThreeCursorFence() async throws {
+    func testSchemaTwoCloudKitTokenGetsOneFullResyncThenWritesCurrentCursorFence() async throws {
         let paths = try makeEnginePaths("legacy-cloudkit-cursor")
         let legacyCursor = SyncCursor("legacy-ckserver-change-token-sentinel")
         try writeSchemaTwoBase(
@@ -1304,7 +1304,9 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         let migratedBytes = try Data(contentsOf: paths.baseURL)
         let migratedObject = try XCTUnwrap(
             JSONSerialization.jsonObject(with: migratedBytes) as? [String: Any])
-        XCTAssertEqual(migratedObject["schemaVersion"] as? Int, 3)
+        XCTAssertEqual(
+            migratedObject["schemaVersion"] as? Int,
+            SyncBase.currentSchemaVersion)
         XCTAssertEqual(
             migratedObject["cursorKind"] as? String,
             "cloudKitSyncEngine")
@@ -1618,6 +1620,24 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
         XCTAssertFalse(didRestart)
         XCTAssertEqual(restartCount.value, 0)
         XCTAssertFalse(lifecycle.acceptsEvents)
+    }
+
+    func testLifecycleRestartCanSynchronouslyCheckEventAdmission() async {
+        let lifecycle = CloudKitAdapterLifecycleGate()
+        let completed = expectation(description: "restart returned")
+
+        Task.detached {
+            let restarted = lifecycle.restartIfActive {
+                // CKSyncEngine construction can synchronously wait for an automatic
+                // delegate callback that performs this exact read. It must not contend
+                // on the transition lock held around construction.
+                XCTAssertTrue(lifecycle.acceptsEvents)
+            }
+            XCTAssertTrue(restarted)
+            completed.fulfill()
+        }
+
+        await fulfillment(of: [completed], timeout: 1)
     }
 
     func testTransientSendOperationFailureAbortsLeaseAndNextSendRecovers() async throws {
@@ -2071,7 +2091,7 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
             ["cancel-1-start", "cancel-1-finish", "cancel-2-start", "cancel-2-finish"])
     }
 
-    func testSanitizedCloudKitFailureCannotReachDurableHaltText() async throws {
+    func testSanitizedCloudKitFailureCannotReachAttentionOrDurableHaltText() async throws {
         let canary = "private-record-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         let error = CKError(
             .missingEntitlement,
@@ -2088,13 +2108,19 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
 
         let state = await engine.sync()
 
-        guard case .halted(_, let detail) = state else {
-            return XCTFail("the permanent CloudKit failure must remain a sticky halt")
+        guard case .needsAttention(let detail) = state else {
+            return XCTFail("a permanent CloudKit refusal should be retryable attention, got \(state)")
         }
         XCTAssertFalse(detail.contains(canary))
-        XCTAssertNil(
-            try Data(contentsOf: paths.stateURL).range(of: Data(canary.utf8)),
-            "CKError localizedDescription/userInfo must never reach durable UI state")
+        if let stateBytes = try? Data(contentsOf: paths.stateURL) {
+            XCTAssertNil(
+                stateBytes.range(of: Data(canary.utf8)),
+                "CKError localizedDescription/userInfo must never reach durable state")
+            if case .loaded(let persisted) = SyncStateFile.load(from: paths.stateURL) {
+                XCTAssertNil(persisted.halt,
+                             "a safe backend retry must not manufacture a sticky halt")
+            }
+        }
     }
 
     func testExplicitSyncNowIsImmediatePushFirstThenFetchWhileAutomaticSchedulingStaysOn() async throws {
@@ -2279,11 +2305,17 @@ final class CloudKitSyncOrchestrationTests: XCTestCase {
             defer { workflowFinished.set(true) }
             switch trigger {
             case .accountReview:
-                try await transport.resetAfterAccountReview()
+                try await transport.resetAfterAccountReview(
+                    expectedIdentity: identity,
+                    expectedDatasetIdentity: nil)
             case .checkpointReview:
-                try await transport.resetAfterCheckpointReview()
+                try await transport.resetAfterCheckpointReview(
+                    expectedIdentity: identity,
+                    expectedDatasetIdentity: nil)
             case .localFullResync:
-                try await transport.resetForLocalFullResync()
+                try await transport.resetForLocalFullResync(
+                    expectedIdentity: identity,
+                    expectedDatasetIdentity: nil)
             case .accountNotification:
                 _ = try await transport.preflightScope()
             }

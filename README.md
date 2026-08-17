@@ -115,13 +115,14 @@ software on the same Mac remains outside this boundary.
   Apple receives ciphertext, including encrypted names, keywords, and tags.
 - Field-aware three-way merging preserves edits from multiple devices. Concurrent body
   edits retain the losing version as a disabled conflict copy instead of discarding it.
-- A deletion safety guard halts suspiciously large remote deletions for review.
-- Use **Sync Now** on Mac or pull to refresh on iPhone. Without push notifications,
-  background polling can take up to two minutes to notice a remote change.
+- A deletion safety guard stops suspiciously large remote deletions before apply. The
+  destructive confirmation is bound to the exact deletion batch, not only its count;
+  older unbound stops first refresh the batch without deleting anything.
+- Use **Sync Now** on Mac or pull to refresh on iPhone. Startup, foreground, and CloudKit
+  push events trigger sync automatically; a six-hour health check covers missed pushes.
 - Usage counts and learned prefix choices stay on the Mac where they were recorded.
-
-> A switched iCloud account is still a known edge case: the current sync base does not
-> bind itself to the CloudKit user record name.
+- Confirmed checkpoints are bound to the signed CloudKit environment and current iCloud
+  account. An intentional account change requires the explicit **Use This Account** action.
 
 ### Import, export, backup, and links
 

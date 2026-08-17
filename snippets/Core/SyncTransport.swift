@@ -118,6 +118,87 @@ nonisolated struct SyncAccountIdentity: Equatable, Hashable, Sendable, Codable {
     }
 }
 
+/// Opaque identity for one physical generation of an account-owned remote dataset.
+///
+/// Account membership and dataset lifetime are deliberately separate. A feed epoch may
+/// rotate as ordinary cursor maintenance, while a dataset generation change means the
+/// remote library was physically replaced and local values must not be uploaded until
+/// the user explicitly chooses this device as a restore source. Like account identity,
+/// this value is persisted only as opaque bytes and must never be rendered or logged.
+nonisolated struct SyncDatasetIdentity: Equatable, Hashable, Sendable, Codable {
+    static let currentSchemaVersion = 1
+    static let maximumDataBytes = 1_024
+
+    let schemaVersion: Int
+    let data: Data
+
+    init(_ data: Data) {
+        precondition(!data.isEmpty && data.count <= Self.maximumDataBytes)
+        schemaVersion = Self.currentSchemaVersion
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion, data
+    }
+
+    private struct AnyCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            intValue = nil
+        }
+
+        init?(intValue: Int) {
+            stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let allFields = try decoder.container(keyedBy: AnyCodingKey.self)
+        let actual = Set(allFields.allKeys.map(\.stringValue))
+        let expected = Set(CodingKeys.allCases.map(\.rawValue))
+        guard actual == expected else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath,
+                      debugDescription: "unexpected sync-dataset-identity fields"))
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "unsupported sync-dataset-identity schema version")
+        }
+        data = try container.decode(Data.self, forKey: .data)
+        guard !data.isEmpty, data.count <= Self.maximumDataBytes else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .data,
+                in: container,
+                debugDescription: "invalid sync-dataset-identity data")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        guard schemaVersion == Self.currentSchemaVersion,
+              !data.isEmpty,
+              data.count <= Self.maximumDataBytes else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "invalid sync-dataset-identity value"))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(data, forKey: .data)
+    }
+}
+
 /// Account and transport-private checkpoint are one preflight decision. Returning a
 /// typed issue beside the identity (instead of throwing it away) lets an explicitly
 /// reviewed reset remain bound to the exact current private-database scope.
@@ -128,13 +209,23 @@ nonisolated struct SyncScopePreflight: Sendable, Equatable {
     }
 
     var identity: SyncAccountIdentity?
+    /// Physical remote dataset generation, separate from stable account membership.
+    /// Accountless transports and backends without a resettable dataset return nil.
+    var datasetIdentity: SyncDatasetIdentity?
+    /// Identities emitted by an older transport version for this exact current scope.
+    /// Core may use these only for a schema migration before any data-plane call.
+    var legacyAccountIdentities: [SyncAccountIdentity]
     var checkpointIssue: CheckpointIssue?
 
     init(
         identity: SyncAccountIdentity?,
+        datasetIdentity: SyncDatasetIdentity? = nil,
+        legacyAccountIdentities: [SyncAccountIdentity] = [],
         checkpointIssue: CheckpointIssue? = nil
     ) {
         self.identity = identity
+        self.datasetIdentity = datasetIdentity
+        self.legacyAccountIdentities = legacyAccountIdentities
         self.checkpointIssue = checkpointIssue
     }
 }
@@ -315,7 +406,8 @@ nonisolated enum SyncTransportFailure: Error, Sendable, Equatable, CustomStringC
     /// review, durably capture local intent and replace only that checkpoint.
     case checkpointUnreadable(detail: String)
     /// CloudKit reported physical record/zone loss. Automatically uploading the local
-    /// cache would violate CloudKit's purge/reset contract, so this stop has no Resume.
+    /// cache would violate CloudKit's purge/reset contract, so recovery requires the
+    /// explicit "Restore Cloud from This Device" action.
     case remoteDataReset(detail: String)
 
     var description: String {
@@ -352,10 +444,17 @@ nonisolated struct SyncFetch: Sendable, Equatable {
     /// must not infer deletions from absence, which is the fastest known way to wipe a
     /// library.
     var isFullResync: Bool
+    /// This page starts a replacement stream after a cursor failed during the current
+    /// paged fetch. Pages already accumulated from that fetch belong to the obsolete
+    /// feed and must be discarded. `isFullResync` alone cannot express this because
+    /// every page of a normal multi-page snapshot may carry that flag.
+    var replacesPriorPages: Bool
     /// Account scope that produced this page. For an account-scoped round this must
     /// match the identity resolved before any data-plane call; otherwise the engine
     /// discards the response before applying records or advancing its cursor.
     var accountIdentity: SyncAccountIdentity?
+    /// Dataset generation that produced this page. It must equal the preflight value.
+    var datasetIdentity: SyncDatasetIdentity?
 
     init(
         records: [WireRecord],
@@ -363,14 +462,18 @@ nonisolated struct SyncFetch: Sendable, Equatable {
         cursorKind: SyncCursorKind? = nil,
         hasMore: Bool = false,
         isFullResync: Bool = false,
-        accountIdentity: SyncAccountIdentity? = nil
+        replacesPriorPages: Bool = false,
+        accountIdentity: SyncAccountIdentity? = nil,
+        datasetIdentity: SyncDatasetIdentity? = nil
     ) {
         self.records = records
         self.cursor = cursor
         self.cursorKind = cursor == nil ? nil : (cursorKind ?? .legacy)
         self.hasMore = hasMore
         self.isFullResync = isFullResync
+        self.replacesPriorPages = replacesPriorPages
         self.accountIdentity = accountIdentity
+        self.datasetIdentity = datasetIdentity
     }
 }
 
@@ -402,15 +505,19 @@ nonisolated struct SyncSubmission: Sendable, Equatable {
     var cursor: SyncCursor?
     /// Account scope that accepted/rejected this batch. See `SyncFetch.accountIdentity`.
     var accountIdentity: SyncAccountIdentity?
+    /// Dataset generation that accepted/rejected this batch.
+    var datasetIdentity: SyncDatasetIdentity?
 
     init(
         results: [SyncSubmitResult],
         cursor: SyncCursor?,
-        accountIdentity: SyncAccountIdentity? = nil
+        accountIdentity: SyncAccountIdentity? = nil,
+        datasetIdentity: SyncDatasetIdentity? = nil
     ) {
         self.results = results
         self.cursor = cursor
         self.accountIdentity = accountIdentity
+        self.datasetIdentity = datasetIdentity
     }
 
     var acceptedIDs: [UUID] {
@@ -489,15 +596,32 @@ nonisolated protocol SyncTransport: Sendable {
 
     /// One-shot destructive transport reset after Core has durably journaled all local
     /// intent from the old account. Accountless/stateless transports need no work.
-    func resetAfterAccountReview() async throws
+    func resetAfterAccountReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws
 
     /// One-shot replacement of an unreadable transport-private checkpoint. Core calls
     /// this only after a human review and after the latest local intent is durable.
-    func resetAfterCheckpointReview() async throws
+    func resetAfterCheckpointReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws
+
+    /// One-shot recovery after the backend reports that its dataset/zone was physically
+    /// reset. Core calls this only after the user chooses this device as the recovery
+    /// source and after every current local value is durable in the journal.
+    func resetAfterRemoteDataResetReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws
 
     /// Resets transport-private scheduler progress after a local crypto/projection
     /// migration already staged every surviving record in the durable journal.
-    func resetForLocalFullResync() async throws
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws
 
     /// Confirms that a transport-owned inbox cursor is now durable in Core's base. A
     /// stateless transport needs no work; CKSyncEngine uses it to compact only the
@@ -518,9 +642,45 @@ nonisolated extension SyncTransport {
     func preflightScope() async throws -> SyncScopePreflight {
         SyncScopePreflight(identity: try await resolveAccountIdentity())
     }
-    func resetAfterAccountReview() async throws {}
-    func resetAfterCheckpointReview() async throws {}
-    func resetForLocalFullResync() async throws {}
+    func resetAfterAccountReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        // Account-scoped transports must explicitly prove that the identity observed
+        // during preflight is still current at the reset boundary.
+        guard expectedIdentity == nil else { throw SyncTransportFailure.accountChanged }
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+    }
+    func resetAfterCheckpointReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedIdentity == nil else { throw SyncTransportFailure.accountChanged }
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+    }
+    func resetAfterRemoteDataResetReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        // A silent no-op would let Core clear its cursor and upload local state even
+        // though a stateful transport never established authority to recreate the
+        // remote dataset. Inert transports that can prove this is safe must opt in.
+        throw SyncTransportFailure.remoteDataReset(
+            detail: "the selected transport cannot restore a reset remote library")
+    }
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedIdentity == nil else { throw SyncTransportFailure.accountChanged }
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+    }
     func acknowledgeFetched(through cursor: SyncCursor?) async throws {}
     func shutdown() async {}
 }

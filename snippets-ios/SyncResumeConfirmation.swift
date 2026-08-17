@@ -1,21 +1,26 @@
 import UIKit
 
 @MainActor
-enum SyncResumeConfirmation {
+enum SyncRecoveryConfirmation {
     static func makeAlert(
+        action: SyncRecoveryAction,
         statusDescription: String,
-        onResume: @escaping () -> Void
+        onConfirm: @escaping () -> Void
     ) -> UIAlertController {
+        precondition(
+            action.confirmationTitle != nil
+                && action.confirmationButtonTitle != nil)
         let alert = UIAlertController(
-            title: "Resume iCloud Sync?",
-            message: statusDescription
-                + "\n\nResume only after reviewing this condition. Snippets will clear "
-                + "the safety stop and immediately attempt another sync round.",
+            title: action.confirmationTitle,
+            message: statusDescription + "\n\n" + action.explanation,
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Resume", style: .default) { _ in
-            onResume()
+        alert.addAction(UIAlertAction(
+            title: action.confirmationButtonTitle,
+            style: action.isDestructiveConfirmation ? .destructive : .default
+        ) { _ in
+            onConfirm()
         })
         return alert
     }

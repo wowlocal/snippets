@@ -32,11 +32,16 @@ data class CloudConfiguration(
     val protocolMajor: Int = 0,
     val accessToken: String = "",
     val spaceID: String = "",
+    val serverInstanceID: String? = null,
     val cursor: String? = null,
     val scopeBinding: String? = null,
     val datasetGeneration: String? = null,
     val feedEpoch: String? = null,
 )
+
+internal fun CloudConfiguration.requiresServerInstanceReview(): Boolean =
+    protocolMajor == 2 && serverURL.isNotBlank() && spaceID.isNotBlank() &&
+        serverInstanceID == null
 
 data class KeyBundle(
     val key: String,
@@ -92,13 +97,14 @@ fun parseLibrary(json: String): List<SnippetItem> {
 fun tagsJSON(tags: List<String>): String = JSONArray(tags).toString()
 
 fun CloudConfiguration.toJSON(): String = JSONObject()
-    .put("schemaVersion", 2)
+    .put("schemaVersion", 3)
     .put("provider", provider.name)
     .put("serverURL", serverURL)
     .put("apiBaseURL", apiBaseURL)
     .put("protocolMajor", protocolMajor)
     .put("accessToken", accessToken)
     .put("spaceID", spaceID)
+    .put("serverInstanceID", serverInstanceID)
     .put("cursor", cursor)
     .put("scopeBinding", scopeBinding)
     .put("datasetGeneration", datasetGeneration)
@@ -113,7 +119,9 @@ fun cloudConfiguration(json: String): CloudConfiguration {
     val protocolMajor = objectValue.optInt("protocolMajor")
     val storedProvider = runCatching { SyncProvider.valueOf(objectValue.getString("provider")) }
         .getOrDefault(SyncProvider.DEVICE)
-    val hasCurrentHTTPBinding = schemaVersion == 2 && protocolMajor == 2 &&
+    // Schema 2 is kept readable so an existing v2 checkpoint can fail closed with
+    // scope_review_required instead of being mistaken for an unsupported provider.
+    val hasCurrentHTTPBinding = schemaVersion in 2..3 && protocolMajor == 2 &&
         apiBaseURL == serverURL.trimEnd('/') + "/v2"
     return CloudConfiguration(
         provider = if (storedProvider == SyncProvider.SNIPPETS_CLOUD && !hasCurrentHTTPBinding) {
@@ -124,6 +132,7 @@ fun cloudConfiguration(json: String): CloudConfiguration {
         protocolMajor = protocolMajor,
         accessToken = objectValue.optString("accessToken"),
         spaceID = objectValue.optString("spaceID"),
+        serverInstanceID = objectValue.optNullableString("serverInstanceID"),
         cursor = objectValue.optNullableString("cursor"),
         scopeBinding = objectValue.optNullableString("scopeBinding"),
         datasetGeneration = objectValue.optNullableString("datasetGeneration"),

@@ -492,19 +492,17 @@ struct SyncEngineFaultInjectionTests {
             device: Self.deviceA, directory: dir)
 
         let rejectedState = await syncEngine.sync()
-        guard case .halted(let reason, _) = rejectedState else {
-            Issue.record("a permanent per-record rejection must halt for user repair")
+        guard case .needsAttention(let detail) = rejectedState else {
+            Issue.record("a permanent per-record rejection must request attention without a safety halt")
             return
         }
-        #expect(reason == .backendRefused)
+        #expect(detail.contains("fixed"))
         #expect(backend.fetchAttempts == 1,
                 "the engine must complete an authoritative fetch before pinning a terminal halt")
         #expect(backend.submittedBatches.count == 1)
 
         library.envelopes[snippetID] = fixedPayload
         backend.configure { $0.rejectRecords[snippetID] = nil }
-        syncEngine.clearHaltAfterUserReview()
-        #expect(!syncEngine.state.isHalted)
         let resumedState = await syncEngine.sync()
         #expect(!resumedState.isHalted)
 
@@ -512,7 +510,7 @@ struct SyncEngineFaultInjectionTests {
             .flatMap { $0 }
             .map { try WireCodec.open($0, using: sealer) }
         #expect(submittedEnvelopes == [rejectedPayload, fixedPayload],
-                "Resume must submit the repaired desired value, never the rejected offer again")
+                "retry must submit the repaired desired value, never the rejected offer again")
         #expect(content(try serverEnvelope(
             snippetID, transport: backend, sealer: sealer)) == "fixed payload")
 
@@ -637,7 +635,7 @@ struct SyncEngineFaultInjectionTests {
             lockURL: lockURL,
             temporaryDirectory: temporaryDirectory)
         #expect(restarted.state.isHalted)
-        restarted.clearHaltAfterUserReview()
+        restarted.performRecovery(.checkAgain)
         #expect(!restarted.state.isHalted)
         _ = await restarted.sync()
 

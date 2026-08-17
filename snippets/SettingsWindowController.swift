@@ -41,6 +41,11 @@ final class SettingsWindowController: NSWindowController {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
     }
+
+    func showSyncSettings() {
+        settingsViewController.selectSync()
+        showSettings()
+    }
 }
 
 @MainActor
@@ -82,6 +87,10 @@ private final class SettingsTabViewController: NSTabViewController {
         syncViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
         diagnosticsViewController.reloadFromStorage()
+    }
+
+    func selectSync() {
+        selectedTabViewItemIndex = 2
     }
 
     private func addTab(title: String, symbolName: String, viewController: NSViewController) {
@@ -1235,7 +1244,7 @@ private final class SyncSettingsViewController: NSViewController {
     private let configureCloudButton = NSButton(title: "Configure…", target: nil, action: nil)
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let syncNowButton = NSButton(title: "Sync Now", target: nil, action: nil)
-    private let clearHaltButton = NSButton(title: "Resume After Review", target: nil, action: nil)
+    private let recoveryButton = NSButton(title: "", target: nil, action: nil)
     private let secondMacLabel = NSTextField(wrappingLabelWithString: "")
     private var presentedRecoveryAlert: NSAlert?
     private var backendSelection: SyncBackendSelectionStore {
@@ -1290,11 +1299,11 @@ private final class SyncSettingsViewController: NSViewController {
         syncNowButton.action = #selector(syncNow)
         LiquidGlassDesign.configureActionButton(syncNowButton, symbolName: "arrow.triangle.2.circlepath")
 
-        clearHaltButton.target = self
-        clearHaltButton.action = #selector(clearHalt)
-        clearHaltButton.bezelStyle = .rounded
+        recoveryButton.target = self
+        recoveryButton.action = #selector(performRecovery)
+        recoveryButton.bezelStyle = .rounded
 
-        let buttonRow = NSStackView(views: [syncNowButton, clearHaltButton, NSView()])
+        let buttonRow = NSStackView(views: [syncNowButton, recoveryButton, NSView()])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
 
@@ -1351,16 +1360,25 @@ private final class SyncSettingsViewController: NSViewController {
         }
         configureCloudButton.isHidden = !selection.snippetsCloudEnabled
             || selection.provider != .snippetsCloud
+        configureCloudButton.title = if selection.cloudCredentialResetRequired {
+            "Reset Cloud Sign-In…"
+        } else if selection.hasPendingRemoteRevocation || selection.hasPendingLocalErase {
+            "Retry Sign Out…"
+        } else {
+            "Configure…"
+        }
         statusLabel.stringValue = coordinator.statusDescription
 
         // Shown whenever sync is on, not only when an engine exists: a start that failed
         // on the keychain leaves no engine and no poll timer, and this button is what
         // retries it. Hiding it there was offering "relaunch the app" as the only cure.
-        syncNowButton.isHidden = !SyncCoordinator.isEnabled
-        if case .halted(let reason, _) = coordinator.state {
-            clearHaltButton.isHidden = !reason.isUserRecoverable
+        if let action = coordinator.recoveryAction {
+            syncNowButton.isHidden = true
+            recoveryButton.title = action.buttonTitle
+            recoveryButton.isHidden = false
         } else {
-            clearHaltButton.isHidden = true
+            syncNowButton.isHidden = !coordinator.canRequestManualSync
+            recoveryButton.isHidden = true
         }
 
         secondMacLabel.stringValue = secondMacAdvice()
@@ -1427,6 +1445,14 @@ private final class SyncSettingsViewController: NSViewController {
     @objc private func configureSnippetsCloud() {
         let selection = backendSelection
         guard selection.snippetsCloudEnabled else { return }
+        if selection.cloudCredentialResetRequired {
+            confirmUnreadableCloudCredentialReset()
+            return
+        }
+        if selection.hasPendingRemoteRevocation || selection.hasPendingLocalErase {
+            retryInterruptedCloudSignOut()
+            return
+        }
         if selection.hasCloudSession {
             do {
                 try presentCloudState(cloudBootstrap.state())
@@ -1444,6 +1470,43 @@ private final class SyncSettingsViewController: NSViewController {
             return
         }
         signInToSnippetsCloud(bundled, selection: selection)
+    }
+
+    private func confirmUnreadableCloudCredentialReset() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Reset Unreadable Cloud Sign-In?"
+        alert.informativeText = "Snippets cannot verify the saved sign-in history or prove that every older token was revoked. First revoke Snippets in your identity provider’s connected-app settings. Reset removes this Mac’s cloud login and device-only library key; local snippets and cloud ciphertext are not deleted."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Reset This Mac")
+        alert.buttons[1].hasDestructiveAction = true
+        alert.buttons[1].keyEquivalent = ""
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        runCloudTask("Couldn’t Reset Cloud Sign-In") { [weak self] in
+            guard let self else { return }
+            if let coordinator = Self.coordinator {
+                try await coordinator.withQuiescedCloudTransport {
+                    try self.cloudBootstrap.resetUnreadableCredentialsOnThisDevice()
+                }
+            } else {
+                try self.cloudBootstrap.resetUnreadableCredentialsOnThisDevice()
+            }
+            self.reloadFromStorage()
+        }
+    }
+
+    private func retryInterruptedCloudSignOut() {
+        runCloudTask("Couldn’t Finish Signing Out") { [weak self] in
+            guard let self else { return }
+            if let coordinator = Self.coordinator {
+                try await coordinator.withQuiescedCloudTransport {
+                    try await self.cloudBootstrap.signOutThisDevice()
+                }
+            } else {
+                try await self.cloudBootstrap.signOutThisDevice()
+            }
+            self.reloadFromStorage()
+        }
     }
 
     private func signInToSnippetsCloud(
@@ -1751,13 +1814,20 @@ private final class SyncSettingsViewController: NSViewController {
         alert.alertStyle = .warning
         alert.messageText = "Sign Out on This Mac?"
         alert.informativeText = "This removes this Mac’s login credential and device-only library key. Cloud ciphertext is not deleted. You will need another approved device or the recovery kit to reconnect."
-        alert.addButton(withTitle: "Sign Out")
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        alert.addButton(withTitle: "Sign Out")
+        alert.buttons[1].hasDestructiveAction = true
+        alert.buttons[1].keyEquivalent = ""
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
         runCloudTask("Couldn’t Sign Out") { [weak self] in
             guard let self else { return }
-            try await self.cloudBootstrap.signOutThisDevice()
-            Self.coordinator?.reloadProviderSelection()
+            if let coordinator = Self.coordinator {
+                try await coordinator.withQuiescedCloudTransport {
+                    try await self.cloudBootstrap.signOutThisDevice()
+                }
+            } else {
+                try await self.cloudBootstrap.signOutThisDevice()
+            }
             self.reloadFromStorage()
         }
     }
@@ -1833,8 +1903,29 @@ private final class SyncSettingsViewController: NSViewController {
         reloadFromStorage()
     }
 
-    @objc private func clearHalt() {
-        Self.coordinator?.clearHaltAfterUserReview()
+    @objc private func performRecovery() {
+        guard let coordinator = Self.coordinator,
+              let action = coordinator.recoveryAction else { return }
+
+        if let title = action.confirmationTitle,
+           let buttonTitle = action.confirmationButtonTitle {
+            let alert = NSAlert()
+            alert.alertStyle = action.isDestructiveConfirmation ? .critical : .warning
+            alert.messageText = title
+            alert.informativeText = coordinator.statusDescription + "\n\n" + action.explanation
+            // Return must never approve a trust-boundary decision. Account change and
+            // cloud restore can disclose/replace remote data even though they are not
+            // styled red, so Cancel is the default for every confirmation.
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: buttonTitle)
+            alert.buttons[1].keyEquivalent = ""
+            if action.isDestructiveConfirmation {
+                alert.buttons[1].hasDestructiveAction = true
+            }
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+        }
+
+        coordinator.performRecovery(action)
         reloadFromStorage()
     }
 }

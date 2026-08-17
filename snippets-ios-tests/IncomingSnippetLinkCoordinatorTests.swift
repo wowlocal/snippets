@@ -22,7 +22,7 @@ final class IncomingSnippetLinkCoordinatorTests: XCTestCase {
 
     func testShareLinkDoesNotMutateBeforeAcceptanceAndReplacementIsDisabled() throws {
         let store = SnippetStore(configuration: .iOS)
-        var trusted = store.addSnippet(name: "Trusted", content: "trusted body")
+        var trusted = try! store.addSnippet(name: "Trusted", content: "trusted body")
         trusted.keyword = "sig"
         store.update(trusted)
         store.flushPendingWrites()
@@ -50,7 +50,7 @@ final class IncomingSnippetLinkCoordinatorTests: XCTestCase {
         let review = try coordinator.makeReview(for: url)
         XCTAssertNil(review.replacedSnippet)
 
-        var appeared = store.addSnippet(name: "Appeared", content: "keep this body")
+        var appeared = try! store.addSnippet(name: "Appeared", content: "keep this body")
         appeared.keyword = "sig"
         store.update(appeared)
         store.flushPendingWrites()
@@ -74,7 +74,7 @@ final class IncomingSnippetLinkCoordinatorTests: XCTestCase {
 
     func testShareReviewRejectsChangedReplacementWithoutAnyMutation() throws {
         let store = SnippetStore(configuration: .iOS)
-        var trusted = store.addSnippet(name: "Trusted", content: "original body")
+        var trusted = try! store.addSnippet(name: "Trusted", content: "original body")
         trusted.keyword = "sig"
         store.update(trusted)
         store.flushPendingWrites()
@@ -105,7 +105,7 @@ final class IncomingSnippetLinkCoordinatorTests: XCTestCase {
 
     func testUnchangedShareReviewStillSucceeds() throws {
         let store = SnippetStore(configuration: .iOS)
-        var trusted = store.addSnippet(name: "Trusted", content: "trusted body")
+        var trusted = try! store.addSnippet(name: "Trusted", content: "trusted body")
         trusted.keyword = "sig"
         store.update(trusted)
         store.flushPendingWrites()
@@ -124,7 +124,7 @@ final class IncomingSnippetLinkCoordinatorTests: XCTestCase {
 
     func testCreationLinkCreatesAUniqueDisabledSnippet() throws {
         let store = SnippetStore(configuration: .iOS)
-        var existing = store.addSnippet(name: "Existing", content: "keep")
+        var existing = try! store.addSnippet(name: "Existing", content: "keep")
         existing.keyword = "sig"
         store.update(existing)
         store.flushPendingWrites()

@@ -45,11 +45,17 @@ PUT    /v2/spaces/{space}/pairings/{pairing}/approval
 POST   /v2/spaces/{space}/pairings/{pairing}/claim
 ```
 
-Every space-scoped response contains `scope {spaceId, scopeBinding,
+Every space-scoped response contains `scope {serverInstanceId, spaceId, scopeBinding,
 datasetGeneration, feedEpoch}`. `WireRecord` remains `{id, rev, deleted, blob}` with
 client-encrypted `blob`. Batch outcomes are positional. Opaque cursor and record-version
 tokens start with `v2` and bind server, space, dataset, and the relevant generation or
 feed position. PostgreSQL stores only numeric record generations and sequences.
+
+Android cloud configuration schema 3 persists the resolved `serverInstanceId` before
+pairing, recovery, or record sync. A schema-2 v2 configuration without that pin remains
+readable but fails closed with `scope_review_required`; signing in or configuring the
+space again performs a fresh authenticated resolution instead of adopting a replacement
+deployment from an old checkpoint.
 
 Requests use canonical standard Base64, strict JSON with required nullable members, and
 no `X-Snippets-Protocol` header. Closed errors are `application/problem+json` with

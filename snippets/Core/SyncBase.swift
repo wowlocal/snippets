@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 // Compiled into the app and the test package — see `Snippet.swift`.
 
@@ -15,9 +20,31 @@ import Foundation
 nonisolated struct SyncBase: Equatable {
 
     /// Schema 2 made account binding downgrade-safe. Schema 3 additionally fences the
-    /// switch from CKServerChangeToken to CKSyncEngine's synthetic durable-inbox cursor:
-    /// an older reader stops on the version before it can alternate the two protocols.
-    static let currentSchemaVersion = 3
+    /// switch from CKServerChangeToken to CKSyncEngine's synthetic durable-inbox cursor.
+    /// Schema 4 separates stable account membership from physical dataset generation and
+    /// adds a crash-safe non-destructive merge marker for primary-library recovery.
+    /// Schema 5 distinguishes a legacy/incomplete restore from an exact reviewed local
+    /// snapshot. The latter is a durable ancestor for edits and deletions made while the
+    /// full cloud fetch is still pending; without that distinction, a post-review delete
+    /// could be silently resurrected by the conservative union.
+    /// Schema 6 optionally retains the readable confirmed ancestor which preceded a
+    /// checkpoint Repair. It is separate from the reviewed primary snapshot: unchanged
+    /// pre-review intent merges against the former, while later user intent merges
+    /// against the latter. Primary-file recovery omits it because old absences are not
+    /// trustworthy there.
+    /// Schema 7 gives every explicit reviewed recovery a random durable identity. Two
+    /// reviews of byte-identical backups are still separate authority epochs, while a
+    /// crash retry of one committed review retains the same identity.
+    static let currentSchemaVersion = 7
+
+    enum NonDestructiveMergeMode: String, Codable, Equatable {
+        /// Legacy schema-4 semantics: every absence is uncertain and must be recovered
+        /// from the journal/cloud rather than interpreted as a new local deletion.
+        case incompletePrimary
+        /// `envelopes` is the exact primary snapshot accepted by Repair/Check Again.
+        /// Later primary changes are authoritative local intent even before first fetch.
+        case reviewedLocalSnapshot
+    }
 
     var schemaVersion: Int
     /// Every record as last agreed, keyed by lowercase uuid string so the file is
@@ -41,10 +68,29 @@ nonisolated struct SyncBase: Equatable {
     /// `nil` is valid for an accountless backend and identifies a legacy CloudKit base
     /// that requires migration before any data-plane operation.
     var accountIdentity: SyncAccountIdentity?
+    /// Physical generation of the remote dataset. This is deliberately not folded into
+    /// `accountIdentity`: routine feed rotation must not look like an account switch, but
+    /// a dataset replacement must survive relaunch and stop before push-first sync.
+    var datasetIdentity: SyncDatasetIdentity?
     /// A crash-safe request to replace transport-private scheduler progress before the
     /// next data-plane call. Local maintenance writes this only after surviving intent
     /// is durable; Core clears it only after the transport reset succeeds.
     var requiresTransportFullResync: Bool
+    /// A restored primary file is readable but may be incomplete. While this marker is
+    /// true, Core must reset to a full merge and must never infer deletion from absence
+    /// against the old base. It is written before clearing the durable quarantine halt.
+    var requiresNonDestructiveLibraryMerge: Bool
+    /// Present exactly while `requiresNonDestructiveLibraryMerge` is true in schema 5+.
+    /// Schema-4 recovery fences migrate conservatively as `.incompletePrimary`.
+    var nonDestructiveMergeMode: NonDestructiveMergeMode?
+    /// Readable backend-confirmed ancestor from immediately before checkpoint Repair.
+    /// `nil` means recovery cannot trust old primary absences. An empty dictionary is a
+    /// known-empty ancestor and is therefore distinct from nil.
+    var preRecoveryConfirmedEnvelopes: [String: SyncEnvelope]?
+    /// Random identity of this exact explicit Repair/Check Again transaction. Required
+    /// only for schema-7 reviewed recovery; legacy reviewed fences have no identity and
+    /// are handled conservatively until upgraded.
+    var nonDestructiveReviewID: UUID?
 
     init(
         schemaVersion: Int = SyncBase.currentSchemaVersion,
@@ -54,7 +100,12 @@ nonisolated struct SyncBase: Equatable {
         cursorKind: SyncCursorKind? = nil,
         journalEstablished: Bool = false,
         accountIdentity: SyncAccountIdentity? = nil,
-        requiresTransportFullResync: Bool = false
+        datasetIdentity: SyncDatasetIdentity? = nil,
+        requiresTransportFullResync: Bool = false,
+        requiresNonDestructiveLibraryMerge: Bool = false,
+        nonDestructiveMergeMode: NonDestructiveMergeMode? = nil,
+        preRecoveryConfirmedEnvelopes: [String: SyncEnvelope]? = nil,
+        nonDestructiveReviewID: UUID? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.envelopes = envelopes
@@ -63,7 +114,20 @@ nonisolated struct SyncBase: Equatable {
         self.cursorKind = cursor == nil ? nil : (cursorKind ?? .legacy)
         self.journalEstablished = journalEstablished
         self.accountIdentity = accountIdentity
+        self.datasetIdentity = datasetIdentity
         self.requiresTransportFullResync = requiresTransportFullResync
+        self.requiresNonDestructiveLibraryMerge = requiresNonDestructiveLibraryMerge
+        self.nonDestructiveMergeMode = requiresNonDestructiveLibraryMerge
+            ? (nonDestructiveMergeMode ?? .incompletePrimary)
+            : nil
+        self.preRecoveryConfirmedEnvelopes = preRecoveryConfirmedEnvelopes
+        self.nonDestructiveReviewID = if schemaVersion >= 7,
+            requiresNonDestructiveLibraryMerge,
+            self.nonDestructiveMergeMode == .reviewedLocalSnapshot {
+            nonDestructiveReviewID ?? UUID()
+        } else {
+            nil
+        }
     }
 
     static func key(_ id: UUID) -> String { id.uuidString.lowercased() }
@@ -72,6 +136,41 @@ nonisolated struct SyncBase: Equatable {
 
     func recordVersion(_ id: UUID) -> SyncRecordVersion? {
         recordVersions[Self.key(id)]
+    }
+
+    /// Stable local transaction identity for an exact reviewed recovery snapshot. It
+    /// contains no user text. Schema 7 includes a random review transaction id, so two
+    /// explicit reviews of identical bytes cannot share causal authority. Legacy fences
+    /// retain their content identity only until the current writer upgrades them.
+    func nonDestructiveReviewFingerprint() -> String? {
+        guard requiresNonDestructiveLibraryMerge,
+              nonDestructiveMergeMode == .reviewedLocalSnapshot else { return nil }
+        func component(_ values: [String: SyncEnvelope]) -> String {
+            values.keys.sorted().map { key in
+                let hash = (try? values[key]?.envelopeHash()) ?? "invalid"
+                return "\(key.utf8.count):\(key)\(hash.utf8.count):\(hash)"
+            }.joined(separator: "|")
+        }
+        let prior = preRecoveryConfirmedEnvelopes.map(component) ?? "unknown"
+        let snapshotMaterial = "reviewed:\(component(envelopes))|prior:\(prior)"
+        let material = nonDestructiveReviewID.map {
+            "review-id:\($0.uuidString.lowercased())|\(snapshotMaterial)"
+        } ?? snapshotMaterial
+        return SHA256.hash(data: Data(material.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Makes a legacy value writable by this version without dropping an active review
+    /// fence. Minting once before the upgraded base is persisted gives all crash retries
+    /// the same durable epoch.
+    mutating func upgradeToCurrentSchema() {
+        if schemaVersion < 7,
+           requiresNonDestructiveLibraryMerge,
+           nonDestructiveMergeMode == .reviewedLocalSnapshot,
+           nonDestructiveReviewID == nil {
+            nonDestructiveReviewID = UUID()
+        }
+        schemaVersion = Self.currentSchemaVersion
     }
 
     /// Updates application ancestry without disturbing its transport generation. This
@@ -148,8 +247,10 @@ nonisolated struct SyncBase: Equatable {
 nonisolated extension SyncBase: Codable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case schemaVersion, envelopes, recordVersions, cursor, cursorKind, journalEstablished
-        case accountIdentity
-        case requiresTransportFullResync
+        case accountIdentity, datasetIdentity
+        case requiresTransportFullResync, requiresNonDestructiveLibraryMerge
+        case nonDestructiveMergeMode, preRecoveryConfirmedEnvelopes
+        case nonDestructiveReviewID
     }
 
     init(from decoder: Decoder) throws {
@@ -211,6 +312,17 @@ nonisolated extension SyncBase: Codable {
                 in: container,
                 debugDescription: "sync account identity requires sync-base schema 2")
         }
+        datasetIdentity = if container.contains(.datasetIdentity) {
+            try container.decode(SyncDatasetIdentity.self, forKey: .datasetIdentity)
+        } else {
+            nil
+        }
+        if schemaVersion < 4, datasetIdentity != nil {
+            throw DecodingError.dataCorruptedError(
+                forKey: .datasetIdentity,
+                in: container,
+                debugDescription: "sync dataset identity requires sync-base schema 4")
+        }
         requiresTransportFullResync = if container.contains(.requiresTransportFullResync) {
             try container.decode(Bool.self, forKey: .requiresTransportFullResync)
         } else {
@@ -221,6 +333,49 @@ nonisolated extension SyncBase: Codable {
                 forKey: .requiresTransportFullResync,
                 in: container,
                 debugDescription: "transport full-resync marker requires sync-base schema 3")
+        }
+        let containsLibraryRecoveryMarker = container.contains(
+            .requiresNonDestructiveLibraryMerge)
+        if schemaVersion >= 4, !containsLibraryRecoveryMarker {
+            throw DecodingError.keyNotFound(
+                CodingKeys.requiresNonDestructiveLibraryMerge,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "sync-base schema 4 requires the library-recovery fence"))
+        }
+        requiresNonDestructiveLibraryMerge = if containsLibraryRecoveryMarker {
+            try container.decode(Bool.self, forKey: .requiresNonDestructiveLibraryMerge)
+        } else {
+            false
+        }
+        if schemaVersion < 4, requiresNonDestructiveLibraryMerge {
+            throw DecodingError.dataCorruptedError(
+                forKey: .requiresNonDestructiveLibraryMerge,
+                in: container,
+                debugDescription: "library-recovery marker requires sync-base schema 4")
+        }
+        if schemaVersion >= 5 {
+            let containsMode = container.contains(.nonDestructiveMergeMode)
+            guard containsMode == requiresNonDestructiveLibraryMerge else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .nonDestructiveMergeMode,
+                    in: container,
+                    debugDescription: "sync-base recovery mode must match its merge fence")
+            }
+            nonDestructiveMergeMode = containsMode
+                ? try container.decode(
+                    NonDestructiveMergeMode.self, forKey: .nonDestructiveMergeMode)
+                : nil
+        } else {
+            guard !container.contains(.nonDestructiveMergeMode) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .nonDestructiveMergeMode,
+                    in: container,
+                    debugDescription: "sync-base recovery mode requires schema 5")
+            }
+            nonDestructiveMergeMode = requiresNonDestructiveLibraryMerge
+                ? .incompletePrimary
+                : nil
         }
 
         let raw = try container.decode([String: String].self, forKey: .envelopes)
@@ -240,6 +395,61 @@ nonisolated extension SyncBase: Codable {
             decoded[key] = envelope
         }
         envelopes = decoded
+
+        if schemaVersion >= 6, container.contains(.preRecoveryConfirmedEnvelopes) {
+            guard requiresNonDestructiveLibraryMerge,
+                  nonDestructiveMergeMode == .reviewedLocalSnapshot else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .preRecoveryConfirmedEnvelopes,
+                    in: container,
+                    debugDescription: "pre-recovery ancestor requires reviewed recovery")
+            }
+            let rawPreRecovery = try container.decode(
+                [String: String].self, forKey: .preRecoveryConfirmedEnvelopes)
+            var decodedPreRecovery: [String: SyncEnvelope] = [:]
+            for (key, text) in rawPreRecovery {
+                guard let data = Data(base64Encoded: text),
+                      let envelope = try? SyncEnvelope.parse(data),
+                      SyncBase.key(envelope.id) == key else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .preRecoveryConfirmedEnvelopes,
+                        in: container,
+                        debugDescription: "invalid pre-recovery confirmed envelope")
+                }
+                decodedPreRecovery[key] = envelope
+            }
+            preRecoveryConfirmedEnvelopes = decodedPreRecovery
+        } else {
+            guard schemaVersion >= 6
+                    || !container.contains(.preRecoveryConfirmedEnvelopes) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .preRecoveryConfirmedEnvelopes,
+                    in: container,
+                    debugDescription: "pre-recovery ancestor requires sync-base schema 6")
+            }
+            preRecoveryConfirmedEnvelopes = nil
+        }
+
+        if schemaVersion >= 7 {
+            nonDestructiveReviewID = try container.decodeIfPresent(
+                UUID.self, forKey: .nonDestructiveReviewID)
+            let requiresReviewID = requiresNonDestructiveLibraryMerge
+                && nonDestructiveMergeMode == .reviewedLocalSnapshot
+            guard (nonDestructiveReviewID != nil) == requiresReviewID else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .nonDestructiveReviewID,
+                    in: container,
+                    debugDescription: "sync-base review id must match reviewed recovery")
+            }
+        } else {
+            guard !container.contains(.nonDestructiveReviewID) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .nonDestructiveReviewID,
+                    in: container,
+                    debugDescription: "review id requires sync-base schema 7")
+            }
+            nonDestructiveReviewID = nil
+        }
 
         // Additive and optional for upgrades from the pre-CAS base. Explicit `null` is
         // not absence: it is a damaged/truncated value and must fail the entire ancestor
@@ -290,6 +500,41 @@ nonisolated extension SyncBase: Codable {
                 .init(codingPath: encoder.codingPath,
                       debugDescription: "CKSyncEngine cursor requires sync-base schema 3"))
         }
+        guard (nonDestructiveMergeMode != nil) == requiresNonDestructiveLibraryMerge else {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "sync recovery mode must match its merge fence"))
+        }
+        if schemaVersion < 5, nonDestructiveMergeMode == .reviewedLocalSnapshot {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "reviewed local snapshot requires sync-base schema 5"))
+        }
+        if preRecoveryConfirmedEnvelopes != nil,
+           (schemaVersion < 6 || !requiresNonDestructiveLibraryMerge
+                || nonDestructiveMergeMode != .reviewedLocalSnapshot) {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "pre-recovery ancestor requires schema-6 reviewed recovery"))
+        }
+        let requiresReviewID = requiresNonDestructiveLibraryMerge
+            && nonDestructiveMergeMode == .reviewedLocalSnapshot
+        if schemaVersion >= 7 {
+            guard (nonDestructiveReviewID != nil) == requiresReviewID else {
+                throw EncodingError.invalidValue(
+                    self,
+                    .init(codingPath: encoder.codingPath,
+                          debugDescription: "sync-base review id must match reviewed recovery"))
+            }
+        } else if nonDestructiveReviewID != nil {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: encoder.codingPath,
+                      debugDescription: "review id requires sync-base schema 7"))
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encodeIfPresent(cursor, forKey: .cursor)
@@ -298,15 +543,38 @@ nonisolated extension SyncBase: Codable {
         }
         try container.encode(journalEstablished, forKey: .journalEstablished)
         try container.encodeIfPresent(accountIdentity, forKey: .accountIdentity)
+        if schemaVersion >= 4 {
+            try container.encodeIfPresent(datasetIdentity, forKey: .datasetIdentity)
+        }
         if schemaVersion >= 3 {
             try container.encode(requiresTransportFullResync,
                                  forKey: .requiresTransportFullResync)
+        }
+        if schemaVersion >= 4 {
+            try container.encode(requiresNonDestructiveLibraryMerge,
+                                 forKey: .requiresNonDestructiveLibraryMerge)
+        }
+        if schemaVersion >= 5 {
+            try container.encodeIfPresent(
+                nonDestructiveMergeMode, forKey: .nonDestructiveMergeMode)
+        }
+        if schemaVersion >= 7 {
+            try container.encodeIfPresent(
+                nonDestructiveReviewID, forKey: .nonDestructiveReviewID)
         }
         var raw: [String: String] = [:]
         for (key, envelope) in envelopes {
             raw[key] = try envelope.canonicalData().base64EncodedString()
         }
         try container.encode(raw, forKey: .envelopes)
+        if schemaVersion >= 6, let preRecoveryConfirmedEnvelopes {
+            var rawPreRecovery: [String: String] = [:]
+            for (key, envelope) in preRecoveryConfirmedEnvelopes {
+                rawPreRecovery[key] = try envelope.canonicalData().base64EncodedString()
+            }
+            try container.encode(
+                rawPreRecovery, forKey: .preRecoveryConfirmedEnvelopes)
+        }
         try container.encode(recordVersions, forKey: .recordVersions)
     }
 }

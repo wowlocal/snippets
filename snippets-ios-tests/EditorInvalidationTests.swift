@@ -46,7 +46,7 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testPhoneEditorMutationDefersHiddenLibraryUntilReturning() throws {
         let environment = makeEnvironment()
-        let snippet = environment.store.addSnippet(name: "Before", content: "Body")
+        let snippet = try! environment.store.addSnippet(name: "Before", content: "Body")
         let root = PhoneRootViewController(environment: environment)
         _ = host(root, size: CGSize(width: 390, height: 844))
         let library = try XCTUnwrap(
@@ -90,7 +90,7 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testIPadRapidEditorMutationsUseTrailingListReload() throws {
         let environment = makeEnvironment()
-        let snippet = environment.store.addSnippet(name: "Before", content: "Body")
+        let snippet = try! environment.store.addSnippet(name: "Before", content: "Body")
         let hosted = try hostSplit(environment: environment, selecting: snippet.id)
         let table = try XCTUnwrap(
             hosted.list.view.invalidationDescendant(identifier: "snippet-list") as? UITableView
@@ -121,7 +121,7 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testIPadEditorMutationRefreshesAnActiveSearchAfterTheDelay() throws {
         let environment = makeEnvironment()
-        let snippet = environment.store.addSnippet(name: "Before", content: "Body")
+        let snippet = try! environment.store.addSnippet(name: "Before", content: "Body")
         let hosted = try hostSplit(environment: environment, selecting: snippet.id)
         let searchField = hosted.list.searchTextField
         let nameField = try XCTUnwrap(
@@ -149,13 +149,13 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testNonEditorLocalChangeStillRefreshesIPadListSynchronously() throws {
         let environment = makeEnvironment()
-        let snippet = environment.store.addSnippet(name: "Before", content: "Body")
+        let snippet = try! environment.store.addSnippet(name: "Before", content: "Body")
         let hosted = try hostSplit(environment: environment, selecting: snippet.id)
         let table = try XCTUnwrap(
             hosted.list.view.invalidationDescendant(identifier: "snippet-list") as? UITableView
         )
 
-        _ = environment.store.addSnippet(name: "List Action", content: "Body")
+        _ = try! environment.store.addSnippet(name: "List Action", content: "Body")
 
         XCTAssertEqual(
             hosted.list.tableView(table, numberOfRowsInSection: 0),
@@ -203,7 +203,7 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testSecureChangeOutsideEditorContextRefreshesPendingIPadListImmediately() throws {
         let environment = makeEnvironment()
-        let snippet = environment.store.addSnippet(name: "Before", content: "Body")
+        let snippet = try! environment.store.addSnippet(name: "Before", content: "Body")
         let hosted = try hostSplit(environment: environment, selecting: snippet.id)
         let table = try XCTUnwrap(
             hosted.list.view.invalidationDescendant(identifier: "snippet-list") as? UITableView
@@ -229,7 +229,7 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testExternalChangeRefreshesPhoneLibraryAndEditorImmediately() throws {
         let environment = makeEnvironment()
-        let snippet = environment.store.addSnippet(name: "Local", content: "Body")
+        let snippet = try! environment.store.addSnippet(name: "Local", content: "Body")
         environment.store.flushPendingWrites()
         let root = PhoneRootViewController(environment: environment)
         _ = host(root, size: CGSize(width: 390, height: 844))
@@ -265,8 +265,8 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testKnownRemoteChangeRebindsOnlyAffectedIPadEditor() throws {
         let environment = makeEnvironment()
-        let selected = environment.store.addSnippet(name: "Selected", content: "Selected body")
-        let other = environment.store.addSnippet(name: "Other", content: "Other body")
+        let selected = try! environment.store.addSnippet(name: "Selected", content: "Selected body")
+        let other = try! environment.store.addSnippet(name: "Other", content: "Other body")
         environment.store.flushPendingWrites()
         let hosted = try hostSplit(environment: environment, selecting: selected.id)
         let nameField = try XCTUnwrap(
@@ -306,8 +306,8 @@ final class EditorInvalidationTests: XCTestCase {
 
     func testKnownRemoteChangeRebindsOnlyAffectedPhoneEditor() throws {
         let environment = makeEnvironment()
-        let selected = environment.store.addSnippet(name: "Selected", content: "Selected body")
-        let other = environment.store.addSnippet(name: "Other", content: "Other body")
+        let selected = try! environment.store.addSnippet(name: "Selected", content: "Selected body")
+        let other = try! environment.store.addSnippet(name: "Other", content: "Other body")
         environment.store.flushPendingWrites()
         let root = PhoneRootViewController(environment: environment)
         _ = host(root, size: CGSize(width: 390, height: 844))

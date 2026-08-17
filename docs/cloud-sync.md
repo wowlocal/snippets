@@ -506,9 +506,12 @@ the offer rather than only its UUID is essential: after fetch persists B/V2 but 
 older offer A/V1, a crash must retry A with V1, never with V2 that would authorize overwriting B.
 
 Before even reading the local library, a CloudKit round binds that protocol state to the current
-private database. `base.json` schema 3 stores an opaque SHA-256 account identity derived from four
-separately length-prefixed routing coordinates: the explicit container, private-database scope,
-the CloudKit environment selected by the running binary's actual code-signing entitlement, and
+private database. The current `base.json` schema 7 keeps stable membership (`accountIdentity`) separate from
+the physical remote generation (`datasetIdentity`); transport feed epochs remain cursor state and
+may rotate without pretending the user changed accounts or the remote library was destroyed. For
+CloudKit, the opaque SHA-256 account identity is derived from four separately length-prefixed
+routing coordinates: the explicit container, private-database scope, the CloudKit environment
+selected by the running binary's actual code-signing entitlement, and
 `CKContainer.userRecordID()`. Development and Production are distinct even if CloudKit returns the
 same user record name; that raw name is neither persisted nor logged. macOS reads the running
 task's code-signing entitlements, avoiding a bundle-path race during an in-place app update. An
@@ -528,15 +531,28 @@ A meaningful legacy checkpoint with no binding, or any binding mismatch, enters 
 halt before projection or network access. A temporary account-status, authentication, or network
 failure is only a retryable failure: it never masquerades as a new account and never mutates the
 checkpoint. A truly empty legacy checkpoint can be bound directly. After an intentional account
-switch, **Resume** performs a journal-first reset: it reconciles current primary storage against
-the old base, clears all old-account offers and CAS generations, durably preserves the latest local
-intent, then writes an empty confirmed base bound to the new account. `snippets.json` and the
-projection sidecar are not erased, so the next round merges this device's library into the new
-private database instead of treating either account as authoritative. The one-shot review is
-consumed before fallible work and cannot survive a crash or failed account-resolution attempt.
-Rekey, secure-snippet forget, and rollback preserve the binding. Schema 2 introduced the account
-boundary; schema 3 also records the cursor family. That second downgrade fence prevents an older
-binary from feeding a CKSyncEngine synthetic inbox cursor to the legacy CKServerChangeToken path.
+switch, **Review Account Change → Use This Account** performs a journal-first reset: it reconciles
+current primary storage against the old base, clears all old-account offers and CAS generations,
+durably preserves the latest local intent, then writes an empty confirmed base bound to the new
+account. `snippets.json` and the projection sidecar are not erased, so the next round merges this
+device's library into the new private database instead of treating either account as authoritative.
+The one-shot authorization is consumed before fallible work and cannot survive a crash or failed
+account-resolution attempt.
+Rekey, secure-snippet forget, rollback, and local-library recovery preserve both scope bindings.
+Schema 2 introduced the account boundary; schema 3 also records the cursor family; schema 4 adds
+the independent dataset generation and durable non-destructive library-recovery fence; schema 5
+distinguishes an uncertain partial restore from an exact primary snapshot accepted by the user;
+schema 6 can retain the readable confirmed ancestor from before checkpoint Repair; and schema 7
+gives each explicit review a random durable transaction identity. Two byte-identical backup reviews
+therefore cannot inherit one another's authority, while a crash retry retains the same identity.
+`journal.json` schema 5 separately retains both the pre-review merge ancestor and exact reviewed
+state (including reviewed absence), bound to that recovery fingerprint, until backend
+acknowledgement. A deletion made while the full fetch/reset is pending therefore remains a deletion
+after restart. An exact
+legacy Snippets Cloud digest for the current membership/dataset/feed can be migrated before the
+data plane even if Check Again already upgraded the file to schema 7; no fuzzy alias is accepted.
+The schema-3 cursor-family downgrade fence prevents an older binary from feeding a CKSyncEngine
+synthetic inbox cursor to the legacy CKServerChangeToken path.
 
 CloudKit scheduling now belongs to `CKSyncEngine`, while the existing domain `SyncEngine` remains
 the only merge reducer and `SyncJournal` remains the only durable outbound source of truth.
@@ -552,7 +568,10 @@ ordered inbound generations. A generation is removed only when a later round pre
 that Core already wrote durably to `base.json`; the adapter exposes the complete inbox as one
 `hasMore == false` fetch so an intra-round page cursor can never become a premature ACK. A missing
 key, failed authentication tag, account mismatch, zone deletion, purge, or encrypted-data reset
-fails closed and requires reviewed recovery; an established zone is never recreated automatically.
+fails closed and requires a reason-specific recovery. **Repair Sync** replaces only an unreadable
+local scheduler checkpoint and does not authorize zone creation. **Restore Cloud Library → Restore
+from This Device** is the separate authority to recreate a physically reset zone after local intent
+is journaled. An established zone is never recreated automatically.
 
 The opaque serialization is a scheduler watermark, not a Core fetch cursor. CKSyncEngine's serial
 delegate is therefore treated as an ordered event log: every `fetchedRecordZoneChanges` appends to
@@ -636,11 +655,24 @@ page still apply, while the cursor is held so that temporarily unfileable record
 without backoff. A *different* `kid` cannot heal by waiting: the engine excludes its tombstones from
 the deletion guard, applies the compatible records in the batch, then enters a sticky vault halt
 instead of polling one cursor forever. Safety halts are written to `Sync/state.json` under the
-library lock and restored before the first round after launch; clearing one removes that durable
-marker with a compare-and-swap, so reviewing one halt cannot erase a newer stop written by a peer.
-A future-version state file fails closed without being rewritten. If the halt cannot be locked or
-written at all, the independent persisted sync preference is switched off and the engine is torn down
-after its in-flight round drains. Conversely, an unreadable or unexpectedly missing local vault fails
+library lock and restored before the first round after launch; a matching typed recovery action
+removes that durable marker with a compare-and-swap, so acting on one halt cannot erase a newer stop
+written by a peer.
+A future-version state file fails closed without being rewritten. The independent
+`Sync/library-quarantine` marker is written before unreadable primary bytes move aside. A missing
+`snippets.json` with that marker is never seeded or projected as empty. Restoring a valid primary or
+explicitly confirming a complete JSON export installs only a recovery candidate; ordinary import
+cannot silently become replacement, and the confirmation shows the candidate's exact record count.
+Ordinary edits, exports, and sync remain blocked. **Check Again** decodes and projects that candidate
+through a read-only bridge path, writes schema 7's exact reviewed-snapshot full-merge fence when
+prior sync ancestry exists, and binds it to the quarantine marker's random review identity. It clears
+its matching durable halt while that independent marker still blocks writes, then retires the marker
+and unlocks the in-process store. A crash at any boundary therefore resumes the same review epoch
+without exposing a writable unfenced primary. With no prior base/journal,
+the same action retires the marker without creating sync state, preserving opt-in. If another durable
+transport halt exists, it remains intact after local recovery. If the halt cannot be locked or written
+at all, the independent persisted sync preference is switched off and the engine is torn down after
+its in-flight round drains. Conversely, an unreadable or unexpectedly missing local vault fails
 closed before projection: it must never appear as an empty vault and manufacture tombstones. The engine
 passes its live in-memory base into that check, because a failed `base.json` write cannot hide records
 the running process knows were accepted.
@@ -661,15 +693,74 @@ Two bugs the fake caught that a real backend would have taught us slowly and exp
 - **An expired token is not a halt.** Treating a non-retryable rejection uniformly put a sticky,
   scary error in front of someone who just needed to sign in again.
 
-`SyncTransport` is the seam. CloudKit and an object-storage backend are two implementations of it,
+Snippets Cloud treats both interactive OAuth sign-in and refresh rotation as journal-first
+credential replacement, not as an in-place overwrite. Before publishing the new active session,
+each observed old/new access and refresh generation plus the transaction kind is written to a
+device-only replacement journal. Superseded access tokens are closed at the resource server.
+After an interactive replacement, the old authorization grant's refresh token is also revoked at
+the provider. After refresh rotation, the old refresh token is instead covered by the server's
+required `oauth-refresh-token-rotation`/reuse-protection contract; proactively revoking it could
+invalidate the newly committed token family. If the process dies before the new session commit,
+the later, abandoned refresh token is revoked instead. Startup resumes this side-aware cleanup.
+Sign-in, refresh, cleanup, and sign-out share one mutation gate, so sign-out first merges the active
+session plus both replacement and prior logout journals into one durable revocation plan; a
+concurrent refresh or browser callback cannot strand a newer token.
+These credential journals contain no snippet data and never authorize a sync safety review.
+
+CloudKit/iCloud is the shipping, user-facing sync path. Snippets Cloud remains dark-launched and is
+integrated as an additional provider rather than as a replacement for iCloud.
+`SyncTransport` is the seam. CloudKit and the Snippets Cloud HTTP v2 service are two implementations of it,
 and `InMemoryTransport` — with fault injection for rejection, latency, partial batches, cursor
 invalidation, and duplicate delivery — is what the engine is proven against **before** a single
 byte reaches a real backend. The wire format cannot change after the first production deploy, so
 it has to be right while it is still free to change.
 
 A `DeletionGuard` refuses any remote change that would delete more than `max(5, 20%)` of the
-library, and a halt is *sticky*: it never auto-heals, because auto-healing a mass deletion means
-deleting, and auto-healing an integrity failure means trusting the thing that just failed.
+library. **Confirm Deletions → Apply Deletions** authorizes exactly one immediate attempt for the
+exact effective deletion set. The durable review context contains counts plus a SHA-256 fingerprint
+of the sorted record UUID set, never names or content; a changed set, even with the same count,
+requires a fresh confirmation. A halt written by an older build without that fingerprint exposes only
+**Refresh Deletion Details**; the refresh applies nothing, persists the exact batch, and then offers
+the destructive confirmation.
+
+The Snippets Cloud client pins the server instance and protocol major from discovery. Every scoped
+response echoes that instance, and each mutating batch carries it with the space, scope binding,
+dataset generation, and feed epoch observed before the request.
+The server requires and validates that complete scope inside its mutation transaction before the first
+record write. This prevents a deployment replacement, membership change, dataset restore, or feed
+rotation between preflight and POST from writing the local library into another scope.
+A reviewed remote reset may rotate dataset/feed generations only while retaining the pinned owner
+binding; only **Use This Account** may repin that binding.
+
+### Recovery policy
+
+The UI does not expose a generic Resume operation. Each condition is classified by whether a user
+decision can authorize data mutation, whether external repair is enough, or whether retry is safe:
+
+| Condition | Runtime policy | User action |
+| --- | --- | --- |
+| Network, throttling, transient service failure | Non-sticky exponential backoff | Automatic retry; **Sync Now** remains available |
+| Authentication required | Non-sticky attention state | Fix sign-in, then **Sync Now** |
+| Permanent backend/schema/quota/record refusal | Non-sticky attention state; no data decision is involved | Fix the reported condition, then **Sync Now** |
+| Large remote deletion | Sticky before apply | **Confirm Deletions**, then destructive **Apply Deletions** for that exact batch; legacy stops first **Refresh Deletion Details** without applying |
+| Account/environment binding changed | Sticky before local projection or data-plane access | **Review Account Change**, then **Use This Account** |
+| Local scheduler checkpoint unreadable | Sticky before the data plane | **Repair Sync** directly; local snippets are retained |
+| Remote dataset/zone physically reset | Sticky; never repopulates automatically | On the most complete device, **Restore Cloud Library**, then **Restore from This Device** |
+| Local library, journal, vault, or legacy integrity state unreadable | Sticky and revalidated | Repair the local condition, then **Check Again** |
+| State written by a newer app schema | Sticky downgrade fence | Update the app; there is no bypass button |
+
+Confirmations that authorize deletion/account/remote mutation, and the direct checkpoint repair action,
+are one-shot. They are consumed
+before fallible work; cancellation, failure, process death, a changed deletion batch, or a newer
+peer halt requires a new review. A retryable backend problem never writes a sticky halt merely to
+attract attention.
+`Sync/state.json` schema 5 atomically replaces the reviewed halt with a process/attempt claim before
+any destructive apply or transport reset. A second live window therefore cannot execute the same
+review in parallel; after the exact owner dies, another explicit action replaces the abandoned claim.
+Older clients fail at the schema fence instead of ignoring this ownership marker.
+Settings reports when the claim belongs to another Mac. There is deliberately no time-only
+auto-takeover: reopening Snippets on the owning Mac lets that host prove its prior process is gone
+and safely reclaim the interrupted action without trusting a foreign PID namespace.
 
 ---
 

@@ -26,7 +26,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         case syncToggle
         case syncStatus
         case syncNow
-        case reviewHalt
+        case syncRecovery
         case keychainStatus
         case lockVault
         case addRecovery
@@ -145,9 +145,11 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             cell.textLabel?.text = "Sync Now"
             cell.imageView?.image = UIImage(systemName: "arrow.triangle.2.circlepath")
             cell.textLabel?.textColor = AppTheme.tint
-        case .reviewHalt:
-            cell.textLabel?.text = "Resume After Review"
-            cell.detailTextLabel?.text = "Only resume after confirming the library and selected cloud account are correct."
+        case .syncRecovery:
+            if let action = environment.syncCoordinator.recoveryAction {
+                cell.textLabel?.text = action.buttonTitle
+                cell.detailTextLabel?.text = action.explanation
+            }
             cell.imageView?.image = UIImage(systemName: "exclamationmark.shield")
             cell.textLabel?.textColor = AppTheme.warning
         case .keychainStatus:
@@ -210,8 +212,8 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             chooseSyncProvider()
         case .syncNow:
             environment.syncCoordinator.syncNow()
-        case .reviewHalt:
-            confirmResumeAfterReview()
+        case .syncRecovery:
+            performSyncRecovery()
         case .lockVault:
             environment.vaultSession.lock()
         case .addRecovery:
@@ -235,10 +237,10 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             var rows: [Row] = environment.backendSelection.snippetsCloudEnabled
                 ? [.syncProvider, .syncToggle, .syncStatus]
                 : [.syncToggle, .syncStatus]
-            if SyncCoordinator.isEnabled { rows.append(.syncNow) }
-            if case .halted(let reason, _) = environment.syncCoordinator.state,
-               reason.isUserRecoverable {
-                rows.append(.reviewHalt)
+            if environment.syncCoordinator.recoveryAction != nil {
+                rows.append(.syncRecovery)
+            } else if environment.syncCoordinator.canRequestManualSync {
+                rows.append(.syncNow)
             }
             return rows
         case .security:
@@ -271,7 +273,21 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         alert.addAction(UIAlertAction(title: "Snippets Cloud…", style: .default) { [weak self] _ in
             self?.configureSnippetsCloud()
         })
-        if selection.hasCloudSession {
+        if selection.cloudCredentialResetRequired {
+            alert.addAction(UIAlertAction(
+                title: "Reset Unreadable Cloud Sign-In",
+                style: .destructive
+            ) { [weak self] _ in
+                self?.confirmUnreadableCloudCredentialReset()
+            })
+        } else if selection.hasPendingRemoteRevocation || selection.hasPendingLocalErase {
+            alert.addAction(UIAlertAction(
+                title: "Retry Sign Out",
+                style: .destructive
+            ) { [weak self] _ in
+                self?.retryInterruptedCloudSignOut()
+            })
+        } else if selection.hasCloudSession {
             alert.addAction(UIAlertAction(
                 title: "Sign Out of Snippets Cloud on This Device",
                 style: .destructive
@@ -291,6 +307,14 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     private func configureSnippetsCloud() {
         let selection = environment.backendSelection
         guard selection.snippetsCloudEnabled else { return }
+        if selection.cloudCredentialResetRequired {
+            confirmUnreadableCloudCredentialReset()
+            return
+        }
+        if selection.hasPendingRemoteRevocation || selection.hasPendingLocalErase {
+            retryInterruptedCloudSignOut()
+            return
+        }
         guard let bundled = SyncBackendSelectionStore.bundledServerURL,
               SyncBackendSelectionStore.bundledOAuthRedirectURL != nil else {
             let unavailable = UIAlertController(
@@ -310,6 +334,35 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             return
         }
         signInToSnippetsCloud(bundled, selection: selection)
+    }
+
+    private func confirmUnreadableCloudCredentialReset() {
+        let alert = UIAlertController(
+            title: "Reset Unreadable Cloud Sign-In?",
+            message: "Snippets cannot verify the saved sign-in history or prove that every older token was revoked. First revoke Snippets in your identity provider’s connected-app settings. Reset removes this device’s cloud login and device-only library key; local snippets and cloud ciphertext are not deleted.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Reset This Device", style: .destructive) {
+            [weak self] _ in
+            guard let self else { return }
+            runCloudTask(title: "Couldn’t Reset Cloud Sign-In") {
+                try await self.environment.syncCoordinator.withQuiescedCloudTransport {
+                    try self.cloudBootstrap.resetUnreadableCredentialsOnThisDevice()
+                }
+                self.tableView.reloadData()
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    private func retryInterruptedCloudSignOut() {
+        runCloudTask(title: "Couldn’t Finish Signing Out") { [weak self] in
+            guard let self else { return }
+            try await environment.syncCoordinator.withQuiescedCloudTransport {
+                try await self.cloudBootstrap.signOutThisDevice()
+            }
+            tableView.reloadData()
+        }
     }
 
     private func signInToSnippetsCloud(
@@ -589,8 +642,9 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         alert.addAction(UIAlertAction(title: "Sign Out", style: .destructive) { [weak self] _ in
             self?.runCloudTask(title: "Couldn’t Sign Out") {
                 guard let self else { return }
-                try await self.cloudBootstrap.signOutThisDevice()
-                self.environment.syncCoordinator.reloadProviderSelection()
+                try await self.environment.syncCoordinator.withQuiescedCloudTransport {
+                    try await self.cloudBootstrap.signOutThisDevice()
+                }
                 self.tableView.reloadData()
             }
         })
@@ -671,11 +725,22 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         temporaryExportURL = nil
     }
 
-    private func confirmResumeAfterReview() {
-        let alert = SyncResumeConfirmation.makeAlert(
+    private func performSyncRecovery() {
+        // Startup prerequisites such as a temporarily unreadable sync key use
+        // `needsAttention` with Check Again rather than a sticky halt. The coordinator
+        // owns exact action validation for both state shapes.
+        guard let action = environment.syncCoordinator.recoveryAction else { return }
+
+        guard action.confirmationTitle != nil else {
+            environment.syncCoordinator.performRecovery(action)
+            tableView.reloadData()
+            return
+        }
+        let alert = SyncRecoveryConfirmation.makeAlert(
+            action: action,
             statusDescription: environment.syncCoordinator.statusDescription
         ) { [weak self] in
-            self?.environment.syncCoordinator.clearHaltAfterUserReview()
+            self?.environment.syncCoordinator.performRecovery(action)
         }
         present(alert, animated: true)
     }

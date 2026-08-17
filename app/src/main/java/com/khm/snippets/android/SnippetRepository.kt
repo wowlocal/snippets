@@ -154,22 +154,27 @@ class SnippetRepository(
 
     suspend fun configureCloud(serverURL: String, accessToken: String, spaceID: String) = mutate {
         requireCloudFeature()
-        val changedScope = configuration.serverURL != serverURL.trim().trimEnd('/') ||
-            configuration.spaceID != spaceID.trim()
+        val normalizedServerURL = serverURL.trim().trimEnd('/')
+        val normalizedAccessToken = accessToken.trim()
+        val resolution = client.resolveSpace(normalizedServerURL, spaceID.trim(), normalizedAccessToken)
+        val changedScope = configuration.serverURL != normalizedServerURL ||
+            !configuration.spaceID.equals(resolution.spaceID, ignoreCase = true) ||
+            !configuration.serverInstanceID.equals(resolution.serverInstanceID, ignoreCase = true)
         configuration = configuration.copy(
             provider = SyncProvider.SNIPPETS_CLOUD,
-            serverURL = serverURL.trim().trimEnd('/'),
-            apiBaseURL = serverURL.trim().trimEnd('/') + "/v2",
+            serverURL = normalizedServerURL,
+            apiBaseURL = normalizedServerURL + "/v2",
             protocolMajor = 2,
-            accessToken = accessToken.trim(),
-            spaceID = spaceID.trim(),
+            accessToken = normalizedAccessToken,
+            spaceID = resolution.spaceID,
+            serverInstanceID = resolution.serverInstanceID,
             cursor = if (changedScope) null else configuration.cursor,
             scopeBinding = if (changedScope) null else configuration.scopeBinding,
             datasetGeneration = if (changedScope) null else configuration.datasetGeneration,
             feedEpoch = if (changedScope) null else configuration.feedEpoch)
         if (changedScope) remoteRecordsJSON = "[]"
         if (keys == null) keys = freshKeyBundle().also { store.write(KEYS, it.toJSON()) }
-        bindCurrentKey(serverURL.trim().trimEnd('/'), spaceID.trim())
+        bindCurrentKey(normalizedServerURL, resolution.spaceID)
         cloudKeyStatus = CloudKeyStatus.READY
         persistSyncState()
     }
@@ -210,20 +215,25 @@ class SnippetRepository(
                     val existingSpace = configuration.takeIf {
                         it.serverURL == authorization.serverURL
                     }?.spaceID?.takeIf(String::isNotBlank)
-                    val spaceID = client.resolvePersonalSpace(
+                    val resolution = client.resolvePersonalSpace(
                         authorization.serverURL,
                         authorization.accessToken,
                         existingSpace,
                     )
                     val changedScope = configuration.serverURL != authorization.serverURL ||
-                        configuration.spaceID != spaceID
+                        !configuration.spaceID.equals(resolution.spaceID, ignoreCase = true) ||
+                        !configuration.serverInstanceID.equals(
+                            resolution.serverInstanceID,
+                            ignoreCase = true,
+                        )
                     configuration = configuration.copy(
                         provider = configuration.provider,
                         serverURL = authorization.serverURL,
                         apiBaseURL = authorization.serverURL + "/v2",
                         protocolMajor = 2,
                         accessToken = "",
-                        spaceID = spaceID,
+                        spaceID = resolution.spaceID,
+                        serverInstanceID = resolution.serverInstanceID,
                         cursor = if (changedScope) null else configuration.cursor,
                         scopeBinding = if (changedScope) null else configuration.scopeBinding,
                         datasetGeneration = if (changedScope) null else configuration.datasetGeneration,
@@ -287,6 +297,9 @@ class SnippetRepository(
             throw CloudAuthFailure("sign_in_required")
         }
         if (!hasBoundKey()) throw SyncFailure("library_key_required")
+        if (configuration.requiresServerInstanceReview()) {
+            throw SyncFailure("scope_review_required")
+        }
         configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
         store.write(CONFIG, configuration.toJSON())
     }
@@ -298,7 +311,8 @@ class SnippetRepository(
         require(imported.scopeID == "sync-v1")
         keys = imported
         if (snippetsCloudEnabled &&
-            configuration.serverURL.isNotBlank() && configuration.spaceID.isNotBlank()) {
+            configuration.serverURL.isNotBlank() && configuration.spaceID.isNotBlank() &&
+            !configuration.requiresServerInstanceReview()) {
             bindCurrentKey(configuration.serverURL, configuration.spaceID)
             configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
             cloudKeyStatus = CloudKeyStatus.READY
@@ -314,13 +328,14 @@ class SnippetRepository(
     /** Starts a five-minute recipient invitation. Its private key is device-only. */
     suspend fun beginDevicePairing() = bootstrap {
         requireSignedInCoordinates()
-        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val token = freshPinnedAccessToken()
         val draft = LibraryKeyBootstrap.createPairingDraft()
         val created = client.createPairing(
             configuration.serverURL,
             configuration.spaceID,
             token,
             draft,
+            requireServerInstanceID(),
         )
         validatePairing(
             created,
@@ -349,12 +364,13 @@ class SnippetRepository(
     /** Polls once; an approved envelope is returned-and-deleted atomically. */
     suspend fun checkDevicePairing() = bootstrap {
         val pending = pendingPairing()
-        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val token = freshPinnedAccessToken()
         val status = client.pairing(
             configuration.serverURL,
             configuration.spaceID,
             pending.invitation.pairingID,
             token,
+            requireServerInstanceID(),
         )
         validatePairing(
             status,
@@ -375,6 +391,7 @@ class SnippetRepository(
             pending.invitation.pairingID,
             token,
             status,
+            requireServerInstanceID(),
         )
         validatePairing(
             taken,
@@ -397,7 +414,7 @@ class SnippetRepository(
 
     suspend fun cancelDevicePairing() = bootstrap {
         val pending = pendingPairing()
-        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val token = freshPinnedAccessToken()
         runCatching {
             client.cancelPairing(
                 configuration.serverURL,
@@ -418,12 +435,13 @@ class SnippetRepository(
         val invitation = LibraryKeyBootstrap.PairingInvitation.fromQRPayload(qrPayload.trim())
         require(invitation.serverURL == configuration.serverURL)
         require(invitation.spaceID.equals(configuration.spaceID, ignoreCase = true))
-        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val token = freshPinnedAccessToken()
         val serverPairing = client.pairing(
             invitation.serverURL,
             invitation.spaceID,
             invitation.pairingID,
             token,
+            requireServerInstanceID(),
         )
         validatePairing(
             serverPairing,
@@ -461,11 +479,12 @@ class SnippetRepository(
 
     suspend fun restoreWithRecoveryKit(qrOrLongCode: String) = bootstrap {
         requireSignedInCoordinates()
-        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val token = freshPinnedAccessToken()
         val state = client.recoveryEnvelope(
             configuration.serverURL,
             configuration.spaceID,
             token,
+            requireServerInstanceID(),
         )
         val recovery = requireNotNull(state.recovery)
         require(recovery.algorithm == LibraryKeyBootstrap.RECOVERY_ALGORITHM)
@@ -491,11 +510,12 @@ class SnippetRepository(
     /** Prepares a replacement kit; UI must require local biometrics then OIDC step-up. */
     suspend fun prepareRecoveryKitReplacement() = bootstrap {
         require(hasBoundKey())
-        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val token = freshPinnedAccessToken()
         val current = client.recoveryEnvelope(
             configuration.serverURL,
             configuration.spaceID,
             token,
+            requireServerInstanceID(),
         )
         val recovery = LibraryKeyBootstrap.createRecoveryEnvelope(
             requireNotNull(keys).toJSON(),
@@ -608,6 +628,7 @@ class SnippetRepository(
             remoteRecordsJSON = pull.records
             configuration = configuration.copy(
                 cursor = pull.cursor,
+                serverInstanceID = pull.serverInstanceID,
                 scopeBinding = pull.scopeBinding,
                 datasetGeneration = pull.datasetGeneration,
                 feedEpoch = pull.feedEpoch)
@@ -697,11 +718,13 @@ class SnippetRepository(
             configuration.serverURL,
             configuration.spaceID,
             accessToken,
+            requireServerInstanceID(),
         )
         val hasRemoteRecords = client.hasRemoteRecords(
             configuration.serverURL,
             configuration.spaceID,
             accessToken,
+            requireServerInstanceID(),
         )
         if (envelope.recovery != null || hasRemoteRecords) {
             configuration = configuration.copy(provider = SyncProvider.DEVICE)
@@ -752,6 +775,7 @@ class SnippetRepository(
             invitation.spaceID,
             invitation.pairingID,
             accessToken,
+            requireServerInstanceID(),
         )
         validatePairing(
             serverPairing,
@@ -782,6 +806,7 @@ class SnippetRepository(
             invitation.recipientPublicKey,
             ciphertext,
             accessToken,
+            requireServerInstanceID(),
         )
         validatePairing(
             approved,
@@ -813,6 +838,7 @@ class SnippetRepository(
                 pending.expectedVersion,
                 pending.ciphertext,
                 accessToken,
+                requireServerInstanceID(),
             )
         } catch (failure: SyncFailure) {
             if (failure.code != "conflict") throw failure
@@ -822,6 +848,7 @@ class SnippetRepository(
                 configuration.serverURL,
                 configuration.spaceID,
                 accessToken,
+                requireServerInstanceID(),
             )
             val existing = current.recovery
             if (current.keyEpoch != kit.keyEpoch ||
@@ -901,6 +928,24 @@ class SnippetRepository(
             !authenticator.hasSession(configuration.serverURL)) {
             throw CloudAuthFailure("sign_in_required")
         }
+        requireServerInstanceID()
+    }
+
+    private fun requireServerInstanceID(): String =
+        configuration.serverInstanceID ?: throw SyncFailure("scope_review_required")
+
+    private suspend fun freshPinnedAccessToken(): String {
+        requireSignedInCoordinates()
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val resolution = client.resolveSpace(
+            configuration.serverURL,
+            configuration.spaceID,
+            token,
+        )
+        if (!resolution.serverInstanceID.equals(requireServerInstanceID(), ignoreCase = true)) {
+            throw SyncFailure("scope_review_required")
+        }
+        return token
     }
 
     private fun clearBootstrapState() {

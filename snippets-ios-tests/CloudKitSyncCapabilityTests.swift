@@ -114,19 +114,19 @@ final class CloudKitSyncCapabilityTests: XCTestCase {
                        "AppDelegate must not bypass coordinator request coalescing")
     }
 
-    func testSettingsExposeResumeOnlyForRecoverableHaltReasons() throws {
+    func testSettingsExposeReasonSpecificRecoveryActions() throws {
         let ios = try source(at: "snippets-ios/SettingsViewController.swift")
         let mac = try source(at: "snippets/SettingsWindowController.swift")
 
         XCTAssertTrue(
-            ios.contains("reason.isUserRecoverable"),
-            "iPhone and iPad must not append the Resume row for remoteDataReset")
+            ios.contains("environment.syncCoordinator.recoveryAction != nil"),
+            "iPhone and iPad must derive recovery from the exact durable halt context")
         XCTAssertFalse(
-            ios.contains("state.isHalted { rows.append(.reviewHalt)"),
-            "a generic halted check exposes an unsafe Resume action")
+            ios.contains("Resume After Review"),
+            "a generic Resume label hides the action being authorized")
         XCTAssertTrue(
-            mac.contains("clearHaltButton.isHidden = !reason.isUserRecoverable"),
-            "macOS must keep the same nonrecoverable-halt presentation rule")
+            mac.contains("if let action = coordinator.recoveryAction"),
+            "macOS must use the same context-bound recovery-action model")
     }
 
     func testProductionCheckpointKeyAndFilePolicyAreLocalAndBackgroundReadable() throws {

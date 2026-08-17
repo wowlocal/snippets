@@ -17,6 +17,8 @@ struct SyncAccountBindingTests {
 
     private let accountA = SyncAccountIdentity(Data(repeating: 0xa1, count: 32))
     private let accountB = SyncAccountIdentity(Data(repeating: 0xb2, count: 32))
+    private let datasetA = SyncDatasetIdentity(Data(repeating: 0xd1, count: 32))
+    private let datasetB = SyncDatasetIdentity(Data(repeating: 0xd2, count: 32))
 
     @Test func freshInstallBindsDurablyBeforeItsFirstFetch() async throws {
         let h = try Harness(account: accountA)
@@ -157,6 +159,57 @@ struct SyncAccountBindingTests {
         #expect(try h.loadedJournal() == journal)
     }
 
+    @Test func libraryRecoveryUpgradeStillRecognizesTheExactLegacyCloudScope() async throws {
+        let legacyIdentity = SyncAccountIdentity(Data(repeating: 0xe3, count: 32))
+        let h = try Harness(account: accountA, dataset: datasetA)
+        defer { h.remove() }
+
+        let id = UUID()
+        let confirmed = envelope(id, name: "legacy cloud value", milliseconds: 1_000)
+        try h.writeBase(SyncBase(
+            schemaVersion: 3,
+            envelopes: [SyncBase.key(id): confirmed],
+            cursor: SyncCursor("legacy-feed-cursor"),
+            journalEstablished: true,
+            accountIdentity: legacyIdentity))
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = confirmed
+        h.transport.legacyAccountIdentities = [legacyIdentity]
+
+        let markerURL = LibraryQuarantineMarker.url(beside: h.stateURL)
+        try LibraryQuarantineMarker.write(
+            to: markerURL, temporaryDirectory: h.normalTemporaryDirectory)
+        var state = SyncState.fresh(
+            deviceID: "account1", now: Date(timeIntervalSinceReferenceDate: 100))
+        state.halt = SyncState.Halt(
+            reason: .localLibraryQuarantined,
+            detail: "review restored primary",
+            at: Date(timeIntervalSinceReferenceDate: 100),
+            recoveryContext: .localLibraryQuarantine)
+        try SyncStateFile.write(
+            state, to: h.stateURL, temporaryDirectory: h.normalTemporaryDirectory)
+        h.rebuildEngine()
+
+        h.engine.performRecovery(.checkAgain)
+        let fenced = try h.loadedBase()
+        #expect(fenced.schemaVersion == SyncBase.currentSchemaVersion)
+        #expect(fenced.datasetIdentity == nil)
+        #expect(fenced.requiresNonDestructiveLibraryMerge)
+
+        let result = await h.engine.sync()
+
+        guard case .idle = result else {
+            Issue.record("exact legacy scope should migrate after recovery, got \(result)")
+            return
+        }
+        let migrated = try h.loadedBase()
+        #expect(migrated.accountIdentity == accountA)
+        #expect(migrated.datasetIdentity == datasetA)
+        #expect(!migrated.requiresNonDestructiveLibraryMerge)
+        #expect(h.transport.localFullResetAttempts == 1)
+        #expect(h.transport.submitAttempts == 1)
+    }
+
     @Test func accountSwitchHaltsBeforeReadingOrUploadingThePreviousLibrary() async throws {
         let h = try Harness(account: accountB)
         defer { h.remove() }
@@ -279,7 +332,7 @@ struct SyncAccountBindingTests {
             return
         }
 
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.useCurrentAccount)
         guard case .idle = h.engine.state else {
             Issue.record("explicit review should authorize one reset attempt")
             return
@@ -356,9 +409,9 @@ struct SyncAccountBindingTests {
             Issue.record("fixture must first detect the account switch")
             return
         }
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.useCurrentAccount)
         guard case .idle = h.engine.state else {
-            Issue.record("review should clear the durable stop before reset")
+            Issue.record("review should authorize the reset attempt")
             return
         }
 
@@ -423,7 +476,7 @@ struct SyncAccountBindingTests {
         }
         #expect(h.transport.accountReviewResetAttempts == 0,
                 "detecting a mismatch is not authorization to destroy its checkpoint")
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.useCurrentAccount)
 
         let baseURL = h.baseURL
         let journalURL = h.journalURL
@@ -449,8 +502,8 @@ struct SyncAccountBindingTests {
 
         let failedReset = await h.engine.sync()
 
-        guard case .offline(let retryAfter) = failedReset else {
-            Issue.record("a retryable checkpoint reset failure should remain offline, got \(failedReset)")
+        guard case .halted(.accountChanged, _) = failedReset else {
+            Issue.record("a failed account reset should remain reviewable, got \(failedReset)")
             return
         }
         #expect(h.transport.accountReviewResetAttempts == 1)
@@ -462,10 +515,9 @@ struct SyncAccountBindingTests {
         #expect(fencedJournal.entry(id)?.desired == latestLocal)
         #expect(fencedJournal.entry(id)?.offered == nil)
 
-        // The one-shot approval was consumed before the fallible reset. A retry after
-        // the backoff cannot reuse it, even if the transport is healthy now.
+        // The one-shot approval was consumed before the fallible reset. Ordinary sync
+        // cannot hide or reuse it, even if the transport is healthy now.
         h.transport.accountReviewResetFailure = nil
-        clock = retryAfter.addingTimeInterval(1)
         let withoutSecondReview = await h.engine.sync()
 
         guard case .halted(.accountChanged, _) = withoutSecondReview else {
@@ -508,7 +560,7 @@ struct SyncAccountBindingTests {
             Issue.record("fixture must detect account B before reading local state")
             return
         }
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.useCurrentAccount)
         h.transport.submitFailure = .unreachable(detail: "inspect captured reset intent")
 
         let result = await h.engine.sync()
@@ -573,7 +625,7 @@ struct SyncAccountBindingTests {
         #expect(try h.loadedBase() == oldBase)
         #expect(try h.loadedJournal() == resetJournal)
 
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.useCurrentAccount)
         h.transport.submitFailure = .unreachable(detail: "observe idempotent retry")
         let retried = await h.engine.sync()
 
@@ -612,7 +664,7 @@ struct SyncAccountBindingTests {
             Issue.record("fixture must first detect account B")
             return
         }
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.useCurrentAccount)
         h.transport.accountMode = .failure(.unreachable(
             detail: "account status temporarily unavailable"))
 
@@ -646,6 +698,44 @@ struct SyncAccountBindingTests {
         #expect(try h.loadedBase() == base)
     }
 
+    @Test func reviewedAccountResetIsBoundToTheExactPreflightIdentity() async throws {
+        let h = try Harness(account: accountB)
+        defer { h.remove() }
+
+        let accountC = SyncAccountIdentity(Data(repeating: 0xc3, count: 32))
+        let id = UUID()
+        let confirmed = envelope(id, name: "account A", milliseconds: 1_000)
+        let originalBase = SyncBase(
+            envelopes: [SyncBase.key(id): confirmed],
+            cursor: SyncCursor("account-a-cursor"),
+            journalEstablished: true,
+            accountIdentity: accountA)
+        try h.writeBase(originalBase)
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = confirmed
+        h.rebuildEngine()
+
+        guard case .halted(.accountChanged, _) = await h.engine.sync() else {
+            Issue.record("fixture must first detect account B")
+            return
+        }
+        h.engine.performRecovery(.useCurrentAccount)
+        h.transport.beforeResetAfterAccountReview = {
+            h.transport.accountMode = .identity(accountC)
+            h.transport.fetchAccountIdentity = accountC
+            h.transport.submitAccountIdentity = accountC
+        }
+
+        guard case .halted(.accountChanged, _) = await h.engine.sync() else {
+            Issue.record("review of B must not authorize a reset into account C")
+            return
+        }
+        #expect(h.transport.accountReviewResetAttempts == 1)
+        #expect(h.transport.submitAttempts == 0)
+        #expect(h.transport.fetchAttempts == 0)
+        #expect(try h.loadedBase() == originalBase)
+    }
+
     @Test func reviewingAnUnrelatedHaltDoesNotResetAccountCheckpoint() throws {
         let h = try Harness(account: accountA)
         defer { h.remove() }
@@ -664,10 +754,11 @@ struct SyncAccountBindingTests {
         h.rebuildEngine()
         h.engine.halt(.massDeletion, detail: "review deletion")
 
-        h.engine.clearHaltAfterUserReview()
+        #expect(h.engine.recoveryAction == .refreshDeletionReview)
+        h.engine.performRecovery(.refreshDeletionReview)
 
         guard case .idle = h.engine.state else {
-            Issue.record("ordinary halt should retain its existing Resume behavior")
+            Issue.record("matching deletion recovery should clear only its own halt")
             return
         }
         #expect(try h.loadedBase() == base)
@@ -708,7 +799,7 @@ struct SyncAccountBindingTests {
         // scheduler epoch; equality must not take reconcileAccountIdentity's early return.
         h.library.envelopes[id] = latestLocal
         h.transport.fetchFailure = nil
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.useCurrentAccount)
         let baseURL = h.baseURL
         let journalURL = h.journalURL
         h.transport.beforeResetAfterAccountReview = {
@@ -778,7 +869,7 @@ struct SyncAccountBindingTests {
         h.library.envelopes[id] = latestLocal
         h.transport.fetchFailure = nil
         h.transport.fetchCursorReply = SyncCursor("checkpoint-fresh-cursor")
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.repairCheckpoint)
         let baseURL = h.baseURL
         let journalURL = h.journalURL
         h.transport.beforeResetAfterCheckpointReview = {
@@ -850,14 +941,14 @@ struct SyncAccountBindingTests {
             return
         }
         h.library.envelopes[id] = latestLocal
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.repairCheckpoint)
         h.transport.checkpointReviewResetFailure = .unreachable(
             detail: "injected local checkpoint-key failure")
 
         let failed = await h.engine.sync()
 
-        guard case .offline(let retryAfter) = failed else {
-            Issue.record("retryable reset failure should go offline, got \(failed)")
+        guard case .halted(.checkpointUnreadable, _) = failed else {
+            Issue.record("failed checkpoint reset should remain reviewable, got \(failed)")
             return
         }
         #expect(h.transport.checkpointReviewResetAttempts == 1)
@@ -868,7 +959,6 @@ struct SyncAccountBindingTests {
         #expect(try h.loadedJournal().entry(id)?.offered == nil)
 
         h.transport.checkpointReviewResetFailure = nil
-        clock = retryAfter.addingTimeInterval(1)
         let withoutSecondReview = await h.engine.sync()
 
         guard case .halted(.checkpointUnreadable, _) = withoutSecondReview else {
@@ -881,7 +971,7 @@ struct SyncAccountBindingTests {
         #expect(try h.loadedBase() == oldBase)
     }
 
-    @Test func remoteDataResetIsNonrecoverableAndCannotResetOrReupload() async throws {
+    @Test func reviewedRemoteDataResetRestoresCloudFromCurrentLocalLibrary() async throws {
         let h = try Harness(account: accountA)
         defer { h.remove() }
 
@@ -902,18 +992,476 @@ struct SyncAccountBindingTests {
             Issue.record("remote data loss must have a distinct sticky halt")
             return
         }
-        h.engine.clearHaltAfterUserReview()
+        #expect(h.transport.remoteDataResetReviewAttempts == 0,
+                "detecting a reset is not authority to recreate the remote library")
+        h.transport.fetchFailure = nil
+        h.transport.fetchCursorReply = SyncCursor("restored-cloud-cursor")
+        h.engine.performRecovery(.restoreCloudFromThisDevice)
 
-        guard case .halted(.remoteDataReset, _) = h.engine.state else {
-            Issue.record("nonrecoverable remote data loss must not expose Resume semantics")
+        let restored = await h.engine.sync()
+
+        #expect(!restored.isHalted)
+        #expect(h.transport.accountReviewResetAttempts == 0)
+        #expect(h.transport.checkpointReviewResetAttempts == 0)
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
+        #expect(h.transport.submitAttempts == 1)
+        let submitted = try #require(h.transport.submittedRecords.first)
+        #expect(try WireCodec.open(submitted, using: h.sealer) == confirmed)
+        #expect(h.transport.fetchAttempts == 2)
+    }
+
+    @Test func staleRemoteResetReviewCannotResurrectAPeerClearedHalt() async throws {
+        let h = try Harness(account: accountA, dataset: datasetA)
+        defer { h.remove() }
+
+        let id = UUID()
+        let local = envelope(id, name: "single restore authority", milliseconds: 1_000)
+        try h.writeBase(SyncBase(
+            envelopes: [SyncBase.key(id): local],
+            cursor: SyncCursor("before-reset"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA))
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = local
+        h.transport.fetchFailure = .remoteDataReset(detail: "dataset reset")
+        h.rebuildEngine()
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("fixture must persist a remote reset review")
+            return
+        }
+
+        func peerEngine() -> SyncEngine {
+            SyncEngine(
+                transport: h.transport,
+                library: h.library,
+                sealer: h.sealer,
+                device: "account1",
+                baseURL: h.baseURL,
+                journalURL: h.journalURL,
+                stateURL: h.stateURL,
+                lockURL: h.lockURL,
+                temporaryDirectory: h.normalTemporaryDirectory)
+        }
+        let firstReviewer = peerEngine()
+        let staleReviewer = peerEngine()
+        h.transport.fetchFailure = nil
+        h.transport.fetchCursorReply = SyncCursor("after-restore")
+
+        firstReviewer.performRecovery(.restoreCloudFromThisDevice)
+        #expect(!(await firstReviewer.sync()).isHalted)
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
+        let completedFetchAttempts = h.transport.fetchAttempts
+        let completedSubmitAttempts = h.transport.submitAttempts
+
+        // This pane still holds the exact old Halt in memory, but the peer has
+        // durably cleared it. Its button must not write that halt back and manufacture
+        // authority for a second remote reset.
+        staleReviewer.performRecovery(.restoreCloudFromThisDevice)
+        _ = await staleReviewer.sync()
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
+        #expect(staleReviewer.requiresTransportRestart,
+                "a pane that missed the durable clear must rebuild its stale transport")
+        #expect(h.transport.fetchAttempts == completedFetchAttempts,
+                "the stale transport must not re-enter the data plane")
+        #expect(h.transport.submitAttempts == completedSubmitAttempts,
+                "the stale transport must not publish after a peer recovery")
+        guard case .loaded(let state) = SyncStateFile.load(from: h.stateURL) else {
+            Issue.record("expected readable state after stale recovery")
+            return
+        }
+        #expect(state.halt == nil)
+    }
+
+    @Test func overlappingRemoteResetReviewsClaimOneDurableAttempt() async throws {
+        let h = try Harness(account: accountA, dataset: datasetA)
+        defer { h.remove() }
+
+        let id = UUID()
+        let local = envelope(id, name: "one claimed restore", milliseconds: 1_000)
+        try h.writeBase(SyncBase(
+            envelopes: [SyncBase.key(id): local],
+            cursor: SyncCursor("before-overlapping-review"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA))
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = local
+        h.transport.fetchFailure = .remoteDataReset(detail: "dataset reset")
+        h.rebuildEngine()
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("fixture must persist a remote reset review")
+            return
+        }
+
+        func peerEngine() -> SyncEngine {
+            SyncEngine(
+                transport: h.transport,
+                library: h.library,
+                sealer: h.sealer,
+                device: "account1",
+                baseURL: h.baseURL,
+                journalURL: h.journalURL,
+                stateURL: h.stateURL,
+                lockURL: h.lockURL,
+                temporaryDirectory: h.normalTemporaryDirectory)
+        }
+        // Both panes loaded the same unclaimed Halt before either confirmation.
+        let firstReviewer = peerEngine()
+        let overlappingReviewer = peerEngine()
+        h.transport.fetchFailure = nil
+        h.transport.fetchCursorReply = SyncCursor("after-overlapping-review")
+
+        // Claim happens synchronously before the transport attempt. The first review
+        // is therefore still durably in flight when the stale pane clicks its button.
+        firstReviewer.performRecovery(.restoreCloudFromThisDevice)
+        guard case .loaded(let claimedState) = SyncStateFile.load(from: h.stateURL) else {
+            Issue.record("expected a readable claimed review")
+            return
+        }
+        #expect(claimedState.halt?.recoveryClaim != nil)
+
+        overlappingReviewer.performRecovery(.restoreCloudFromThisDevice)
+        guard case .halted(.remoteDataReset, _) = overlappingReviewer.state else {
+            Issue.record("the overlapping reviewer must adopt the claimed halt")
+            return
+        }
+        #expect(overlappingReviewer.recoveryAction == nil,
+                "a live peer claim must not expose a second destructive action")
+
+        #expect(!(await firstReviewer.sync()).isHalted)
+        #expect(!(await overlappingReviewer.sync()).isHalted,
+                "a peer completion watch must retire its stale claimed banner")
+        #expect(overlappingReviewer.requiresTransportRestart,
+                "the stale transport must be rebuilt rather than reuse peer-reset state")
+        _ = await overlappingReviewer.sync()
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
+        guard case .loaded(let finalState) = SyncStateFile.load(from: h.stateURL) else {
+            Issue.record("expected readable state after the claimed recovery")
+            return
+        }
+        #expect(finalState.halt == nil)
+    }
+
+    @Test func unknownRecoveryClaimRequiresExplicitTwoStepTakeover() async throws {
+        let h = try Harness(account: accountA, dataset: datasetA)
+        defer { h.remove() }
+
+        let id = UUID()
+        let local = envelope(id, name: "foreign claimed restore", milliseconds: 1_000)
+        try h.writeBase(SyncBase(
+            envelopes: [SyncBase.key(id): local],
+            cursor: SyncCursor("before-foreign-claim"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA))
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = local
+        h.transport.fetchFailure = .remoteDataReset(detail: "dataset reset")
+        h.rebuildEngine()
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync(),
+              case .loaded(var persisted) = SyncStateFile.load(from: h.stateURL),
+              var halt = persisted.halt else {
+            Issue.record("fixture must persist a remote reset review")
+            return
+        }
+        let localGeneration = SentinelLock.processGeneration(
+            for: ProcessInfo.processInfo.processIdentifier)
+        halt.recoveryClaim = SyncState.Halt.RecoveryClaim(
+            id: UUID(),
+            ownerID: UUID(),
+            // Deliberately collide with every locally observable namespace. Another
+            // Mac can share a hostname and happen to reuse this PID/start tuple; only
+            // a process-local owner registration can prove ownership.
+            hostName: ProcessInfo.processInfo.hostName,
+            processID: ProcessInfo.processInfo.processIdentifier,
+            processGenerationSeconds: localGeneration?.seconds,
+            processGenerationMicroseconds: localGeneration?.microseconds)
+        persisted.halt = halt
+        try SyncStateFile.write(
+            persisted,
+            to: h.stateURL,
+            temporaryDirectory: h.normalTemporaryDirectory)
+
+        h.rebuildEngine()
+        #expect(h.engine.recoveryAction == .reclaimRecovery,
+                "an unknown PID/hostname namespace needs a non-destructive takeover")
+        #expect(h.engine.recoveryClaimNeedsTakeover,
+                "Settings must explain the interrupted attempt")
+        h.engine.performRecovery(.restoreCloudFromThisDevice)
+        _ = await h.engine.sync()
+        #expect(h.transport.remoteDataResetReviewAttempts == 0)
+
+        h.engine.performRecovery(.reclaimRecovery)
+        #expect(h.engine.recoveryAction == .restoreCloudFromThisDevice,
+                "takeover clears only ownership and must ask for the original review again")
+        #expect(!h.engine.recoveryClaimNeedsTakeover)
+        _ = await h.engine.sync()
+        #expect(h.transport.remoteDataResetReviewAttempts == 0,
+                "takeover alone must never execute the original recovery")
+    }
+
+    @Test func crashAfterReviewedRemoteResetKeepsItsExactDurableReviewFence() async throws {
+        let h = try Harness(account: accountA, dataset: datasetA)
+        defer { h.remove() }
+
+        let id = UUID()
+        let confirmed = envelope(id, name: "must survive reset", milliseconds: 1_000)
+        let originalBase = SyncBase(
+            envelopes: [SyncBase.key(id): confirmed],
+            cursor: SyncCursor("remote-reset-crash-cursor"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA)
+        try h.writeBase(originalBase)
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = confirmed
+        h.transport.fetchFailure = .remoteDataReset(detail: "zone_was_deleted")
+        h.rebuildEngine()
+
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("fixture must first persist the remote-reset review stop")
             return
         }
         h.transport.fetchFailure = nil
-        _ = await h.engine.sync()
-        #expect(h.transport.accountReviewResetAttempts == 0)
-        #expect(h.transport.checkpointReviewResetAttempts == 0)
+        h.engine.performRecovery(.restoreCloudFromThisDevice)
+        h.transport.beforeResetAfterRemoteDataReview = {
+            try? FileManager.default.removeItem(at: h.normalTemporaryDirectory)
+            try? Data("not a directory".utf8).write(to: h.normalTemporaryDirectory)
+        }
+
+        let failed = await h.engine.sync()
+
+        guard case .halted(.remoteDataReset, _) = failed else {
+            Issue.record("post-reset base failure must retain the exact review, got \(failed)")
+            return
+        }
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
         #expect(h.transport.submitAttempts == 0)
         #expect(h.transport.fetchAttempts == 1)
+        #expect(try h.loadedBase() == originalBase)
+        guard case .loaded(let persistedState) = SyncStateFile.load(from: h.stateURL) else {
+            Issue.record("the original durable safety state must remain readable")
+            return
+        }
+        #expect(persistedState.halt?.reason == .remoteDataReset)
+
+        // A fresh process has no in-memory approval. Even though the transport reset
+        // already happened, it must stop before preflight/data-plane work until the
+        // user explicitly reviews the same Restore action again.
+        try FileManager.default.removeItem(at: h.normalTemporaryDirectory)
+        try FileManager.default.createDirectory(
+            at: h.normalTemporaryDirectory, withIntermediateDirectories: true)
+        h.transport.beforeResetAfterRemoteDataReview = nil
+        h.rebuildEngine()
+
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("restart must preserve the exact remote-reset review")
+            return
+        }
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
+        #expect(h.transport.submitAttempts == 0)
+        #expect(h.transport.fetchAttempts == 1)
+
+        h.engine.performRecovery(.restoreCloudFromThisDevice)
+        let recovered = await h.engine.sync()
+
+        #expect(!recovered.isHalted)
+        #expect(h.transport.remoteDataResetReviewAttempts == 2)
+        #expect(h.transport.submitAttempts == 1)
+        #expect(h.transport.fetchAttempts == 2)
+        let submitted = try #require(h.transport.submittedRecords.first)
+        #expect(try WireCodec.open(submitted, using: h.sealer) == confirmed)
+    }
+
+    @Test func datasetGenerationChangeHaltsBeforeProjectionAndSurvivesRestart() async throws {
+        let h = try Harness(account: accountA, dataset: datasetB)
+        defer { h.remove() }
+
+        let id = UUID()
+        let confirmed = envelope(id, name: "old remote generation", milliseconds: 1_000)
+        let oldBase = SyncBase(
+            envelopes: [SyncBase.key(id): confirmed],
+            recordVersions: [
+                SyncBase.key(id): SyncRecordVersion(Data("old-dataset-version".utf8))
+            ],
+            cursor: SyncCursor("old-dataset-cursor"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA)
+        try h.writeBase(oldBase)
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = confirmed
+        h.rebuildEngine()
+
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("a physical dataset replacement must require restore review")
+            return
+        }
+        #expect(h.library.readAttempts == 0)
+        #expect(h.transport.submitAttempts == 0)
+        #expect(h.transport.fetchAttempts == 0)
+        #expect(try h.loadedBase() == oldBase)
+
+        let resolutions = h.transport.accountResolutionAttempts
+        h.rebuildEngine()
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("the dataset-generation stop must survive process restart")
+            return
+        }
+        #expect(h.transport.accountResolutionAttempts == resolutions)
+    }
+
+    @Test func reviewedDatasetGenerationChangeRebindsOnlyToExactPreflightScope() async throws {
+        let h = try Harness(account: accountA, dataset: datasetB)
+        defer { h.remove() }
+
+        let id = UUID()
+        let local = envelope(id, name: "restore source", milliseconds: 2_000)
+        try h.writeBase(SyncBase(
+            envelopes: [SyncBase.key(id): local],
+            cursor: SyncCursor("old-dataset-cursor"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA))
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = local
+        h.rebuildEngine()
+
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("fixture must first detect the dataset replacement")
+            return
+        }
+        h.engine.performRecovery(.restoreCloudFromThisDevice)
+        let result = await h.engine.sync()
+
+        #expect(!result.isHalted)
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
+        #expect(h.transport.submitAttempts == 1)
+        #expect(try h.loadedBase().datasetIdentity == datasetB)
+    }
+
+    @Test func accountReviewCannotAbsorbAConcurrentDatasetReplacement() async throws {
+        let h = try Harness(account: accountA, dataset: datasetB)
+        defer { h.remove() }
+
+        let id = UUID()
+        let local = envelope(id, name: "local value", milliseconds: 2_000)
+        let originalBase = SyncBase(
+            envelopes: [SyncBase.key(id): local],
+            cursor: SyncCursor("dataset-a-cursor"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA)
+        try h.writeBase(originalBase)
+        try h.writeJournal(SyncJournal())
+        h.library.envelopes[id] = local
+        h.rebuildEngine()
+
+        // Model an account-change UI that became stale while it was open. Its action
+        // may authorize only an account checkpoint replacement, never a newly observed
+        // physical dataset reset under the same membership.
+        h.engine.halt(.accountChanged, detail: "review the account")
+        h.engine.performRecovery(.useCurrentAccount)
+
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("dataset replacement must demand its own Restore review")
+            return
+        }
+        #expect(h.transport.accountReviewResetAttempts == 0)
+        #expect(h.transport.remoteDataResetReviewAttempts == 0)
+        #expect(h.transport.submitAttempts == 0)
+        #expect(h.transport.fetchAttempts == 0)
+        #expect(try h.loadedBase() == originalBase)
+    }
+
+    @Test func meaningfulSchemaFourBaseCannotSilentlyLoseItsDatasetFence() async throws {
+        let h = try Harness(account: accountA, dataset: datasetB)
+        defer { h.remove() }
+
+        let id = UUID()
+        let confirmed = envelope(id, name: "confirmed", milliseconds: 1_000)
+        try h.writeBase(SyncBase(
+            envelopes: [SyncBase.key(id): confirmed],
+            cursor: SyncCursor("cursor-with-stripped-dataset"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: nil))
+        try h.writeJournal(SyncJournal())
+        h.rebuildEngine()
+
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("missing dataset binding in a meaningful v4 base must fail closed")
+            return
+        }
+        #expect(h.library.readAttempts == 0)
+        #expect(h.transport.submitAttempts == 0)
+        #expect(h.transport.fetchAttempts == 0)
+    }
+
+    @Test func fetchFromAChangedDatasetCannotApplyOrAdvanceTheOldBase() async throws {
+        let h = try Harness(account: accountA, dataset: datasetA)
+        defer { h.remove() }
+
+        let remoteID = UUID()
+        let oldBase = SyncBase(
+            cursor: SyncCursor("cursor-before-response-race"),
+            journalEstablished: true,
+            accountIdentity: accountA,
+            datasetIdentity: datasetA)
+        try h.writeBase(oldBase)
+        try h.writeJournal(SyncJournal())
+        h.transport.fetchRecords = [try WireCodec.seal(
+            envelope(remoteID, name: "wrong generation", milliseconds: 2_000),
+            using: h.sealer)]
+        h.transport.fetchCursorReply = SyncCursor("cursor-from-wrong-generation")
+        h.transport.beforeFetch = { _ in h.transport.datasetIdentity = self.datasetB }
+        h.rebuildEngine()
+
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("a response from another dataset must be rejected wholesale")
+            return
+        }
+        #expect(h.library.applyAttempts == 0)
+        #expect(h.library.envelopes[remoteID] == nil)
+        #expect(try h.loadedBase() == oldBase)
+    }
+
+    @Test func failedReviewedRemoteResetRemainsImmediatelyActionable() async throws {
+        let h = try Harness(account: accountA)
+        defer { h.remove() }
+
+        try h.writeBase(SyncBase(
+            cursor: SyncCursor("remote-data-loss-cursor"),
+            journalEstablished: true,
+            accountIdentity: accountA))
+        try h.writeJournal(SyncJournal())
+        h.transport.fetchFailure = .remoteDataReset(detail: "dataset reset")
+        h.rebuildEngine()
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("fixture must first detect the remote reset")
+            return
+        }
+
+        h.transport.fetchFailure = nil
+        h.transport.remoteDataResetReviewFailure = .unreachable(
+            detail: "injected reset failure")
+        h.engine.performRecovery(.restoreCloudFromThisDevice)
+        let failed = await h.engine.sync()
+
+        guard case .halted(.remoteDataReset, _) = failed else {
+            Issue.record("failed restore must keep its recovery action visible, got \(failed)")
+            return
+        }
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
+        #expect(h.transport.submitAttempts == 0)
+
+        h.transport.remoteDataResetReviewFailure = nil
+        guard case .halted(.remoteDataReset, _) = await h.engine.sync() else {
+            Issue.record("ordinary retry must not reuse the consumed restore approval")
+            return
+        }
+        #expect(h.transport.remoteDataResetReviewAttempts == 1)
     }
 
     @Test func signedOutAccountCanRecoverWithoutDeletingOrRebindingCheckpoint() async throws {
@@ -1168,7 +1716,10 @@ struct SyncAccountBindingTests {
             keyring: SnippetCrypto.Keyring.generate(), scopeID: "account-binding-tests")
         var engine: SyncEngine!
 
-        init(account: SyncAccountIdentity) throws {
+        init(
+            account: SyncAccountIdentity,
+            dataset: SyncDatasetIdentity? = nil
+        ) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "sync-account-binding-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1177,7 +1728,7 @@ struct SyncAccountBindingTests {
             stateURL = root.appendingPathComponent("state.json")
             lockURL = root.appendingPathComponent("library.lock")
             normalTemporaryDirectory = root.appendingPathComponent("Tmp", isDirectory: true)
-            transport = AccountRecordingTransport(account: account)
+            transport = AccountRecordingTransport(account: account, dataset: dataset)
             rebuildEngine()
         }
 
@@ -1282,22 +1833,29 @@ nonisolated private final class AccountRecordingTransport: SyncTransport, @unche
     private var fetchFailureStorage: SyncTransportFailure?
     private var fetchAccountIdentityStorage: SyncAccountIdentity?
     private var submitAccountIdentityStorage: SyncAccountIdentity?
+    private var datasetIdentityStorage: SyncDatasetIdentity?
+    private var legacyAccountIdentitiesStorage: [SyncAccountIdentity] = []
     private var fetchRecordsStorage: [WireRecord] = []
     private var fetchCursorReplyStorage: SyncCursor?
     private var accountReviewResetAttemptsStorage = 0
     private var accountReviewResetFailureStorage: SyncTransportFailure?
     private var checkpointReviewResetAttemptsStorage = 0
     private var checkpointReviewResetFailureStorage: SyncTransportFailure?
+    private var remoteDataResetReviewAttemptsStorage = 0
+    private var remoteDataResetReviewFailureStorage: SyncTransportFailure?
+    private var localFullResetAttemptsStorage = 0
 
     var beforeFetch: (@Sendable (SyncCursor?) -> Void)?
     var beforeSubmit: (@Sendable ([WireRecord], SyncCursor?) -> Void)?
     var beforeResetAfterAccountReview: (@Sendable () -> Void)?
     var beforeResetAfterCheckpointReview: (@Sendable () -> Void)?
+    var beforeResetAfterRemoteDataReview: (@Sendable () -> Void)?
 
-    init(account: SyncAccountIdentity) {
+    init(account: SyncAccountIdentity, dataset: SyncDatasetIdentity? = nil) {
         accountModeStorage = .identity(account)
         fetchAccountIdentityStorage = account
         submitAccountIdentityStorage = account
+        datasetIdentityStorage = dataset
     }
 
     var accountMode: AccountMode {
@@ -1325,6 +1883,16 @@ nonisolated private final class AccountRecordingTransport: SyncTransport, @unche
         set { lock.withLock { submitAccountIdentityStorage = newValue } }
     }
 
+    var datasetIdentity: SyncDatasetIdentity? {
+        get { lock.withLock { datasetIdentityStorage } }
+        set { lock.withLock { datasetIdentityStorage = newValue } }
+    }
+
+    var legacyAccountIdentities: [SyncAccountIdentity] {
+        get { lock.withLock { legacyAccountIdentitiesStorage } }
+        set { lock.withLock { legacyAccountIdentitiesStorage = newValue } }
+    }
+
     var fetchRecords: [WireRecord] {
         get { lock.withLock { fetchRecordsStorage } }
         set { lock.withLock { fetchRecordsStorage = newValue } }
@@ -1345,6 +1913,11 @@ nonisolated private final class AccountRecordingTransport: SyncTransport, @unche
         set { lock.withLock { checkpointReviewResetFailureStorage = newValue } }
     }
 
+    var remoteDataResetReviewFailure: SyncTransportFailure? {
+        get { lock.withLock { remoteDataResetReviewFailureStorage } }
+        set { lock.withLock { remoteDataResetReviewFailureStorage = newValue } }
+    }
+
     var accountResolutionAttempts: Int {
         lock.withLock { accountResolutionAttemptsStorage }
     }
@@ -1360,6 +1933,10 @@ nonisolated private final class AccountRecordingTransport: SyncTransport, @unche
     var checkpointReviewResetAttempts: Int {
         lock.withLock { checkpointReviewResetAttemptsStorage }
     }
+    var remoteDataResetReviewAttempts: Int {
+        lock.withLock { remoteDataResetReviewAttemptsStorage }
+    }
+    var localFullResetAttempts: Int { lock.withLock { localFullResetAttemptsStorage } }
 
     func resolveAccountIdentity() async throws -> SyncAccountIdentity? {
         let mode = lock.withLock { () -> AccountMode in
@@ -1373,22 +1950,90 @@ nonisolated private final class AccountRecordingTransport: SyncTransport, @unche
         }
     }
 
-    func resetAfterAccountReview() async throws {
+    func preflightScope() async throws -> SyncScopePreflight {
+        SyncScopePreflight(
+            identity: try await resolveAccountIdentity(),
+            datasetIdentity: datasetIdentity,
+            legacyAccountIdentities: legacyAccountIdentities)
+    }
+
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        let matches = lock.withLock { () -> Bool in
+            localFullResetAttemptsStorage += 1
+            let identity: SyncAccountIdentity?
+            if case .identity(let current) = accountModeStorage {
+                identity = current
+            } else {
+                identity = nil
+            }
+            return expectedIdentity == identity
+                && expectedDatasetIdentity == datasetIdentityStorage
+        }
+        guard matches else { throw SyncTransportFailure.accountChanged }
+    }
+
+    func resetAfterAccountReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == datasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
         let failure = lock.withLock { () -> SyncTransportFailure? in
             accountReviewResetAttemptsStorage += 1
             return accountReviewResetFailureStorage
         }
         beforeResetAfterAccountReview?()
         if let failure { throw failure }
+        guard expectedIdentity == currentIdentity else {
+            throw SyncTransportFailure.accountChanged
+        }
     }
 
-    func resetAfterCheckpointReview() async throws {
+    func resetAfterCheckpointReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == datasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
         let failure = lock.withLock { () -> SyncTransportFailure? in
             checkpointReviewResetAttemptsStorage += 1
             return checkpointReviewResetFailureStorage
         }
         beforeResetAfterCheckpointReview?()
         if let failure { throw failure }
+        guard expectedIdentity == currentIdentity else {
+            throw SyncTransportFailure.accountChanged
+        }
+    }
+
+    func resetAfterRemoteDataResetReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == datasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
+        let failure = lock.withLock { () -> SyncTransportFailure? in
+            remoteDataResetReviewAttemptsStorage += 1
+            return remoteDataResetReviewFailureStorage
+        }
+        beforeResetAfterRemoteDataReview?()
+        if let failure { throw failure }
+        guard expectedIdentity == currentIdentity else {
+            throw SyncTransportFailure.accountChanged
+        }
+    }
+
+    private var currentIdentity: SyncAccountIdentity? {
+        lock.withLock {
+            guard case .identity(let identity) = accountModeStorage else { return nil }
+            return identity
+        }
     }
 
     func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
@@ -1409,7 +2054,8 @@ nonisolated private final class AccountRecordingTransport: SyncTransport, @unche
         return SyncFetch(
             records: reply.records,
             cursor: reply.cursor,
-            accountIdentity: reply.account)
+            accountIdentity: reply.account,
+            datasetIdentity: datasetIdentity)
     }
 
     func submit(
@@ -1435,6 +2081,7 @@ nonisolated private final class AccountRecordingTransport: SyncTransport, @unche
                         recordVersion: SyncRecordVersion(Data("accepted".utf8))))
             },
             cursor: cursor,
-            accountIdentity: reply.account)
+            accountIdentity: reply.account,
+            datasetIdentity: datasetIdentity)
     }
 }

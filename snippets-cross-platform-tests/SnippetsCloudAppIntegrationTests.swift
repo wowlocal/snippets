@@ -19,6 +19,7 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         let serverURL: String
         let accessToken: String
         let spaceID: String
+        let serverInstanceID: String
         let phase: String
     }
 
@@ -42,6 +43,8 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         let serverText = try XCTUnwrap(environment["SNIPPETS_CLOUD_E2E_SERVER_URL"])
         let token = try XCTUnwrap(environment["SNIPPETS_CLOUD_E2E_ACCESS_TOKEN"])
         let spaceText = try XCTUnwrap(environment["SNIPPETS_CLOUD_E2E_SPACE_ID"])
+        let serverInstanceText = try XCTUnwrap(
+            environment["SNIPPETS_CLOUD_E2E_SERVER_INSTANCE_ID"])
         let phase = try XCTUnwrap(Phase(rawValue:
             try XCTUnwrap(environment["SNIPPETS_CLOUD_E2E_APPLE_PHASE"])))
         try requirePhaseForCurrentPlatform(phase)
@@ -93,9 +96,9 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         try selection.selectSnippetsCloud(
             serverURL: try XCTUnwrap(URL(string: serverText)),
             spaceID: try XCTUnwrap(UUID(uuidString: spaceText)),
+            serverInstanceID: try XCTUnwrap(UUID(uuidString: serverInstanceText)),
             accessToken: token)
         XCTAssertTrue(try selection.makeTransport().supportsPush)
-        XCTAssertTrue(selection.hasPendingProviderSwitch)
         if phase == .macChaosTruncatedFetch {
             try await assertTruncatedFetchRecovers(selection)
         }
@@ -123,7 +126,6 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         defer { coordinator.stop() }
 
         try await sync(coordinator)
-        XCTAssertFalse(selection.hasPendingProviderSwitch)
         assertConfirmedRecordCount(confirmedRecordCount(for: phase))
         try await assertRemoteLibrary(selection, expected: remoteBeforeLocalMutation(for: phase))
         switch phase {
@@ -132,7 +134,7 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
 
         case .iosSeed:
             assertLibrary(store, expected: ["mac-e2e": Self.macInitial])
-            var snippet = store.addSnippet(
+            var snippet = try! store.addSnippet(
                 name: "iOS E2E", content: Self.iosInitial, tags: ["integration", "ios"])
             snippet.keyword = "ios-e2e"
             snippet.isPinned = true
@@ -215,6 +217,8 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
             environment["SNIPPETS_CLOUD_E2E_SERVER_URL"] = configuration.serverURL
             environment["SNIPPETS_CLOUD_E2E_ACCESS_TOKEN"] = configuration.accessToken
             environment["SNIPPETS_CLOUD_E2E_SPACE_ID"] = configuration.spaceID
+            environment["SNIPPETS_CLOUD_E2E_SERVER_INSTANCE_ID"] =
+                configuration.serverInstanceID
             environment["SNIPPETS_CLOUD_E2E_APPLE_PHASE"] = configuration.phase
         }
         #endif

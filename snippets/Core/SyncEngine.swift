@@ -122,6 +122,14 @@ protocol SyncLibraryAccess: AnyObject {
     /// `base.json`. A failed derived-state write must not make the projection forget
     /// secure records the running engine already knows the backend accepted.
     func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope]
+    /// Explicitly verifies and adopts a primary restored while the library was
+    /// quarantined. Ordinary projection must not perform this adoption: if state.json
+    /// was lost, only the recovery action may cross this boundary.
+    func reviewRecoveredLibrary(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope]
+    /// Releases the library's in-process mutation quarantine only after Core has made
+    /// the non-destructive recovery fence durable and retired the independent marker.
+    /// Value-only implementations have no separate mutation gate.
+    func finalizeRecoveredLibraryReview() throws
     /// Captures projection and exact primary comparison tokens as one logical read.
     func currentSnapshot(agreedBase: SyncBase) throws -> SyncLibrarySnapshot
     /// Partitions records before the deletion guard. A deletion the library cannot file
@@ -182,6 +190,12 @@ protocol SyncLibraryAccess: AnyObject {
     func prepareConflictCopyEvidence(
         from envelopes: [SyncEnvelope]
     ) throws -> [SyncEnvelope] { [] }
+
+    func reviewRecoveredLibrary(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {
+        try currentEnvelopes(agreedBase: agreedBase)
+    }
+
+    func finalizeRecoveredLibraryReview() throws {}
 
     func currentSnapshot(agreedBase: SyncBase) throws -> SyncLibrarySnapshot {
         let envelopes = try currentEnvelopes(agreedBase: agreedBase)
@@ -255,6 +269,19 @@ protocol SyncLibraryAccess: AnyObject {
 @MainActor
 final class SyncEngine {
 
+    private final class WeakRecoveryClaimOwner {
+        weak var value: SyncEngine?
+
+        init(_ value: SyncEngine) {
+            self.value = value
+        }
+    }
+
+    /// Same-process peers need more than a PID: tests, multiple windows, and scene
+    /// coordinators can each own an engine while sharing one process incarnation.
+    /// Weak ownership also makes a simulated/process restart immediately reclaimable.
+    private static var recoveryClaimOwners: [UUID: WeakRecoveryClaimOwner] = [:]
+
     /// Sticky by design. Every one of these means "stop and let a human look", and
     /// auto-healing each would be actively wrong: auto-healing a mass deletion means
     /// deleting, and auto-healing an integrity failure means trusting the thing that
@@ -265,6 +292,10 @@ final class SyncEngine {
         case syncing
         case offline(retryAfter: Date)
         case needsAuthentication(String)
+        /// The backend rejected work for a condition that cannot be repaired by a
+        /// timer, but retrying after the user fixes the backend is safe. This is not a
+        /// persisted safety halt because no destructive decision is being authorized.
+        case needsAttention(String)
         /// A secure record arrived and there is no vault here to file it in.
         ///
         /// Separate from `.offline` because that is what it used to be reported as, and
@@ -291,10 +322,12 @@ final class SyncEngine {
     private let baseURL: URL
     private let journalURL: URL
     private let stateURL: URL
+    private let libraryQuarantineMarkerURL: URL
     private let lockURL: URL
     private let temporaryDirectory: URL
     private let stateLockTimeout: TimeInterval
     private let device: String
+    private let recoveryClaimOwnerID = UUID()
     private var base: SyncBase
     private var journal: SyncJournal
     /// Once journal.json exists, base.json must also exist: the engine establishes them
@@ -302,23 +335,56 @@ final class SyncEngine {
     /// local absence ambiguous and therefore requires repair/review, not a blind reset.
     private var baseRequiresReload = false
     /// A corrupt/future journal must be repaired or deliberately removed before even an
-    /// explicit Resume can proceed. Otherwise Resume would overwrite the only remaining
-    /// evidence of an ambiguous server commit with a fresh empty journal.
+    /// explicit recovery action can proceed. Otherwise recovery would overwrite the only
+    /// remaining evidence of an ambiguous server commit with a fresh empty journal.
     private var journalRequiresReload = false
     /// One process-local authorization granted by clearing a recoverable transport
     /// halt. It is consumed before the journal-first reset begins. A crash therefore
     /// loses the authorization and asks for review again rather than guessing that the
     /// replacement completed.
-    private enum ApprovedTransportReset { case account, checkpoint }
+    private enum ApprovedTransportReset { case account, checkpoint, remoteData }
     private var approvedTransportReset: ApprovedTransportReset?
+    private enum ApprovedMassDeletion {
+        case reviewedBatch(
+            liveCount: Int,
+            requestedDeletions: Int,
+            fingerprint: String)
+
+        func matches(_ refusal: DeletionGuard.Refusal, fingerprint: String) -> Bool {
+            switch self {
+            case .reviewedBatch(let liveCount, let requestedDeletions, let reviewedFingerprint):
+                refusal.liveCount == liveCount
+                    && refusal.requestedDeletions == requestedDeletions
+                    && reviewedFingerprint == fingerprint
+            }
+        }
+    }
+    /// One round only. A crash or a changed deletion batch asks again.
+    private var approvedMassDeletion: ApprovedMassDeletion?
+    /// The exact deletion halt remains durable while its approved round runs. It is
+    /// cleared only after the library, base, journal and cursor are all durable. This
+    /// is deliberately separate from the process-local authority above: consuming the
+    /// authority before apply must not also remove the restart fence.
+    private var reviewedMassDeletionInFlight: SyncState.Halt?
+    /// A legacy halt has no exact deletion fingerprint. Its Refresh action authorizes
+    /// one read-only inspection round, not any deletion at all. Keep the old halt
+    /// durable until that round either records exact facts or proves there are no
+    /// effective deletions left.
+    private var refreshingLegacyDeletionReview = false
     /// A reviewed checkpoint reset may fail transiently after its one-shot authority is
     /// consumed. Keep the public result retryable for that attempt, but require a new
     /// Review before any later data-plane call (and persist the halt for a restart).
     private var checkpointResetRequiresReview = false
+    private var remoteResetRequiresReview = false
     private var consecutiveFailures = 0
     /// The exact halt value read from or written to disk. It is a compare-and-swap
-    /// token: Resume may clear only this halt, never a newer stop written by a peer.
+    /// token: recovery may clear only this halt, never a newer stop written by a peer.
     private var durableHalt: SyncState.Halt?
+    /// A peer completed the claimed recovery and may have replaced transport-private
+    /// scheduler state. Core can reload base/journal, but this transport instance must
+    /// never touch its old checkpoint again; the coordinator observes this and rebuilds
+    /// the complete engine/transport after an awaited shutdown barrier.
+    private(set) var requiresTransportRestart = false
 
     /// Production sets this to turn off the persisted sync preference if a safety halt
     /// cannot be saved. The in-memory halt still stops this process; the preference is
@@ -339,6 +405,7 @@ final class SyncEngine {
         baseURL: URL = SnippetStorageLocations.syncBaseFileURL,
         journalURL: URL? = nil,
         stateURL: URL = SnippetStorageLocations.syncStateFileURL,
+        libraryQuarantineMarkerURL: URL? = nil,
         lockURL: URL = SnippetStorageLocations.libraryLockFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
         stateLockTimeout: TimeInterval = 2.0
@@ -351,6 +418,8 @@ final class SyncEngine {
         self.journalURL = journalURL ?? baseURL.deletingLastPathComponent()
             .appendingPathComponent("journal.json", isDirectory: false)
         self.stateURL = stateURL
+        self.libraryQuarantineMarkerURL = libraryQuarantineMarkerURL
+            ?? LibraryQuarantineMarker.url(beside: stateURL)
         self.lockURL = lockURL
         self.temporaryDirectory = temporaryDirectory
         self.stateLockTimeout = stateLockTimeout
@@ -444,6 +513,7 @@ final class SyncEngine {
         case .fresh:
             break
         }
+        Self.recoveryClaimOwners[recoveryClaimOwnerID] = WeakRecoveryClaimOwner(self)
     }
 
     // MARK: - Halting
@@ -453,31 +523,451 @@ final class SyncEngine {
         enterHalt(reason, detail: detail)
     }
 
-    /// The only way out of a halt. Named for what it demands rather than what it does,
-    /// because "resume" would read as something safe to call automatically.
-    func clearHaltAfterUserReview() {
+    /// Reconstructs the typed halt from the independent quarantine marker when
+    /// state.json was lost. Used by the app's local-only recovery path while cloud sync
+    /// is disabled; no transport or sealing operation is needed to review a restored
+    /// primary file and publish its base.json crash fence.
+    func reassertPrimaryLibraryQuarantine() {
+        if durableHalt?.recoveryContext == .localLibraryQuarantine { return }
+        if case .halted(.schemaTooNew, _) = state { return }
+        if durableHalt != nil {
+            // A concurrently persisted account/deletion stop must survive local-file
+            // recovery. Present the more fundamental primary quarantine in memory; once
+            // its independent marker is retired, the preserved halt becomes visible to
+            // a normal transport-backed engine again.
+            transition(to: .halted(
+                .localLibraryQuarantined,
+                detail: "the primary snippet library was preserved for recovery; restore "
+                    + "or import a valid library, then check again"))
+            return
+        }
+        enterHalt(
+            .localLibraryQuarantined,
+            detail: "the primary snippet library was preserved for recovery; restore "
+                + "or import a valid library, then check again",
+            recoveryContext: .localLibraryQuarantine)
+    }
+
+    /// The action that can clear the exact stop currently held by this engine.
+    ///
+    /// Old schema-3 mass-deletion halts contain counts only in human-readable text, not
+    /// the fingerprint of the exact UUID set. Matching that text could authorize a
+    /// different same-sized deletion batch, so those halts may only be refreshed. The
+    /// following fetch writes a typed context and presents the real confirmation.
+    var recoveryAction: SyncRecoveryAction? {
+        guard case .halted(let reason, _) = state else { return nil }
+        if let claim = durableHalt?.recoveryClaim {
+            switch recoveryClaimDisposition(claim) {
+            case .ownedByThisEngine, .abandonedInThisProcess:
+                break
+            case .activeInThisProcess:
+                return nil
+            case .unknownProcessOrHost:
+                return .reclaimRecovery
+            }
+        }
+        if reason == .massDeletion, durableHalt?.recoveryContext == nil {
+            return .refreshDeletionReview
+        }
+        return reason.recoveryAction
+    }
+
+    var recoveryClaimNeedsTakeover: Bool {
+        guard let claim = durableHalt?.recoveryClaim else { return false }
+        return recoveryClaimDisposition(claim) == .unknownProcessOrHost
+    }
+
+    private func haltByClaimingRecovery(_ halt: SyncState.Halt) -> SyncState.Halt {
+        var claimed = halt
+        let processID = ProcessInfo.processInfo.processIdentifier
+        let generation = SentinelLock.processGeneration(for: processID)
+        claimed.recoveryClaim = SyncState.Halt.RecoveryClaim(
+            id: UUID(),
+            ownerID: recoveryClaimOwnerID,
+            hostName: ProcessInfo.processInfo.hostName,
+            processID: processID,
+            processGenerationSeconds: generation?.seconds,
+            processGenerationMicroseconds: generation?.microseconds)
+        return claimed
+    }
+
+    private enum RecoveryClaimDisposition: Equatable {
+        case ownedByThisEngine
+        case activeInThisProcess
+        case abandonedInThisProcess
+        case unknownProcessOrHost
+    }
+
+    /// Process-local weak ownership is the only namespace we can prove. Hostnames and
+    /// PIDs are not globally unique, so they must never authorize stealing a claim from
+    /// a different process or Mac. An unknown owner instead gets an explicit takeover
+    /// confirmation that clears only the claim; the original action is confirmed again.
+    private func recoveryClaimDisposition(
+        _ claim: SyncState.Halt.RecoveryClaim
+    ) -> RecoveryClaimDisposition {
+        if claim.ownerID == recoveryClaimOwnerID { return .ownedByThisEngine }
+        if let knownOwner = Self.recoveryClaimOwners[claim.ownerID] {
+            if knownOwner.value != nil { return .activeInThisProcess }
+            Self.recoveryClaimOwners.removeValue(forKey: claim.ownerID)
+            return .abandonedInThisProcess
+        }
+        return .unknownProcessOrHost
+    }
+
+    /// Performs the action the UI described and the user selected. The action must
+    /// still match the exact durable halt: a stale button can never clear a newer stop.
+    func performRecovery(_ action: SyncRecoveryAction) {
         guard case .halted(let reason, let detail) = state else { return }
-        guard reason.isUserRecoverable else { return }
-        guard reloadProtocolPairAfterReview() else { return }
+        guard recoveryAction == action else { return }
+
+        if action == .reclaimRecovery {
+            guard let claimedHalt = durableHalt,
+                  let claim = claimedHalt.recoveryClaim,
+                  recoveryClaimDisposition(claim) == .unknownProcessOrHost else { return }
+            var unclaimedHalt = claimedHalt
+            unclaimedHalt.recoveryClaim = nil
+            switch updatePersistedHalt(unclaimedHalt, expecting: claimedHalt) {
+            case .written(let stored):
+                guard let stored else {
+                    durableHalt = nil
+                    requiresTransportRestart = true
+                    transition(to: .needsAttention("transport_restart_required"))
+                    return
+                }
+                durableHalt = stored
+                transition(to: .halted(stored.reason, detail: stored.detail))
+            case .superseded(let newer):
+                durableHalt = newer
+                transition(to: .halted(newer.reason, detail: newer.detail))
+            case .cleared:
+                durableHalt = nil
+                requiresTransportRestart = true
+                transition(to: .needsAttention("transport_restart_required"))
+            case .tooNew(let version):
+                durableHalt = nil
+                transition(to: .halted(
+                    .schemaTooNew,
+                    detail: "Sync/state.json is version \(version); update Snippets before "
+                        + "sync can resume."))
+            case .failed:
+                transition(to: .halted(
+                    reason,
+                    detail: detail + " The interrupted recovery claim could not be "
+                        + "cleared from disk; no recovery action was applied."))
+            }
+            return
+        }
+
+        let isPrimaryLibraryRecovery = action == .checkAgain
+            && (durableHalt?.recoveryContext == .localLibraryQuarantine
+                || LibraryQuarantineMarker.exists(at: libraryQuarantineMarkerURL))
+        var reviewedPrimary: [UUID: SyncEnvelope]?
+        if isPrimaryLibraryRecovery {
+            // This marker was written before the unreadable primary moved aside. Never
+            // clear it merely because a button was tapped: prove that the restored or
+            // imported primary can be projected first. On failure the exact durable
+            // marker remains, so a relaunch still refuses to seed/project an empty file.
+            do {
+                reviewedPrimary = try library.reviewRecoveredLibrary(
+                    agreedBase: journal.projectionKnowledge(over: base))
+            } catch {
+                enterHalt(
+                    .localLibraryQuarantined,
+                    detail: "the restored snippet library still cannot be read; choose a "
+                        + "valid export or quarantined backup, then check again",
+                    recoveryContext: .localLibraryQuarantine)
+                return
+            }
+        }
+        guard let reviewedProtocolPair = reloadProtocolPairAfterReview() else { return }
+
+        if isPrimaryLibraryRecovery {
+            // Existing sync ancestry needs a crash fence before clearing state.json:
+            // every future round must do a full merge without inferring deletion from
+            // old-base absence. A never-synced installation has no ancestor to protect;
+            // keep the opt-in contract by retiring only the quarantine marker and leave
+            // base.json/journal.json absent until the user actually enables sync.
+            do {
+                if reviewedProtocolPair == .existing {
+                    var recoveryBase = base
+                    recoveryBase.upgradeToCurrentSchema()
+                    recoveryBase.envelopes = Dictionary(uniqueKeysWithValues:
+                        (reviewedPrimary ?? [:]).values.map {
+                            (SyncBase.key($0.id), $0)
+                        })
+                    // These envelopes are a local edit/delete witness, not backend
+                    // confirmation. The reviewed full reset obtains fresh CAS tokens.
+                    recoveryBase.recordVersions = [:]
+                    recoveryBase.cursor = nil
+                    recoveryBase.cursorKind = nil
+                    recoveryBase.requiresTransportFullResync = false
+                    recoveryBase.requiresNonDestructiveLibraryMerge = true
+                    recoveryBase.nonDestructiveMergeMode = .reviewedLocalSnapshot
+                    // A crash after base.json was written but before the independent
+                    // marker was retired must resume the same review transaction. If
+                    // an older broken ordering already lost the marker, the active
+                    // base fence is the only safe identity to restore here.
+                    let resumableReviewID = base.requiresNonDestructiveLibraryMerge
+                        && base.nonDestructiveMergeMode == .reviewedLocalSnapshot
+                        ? base.nonDestructiveReviewID
+                        : nil
+                    recoveryBase.nonDestructiveReviewID = try LibraryQuarantineMarker.write(
+                        reviewID: resumableReviewID,
+                        to: libraryQuarantineMarkerURL,
+                        temporaryDirectory: temporaryDirectory)
+                    // A restored export may be incomplete; old confirmed absences are
+                    // deliberately not an ancestor for this recovery epoch.
+                    recoveryBase.preRecoveryConfirmedEnvelopes = nil
+                    try persistBase(recoveryBase)
+                }
+
+                // Keep the independent marker until this recovery's durable halt is
+                // gone. Otherwise a crash in this interval starts with a writable
+                // primary plus a stale local-recovery halt; a second Check Again could
+                // mint a new review epoch and forget what the first review observed.
+                if let reviewedHalt = durableHalt,
+                   reviewedHalt.recoveryContext == .localLibraryQuarantine {
+                    switch updatePersistedHalt(nil, expecting: reviewedHalt) {
+                    case .written:
+                        durableHalt = nil
+                    case .cleared:
+                        durableHalt = nil
+                    case .superseded(let newer):
+                        durableHalt = newer
+                        if newer.recoveryContext == .localLibraryQuarantine {
+                            transition(to: .halted(newer.reason, detail: newer.detail))
+                            return
+                        }
+                        // A different transport halt is independent of the primary
+                        // recovery. Finish retiring this marker, then reveal it below.
+                    case .tooNew(let version):
+                        durableHalt = nil
+                        transition(to: .halted(
+                            .schemaTooNew,
+                            detail: "Sync/state.json is version \(version); update Snippets "
+                                + "before sync can resume."))
+                        return
+                    case .failed:
+                        transition(to: .halted(
+                            reason,
+                            detail: detail + " The reviewed stop could not be cleared "
+                                + "from disk; library recovery remains locked."))
+                        return
+                    }
+                }
+                try LibraryQuarantineMarker.removeDurably(at: libraryQuarantineMarkerURL)
+                try library.finalizeRecoveredLibraryReview()
+            } catch {
+                enterHalt(
+                    .localLibraryQuarantined,
+                    detail: "the restored library was readable, but its safe recovery "
+                        + "transaction could not be finalized; sync remains stopped",
+                    recoveryContext: .localLibraryQuarantine)
+                return
+            }
+
+            // `reassertPrimaryLibraryQuarantine` may have deliberately kept a different
+            // concurrent durable halt intact. Local recovery is complete once its own
+            // marker/fence transaction commits; never clear the unrelated stop with the
+            // Check Again action that did not review it.
+            if let preservedHalt = durableHalt,
+               preservedHalt.recoveryContext != .localLibraryQuarantine {
+                transition(to: .halted(
+                    preservedHalt.reason,
+                    detail: preservedHalt.detail))
+                return
+            }
+
+            consecutiveFailures = 0
+            transition(to: .idle(lastSync: nil))
+            return
+        }
+
+        switch action {
+        case .applyRemoteDeletions:
+            approvedMassDeletion = switch durableHalt?.recoveryContext {
+            case .massDeletion(
+                let liveCount,
+                let requestedDeletions,
+                let batchFingerprint):
+                .reviewedBatch(
+                    liveCount: liveCount,
+                    requestedDeletions: requestedDeletions,
+                    fingerprint: batchFingerprint)
+            case .localLibraryQuarantine, nil:
+                // Unreachable for a valid action: a legacy halt exposes only
+                // `refreshDeletionReview`, which grants no deletion authority.
+                nil
+            }
+        case .useCurrentAccount:
+            approvedTransportReset = .account
+        case .repairCheckpoint:
+            approvedTransportReset = .checkpoint
+        case .restoreCloudFromThisDevice:
+            approvedTransportReset = .remoteData
+        case .refreshDeletionReview:
+            refreshingLegacyDeletionReview = true
+        case .reclaimRecovery:
+            return
+        case .retrySync, .checkAgain:
+            break
+        }
+
+        if refreshingLegacyDeletionReview {
+            guard let reviewedHalt = durableHalt,
+                  reviewedHalt.reason == .massDeletion,
+                  reviewedHalt.recoveryContext == nil else {
+                refreshingLegacyDeletionReview = false
+                transition(to: .halted(
+                    reason,
+                    detail: detail + " The legacy deletion stop changed; refresh it again."))
+                return
+            }
+            // Keep the old stop as the crash/retry fence. The process may inspect one
+            // batch, but a restart or a failed fetch must ask for Refresh again.
+            switch updatePersistedHalt(reviewedHalt, expecting: reviewedHalt) {
+            case .written(let stored):
+                durableHalt = stored
+                consecutiveFailures = 0
+                transition(to: .idle(lastSync: nil))
+            case .superseded(let newer):
+                refreshingLegacyDeletionReview = false
+                durableHalt = newer
+                transition(to: .halted(newer.reason, detail: newer.detail))
+            case .cleared:
+                refreshingLegacyDeletionReview = false
+                durableHalt = nil
+                transition(to: .idle(lastSync: nil))
+            case .tooNew(let version):
+                refreshingLegacyDeletionReview = false
+                durableHalt = nil
+                transition(to: .halted(
+                    .schemaTooNew,
+                    detail: "Sync/state.json is version \(version); update Snippets before "
+                        + "sync can resume."))
+            case .failed:
+                refreshingLegacyDeletionReview = false
+                transition(to: .halted(
+                    reason,
+                    detail: detail + " The legacy deletion stop could not be verified "
+                        + "on disk; sync remains stopped."))
+            }
+            return
+        }
+
+        if approvedTransportReset != nil {
+            // A reviewed scheduler/remote reset can mutate transport state before the
+            // replacement base is durable. Keep the exact halt on disk throughout that
+            // window while letting this process run the one approved attempt. A crash
+            // therefore starts halted again instead of reconciling against the old base.
+            guard let reviewedHalt = durableHalt else {
+                approvedTransportReset = nil
+                transition(to: .halted(
+                    reason,
+                    detail: detail + " The safety stop is not durable, so the reviewed "
+                        + "reset cannot start."))
+                return
+            }
+            let claimedHalt = haltByClaimingRecovery(reviewedHalt)
+            switch updatePersistedHalt(claimedHalt, expecting: reviewedHalt) {
+            case .written(let stored):
+                durableHalt = stored
+                consecutiveFailures = 0
+                transition(to: .idle(lastSync: nil))
+            case .superseded(let newer):
+                approvedTransportReset = nil
+                durableHalt = newer
+                transition(to: .halted(newer.reason, detail: newer.detail))
+            case .cleared:
+                approvedTransportReset = nil
+                durableHalt = nil
+                requiresTransportRestart = true
+                transition(to: .needsAttention("transport_restart_required"))
+            case .tooNew(let version):
+                approvedTransportReset = nil
+                durableHalt = nil
+                transition(to: .halted(
+                    .schemaTooNew,
+                    detail: "Sync/state.json is version \(version); update Snippets before "
+                        + "sync can resume."))
+            case .failed:
+                approvedTransportReset = nil
+                transition(to: .halted(
+                    reason,
+                    detail: detail + " The reviewed stop could not be verified on disk; "
+                        + "sync remains stopped."))
+            }
+            return
+        }
+
+        if approvedMassDeletion != nil {
+            // Applying a reviewed deletion can mutate the primary library before the
+            // replacement base/cursor commit. Keep the exact typed stop on disk for
+            // that entire interval. A crash therefore cannot turn a previously large
+            // batch into an unreviewed below-threshold deletion on the next launch.
+            guard let reviewedHalt = durableHalt,
+                  reviewedHalt.reason == .massDeletion,
+                  reviewedHalt.recoveryContext != nil else {
+                approvedMassDeletion = nil
+                transition(to: .halted(
+                    reason,
+                    detail: detail + " The exact deletion stop is not durable, so the "
+                        + "reviewed deletion cannot start."))
+                return
+            }
+            let claimedHalt = haltByClaimingRecovery(reviewedHalt)
+            switch updatePersistedHalt(claimedHalt, expecting: reviewedHalt) {
+            case .written(let stored):
+                durableHalt = stored
+                reviewedMassDeletionInFlight = stored
+                consecutiveFailures = 0
+                transition(to: .idle(lastSync: nil))
+            case .superseded(let newer):
+                approvedMassDeletion = nil
+                durableHalt = newer
+                transition(to: .halted(newer.reason, detail: newer.detail))
+            case .cleared:
+                approvedMassDeletion = nil
+                reviewedMassDeletionInFlight = nil
+                durableHalt = nil
+                requiresTransportRestart = true
+                transition(to: .needsAttention("transport_restart_required"))
+            case .tooNew(let version):
+                approvedMassDeletion = nil
+                durableHalt = nil
+                transition(to: .halted(
+                    .schemaTooNew,
+                    detail: "Sync/state.json is version \(version); update Snippets before "
+                        + "sync can resume."))
+            case .failed:
+                approvedMassDeletion = nil
+                transition(to: .halted(
+                    reason,
+                    detail: detail + " The reviewed deletion stop could not be verified "
+                        + "on disk; sync remains stopped."))
+            }
+            return
+        }
 
         switch updatePersistedHalt(nil, expecting: durableHalt) {
         case .written:
             durableHalt = nil
             consecutiveFailures = 0
-            approvedTransportReset = switch reason {
-            case .accountChanged: .account
-            case .checkpointUnreadable: .checkpoint
-            default: nil
-            }
+            transition(to: .idle(lastSync: nil))
+        case .cleared:
+            durableHalt = nil
+            consecutiveFailures = 0
             transition(to: .idle(lastSync: nil))
         case .superseded(let newer):
             approvedTransportReset = nil
+            approvedMassDeletion = nil
             // A peer stopped for a different reason after this pane was drawn. The
             // user's review covered the old stop, not this one; adopt it and ask again.
             durableHalt = newer
             transition(to: .halted(newer.reason, detail: newer.detail))
         case .tooNew(let version):
             approvedTransportReset = nil
+            approvedMassDeletion = nil
             durableHalt = nil
             transition(to: .halted(
                 .schemaTooNew,
@@ -485,6 +975,7 @@ final class SyncEngine {
                     + "sync can resume."))
         case .failed:
             approvedTransportReset = nil
+            approvedMassDeletion = nil
             transition(to: .halted(
                 reason,
                 detail: detail + " The reviewed stop could not be cleared from disk; "
@@ -497,9 +988,14 @@ final class SyncEngine {
     /// Repairing one side can change what the other side means (most importantly, a
     /// repaired base may carry `journalEstablished = true`). Conditional reloads let a
     /// user replace an unreadable base with that shape while leaving journal missing,
-    /// then Resume would create an empty journal over evidence of lost intent. Reading
+    /// then recovery would create an empty journal over evidence of lost intent. Reading
     /// the pair every time also catches damage that happened after engine initialization.
-    private func reloadProtocolPairAfterReview() -> Bool {
+    private enum ReviewedProtocolPair {
+        case absent
+        case existing
+    }
+
+    private func reloadProtocolPairAfterReview() -> ReviewedProtocolPair? {
         let baseOutcome = SyncBaseFile.load(from: baseURL)
         let journalOutcome = SyncJournalFile.load(from: journalURL)
 
@@ -510,14 +1006,14 @@ final class SyncEngine {
                 .schemaTooNew,
                 detail: "Sync/base.json is version \(version); update Snippets before "
                     + "sync can resume."))
-            return false
+            return nil
         case .unreadable:
             baseRequiresReload = true
             transition(to: .halted(
                 .localLibraryQuarantined,
                 detail: "the confirmed sync base is unreadable; repair it or "
                     + "deliberately remove both protocol files before sync can resume"))
-            return false
+            return nil
         case .missing:
             switch journalOutcome {
             case .missing:
@@ -526,14 +1022,14 @@ final class SyncEngine {
                 journal = SyncJournal()
                 baseRequiresReload = false
                 journalRequiresReload = false
-                return true
+                return .absent
             case .tooNew(let version):
                 journalRequiresReload = true
                 transition(to: .halted(
                     .schemaTooNew,
                     detail: "Sync/journal.json is version \(version); update Snippets "
                         + "before sync can resume."))
-                return false
+                return nil
             case .loaded, .unreadable:
                 baseRequiresReload = true
                 transition(to: .halted(
@@ -541,7 +1037,7 @@ final class SyncEngine {
                     detail: "Sync/base.json is missing while journal.json still exists; "
                         + "restore the base or deliberately remove both protocol files "
                         + "before sync can resume"))
-                return false
+                return nil
             }
         case .loaded(let repairedBase):
             switch journalOutcome {
@@ -550,7 +1046,7 @@ final class SyncEngine {
                 journal = repairedJournal
                 baseRequiresReload = false
                 journalRequiresReload = false
-                return true
+                return .existing
             case .missing(let emptyJournal):
                 guard !repairedBase.journalEstablished else {
                     journalRequiresReload = true
@@ -559,7 +1055,7 @@ final class SyncEngine {
                         detail: "Sync/journal.json is missing while base.json proves it "
                             + "was established; restore it or deliberately remove both "
                             + "protocol files before sync can resume"))
-                    return false
+                    return nil
                 }
                 // Legacy base from before the journal shipped. It will receive the
                 // additive established marker before the next network operation.
@@ -567,21 +1063,21 @@ final class SyncEngine {
                 journal = emptyJournal
                 baseRequiresReload = false
                 journalRequiresReload = false
-                return true
+                return .existing
             case .tooNew(let version):
                 journalRequiresReload = true
                 transition(to: .halted(
                     .schemaTooNew,
                     detail: "Sync/journal.json is version \(version); update Snippets "
                         + "before sync can resume."))
-                return false
+                return nil
             case .unreadable(let journalDetail):
                 journalRequiresReload = true
                 transition(to: .halted(
                     .localLibraryQuarantined,
                     detail: "\(journalDetail); repair it or deliberately remove both "
                         + "protocol files before sync can resume"))
-                return false
+                return nil
             }
         }
     }
@@ -599,10 +1095,50 @@ final class SyncEngine {
     }
 
     @discardableResult
-    func sync() async -> State {
+    func sync(bypassingBackoff: Bool = false) async -> State {
+        if requiresTransportRestart { return state }
+        if state.isHalted,
+           let claimedHalt = durableHalt,
+           claimedHalt.recoveryClaim != nil {
+            // A live peer owns this reviewed mutation, so this engine exposes no
+            // duplicate action. Its normal poll still acts as a read-only completion
+            // watch: once the owner clears/replaces the durable halt, stop showing a
+            // permanent stale banner. Reload protocol ancestry before any later round.
+            switch updatePersistedHalt(claimedHalt, expecting: claimedHalt) {
+            case .written(let stored):
+                durableHalt = stored
+            case .superseded(let newer):
+                durableHalt = newer
+                transition(to: .halted(newer.reason, detail: newer.detail))
+            case .cleared:
+                durableHalt = nil
+                requiresTransportRestart = true
+                transition(to: .needsAttention("transport_restart_required"))
+            case .tooNew(let version):
+                durableHalt = nil
+                transition(to: .halted(
+                    .schemaTooNew,
+                    detail: "Sync/state.json is version \(version); update Snippets "
+                        + "before sync can resume."))
+            case .failed:
+                break
+            }
+            return state
+        }
         guard !state.isHalted else { return state }
         if case .syncing = state { return state }
-        if case .offline(let retryAfter) = state, now() < retryAfter { return state }
+        if !bypassingBackoff,
+           case .offline(let retryAfter) = state,
+           now() < retryAfter { return state }
+
+        // A mass-deletion confirmation belongs to exactly this immediate attempt. If
+        // the task is cancelled, fails before apply, or sees a different batch, it must
+        // never leak into a later round.
+        defer {
+            approvedMassDeletion = nil
+            reviewedMassDeletionInFlight = nil
+            refreshingLegacyDeletionReview = false
+        }
 
         let startedAtUptime = ProcessInfo.processInfo.systemUptime
         var diagnosticRound = DiagnosticSyncRound(durationMilliseconds: 0)
@@ -639,6 +1175,14 @@ final class SyncEngine {
             diagnosticRound.deferred = outcome.deferred
             diagnosticRound.quarantined = outcome.quarantined
             diagnosticRound.fullResync = outcome.fullResync
+            if refreshingLegacyDeletionReview,
+               !finalizeLegacyDeletionRefresh() {
+                return state
+            }
+            if reviewedMassDeletionInFlight != nil,
+               !finalizeReviewedMassDeletionHalt() {
+                return state
+            }
             consecutiveFailures = 0
             if outcome.deferred > 0 {
                 transition(to: .waitingForVault(
@@ -651,13 +1195,67 @@ final class SyncEngine {
             // `SyncCoordinator.stop()` cancels and then waits for this round to drain
             // before a destructive local vault removal is allowed. Cancellation is a
             // lifecycle event, not an offline failure and never a reason to back off.
-            transition(to: .disabled)
+            if let reviewed = reviewedMassDeletionInFlight {
+                transition(to: .halted(reviewed.reason, detail: reviewed.detail))
+            } else {
+                transition(to: .disabled)
+            }
         } catch let failure as SyncTransportFailure {
-            handle(failure)
+            // A reviewed reset can persist a fresh review-required halt and then fail
+            // at the transport boundary. Do not immediately overwrite that durable,
+            // actionable state with a generic offline/backoff presentation.
+            if let reviewed = reviewedMassDeletionInFlight {
+                switch failure {
+                case .accountChanged, .checkpointUnreadable, .remoteDataReset:
+                    handle(failure)
+                case .unreachable, .rejected, .pushUnsupported:
+                    transition(to: .halted(reviewed.reason, detail: reviewed.detail))
+                }
+            } else if refreshingLegacyDeletionReview,
+               let legacyHalt = pendingLegacyDeletionRefreshHalt {
+                switch failure {
+                case .accountChanged, .checkpointUnreadable, .remoteDataReset:
+                    handle(failure)
+                case .unreachable, .rejected, .pushUnsupported:
+                    transition(to: .halted(
+                        legacyHalt.reason,
+                        detail: legacyHalt.detail))
+                }
+            } else if !state.isHalted {
+                handle(failure)
+            }
         } catch let failure as SyncEngineFailure {
-            enterHalt(failure.reason, detail: failure.detail)
+            if reviewedMassDeletionInFlight != nil,
+               failure.reason != .massDeletion,
+               failure.reason != .backendRefused {
+                enterHalt(
+                    failure.reason,
+                    detail: failure.detail,
+                    recoveryContext: failure.recoveryContext)
+            } else if let reviewed = reviewedMassDeletionInFlight,
+                      failure.reason == .backendRefused {
+                transition(to: .halted(reviewed.reason, detail: reviewed.detail))
+            } else if refreshingLegacyDeletionReview,
+               failure.reason == .backendRefused,
+               let legacyHalt = pendingLegacyDeletionRefreshHalt {
+                transition(to: .halted(legacyHalt.reason, detail: legacyHalt.detail))
+            } else if failure.reason == .backendRefused {
+                transition(to: .needsAttention(failure.detail))
+            } else {
+                enterHalt(
+                    failure.reason,
+                    detail: failure.detail,
+                    recoveryContext: failure.recoveryContext)
+            }
         } catch {
-            handle(.unreachable(detail: "\(error)"))
+            if let reviewed = reviewedMassDeletionInFlight {
+                transition(to: .halted(reviewed.reason, detail: reviewed.detail))
+            } else if refreshingLegacyDeletionReview,
+               let legacyHalt = pendingLegacyDeletionRefreshHalt {
+                transition(to: .halted(legacyHalt.reason, detail: legacyHalt.detail))
+            } else if !state.isHalted {
+                handle(.unreachable(detail: "\(error)"))
+            }
         }
         return state
     }
@@ -682,9 +1280,11 @@ final class SyncEngine {
         // data-plane leg. A cursor and CKRecord system fields are credentials issued by
         // one private database; using them under another Apple ID is never a migration.
         let roundAccountIdentity: SyncAccountIdentity?
+        let roundDatasetIdentity: SyncDatasetIdentity?
         do {
             let preflight = try await transport.preflightScope()
             roundAccountIdentity = preflight.identity
+            roundDatasetIdentity = preflight.datasetIdentity
             try Task.checkCancellation()
             switch preflight.checkpointIssue {
             case .accountChanged where approvedTransportReset != .account:
@@ -695,7 +1295,7 @@ final class SyncEngine {
             case nil, .accountChanged, .unreadable:
                 break
             }
-            try await reconcileAccountIdentity(roundAccountIdentity)
+            try await reconcileScope(preflight)
         } catch {
             // Review authorizes exactly this immediate account-resolution attempt. If
             // iCloud is unavailable (or the task is cancelled) before a scope can be
@@ -710,6 +1310,26 @@ final class SyncEngine {
         // CAS generations survive a wire-key change because CloudKit change tags are
         // independent of payload encryption. Reset the transport-private scheduler
         // before any offer/fetch can observe its old encrypted inbox.
+        if base.requiresNonDestructiveLibraryMerge {
+            let recovery = try await resetForNonDestructiveLibraryMerge(
+                accountIdentity: roundAccountIdentity,
+                datasetIdentity: roundDatasetIdentity)
+            round.merged += recovery.changedIDs.count
+            round.deferred += recovery.deferredIDs.count
+            round.retryNeeded = !recovery.retryIDs.isEmpty
+            guard recovery.deferredIDs.isEmpty,
+                  recovery.incompatibleVaultIDs.isEmpty,
+                  recovery.retryIDs.isEmpty else {
+                if !recovery.incompatibleVaultIDs.isEmpty {
+                    throw SyncEngineFailure(
+                        reason: .vaultUnreadable,
+                        detail: "a journaled secure snippet from before local-library "
+                            + "recovery belongs to a different vault")
+                }
+                return round
+            }
+        }
+
         if base.requiresTransportFullResync {
             // Maintenance can crash after scrubbing projection/base but before the old
             // carrier dependency is rewritten. Recover its deterministic copy from the
@@ -730,7 +1350,9 @@ final class SyncEngine {
                 }
                 return round
             }
-            try await transport.resetForLocalFullResync()
+            try await transport.resetForLocalFullResync(
+                expectedIdentity: roundAccountIdentity,
+                expectedDatasetIdentity: roundDatasetIdentity)
             var resetComplete = base
             resetComplete.requiresTransportFullResync = false
             try persistBase(resetComplete)
@@ -751,7 +1373,7 @@ final class SyncEngine {
             // write a missing journal is always a safety stop. It is set only after the
             // journal exists and before anything below can contact the backend.
             var established = base
-            established.schemaVersion = SyncBase.currentSchemaVersion
+            established.upgradeToCurrentSchema()
             established.journalEstablished = true
             try persistBase(established)
         }
@@ -876,6 +1498,12 @@ final class SyncEngine {
                 throw SyncEngineFailure(
                     reason: .accountChanged,
                     detail: "the iCloud account changed while pending snippets were "
+                        + "being submitted; no acknowledgement was trusted")
+            }
+            guard submission.datasetIdentity == roundDatasetIdentity else {
+                throw SyncEngineFailure(
+                    reason: .remoteDataReset,
+                    detail: "the remote library was replaced while pending snippets were "
                         + "being submitted; no acknowledgement was trusted")
             }
 
@@ -1023,6 +1651,8 @@ final class SyncEngine {
         }
         var rawIncoming = authoritativeConflictRecords.map { (record: $0, fromConflict: true) }
         var isFullResync = false
+        var pageFullResyncMode: Bool?
+        var fetchedPageRecordCount = 0
         var opaqueFetchedIDs = Set<UUID>()
         var fetchedAuthoritativeIDs = Set<UUID>()
         round.downloaded += authoritativeConflictRecords.count
@@ -1037,8 +1667,40 @@ final class SyncEngine {
                     detail: "the iCloud account changed while remote snippets were "
                         + "being fetched; no records or cursor were trusted")
             }
+            guard fetch.datasetIdentity == roundDatasetIdentity else {
+                throw SyncEngineFailure(
+                    reason: .remoteDataReset,
+                    detail: "the remote library was replaced while changes were being "
+                        + "downloaded; no response from that operation was trusted")
+            }
+            if fetch.replacesPriorPages {
+                guard fetch.isFullResync else {
+                    throw SyncEngineFailure(
+                        reason: .checkpointUnreadable,
+                        detail: "the backend restarted a paged fetch without returning "
+                            + "a complete snapshot")
+                }
+                // Retain authoritative records returned by this round's CAS conflicts,
+                // but throw away every page from the obsolete feed. A feed can rotate
+                // more than once during a large snapshot, so this is page-token driven
+                // rather than only the first false→true full-resync transition.
+                rawIncoming.removeAll { !$0.fromConflict }
+                round.downloaded -= fetchedPageRecordCount
+                fetchedPageRecordCount = 0
+                isFullResync = false
+                pageFullResyncMode = nil
+            }
+            if let pageFullResyncMode,
+               pageFullResyncMode != fetch.isFullResync {
+                throw SyncEngineFailure(
+                    reason: .checkpointUnreadable,
+                    detail: "the backend changed between snapshot and delta mode "
+                        + "inside one paged fetch; no records or cursor were trusted")
+            }
+            pageFullResyncMode = fetch.isFullResync
             isFullResync = isFullResync || fetch.isFullResync
             round.downloaded += fetch.records.count
+            fetchedPageRecordCount += fetch.records.count
             rawIncoming.append(contentsOf: fetch.records.map {
                 (record: $0, fromConflict: false)
             })
@@ -1209,7 +1871,23 @@ final class SyncEngine {
                 // delete racing an unrelated remote edit.
                 ancestor = offered
             } else {
-                ancestor = base.envelope(envelope.id)
+                let entry = journal.entry(envelope.id)
+                if let entry, entry.reviewedLocalSnapshotKnown {
+                    let reviewedState = entry.reviewedLocalAncestor
+                    let desiredState = entry.desired.deleted ? nil : entry.desired
+                    let changedAfterReview = !Self.sameVersion(
+                        desiredState, reviewedState)
+                    // A readable pre-recovery base remains the causal ancestor even
+                    // when the user edits or deletes the reviewed primary afterward.
+                    // Using the reviewed value instead would make an unchanged remote
+                    // copy look like a concurrent edit and could resurrect it. The
+                    // reviewed value is an ancestor only for a row that had no older
+                    // confirmed ancestry and changed after the explicit review.
+                    ancestor = entry.preReviewMergeAncestor
+                        ?? (changedAfterReview ? reviewedState : nil)
+                } else {
+                    ancestor = base.envelope(envelope.id)
+                }
             }
             let merge: SyncMerge.EnvelopeOutcome
             do {
@@ -1296,9 +1974,58 @@ final class SyncEngine {
 
         // The circuit breaker.
         let live = library.liveIDs()
-        let decision = DeletionGuard.evaluate(live: live, incoming: classification.applicable)
-        if case .refuse(let refusal) = decision {
-            throw SyncEngineFailure(reason: .massDeletion, detail: refusal.description)
+        let effectiveDeletionIDs = Set(
+            classification.applicable.lazy.filter(\.deleted).map(\.id))
+            .intersection(live)
+        let decision = DeletionGuard.evaluate(
+            liveCount: live.count,
+            deletions: effectiveDeletionIDs.count)
+        let hasExactReviewBoundary = refreshingLegacyDeletionReview
+            || approvedMassDeletion != nil
+            || reviewedMassDeletionInFlight != nil
+        let refusal: DeletionGuard.Refusal? = if hasExactReviewBoundary,
+                                                !effectiveDeletionIDs.isEmpty {
+            DeletionGuard.Refusal(
+                liveCount: live.count,
+                requestedDeletions: effectiveDeletionIDs.count,
+                allowedDeletions: DeletionGuard.allowedDeletions(liveCount: live.count))
+        } else if case .refuse(let refusal) = decision {
+            refusal
+        } else {
+            nil
+        }
+        if let refusal {
+            let fingerprint = Self.massDeletionFingerprint(
+                live: live,
+                incoming: classification.applicable)
+            if approvedMassDeletion?.matches(refusal, fingerprint: fingerprint) == true {
+                // Consume before the first fallible apply step. A failure or crash asks
+                // again instead of carrying destructive authority into another round.
+                approvedMassDeletion = nil
+            } else {
+                approvedMassDeletion = nil
+                let detail: String
+                if hasExactReviewBoundary, decision.isAllowed {
+                    detail = "the deletion batch changed or was refreshed; cloud sync "
+                        + "now reports \(refusal.requestedDeletions) deletions among "
+                        + "\(refusal.liveCount) snippets. Sync paused before completing "
+                        + "this batch. Review this exact replacement batch before "
+                        + "letting sync finish it"
+                } else {
+                    detail = refusal.description
+                }
+                throw SyncEngineFailure(
+                    reason: .massDeletion,
+                    detail: detail,
+                    recoveryContext: .massDeletion(
+                        liveCount: refusal.liveCount,
+                        requestedDeletions: refusal.requestedDeletions,
+                batchFingerprint: fingerprint))
+            }
+        } else if approvedMassDeletion != nil {
+            // The reviewed set disappeared completely. There is no destructive action
+            // left to authorize; consume the one-shot and let non-deletion work finish.
+            approvedMassDeletion = nil
         }
 
         try Task.checkCancellation()
@@ -1490,29 +2217,174 @@ final class SyncEngine {
         return round
     }
 
-    /// Establishes or verifies the account component of the confirmed checkpoint.
-    ///
-    /// A truly pristine legacy pair can be bound directly. Any meaningful unbound
-    /// checkpoint may already straddle an account switch that happened before this
-    /// version existed, and an explicit mismatch is equally ambiguous; both require the
-    /// sticky review path before local data is even projected.
-    private func reconcileAccountIdentity(
-        _ resolved: SyncAccountIdentity?
-    ) async throws {
-        if case .checkpoint? = approvedTransportReset {
-            // Consume before any fallible work. If reset fails, another human Review is
-            // required; the authorization must never leak into a later scope.
+    /// Establishes or verifies stable account membership and the physical remote dataset
+    /// generation before Core projects local user data. Feed epochs stay transport-local:
+    /// rotating one is ordinary cursor maintenance, while changing a dataset is a sticky
+    /// restore review even after process death.
+    private func reconcileScope(_ preflight: SyncScopePreflight) async throws {
+        let resolved = preflight.identity
+        let resolvedDataset = preflight.datasetIdentity
+        let meaningfulCheckpoint = base.cursor != nil
+            || !base.envelopes.isEmpty
+            || !base.recordVersions.isEmpty
+            || !journal.entries.isEmpty
+            || !journal.conflictDependencies.isEmpty
+
+        // Snippets Cloud originally folded dataset and feed into accountIdentity. The
+        // exact current legacy digest proves the same membership, dataset and feed, so it
+        // can be migrated without a misleading account review. No fuzzy/partial alias is
+        // accepted: a feed that changed before upgrade still needs conservative review.
+        if let stored = base.accountIdentity,
+           (base.schemaVersion < 4 || base.datasetIdentity == nil),
+           preflight.legacyAccountIdentities.contains(stored) {
+            var migrated = base
+            migrated.upgradeToCurrentSchema()
+            migrated.accountIdentity = resolved
+            migrated.datasetIdentity = resolvedDataset
+            try persistBase(migrated)
+        }
+
+        // A truly empty installation has no old scope-bearing fact to protect and may be
+        // bound directly. This also covers the first accountless backend round.
+        if !meaningfulCheckpoint,
+           base.accountIdentity == nil,
+           base.datasetIdentity == nil {
+            var bound = base
+            bound.upgradeToCurrentSchema()
+            bound.accountIdentity = resolved
+            bound.datasetIdentity = resolvedDataset
+            try persistBase(bound)
+        }
+
+        if case .account? = approvedTransportReset {
+            // Account notifications and checkpoint binding failures can require a fresh
+            // scheduler epoch even when the stable identity resolves to the same value.
+            // The reset still revalidates the exact account and dataset from preflight.
+            if base.accountIdentity == resolved,
+               base.datasetIdentity != resolvedDataset {
+                approvedTransportReset = nil
+                throw SyncEngineFailure(
+                    reason: .remoteDataReset,
+                    detail: "the remote library changed while the account review was "
+                        + "open; review the remote restore separately")
+            }
             approvedTransportReset = nil
             do {
                 try await resetTransportCheckpoint(
-                    resolved: resolved,
-                    reset: { try await self.transport.resetAfterCheckpointReview() })
+                    resolvedAccount: resolved,
+                    resolvedDataset: resolvedDataset,
+                    finalizingReviewedHalt: .accountChanged,
+                    reset: {
+                        try await self.transport.resetAfterAccountReview(
+                            expectedIdentity: resolved,
+                            expectedDatasetIdentity: resolvedDataset)
+                    })
+            } catch let failure as ReviewedTransportHaltCommitFailure {
+                throw failure
+            } catch {
+                enterHalt(
+                    .accountChanged,
+                    detail: "the reviewed account change could not replace the old "
+                        + "checkpoint; review is required before retrying")
+                throw error
+            }
+            return
+        }
+
+        if base.accountIdentity != resolved {
+            let detail: String
+            if base.accountIdentity == nil {
+                detail = "the confirmed sync checkpoint predates account binding; "
+                    + "review the signed-in account before starting a fresh merge"
+            } else if resolved == nil {
+                detail = "the selected sync backend has no account scope but the "
+                    + "confirmed checkpoint belongs to an account"
+            } else {
+                detail = "the signed-in account no longer owns the confirmed sync "
+                    + "checkpoint; review the account before starting a fresh merge"
+            }
+            throw SyncEngineFailure(reason: .accountChanged, detail: detail)
+        }
+
+        let datasetMatches = base.datasetIdentity == resolvedDataset
+        let missingDatasetFence = resolvedDataset != nil
+            && base.datasetIdentity == nil
+            && meaningfulCheckpoint
+        let datasetChanged = !datasetMatches || missingDatasetFence
+
+        if case .remoteData? = approvedTransportReset {
+            // Consume before the first fallible operation. The reset checks both values
+            // observed by this exact preflight, closing account/dataset changes between
+            // review and transport checkpoint replacement.
+            approvedTransportReset = nil
+            do {
+                try await resetTransportCheckpoint(
+                    resolvedAccount: resolved,
+                    resolvedDataset: resolvedDataset,
+                    finalizingReviewedHalt: .remoteDataReset,
+                    reset: {
+                        try await self.transport.resetAfterRemoteDataResetReview(
+                            expectedIdentity: resolved,
+                            expectedDatasetIdentity: resolvedDataset)
+                    })
+                remoteResetRequiresReview = false
+            } catch let failure as ReviewedTransportHaltCommitFailure {
+                throw failure
+            } catch let failure as SyncTransportFailure {
+                if case .accountChanged = failure { throw failure }
+                remoteResetRequiresReview = true
+                enterHalt(
+                    .remoteDataReset,
+                    detail: "the reviewed cloud-library restore could not replace the "
+                        + "remote-reset checkpoint; review is required before retrying")
+                throw failure
+            } catch {
+                remoteResetRequiresReview = true
+                enterHalt(
+                    .remoteDataReset,
+                    detail: "the reviewed cloud-library restore could not replace the "
+                        + "remote-reset checkpoint; review is required before retrying")
+                throw error
+            }
+            return
+        }
+
+        if remoteResetRequiresReview {
+            throw SyncEngineFailure(
+                reason: .remoteDataReset,
+                detail: "the previous reviewed cloud-library restore did not complete; "
+                    + "review is required again")
+        }
+        if datasetChanged {
+            let detail = missingDatasetFence
+                ? "the confirmed checkpoint has no durable remote-dataset binding; "
+                    + "review this device before restoring the cloud library"
+                : "the remote library was replaced; review before restoring it from "
+                    + "this device"
+            throw SyncEngineFailure(reason: .remoteDataReset, detail: detail)
+        }
+
+        if case .checkpoint? = approvedTransportReset {
+            approvedTransportReset = nil
+            do {
+                try await resetTransportCheckpoint(
+                    resolvedAccount: resolved,
+                    resolvedDataset: resolvedDataset,
+                    finalizingReviewedHalt: .checkpointUnreadable,
+                    reset: {
+                        try await self.transport.resetAfterCheckpointReview(
+                            expectedIdentity: resolved,
+                            expectedDatasetIdentity: resolvedDataset)
+                    })
                 checkpointResetRequiresReview = false
+            } catch let failure as ReviewedTransportHaltCommitFailure {
+                throw failure
             } catch {
                 checkpointResetRequiresReview = true
                 enterHalt(
                     .checkpointUnreadable,
-                    detail: "the reviewed local scheduler checkpoint could not be replaced; review is required before retrying")
+                    detail: "the reviewed local scheduler checkpoint could not be "
+                        + "replaced; review is required before retrying")
                 throw error
             }
             return
@@ -1521,102 +2393,88 @@ final class SyncEngine {
         if checkpointResetRequiresReview {
             throw SyncEngineFailure(
                 reason: .checkpointUnreadable,
-                detail: "the previous reviewed scheduler reset did not complete; review is required again")
+                detail: "the previous reviewed scheduler reset did not complete; review "
+                    + "is required again")
         }
 
-        if base.accountIdentity == resolved, approvedTransportReset == nil {
-            return
+        if base.schemaVersion < SyncBase.currentSchemaVersion {
+            var upgraded = base
+            upgraded.upgradeToCurrentSchema()
+            try persistBase(upgraded)
         }
-
-        let meaningfulCheckpoint = base.cursor != nil
-            || !base.envelopes.isEmpty
-            || !base.recordVersions.isEmpty
-            || !journal.entries.isEmpty
-            || !journal.conflictDependencies.isEmpty
-        let isPristineLegacy = base.accountIdentity == nil
-            && resolved != nil
-            && !meaningfulCheckpoint
-
-        if isPristineLegacy {
-            var bound = base
-            bound.schemaVersion = SyncBase.currentSchemaVersion
-            bound.accountIdentity = resolved
-            try persistBase(bound)
-            approvedTransportReset = nil
-            return
-        }
-
-        guard case .account? = approvedTransportReset else {
-            let detail: String
-            if base.accountIdentity == nil {
-                detail = "the confirmed iCloud checkpoint predates account binding; review "
-                    + "the signed-in account before starting a fresh merge"
-            } else if resolved == nil {
-                detail = "the selected sync backend has no account scope but the confirmed "
-                    + "checkpoint belongs to an iCloud account"
-            } else {
-                detail = "the signed-in iCloud account no longer owns the confirmed sync "
-                    + "checkpoint; review the account before starting a fresh merge"
-            }
-            throw SyncEngineFailure(
-                reason: .accountChanged,
-                detail: detail)
-        }
-
-        // Consume before the first fallible write. Failure or process death must not
-        // leave a reusable authorization that can later target a different account.
         approvedTransportReset = nil
+    }
 
-        // A crash can leave the durable dependency in the post-stage/pre-apply window:
-        // the encrypted losing body exists only in its authenticated source carrier and
-        // has not reached the vault copy yet. The old inbox may disappear as soon as the
-        // account scheduler is reset, so recover that prerequisite from the journal's
-        // frozen source before deriving replacement-account intent.
-        let recovery = try recoverConflictPrerequisitesBeforeSchedulerReset()
-        guard recovery.deferredIDs.isEmpty else {
-            throw SyncEngineFailure(
-                reason: .vaultUnreadable,
-                detail: "unlock the secure vault and review the sync reset again; "
-                    + "the old checkpoint was retained because it still owns a "
-                    + "conflict-copy prerequisite")
-        }
-        guard recovery.incompatibleVaultIDs.isEmpty else {
-            throw SyncEngineFailure(
-                reason: .vaultUnreadable,
-                detail: "the secure vault identity does not match a pending conflict "
-                    + "copy; the old checkpoint was retained")
-        }
-        guard recovery.retryIDs.isEmpty else {
-            throw SyncEngineFailure(
-                reason: .localLibraryQuarantined,
-                detail: "primary conflict-copy state changed during reviewed recovery; "
-                    + "the old checkpoint was retained for another review")
-        }
-
-        // Capture primary storage against the OLD projection before erasing its base.
-        // This is the only point where an unjournaled local deletion can still be
-        // distinguished from a fresh install.
-        let current = try library.currentEnvelopes(
+    /// Converts a restored-but-possibly-incomplete primary library into durable outbound
+    /// intent without deriving any deletion from the old base. The base marker was
+    /// written before the quarantine halt was cleared, so a crash at every point either
+    /// remains stopped or repeats this idempotent full-merge preparation.
+    private func resetForNonDestructiveLibraryMerge(
+        accountIdentity: SyncAccountIdentity?,
+        datasetIdentity: SyncDatasetIdentity?
+    ) async throws -> ApplyOutcome {
+        // A durable live journal entry may be the only copy of an edit that had not yet
+        // reached the backend when snippets.json became unreadable. Materialize those
+        // exact values back into primary storage before emptying the base; otherwise the
+        // ordinary reconciliation immediately after reset would see primary absence and
+        // discard them. Tombstone entries remain journal-owned and need no primary row.
+        let snapshot = try library.currentSnapshot(
             agreedBase: journal.projectionKnowledge(over: base))
-        var resetJournal = journal
-        try resetJournal.prepareForAccountChange(
-            current: current,
-            confirmed: base,
-            deviceID: device,
-            now: now(),
-            discoverSecureCarriers: library.supportsSecureConflictMaterialization)
-
-        // Journal first is the crash fence. If the next write fails, restart still sees
-        // the old account-bound base plus complete latest local intent and asks for
-        // review again. No old offered generation survives into the new account.
-        try persistJournal(resetJournal)
-        // Only now may transport-private account state be replaced. A failed CKSyncEngine
-        // checkpoint reset leaves the old base intact and the one-shot approval already
-        // consumed, so the next attempt must ask for Review again.
-        try await transport.resetAfterAccountReview()
-        try persistBase(SyncBase(
-            journalEstablished: true,
-            accountIdentity: resolved))
+        if base.nonDestructiveMergeMode == .reviewedLocalSnapshot {
+            // Mutate a candidate, not the published in-memory journal. The persistence
+            // helper compares candidate vs published state before writing; mutating the
+            // property in place would make a real tombstone look unchanged and leave
+            // only the older live entry on disk across a crash.
+            var reviewedJournal = journal
+            try reviewedJournal.reconcileAfterReviewedLocalSnapshot(
+                current: snapshot.envelopes,
+                reviewedSnapshot: base,
+                deviceID: device,
+                now: now())
+            // The tombstone for a post-review deletion must reach disk before an older
+            // journal-only live value can be materialized below. A crash then repeats
+            // from the exact same reviewed ancestor instead of resurrecting the row.
+            try persistJournal(reviewedJournal)
+        }
+        let missingJournalValues = journal.entries.values
+            .map(\.desired)
+            .filter { !$0.deleted && snapshot.envelopes[$0.id] == nil }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        let materialized: ApplyOutcome
+        if missingJournalValues.isEmpty {
+            materialized = ApplyOutcome()
+        } else {
+            materialized = try library.applyRemote(
+                missingJournalValues,
+                expectedPrimary: Dictionary(
+                    uniqueKeysWithValues: missingJournalValues.map { ($0.id, .absent) }))
+            // `applyRemote` is the exact primary commit point for a journal-only value.
+            // Publish every successfully applied row immediately, even when another row
+            // in this batch was deferred/retried. An external/user deletion can land in
+            // the inter-round interval and must become a tombstone rather than letting
+            // that exact live journal value be materialized again.
+            let unapplied = Set(materialized.deferredIDs)
+                .union(materialized.incompatibleVaultIDs)
+                .union(materialized.retryIDs)
+            let appliedJournalValues = missingJournalValues.filter {
+                !unapplied.contains($0.id)
+            }
+            var materializedJournal = journal
+            materializedJournal.markReviewedLocalSnapshot(appliedJournalValues)
+            if !appliedJournalValues.isEmpty {
+                try persistJournal(materializedJournal)
+            }
+            guard unapplied.isEmpty else { return materialized }
+        }
+        try await resetTransportCheckpoint(
+            resolvedAccount: accountIdentity,
+            resolvedDataset: datasetIdentity,
+            reset: {
+                try await self.transport.resetForLocalFullResync(
+                    expectedIdentity: accountIdentity,
+                    expectedDatasetIdentity: datasetIdentity)
+            })
+        return materialized
     }
 
     /// Rebuilds same-account local intent before replacing an unreadable/poisoned
@@ -1624,13 +2482,17 @@ final class SyncEngine {
     /// account migration: cursor and record generations cannot be trusted once the
     /// scheduler epoch is replaced.
     private func resetTransportCheckpoint(
-        resolved: SyncAccountIdentity?,
+        resolvedAccount: SyncAccountIdentity?,
+        resolvedDataset: SyncDatasetIdentity?,
+        finalizingReviewedHalt: SyncState.HaltReason? = nil,
         reset: () async throws -> Void
     ) async throws {
         // Replacing a poisoned scheduler can discard the only replayable inbox event in
         // exactly the same way as an account reset. Materialise journal-owned carriers
         // while the old checkpoint is still intact, then persist their copy snapshots.
-        let recovery = try recoverConflictPrerequisitesBeforeSchedulerReset()
+        let nonDestructiveLibraryRecovery = base.requiresNonDestructiveLibraryMerge
+        let recovery = try recoverConflictPrerequisitesBeforeSchedulerReset(
+            inferLocalAbsences: !nonDestructiveLibraryRecovery)
         guard recovery.deferredIDs.isEmpty else {
             throw SyncEngineFailure(
                 reason: .vaultUnreadable,
@@ -1653,23 +2515,188 @@ final class SyncEngine {
         let current = try library.currentEnvelopes(
             agreedBase: journal.projectionKnowledge(over: base))
         var resetJournal = journal
-        try resetJournal.prepareForAccountChange(
-            current: current,
-            confirmed: base,
-            deviceID: device,
-            now: now(),
-            discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        if nonDestructiveLibraryRecovery {
+            try resetJournal.prepareForNonDestructiveLibraryRecovery(
+                current: current,
+                confirmed: base,
+                deviceID: device,
+                now: now(),
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+            resetJournal.markReviewedLocalSnapshot(current.values)
+        } else {
+            try resetJournal.prepareForAccountChange(
+                current: current,
+                confirmed: base,
+                deviceID: device,
+                now: now(),
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        }
         try persistJournal(resetJournal)
         try await reset()
-        try persistBase(SyncBase(
-            journalEstablished: true,
-            accountIdentity: resolved))
+        do {
+            try persistBase(SyncBase(
+                journalEstablished: true,
+                accountIdentity: resolvedAccount,
+                datasetIdentity: resolvedDataset))
+            if let finalizingReviewedHalt {
+                try finalizeReviewedTransportHalt(reason: finalizingReviewedHalt)
+            }
+        } catch let failure as ReviewedTransportHaltCommitFailure {
+            throw failure
+        } catch {
+            guard let finalizingReviewedHalt else { throw error }
+            // The transport has already discarded/replaced its private checkpoint. The
+            // old durable halt is therefore the only crash-safe authorization fence
+            // until the replacement base commits. Keep presenting that exact action;
+            // translating this storage failure into a generic local Check Again would
+            // let the wrong button clear the still-required remote/account review.
+            transition(to: .halted(
+                finalizingReviewedHalt,
+                detail: "the reviewed reset changed its transport checkpoint, but the "
+                    + "replacement sync base could not be committed; review again"))
+            throw ReviewedTransportHaltCommitFailure.persistenceFailed
+        }
+    }
+
+    private enum ReviewedTransportHaltCommitFailure: Error {
+        case missingOrMismatched
+        case superseded
+        case futureSchema
+        case persistenceFailed
+    }
+
+    private var pendingLegacyDeletionRefreshHalt: SyncState.Halt? {
+        guard let halt = durableHalt,
+              halt.reason == .massDeletion,
+              halt.recoveryContext == nil else { return nil }
+        return halt
+    }
+
+    /// A successful inspection with no effective deletion is the only path that may
+    /// retire a legacy stop without replacing it with exact review facts. This happens
+    /// after the complete round (including durable apply/base/cursor writes), so every
+    /// earlier failure or crash leaves the legacy Refresh action intact.
+    private func finalizeLegacyDeletionRefresh() -> Bool {
+        guard let reviewed = pendingLegacyDeletionRefreshHalt else {
+            transition(to: .halted(
+                .massDeletion,
+                detail: "the legacy deletion review changed while it was being "
+                    + "refreshed; review it again"))
+            return false
+        }
+        switch updatePersistedHalt(nil, expecting: reviewed) {
+        case .written:
+            durableHalt = nil
+            return true
+        case .cleared:
+            durableHalt = nil
+            return true
+        case .superseded(let newer):
+            durableHalt = newer
+            transition(to: .halted(newer.reason, detail: newer.detail))
+        case .tooNew(let version):
+            durableHalt = nil
+            transition(to: .halted(
+                .schemaTooNew,
+                detail: "Sync/state.json is version \(version); update Snippets before "
+                    + "sync can resume."))
+        case .failed:
+            onSafetyHaltPersistenceFailure?()
+            transition(to: .halted(
+                .massDeletion,
+                detail: "the deletion check found nothing to remove, but its old "
+                    + "safety stop could not be cleared from disk"))
+        }
+        return false
+    }
+
+    /// Retires only the exact deletion stop whose batch the user approved, and only
+    /// after the whole round has committed. A same-reason halt written meanwhile may
+    /// describe a different fingerprint, so matching just the reason is insufficient.
+    private func finalizeReviewedMassDeletionHalt() -> Bool {
+        guard let reviewed = reviewedMassDeletionInFlight,
+              durableHalt == reviewed else {
+            if let durableHalt {
+                transition(to: .halted(durableHalt.reason, detail: durableHalt.detail))
+            } else {
+                transition(to: .halted(
+                    .massDeletion,
+                    detail: "the reviewed deletion completed, but its exact safety "
+                        + "stop changed; review the current state again"))
+            }
+            return false
+        }
+        switch updatePersistedHalt(nil, expecting: reviewed) {
+        case .written:
+            durableHalt = nil
+            return true
+        case .cleared:
+            durableHalt = nil
+            return true
+        case .superseded(let newer):
+            durableHalt = newer
+            transition(to: .halted(newer.reason, detail: newer.detail))
+        case .tooNew(let version):
+            durableHalt = nil
+            transition(to: .halted(
+                .schemaTooNew,
+                detail: "Sync/state.json is version \(version); update Snippets before "
+                    + "sync can resume."))
+        case .failed:
+            onSafetyHaltPersistenceFailure?()
+            transition(to: .halted(
+                .massDeletion,
+                detail: "the reviewed deletions were applied, but their safety stop "
+                    + "could not be cleared; review again before syncing"))
+        }
+        return false
+    }
+
+    /// Clears the exact still-durable halt only after journal, transport checkpoint,
+    /// and replacement base have all committed. This is the final commit record for a
+    /// reviewed reset; every earlier crash remains visibly review-required.
+    private func finalizeReviewedTransportHalt(
+        reason: SyncState.HaltReason
+    ) throws {
+        guard let reviewed = durableHalt, reviewed.reason == reason else {
+            transition(to: .halted(
+                reason,
+                detail: "the reviewed reset completed, but its safety stop no longer "
+                    + "matches; review again before syncing"))
+            throw ReviewedTransportHaltCommitFailure.missingOrMismatched
+        }
+        switch updatePersistedHalt(nil, expecting: reviewed) {
+        case .written:
+            durableHalt = nil
+        case .cleared:
+            durableHalt = nil
+        case .superseded(let newer):
+            durableHalt = newer
+            transition(to: .halted(newer.reason, detail: newer.detail))
+            throw ReviewedTransportHaltCommitFailure.superseded
+        case .tooNew(let version):
+            durableHalt = nil
+            transition(to: .halted(
+                .schemaTooNew,
+                detail: "Sync/state.json is version \(version); update Snippets before "
+                    + "sync can resume."))
+            throw ReviewedTransportHaltCommitFailure.futureSchema
+        case .failed:
+            onSafetyHaltPersistenceFailure?()
+            transition(to: .halted(
+                reason,
+                detail: "the reviewed reset completed, but its safety stop could not "
+                    + "be cleared from disk; sync remains stopped"))
+            throw ReviewedTransportHaltCommitFailure.persistenceFailed
+        }
     }
 
     /// Closes stage/evidence/apply crash windows before a reviewed scheduler reset.
     /// Exact random-nonce C0 bytes become journal-durable before primary installation;
     /// a later C1/tombstone is held and reapplied atomically with that installation.
-    private func recoverConflictPrerequisitesBeforeSchedulerReset() throws -> ApplyOutcome {
+    private func recoverConflictPrerequisitesBeforeSchedulerReset(
+        inferLocalAbsences: Bool = true
+    ) throws -> ApplyOutcome {
         // First let already-present primary copies satisfy their requirements. A stale
         // crash-shaped journal may still say every sibling is missing even though one
         // has since been materialized or demoted; feeding that sibling back through the
@@ -1690,11 +2717,13 @@ final class SyncEngine {
         }
         // Capture existing C1/plain demotions before freezing missing C0. They are real
         // later local intent and must remain primary after the recovery transaction.
-        recoveredJournal.reconcile(
-            current: current,
-            confirmed: base,
-            deviceID: device,
-            now: now())
+        if inferLocalAbsences {
+            recoveredJournal.reconcile(
+                current: current,
+                confirmed: base,
+                deviceID: device,
+                now: now())
+        }
         let sources = recoveredJournal.carrierSourcesAwaitingMaterialization
         if !sources.isEmpty {
             let freshlyPrepared = try library.prepareConflictCopyEvidence(from: sources)
@@ -1738,11 +2767,13 @@ final class SyncEngine {
                 detail: "a recovered conflict-copy prerequisite did not match its "
                     + "durable source; the reviewed reset was not performed")
         }
-        recoveredJournal.reconcile(
-            current: recoveredCurrent,
-            confirmed: base,
-            deviceID: device,
-            now: now())
+        if inferLocalAbsences {
+            recoveredJournal.reconcile(
+                current: recoveredCurrent,
+                confirmed: base,
+                deviceID: device,
+                now: now())
+        }
         let recoveredPrimary = try library.currentSnapshot(
             agreedBase: recoveredJournal.projectionKnowledge(over: base))
         guard recoveredJournal.conflictPrerequisiteRecovery(
@@ -1811,9 +2842,9 @@ final class SyncEngine {
             // them to check a sign-in that was never the problem. The submit leg already
             // routes this to `backendRefused`; the same condition must not describe
             // itself two different ways depending on which half of the round saw it.
-            enterHalt(.backendRefused, detail: detail)
+            transition(to: .needsAttention(detail))
         case .pushUnsupported:
-            transition(to: .needsAuthentication("this backend does not accept pushes"))
+            transition(to: .needsAttention("this backend does not accept pushes"))
         case .accountChanged:
             enterHalt(
                 .accountChanged,
@@ -1908,19 +2939,38 @@ final class SyncEngine {
         }
     }
 
+    /// Opaque, local-only binding for a destructive confirmation. Hashing the sorted
+    /// effective UUID set means duplicate delivery and batch order do not matter, while
+    /// replacing even one deletion requires a fresh review. The value is never logged.
+    private static func massDeletionFingerprint(
+        live: Set<UUID>,
+        incoming: [SyncEnvelope]
+    ) -> String {
+        let deleting = Set(incoming.lazy.filter(\.deleted).map(\.id)).intersection(live)
+        return SyncDeletionSafety.fingerprint(ids: deleting)
+    }
+
     /// Makes a safety stop survive process death and an ordinary relaunch.
     ///
     /// `SyncState.halt` has always promised this, but the engine previously kept its
     /// halt only in memory. A rival vault therefore stopped one scheduler round in one
     /// process, then fetched the same held cursor and stopped again after every launch.
-    /// Backend refusals and mass-deletion stops had the same hole. All safety halts now
-    /// go through this one door.
-    private func enterHalt(_ reason: SyncState.HaltReason, detail: String) {
+    /// Historical backend-refusal halts and mass-deletion stops had the same hole. All
+    /// persisted safety halts now go through this one door.
+    private func enterHalt(
+        _ reason: SyncState.HaltReason,
+        detail: String,
+        recoveryContext: SyncState.Halt.RecoveryContext? = nil
+    ) {
         // JSON's ISO-8601 strategy stores whole seconds. Normalize before using the
-        // value as a CAS token so an immediate same-process Resume compares equal to
+        // value as a CAS token so immediate same-process recovery compares equal to
         // what another decoder reads from disk.
         let at = Date(timeIntervalSince1970: floor(now().timeIntervalSince1970))
-        let halt = SyncState.Halt(reason: reason, detail: detail, at: at)
+        let halt = SyncState.Halt(
+            reason: reason,
+            detail: detail,
+            at: at,
+            recoveryContext: recoveryContext)
         switch updatePersistedHalt(halt, expecting: durableHalt) {
         case .written(let stored):
             durableHalt = stored
@@ -1928,6 +2978,9 @@ final class SyncEngine {
         case .superseded(let newer):
             durableHalt = newer
             transition(to: .halted(newer.reason, detail: newer.detail))
+        case .cleared:
+            durableHalt = nil
+            transition(to: .idle(lastSync: nil))
         case .tooNew(let version):
             durableHalt = nil
             transition(to: .halted(
@@ -1949,6 +3002,7 @@ final class SyncEngine {
     private enum HaltUpdateResult {
         case written(SyncState.Halt?)
         case superseded(SyncState.Halt)
+        case cleared
         case tooNew(Int)
         case failed
     }
@@ -2008,6 +3062,10 @@ final class SyncEngine {
             // different non-nil halt is a new stop this caller has not reviewed.
             if halt == nil, persisted.halt == nil { return .written(nil) }
             if let newer = persisted.halt { return .superseded(newer) }
+            // A stale reviewer must not recreate a stop that a peer already completed.
+            // In particular, writing `expected` here would manufacture fresh one-shot
+            // authority for a second account/checkpoint/remote reset.
+            return .cleared
         }
 
         if persisted.halt == halt { return .written(halt) }
@@ -2040,4 +3098,5 @@ final class SyncEngine {
 nonisolated struct SyncEngineFailure: Error {
     var reason: SyncState.HaltReason
     var detail: String
+    var recoveryContext: SyncState.Halt.RecoveryContext? = nil
 }

@@ -47,11 +47,11 @@ nonisolated enum DeletionGuard {
     /// boundary behaviour has to be *provable* rather than *verified up to 100 000*,
     /// because the boundary is the only part of it anybody will ever read.
     static func allowedDeletions(liveCount: Int) -> Int {
-        max(Self.floor, (max(0, liveCount) * 2 + 9) / 10)
+        SyncDeletionSafety.allowedDeletions(liveCount: liveCount)
     }
 
     /// Below this many records, the percentage is noise and the floor governs.
-    static let floor = 5
+    static let floor = SyncDeletionSafety.floor
 
     /// Why a batch was refused. Carries the numbers rather than a formatted string, so
     /// the UI, the CLI, and `SyncState.Halt.detail` can each say it their own way.
@@ -67,9 +67,12 @@ nonisolated enum DeletionGuard {
         }
 
         var description: String {
-            "the sync backend asked to delete \(requestedDeletions) of \(liveCount) "
-                + "snippet\(liveCount == 1 ? "" : "s"); at most \(allowedDeletions) "
-                + "may be applied without confirmation"
+            let remaining = max(0, liveCount - requestedDeletions)
+            return "cloud sync reported a batch deleting \(requestedDeletions) of \(liveCount) "
+                + "snippet\(liveCount == 1 ? "" : "s"). Sync paused before completing "
+                + "this batch. Applied in full to the reviewed library state, it keeps "
+                + "at least \(remaining) snippets; up to "
+                + "\(allowedDeletions) deletions may be applied without confirmation"
         }
     }
 

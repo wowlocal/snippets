@@ -24,7 +24,12 @@ nonisolated struct SyncJournal: Equatable {
     /// Schema 3 persists the exact acceptance receipt for a conflict prerequisite.
     /// A later same-provenance C1 is not proof that the immutable C0 snapshot was ever
     /// accepted, and an older build must not erase that ordering fact on rewrite.
-    static let currentSchemaVersion = 3
+    /// Schema 4 persists reviewed primary existence until the first backend ACK. This
+    /// closes the edit/delete window while an async checkpoint reset is in flight.
+    /// Schema 5 keeps the reviewed state (including reviewed absence) separate from the
+    /// older merge ancestor. Recovery can therefore preserve pre-review/lost-ACK intent
+    /// and still recognize edits or deletions made after the user reviewed recovery.
+    static let currentSchemaVersion = 5
 
     struct Offered: Equatable {
         var envelope: SyncEnvelope
@@ -53,6 +58,39 @@ nonisolated struct SyncJournal: Equatable {
         var offered: Offered?
         var generation: UInt64
         var modifiedAt: Date
+        /// Exact primary value accepted by Repair/Check Again. Unlike an offer this says
+        /// nothing about the backend. It proves that a later primary absence is a real
+        /// local deletion and remains the three-way ancestor until that intent is ACKed.
+        var reviewedLocalAncestor: SyncEnvelope?
+        /// True when an explicit review captured this id. `reviewedLocalAncestor == nil`
+        /// then means the exact reviewed state was absence, not “unknown”.
+        var reviewedLocalSnapshotKnown: Bool
+        /// Older confirmed/tentative ancestor used while local intent is still exactly
+        /// the state shown at review time. Once local changes after review, merge uses
+        /// `reviewedLocalAncestor` (including its known-absent state) instead.
+        var preReviewMergeAncestor: SyncEnvelope?
+        var reviewedLocalExistence: Bool {
+            reviewedLocalSnapshotKnown && reviewedLocalAncestor != nil
+        }
+
+        init(
+            desired: SyncEnvelope,
+            offered: Offered?,
+            generation: UInt64,
+            modifiedAt: Date,
+            reviewedLocalAncestor: SyncEnvelope? = nil,
+            reviewedLocalSnapshotKnown: Bool? = nil,
+            preReviewMergeAncestor: SyncEnvelope? = nil
+        ) {
+            self.desired = desired
+            self.offered = offered
+            self.generation = generation
+            self.modifiedAt = modifiedAt
+            self.reviewedLocalAncestor = reviewedLocalAncestor
+            self.reviewedLocalSnapshotKnown = reviewedLocalSnapshotKnown
+                ?? (reviewedLocalAncestor != nil)
+            self.preReviewMergeAncestor = preReviewMergeAncestor
+        }
     }
 
     /// One losing body which must exist as an ordinary backend record before its source
@@ -112,6 +150,9 @@ nonisolated struct SyncJournal: Equatable {
     var schemaVersion: Int
     private(set) var entries: [String: Entry]
     private(set) var conflictDependencies: [String: ConflictDependency]
+    /// Global identity of the reviewed snapshot whose per-entry two-phase ancestors are
+    /// stored above. A changed explicit review clears/supersedes all older authority.
+    private(set) var reviewedRecoveryFingerprint: String?
     /// Transient upgrade marker. Schema-1 bytes have no dependency map; the first engine
     /// reconciliation inspects current/base state before the file is rewritten as v2.
     private var needsDependencyMigration: Bool
@@ -119,11 +160,13 @@ nonisolated struct SyncJournal: Equatable {
     init(
         schemaVersion: Int = SyncJournal.currentSchemaVersion,
         entries: [String: Entry] = [:],
-        conflictDependencies: [String: ConflictDependency] = [:]
+        conflictDependencies: [String: ConflictDependency] = [:],
+        reviewedRecoveryFingerprint: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.entries = entries
         self.conflictDependencies = conflictDependencies
+        self.reviewedRecoveryFingerprint = reviewedRecoveryFingerprint
         needsDependencyMigration = schemaVersion < SyncJournal.currentSchemaVersion
     }
 
@@ -319,7 +362,11 @@ nonisolated struct SyncJournal: Equatable {
                     desired: tombstone,
                     offered: previous?.offered,
                     generation: Self.nextGeneration(after: previous?.generation),
-                    modifiedAt: now)
+                    modifiedAt: now,
+                    reviewedLocalAncestor: previous?.reviewedLocalAncestor,
+                    reviewedLocalSnapshotKnown:
+                        previous?.reviewedLocalSnapshotKnown ?? false,
+                    preReviewMergeAncestor: previous?.preReviewMergeAncestor)
             }
         }
         entries = candidate
@@ -912,7 +959,11 @@ nonisolated struct SyncJournal: Equatable {
                 generation: changed
                     ? Self.nextGeneration(after: previous?.generation)
                     : (previous?.generation ?? 1),
-                modifiedAt: changed ? now : (previous?.modifiedAt ?? now))
+                modifiedAt: changed ? now : (previous?.modifiedAt ?? now),
+                reviewedLocalAncestor: previous?.reviewedLocalAncestor,
+                reviewedLocalSnapshotKnown:
+                    previous?.reviewedLocalSnapshotKnown ?? false,
+                preReviewMergeAncestor: previous?.preReviewMergeAncestor)
         }
         entries = candidate
     }
@@ -1015,7 +1066,8 @@ nonisolated struct SyncJournal: Equatable {
                 Self.newestLive(
                     confirmedEnvelope,
                     Self.newestLive(
-                        !isDependencyOwned(id)
+                        (!isDependencyOwned(id)
+                            && previous?.reviewedLocalExistence != true)
                             ? nil : previous?.desired,
                         conflictExistenceProof(for: id)))) {
                 let evidence = [previous?.desired, offered?.envelope, confirmedEnvelope]
@@ -1063,7 +1115,11 @@ nonisolated struct SyncJournal: Equatable {
                 desired: desired,
                 offered: offered,
                 generation: generation,
-                modifiedAt: modifiedAt)
+                modifiedAt: modifiedAt,
+                reviewedLocalAncestor: previous?.reviewedLocalAncestor,
+                reviewedLocalSnapshotKnown:
+                    previous?.reviewedLocalSnapshotKnown ?? false,
+                preReviewMergeAncestor: previous?.preReviewMergeAncestor)
         }
     }
 
@@ -1411,8 +1467,15 @@ nonisolated struct SyncJournal: Equatable {
         for key in Array(entries.keys) {
             guard var entry = entries[key] else { continue }
             entry.offered = nil
+            // A reviewed local ancestor is causal authority only inside the backend
+            // membership where it was captured. Carrying it into another account can
+            // make a same-UUID tombstone delete an unrelated record there.
+            entry.reviewedLocalAncestor = nil
+            entry.reviewedLocalSnapshotKnown = false
+            entry.preReviewMergeAncestor = nil
             entries[key] = entry
         }
+        reviewedRecoveryFingerprint = nil
         // Backend generations and ambiguity do not cross an account boundary. Retain
         // dependency snapshots, but require every prerequisite and source release to be
         // offered afresh in the replacement private database.
@@ -1436,6 +1499,213 @@ nonisolated struct SyncJournal: Equatable {
                 offered: nil,
                 generation: 1,
                 modifiedAt: now)
+        }
+    }
+
+    /// Rebuilds outbound intent after an unreadable primary library was replaced with a
+    /// readable recovery candidate.
+    ///
+    /// The candidate may be a partial export, a backup from another moment, or even a
+    /// starter file written by an older downgraded build. Its present values are useful
+    /// local intent; its absences are not proof of deletion. Preserve already-durable
+    /// journal intent, add every recovered current value, clear old offers/generations,
+    /// and deliberately reconcile against an empty ancestor so no old-base absence can
+    /// become a tombstone. A subsequent full fetch merges remote-only records back in.
+    mutating func prepareForNonDestructiveLibraryRecovery(
+        current: [UUID: SyncEnvelope],
+        confirmed: SyncBase,
+        deviceID: String,
+        now: Date,
+        discoverSecureCarriers: Bool = true
+    ) throws {
+        try reconcileDependencies(
+            current: current,
+            confirmed: confirmed,
+            discoverSecureCarriers: discoverSecureCarriers)
+        try recoverPlainDependenciesForScopeReset(current: current)
+        guard conflictDependencies.values.allSatisfy({ dependency in
+            dependency.requirements.values.allSatisfy {
+                $0.snapshot != nil || $0.offered != nil
+            }
+        }) else {
+            throw SyncMerge.EnvelopeFailure.malformedContentConflict
+        }
+
+        var recoveryValues = current
+        // Journal entries are already durable evidence. When the restored candidate is
+        // missing one, preserve the recorded desired value instead of interpreting that
+        // absence as a later user deletion.
+        for entry in entries.values where recoveryValues[entry.desired.id] == nil {
+            recoveryValues[entry.desired.id] = entry.desired
+        }
+        reconcile(
+            current: recoveryValues,
+            confirmed: SyncBase(),
+            deviceID: deviceID,
+            now: now)
+
+        for key in Array(entries.keys) {
+            entries[key]?.offered = nil
+        }
+        for key in Array(conflictDependencies.keys) {
+            guard var dependency = conflictDependencies[key] else { continue }
+            dependency.sourceOffered = nil
+            for fingerprint in Array(dependency.requirements.keys) {
+                dependency.requirements[fingerprint]?.acceptedRecordVersion = nil
+                dependency.requirements[fingerprint]?.offered = nil
+            }
+            conflictDependencies[key] = dependency
+        }
+
+        for envelope in current.values.sorted(by: {
+            $0.id.uuidString < $1.id.uuidString
+        }) {
+            let key = SyncBase.key(envelope.id)
+            guard entries[key] == nil else { continue }
+            entries[key] = Entry(
+                desired: envelope,
+                offered: nil,
+                generation: 1,
+                modifiedAt: now)
+        }
+    }
+
+    /// Folds edits made after an exact Repair/Check Again snapshot into durable intent
+    /// before the conservative full-merge path can materialize missing journal values.
+    ///
+    /// Entries absent from `reviewedSnapshot` are older journal-only evidence: primary
+    /// storage could not express them when the user reviewed the library, so continued
+    /// absence is not a new deletion and they must remain recoverable. Entries present
+    /// in the snapshot are different. Their exact reviewed envelope is an ancestor, so
+    /// a later primary absence is a real deletion and ordinary reconciliation can mint
+    /// its tombstone. This distinction closes both the immediate startup-Repair race
+    /// and the arbitrarily long Check Again-while-sync-off window.
+    mutating func reconcileAfterReviewedLocalSnapshot(
+        current: [UUID: SyncEnvelope],
+        reviewedSnapshot: SyncBase,
+        deviceID: String,
+        now: Date
+    ) throws {
+        guard reviewedSnapshot.requiresNonDestructiveLibraryMerge,
+              reviewedSnapshot.nonDestructiveMergeMode == .reviewedLocalSnapshot else {
+            return
+        }
+
+        guard let fingerprint = reviewedSnapshot.nonDestructiveReviewFingerprint() else {
+            throw SyncMerge.EnvelopeFailure.malformedContentConflict
+        }
+
+        if reviewedRecoveryFingerprint != fingerprint {
+            let reviewedCurrent = Dictionary(uniqueKeysWithValues:
+                reviewedSnapshot.envelopes.values.map { ($0.id, $0) })
+            let preRecoveryBase = reviewedSnapshot.preRecoveryConfirmedEnvelopes.map {
+                SyncBase(envelopes: $0)
+            }
+            var preReviewAncestors: [UUID: SyncEnvelope] = [:]
+            if let preRecoveryBase {
+                for envelope in preRecoveryBase.envelopes.values {
+                    preReviewAncestors[envelope.id] = envelope
+                }
+            }
+            for entry in entries.values {
+                if let offered = entry.offered?.envelope {
+                    preReviewAncestors[offered.id] = offered
+                }
+            }
+            let authoritativeIDs = Set(entries.values.map { $0.desired.id })
+                .union(preRecoveryBase?.envelopes.values.map(\.id) ?? [])
+                .union(reviewedCurrent.keys)
+
+            if let preRecoveryBase {
+                try prepareForAccountChange(
+                    current: reviewedCurrent,
+                    confirmed: preRecoveryBase,
+                    deviceID: deviceID,
+                    now: now)
+            } else {
+                try prepareForNonDestructiveLibraryRecovery(
+                    current: reviewedCurrent,
+                    confirmed: SyncBase(),
+                    deviceID: deviceID,
+                    now: now)
+            }
+
+            // This is a new explicit review epoch. Clear every older per-entry causal
+            // fact before publishing the exact live/absent state from this review.
+            for key in Array(entries.keys) {
+                entries[key]?.reviewedLocalAncestor = nil
+                entries[key]?.reviewedLocalSnapshotKnown = false
+                entries[key]?.preReviewMergeAncestor = nil
+            }
+            reviewedRecoveryFingerprint = fingerprint
+            for id in authoritativeIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+                let key = SyncBase.key(id)
+                guard var entry = entries[key] else { continue }
+                if let reviewed = reviewedCurrent[id] {
+                    entry.reviewedLocalSnapshotKnown = true
+                    entry.reviewedLocalAncestor = reviewed
+                    entry.preReviewMergeAncestor = preReviewAncestors[id]
+                } else if preRecoveryBase != nil {
+                    // Checkpoint Repair reviewed an intact primary, so absence for every
+                    // previously known id is authoritative. Primary-file recovery omits
+                    // the old base and deliberately leaves such absences unknown.
+                    entry.reviewedLocalSnapshotKnown = true
+                    entry.reviewedLocalAncestor = nil
+                    entry.preReviewMergeAncestor = preReviewAncestors[id]
+                }
+                entries[key] = entry
+            }
+        }
+
+        let journalOnly = entries.filter { _, entry in
+            !entry.reviewedLocalSnapshotKnown && current[entry.desired.id] == nil
+        }
+        let emptyBase = SyncBase()
+        try reconcileDependencies(current: current, confirmed: emptyBase)
+        reconcile(current: current, confirmed: emptyBase, deviceID: deviceID, now: now)
+
+        // Reconciliation intentionally drops an unoffered live value absent from both
+        // current and confirmed state. Here that exact shape means “survived only in the
+        // pre-repair journal”, not “the user deleted it after review”. Restore it until
+        // the non-destructive reset materializes it under primary CAS.
+        for (key, entry) in journalOnly where entries[key] == nil {
+            entries[key] = entry
+        }
+        // A previous attempt may have committed only part of journal materialization
+        // and crashed before its journal write. Exact live primary values now prove
+        // their own materialization, but must not replace the explicit review ancestor
+        // of any row that was already present when the user reviewed recovery.
+        markReviewedLocalSnapshot(current.values)
+    }
+
+    /// Replaces an older user-review fence with the exact snapshot accepted by the
+    /// newest explicit Repair/Check Again action. This is intentionally different from
+    /// technical materialization below: a second recovery review supersedes the first.
+    mutating func replaceReviewedLocalSnapshot<S: Sequence>(_ envelopes: S)
+    where S.Element == SyncEnvelope {
+        for envelope in envelopes where !envelope.deleted {
+            let key = SyncBase.key(envelope.id)
+            guard var entry = entries[key] else { continue }
+            entry.reviewedLocalAncestor = envelope
+            entry.reviewedLocalSnapshotKnown = true
+            entry.preReviewMergeAncestor = nil
+            entries[key] = entry
+        }
+    }
+
+    /// Adds an existence fence before an awaited scheduler reset or immediately after
+    /// journal-only materialization. Never replace an earlier explicit review ancestor:
+    /// later local edits are intent relative to that original snapshot, not a new review.
+    mutating func markReviewedLocalSnapshot<S: Sequence>(_ envelopes: S)
+    where S.Element == SyncEnvelope {
+        for envelope in envelopes where !envelope.deleted {
+            let key = SyncBase.key(envelope.id)
+            guard var entry = entries[key] else { continue }
+            if !entry.reviewedLocalSnapshotKnown {
+                entry.reviewedLocalAncestor = envelope
+                entry.reviewedLocalSnapshotKnown = true
+            }
+            entries[key] = entry
         }
     }
 
@@ -1760,7 +2030,7 @@ nonisolated struct SyncJournal: Equatable {
 /// second synthesized representation that can drift.
 nonisolated extension SyncJournal: Codable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, entries, conflictDependencies
+        case schemaVersion, entries, conflictDependencies, reviewedRecoveryFingerprint
     }
 
     private struct StoredOffered: Codable {
@@ -1795,7 +2065,9 @@ nonisolated extension SyncJournal: Codable {
 
     private struct StoredEntry: Codable {
         private enum CodingKeys: String, CodingKey, CaseIterable {
-            case desired, offered, generation, modifiedAt
+            case desired, offered, generation, modifiedAt, reviewedLocalExistence
+            case reviewedLocalAncestor, reviewedLocalSnapshotKnown
+            case preReviewMergeAncestor
         }
         var desired: String
         var offered: StoredOffered?
@@ -1803,15 +2075,25 @@ nonisolated extension SyncJournal: Codable {
         /// `Date`'s stored `Double`, without ISO-8601's subsecond truncation. Journal
         /// round trips must be value-exact because equality suppresses needless writes.
         var modifiedAt: Double
+        var reviewedLocalExistence: Bool?
+        var reviewedLocalAncestor: String?
+        var reviewedLocalSnapshotKnown: Bool?
+        var preReviewMergeAncestor: String?
 
         init(
             desired: String, offered: StoredOffered?, generation: UInt64,
-            modifiedAt: Double
+            modifiedAt: Double, reviewedLocalExistence: Bool?,
+            reviewedLocalAncestor: String?, reviewedLocalSnapshotKnown: Bool?,
+            preReviewMergeAncestor: String?
         ) {
             self.desired = desired
             self.offered = offered
             self.generation = generation
             self.modifiedAt = modifiedAt
+            self.reviewedLocalExistence = reviewedLocalExistence
+            self.reviewedLocalAncestor = reviewedLocalAncestor
+            self.reviewedLocalSnapshotKnown = reviewedLocalSnapshotKnown
+            self.preReviewMergeAncestor = preReviewMergeAncestor
         }
 
         init(from decoder: Decoder) throws {
@@ -1821,6 +2103,14 @@ nonisolated extension SyncJournal: Codable {
             offered = try container.decodeIfPresent(StoredOffered.self, forKey: .offered)
             generation = try container.decode(UInt64.self, forKey: .generation)
             modifiedAt = try container.decode(Double.self, forKey: .modifiedAt)
+            reviewedLocalExistence = try container.decodeIfPresent(
+                Bool.self, forKey: .reviewedLocalExistence)
+            reviewedLocalAncestor = try container.decodeIfPresent(
+                String.self, forKey: .reviewedLocalAncestor)
+            reviewedLocalSnapshotKnown = try container.decodeIfPresent(
+                Bool.self, forKey: .reviewedLocalSnapshotKnown)
+            preReviewMergeAncestor = try container.decodeIfPresent(
+                String.self, forKey: .preReviewMergeAncestor)
         }
     }
 
@@ -1916,6 +2206,26 @@ nonisolated extension SyncJournal: Codable {
         // journal that silently discards desired/offered intent.
         let stored = try container.decode([String: StoredEntry].self, forKey: .entries)
 
+        if schemaVersion >= 5 {
+            reviewedRecoveryFingerprint = try container.decodeIfPresent(
+                String.self, forKey: .reviewedRecoveryFingerprint)
+            if let reviewedRecoveryFingerprint,
+               !Self.isLowercaseSHA256(reviewedRecoveryFingerprint) {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .reviewedRecoveryFingerprint,
+                    in: container,
+                    debugDescription: "invalid reviewed recovery fingerprint")
+            }
+        } else {
+            guard !container.contains(.reviewedRecoveryFingerprint) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .reviewedRecoveryFingerprint,
+                    in: container,
+                    debugDescription: "review fingerprint requires journal schema 5")
+            }
+            reviewedRecoveryFingerprint = nil
+        }
+
         var decoded: [String: Entry] = [:]
         decoded.reserveCapacity(stored.count)
         for (key, value) in stored {
@@ -1949,13 +2259,92 @@ nonisolated extension SyncJournal: Codable {
                 offered = nil
             }
 
+            let reviewedLocalAncestor: SyncEnvelope?
+            if let encoded = value.reviewedLocalAncestor {
+                guard let data = Data(base64Encoded: encoded),
+                      let ancestor = try? SyncEnvelope.parse(data),
+                      ancestor.id == desired.id,
+                      !ancestor.deleted else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .entries,
+                        in: container,
+                        debugDescription: "invalid reviewed local ancestor")
+                }
+                reviewedLocalAncestor = ancestor
+            } else {
+                reviewedLocalAncestor = nil
+            }
+            let reviewedLocalSnapshotKnown: Bool
+            let preReviewMergeAncestor: SyncEnvelope?
+            if schemaVersion >= 5 {
+                guard let storedKnown = value.reviewedLocalSnapshotKnown else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .entries,
+                        in: container,
+                        debugDescription: "journal schema 5 requires reviewed snapshot facts")
+                }
+                reviewedLocalSnapshotKnown = storedKnown
+                if let encoded = value.preReviewMergeAncestor {
+                    guard let data = Data(base64Encoded: encoded),
+                          let ancestor = try? SyncEnvelope.parse(data),
+                          ancestor.id == desired.id else {
+                        throw DecodingError.dataCorruptedError(
+                            forKey: .entries,
+                            in: container,
+                            debugDescription: "invalid pre-review merge ancestor")
+                    }
+                    preReviewMergeAncestor = ancestor
+                } else {
+                    preReviewMergeAncestor = nil
+                }
+            } else {
+                guard value.reviewedLocalSnapshotKnown == nil,
+                      value.preReviewMergeAncestor == nil else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .entries,
+                        in: container,
+                        debugDescription: "two-phase review facts require journal schema 5")
+                }
+                reviewedLocalSnapshotKnown = reviewedLocalAncestor != nil
+                preReviewMergeAncestor = nil
+            }
+            guard (value.reviewedLocalExistence ?? false)
+                    == (reviewedLocalSnapshotKnown && reviewedLocalAncestor != nil),
+                  reviewedLocalSnapshotKnown || (reviewedLocalAncestor == nil
+                    && preReviewMergeAncestor == nil) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .entries,
+                    in: container,
+                    debugDescription: "reviewed state must bind exact recovery ancestry")
+            }
+
             decoded[key] = Entry(
                 desired: desired,
                 offered: offered,
                 generation: value.generation,
-                modifiedAt: Date(timeIntervalSinceReferenceDate: value.modifiedAt))
+                modifiedAt: Date(timeIntervalSinceReferenceDate: value.modifiedAt),
+                reviewedLocalAncestor: reviewedLocalAncestor,
+                reviewedLocalSnapshotKnown: reviewedLocalSnapshotKnown,
+                preReviewMergeAncestor: preReviewMergeAncestor)
         }
         entries = decoded
+
+        if schemaVersion < 4,
+           stored.values.contains(where: {
+               $0.reviewedLocalExistence != nil || $0.reviewedLocalAncestor != nil
+           }) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .entries,
+                in: container,
+                debugDescription: "reviewed local existence requires journal schema 4")
+        }
+        if schemaVersion >= 4,
+           stored.values.contains(where: { $0.reviewedLocalExistence == nil }) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .entries,
+                in: container,
+                debugDescription: "journal schema 4 requires reviewed existence facts")
+        }
 
         if schemaVersion == 1 {
             guard !container.contains(.conflictDependencies) else {
@@ -2119,9 +2508,41 @@ nonisolated extension SyncJournal: Codable {
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
+        if schemaVersion >= 5 {
+            try container.encodeIfPresent(
+                reviewedRecoveryFingerprint, forKey: .reviewedRecoveryFingerprint)
+        } else if reviewedRecoveryFingerprint != nil {
+            throw EncodingError.invalidValue(
+                self,
+                .init(codingPath: container.codingPath,
+                      debugDescription: "review fingerprint requires journal schema 5"))
+        }
         var stored: [String: StoredEntry] = [:]
         stored.reserveCapacity(entries.count)
         for (key, entry) in entries {
+            guard entry.reviewedLocalSnapshotKnown
+                    || (entry.reviewedLocalAncestor == nil
+                        && entry.preReviewMergeAncestor == nil),
+                  entry.reviewedLocalAncestor.map({
+                    $0.id == entry.desired.id && !$0.deleted
+                  }) ?? true,
+                  entry.preReviewMergeAncestor.map({
+                    $0.id == entry.desired.id
+                  }) ?? true else {
+                throw EncodingError.invalidValue(
+                    entry,
+                    .init(codingPath: container.codingPath,
+                          debugDescription: "invalid reviewed recovery ancestry"))
+            }
+            if schemaVersion < 5,
+               (entry.preReviewMergeAncestor != nil
+                    || (entry.reviewedLocalSnapshotKnown
+                        && entry.reviewedLocalAncestor == nil)) {
+                throw EncodingError.invalidValue(
+                    entry,
+                    .init(codingPath: container.codingPath,
+                          debugDescription: "two-phase recovery ancestry requires schema 5"))
+            }
             let offered = try entry.offered.map {
                 StoredOffered(
                     envelope: try $0.envelope.canonicalData().base64EncodedString(),
@@ -2132,7 +2553,19 @@ nonisolated extension SyncJournal: Codable {
                 desired: try entry.desired.canonicalData().base64EncodedString(),
                 offered: offered,
                 generation: entry.generation,
-                modifiedAt: entry.modifiedAt.timeIntervalSinceReferenceDate)
+                modifiedAt: entry.modifiedAt.timeIntervalSinceReferenceDate,
+                reviewedLocalExistence: schemaVersion >= 4
+                    ? entry.reviewedLocalExistence
+                    : nil,
+                reviewedLocalAncestor: schemaVersion >= 4
+                    ? try entry.reviewedLocalAncestor?.canonicalData().base64EncodedString()
+                    : nil,
+                reviewedLocalSnapshotKnown: schemaVersion >= 5
+                    ? entry.reviewedLocalSnapshotKnown
+                    : nil,
+                preReviewMergeAncestor: schemaVersion >= 5
+                    ? try entry.preReviewMergeAncestor?.canonicalData().base64EncodedString()
+                    : nil)
         }
         try container.encode(stored, forKey: .entries)
         var storedDependencies: [String: StoredDependency] = [:]

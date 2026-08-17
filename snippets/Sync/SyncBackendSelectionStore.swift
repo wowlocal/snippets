@@ -48,35 +48,107 @@ struct SnippetsCloudCredentialRevocationPlan: Equatable {
     }
 }
 
-/// Shares one refresh exchange across every transport/UI OAuth client in this process.
-/// MainActor alone does not serialize across an awaited token request, so an explicit
-/// single-flight gate prevents two rotations from producing an untracked credential.
-@MainActor
-final class SnippetsCloudRefreshSingleFlight {
-    private struct Flight {
-        let id: UUID
-        let task: Task<String, Error>
-    }
+/// Distinguishes the two crash sides of a journal-first credential replacement.
+/// A later-than-current refresh token was minted but never committed and must be
+/// revoked. After commit, refresh rotation relies on mandatory reuse protection, while
+/// an interactive replacement is a separate grant whose older refresh stays tracked
+/// and is explicitly revoked.
+struct SnippetsCloudCredentialReplacementCleanupPlan: Equatable {
+    let accessTokensToRetire: [String]
+    let abandonedRefreshTokens: [String]
 
-    private var flight: Flight?
-    var isActive: Bool { flight != nil }
-
-    func run(
-        _ operation: @escaping @MainActor () async throws -> String
-    ) async throws -> String {
-        if let flight { return try await flight.task.value }
-        let id = UUID()
-        let task = Task { @MainActor in try await operation() }
-        flight = Flight(id: id, task: task)
-        defer {
-            if flight?.id == id { flight = nil }
+    init?(
+        currentAccessToken: String?,
+        currentRefreshToken: String?,
+        journalAccessTokens: [String],
+        journalRefreshTokens: [String],
+        replacementKind: SnippetsCloudCredentialReplacementKind
+    ) {
+        guard !journalAccessTokens.isEmpty, !journalRefreshTokens.isEmpty,
+              (currentAccessToken == nil) == (currentRefreshToken == nil) else { return nil }
+        accessTokensToRetire = journalAccessTokens.filter { $0 != currentAccessToken }
+        guard let currentAccessToken, let currentRefreshToken else {
+            abandonedRefreshTokens = journalRefreshTokens
+            return
         }
-        return try await task.value
+        guard let accessIndex = journalAccessTokens.firstIndex(of: currentAccessToken),
+              let refreshIndex = journalRefreshTokens.firstIndex(of: currentRefreshToken)
+        else { return nil }
+        let currentIsCommittedNewest =
+            accessIndex == journalAccessTokens.index(before: journalAccessTokens.endIndex)
+            && refreshIndex == journalRefreshTokens.index(before: journalRefreshTokens.endIndex)
+        if currentIsCommittedNewest {
+            abandonedRefreshTokens = replacementKind == .interactiveReplacement
+                ? journalRefreshTokens.filter { $0 != currentRefreshToken }
+                : []
+        } else {
+            abandonedRefreshTokens = Array(
+                journalRefreshTokens.suffix(from: refreshIndex + 1))
+        }
+    }
+}
+
+enum SnippetsCloudCredentialReplacementKind: String, Codable {
+    case refreshRotation
+    case interactiveReplacement
+}
+
+/// Serializes interactive credential replacement, orphan cleanup, and logout across
+/// awaits. MainActor alone is reentrant, so without this gate a browser callback could
+/// publish a new token generation while logout was already revoking an older plan.
+@MainActor
+final class SnippetsCloudCredentialMutationGate {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
     }
 
-    func drain() async {
-        guard let flight else { return }
-        _ = await flight.task.result
+    private var held = false
+    private var waiters: [Waiter] = []
+
+    func run<T>(
+        _ operation: @escaping @MainActor () async throws -> T
+    ) async throws -> T {
+        try await acquire()
+        defer { release() }
+        try Task.checkCancellation()
+        return try await operation()
+    }
+
+    private func acquire() async throws {
+        try Task.checkCancellation()
+        if !held {
+            held = true
+            return
+        }
+        let id = UUID()
+        let acquired = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    waiters.append(Waiter(id: id, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelWaiter(id)
+            }
+        }
+        guard acquired else { throw CancellationError() }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            held = false
+        } else {
+            waiters.removeFirst().continuation.resume(returning: true)
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(returning: false)
     }
 }
 
@@ -102,9 +174,10 @@ final class SyncBackendSelectionStore {
 
     struct CloudCoordinates: Equatable {
         var serverURL: URL
-        var apiBaseURL: URL
-        var protocolMajor: Int
+        var apiBaseURL: URL? = nil
         var spaceID: UUID
+        var serverInstanceID: UUID? = nil
+        var protocolMajor: Int? = nil
     }
 
     enum Failure: Error, LocalizedError, CustomStringConvertible {
@@ -112,6 +185,9 @@ final class SyncBackendSelectionStore {
         case missingConfiguration
         case missingCredential
         case invalidCredential
+        case credentialCleanupRequired
+        case credentialResetRequired
+        case credentialStoreUnavailable
 
         var description: String {
             switch self {
@@ -119,6 +195,11 @@ final class SyncBackendSelectionStore {
             case .missingConfiguration: "Snippets Cloud is not configured"
             case .missingCredential: "Snippets Cloud needs sign-in"
             case .invalidCredential: "the stored Snippets Cloud credential is invalid"
+            case .credentialCleanupRequired:
+                "a previous Snippets Cloud sign-in is still retiring old credentials"
+            case .credentialResetRequired:
+                "the saved Snippets Cloud credential history cannot be verified"
+            case .credentialStoreUnavailable: "the credential store is temporarily unavailable"
             }
         }
 
@@ -126,13 +207,17 @@ final class SyncBackendSelectionStore {
     }
 
     static let providerDefaultsKey = "SnippetsSyncProvider"
-    static let pendingSwitchDefaultsKey = "SnippetsSyncProviderSwitchPending"
+    /// Removed one-bit provider-switch authority. Older builds could leave this true
+    /// across an offline attempt and accidentally authorize a later unrelated account.
+    private static let legacyPendingSwitchDefaultsKey = "SnippetsSyncProviderSwitchPending"
     private static let serverDefaultsKey = "SnippetsCloudServerURL"
     private static let apiBaseDefaultsKey = "SnippetsCloudAPIBaseURL"
-    private static let protocolDefaultsKey = "SnippetsCloudProtocolMajor"
     private static let spaceDefaultsKey = "SnippetsCloudSpaceID"
+    private static let serverInstanceDefaultsKey = "SnippetsCloudServerInstanceID"
+    private static let protocolMajorDefaultsKey = "SnippetsCloudProtocolMajor"
     private static let tokenAccount = "oidc-access-token-v1"
     static let oauthSessionAccount = "oidc-session-v1"
+    static let oauthSessionReplacementAccount = "oidc-session-replacement-journal-v1"
     static let oauthRevocationAccount = "oidc-revocation-journal-v1"
     static let pendingLocalEraseAccount = "cloud-local-erase-v1"
     fileprivate static let credentialService = "com.khm.snippets.sync-http"
@@ -161,24 +246,38 @@ final class SyncBackendSelectionStore {
             service: SnippetsCloudAccountBootstrap.bootstrapService,
             itemAccessibility: .afterFirstUnlock)
         self.cloudKeys = cloudKeys ?? SnippetsCloudKeyStore(coordinates: {
-            Self.cloudCoordinates(in: defaults, allowLegacyV1ForLogout: false)
+            Self.cloudCoordinates(in: defaults)
         })
-        if !snippetsCloudEnabled {
-            // A provider-switch journal is one-shot review authority. Never carry an
-            // unfinished development transition through a build that cannot expose or
-            // complete that transition, then revive it if the feature is enabled later.
-            defaults.set(false, forKey: Self.pendingSwitchDefaultsKey)
-        }
+        // A provider choice is not authority to clear an account safety boundary. Drop
+        // the legacy Boolean on every launch; an account/dataset change now always uses
+        // the explicit reason-specific confirmation shown by Sync settings.
+        defaults.removeObject(forKey: Self.legacyPendingSwitchDefaultsKey)
         // A successful remote logout writes this journal before deleting any local
         // secret. Finishing it during normal app construction makes process death at
         // every subsequent deletion boundary recoverable and fail-closed.
         try? resumePendingLocalErase()
-        if hasPendingRemoteRevocation {
+        let startupLineage = try? SnippetsCloudOAuthClient(
+            keychain: self.keychain,
+            redirectURL: Self.bundledOAuthRedirectURL
+                ?? URL(string: "https://credentials.invalid/oauth2redirect/apple")!
+        ).inspectCredentialLineage()
+        if startupLineage?.hasRevocation == true {
             // The remote intent journal is written before the first logout request and
             // retained through provider success. A crash in the network/local handoff
             // therefore resumes idempotently instead of leaving a usable local root.
             Task { @MainActor [weak self] in
                 try? await self?.resumeInterruptedSignOut()
+            }
+        } else if startupLineage?.hasReplacement == true,
+                  let redirectURL = Self.bundledOAuthRedirectURL {
+            // This also covers a crash after a first token exchange journaled its
+            // credentials but before AUTH_SESSION was committed. With no current
+            // session every journal token is superseded and is remotely revoked.
+            Task { @MainActor [credentialStore = self.keychain] in
+                try? await SnippetsCloudOAuthClient(
+                    keychain: credentialStore,
+                    redirectURL: redirectURL
+                ).retireSupersededInteractiveSessions()
             }
         }
     }
@@ -209,63 +308,118 @@ final class SyncBackendSelectionStore {
         keychain.hasItem(account: Self.oauthRevocationAccount)
     }
 
-    private static func cloudCoordinates(in defaults: UserDefaults) -> CloudCoordinates? {
-        cloudCoordinates(in: defaults, allowLegacyV1ForLogout: false)
+    var hasPendingCredentialCleanup: Bool {
+        keychain.hasItem(account: Self.oauthSessionReplacementAccount)
     }
 
-    private static func cloudCoordinates(
-        in defaults: UserDefaults,
-        allowLegacyV1ForLogout: Bool
-    ) -> CloudCoordinates? {
+    func pendingLocalEraseExists() throws -> Bool {
+        try keychain.loadItem(account: Self.pendingLocalEraseAccount) != nil
+    }
+
+    func pendingRemoteRevocationExists() throws -> Bool {
+        try keychain.loadItem(account: Self.oauthRevocationAccount) != nil
+    }
+
+    var cloudCredentialResetRequired: Bool {
+        guard let failure = credentialLineageFailure() else { return false }
+        if case .credentialResetRequired = failure { return true }
+        return false
+    }
+
+    private func credentialLineageFailure() -> Failure? {
+        // Parsing the journal does not use the callback, but keeping construction on
+        // the same validated client avoids a second, weaker credential schema path.
+        let inspectionRedirect = Self.bundledOAuthRedirectURL
+            ?? URL(string: "https://credentials.invalid/oauth2redirect/apple")!
+        do {
+            let lineage = try SnippetsCloudOAuthClient(
+                keychain: keychain,
+                redirectURL: inspectionRedirect
+            ).inspectCredentialLineage()
+            return lineage.hasReplacement || lineage.hasRevocation
+                ? .credentialCleanupRequired : nil
+        } catch SnippetsCloudOAuthClient.Failure.invalidStoredSession {
+            return .credentialResetRequired
+        } catch {
+            return .credentialStoreUnavailable
+        }
+    }
+
+    private func schedulePendingCredentialCleanup() {
+        guard hasPendingCredentialCleanup,
+              !hasPendingRemoteRevocation,
+              let redirectURL = Self.bundledOAuthRedirectURL else { return }
+        Task { @MainActor [credentialStore = keychain] in
+            // Success removes the durable boundary. Failure deliberately leaves it in
+            // place; makeTransport and every token provider keep the data plane closed,
+            // while Try Again/startup can schedule another awaited cleanup attempt.
+            try? await SnippetsCloudOAuthClient(
+                keychain: credentialStore,
+                redirectURL: redirectURL
+            ).retireSupersededInteractiveSessions()
+        }
+    }
+
+    private static func cloudCoordinates(in defaults: UserDefaults) -> CloudCoordinates? {
         guard let rawURL = defaults.string(forKey: Self.serverDefaultsKey),
               let url = URL(string: rawURL),
               let rawSpace = defaults.string(forKey: Self.spaceDefaultsKey),
               let spaceID = UUID(uuidString: rawSpace) else { return nil }
-        let protocolMajor = defaults.integer(forKey: Self.protocolDefaultsKey)
-        let apiBase = defaults.string(forKey: Self.apiBaseDefaultsKey).flatMap(URL.init(string:))
-        if protocolMajor == 2, apiBase == url.appending(path: "v2") {
-            return CloudCoordinates(
-                serverURL: url,
-                apiBaseURL: apiBase!,
-                protocolMajor: protocolMajor,
-                spaceID: spaceID)
-        }
-        guard allowLegacyV1ForLogout else { return nil }
+        let serverInstanceID = defaults.string(forKey: Self.serverInstanceDefaultsKey)
+            .flatMap(UUID.init(uuidString:))
+        let apiBaseURL = defaults.string(forKey: Self.apiBaseDefaultsKey)
+            .flatMap(URL.init(string:))
+        let storedProtocol = defaults.object(forKey: Self.protocolMajorDefaultsKey) as? NSNumber
         return CloudCoordinates(
             serverURL: url,
-            apiBaseURL: url.appending(path: "v1"),
-            protocolMajor: 1,
-            spaceID: spaceID)
-    }
-
-    var hasPendingProviderSwitch: Bool {
-        snippetsCloudEnabled && defaults.bool(forKey: Self.pendingSwitchDefaultsKey)
+            apiBaseURL: apiBaseURL,
+            spaceID: spaceID,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: storedProtocol?.intValue)
     }
 
     func selectICloud() {
-        markSwitch(to: .iCloud)
+        provider = .iCloud
     }
 
     func selectSnippetsCloud(
         serverURL: URL,
         spaceID: UUID,
+        serverInstanceID: UUID,
+        protocolMajor: Int = 2,
         accessToken: String
     ) throws {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
-        guard !hasPendingLocalErase, !hasPendingRemoteRevocation else {
+        if let failure = credentialLineageFailure() { throw failure }
+        let localErasePending: Bool
+        let remoteRevocationPending: Bool
+        do {
+            localErasePending = try pendingLocalEraseExists()
+            remoteRevocationPending = try pendingRemoteRevocationExists()
+        } catch {
+            throw Failure.credentialStoreUnavailable
+        }
+        guard !localErasePending, !remoteRevocationPending,
+              !hasPendingCredentialCleanup else {
             throw Failure.missingCredential
         }
         let configuration = try SnippetsCloudTransport.Configuration(
             baseURL: serverURL,
             spaceID: spaceID,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: protocolMajor,
             accessToken: accessToken)
         try keychain.storeItem(Data(configuration.accessToken.utf8), account: Self.tokenAccount)
         defaults.set(configuration.baseURL.absoluteString, forKey: Self.serverDefaultsKey)
-        defaults.set(configuration.baseURL.appending(path: "v2").absoluteString,
-                     forKey: Self.apiBaseDefaultsKey)
-        defaults.set(2, forKey: Self.protocolDefaultsKey)
+        defaults.set(
+            configuration.baseURL.appending(path: "v2").absoluteString,
+            forKey: Self.apiBaseDefaultsKey)
         defaults.set(configuration.spaceID.uuidString.lowercased(), forKey: Self.spaceDefaultsKey)
-        markSwitch(to: .snippetsCloud)
+        defaults.set(
+            configuration.serverInstanceID.uuidString.lowercased(),
+            forKey: Self.serverInstanceDefaultsKey)
+        defaults.set(configuration.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
+        provider = .snippetsCloud
     }
 
     func signIn(
@@ -275,6 +429,15 @@ final class SyncBackendSelectionStore {
     ) async throws {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
         try resumePendingLocalErase()
+        if let failure = credentialLineageFailure() {
+            switch failure {
+            case .credentialCleanupRequired:
+                // signIn() owns the awaited, serialized cleanup before opening a browser.
+                break
+            default:
+                throw failure
+            }
+        }
         guard let pinnedServerURL = Self.bundledServerURL,
               let redirectURL = Self.bundledOAuthRedirectURL,
               serverURL == pinnedServerURL else {
@@ -290,13 +453,16 @@ final class SyncBackendSelectionStore {
             presentationContext: presentationContext)
         defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
         defaults.set(result.apiBaseURL.absoluteString, forKey: Self.apiBaseDefaultsKey)
-        defaults.set(result.protocolMajor, forKey: Self.protocolDefaultsKey)
         defaults.set(result.spaceID.uuidString.lowercased(), forKey: Self.spaceDefaultsKey)
+        defaults.set(
+            result.serverInstanceID.uuidString.lowercased(),
+            forKey: Self.serverInstanceDefaultsKey)
+        defaults.set(result.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
         try? keychain.deleteItem(account: Self.tokenAccount)
     }
 
     func signOutSnippetsCloud() async throws {
-        if hasPendingLocalErase {
+        if try pendingLocalEraseExists() {
             try resumePendingLocalErase()
             return
         }
@@ -305,11 +471,13 @@ final class SyncBackendSelectionStore {
     }
 
     func resumeInterruptedSignOut() async throws {
-        if hasPendingLocalErase {
+        if try pendingLocalEraseExists() {
             try resumePendingLocalErase()
             return
         }
-        guard hasPendingRemoteRevocation else { return }
+        guard try pendingRemoteRevocationExists() else {
+            return
+        }
         try await revokeSnippetsCloudSession()
         try forgetSnippetsCloudLocally()
     }
@@ -318,9 +486,7 @@ final class SyncBackendSelectionStore {
     /// removed. Keeping this separate lets the bootstrap coordinator erase its own
     /// device-only journals only after the server-side credential is no longer usable.
     func revokeSnippetsCloudSession() async throws {
-        guard let coordinates = Self.cloudCoordinates(
-            in: defaults,
-            allowLegacyV1ForLogout: true),
+        guard let coordinates = cloudCoordinates,
               let redirectURL = Self.bundledOAuthRedirectURL else {
             throw Failure.missingConfiguration
         }
@@ -340,6 +506,19 @@ final class SyncBackendSelectionStore {
             Data("pending".utf8),
             account: Self.pendingLocalEraseAccount)
         try resumePendingLocalErase(bootstrapSecrets: bootstrapSecrets)
+    }
+
+    /// Explicit escape hatch for a structurally unreadable OAuth lineage. Remote
+    /// revocation cannot be reconstructed from corrupt bytes, so Settings must first
+    /// warn the user to revoke Snippets in the identity provider. The local half still
+    /// uses the normal journal-first erase and removes the library root before tokens.
+    func resetUnreadableCloudCredentialsLocally(
+        bootstrapSecrets: KeychainSecretStore? = nil
+    ) throws {
+        guard cloudCredentialResetRequired else {
+            throw Failure.credentialCleanupRequired
+        }
+        try forgetSnippetsCloudLocally(bootstrapSecrets: bootstrapSecrets)
     }
 
     func resumePendingLocalErase(
@@ -364,6 +543,7 @@ final class SyncBackendSelectionStore {
         for account in [
             Self.tokenAccount,
             Self.oauthSessionAccount,
+            Self.oauthSessionReplacementAccount,
             Self.oauthRevocationAccount,
         ] {
             do { try keychain.deleteItem(account: account) }
@@ -373,19 +553,33 @@ final class SyncBackendSelectionStore {
 
         defaults.removeObject(forKey: Self.serverDefaultsKey)
         defaults.removeObject(forKey: Self.apiBaseDefaultsKey)
-        defaults.removeObject(forKey: Self.protocolDefaultsKey)
         defaults.removeObject(forKey: Self.spaceDefaultsKey)
-        markSwitch(to: .iCloud)
+        defaults.removeObject(forKey: Self.serverInstanceDefaultsKey)
+        defaults.removeObject(forKey: Self.protocolMajorDefaultsKey)
+        provider = .iCloud
         try keychain.deleteItem(account: Self.pendingLocalEraseAccount)
     }
 
     func freshCloudAccessToken(forceRefresh: Bool = false) async throws -> String {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
+        if let failure = credentialLineageFailure() {
+            switch failure {
+            case .credentialCleanupRequired:
+                // The token provider performs and awaits the same serialized cleanup.
+                break
+            default:
+                throw failure
+            }
+        }
         guard !hasPendingLocalErase, !hasPendingRemoteRevocation else {
             throw Failure.missingCredential
         }
         guard let coordinates = cloudCoordinates,
               coordinates.serverURL == Self.bundledServerURL,
+              coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2"),
+              let serverInstanceID = coordinates.serverInstanceID,
+              let protocolMajor = coordinates.protocolMajor,
+              protocolMajor == 2,
               let redirectURL = Self.bundledOAuthRedirectURL else {
             throw Failure.missingConfiguration
         }
@@ -394,23 +588,40 @@ final class SyncBackendSelectionStore {
             redirectURL: redirectURL
         ).freshAccessToken(
             expectedServerURL: coordinates.serverURL,
+            expectedServerInstanceID: serverInstanceID,
+            expectedProtocolMajor: protocolMajor,
             forceRefresh: forceRefresh)
     }
 
     func activateSnippetsCloud() {
         guard snippetsCloudEnabled else { return }
-        guard !hasPendingLocalErase, !hasPendingRemoteRevocation else { return }
-        markSwitch(to: .snippetsCloud)
+        guard !hasPendingLocalErase, !hasPendingRemoteRevocation,
+              !hasPendingCredentialCleanup else { return }
+        provider = .snippetsCloud
     }
 
     func parkSnippetsCloudUntilKeyReady() {
-        if provider == .snippetsCloud { markSwitch(to: .iCloud) }
+        if provider == .snippetsCloud { provider = .iCloud }
     }
 
     var hasCloudSession: Bool {
-        snippetsCloudEnabled
-            && !hasPendingLocalErase
-            && keychain.hasItem(account: Self.oauthSessionAccount)
+        guard snippetsCloudEnabled,
+              !hasPendingLocalErase,
+              !hasPendingRemoteRevocation,
+              !hasPendingCredentialCleanup,
+              let coordinates = cloudCoordinates,
+              coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2"),
+              let serverInstanceID = coordinates.serverInstanceID,
+              let protocolMajor = coordinates.protocolMajor,
+              protocolMajor == 2,
+              let redirectURL = Self.bundledOAuthRedirectURL else { return false }
+        return (try? SnippetsCloudOAuthClient(
+            keychain: keychain,
+            redirectURL: redirectURL
+        ).currentTransportCredential(
+            expectedServerURL: coordinates.serverURL,
+            expectedServerInstanceID: serverInstanceID,
+            expectedProtocolMajor: protocolMajor)) != nil
     }
 
     static var bundledServerURL: URL? {
@@ -444,68 +655,122 @@ final class SyncBackendSelectionStore {
     }
 
     func makeTransport() throws -> any SyncTransport {
-        guard !hasPendingLocalErase, !hasPendingRemoteRevocation else {
-            throw Failure.missingCredential
+        do {
+            guard try !pendingLocalEraseExists() else {
+                throw Failure.missingCredential
+            }
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            throw Failure.credentialStoreUnavailable
         }
         switch provider {
         case .iCloud:
             return CloudKitTransport()
         case .snippetsCloud:
-            guard let coordinates = cloudCoordinates else { throw Failure.missingConfiguration }
+            if let cleanupFailure = credentialLineageFailure() {
+                if case .credentialCleanupRequired = cleanupFailure {
+                    schedulePendingCredentialCleanup()
+                }
+                throw cleanupFailure
+            }
+            do {
+                guard try !pendingRemoteRevocationExists() else {
+                    throw Failure.missingCredential
+                }
+            } catch let failure as Failure {
+                throw failure
+            } catch {
+                throw Failure.credentialStoreUnavailable
+            }
+            guard let coordinates = Self.cloudCoordinates(in: defaults) else {
+                throw Failure.missingConfiguration
+            }
             guard coordinates.serverURL == Self.bundledServerURL,
+                  coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2"),
                   let redirectURL = Self.bundledOAuthRedirectURL else {
                 throw Failure.missingConfiguration
             }
             let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
-            if let token = try oauth.currentAccessToken(expectedServerURL: coordinates.serverURL) {
+            guard let expectedServerInstanceID = coordinates.serverInstanceID,
+                  let expectedProtocolMajor = coordinates.protocolMajor,
+                  expectedProtocolMajor == 2 else {
+                throw Failure.missingConfiguration
+            }
+            let credential: SnippetsCloudOAuthClient.TransportCredential?
+            do {
+                credential = try oauth.currentTransportCredential(
+                    expectedServerURL: coordinates.serverURL,
+                    expectedServerInstanceID: expectedServerInstanceID,
+                    expectedProtocolMajor: expectedProtocolMajor)
+            } catch SnippetsCloudOAuthClient.Failure.invalidStoredSession {
+                throw Failure.invalidCredential
+            } catch {
+                throw Failure.credentialStoreUnavailable
+            }
+            if let credential {
                 return SnippetsCloudTransport(
                     configuration: try .init(
                         baseURL: coordinates.serverURL,
                         spaceID: coordinates.spaceID,
-                        accessToken: token),
+                        serverInstanceID: credential.serverInstanceID,
+                        protocolMajor: credential.protocolMajor,
+                        accessToken: credential.accessToken),
                     accessTokenProvider: { forceRefresh in
                         try await oauth.freshAccessToken(
                             expectedServerURL: coordinates.serverURL,
+                            expectedServerInstanceID: expectedServerInstanceID,
+                            expectedProtocolMajor: expectedProtocolMajor,
                             forceRefresh: forceRefresh)
                     })
             }
-            guard let tokenData = try keychain.loadItem(account: Self.tokenAccount) else {
-                throw Failure.missingCredential
+            let tokenData: Data
+            do {
+                guard let stored = try keychain.loadItem(account: Self.tokenAccount) else {
+                    throw Failure.missingCredential
+                }
+                tokenData = stored
+            } catch let failure as Failure {
+                throw failure
+            } catch {
+                throw Failure.credentialStoreUnavailable
             }
             guard let token = String(data: tokenData, encoding: .utf8) else {
                 throw Failure.invalidCredential
             }
+            guard let serverInstanceID = coordinates.serverInstanceID,
+                  let protocolMajor = coordinates.protocolMajor else {
+                throw Failure.missingConfiguration
+            }
             return SnippetsCloudTransport(configuration: try .init(
                 baseURL: coordinates.serverURL,
                 spaceID: coordinates.spaceID,
+                serverInstanceID: serverInstanceID,
+                protocolMajor: protocolMajor,
                 accessToken: token))
         }
     }
 
-    func clearPendingProviderSwitch() {
-        defaults.set(false, forKey: Self.pendingSwitchDefaultsKey)
-    }
-
-    private func markSwitch(to selected: Provider) {
-        guard selected != .snippetsCloud || snippetsCloudEnabled else { return }
-        // Setting the same provider after changing its endpoint/token can still be an
-        // account-scope transition and needs the exact same journal-first handoff.
-        provider = selected
-        defaults.set(snippetsCloudEnabled, forKey: Self.pendingSwitchDefaultsKey)
-    }
 }
 
 @MainActor
 private final class SnippetsCloudOAuthClient {
     /// All OAuth client instances, including transport-owned instances, share this
-    /// process-wide rotation gate.
-    private static let refreshGate = SnippetsCloudRefreshSingleFlight()
+    /// process-wide mutation gate.
+    private static let credentialMutationGate = SnippetsCloudCredentialMutationGate()
 
     struct SignInResult {
         let serverURL: URL
         let apiBaseURL: URL
-        let protocolMajor: Int
         let spaceID: UUID
+        let serverInstanceID: UUID
+        let protocolMajor: Int
+    }
+
+    struct TransportCredential {
+        let accessToken: String
+        let serverInstanceID: UUID
+        let protocolMajor: Int
     }
 
     enum Failure: Error, CustomStringConvertible {
@@ -547,9 +812,22 @@ private final class SnippetsCloudOAuthClient {
             let stepUpMaxAgeSeconds: Int
             let stepUpACRValues: [String]
         }
+        struct Limits: Decodable {
+            let maxBlobBytes: Int
+            let maxRevisionBytes: Int
+            let maxBatchRecords: Int
+            let maxPageRecords: Int
+            let maxRequestBytes: Int
+            let maxResponseBytes: Int
+            let maxKeyEnvelopeBytes: Int
+            let maxPairingSeconds: Int
+        }
         let protocolMajor: Int
+        let serverInstanceId: UUID
         let apiBase: URL
         let oidc: OIDC
+        let limits: Limits
+        let recordProfile: String
         let capabilities: [String]
     }
 
@@ -585,9 +863,10 @@ private final class SnippetsCloudOAuthClient {
 
     struct StoredSession: Codable {
         let schemaVersion: Int
-        let protocolMajor: Int?
-        let apiBase: URL?
         let serverURL: URL
+        let apiBase: URL?
+        let serverInstanceID: UUID?
+        let protocolMajor: Int?
         let issuer: URL
         let resource: URL
         let tokenEndpoint: URL
@@ -608,13 +887,21 @@ private final class SnippetsCloudOAuthClient {
         let clientID: String
         let accessTokens: [String]
         let refreshTokens: [String]
+        let replacementKind: SnippetsCloudCredentialReplacementKind?
     }
 
     struct SpacesResponse: Decodable { let spaces: [Space] }
     struct Space: Decodable {
-        struct Scope: Decodable { let spaceId: UUID }
+        struct Scope: Decodable {
+            let serverInstanceId: UUID
+            let spaceId: UUID
+            let scopeBinding: String
+            let datasetGeneration: UUID
+            let feedEpoch: UUID
+        }
         let scope: Scope
         let role: String
+
         var spaceId: UUID { scope.spaceId }
     }
 
@@ -639,8 +926,36 @@ private final class SnippetsCloudOAuthClient {
         requiresStrongAuthentication: Bool,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> SignInResult {
-        guard !keychain.hasItem(account: SyncBackendSelectionStore.oauthRevocationAccount)
+        try await Self.credentialMutationGate.run { [self] in
+            try await retireSupersededInteractiveSessionsWithoutGate()
+            return try await performSignIn(
+                serverURL: serverURL,
+                existingSpaceID: existingSpaceID,
+                requiresStrongAuthentication: requiresStrongAuthentication,
+                presentationContext: presentationContext)
+        }
+    }
+
+    private func performSignIn(
+        serverURL: URL,
+        existingSpaceID: UUID?,
+        requiresStrongAuthentication: Bool,
+        presentationContext: any ASWebAuthenticationPresentationContextProviding
+    ) async throws -> SignInResult {
+        guard try keychain.loadItem(
+            account: SyncBackendSelectionStore.oauthRevocationAccount) == nil
         else { throw Failure.invalidStoredSession }
+        // Capture the active generation before the first await. At commit we verify
+        // that logout or another interactive sign-in did not replace it while the
+        // browser was open. Every observed/new generation is journaled first.
+        let sessionAtStart = try loadSession()
+        if let sessionAtStart,
+           let replacements = try loadSessionReplacementJournal(boundTo: sessionAtStart) {
+            guard replacements.accessTokens.count < 16,
+                  replacements.refreshTokens.count < 16 else {
+                throw Failure.invalidStoredSession
+            }
+        }
         let serverURL = try validatedBaseURL(serverURL)
         let discoveryURL = serverURL.appending(path: ".well-known/snippets-sync")
         let discovery: Discovery = try await getJSON(
@@ -648,12 +963,22 @@ private final class SnippetsCloudOAuthClient {
             maximumBytes: 256 * 1_024,
             failure: .discoveryUnavailable)
         guard discovery.protocolMajor == 2,
+              discovery.recordProfile == "snippets-wire-v1",
+              discovery.limits.maxBlobBytes == 900_000,
+              discovery.limits.maxRevisionBytes == 256,
+              discovery.limits.maxBatchRecords == 50,
+              discovery.limits.maxPageRecords == 50,
+              discovery.limits.maxRequestBytes == 16 * 1_024 * 1_024,
+              discovery.limits.maxResponseBytes == 64 * 1_024 * 1_024,
+              discovery.limits.maxKeyEnvelopeBytes == 4_096,
+              discovery.limits.maxPairingSeconds == 600,
               discovery.apiBase == serverURL.appending(path: "v2"),
               try validatedBaseURL(discovery.oidc.resource) == serverURL,
               discovery.oidc.authorizationFlow == "authorization_code_pkce",
               discovery.capabilities.contains("oidc-pkce"),
               discovery.capabilities.contains("oauth-resource-indicators"),
               discovery.capabilities.contains("oauth-token-revocation"),
+              discovery.capabilities.contains("oauth-refresh-token-rotation"),
               discovery.capabilities.contains("resource-session-revocation"),
               discovery.capabilities.contains("account-without-required-email"),
               discovery.capabilities.contains("phishing-resistant-step-up"),
@@ -692,6 +1017,19 @@ private final class SnippetsCloudOAuthClient {
               try secureEndpoint(provider.revocationEndpoint) == provider.revocationEndpoint,
               provider.codeChallengeMethodsSupported?.contains("S256") == true else {
             throw Failure.identityProviderUnavailable
+        }
+        if let sessionAtStart {
+            // A grant can only be journaled and later revoked by the authority that
+            // minted it. Reject a changed issuer/client/revocation endpoint before
+            // opening the browser or exchanging a code, never after a new refresh
+            // token already exists.
+            guard sessionAtStart.serverURL == serverURL,
+                  sessionAtStart.issuer == issuer,
+                  sessionAtStart.resource == discovery.oidc.resource,
+                  sessionAtStart.revocationEndpoint == provider.revocationEndpoint,
+                  sessionAtStart.clientID == discovery.oidc.clientId else {
+                throw Failure.invalidStoredSession
+            }
         }
 
         let state = try randomBase64URL(bytes: 32)
@@ -780,16 +1118,12 @@ private final class SnippetsCloudOAuthClient {
             accessToken: token.accessToken,
             resource: discovery.oidc.resource)
 
-        let spaceID: UUID
-        spaceID = try await resolvePersonalSpace(
-            serverURL: serverURL,
-            accessToken: token.accessToken,
-            existingSpaceID: existingSpaceID)
         let stored = StoredSession(
             schemaVersion: 5,
-            protocolMajor: 2,
-            apiBase: discovery.apiBase,
             serverURL: serverURL,
+            apiBase: discovery.apiBase,
+            serverInstanceID: discovery.serverInstanceId,
+            protocolMajor: discovery.protocolMajor,
             issuer: issuer,
             resource: discovery.oidc.resource,
             tokenEndpoint: provider.tokenEndpoint,
@@ -802,38 +1136,105 @@ private final class SnippetsCloudOAuthClient {
                 token.expiresIn,
                 discovery.oidc.maxAccessTokenAgeSeconds
             ))))
+        // Persist the newly minted grant before any further await. If space lookup,
+        // selection, or process lifetime fails, startup sees B as an abandoned
+        // generation and revokes both its resource session and refresh token.
+        try storeSessionReplacementJournal(
+            sessions: [sessionAtStart, stored].compactMap { $0 },
+            kind: .interactiveReplacement)
+        let spaceID = try await resolvePersonalSpace(
+            serverURL: serverURL,
+            serverInstanceID: discovery.serverInstanceId,
+            accessToken: token.accessToken,
+            existingSpaceID: existingSpaceID)
+        let sessionAtCommit = try loadSession()
+        try storeSessionReplacementJournal(
+            sessions: [sessionAtStart, sessionAtCommit, stored].compactMap { $0 },
+            kind: .interactiveReplacement)
+        guard sameTokenGeneration(sessionAtStart, sessionAtCommit),
+              try keychain.loadItem(
+                account: SyncBackendSelectionStore.oauthRevocationAccount) == nil,
+              try keychain.loadItem(
+                account: SyncBackendSelectionStore.pendingLocalEraseAccount) == nil
+        else { throw Failure.invalidStoredSession }
         try keychain.storeItem(
             try JSONEncoder().encode(stored),
             account: SyncBackendSelectionStore.oauthSessionAccount)
+        try await retireSupersededInteractiveSessionsWithoutGate()
         return SignInResult(
             serverURL: serverURL,
             apiBaseURL: discovery.apiBase,
-            protocolMajor: discovery.protocolMajor,
-            spaceID: spaceID)
+            spaceID: spaceID,
+            serverInstanceID: discovery.serverInstanceId,
+            protocolMajor: discovery.protocolMajor)
     }
 
-    func currentAccessToken(expectedServerURL: URL) throws -> String? {
+    func currentTransportCredential(
+        expectedServerURL: URL,
+        expectedServerInstanceID: UUID,
+        expectedProtocolMajor: Int
+    ) throws -> TransportCredential? {
+        guard try keychain.loadItem(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount) == nil
+        else { throw Failure.invalidStoredSession }
         guard let stored = try loadSession() else { return nil }
-        try validateServerBinding(stored, expectedServerURL: expectedServerURL)
-        return stored.accessToken
+        try validateServerBinding(
+            stored,
+            expectedServerURL: expectedServerURL,
+            expectedServerInstanceID: expectedServerInstanceID,
+            expectedProtocolMajor: expectedProtocolMajor)
+        guard let serverInstanceID = stored.serverInstanceID,
+              let protocolMajor = stored.protocolMajor,
+              protocolMajor == 2 else {
+            throw Failure.invalidStoredSession
+        }
+        return TransportCredential(
+            accessToken: stored.accessToken,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: protocolMajor)
     }
 
     func freshAccessToken(
         expectedServerURL: URL,
+        expectedServerInstanceID: UUID,
+        expectedProtocolMajor: Int,
         forceRefresh: Bool = false
     ) async throws -> String {
-        guard !keychain.hasItem(account: SyncBackendSelectionStore.oauthRevocationAccount)
+        try await Self.credentialMutationGate.run { [self] in
+            try await freshAccessTokenWithoutGate(
+                expectedServerURL: expectedServerURL,
+                expectedServerInstanceID: expectedServerInstanceID,
+                expectedProtocolMajor: expectedProtocolMajor,
+                forceRefresh: forceRefresh)
+        }
+    }
+
+    private func freshAccessTokenWithoutGate(
+        expectedServerURL: URL,
+        expectedServerInstanceID: UUID,
+        expectedProtocolMajor: Int,
+        forceRefresh: Bool
+    ) async throws -> String {
+        // A transport that was constructed before interactive replacement still has
+        // to cross the durable cleanup boundary on every request. Never hand out B
+        // while an older A from its journal may remain remotely usable.
+        try await retireSupersededInteractiveSessionsWithoutGate()
+        guard try keychain.loadItem(
+            account: SyncBackendSelectionStore.oauthRevocationAccount) == nil
         else { throw Failure.invalidStoredSession }
         guard let stored = try loadSession() else { throw Failure.invalidStoredSession }
-        try validateServerBinding(stored, expectedServerURL: expectedServerURL)
-        if !forceRefresh,
-           stored.expiresAt.timeIntervalSinceNow > 60,
-           !Self.refreshGate.isActive {
+        try validateServerBinding(
+            stored,
+            expectedServerURL: expectedServerURL,
+            expectedServerInstanceID: expectedServerInstanceID,
+            expectedProtocolMajor: expectedProtocolMajor)
+        guard stored.serverInstanceID != nil, stored.protocolMajor == 2 else {
+            throw Failure.invalidStoredSession
+        }
+        if !forceRefresh, stored.expiresAt.timeIntervalSinceNow > 60 {
             return stored.accessToken
         }
-        return try await Self.refreshGate.run { [self] in
-            try await performRefresh(stored)
-        }
+        return try await performRefresh(stored)
     }
 
     private func performRefresh(_ stored: StoredSession) async throws -> String {
@@ -845,8 +1246,10 @@ private final class SnippetsCloudOAuthClient {
                 "refresh_token": stored.refreshToken,
                 "resource": stored.resource.absoluteString,
             ])
-        let refreshToken = token.refreshToken ?? stored.refreshToken
-        guard token.tokenType.caseInsensitiveCompare("Bearer") == .orderedSame,
+        guard let refreshToken = token.refreshToken,
+              refreshToken != stored.refreshToken,
+              token.accessToken != stored.accessToken,
+              token.tokenType.caseInsensitiveCompare("Bearer") == .orderedSame,
               (8...16_384).contains(token.accessToken.utf8.count),
               !token.accessToken.contains(where: \.isWhitespace),
               (8...16_384).contains(refreshToken.utf8.count),
@@ -857,9 +1260,10 @@ private final class SnippetsCloudOAuthClient {
         try validateResourceAudience(accessToken: token.accessToken, resource: stored.resource)
         let updated = StoredSession(
             schemaVersion: 5,
-            protocolMajor: stored.protocolMajor,
-            apiBase: stored.apiBase,
             serverURL: stored.serverURL,
+            apiBase: stored.apiBase,
+            serverInstanceID: stored.serverInstanceID,
+            protocolMajor: stored.protocolMajor,
             issuer: stored.issuer,
             resource: stored.resource,
             tokenEndpoint: stored.tokenEndpoint,
@@ -872,38 +1276,56 @@ private final class SnippetsCloudOAuthClient {
                 token.expiresIn,
                 stored.maximumAccessTokenAgeSeconds
             ))))
-        // During logout, retain every issued token family member before replacing the
-        // stored session. A crash after refresh can then retry revocation without
-        // forgetting the provider's previous refresh token.
+        // During logout, retain every issued token family member and abort before
+        // replacing the stored session. The logout transaction owns the lineage.
         let joinedRevocation = try extendRevocationJournalIfPresent(with: [stored, updated])
-        try keychain.storeItem(
-            try JSONEncoder().encode(updated),
-            account: SyncBackendSelectionStore.oauthSessionAccount)
         if joinedRevocation {
             throw Failure.invalidStoredSession
         }
+        // Ordinary refresh is also a credential-replacement transaction. Journal A/B
+        // before publishing B, then revoke A and clear the journal. A crash before the
+        // session write retires B while keeping A; a crash after it retires A while
+        // keeping B. No token generation can disappear from durable lineage.
+        try storeSessionReplacementJournal(
+            sessions: [stored, updated],
+            kind: .refreshRotation)
+        try keychain.storeItem(
+            try JSONEncoder().encode(updated),
+            account: SyncBackendSelectionStore.oauthSessionAccount)
+        try await retireSupersededInteractiveSessionsWithoutGate()
+        guard try keychain.loadItem(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount) == nil
+        else { throw Failure.invalidStoredSession }
         return updated.accessToken
     }
 
     private func validateServerBinding(
         _ stored: StoredSession,
-        expectedServerURL: URL
+        expectedServerURL: URL,
+        expectedServerInstanceID: UUID? = nil,
+        expectedProtocolMajor: Int? = nil
     ) throws {
-        guard (try? validatedBaseURL(expectedServerURL)) == stored.serverURL else {
+        guard (try? validatedBaseURL(expectedServerURL)) == stored.serverURL,
+              expectedServerInstanceID == nil
+                || stored.serverInstanceID == expectedServerInstanceID,
+              expectedProtocolMajor == nil
+                || stored.protocolMajor == expectedProtocolMajor else {
             throw Failure.invalidStoredSession
         }
     }
 
-    private func loadSession(allowLegacyV1ForLogout: Bool = false) throws -> StoredSession? {
+    private func loadSession() throws -> StoredSession? {
         guard let data = try keychain.loadItem(
             account: SyncBackendSelectionStore.oauthSessionAccount) else { return nil }
         guard data.count <= 128 * 1_024,
               let value = try? JSONDecoder().decode(StoredSession.self, from: data),
-              (value.schemaVersion == 5 || (allowLegacyV1ForLogout && value.schemaVersion == 4)),
-              value.schemaVersion == 4 || (
-                  value.protocolMajor == 2
-                      && value.apiBase == value.serverURL.appending(path: "v2")
-              ),
+              (value.schemaVersion == 4 || value.schemaVersion == 5),
+              (value.schemaVersion == 4
+                ? value.serverInstanceID == nil
+                    && value.protocolMajor == nil
+                    && value.apiBase == nil
+                : value.protocolMajor == 2
+                    && value.apiBase == value.serverURL.appending(path: "v2")),
               !value.clientID.isEmpty, value.clientID.utf8.count <= 256,
               (60...86_400).contains(value.maximumAccessTokenAgeSeconds),
               (8...16_384).contains(value.accessToken.utf8.count),
@@ -923,60 +1345,159 @@ private final class SnippetsCloudOAuthClient {
     }
 
     func revokeCurrentSession(expectedServerURL: URL) async throws {
-        guard var stored = try loadSession(allowLegacyV1ForLogout: true) else {
-            guard !keychain.hasItem(account: SyncBackendSelectionStore.oauthRevocationAccount)
-            else { throw Failure.invalidStoredSession }
-            return
+        try await Self.credentialMutationGate.run { [self] in
+            try await revokeCurrentSessionWithoutGate(
+                expectedServerURL: expectedServerURL)
         }
-        try validateServerBinding(stored, expectedServerURL: expectedServerURL)
-        var revocationJournal = try loadRevocationJournal(boundTo: stored)
-        if revocationJournal == nil {
-            revocationJournal = makeRevocationJournal(sessions: [stored])
-            try storeRevocationJournal(revocationJournal!)
-        }
+    }
 
-        // A refresh that began before the journal existed is allowed to finish only
-        // after adding both generations to that journal. No later ordinary refresh can
-        // start while the journal exists.
-        await Self.refreshGate.drain()
-        guard let latest = try loadSession(allowLegacyV1ForLogout: true) else {
+    private func revokeCurrentSessionWithoutGate(expectedServerURL: URL) async throws {
+        let expectedServerURL = try validatedBaseURL(expectedServerURL)
+        var stored = try loadSession()
+        if let stored {
+            try validateServerBinding(stored, expectedServerURL: expectedServerURL)
+        }
+        var replacement = try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount,
+            expectedServerURL: expectedServerURL,
+            boundTo: stored)
+        var revocationJournal = try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthRevocationAccount,
+            expectedServerURL: expectedServerURL,
+            boundTo: stored)
+        guard revocationJournal != nil || replacement != nil || stored != nil else { return }
+        let initialAuthority = revocationJournal
+            ?? replacement
+            ?? makeRevocationJournal(sessions: [stored!])
+        revocationJournal = try mergedCredentialJournal(
+            authority: initialAuthority,
+            journals: [revocationJournal, replacement].compactMap { $0 },
+            sessions: [stored].compactMap { $0 })
+        try storeRevocationJournal(revocationJournal!)
+
+        // Refresh, interactive replacement, cleanup, and logout all hold the same
+        // process-wide gate, so no newer generation can appear after this merge.
+        stored = try loadSession()
+        if let stored {
+            try validateServerBinding(stored, expectedServerURL: expectedServerURL)
+        }
+        replacement = try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount,
+            expectedServerURL: expectedServerURL,
+            boundTo: stored)
+        guard let durableJournal = try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthRevocationAccount,
+            expectedServerURL: expectedServerURL,
+            boundTo: stored) else { throw Failure.invalidStoredSession }
+        revocationJournal = try mergedCredentialJournal(
+            authority: durableJournal,
+            journals: [durableJournal, replacement].compactMap { $0 },
+            sessions: [stored].compactMap { $0 })
+        try storeRevocationJournal(revocationJournal!)
+        guard let revocationJournal else { throw Failure.invalidStoredSession }
+        let plan = SnippetsCloudCredentialRevocationPlan(
+            sessionAccessToken: stored?.accessToken,
+            sessionRefreshToken: stored?.refreshToken,
+            journalAccessTokens: revocationJournal.accessTokens,
+            journalRefreshTokens: revocationJournal.refreshTokens)
+
+        // Revoke every access-token generation from the journal. In particular, do
+        // not try to refresh merely because the old primary session gets 401: after
+        // a crash the next, still-valid generation may exist only in this journal.
+        // A 401 is terminally safe for that credential because it cannot authorize
+        // the data plane; provider revocation below closes every refresh generation.
+        try await revokeCredentialPlan(plan, authority: revocationJournal)
+        // Keep the remote-intent journal until the caller durably records local erase.
+        // If the process dies here, startup repeats these idempotent RFC 7009/resource
+        // revocations and then removes the root key.
+    }
+
+    func retireSupersededInteractiveSessions() async throws {
+        try await Self.credentialMutationGate.run { [self] in
+            try await retireSupersededInteractiveSessionsWithoutGate()
+        }
+    }
+
+    struct CredentialLineageInspection {
+        let hasSession: Bool
+        let hasReplacement: Bool
+        let hasRevocation: Bool
+    }
+
+    func inspectCredentialLineage() throws -> CredentialLineageInspection {
+        let current = try loadSession()
+        let replacement = try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount,
+            boundTo: current)
+        let revocation = try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthRevocationAccount,
+            boundTo: current)
+        if let replacement, let revocation,
+           !credentialAuthorityMatches(replacement, revocation) {
             throw Failure.invalidStoredSession
         }
-        try validateServerBinding(latest, expectedServerURL: expectedServerURL)
-        stored = latest
-        revocationJournal = try loadRevocationJournal(boundTo: stored)
+        return CredentialLineageInspection(
+            hasSession: current != nil,
+            hasReplacement: replacement != nil,
+            hasRevocation: revocation != nil)
+    }
 
-        func revokeAtResource(serverURL: URL, accessToken: String) async throws -> Int {
-            var request = URLRequest(
-                url: serverURL.appending(path: "v2/session"))
-            request.httpMethod = "DELETE"
-            request.timeoutInterval = 20
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue(
-                "Bearer \(accessToken)",
-                forHTTPHeaderField: "Authorization")
-            let (body, response) = try await boundedResponse(
-                request,
-                maximumBytes: 256 * 1_024)
-            guard let http = response as? HTTPURLResponse,
-                  response.url == request.url,
-                  http.statusCode != 204 || body.isEmpty else {
-                throw Failure.tokenExchangeFailed
-            }
-            return http.statusCode
+    private func retireSupersededInteractiveSessionsWithoutGate() async throws {
+        let current = try loadSession()
+        let replacement = try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount,
+            boundTo: current)
+        guard let replacement else { return }
+        guard let cleanup = SnippetsCloudCredentialReplacementCleanupPlan(
+            currentAccessToken: current?.accessToken,
+            currentRefreshToken: current?.refreshToken,
+            journalAccessTokens: replacement.accessTokens,
+            journalRefreshTokens: replacement.refreshTokens,
+            replacementKind: replacement.replacementKind ?? .interactiveReplacement)
+        else { throw Failure.invalidStoredSession }
+        try await revokeResourceAccessTokens(
+            cleanup.accessTokensToRetire,
+            authority: replacement)
+        // Before AUTH_SESSION commits, later journal entries are abandoned newly
+        // minted grants and must be revoked. After it commits, earlier refresh tokens
+        // belong to the same rotated family; revoking them may kill the new session,
+        // so rotation/reuse protection is the authority that makes them unusable.
+        if !cleanup.abandonedRefreshTokens.isEmpty {
+            try await revokeProviderCredentials(
+                SnippetsCloudCredentialRevocationPlan(
+                    sessionAccessToken: nil,
+                    sessionRefreshToken: nil,
+                    journalAccessTokens: [],
+                    journalRefreshTokens: cleanup.abandonedRefreshTokens),
+                authority: replacement)
         }
+        try keychain.deleteItem(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount)
+    }
 
-        func revoke(_ token: String, hint: String) async throws {
+    private func revokeCredentialPlan(
+        _ plan: SnippetsCloudCredentialRevocationPlan,
+        authority: RevocationJournal
+    ) async throws {
+        try await revokeResourceAccessTokens(plan.accessTokens, authority: authority)
+        try await revokeProviderCredentials(plan, authority: authority)
+    }
+
+    private func revokeProviderCredentials(
+        _ plan: SnippetsCloudCredentialRevocationPlan,
+        authority: RevocationJournal
+    ) async throws {
+        func revokeAtProvider(_ token: String, hint: String) async throws {
             var components = URLComponents()
             components.queryItems = [
-                URLQueryItem(name: "client_id", value: stored.clientID),
+                URLQueryItem(name: "client_id", value: authority.clientID),
                 URLQueryItem(name: "token", value: token),
                 URLQueryItem(name: "token_type_hint", value: hint),
             ]
             guard let body = components.percentEncodedQuery?.data(using: .utf8) else {
                 throw Failure.tokenExchangeFailed
             }
-            var request = URLRequest(url: stored.revocationEndpoint)
+            var request = URLRequest(url: authority.revocationEndpoint)
             request.httpMethod = "POST"
             request.httpBody = body
             request.timeoutInterval = 20
@@ -990,56 +1511,84 @@ private final class SnippetsCloudOAuthClient {
             guard let http = response as? HTTPURLResponse,
                   http.statusCode == 200 else { throw Failure.tokenExchangeFailed }
         }
-        revocationJournal = try loadRevocationJournal(boundTo: stored)
-        guard let revocationJournal else { throw Failure.invalidStoredSession }
-        let plan = SnippetsCloudCredentialRevocationPlan(
-            sessionAccessToken: stored.accessToken,
-            sessionRefreshToken: stored.refreshToken,
-            journalAccessTokens: revocationJournal.accessTokens,
-            journalRefreshTokens: revocationJournal.refreshTokens)
-
-        // Revoke every access-token generation from the journal. In particular, do
-        // not try to refresh merely because the old primary session gets 401: after
-        // a crash the next, still-valid generation may exist only in this journal.
-        // A 401 is terminally safe for that credential because it cannot authorize
-        // the data plane; provider revocation below closes every refresh generation.
         for token in plan.accessTokens {
-            let status = try await revokeAtResource(
-                serverURL: stored.serverURL,
-                accessToken: token)
-            guard status == 204 || status == 401 else {
+            try await revokeAtProvider(token, hint: "access_token")
+        }
+        for token in plan.refreshTokens {
+            try await revokeAtProvider(token, hint: "refresh_token")
+        }
+    }
+
+    private func revokeResourceAccessTokens(
+        _ tokens: [String],
+        authority: RevocationJournal
+    ) async throws {
+        for token in tokens {
+            var request = URLRequest(
+                url: authority.serverURL.appending(path: "v2/session"))
+            request.httpMethod = "DELETE"
+            request.timeoutInterval = 20
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue(
+                "Bearer \(token)",
+                forHTTPHeaderField: "Authorization")
+            let (body, response) = try await boundedResponse(
+                request,
+                maximumBytes: 256 * 1_024)
+            guard let http = response as? HTTPURLResponse,
+                  response.url == request.url,
+                  http.statusCode != 204 || body.isEmpty,
+                  http.statusCode == 204 || http.statusCode == 401 else {
                 throw Failure.tokenExchangeFailed
             }
         }
-        for token in plan.accessTokens {
-            try await revoke(token, hint: "access_token")
-        }
-        for token in plan.refreshTokens {
-            try await revoke(token, hint: "refresh_token")
-        }
-        // Keep the remote-intent journal until the caller durably records local erase.
-        // If the process dies here, startup repeats these idempotent RFC 7009/resource
-        // revocations and then removes the root key.
     }
 
     private func loadRevocationJournal(
         boundTo stored: StoredSession
     ) throws -> RevocationJournal? {
+        try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthRevocationAccount,
+            boundTo: stored)
+    }
+
+    private func loadSessionReplacementJournal(
+        boundTo stored: StoredSession
+    ) throws -> RevocationJournal? {
+        try loadCredentialJournal(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount,
+            boundTo: stored)
+    }
+
+    private func loadCredentialJournal(
+        account: String,
+        expectedServerURL: URL? = nil,
+        boundTo stored: StoredSession? = nil
+    ) throws -> RevocationJournal? {
         guard let data = try keychain.loadItem(
-            account: SyncBackendSelectionStore.oauthRevocationAccount) else { return nil }
+            account: account) else { return nil }
         guard data.count <= 256 * 1_024,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == [
-                "schemaVersion", "serverURL", "issuer", "resource",
-                "revocationEndpoint", "clientID", "accessTokens", "refreshTokens",
-              ],
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw Failure.invalidStoredSession }
+        let baseKeys: Set<String> = [
+            "schemaVersion", "serverURL", "issuer", "resource",
+            "revocationEndpoint", "clientID", "accessTokens", "refreshTokens",
+        ]
+        let keys = Set(object.keys)
+        guard keys == baseKeys
+                || (account == SyncBackendSelectionStore.oauthSessionReplacementAccount
+                    && keys == baseKeys.union(["replacementKind"])),
               let journal = try? JSONDecoder().decode(RevocationJournal.self, from: data),
               journal.schemaVersion == 1,
-              journal.serverURL == stored.serverURL,
-              journal.issuer == stored.issuer,
-              journal.resource == stored.resource,
-              journal.revocationEndpoint == stored.revocationEndpoint,
-              journal.clientID == stored.clientID,
+              journal.replacementKind == nil
+                || account == SyncBackendSelectionStore.oauthSessionReplacementAccount,
+              (try? validatedBaseURL(journal.serverURL)) == journal.serverURL,
+              (try? validatedBaseURL(journal.resource)) == journal.serverURL,
+              (try? validatedIssuer(journal.issuer)) == journal.issuer,
+              (try? secureEndpoint(journal.revocationEndpoint)) == journal.revocationEndpoint,
+              !journal.clientID.isEmpty, journal.clientID.utf8.count <= 256,
+              expectedServerURL == nil || journal.serverURL == expectedServerURL,
+              stored == nil || credentialAuthorityMatches(journal, stored!),
               (1...16).contains(journal.accessTokens.count),
               (1...16).contains(journal.refreshTokens.count),
               Set(journal.accessTokens).count == journal.accessTokens.count,
@@ -1049,6 +1598,62 @@ private final class SnippetsCloudOAuthClient {
             throw Failure.invalidStoredSession
         }
         return journal
+    }
+
+    /// Records every interactive OAuth generation before replacing the active
+    /// session. This is deliberately separate from the logout-intent journal: its
+    /// presence must not disable a valid newly authenticated session, while a later
+    /// logout still has durable authority to revoke every older token family.
+    private func storeSessionReplacementJournal(
+        sessions: [StoredSession],
+        kind: SnippetsCloudCredentialReplacementKind
+    ) throws {
+        guard let first = sessions.first,
+              sessions.allSatisfy({ credentialAuthorityMatches($0, first) }) else {
+            throw Failure.invalidStoredSession
+        }
+        let existing = try loadSessionReplacementJournal(boundTo: first)
+        guard existing?.replacementKind == nil || existing?.replacementKind == kind else {
+            throw Failure.invalidStoredSession
+        }
+        let journal = RevocationJournal(
+            schemaVersion: 1,
+            serverURL: first.serverURL,
+            issuer: first.issuer,
+            resource: first.resource,
+            revocationEndpoint: first.revocationEndpoint,
+            clientID: first.clientID,
+            accessTokens: orderedUnique(
+                (existing?.accessTokens ?? []) + sessions.map(\.accessToken)),
+            refreshTokens: orderedUnique(
+                (existing?.refreshTokens ?? []) + sessions.map(\.refreshToken)),
+            replacementKind: kind)
+        try storeCredentialJournal(
+            journal,
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount)
+    }
+
+    private func mergedCredentialJournal(
+        authority: RevocationJournal,
+        journals: [RevocationJournal],
+        sessions: [StoredSession]
+    ) throws -> RevocationJournal {
+        guard journals.allSatisfy({ credentialAuthorityMatches($0, authority) }),
+              sessions.allSatisfy({ credentialAuthorityMatches(authority, $0) }) else {
+            throw Failure.invalidStoredSession
+        }
+        return RevocationJournal(
+            schemaVersion: 1,
+            serverURL: authority.serverURL,
+            issuer: authority.issuer,
+            resource: authority.resource,
+            revocationEndpoint: authority.revocationEndpoint,
+            clientID: authority.clientID,
+            accessTokens: orderedUnique(
+                journals.flatMap(\.accessTokens) + sessions.map(\.accessToken)),
+            refreshTokens: orderedUnique(
+                journals.flatMap(\.refreshTokens) + sessions.map(\.refreshToken)),
+            replacementKind: nil)
     }
 
     private func extendRevocationJournalIfPresent(
@@ -1066,7 +1671,8 @@ private final class SnippetsCloudOAuthClient {
             accessTokens: orderedUnique(
                 existing.accessTokens + sessions.map(\.accessToken)),
             refreshTokens: orderedUnique(
-                existing.refreshTokens + sessions.map(\.refreshToken)))
+                existing.refreshTokens + sessions.map(\.refreshToken)),
+            replacementKind: nil)
         try storeRevocationJournal(merged)
         return true
     }
@@ -1083,10 +1689,20 @@ private final class SnippetsCloudOAuthClient {
             revocationEndpoint: first.revocationEndpoint,
             clientID: first.clientID,
             accessTokens: orderedUnique(sessions.map(\.accessToken)),
-            refreshTokens: orderedUnique(sessions.map(\.refreshToken)))
+            refreshTokens: orderedUnique(sessions.map(\.refreshToken)),
+            replacementKind: nil)
     }
 
     private func storeRevocationJournal(_ journal: RevocationJournal) throws {
+        try storeCredentialJournal(
+            journal,
+            account: SyncBackendSelectionStore.oauthRevocationAccount)
+    }
+
+    private func storeCredentialJournal(
+        _ journal: RevocationJournal,
+        account: String
+    ) throws {
         guard journal.accessTokens.count <= 16, journal.refreshTokens.count <= 16 else {
             throw Failure.invalidStoredSession
         }
@@ -1094,7 +1710,54 @@ private final class SnippetsCloudOAuthClient {
         guard data.count <= 256 * 1_024 else { throw Failure.invalidStoredSession }
         try keychain.storeItem(
             data,
-            account: SyncBackendSelectionStore.oauthRevocationAccount)
+            account: account)
+    }
+
+    private func credentialAuthorityMatches(
+        _ lhs: StoredSession,
+        _ rhs: StoredSession
+    ) -> Bool {
+        lhs.serverURL == rhs.serverURL
+            && lhs.issuer == rhs.issuer
+            && lhs.resource == rhs.resource
+            && lhs.revocationEndpoint == rhs.revocationEndpoint
+            && lhs.clientID == rhs.clientID
+    }
+
+    private func credentialAuthorityMatches(
+        _ lhs: RevocationJournal,
+        _ rhs: StoredSession
+    ) -> Bool {
+        lhs.serverURL == rhs.serverURL
+            && lhs.issuer == rhs.issuer
+            && lhs.resource == rhs.resource
+            && lhs.revocationEndpoint == rhs.revocationEndpoint
+            && lhs.clientID == rhs.clientID
+    }
+
+    private func credentialAuthorityMatches(
+        _ lhs: RevocationJournal,
+        _ rhs: RevocationJournal
+    ) -> Bool {
+        lhs.serverURL == rhs.serverURL
+            && lhs.issuer == rhs.issuer
+            && lhs.resource == rhs.resource
+            && lhs.revocationEndpoint == rhs.revocationEndpoint
+            && lhs.clientID == rhs.clientID
+    }
+
+    private func sameTokenGeneration(
+        _ lhs: StoredSession?,
+        _ rhs: StoredSession?
+    ) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): true
+        case let (lhs?, rhs?):
+            credentialAuthorityMatches(lhs, rhs)
+                && lhs.accessToken == rhs.accessToken
+                && lhs.refreshToken == rhs.refreshToken
+        default: false
+        }
     }
 
     private func validToken(_ token: String) -> Bool {
@@ -1140,6 +1803,7 @@ private final class SnippetsCloudOAuthClient {
 
     private func resolvePersonalSpace(
         serverURL: URL,
+        serverInstanceID: UUID,
         accessToken: String,
         existingSpaceID: UUID?
     ) async throws -> UUID {
@@ -1147,6 +1811,10 @@ private final class SnippetsCloudOAuthClient {
             url: serverURL.appending(path: "v2/spaces"),
             method: "GET",
             accessToken: accessToken)
+        guard response.spaces.allSatisfy({
+            $0.scope.serverInstanceId == serverInstanceID
+                && (32...256).contains($0.scope.scopeBinding.utf8.count)
+        }) else { throw Failure.insecureServerProfile }
         if let existingSpaceID, response.spaces.contains(where: { $0.spaceId == existingSpaceID }) {
             return existingSpaceID
         }
@@ -1159,7 +1827,13 @@ private final class SnippetsCloudOAuthClient {
             url: serverURL.appending(path: "v2/spaces"),
             method: "POST",
             accessToken: accessToken,
-            additionalHeaders: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()])
+            additionalHeaders: [
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased()
+            ])
+        guard created.scope.serverInstanceId == serverInstanceID,
+              (32...256).contains(created.scope.scopeBinding.utf8.count) else {
+            throw Failure.insecureServerProfile
+        }
         return created.spaceId
     }
 
@@ -1200,7 +1874,9 @@ private final class SnippetsCloudOAuthClient {
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        for (name, value) in additionalHeaders { request.setValue(value, forHTTPHeaderField: name) }
+        for (name, value) in additionalHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await boundedResponse(request, maximumBytes: 1 * 1_024 * 1_024)
         guard let http = response as? HTTPURLResponse else { throw Failure.discoveryUnavailable }

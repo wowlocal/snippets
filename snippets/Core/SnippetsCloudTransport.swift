@@ -16,9 +16,17 @@ actor SnippetsCloudTransport: SyncTransport {
     nonisolated struct Configuration: Sendable, Equatable {
         let baseURL: URL
         let spaceID: UUID
+        let serverInstanceID: UUID
+        let protocolMajor: Int
         let accessToken: String
 
-        init(baseURL: URL, spaceID: UUID, accessToken: String) throws {
+        init(
+            baseURL: URL,
+            spaceID: UUID,
+            serverInstanceID: UUID,
+            protocolMajor: Int = 2,
+            accessToken: String
+        ) throws {
             guard baseURL.scheme?.lowercased() == "https",
                   baseURL.host != nil,
                   baseURL.user == nil,
@@ -30,8 +38,13 @@ actor SnippetsCloudTransport: SyncTransport {
             guard (8...16_384).contains(accessToken.utf8.count) else {
                 throw ConfigurationFailure.invalidAccessToken
             }
+            guard protocolMajor == 2 else {
+                throw ConfigurationFailure.incompatibleProtocol
+            }
             self.baseURL = baseURL
             self.spaceID = spaceID
+            self.serverInstanceID = serverInstanceID
+            self.protocolMajor = protocolMajor
             self.accessToken = accessToken
         }
     }
@@ -39,6 +52,7 @@ actor SnippetsCloudTransport: SyncTransport {
     nonisolated enum ConfigurationFailure: Error, Equatable {
         case invalidServerURL
         case invalidAccessToken
+        case incompatibleProtocol
     }
 
     nonisolated let identifier = "snippets-cloud"
@@ -49,6 +63,10 @@ actor SnippetsCloudTransport: SyncTransport {
     private let configuration: Configuration
     private let session: URLSession
     private let accessTokenProvider: AccessTokenProvider?
+    /// The scope Core admitted for data-plane use. Ordinary preflight requests observe
+    /// changes without moving this pin; only an explicit account review may change the
+    /// owner binding, and remote-reset review may rotate dataset/feed generations while
+    /// retaining that same owner.
     private var resolvedScope: ScopeDTO?
     private var resolvedIdentity: SyncAccountIdentity?
 
@@ -64,33 +82,77 @@ actor SnippetsCloudTransport: SyncTransport {
     }
 
     func resolveAccountIdentity() async throws -> SyncAccountIdentity? {
-        let descriptor: SpaceDTO = try await request(method: "GET", path: scopePath)
-        let scope = descriptor.scope
-        guard scope.spaceId == configuration.spaceID else {
-            throw SyncTransportFailure.unreachable(detail: "invalid_scope_response")
+        try await preflightScope().identity
+    }
+
+    func preflightScope() async throws -> SyncScopePreflight {
+        let scope = try await currentScope()
+        let identity = Self.accountIdentity(configuration: configuration, scope: scope)
+        let datasetIdentity = Self.datasetIdentity(configuration: configuration, scope: scope)
+
+        if let previous = resolvedScope, let resolvedIdentity {
+            // Feed rotation is cursor maintenance, not a new account or a remote purge.
+            // Adopt it before push-first work so a pending batch does not retry forever
+            // with an obsolete feed precondition. Account/dataset changes remain pinned
+            // to the old scope until Core obtains the corresponding explicit review.
+            if resolvedIdentity == identity,
+               Self.datasetIdentity(configuration: configuration, scope: previous)
+                == datasetIdentity {
+                resolvedScope = scope
+            }
+        } else {
+            resolvedScope = scope
+            resolvedIdentity = identity
         }
-        let identity = Self.identity(configuration: configuration, scope: scope)
-        resolvedScope = scope
-        resolvedIdentity = identity
-        return identity
+
+        return SyncScopePreflight(
+            identity: identity,
+            datasetIdentity: datasetIdentity,
+            // Identities written before server-instance pinning cannot prove which
+            // deployment produced them. A meaningful old checkpoint therefore gets
+            // the normal explicit account review instead of a silent migration.
+            legacyAccountIdentities: [])
     }
 
     func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
-        let identity = try await establishedIdentity()
+        let established = try await establishedScope()
         let page: ChangesPageDTO
+        let replacesPriorPages: Bool
         do {
             page = try await changes(since: cursor)
+            replacesPriorPages = false
         } catch let failure as HTTPFailure where failure.code == "cursor_invalid" {
             page = try await changes(since: nil)
+            replacesPriorPages = true
+            guard page.fullSnapshot else {
+                throw SyncTransportFailure.rejected(.permanent(
+                    detail: "incomplete_full_snapshot"))
+            }
+            try adoptFeedRotation(
+                page.scope,
+                expectedIdentity: established.identity,
+                expectedDatasetIdentity: established.datasetIdentity)
         }
-        try validate(page.scope, against: identity)
+        // A nil cursor has no ancestor with which a delta can be interpreted. This is
+        // also true after cursor_invalid: replacing already accumulated pages is safe
+        // only with the server's explicit complete-snapshot assertion.
+        guard cursor != nil || page.fullSnapshot else {
+            throw SyncTransportFailure.rejected(.permanent(
+                detail: "incomplete_full_snapshot"))
+        }
+        try validate(
+            page.scope,
+            against: established.identity,
+            datasetIdentity: established.datasetIdentity)
         return SyncFetch(
             records: page.records.map(\.wireRecord),
             cursor: SyncCursor(page.cursor),
             cursorKind: .legacy,
             hasMore: page.hasMore,
             isFullResync: page.fullSnapshot,
-            accountIdentity: identity)
+            replacesPriorPages: replacesPriorPages,
+            accountIdentity: established.identity,
+            datasetIdentity: established.datasetIdentity)
     }
 
     func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
@@ -101,44 +163,182 @@ actor SnippetsCloudTransport: SyncTransport {
             throw SyncTransportFailure.rejected(.permanent(detail: "record_too_large"))
         }
 
-        let identity = try await establishedIdentity()
-        let items = try records.map { record in
-            BatchItemDTO(
-                record: ServerRecordDTO(record),
-                expectedRecordVersion: try Self.recordVersionString(record.recordVersion))
-        }
-        let response: BatchResponseDTO = try await request(
-            method: "POST",
-            path: recordsPath,
-            body: BatchRequestDTO(items: items))
-        try validate(response.scope, against: identity)
-        guard response.outcomes.count == records.count else {
-            throw SyncTransportFailure.unreachable(detail: "invalid_batch_response")
-        }
+        let established = try await establishedScope()
+        var expectedScope = established.scope
+        var results: [SyncSubmitResult] = []
+        results.reserveCapacity(records.count)
 
-        let results = try zip(records, response.outcomes).map { record, outcome in
-            SyncSubmitResult(id: record.id, outcome: try Self.outcome(outcome))
+        // Ten near-limit encrypted blobs remain below both the server's 16 MiB request
+        // ceiling and this client's 16 MiB response ceiling after JSON/base64 overhead.
+        // Core may still offer its protocol-level maximum of 50; keep that API atomic
+        // from the engine's perspective while issuing bounded HTTP messages here.
+        for start in stride(from: 0, to: records.count, by: Self.maximumRecordsPerHTTPMessage) {
+            let end = min(start + Self.maximumRecordsPerHTTPMessage, records.count)
+            let chunk = records[start..<end]
+            let items = try chunk.map { record in
+                BatchItemDTO(
+                    record: ServerRecordDTO(record),
+                    expectedRecordVersion: try Self.recordVersionString(record.recordVersion))
+            }
+            let response: BatchResponseDTO
+            do {
+                response = try await submitBatch(items, expectedScope: expectedScope)
+            } catch let failure as HTTPFailure where failure.code == "cursor_invalid" {
+                // The feed may rotate after preflight or between chunks. Re-read and
+                // adopt only within the exact same membership and dataset, then retry
+                // this CAS-protected chunk once with the new feed precondition.
+                let current = try await currentScope()
+                try adoptFeedRotation(
+                    current,
+                    expectedIdentity: established.identity,
+                    expectedDatasetIdentity: established.datasetIdentity)
+                expectedScope = current
+                response = try await submitBatch(items, expectedScope: expectedScope)
+            } catch let failure as HTTPFailure where failure.code == "forbidden" {
+                // A replacement deployment rejects the old instance precondition
+                // before touching records. Re-read its signed scope so Core sees an
+                // account boundary instead of presenting a generic backend refusal.
+                _ = try await currentScope()
+                throw failure
+            }
+            try validate(
+                response.scope,
+                against: established.identity,
+                datasetIdentity: established.datasetIdentity)
+            guard response.outcomes.count == chunk.count else {
+                throw SyncTransportFailure.unreachable(detail: "invalid_batch_response")
+            }
+            results.append(contentsOf: try zip(chunk, response.outcomes).map { record, outcome in
+                SyncSubmitResult(id: record.id, outcome: try Self.outcome(outcome))
+            })
         }
-        return SyncSubmission(results: results, cursor: cursor, accountIdentity: identity)
+        return SyncSubmission(
+            results: results,
+            cursor: cursor,
+            accountIdentity: established.identity,
+            datasetIdentity: established.datasetIdentity)
     }
 
-    func resetAfterAccountReview() async throws {
-        resolvedScope = nil
-        resolvedIdentity = nil
-        _ = try await resolveAccountIdentity()
+    func resetAfterAccountReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        let scope = try await currentScope()
+        guard Self.accountIdentity(configuration: configuration, scope: scope) == expectedIdentity
+        else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard Self.datasetIdentity(configuration: configuration, scope: scope)
+                == expectedDatasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
+        resolvedScope = scope
+        resolvedIdentity = expectedIdentity
     }
 
-    private func establishedIdentity() async throws -> SyncAccountIdentity {
-        if let resolvedIdentity { return resolvedIdentity }
-        guard let identity = try await resolveAccountIdentity() else {
+    func resetAfterCheckpointReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        let scope = try await currentScope()
+        guard Self.accountIdentity(configuration: configuration, scope: scope) == expectedIdentity
+        else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard Self.datasetIdentity(configuration: configuration, scope: scope)
+                == expectedDatasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
+        // HTTP transport has no device-local scheduler checkpoint. Adopting a newer
+        // feed epoch after explicit repair is safe only inside the same dataset.
+        resolvedScope = scope
+    }
+
+    func resetAfterRemoteDataResetReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        let scope = try await currentScope()
+        // The expected membership identity comes from Core's durable base. It remains
+        // available after relaunch, unlike this actor's full generation pin, and makes
+        // remote restore authority impossible to reuse under another credential.
+        guard Self.accountIdentity(configuration: configuration, scope: scope) == expectedIdentity
+        else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard Self.datasetIdentity(configuration: configuration, scope: scope)
+                == expectedDatasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
+        resolvedScope = scope
+        resolvedIdentity = expectedIdentity
+    }
+
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        let scope = try await currentScope()
+        guard Self.accountIdentity(configuration: configuration, scope: scope) == expectedIdentity
+        else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard Self.datasetIdentity(configuration: configuration, scope: scope)
+                == expectedDatasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
+        // The HTTP feed cursor lives in Core's base, so there is no device-local
+        // scheduler blob to erase. Pin the exact reviewed scope for the ensuing full fetch.
+        resolvedScope = scope
+        resolvedIdentity = expectedIdentity
+    }
+
+    private func establishedScope() async throws -> (
+        identity: SyncAccountIdentity,
+        datasetIdentity: SyncDatasetIdentity,
+        scope: ScopeDTO
+    ) {
+        if resolvedScope == nil || resolvedIdentity == nil {
+            _ = try await preflightScope()
+        }
+        guard let resolvedIdentity, let resolvedScope else {
             throw SyncTransportFailure.unreachable(detail: "scope_identity_missing")
         }
-        return identity
+        return (
+            resolvedIdentity,
+            Self.datasetIdentity(configuration: configuration, scope: resolvedScope),
+            resolvedScope)
+    }
+
+    private func currentScope() async throws -> ScopeDTO {
+        let descriptor: SpaceDTO = try await request(method: "GET", path: scopePath)
+        let scope = descriptor.scope
+        guard scope.serverInstanceId == configuration.serverInstanceID else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard scope.spaceId == configuration.spaceID else {
+            throw SyncTransportFailure.unreachable(detail: "invalid_scope_response")
+        }
+        return scope
+    }
+
+    private func submitBatch(
+        _ items: [BatchItemDTO],
+        expectedScope: ScopeDTO
+    ) async throws -> BatchResponseDTO {
+        try await request(
+            method: "POST",
+            path: recordsPath,
+            body: BatchRequestDTO(
+                items: items,
+                expectedScope: expectedScope))
     }
 
     private func changes(since cursor: SyncCursor?) async throws -> ChangesPageDTO {
         var components = URLComponents()
-        components.queryItems = [URLQueryItem(name: "limit", value: "50")]
+        components.queryItems = [URLQueryItem(
+            name: "limit",
+            value: String(Self.maximumRecordsPerHTTPMessage))]
         if let cursor { components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor.rawValue)) }
         return try await request(
             method: "GET",
@@ -146,15 +346,51 @@ actor SnippetsCloudTransport: SyncTransport {
             percentEncodedQuery: components.percentEncodedQuery)
     }
 
-    private func validate(_ scope: ScopeDTO, against identity: SyncAccountIdentity) throws {
+    private func validate(
+        _ scope: ScopeDTO,
+        against identity: SyncAccountIdentity,
+        datasetIdentity: SyncDatasetIdentity
+    ) throws {
+        guard scope.serverInstanceId == configuration.serverInstanceID else {
+            throw SyncTransportFailure.accountChanged
+        }
         guard scope.spaceId == configuration.spaceID else {
             throw SyncTransportFailure.unreachable(detail: "invalid_scope_response")
         }
-        let responseIdentity = Self.identity(configuration: configuration, scope: scope)
-        guard responseIdentity == identity,
-              resolvedScope == nil || resolvedScope == scope else {
+        guard Self.accountIdentity(configuration: configuration, scope: scope) == identity else {
             throw SyncTransportFailure.accountChanged
         }
+        guard Self.datasetIdentity(configuration: configuration, scope: scope)
+                == datasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
+        guard resolvedScope == nil || resolvedScope == scope else {
+            throw SyncTransportFailure.unreachable(detail: "feed_changed_during_response")
+        }
+    }
+
+    private func adoptFeedRotation(
+        _ scope: ScopeDTO,
+        expectedIdentity: SyncAccountIdentity,
+        expectedDatasetIdentity: SyncDatasetIdentity
+    ) throws {
+        guard scope.serverInstanceId == configuration.serverInstanceID else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard scope.spaceId == configuration.spaceID else {
+            throw SyncTransportFailure.unreachable(detail: "invalid_scope_response")
+        }
+        guard let previous = resolvedScope,
+              Self.accountIdentity(configuration: configuration, scope: scope) == expectedIdentity,
+              scope.scopeBinding == previous.scopeBinding else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard Self.datasetIdentity(configuration: configuration, scope: scope)
+                == expectedDatasetIdentity,
+              scope.datasetGeneration == previous.datasetGeneration else {
+            throw SyncTransportFailure.remoteDataReset(detail: "dataset_reset")
+        }
+        resolvedScope = scope
     }
 
     private func request<Response: Decodable>(
@@ -269,6 +505,7 @@ actor SnippetsCloudTransport: SyncTransport {
     }
 
     private nonisolated static let maximumResponseBytes = 16 * 1_024 * 1_024
+    private nonisolated static let maximumRecordsPerHTTPMessage = 10
     private nonisolated static let secureSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
@@ -283,16 +520,32 @@ actor SnippetsCloudTransport: SyncTransport {
     private var changesPath: String { "v2/spaces/\(configuration.spaceID.uuidString.lowercased())/changes" }
     private var recordsPath: String { "v2/spaces/\(configuration.spaceID.uuidString.lowercased())/records/batch" }
 
-    private nonisolated static func identity(
+    private nonisolated static func accountIdentity(
         configuration: Configuration,
         scope: ScopeDTO
     ) -> SyncAccountIdentity {
+        accountIdentity(
+            baseURL: configuration.baseURL,
+            protocolMajor: configuration.protocolMajor,
+            serverInstanceID: configuration.serverInstanceID,
+            spaceID: configuration.spaceID,
+            scopeBinding: scope.scopeBinding)
+    }
+
+    nonisolated static func accountIdentity(
+        baseURL: URL,
+        protocolMajor: Int,
+        serverInstanceID: UUID,
+        spaceID: UUID,
+        scopeBinding: String
+    ) -> SyncAccountIdentity {
         let fields = [
-            configuration.baseURL.absoluteString,
-            configuration.spaceID.uuidString.lowercased(),
-            scope.scopeBinding,
-            scope.datasetGeneration.uuidString.lowercased(),
-            scope.feedEpoch.uuidString.lowercased(),
+            "snippets-cloud-membership-v2",
+            baseURL.absoluteString,
+            String(protocolMajor),
+            serverInstanceID.uuidString.lowercased(),
+            spaceID.uuidString.lowercased(),
+            scopeBinding,
         ]
         var material = Data()
         for field in fields {
@@ -302,6 +555,50 @@ actor SnippetsCloudTransport: SyncTransport {
             material.append(contentsOf: field.utf8)
         }
         return SyncAccountIdentity(Data(SHA256.hash(data: material)))
+    }
+
+    private nonisolated static func datasetIdentity(
+        configuration: Configuration,
+        scope: ScopeDTO
+    ) -> SyncDatasetIdentity {
+        datasetIdentity(
+            baseURL: configuration.baseURL,
+            protocolMajor: configuration.protocolMajor,
+            serverInstanceID: configuration.serverInstanceID,
+            spaceID: configuration.spaceID,
+            scopeBinding: scope.scopeBinding,
+            datasetGeneration: scope.datasetGeneration)
+    }
+
+    nonisolated static func datasetIdentity(
+        baseURL: URL,
+        protocolMajor: Int,
+        serverInstanceID: UUID,
+        spaceID: UUID,
+        scopeBinding: String,
+        datasetGeneration: UUID
+    ) -> SyncDatasetIdentity {
+        let fields = [
+            "snippets-cloud-dataset-v2",
+            baseURL.absoluteString,
+            String(protocolMajor),
+            serverInstanceID.uuidString.lowercased(),
+            spaceID.uuidString.lowercased(),
+            scopeBinding,
+            datasetGeneration.uuidString.lowercased(),
+        ]
+        return SyncDatasetIdentity(digest(fields))
+    }
+
+    private nonisolated static func digest(_ fields: [String]) -> Data {
+        var material = Data()
+        for field in fields {
+            withUnsafeBytes(of: UInt32(field.utf8.count).bigEndian) {
+                material.append(contentsOf: $0)
+            }
+            material.append(contentsOf: field.utf8)
+        }
+        return Data(SHA256.hash(data: material))
     }
 
     private nonisolated static func recordVersionString(_ version: SyncRecordVersion?) throws -> String? {
@@ -349,6 +646,9 @@ actor SnippetsCloudTransport: SyncTransport {
                 retryAfter: TimeInterval(error?.retryAfterSeconds ?? 60)))
         case "dataset_reset":
             return SyncTransportFailure.remoteDataReset(detail: code)
+        case "server_identity_changed":
+            return SyncTransportFailure.rejected(
+                .authenticationRequired(detail: code))
         case "cursor_invalid":
             return HTTPFailure(code: code)
         case "dependency_unavailable" where status >= 500:
@@ -380,6 +680,7 @@ private nonisolated final class SnippetsCloudNoRedirectDelegate:
 private nonisolated struct HTTPFailure: Error { let code: String }
 
 private nonisolated struct ScopeDTO: Codable, Equatable, Sendable {
+    let serverInstanceId: UUID
     let spaceId: UUID
     let scopeBinding: String
     let datasetGeneration: UUID
@@ -426,7 +727,12 @@ private nonisolated struct ChangesPageDTO: Decodable, Sendable {
 
 }
 
-private nonisolated struct BatchRequestDTO: Encodable, Sendable { let items: [BatchItemDTO] }
+private nonisolated struct BatchRequestDTO: Encodable, Sendable {
+    let items: [BatchItemDTO]
+    /// Checked atomically before the first mutation. Record CAS alone cannot stop a
+    /// stale client from creating records in a replaced dataset.
+    let expectedScope: ScopeDTO
+}
 private nonisolated struct BatchItemDTO: Encodable, Sendable {
     let record: ServerRecordDTO
     let expectedRecordVersion: String?

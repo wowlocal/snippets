@@ -245,8 +245,21 @@ final class PhoneLibraryViewController: UIViewController {
     }
 
     private func configureNavigationMenu() {
-        let syncTitle = SyncCoordinator.isEnabled ? "Sync Now" : "Connect iCloud"
-        let syncImage = SyncCoordinator.isEnabled ? "arrow.triangle.2.circlepath" : "icloud"
+        let providerName = environment.backendSelection.provider.displayName
+        let recoveryAction = environment.syncCoordinator.recoveryAction
+        let needsSettings = environment.syncCoordinator.requiresSyncSettingsAttention
+        let syncTitle = if let recoveryAction {
+            recoveryAction.buttonTitle
+        } else if needsSettings {
+            "Open Sync Settings"
+        } else if SyncCoordinator.isEnabled {
+            "Sync Now"
+        } else {
+            "Connect \(providerName)"
+        }
+        let syncImage = recoveryAction != nil ? "exclamationmark.shield"
+            : needsSettings ? "exclamationmark.triangle"
+            : (SyncCoordinator.isEnabled ? "arrow.triangle.2.circlepath" : "icloud")
         let menu = UIMenu(children: [
             UIAction(title: "New from Clipboard", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
                 guard let self else { return }
@@ -266,9 +279,16 @@ final class PhoneLibraryViewController: UIViewController {
                     self.delegate?.phoneLibraryRequestedEncryptedBackup(self)
                 },
             ]),
-            UIAction(title: syncTitle, image: UIImage(systemName: syncImage)) { [weak self] _ in
+            UIAction(
+                title: syncTitle,
+                image: UIImage(systemName: syncImage)
+            ) { [weak self] _ in
                 guard let self else { return }
-                if SyncCoordinator.isEnabled {
+                if recoveryAction != nil {
+                    self.performSyncRecovery()
+                } else if needsSettings {
+                    self.delegate?.phoneLibraryRequestedSettings(self)
+                } else if SyncCoordinator.isEnabled {
                     self.delegate?.phoneLibraryRequestedSync(self)
                 } else {
                     self.delegate?.phoneLibraryRequestedConnectICloud(self)
@@ -407,8 +427,8 @@ final class PhoneLibraryViewController: UIViewController {
             bottom: 0,
             trailing: PhoneLibraryLayout.headerHorizontalInset
         )
-        syncStatusBanner.onRequestResume = { [weak self] in
-            self?.confirmResumeAfterReview()
+        syncStatusBanner.onRequestRecovery = { [weak self] in
+            self?.performSyncRecovery()
         }
         syncStatusHeader.addSubview(syncStatusBanner)
         NSLayoutConstraint.activate([
@@ -472,7 +492,13 @@ final class PhoneLibraryViewController: UIViewController {
         }
         emptyView.onSync = { [weak self] in
             guard let self else { return }
-            self.delegate?.phoneLibraryRequestedSync(self)
+            if self.environment.syncCoordinator.recoveryAction != nil {
+                self.performSyncRecovery()
+            } else if self.environment.syncCoordinator.requiresSyncSettingsAttention {
+                self.delegate?.phoneLibraryRequestedSettings(self)
+            } else {
+                self.delegate?.phoneLibraryRequestedSync(self)
+            }
         }
         emptyView.onClearFilters = { [weak self] in
             guard let self else { return }
@@ -518,14 +544,24 @@ final class PhoneLibraryViewController: UIViewController {
         let hasQuery = !(searchController.searchBar.text ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if libraryIsEmpty {
-            if isAwaitingFirstFetch {
+            if environment.store.isLibraryQuarantined {
+                emptyView.configureLibraryRecovery(
+                    syncStatus: environment.syncCoordinator.statusDescription)
+            } else if isAwaitingFirstFetch {
+                let recoveryAction = environment.syncCoordinator.recoveryAction
+                let needsSettings = environment.syncCoordinator.requiresSyncSettingsAttention
                 emptyView.configureFirstFetch(
                     syncStatus: firstFetchStatus,
-                    canRetry: !environment.syncCoordinator.state.isSyncing
+                    actionTitle: recoveryAction?.buttonTitle
+                        ?? (needsSettings ? "Open Sync Settings" : "Try Again"),
+                    actionSymbol: recoveryAction != nil ? "exclamationmark.shield"
+                        : needsSettings ? "exclamationmark.triangle" : "arrow.clockwise",
+                    showsAction: !environment.syncCoordinator.state.isSyncing
                 )
             } else {
                 emptyView.configureEmptyLibrary(
-                    offersICloud: !SyncCoordinator.isEnabled,
+                    offersCloud: !SyncCoordinator.isEnabled,
+                    providerName: environment.backendSelection.provider.displayName,
                     syncStatus: environment.syncCoordinator.statusDescription
                 )
             }
@@ -559,12 +595,13 @@ final class PhoneLibraryViewController: UIViewController {
     }
 
     private var firstFetchStatus: String {
+        let providerName = environment.backendSelection.provider.displayName
         switch environment.syncCoordinator.state {
         case .disabled, .idle(lastSync: nil):
-            return "Preparing the first iCloud fetch. Your local library will stay empty until it finishes."
+            return "Preparing the first \(providerName) fetch. Your local library will stay empty until it finishes."
         case .syncing:
-            return "Checking iCloud for the library from your other devices."
-        case .offline, .needsAuthentication, .waitingForVault, .halted:
+            return "Checking \(providerName) for the library from your other devices."
+        case .offline, .needsAuthentication, .needsAttention, .waitingForVault, .halted:
             return "The first fetch has not finished. \(environment.syncCoordinator.statusDescription)"
         case .idle(lastSync: _):
             return environment.syncCoordinator.statusDescription
@@ -572,7 +609,9 @@ final class PhoneLibraryViewController: UIViewController {
     }
 
     private func updateSyncPresentation() {
-        guard SyncCoordinator.isEnabled else {
+        let hasLocalRecovery = environment.store.isLibraryQuarantined
+            || environment.syncCoordinator.recoveryAction == .checkAgain
+        guard SyncCoordinator.isEnabled || hasLocalRecovery else {
             syncStatusBanner.isHidden = true
             view.setNeedsLayout()
             return
@@ -582,27 +621,40 @@ final class PhoneLibraryViewController: UIViewController {
         syncStatusBanner.configure(
             state: environment.syncCoordinator.state,
             status: environment.syncCoordinator.statusDescription,
-            isFirstFetch: !hasCompletedSync
+            isFirstFetch: !hasCompletedSync,
+            recoveryAction: environment.syncCoordinator.recoveryAction,
+            providerName: environment.backendSelection.provider.displayName
         )
         // State changes are visual only. Pull-to-refresh owns the haptic for an explicit
         // user gesture; background polling must never manufacture one by moving insets.
         view.setNeedsLayout()
     }
 
-    private func confirmResumeAfterReview() {
-        guard case .halted(let reason, _) = environment.syncCoordinator.state,
-              reason.isUserRecoverable,
+    private func performSyncRecovery() {
+        guard let action = environment.syncCoordinator.recoveryAction,
               presentedViewController == nil else { return }
 
-        let alert = SyncResumeConfirmation.makeAlert(
+        guard action.confirmationTitle != nil else {
+            environment.syncCoordinator.performRecovery(action)
+            return
+        }
+        let alert = SyncRecoveryConfirmation.makeAlert(
+            action: action,
             statusDescription: environment.syncCoordinator.statusDescription
         ) { [weak self] in
-            self?.environment.syncCoordinator.clearHaltAfterUserReview()
+            self?.environment.syncCoordinator.performRecovery(action)
         }
         present(alert, animated: true)
     }
 
     private func requestedRefresh() {
+        // Local quarantine exists independently of the cloud opt-in. Its Check Again
+        // action must outrank the normal "enable sync" prompt.
+        if environment.syncCoordinator.recoveryAction != nil {
+            finishRefresh()
+            performSyncRecovery()
+            return
+        }
         guard SyncCoordinator.isEnabled else {
             finishRefresh()
             confirmSyncEnablementForRefresh()
@@ -613,9 +665,9 @@ final class PhoneLibraryViewController: UIViewController {
             guard let self else { return }
             defer { self.finishRefresh() }
             // The request completes after the requested round (including a coalesced
-            // replay). Halt/backoff no-ops complete with their final state, while an
-            // unavailable start returns immediately as not-started. The spinner follows
-            // the real lifecycle rather than a timer in every case.
+            // replay). A halt no-op completes with its final state, manual refresh may
+            // bypass a pending network backoff once, and an unavailable start returns
+            // immediately as not-started. The spinner follows the real lifecycle.
             _ = await self.environment.syncCoordinator.requestSync(trigger: .manual)
         }
     }
@@ -626,9 +678,10 @@ final class PhoneLibraryViewController: UIViewController {
 
     private func confirmSyncEnablementForRefresh() {
         guard presentedViewController == nil else { return }
+        let providerName = environment.backendSelection.provider.displayName
         let alert = UIAlertController(
-            title: "Turn On iCloud Sync?",
-            message: "Pull to refresh uses iCloud. Snippets encrypts records before uploading them, and you can turn sync off later in Settings.",
+            title: "Turn On \(providerName) Sync?",
+            message: "Pull to refresh uses \(providerName). Snippets encrypts records before uploading them, and you can turn sync off later in Settings.",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "Not Now", style: .cancel))
@@ -1782,7 +1835,7 @@ private final class PhoneEmptyLibraryView: UIView {
         messageLabel.numberOfLines = 0
         messageLabel.accessibilityIdentifier = "phone-empty-message"
 
-        configureButton(connectButton, title: "Connect iCloud", symbol: "icloud", prominent: true) { [weak self] in
+        configureButton(connectButton, title: "Connect Cloud", symbol: "icloud", prominent: true) { [weak self] in
             guard let self else { return }
             if self.primaryButtonStartsSync {
                 self.onSync?()
@@ -1854,30 +1907,50 @@ private final class PhoneEmptyLibraryView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configureEmptyLibrary(offersICloud: Bool, syncStatus: String) {
+    func configureEmptyLibrary(
+        offersCloud: Bool,
+        providerName: String,
+        syncStatus: String
+    ) {
         primaryButtonStartsSync = false
-        titleLabel.text = offersICloud ? "Bring Your Library to iPhone" : "Your Library Is Empty"
-        messageLabel.text = offersICloud
-            ? "Connect iCloud to fetch the library you already use on Mac and iPad."
+        titleLabel.text = offersCloud ? "Bring Your Library to iPhone" : "Your Library Is Empty"
+        messageLabel.text = offersCloud
+            ? "Connect \(providerName) to fetch the library from your other devices."
             : "\(syncStatus) You can also create a snippet on this device."
-        connectButton.isHidden = !offersICloud
-        connectButton.configuration?.title = "Connect iCloud"
+        connectButton.isHidden = !offersCloud
+        connectButton.configuration?.title = "Connect \(providerName)"
         connectButton.configuration?.image = UIImage(systemName: "icloud")
         connectButton.accessibilityIdentifier = "phone-connect-icloud"
         clearFiltersButton.isHidden = true
-        actions.isHidden = !offersICloud
+        actions.isHidden = !offersCloud
     }
 
-    func configureFirstFetch(syncStatus: String, canRetry: Bool) {
+    func configureFirstFetch(
+        syncStatus: String,
+        actionTitle: String,
+        actionSymbol: String,
+        showsAction: Bool
+    ) {
         primaryButtonStartsSync = true
-        titleLabel.text = canRetry ? "Library Hasn’t Been Fetched" : "Fetching Your Library"
+        titleLabel.text = showsAction ? "Library Hasn’t Been Fetched" : "Fetching Your Library"
         messageLabel.text = syncStatus
-        connectButton.configuration?.title = "Try Again"
-        connectButton.configuration?.image = UIImage(systemName: "arrow.clockwise")
+        connectButton.configuration?.title = actionTitle
+        connectButton.configuration?.image = UIImage(systemName: actionSymbol)
         connectButton.accessibilityIdentifier = "phone-sync-now"
-        connectButton.isHidden = !canRetry
+        connectButton.isHidden = !showsAction
         clearFiltersButton.isHidden = true
-        actions.isHidden = !canRetry
+        actions.isHidden = !showsAction
+    }
+
+    func configureLibraryRecovery(syncStatus: String) {
+        primaryButtonStartsSync = false
+        titleLabel.text = "Library Recovery Required"
+        messageLabel.text = "The ordinary snippet library could not be read and remains "
+            + "preserved. Import a complete Snippets JSON export, then review Sync and "
+            + "choose Check Again. \(syncStatus)"
+        connectButton.isHidden = true
+        clearFiltersButton.isHidden = true
+        actions.isHidden = true
     }
 
     func configureNoResults(
@@ -2019,24 +2092,24 @@ final class PhoneSyncStatusBanner: UIVisualEffectView {
     private let symbolView = UIImageView()
     private let activityIndicator = UIActivityIndicatorView(style: .medium)
     private let statusLabel = UILabel()
-    private let resumeLabel = UILabel()
-    private let resumeSymbolView = UIImageView()
-    private let resumeGroup = UIStackView()
-    private var isResumeAvailable = false
+    private let recoveryLabel = UILabel()
+    private let recoverySymbolView = UIImageView()
+    private let recoveryGroup = UIStackView()
+    private var isRecoveryAvailable = false
 
-    var onRequestResume: (() -> Void)?
+    var onRequestRecovery: (() -> Void)?
 
     init() {
         let glass = UIGlassEffect(style: .regular)
         glass.tintColor = AppTheme.tint.withAlphaComponent(0.035)
         super.init(effect: glass)
         translatesAutoresizingMaskIntoConstraints = false
-        layer.cornerRadius = 17
+        layer.cornerRadius = 22
         layer.cornerCurve = .continuous
         clipsToBounds = true
         accessibilityIdentifier = "phone-sync-status"
         isAccessibilityElement = true
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(requestResume)))
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(requestRecovery)))
 
         symbolView.translatesAutoresizingMaskIntoConstraints = false
         symbolView.tintColor = AppTheme.tint
@@ -2047,38 +2120,38 @@ final class PhoneSyncStatusBanner: UIVisualEffectView {
         statusLabel.font = AppTheme.scaledFont(size: 12, weight: .medium, textStyle: .footnote)
         statusLabel.adjustsFontForContentSizeCategory = true
         statusLabel.textColor = .secondaryLabel
-        statusLabel.numberOfLines = 1
+        statusLabel.numberOfLines = 2
         statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.accessibilityIdentifier = "phone-sync-status-text"
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        resumeLabel.font = AppTheme.scaledFont(size: 12, weight: .semibold, textStyle: .footnote)
-        resumeLabel.adjustsFontForContentSizeCategory = true
-        resumeLabel.textColor = AppTheme.tint
-        resumeLabel.text = "Resume"
-        resumeLabel.accessibilityIdentifier = "phone-sync-resume-label"
+        recoveryLabel.font = AppTheme.scaledFont(size: 12, weight: .semibold, textStyle: .footnote)
+        recoveryLabel.adjustsFontForContentSizeCategory = true
+        recoveryLabel.textColor = AppTheme.tint
+        recoveryLabel.accessibilityIdentifier = "phone-sync-recovery-label"
 
-        resumeSymbolView.image = UIImage(systemName: "chevron.right")
-        resumeSymbolView.tintColor = AppTheme.tint
-        resumeSymbolView.contentMode = .scaleAspectFit
-        resumeSymbolView.translatesAutoresizingMaskIntoConstraints = false
+        recoverySymbolView.image = UIImage(systemName: "chevron.right")
+        recoverySymbolView.tintColor = AppTheme.tint
+        recoverySymbolView.contentMode = .scaleAspectFit
+        recoverySymbolView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            resumeSymbolView.widthAnchor.constraint(equalToConstant: 8),
-            resumeSymbolView.heightAnchor.constraint(equalToConstant: 12),
+            recoverySymbolView.widthAnchor.constraint(equalToConstant: 8),
+            recoverySymbolView.heightAnchor.constraint(equalToConstant: 12),
         ])
 
-        resumeGroup.addArrangedSubview(resumeLabel)
-        resumeGroup.addArrangedSubview(resumeSymbolView)
-        resumeGroup.axis = .horizontal
-        resumeGroup.alignment = .center
-        resumeGroup.spacing = 4
-        resumeGroup.isHidden = true
-        resumeGroup.setContentCompressionResistancePriority(.required, for: .horizontal)
+        recoveryGroup.addArrangedSubview(recoveryLabel)
+        recoveryGroup.addArrangedSubview(recoverySymbolView)
+        recoveryGroup.axis = .horizontal
+        recoveryGroup.alignment = .center
+        recoveryGroup.spacing = 4
+        recoveryGroup.isHidden = true
+        recoveryGroup.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let leadingStatus = UIView()
         leadingStatus.translatesAutoresizingMaskIntoConstraints = false
         leadingStatus.addSubview(symbolView)
         leadingStatus.addSubview(activityIndicator)
-        let row = UIStackView(arrangedSubviews: [leadingStatus, statusLabel, resumeGroup])
+        let row = UIStackView(arrangedSubviews: [leadingStatus, statusLabel, recoveryGroup])
         row.translatesAutoresizingMaskIntoConstraints = false
         row.axis = .horizontal
         row.alignment = .center
@@ -2086,7 +2159,7 @@ final class PhoneSyncStatusBanner: UIVisualEffectView {
         contentView.addSubview(row)
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 34),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             leadingStatus.widthAnchor.constraint(equalToConstant: 16),
             leadingStatus.heightAnchor.constraint(equalToConstant: 16),
             symbolView.centerXAnchor.constraint(equalTo: leadingStatus.centerXAnchor),
@@ -2097,25 +2170,32 @@ final class PhoneSyncStatusBanner: UIVisualEffectView {
             activityIndicator.centerYAnchor.constraint(equalTo: leadingStatus.centerYAnchor),
             row.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 11),
             row.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -13),
-            row.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
+            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(state: SyncEngine.State, status: String, isFirstFetch: Bool) {
+    func configure(
+        state: SyncEngine.State,
+        status: String,
+        isFirstFetch: Bool,
+        recoveryAction: SyncRecoveryAction?,
+        providerName: String
+    ) {
         let text: String
         let symbolName: String
         switch state {
         case .disabled:
-            text = isFirstFetch ? "Preparing the first iCloud fetch…" : "Preparing iCloud Sync…"
+            text = isFirstFetch ? "Preparing the first cloud fetch…" : "Preparing cloud sync…"
             symbolName = "icloud"
         case .syncing:
-            text = isFirstFetch ? "Fetching your iCloud library…" : "Syncing changes…"
+            text = isFirstFetch ? "Fetching your cloud library…" : "Syncing changes…"
             symbolName = "arrow.triangle.2.circlepath"
         case .idle(let lastSync):
             if isFirstFetch && lastSync == nil {
-                text = "Waiting to fetch your iCloud library…"
+                text = "Waiting to fetch your cloud library…"
                 symbolName = "icloud.and.arrow.down"
             } else if let lastSync {
                 let formatter = DateFormatter()
@@ -2123,39 +2203,48 @@ final class PhoneSyncStatusBanner: UIVisualEffectView {
                 text = "Synced at \(formatter.string(from: lastSync))"
                 symbolName = "checkmark.icloud"
             } else {
-                text = "iCloud on · Not synced yet"
+                text = "\(providerName) on · Not synced yet"
                 symbolName = "checkmark.icloud"
             }
         case .offline:
-            text = isFirstFetch ? "First sync paused" : "iCloud unavailable"
+            text = isFirstFetch ? "First sync paused" : "\(providerName) unavailable"
             symbolName = "icloud.slash"
         case .needsAuthentication:
-            text = "iCloud needs attention"
+            text = status
             symbolName = "person.crop.circle.badge.exclamationmark"
+        case .needsAttention:
+            text = status
+            symbolName = "exclamationmark.triangle"
         case .waitingForVault:
-            text = "Waiting for Secure Snippets"
+            text = status
             symbolName = "lock.icloud"
-        case .halted:
-            text = "Sync paused for safety"
-            symbolName = "exclamationmark.icloud"
+        case .halted(let reason, _):
+            if reason == .schemaTooNew {
+                text = "Update Snippets to resume sync"
+                symbolName = "arrow.down.app"
+            } else {
+                text = status
+                symbolName = "exclamationmark.icloud"
+            }
         }
 
         statusLabel.text = text
-        isResumeAvailable = if case .halted(let reason, _) = state {
-            reason.isUserRecoverable
+        isRecoveryAvailable = recoveryAction != nil
+        recoveryLabel.text = recoveryAction?.compactButtonTitle
+        recoveryGroup.isHidden = !isRecoveryAvailable
+        isUserInteractionEnabled = isRecoveryAvailable
+        accessibilityLabel = "Sync"
+        if let recoveryAction {
+            accessibilityValue = "\(status). Action: \(recoveryAction.buttonTitle)."
         } else {
-            false
+            accessibilityValue = state.requiresSyncAttention ? status : text
         }
-        resumeGroup.isHidden = !isResumeAvailable
-        isUserInteractionEnabled = isResumeAvailable
-        accessibilityLabel = "iCloud Sync"
-        accessibilityValue = state.requiresSyncAttention ? status : text
-        accessibilityTraits = isResumeAvailable ? .button : .staticText
-        if isResumeAvailable {
-            accessibilityHint = "Review the safety stop and choose whether to resume sync"
+        accessibilityTraits = isRecoveryAvailable ? .button : .staticText
+        if let recoveryAction {
+            accessibilityHint = "Double-tap to \(recoveryAction.buttonTitle)"
         } else {
             accessibilityHint = state.requiresSyncAttention
-                ? "Open Settings for details and recovery actions"
+                ? "Details are available in Settings"
                 : nil
         }
 
@@ -2171,16 +2260,16 @@ final class PhoneSyncStatusBanner: UIVisualEffectView {
     }
 
     override func accessibilityActivate() -> Bool {
-        performResumeRequestIfAvailable()
+        performRecoveryRequestIfAvailable()
     }
 
-    @objc private func requestResume() {
-        _ = performResumeRequestIfAvailable()
+    @objc private func requestRecovery() {
+        _ = performRecoveryRequestIfAvailable()
     }
 
-    private func performResumeRequestIfAvailable() -> Bool {
-        guard isResumeAvailable else { return false }
-        onRequestResume?()
+    private func performRecoveryRequestIfAvailable() -> Bool {
+        guard isRecoveryAvailable else { return false }
+        onRequestRecovery?()
         return true
     }
 }
@@ -2193,7 +2282,7 @@ private extension SyncEngine.State {
 
     var requiresSyncAttention: Bool {
         switch self {
-        case .offline, .needsAuthentication, .waitingForVault, .halted:
+        case .offline, .needsAuthentication, .needsAttention, .waitingForVault, .halted:
             return true
         case .disabled, .idle, .syncing:
             return false

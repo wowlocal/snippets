@@ -102,7 +102,7 @@ final class PhoneLibraryUXTests: XCTestCase {
 
     func testRowAccessibilityDescribesStatePinAndTagsAndOffersActions() throws {
         let environment = AppEnvironment()
-        var snippet = environment.store.addSnippet(
+        var snippet = try! environment.store.addSnippet(
             name: "Deploy Token",
             content: "ordinary body",
             tags: ["Work", "Release"]
@@ -135,8 +135,8 @@ final class PhoneLibraryUXTests: XCTestCase {
 
     func testActiveFilterCountIsVisibleAndEmptyFilterResultCanBeCleared() throws {
         let environment = AppEnvironment()
-        _ = environment.store.addSnippet(name: "One", content: "1", tags: ["Personal"])
-        _ = environment.store.addSnippet(name: "Two", content: "2", tags: ["Work"])
+        _ = try! environment.store.addSnippet(name: "One", content: "1", tags: ["Personal"])
+        _ = try! environment.store.addSnippet(name: "Two", content: "2", tags: ["Work"])
         let library = PhoneLibraryViewController(environment: environment)
         let navigation = UINavigationController(rootViewController: library)
         _ = host(navigation)
@@ -180,7 +180,7 @@ final class PhoneLibraryUXTests: XCTestCase {
             library.view.descendant(withAccessibilityIdentifier: "phone-sync-status")
         )
         XCTAssertFalse(banner.isHidden)
-        XCTAssertEqual(banner.accessibilityLabel, "iCloud Sync")
+        XCTAssertEqual(banner.accessibilityLabel, "Sync")
         let title = try XCTUnwrap(
             library.view.descendant(withAccessibilityIdentifier: "phone-empty-title") as? UILabel
         )
@@ -191,13 +191,13 @@ final class PhoneLibraryUXTests: XCTestCase {
     func testLibraryUsesInsetMailStyleRowsAndCustomSwipeActions() throws {
         UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
         let environment = AppEnvironment()
-        _ = environment.store.addSnippet(
+        _ = try! environment.store.addSnippet(
             name: "Mail-style row",
             content: "The preview remains readable beneath floating controls.",
             tags: ["Work"]
         )
         for index in 0..<12 {
-            _ = environment.store.addSnippet(
+            _ = try! environment.store.addSnippet(
                 name: "Additional row \(index)",
                 content: "Enough content to exercise scrolling behavior.",
                 tags: ["Work"]
@@ -237,8 +237,8 @@ final class PhoneLibraryUXTests: XCTestCase {
         XCTAssertEqual(table.frame.maxY, library.view.bounds.maxY, accuracy: 0.5)
         XCTAssertTrue(banner.isDescendant(of: syncHeader))
         XCTAssertGreaterThan(syncHeader.bounds.height, banner.bounds.height)
-        XCTAssertEqual(banner.bounds.height, 34, accuracy: 0.5)
-        XCTAssertEqual(syncHeader.bounds.height, 46, accuracy: 0.5)
+        XCTAssertEqual(banner.bounds.height, 44, accuracy: 0.5)
+        XCTAssertEqual(syncHeader.bounds.height, 56, accuracy: 0.5)
         XCTAssertEqual(banner.frame.minX, 20, accuracy: 0.5)
         XCTAssertEqual(table.contentInset.top, 0, accuracy: 0.5)
         XCTAssertTrue(banner is UIVisualEffectView)
@@ -546,44 +546,102 @@ final class PhoneLibraryUXTests: XCTestCase {
         XCTAssertFalse(table.refreshControl?.isRefreshing == true)
     }
 
-    func testRecoverableSafetyHaltBannerOffersResumeButRemoteResetDoesNot() {
+    func testLocalQuarantineOutranksSyncOptInOnEmptyStateBannerAndRefresh() throws {
+        SnippetStorageLocations.createAllDirectories()
+        try Data("not a snippet library".utf8).write(
+            to: SnippetStorageLocations.snippetsFileURL,
+            options: .atomic)
+        let environment = AppEnvironment()
+        XCTAssertTrue(environment.store.isLibraryQuarantined)
+        XCTAssertFalse(SyncCoordinator.isEnabled)
+
+        let root = PhoneRootViewController(environment: environment)
+        _ = host(root)
+        let library = try XCTUnwrap(
+            root.viewControllers.first as? PhoneLibraryViewController)
+        library.reload()
+        library.view.layoutIfNeeded()
+
+        let title = try XCTUnwrap(
+            library.view.descendant(
+                withAccessibilityIdentifier: "phone-empty-title") as? UILabel)
+        let connect = try XCTUnwrap(
+            library.view.descendant(
+                withAccessibilityIdentifier: "phone-connect-icloud") as? UIButton)
+        let banner = try XCTUnwrap(
+            library.view.descendant(
+                withAccessibilityIdentifier: "phone-sync-status"))
+        XCTAssertEqual(title.text, "Library Recovery Required")
+        XCTAssertTrue(connect.isHidden)
+        XCTAssertFalse(banner.isHidden)
+
+        let table = try XCTUnwrap(
+            library.view.descendant(
+                withAccessibilityIdentifier: "phone-snippet-list") as? UITableView)
+        table.refreshControl?.beginRefreshing()
+        table.refreshControl?.sendActions(for: .valueChanged)
+        drainMainRunLoop()
+
+        XCTAssertFalse(SyncCoordinator.isEnabled)
+        XCTAssertNil(library.presentedViewController,
+                     "refresh must run Check Again, not offer to enable cloud sync")
+        XCTAssertTrue(environment.store.isLibraryQuarantined)
+        XCTAssertFalse(table.refreshControl?.isRefreshing == true)
+    }
+
+    func testSafetyHaltBannerOffersItsTypedActionButFutureSchemaDoesNot() {
         let banner = PhoneSyncStatusBanner()
-        var resumeRequests = 0
-        banner.onRequestResume = { resumeRequests += 1 }
+        var recoveryRequests = 0
+        banner.onRequestRecovery = { recoveryRequests += 1 }
 
         banner.configure(
             state: .halted(.accountChanged, detail: "Account review is required."),
             status: "Stopped because the iCloud account changed.",
-            isFirstFetch: false
+            isFirstFetch: false,
+            recoveryAction: .useCurrentAccount,
+            providerName: "iCloud"
         )
 
         XCTAssertTrue(banner.isUserInteractionEnabled)
         XCTAssertTrue(banner.accessibilityTraits.contains(.button))
+        XCTAssertEqual(banner.accessibilityHint, "Double-tap to Review Account Change")
         XCTAssertTrue(banner.accessibilityActivate())
-        XCTAssertEqual(resumeRequests, 1)
+        XCTAssertEqual(recoveryRequests, 1)
 
         banner.configure(
-            state: .halted(.remoteDataReset, detail: "The remote library was reset."),
-            status: "Stopped because the remote library was reset.",
-            isFirstFetch: false
+            state: .halted(.schemaTooNew, detail: "Update Snippets."),
+            status: "A newer Snippets version wrote this library.",
+            isFirstFetch: false,
+            recoveryAction: nil,
+            providerName: "iCloud"
         )
 
         XCTAssertFalse(banner.isUserInteractionEnabled)
         XCTAssertFalse(banner.accessibilityTraits.contains(.button))
+        let statusLabel = banner.descendant(
+            withAccessibilityIdentifier: "phone-sync-status-text"
+        ) as? UILabel
+        XCTAssertEqual(statusLabel?.text, "Update Snippets to resume sync")
         XCTAssertFalse(banner.accessibilityActivate())
-        XCTAssertEqual(resumeRequests, 1)
+        XCTAssertEqual(recoveryRequests, 1)
     }
 
-    func testResumeConfirmationExplainsTheSafetyStopBeforeOfferingResume() {
-        let alert = SyncResumeConfirmation.makeAlert(
-            statusDescription: "Stopped because the iCloud account changed."
+    func testDeletionConfirmationNamesTheDestructiveAction() {
+        let alert = SyncRecoveryConfirmation.makeAlert(
+            action: .applyRemoteDeletions,
+            statusDescription: DeletionGuard.Refusal(
+                liveCount: 117,
+                requestedDeletions: 49,
+                allowedDeletions: 24).description
         ) {}
 
-        XCTAssertEqual(alert.title, "Resume iCloud Sync?")
-        XCTAssertTrue(alert.message?.contains("iCloud account changed") == true)
-        XCTAssertTrue(alert.message?.contains("clear the safety stop") == true)
-        XCTAssertEqual(alert.actions.map(\.title), ["Cancel", "Resume"])
-        XCTAssertEqual(alert.actions.map(\.style), [.cancel, .default])
+        XCTAssertEqual(alert.title, "Apply These Deletions?")
+        XCTAssertTrue(alert.message?.contains("deleting 49 of 117") == true)
+        XCTAssertTrue(alert.message?.contains("at least 68") == true)
+        XCTAssertTrue(alert.message?.contains("paused before completing") == true)
+        XCTAssertTrue(alert.message?.contains("some records may already") == true)
+        XCTAssertEqual(alert.actions.map(\.title), ["Cancel", "Apply Deletions"])
+        XCTAssertEqual(alert.actions.map(\.style), [.cancel, .destructive])
     }
 
     @discardableResult

@@ -182,8 +182,15 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
 
     /// Called by Core only after it durably captured local intent in the old account's
     /// journal. That ordering makes replacing account-scoped CKSyncEngine state safe.
-    func resetAfterAccountReview() async throws {
+    func resetAfterAccountReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
         let identity = try await beginAccountOperation()
+        guard identity == expectedIdentity else { throw SyncTransportFailure.accountChanged }
         let allowsZoneBootstrap: Bool
         switch checkpointStore.load(for: identity) {
         case .loaded:
@@ -204,16 +211,47 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         try await verifyAccountIdentity(identity)
     }
 
-    func resetAfterCheckpointReview() async throws {
+    func resetAfterCheckpointReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
         let identity = try await beginAccountOperation()
+        guard identity == expectedIdentity else { throw SyncTransportFailure.accountChanged }
         if let retirement = retireAdapter() { await retirement.value }
         await adapterRetirement.waitUntilIdle()
         try checkpointStore.reset(for: identity, allowsZoneBootstrap: false)
         try await verifyAccountIdentity(identity)
     }
 
-    func resetForLocalFullResync() async throws {
+    func resetAfterRemoteDataResetReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
         let identity = try await beginAccountOperation()
+        guard identity == expectedIdentity else { throw SyncTransportFailure.accountChanged }
+        if let retirement = retireAdapter() { await retirement.value }
+        await adapterRetirement.waitUntilIdle()
+        // Unlike local checkpoint repair, this explicit action is authority to recreate
+        // the purged private zone and repopulate it from the journaled local library.
+        try checkpointStore.reset(for: identity, allowsZoneBootstrap: true)
+        try await verifyAccountIdentity(identity)
+    }
+
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+        let identity = try await beginAccountOperation()
+        guard identity == expectedIdentity else { throw SyncTransportFailure.accountChanged }
         if let retirement = retireAdapter() { await retirement.value }
         await adapterRetirement.waitUntilIdle()
         // Replace the old encrypted inbox atomically, but retain the durable fact that

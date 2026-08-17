@@ -275,6 +275,24 @@ nonisolated enum SentinelLock {
         #endif
     }
 
+    /// Whether an exact process incarnation still exists. Recovery-attempt claims use
+    /// the same PID-reuse fence as sentinel locks, but do not need a filesystem-age
+    /// fallback: a claim also has an in-process owner identity for same-process peers.
+    static func processIsAlive(
+        pid: pid_t,
+        generation: ProcessGeneration?
+    ) -> Bool {
+        guard pid > 0 else { return false }
+        let liveness = kill(pid, 0)
+        let livenessError = errno
+        guard liveness == 0 || livenessError == EPERM else { return false }
+        guard let generation,
+              let current = processGeneration(for: pid) else {
+            return true
+        }
+        return current == generation
+    }
+
     final class Handle {
         private let sentinelPath: String
         private let uniquePath: String

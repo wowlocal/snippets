@@ -62,6 +62,7 @@ final class SyncKeyStore {
         case malformedMaterial(Int)
         case keychainUnavailable
         case cloudBootstrapRequired
+        case cloudRecordUnreadable
 
         var description: String {
             switch self {
@@ -71,6 +72,8 @@ final class SyncKeyStore {
                 return "the keychain could not provide the sync key"
             case .cloudBootstrapRequired:
                 return "approve this device or restore the Snippets Cloud recovery kit first"
+            case .cloudRecordUnreadable:
+                return "the stored Snippets Cloud library key could not be verified"
             }
         }
     }
@@ -99,7 +102,17 @@ final class SyncKeyStore {
     func material() throws -> Data? {
         if usesSnippetsCloud() {
             guard let cloudKeys else { throw Failure.cloudBootstrapRequired }
-            return try cloudKeys.materialForConfiguredAccount()
+            do {
+                return try cloudKeys.materialForConfiguredAccount()
+            } catch SnippetsCloudKeyStore.Failure.malformedRecord {
+                throw Failure.cloudRecordUnreadable
+            } catch SnippetsCloudKeyStore.Failure.wrongAccount {
+                throw Failure.cloudBootstrapRequired
+            } catch SnippetsCloudKeyStore.Failure.keychainUnavailable {
+                throw Failure.keychainUnavailable
+            } catch {
+                throw Failure.keychainUnavailable
+            }
         }
         do {
             guard let stored = try keychain.loadItem(
@@ -199,6 +212,15 @@ final class SnippetsCloudKeyStore {
         let schemaVersion: Int
         let serverURL: String
         let spaceID: String
+        let serverInstanceID: String
+        let protocolMajor: Int
+        let material: Data
+    }
+
+    private struct LegacyRecord: Codable {
+        let schemaVersion: Int
+        let serverURL: String
+        let spaceID: String
         let material: Data
     }
 
@@ -219,22 +241,42 @@ final class SnippetsCloudKeyStore {
     }
 
     func materialForConfiguredAccount() throws -> Data? {
-        guard let coordinates = coordinates() else { return nil }
-        return try material(serverURL: coordinates.serverURL, spaceID: coordinates.spaceID)
+        guard let coordinates = coordinates(),
+              let serverInstanceID = coordinates.serverInstanceID,
+              let protocolMajor = coordinates.protocolMajor else { return nil }
+        return try material(
+            serverURL: coordinates.serverURL,
+            spaceID: coordinates.spaceID,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: protocolMajor)
     }
 
-    func material(serverURL: URL, spaceID: UUID) throws -> Data? {
+    func material(
+        serverURL: URL,
+        spaceID: UUID,
+        serverInstanceID: UUID,
+        protocolMajor: Int
+    ) throws -> Data? {
         guard let data = try loadRecordData() else { return nil }
-        let record = try decode(data)
+        guard let record = try decode(data) else { return nil }
         guard record.serverURL == serverURL.absoluteString,
-              record.spaceID == spaceID.uuidString.lowercased() else {
+              record.spaceID == spaceID.uuidString.lowercased(),
+              record.serverInstanceID == serverInstanceID.uuidString.lowercased(),
+              record.protocolMajor == protocolMajor else {
             return nil
         }
         return record.material
     }
 
-    func install(_ material: Data, serverURL: URL, spaceID: UUID) throws {
+    func install(
+        _ material: Data,
+        serverURL: URL,
+        spaceID: UUID,
+        serverInstanceID: UUID,
+        protocolMajor: Int
+    ) throws {
         guard material.count == 64,
+              protocolMajor == 2,
               serverURL.scheme?.lowercased() == "https",
               serverURL.host != nil,
               serverURL.user == nil,
@@ -245,9 +287,11 @@ final class SnippetsCloudKeyStore {
             throw Failure.malformedRecord
         }
         let record = Record(
-            schemaVersion: 1,
+            schemaVersion: 2,
             serverURL: serverURL.absoluteString,
             spaceID: spaceID.uuidString.lowercased(),
+            serverInstanceID: serverInstanceID.uuidString.lowercased(),
+            protocolMajor: protocolMajor,
             material: material)
         do {
             try keychain.storeItem(try JSONEncoder().encode(record), account: Self.account)
@@ -266,12 +310,27 @@ final class SnippetsCloudKeyStore {
         catch { throw Failure.keychainUnavailable }
     }
 
-    private func decode(_ data: Data) throws -> Record {
+    /// Schema 1 did not bind the root key to a deployment. Treat a structurally valid
+    /// legacy item as absent so onboarding can recover it deliberately; never silently
+    /// bless it for a replacement server at the same URL and space UUID.
+    private func decode(_ data: Data) throws -> Record? {
         guard data.count <= 2_048,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == ["schemaVersion", "serverURL", "spaceID", "material"],
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw Failure.malformedRecord }
+        if object["schemaVersion"] as? Int == 1 {
+            guard Set(object.keys) == ["schemaVersion", "serverURL", "spaceID", "material"],
+                  let legacy = try? JSONDecoder().decode(LegacyRecord.self, from: data),
+                  legacy.schemaVersion == 1,
+                  legacy.material.count == 64 else { throw Failure.malformedRecord }
+            return nil
+        }
+        guard Set(object.keys) == [
+                  "schemaVersion", "serverURL", "spaceID", "serverInstanceID",
+                  "protocolMajor", "material",
+              ],
               let record = try? JSONDecoder().decode(Record.self, from: data),
-              record.schemaVersion == 1,
+              record.schemaVersion == 2,
+              record.protocolMajor == 2,
               record.material.count == 64,
               let server = URL(string: record.serverURL),
               server.scheme?.lowercased() == "https",
@@ -282,7 +341,9 @@ final class SnippetsCloudKeyStore {
               server.fragment == nil,
               !record.serverURL.hasSuffix("/"),
               let space = UUID(uuidString: record.spaceID),
-              space.uuidString.lowercased() == record.spaceID else {
+              space.uuidString.lowercased() == record.spaceID,
+              let instance = UUID(uuidString: record.serverInstanceID),
+              instance.uuidString.lowercased() == record.serverInstanceID else {
             throw Failure.malformedRecord
         }
         return record
