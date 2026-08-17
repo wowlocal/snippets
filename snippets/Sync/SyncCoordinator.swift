@@ -162,6 +162,48 @@ final class SyncOfflineRetryScheduler {
 @MainActor
 final class SyncCoordinator {
 
+    private struct LocalRecoveryOnlySealer: SyncBlobSealing {
+        private struct UnexpectedDataPlaneUse: Error {}
+
+        func seal(_ plaintext: Data, for identity: WireIdentity) throws -> Data {
+            _ = plaintext
+            _ = identity
+            throw UnexpectedDataPlaneUse()
+        }
+
+        func open(_ ciphertext: Data, for identity: WireIdentity) throws -> Data {
+            _ = ciphertext
+            _ = identity
+            throw UnexpectedDataPlaneUse()
+        }
+    }
+
+    /// Exists only so Core can replay the local quarantine transaction while cloud
+    /// sync is off. Every data-plane method fails closed; the coordinator never starts
+    /// a round on this engine and accepts only its Check Again action.
+    nonisolated private struct LocalRecoveryOnlyTransport: SyncTransport {
+        let identifier = "local-library-recovery"
+        let supportsPush = false
+        let pollInterval: TimeInterval = 24 * 60 * 60
+        let events = AsyncStream<SyncTransportEvent> { $0.finish() }
+
+        func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+            _ = cursor
+            throw SyncTransportFailure.rejected(.permanent(
+                detail: "local recovery transport cannot fetch"))
+        }
+
+        func submit(
+            _ records: [WireRecord],
+            at cursor: SyncCursor?
+        ) async throws -> SyncSubmission {
+            _ = records
+            _ = cursor
+            throw SyncTransportFailure.rejected(.permanent(
+                detail: "local recovery transport cannot submit"))
+        }
+    }
+
     /// Off unless the user has said otherwise. `UserDefaults.bool(forKey:)` returns
     /// `false` for an absent key, so the default needs no registration — and an absent
     /// key and an explicit "off" behave identically, which is what we want.
@@ -216,6 +258,10 @@ final class SyncCoordinator {
     private let offlineRetryScheduler: SyncOfflineRetryScheduler
 
     private(set) var engine: SyncEngine?
+    /// A transport-inert engine used only to complete primary-library review while the
+    /// cloud preference is off or keychain/backend startup is unavailable. It never
+    /// runs a round; it reuses Core's exact CAS, protocol-pair, and crash-fence logic.
+    private var localRecoveryEngine: SyncEngine?
     private(set) var state: SyncEngine.State = .disabled
 
     /// Compatibility hook used by the macOS settings window.
@@ -229,6 +275,11 @@ final class SyncCoordinator {
     private var pollTimer: Timer?
     private var startRetryTimer: Timer?
     private var eventTask: Task<Void, Never>?
+    /// A startup-level Repair action may rebuild base/journal while an older durable
+    /// checkpoint halt still exists in state.json. Carry that exact user authority into
+    /// the first successfully constructed engine so the same Repair is not requested
+    /// twice. No other halt is cleared by this flag.
+    private var continueCheckpointRepairAfterStart = false
     /// Retained until the round has actually returned. Cancellation is advisory across
     /// an awaited CloudKit call, so `engine == nil` is not proof that sync is quiescent.
     private var roundTask: Task<Void, Never>?
@@ -250,6 +301,10 @@ final class SyncCoordinator {
     /// arriving mid-round it would look like the button did nothing. So a dropped request
     /// is remembered and replayed once the round finishes.
     private var roundRequests = SyncRoundRequestCoalescer()
+    /// A manual request queued behind a live/shutting-down round must retain the same
+    /// promise as a direct Sync Now: one immediate attempt even if that round ends in
+    /// backoff. Automatic triggers never set this bit.
+    private var replayBypassesBackoff = false
 
     private typealias RequestCompletion = (RequestResult) -> Void
     private var currentRoundCompletions: [RequestCompletion] = []
@@ -260,6 +315,93 @@ final class SyncCoordinator {
     /// round, never on every redraw of the settings pane.
     private var activeKeyMaterial: Data?
     private var startFailure: String?
+    private var startIssue: StartIssue?
+    /// Credential/root-key removal is a maintenance transaction, not merely a provider
+    /// selection change. While it is active, the retiring transport must drain without
+    /// the ordinary "still enabled" auto-restart constructing a replacement over the
+    /// credentials that are about to be erased.
+    private var cloudMutationInProgress = false
+
+    #if DEBUG
+    enum ProtocolRepairBoundary: CaseIterable, Equatable {
+        case baseCommitted
+        case journalCommitted
+    }
+    /// Fault-injection only. Throwing models process death after the named durable
+    /// boundary; production has no hook and no alternate commit path.
+    var protocolRepairBoundaryHook: ((ProtocolRepairBoundary) throws -> Void)?
+    #endif
+
+    private enum StartIssue: Equatable {
+        case schemaTooNew(version: Int)
+        case checkpointUnreadable
+        case authenticationRequired
+        case cloudKeyRequired
+        case syncKeyUnreadable
+        case cloudCredentialsUnreadable
+        case retryablePrerequisite
+
+        var description: String {
+            switch self {
+            case .schemaTooNew:
+                "A newer Snippets version wrote the local sync state. Update Snippets."
+            case .checkpointUnreadable:
+                "The local sync checkpoint could not be read."
+            case .authenticationRequired:
+                "Sign in to the selected cloud service again."
+            case .cloudKeyRequired:
+                "Approve this device from a trusted device or restore the Snippets Cloud recovery kit."
+            case .syncKeyUnreadable:
+                "The stored sync encryption key could not be verified. Repair or restore the library key, then choose Check Again."
+            case .cloudCredentialsUnreadable:
+                "The saved cloud sign-in history cannot be verified. Reset it from Snippets Cloud settings."
+            case .retryablePrerequisite:
+                "A local sync prerequisite is temporarily unavailable. Try again."
+            }
+        }
+
+        var state: SyncEngine.State {
+            switch self {
+            case .schemaTooNew(let version):
+                .halted(
+                    .schemaTooNew,
+                    detail: "Sync state schema \(version) is newer than this build.")
+            case .checkpointUnreadable:
+                .halted(
+                    .checkpointUnreadable,
+                    detail: "the local base or journal could not be verified")
+            case .authenticationRequired:
+                .needsAuthentication("sign_in_required")
+            case .cloudKeyRequired:
+                .needsAttention("cloud_key_required")
+            case .syncKeyUnreadable:
+                .needsAttention("sync_key_unreadable")
+            case .cloudCredentialsUnreadable:
+                .needsAttention("cloud_credentials_unreadable")
+            case .retryablePrerequisite:
+                .needsAttention("startup_prerequisite_unavailable")
+            }
+        }
+
+        var recoveryAction: SyncRecoveryAction? {
+            switch self {
+            case .checkpointUnreadable: .repairCheckpoint
+            case .syncKeyUnreadable: .checkAgain
+            case .retryablePrerequisite: .retrySync
+            case .schemaTooNew, .authenticationRequired, .cloudKeyRequired,
+                 .cloudCredentialsUnreadable: nil
+            }
+        }
+
+        var retriesAutomatically: Bool {
+            switch self {
+            case .retryablePrerequisite: true
+            case .schemaTooNew, .checkpointUnreadable, .authenticationRequired,
+                 .cloudKeyRequired, .syncKeyUnreadable,
+                 .cloudCredentialsUnreadable: false
+            }
+        }
+    }
 
     private lazy var libraryChangeDebouncer = SyncTriggerDebouncer(
         delay: Self.libraryChangeDebounceInterval
@@ -283,6 +425,7 @@ final class SyncCoordinator {
         self.backendSelection = selection
         self.transportFactory = transportFactory ?? { try selection.makeTransport() }
         self.offlineRetryScheduler = offlineRetryScheduler ?? SyncOfflineRetryScheduler()
+        restoreLocalLibraryRecoveryIfNeeded()
     }
 
     // MARK: - The preference
@@ -306,6 +449,9 @@ final class SyncCoordinator {
 
     var readiness: Readiness {
         guard Self.isEnabled else { return .off }
+        guard !cloudMutationInProgress else {
+            return .cannotStart("Cloud account maintenance is in progress.")
+        }
         if let startFailure { return .cannotStart(startFailure) }
         return .ready
     }
@@ -317,6 +463,25 @@ final class SyncCoordinator {
     /// Destructive local maintenance may proceed only after an old round has returned,
     /// not merely after the checkbox was switched off.
     var isQuiescent: Bool { roundTask == nil && shutdownTask == nil }
+
+    /// Whether a user-facing Sync Now can do useful work. A sticky/startup condition
+    /// with its own recovery action must never be presented as a generic retry, and a
+    /// non-actionable attention state belongs in Settings instead of a no-op loop.
+    var canRequestManualSync: Bool {
+        guard Self.isEnabled, !cloudMutationInProgress, recoveryAction == nil else {
+            return false
+        }
+        switch state {
+        case .needsAuthentication, .needsAttention, .waitingForVault, .halted:
+            return false
+        case .disabled, .idle, .syncing, .offline:
+            return true
+        }
+    }
+
+    var requiresSyncSettingsAttention: Bool {
+        Self.isEnabled && recoveryAction == nil && !canRequestManualSync
+    }
 
     @discardableResult
     func addStateObserver(_ observer: @escaping (SyncEngine.State) -> Void) -> UUID {
@@ -352,38 +517,57 @@ final class SyncCoordinator {
     }
 
     func start() {
-        guard Self.isEnabled, engine == nil else { return }
+        guard Self.isEnabled, !cloudMutationInProgress, engine == nil else { return }
         // Re-enabling is intentionally deferred while the prior transport drains. The
         // shutdown task calls start again after its awaited backend barrier completes.
         guard roundTask == nil, shutdownTask == nil else { return }
+        restoreLocalLibraryRecoveryIfNeeded()
+        if let localRecoveryEngine {
+            publish(localRecoveryEngine.state)
+            return
+        }
 
         let material: Data
         let sealer: SnippetCryptoSealer
         let transport: any SyncTransport
         do {
+            try validateProtocolFilesForStartup()
             material = try keys.materialMintingIfNeeded()
             sealer = SnippetCryptoSealer(
                 keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
             try discardAgreedBaseIfWireKeyChanged(material)
             transport = try transportFactory()
         } catch {
-            // Not a halt: no remote or library data was changed. The keychain may not be
-            // answering, or the stale agreed base may not yet be removable. Both are
-            // start prerequisites worth retrying rather than running under ambiguous
-            // crypto state. `readiness` carries the detail to Settings.
+            // Startup has not touched either the primary library or the backend. Keep
+            // the failure in a closed, action-oriented vocabulary: raw error text can
+            // contain implementation detail and, more importantly, cannot tell the UI
+            // whether retrying, signing in, repairing, or updating is the safe action.
+            let issue = Self.startIssue(for: error)
+            let diagnosticArea: DiagnosticStorageArea = switch issue {
+            case .schemaTooNew, .checkpointUnreadable: .syncState
+            case .authenticationRequired, .cloudKeyRequired, .syncKeyUnreadable,
+                 .cloudCredentialsUnreadable, .retryablePrerequisite: .syncKey
+            }
             Diagnostics.record(.storageFailure(
-                area: .syncKey,
+                area: diagnosticArea,
                 operation: .read,
                 failure: DiagnosticFailure(error),
                 attempt: nil))
-            startFailure = "\(error)"
-            scheduleStartRetry()
-            publish(.disabled)
+            startIssue = issue
+            startFailure = issue.description
+            if issue.retriesAutomatically {
+                scheduleStartRetry()
+            } else {
+                startRetryTimer?.invalidate()
+                startRetryTimer = nil
+            }
+            publish(issue.state)
             return
         }
         startRetryTimer?.invalidate()
         startRetryTimer = nil
         startFailure = nil
+        startIssue = nil
         activeKeyMaterial = material
 
         let engine = SyncEngine(
@@ -398,14 +582,20 @@ final class SyncCoordinator {
         let generation = lifecycleGeneration
         engine.onStateChange = { [weak self, weak engine] state in
             MainActor.assumeIsolated {
-                guard let self, let engine, self.lifecycleGeneration == generation else { return }
+                guard let self, engine != nil, self.lifecycleGeneration == generation else { return }
                 self.publish(state)
-                self.handleExpectedProviderTransition(state, engine: engine)
             }
         }
 
         self.transport = transport
         self.engine = engine
+
+        if continueCheckpointRepairAfterStart {
+            continueCheckpointRepairAfterStart = false
+            if engine.recoveryAction == .repairCheckpoint {
+                engine.performRecovery(.repairCheckpoint)
+            }
+        }
 
         // A safety halt restored from `Sync/state.json` is already the engine's state;
         // it does not transition during the no-op `sync()` below, so its callback will
@@ -413,7 +603,6 @@ final class SyncCoordinator {
         // relaunch even though the engine correctly refuses to fetch.
         if engine.state.isHalted {
             publish(engine.state)
-            handleExpectedProviderTransition(engine.state, engine: engine)
         }
 
         startPolling(every: transport.pollInterval)
@@ -467,7 +656,9 @@ final class SyncCoordinator {
         transport = nil
         activeKeyMaterial = nil
         roundRequests.cancelReplay()
-        publish(.disabled)
+        replayBypassesBackoff = false
+        restoreLocalLibraryRecoveryIfNeeded()
+        publish(localRecoveryEngine?.state ?? .disabled)
         finishAllRequests(with: .completed(.disabled))
 
         if shutdownTask == nil, retiringRound != nil || retiringTransport != nil {
@@ -480,42 +671,48 @@ final class SyncCoordinator {
 
                 guard let self else { return }
                 self.shutdownTask = nil
-                if Self.isEnabled { self.start() }
+                if Self.isEnabled, !self.cloudMutationInProgress { self.start() }
             }
         }
     }
 
-    /// Rebuilds the transport after Settings changed the selected provider.
-    ///
-    /// The selection store records one durable, one-shot authorization. If the new
-    /// account identity differs from the old checkpoint, the ordinary sticky halt is
-    /// cleared only for this explicit Switch-and-Sync action; the engine then performs
-    /// its existing journal-first reset. Unexpected account changes retain the halt.
+    /// Runs credential or device-only cloud-root mutation only after both Core's round
+    /// and transport-owned scheduler work have stopped. The closure is intentionally
+    /// owned by the coordinator so callers cannot accidentally erase first and await
+    /// shutdown afterwards. A second UI action is rejected instead of interleaving two
+    /// sign-out/reset transactions.
+    func withQuiescedCloudTransport<T>(
+        _ operation: @escaping @MainActor () async throws -> T
+    ) async throws -> T {
+        guard !cloudMutationInProgress else {
+            throw CloudMaintenanceFailure.alreadyInProgress
+        }
+        cloudMutationInProgress = true
+        stop()
+        if let shutdownTask { await shutdownTask.value }
+
+        do {
+            let result = try await operation()
+            cloudMutationInProgress = false
+            if Self.isEnabled { start() }
+            return result
+        } catch {
+            cloudMutationInProgress = false
+            if Self.isEnabled { start() }
+            throw error
+        }
+    }
+
+    private enum CloudMaintenanceFailure: Error {
+        case alreadyInProgress
+    }
+
+    /// Rebuilds the transport after Settings changed the selected provider. A provider
+    /// choice never doubles as authority to clear an account/dataset review boundary;
+    /// that confirmation remains an explicit, reason-specific action in Settings.
     func reloadProviderSelection() {
         stop()
         if Self.isEnabled, shutdownTask == nil { start() }
-    }
-
-    private func handleExpectedProviderTransition(
-        _ state: SyncEngine.State,
-        engine: SyncEngine
-    ) {
-        guard backendSelection.hasPendingProviderSwitch else { return }
-        switch state {
-        case .halted(.accountChanged, _):
-            backendSelection.clearPendingProviderSwitch()
-            engine.clearHaltAfterUserReview()
-            _ = syncNow(trigger: .retry)
-        case .idle(let lastSync) where lastSync != nil:
-            // A pristine install or two scopes that legitimately bind identically need
-            // no reset. Consume the one-shot authorization after the successful round.
-            backendSelection.clearPendingProviderSwitch()
-        case .halted:
-            // A provider switch never authorizes clearing a different safety stop.
-            backendSelection.clearPendingProviderSwitch()
-        default:
-            break
-        }
     }
 
     /// Re-evaluates after the shape of the library changed underneath — most usefully,
@@ -539,7 +736,10 @@ final class SyncCoordinator {
     }
 
     private func scheduleLibraryChangeSync() {
-        guard Self.isEnabled else { return }
+        // The maintenance completion always starts a full ordinary round, so dropping
+        // its redundant debounce is safe and prevents a timer from attempting to reopen
+        // the transport while credentials are being revoked or erased.
+        guard Self.isEnabled, !cloudMutationInProgress else { return }
         libraryChangeDebouncer.request()
     }
 
@@ -572,6 +772,11 @@ final class SyncCoordinator {
         trigger: DiagnosticSyncTrigger,
         completion: RequestCompletion?
     ) -> RequestDisposition {
+        let bypassesBackoff: Bool
+        switch trigger {
+        case .manual: bypassesBackoff = true
+        default: bypassesBackoff = false
+        }
         // Any round requested before the trailing timer fires includes the same current
         // library state. Consume the pending debounce so it cannot manufacture a second,
         // redundant round immediately afterwards.
@@ -584,7 +789,7 @@ final class SyncCoordinator {
         }
 
         if shutdownTask != nil {
-            roundRequests.requestReplay()
+            queueReplay(bypassingBackoff: bypassesBackoff)
             if let completion { replayRoundCompletions.append(completion) }
             return .queued
         }
@@ -607,14 +812,14 @@ final class SyncCoordinator {
                 if let completion { currentRoundCompletions.append(completion) }
                 return .started
             }
-            roundRequests.requestReplay()
+            queueReplay(bypassingBackoff: bypassesBackoff)
             if let completion { replayRoundCompletions.append(completion) }
             return .queued
         }
         // A rebuild also ends by syncing; running a second round here would be waste.
         if restartIfWireKeyChanged() {
             if shutdownTask != nil {
-                roundRequests.requestReplay()
+                queueReplay(bypassingBackoff: bypassesBackoff)
                 if let completion { replayRoundCompletions.append(completion) }
                 return .queued
             }
@@ -627,7 +832,7 @@ final class SyncCoordinator {
                 if let completion { currentRoundCompletions.append(completion) }
                 return .started
             }
-            roundRequests.requestReplay()
+            queueReplay(bypassingBackoff: bypassesBackoff)
             if let completion { replayRoundCompletions.append(completion) }
             return .queued
         }
@@ -639,26 +844,160 @@ final class SyncCoordinator {
         }
         Diagnostics.record(.syncTriggered(trigger))
         if roundTask != nil {
-            roundRequests.requestReplay()
+            queueReplay(bypassingBackoff: bypassesBackoff)
             if let completion { replayRoundCompletions.append(completion) }
             return .queued
         }
-        startRound(with: engine, completions: completion.map { [$0] } ?? [])
+        startRound(
+            with: engine,
+            completions: completion.map { [$0] } ?? [],
+            bypassingBackoff: bypassesBackoff)
         return .started
     }
 
-    /// The only way out of a halt, and it goes through the engine's deliberately
-    /// awkwardly-named method so the intent stays visible: a halt means a human looked.
-    func clearHaltAfterUserReview() {
-        engine?.clearHaltAfterUserReview()
+    private func queueReplay(bypassingBackoff: Bool) {
+        roundRequests.requestReplay()
+        replayBypassesBackoff = replayBypassesBackoff || bypassingBackoff
+    }
+
+    /// Runs the reason-specific action the UI presented. The engine rejects stale or
+    /// mismatched actions before touching the durable safety stop.
+    func performRecovery(_ action: SyncRecoveryAction) {
+        if let startIssue, startIssue.recoveryAction == action {
+            switch (startIssue, action) {
+            case (.checkpointUnreadable, .repairCheckpoint):
+                do {
+                    try repairUnreadableProtocolCheckpoint()
+                    self.startIssue = nil
+                    startFailure = nil
+                    continueCheckpointRepairAfterStart = true
+                    start()
+                } catch {
+                    Diagnostics.record(.storageFailure(
+                        area: .syncState,
+                        operation: .write,
+                        failure: DiagnosticFailure(error),
+                        attempt: nil))
+                    let repairedIssue = Self.startIssue(for: error)
+                    self.startIssue = repairedIssue == .retryablePrerequisite
+                        ? .checkpointUnreadable
+                        : repairedIssue
+                    startFailure = self.startIssue?.description
+                    publish(self.startIssue?.state ?? .disabled)
+                }
+            case (.retryablePrerequisite, .retrySync):
+                self.startIssue = nil
+                startFailure = nil
+                startRetryTimer?.invalidate()
+                startRetryTimer = nil
+                start()
+            case (.syncKeyUnreadable, .checkAgain):
+                self.startIssue = nil
+                startFailure = nil
+                start()
+            default:
+                break
+            }
+            return
+        }
+        if let localRecoveryEngine,
+           localRecoveryEngine.recoveryAction == action {
+            localRecoveryEngine.performRecovery(action)
+            // Marker retirement is the commit point for primary recovery. The inert
+            // engine may now be showing an unrelated halt that it intentionally
+            // preserved; drop it so only a real transport-backed engine can act on that.
+            if !LibraryQuarantineMarker.exists() {
+                self.localRecoveryEngine = nil
+                if Self.isEnabled {
+                    start()
+                } else {
+                    publish(.disabled)
+                }
+                return
+            }
+            if localRecoveryEngine.state.isHalted {
+                publish(localRecoveryEngine.state)
+                return
+            }
+            // The independent marker outranks in-memory state. This also protects the
+            // transient case where reconstructing state.json failed but its later clear
+            // succeeded: never discard the only recovery UI while the store is locked.
+            if LibraryQuarantineMarker.exists() {
+                localRecoveryEngine.reassertPrimaryLibraryQuarantine()
+                publish(localRecoveryEngine.state)
+                return
+            }
+            self.localRecoveryEngine = nil
+            if Self.isEnabled {
+                start()
+            } else {
+                publish(.disabled)
+            }
+            return
+        }
+        engine?.performRecovery(action)
         if Self.isEnabled {
             _ = syncNow(trigger: .retry)
         } else {
             // Halt persistence failed and turned the opt-in off. Do not let the existing
-            // in-memory engine bypass that preference after Review; a later checkbox-on
+            // in-memory engine bypass that preference after recovery; a later checkbox-on
             // constructs a fresh engine deliberately.
             stop()
         }
+    }
+
+    /// Recovery is derived from the engine's exact durable context, not just the broad
+    /// halt reason. In particular, a legacy mass-deletion stop can only refresh its
+    /// facts and can never expose the destructive confirmation.
+    var recoveryAction: SyncRecoveryAction? {
+        if let engineAction = engine?.recoveryAction { return engineAction }
+        if let localAction = localRecoveryEngine?.recoveryAction { return localAction }
+        guard Self.isEnabled else { return nil }
+        return startIssue?.recoveryAction
+    }
+
+    /// Restores a local recovery affordance independently of the cloud opt-in. The
+    /// independent marker is authoritative when state.json itself was lost; Core then
+    /// recreates the typed halt before exposing Check Again.
+    private func restoreLocalLibraryRecoveryIfNeeded() {
+        guard engine == nil, localRecoveryEngine == nil else { return }
+        let hasIndependentMarker = LibraryQuarantineMarker.exists()
+        let hasTypedStateMarker: Bool
+        switch SyncStateFile.load() {
+        case .loaded(let persisted):
+            hasTypedStateMarker = persisted.halt?.recoveryContext == .localLibraryQuarantine
+        case .tooNew, .fresh:
+            hasTypedStateMarker = false
+        }
+        guard hasIndependentMarker || hasTypedStateMarker else { return }
+
+        let candidate = SyncEngine(
+            transport: LocalRecoveryOnlyTransport(),
+            library: library,
+            sealer: LocalRecoveryOnlySealer(),
+            device: device)
+        if hasIndependentMarker {
+            candidate.reassertPrimaryLibraryQuarantine()
+        }
+        guard candidate.state.isHalted else { return }
+        let isPrimaryRecovery: Bool
+        if case .halted(.localLibraryQuarantined, _) = candidate.state {
+            isPrimaryRecovery = candidate.recoveryAction == .checkAgain
+        } else {
+            isPrimaryRecovery = false
+        }
+        let isFutureSchema: Bool
+        if case .halted(.schemaTooNew, _) = candidate.state {
+            isFutureSchema = true
+        } else {
+            isFutureSchema = false
+        }
+        // Never expose a transport-scoped action through this inert engine. A future
+        // schema fence is the sole exception: it is intentionally non-actionable and
+        // must remain visible while sync is off.
+        guard isPrimaryRecovery || isFutureSchema else { return }
+        localRecoveryEngine = candidate
+        state = candidate.state
     }
 
     // MARK: - Internals
@@ -671,8 +1010,164 @@ final class SyncCoordinator {
     /// remains the sole authority for the actual key material.
     private static let wireKeyFingerprintDefaultsKey = "SnippetsSyncWireKeyFingerprint"
 
-    private struct ProtocolResetFailure: Error, CustomStringConvertible {
-        var description: String
+    private struct ProtocolResetFailure: Error {
+        enum Kind {
+            case schemaTooNew(version: Int)
+            case checkpointUnreadable
+            case retryablePrerequisite
+        }
+
+        var kind: Kind
+    }
+
+    private static func startIssue(for error: Error) -> StartIssue {
+        if let failure = error as? ProtocolResetFailure {
+            return switch failure.kind {
+            case .schemaTooNew(let version): .schemaTooNew(version: version)
+            case .checkpointUnreadable: .checkpointUnreadable
+            case .retryablePrerequisite: .retryablePrerequisite
+            }
+        }
+        if let failure = error as? SyncBackendSelectionStore.Failure {
+            return switch failure {
+            case .missingCredential, .invalidCredential: .authenticationRequired
+            case .credentialResetRequired: .cloudCredentialsUnreadable
+            case .featureDisabled, .missingConfiguration,
+                 .credentialCleanupRequired, .credentialStoreUnavailable:
+                .retryablePrerequisite
+            }
+        }
+        if let failure = error as? SyncKeyStore.Failure {
+            return switch failure {
+            case .keychainUnavailable: .retryablePrerequisite
+            case .cloudBootstrapRequired: .cloudKeyRequired
+            case .malformedMaterial, .cloudRecordUnreadable: .syncKeyUnreadable
+            }
+        }
+        return .retryablePrerequisite
+    }
+
+    /// Validate the application-level checkpoint before constructing a transport. The
+    /// engine also validates these files, but doing it here is what lets Settings offer
+    /// an actual Repair action instead of constructing an inert engine whose generic
+    /// resume can only rediscover the same malformed bytes.
+    private func validateProtocolFilesForStartup() throws {
+        let baseOutcome = SyncBaseFile.load()
+        let journalOutcome = SyncJournalFile.load()
+        let stateOutcome = SyncStateFile.load()
+
+        var futureVersions: [Int] = []
+        if case .tooNew(let version) = baseOutcome { futureVersions.append(version) }
+        if case .tooNew(let version) = journalOutcome { futureVersions.append(version) }
+        if case .tooNew(let version) = stateOutcome { futureVersions.append(version) }
+        if let version = futureVersions.max() {
+            throw ProtocolResetFailure(kind: .schemaTooNew(version: version))
+        }
+
+        if case .unreadable = baseOutcome {
+            throw ProtocolResetFailure(kind: .checkpointUnreadable)
+        }
+        if case .unreadable = journalOutcome {
+            throw ProtocolResetFailure(kind: .checkpointUnreadable)
+        }
+
+        switch baseOutcome {
+        case .missing:
+            if case .loaded = journalOutcome {
+                throw ProtocolResetFailure(kind: .checkpointUnreadable)
+            }
+        case .loaded(let base):
+            if base.journalEstablished, case .missing = journalOutcome {
+                throw ProtocolResetFailure(kind: .checkpointUnreadable)
+            }
+        case .tooNew, .unreadable:
+            break
+        }
+    }
+
+    /// Rebuilds only derived sync intent from the current primary library. The new base
+    /// carries both a non-destructive full-merge marker and the exact reviewed primary
+    /// snapshot. That snapshot is not remote confirmation: it exists solely so an edit
+    /// or deletion made after Repair remains authoritative while the first full fetch is
+    /// pending. Older journal-only intent is retained independently.
+    private func repairUnreadableProtocolCheckpoint() throws {
+        let baseOutcome = SyncBaseFile.load()
+        let journalOutcome = SyncJournalFile.load()
+        let stateOutcome = SyncStateFile.load()
+
+        if case .tooNew(let version) = baseOutcome {
+            throw ProtocolResetFailure(kind: .schemaTooNew(version: version))
+        }
+        if case .tooNew(let version) = journalOutcome {
+            throw ProtocolResetFailure(kind: .schemaTooNew(version: version))
+        }
+        if case .tooNew(let version) = stateOutcome {
+            throw ProtocolResetFailure(kind: .schemaTooNew(version: version))
+        }
+
+        let priorBase: SyncBase? = if case .loaded(let loaded) = baseOutcome {
+            loaded
+        } else {
+            nil
+        }
+        let current = try library.currentEnvelopes(agreedBase: priorBase ?? SyncBase())
+        var repairedJournal = if case .loaded(let loaded) = journalOutcome {
+            loaded
+        } else {
+            SyncJournal()
+        }
+        let recoveryBase: SyncBase
+        if var activeReview = priorBase,
+           activeReview.requiresNonDestructiveLibraryMerge,
+           activeReview.nonDestructiveMergeMode == .reviewedLocalSnapshot {
+            // A previous Repair may have committed base.json and crashed before its
+            // journal. Its reviewed snapshot is already the durable boundary between
+            // pre- and post-review intent. Re-snapshotting `current` here would turn a
+            // later deletion into unknown absence under a new review epoch.
+            activeReview.upgradeToCurrentSchema()
+            activeReview.journalEstablished = true
+            recoveryBase = activeReview
+        } else {
+            let preRecoveryConfirmed = priorBase.flatMap {
+                prior -> [String: SyncEnvelope]? in
+                if prior.requiresNonDestructiveLibraryMerge {
+                    return prior.preRecoveryConfirmedEnvelopes
+                }
+                return prior.envelopes
+            }
+            recoveryBase = SyncBase(
+                envelopes: Dictionary(uniqueKeysWithValues: current.values.map {
+                    (SyncBase.key($0.id), $0)
+                }),
+                journalEstablished: true,
+                accountIdentity: priorBase?.accountIdentity,
+                datasetIdentity: priorBase?.datasetIdentity,
+                requiresNonDestructiveLibraryMerge: true,
+                nonDestructiveMergeMode: .reviewedLocalSnapshot,
+                preRecoveryConfirmedEnvelopes: preRecoveryConfirmed,
+                nonDestructiveReviewID: UUID())
+        }
+        try repairedJournal.reconcileAfterReviewedLocalSnapshot(
+            current: current,
+            reviewedSnapshot: recoveryBase,
+            deviceID: device,
+            now: Date())
+
+        // Base first is the crash fence. Its non-destructive marker makes even an old,
+        // still-readable journal safe after a crash; a missing/unreadable journal keeps
+        // startup stopped. Writing the journal first would be unsafe when the old base
+        // was readable: a crash could pair that deletion-capable ancestor with the new
+        // empty-ancestor journal before the marker existed.
+        try SyncBaseFile.write(recoveryBase)
+        #if DEBUG
+        try protocolRepairBoundaryHook?(.baseCommitted)
+        #endif
+        try SyncJournalFile.write(repairedJournal)
+        #if DEBUG
+        try protocolRepairBoundaryHook?(.journalCommitted)
+        #endif
+        try library.retainConflictPrerequisiteInstallReceipts(
+            for: repairedJournal.activeConflictPrerequisiteCopyIDs)
     }
 
     /// Clears the agreed envelopes when the key that sealed them is no longer the key we
@@ -722,11 +1217,9 @@ final class SyncCoordinator {
             confirmed = SyncBase()
             baseWasMissing = true
         case .tooNew(let version):
-            throw ProtocolResetFailure(
-                description: "sync base schemaVersion \(version) is newer than this build")
+            throw ProtocolResetFailure(kind: .schemaTooNew(version: version))
         case .unreadable:
-            throw ProtocolResetFailure(
-                description: "confirmed sync state could not be read during transport rekey")
+            throw ProtocolResetFailure(kind: .checkpointUnreadable)
         }
 
         var journal: SyncJournal
@@ -739,22 +1232,16 @@ final class SyncCoordinator {
             journal = loaded
             journalWasMissing = false
         case .tooNew(let version):
-            throw ProtocolResetFailure(
-                description: "sync journal schemaVersion \(version) is newer than this build")
+            throw ProtocolResetFailure(kind: .schemaTooNew(version: version))
         case .unreadable:
-            throw ProtocolResetFailure(
-                description: "pending sync changes could not be read during transport rekey")
+            throw ProtocolResetFailure(kind: .checkpointUnreadable)
         }
 
         guard !baseWasMissing || journalWasMissing else {
-            throw ProtocolResetFailure(
-                description: "confirmed sync state is missing while pending changes "
-                    + "still exist; refusing to hide the loss during transport rekey")
+            throw ProtocolResetFailure(kind: .checkpointUnreadable)
         }
         guard !journalWasMissing || !confirmed.journalEstablished else {
-            throw ProtocolResetFailure(
-                description: "pending sync state is missing even though the confirmed "
-                    + "base records that its journal was established; refusing transport rekey")
+            throw ProtocolResetFailure(kind: .checkpointUnreadable)
         }
 
         // Truly fresh sync has nothing to reseal. Do not manufacture journal.json here:
@@ -773,11 +1260,13 @@ final class SyncCoordinator {
         var current = try library.currentEnvelopes(
             agreedBase: journal.projectionKnowledge(over: confirmed))
         try journal.reconcileDependencies(current: current, confirmed: confirmed)
-        journal.reconcile(
-            current: current,
-            confirmed: confirmed,
-            deviceID: device,
-            now: Date())
+        if !confirmed.requiresNonDestructiveLibraryMerge {
+            journal.reconcile(
+                current: current,
+                confirmed: confirmed,
+                deviceID: device,
+                now: Date())
+        }
         // Publish later C1/T intent before any frozen C0 recovery can touch primary.
         try SyncJournalFile.write(journal)
         // The scheduler reset below can discard an old inbox. Carrier-only dependency
@@ -790,9 +1279,7 @@ final class SyncCoordinator {
             let freshlyPrepared = try library.prepareConflictCopyEvidence(
                 from: carrierSources)
             guard !freshlyPrepared.isEmpty else {
-                throw ProtocolResetFailure(
-                    description: "secure conflict copies must be unlocked before "
-                        + "resetting the transport key")
+                throw ProtocolResetFailure(kind: .retryablePrerequisite)
             }
             try journal.recordConflictCopyEvidence(freshlyPrepared)
             // Publish exact random-nonce C0 before primary mutation. A crash here is
@@ -821,34 +1308,41 @@ final class SyncCoordinator {
             guard recovery.deferredIDs.isEmpty,
                   recovery.incompatibleVaultIDs.isEmpty,
                   recovery.retryIDs.isEmpty else {
-                throw ProtocolResetFailure(
-                    description: "secure conflict copies must be unlocked and recovered "
-                        + "before resetting the transport key")
+                throw ProtocolResetFailure(kind: .retryablePrerequisite)
             }
             let recovered = try library.currentEnvelopes(
                 agreedBase: journal.projectionKnowledge(over: confirmed))
             try journal.reconcileDependencies(current: recovered, confirmed: confirmed)
-            journal.reconcile(
-                current: recovered,
-                confirmed: confirmed,
-                deviceID: device,
-                now: Date())
+            if !confirmed.requiresNonDestructiveLibraryMerge {
+                journal.reconcile(
+                    current: recovered,
+                    confirmed: confirmed,
+                    deviceID: device,
+                    now: Date())
+            }
             let recoveredPrimary = try library.currentSnapshot(
                 agreedBase: journal.projectionKnowledge(over: confirmed))
             guard journal.conflictPrerequisiteRecovery(
                 primaryStates: recoveredPrimary.primaryStates,
                 installedHashes: recoveredPrimary.installedConflictPrerequisiteHashes)
                 .sources.isEmpty else {
-                throw ProtocolResetFailure(
-                    description: "secure conflict-copy recovery did not complete before "
-                        + "the transport-key reset")
+                throw ProtocolResetFailure(kind: .retryablePrerequisite)
             }
             current = recovered
         }
-        try journal.prepareForTransportRekey(
-            current: current,
-            confirmed: confirmed,
-            now: Date())
+        if confirmed.requiresNonDestructiveLibraryMerge {
+            try journal.prepareForNonDestructiveLibraryRecovery(
+                current: current,
+                confirmed: confirmed,
+                deviceID: device,
+                now: Date(),
+                discoverSecureCarriers: library.supportsSecureConflictMaterialization)
+        } else {
+            try journal.prepareForTransportRekey(
+                current: current,
+                confirmed: confirmed,
+                now: Date())
+        }
         try SyncJournalFile.write(journal)
         try library.retainConflictPrerequisiteInstallReceipts(
             for: journal.activeConflictPrerequisiteCopyIDs)
@@ -860,10 +1354,20 @@ final class SyncCoordinator {
         // what lets the resealed value replace old ciphertext without overwriting an
         // independent remote edit.
         try SyncBaseFile.write(SyncBase(
+            envelopes: confirmed.requiresNonDestructiveLibraryMerge
+                ? confirmed.envelopes
+                : [:],
             recordVersions: confirmed.recordVersions,
             journalEstablished: true,
             accountIdentity: confirmed.accountIdentity,
-            requiresTransportFullResync: true))
+            datasetIdentity: confirmed.datasetIdentity,
+            requiresTransportFullResync: !confirmed.requiresNonDestructiveLibraryMerge,
+            requiresNonDestructiveLibraryMerge:
+                confirmed.requiresNonDestructiveLibraryMerge,
+            nonDestructiveMergeMode: confirmed.nonDestructiveMergeMode,
+            preRecoveryConfirmedEnvelopes:
+                confirmed.preRecoveryConfirmedEnvelopes,
+            nonDestructiveReviewID: confirmed.nonDestructiveReviewID))
 
         // The projection sidecar remains untouched: it contains forward-compatible `x`
         // fields and local HLC/origin metadata independent of the transport key.
@@ -902,13 +1406,14 @@ final class SyncCoordinator {
 
     private func startRound(
         with engine: SyncEngine,
-        completions: [RequestCompletion]
+        completions: [RequestCompletion],
+        bypassingBackoff: Bool = false
     ) {
         let generation = lifecycleGeneration
         roundGeneration = generation
         currentRoundCompletions.append(contentsOf: completions)
         let task = Task { @MainActor [weak self] in
-            let finalState = await engine.sync()
+            let finalState = await engine.sync(bypassingBackoff: bypassingBackoff)
             guard let self else { return }
             self.finishRound(generation: generation, finalState: finalState)
         }
@@ -945,9 +1450,19 @@ final class SyncCoordinator {
             return
         }
 
+        if engine?.requiresTransportRestart == true {
+            // A peer finished a durable recovery claim. Its base/journal and the
+            // transport-private scheduler checkpoint form one generation; rebuilding
+            // only Core would let this old adapter write stale state over the reset.
+            reloadProviderSelection()
+            return
+        }
+
         let replay = roundRequests.finishRound(
             generation: generation,
             currentGeneration: lifecycleGeneration)
+        let bypassesBackoff = replayBypassesBackoff
+        replayBypassesBackoff = false
         guard replay, let engine else {
             // Defensive: every queued completion should imply a requested replay, but
             // never leave an async caller suspended if future scheduling code violates
@@ -963,7 +1478,10 @@ final class SyncCoordinator {
         let replayCompletions = replayRoundCompletions
         replayRoundCompletions.removeAll(keepingCapacity: true)
         Diagnostics.record(.syncTriggered(.retry))
-        startRound(with: engine, completions: replayCompletions)
+        startRound(
+            with: engine,
+            completions: replayCompletions,
+            bypassingBackoff: bypassesBackoff)
     }
 
     private func finishAllRequests(with result: RequestResult) {
@@ -1025,7 +1543,7 @@ final class SyncCoordinator {
         case .idle(let lastSync): lastSync == nil ? .idle : .synced
         case .syncing: .syncing
         case .offline, .waitingForVault: .waiting
-        case .needsAuthentication: .failed
+        case .needsAuthentication, .needsAttention: .failed
         case .halted: .halted
         }
     }
@@ -1049,6 +1567,35 @@ final class SyncCoordinator {
     /// One sentence for the settings pane. Deliberately here rather than in the view, so
     /// the state and the words for it cannot drift apart.
     var statusDescription: String {
+        // Primary-file recovery remains actionable even when cloud sync is off. Render
+        // that stop before the ordinary readiness shortcut would reduce it to "Off".
+        if localRecoveryEngine != nil,
+           case .halted(let reason, let detail) = state {
+            return Self.userFacingHaltDescription(reason: reason, detail: detail)
+        }
+        if Self.isEnabled, let startIssue {
+            if startIssue == .syncKeyUnreadable {
+                return switch backendSelection.provider {
+                case .iCloud:
+                    "The iCloud sync encryption key could not be verified. First "
+                        + "confirm that iCloud Passwords & Keychain is enabled for the "
+                        + "intended Apple Account, or recover the key from a Mac that "
+                        + "can still sync this library. Check Again only rechecks the "
+                        + "key; it does not repair or replace it."
+                case .snippetsCloud:
+                    "The Snippets Cloud library key could not be verified. First "
+                        + "approve this device from a trusted device or restore the "
+                        + "Snippets Cloud recovery kit. Check Again only rechecks the "
+                        + "key; it does not repair or replace it."
+                }
+            }
+            return startIssue.description
+        }
+        if engine?.recoveryClaimNeedsTakeover == true {
+            return "An earlier recovery attempt is still claimed by another process or "
+                + "Mac. If it is no longer running, choose Take Over Recovery. That only "
+                + "clears attempt ownership; the original action must be reviewed again."
+        }
         switch readiness {
         case .off:
             return "Off. Your snippets stay on this device."
@@ -1073,19 +1620,113 @@ final class SyncCoordinator {
             formatter.timeStyle = .short
             return "Cannot reach \(backendSelection.provider.displayName). Trying again at \(formatter.string(from: retryAfter))."
         case .needsAuthentication(let detail):
-            return "\(backendSelection.provider.displayName) needs attention: \(detail)"
+            var sentence = "\(backendSelection.provider.displayName) needs attention: "
+                + Self.userFacingAuthenticationDetail(detail)
+            if !sentence.hasSuffix(".") { sentence += "." }
+            return sentence
+        case .needsAttention(let detail):
+            var sentence = "Sync needs attention: \(Self.userFacingAttentionDetail(detail))"
+            if !sentence.hasSuffix(".") { sentence += "." }
+            return sentence + " Fix the reported condition, then try again."
         case .waitingForVault(let detail):
             return "Waiting: \(detail)."
         case .halted(let reason, let detail):
-            // The reason in words, then the backend's own account, then where to look.
-            // Previously this interpolated the enum case, so the sentence a user met was
-            // "Stopped for safety (manifestIntegrityFailed): …".
-            var sentence = "Stopped: \(reason.title). \(detail)"
-            if !sentence.hasSuffix(".") { sentence += "." }
-            if let guidance = reason.guidance { sentence += " \(guidance)" }
-            return sentence
+            return Self.userFacingHaltDescription(reason: reason, detail: detail)
         }
     }
+
+    private static func userFacingHaltDescription(
+        reason: SyncState.HaltReason,
+        detail: String
+    ) -> String {
+        // The reason in words, then a closed user-facing account, then where to look.
+        // Previously this interpolated enum and transport internals directly.
+        var sentence = "Stopped because \(reason.title): "
+            + userFacingHaltDetail(reason: reason, detail: detail)
+        if !sentence.hasSuffix(".") { sentence += "." }
+        if let guidance = reason.guidance { sentence += " \(guidance)" }
+        return sentence
+    }
+
+    /// Transport details are retained for state-machine decisions, but a backend may
+    /// express them as protocol tokens such as `record_too_large`. Settings presents a
+    /// closed vocabulary instead of leaking those implementation codes into the UI.
+    private static func userFacingAuthenticationDetail(_ detail: String) -> String {
+        switch detail {
+        case "sign_in_required", "authentication_required":
+            return "Sign in to continue"
+        case "invalid_access_token", "reauthentication_required":
+            return "Your sign-in expired; sign in again"
+        default:
+            return "Sign in again to continue"
+        }
+    }
+
+    private static func userFacingAttentionDetail(_ detail: String) -> String {
+        switch detail {
+        case "record_too_large", "payload_too_large":
+            return "One snippet is too large for the cloud service"
+        case "quota_exceeded":
+            return "The cloud account is out of storage"
+        case "forbidden":
+            return "This account cannot update the selected cloud library"
+        case "incompatible_version":
+            return "Update Snippets before syncing again"
+        case "startup_prerequisite_unavailable":
+            return "A local sync prerequisite is temporarily unavailable"
+        case "transport_restart_required":
+            return "Another Snippets process completed recovery; reconnecting sync"
+        case "cloud_key_required":
+            return "Approve this device or restore the Snippets Cloud recovery kit"
+        case "sync_key_unreadable":
+            return "The stored sync encryption key could not be verified"
+        case "not_found":
+            return "The selected cloud library is no longer available"
+        case "invalid_batch_size", "invalid_record_version", "invalid_request",
+             "record_rejected":
+            return "The cloud service rejected a change"
+        case "internal_error":
+            return "The cloud service could not accept a change"
+        case "the snippet exceeds CloudKit limits",
+             "this snippet is too large for CloudKit to store":
+            return "One snippet is too large for the cloud service"
+        case "the iCloud account is out of space":
+            return "The cloud account is out of storage"
+        case "the CloudKit record zone no longer exists":
+            return "The cloud library is no longer available"
+        case "the sync backend rejected this snippet":
+            return "The cloud service rejected a change"
+        default:
+            return "The cloud service rejected a change"
+        }
+    }
+
+    private static func userFacingHaltDetail(
+        reason: SyncState.HaltReason,
+        detail: String
+    ) -> String {
+        switch reason {
+        case .massDeletion:
+            return detail
+        case .backendRefused:
+            return userFacingAttentionDetail(detail)
+        case .accountChanged:
+            return "The signed-in cloud account no longer matches this device's saved checkpoint"
+        case .checkpointUnreadable:
+            return "Snippets could not verify this device's saved sync checkpoint"
+        case .remoteDataReset:
+            return "The cloud service reported that its stored library was reset"
+        case .manifestIntegrityFailed:
+            return "The saved sync integrity information did not verify"
+        case .localLibraryQuarantined:
+            return "Snippets preserved the unreadable library for recovery and did not sync an empty replacement"
+        case .vaultUnreadable:
+            return "Snippets could not verify the secure vault"
+        case .schemaTooNew:
+            return "This device cannot safely write the newer library format"
+        }
+    }
+
 }
 
 extension SyncCoordinator: SnippetStoreSyncDelegate {}

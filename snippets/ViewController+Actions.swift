@@ -286,9 +286,22 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         )
 
         let syncEnabled = SyncCoordinator.isEnabled
+        let coordinator = (NSApp.delegate as? AppDelegate)?.syncCoordinator
+        let recoveryAction = coordinator?.recoveryAction
+        let needsSettings = coordinator?.requiresSyncSettingsAttention == true
+        let syncTitle = if let recoveryAction {
+            recoveryAction.buttonTitle + "…"
+        } else if needsSettings {
+            "Open Sync Settings…"
+        } else {
+            syncEnabled ? "Sync Now" : "Connect iCloud"
+        }
+        let syncSymbol = recoveryAction != nil ? "exclamationmark.shield"
+            : needsSettings ? "exclamationmark.triangle"
+            : syncEnabled ? "arrow.triangle.2.circlepath" : "icloud"
         let syncItem = LiquidGlassDesign.menuItem(
-            title: syncEnabled ? "Sync Now" : "Connect iCloud",
-            symbolName: syncEnabled ? "arrow.triangle.2.circlepath" : "icloud",
+            title: syncTitle,
+            symbolName: syncSymbol,
             action: #selector(syncFromMoreMenu),
             target: self
         )
@@ -336,6 +349,12 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     /// consent that enables it; subsequent presses request an immediate round.
     @objc private func syncFromMoreMenu() {
         guard let app = NSApp.delegate as? AppDelegate else { return }
+        if app.syncCoordinator.recoveryAction != nil
+            || app.syncCoordinator.requiresSyncSettingsAttention
+        {
+            app.openSyncSettings()
+            return
+        }
         if SyncCoordinator.isEnabled {
             app.syncCoordinator.syncNow()
         } else {
@@ -395,7 +414,16 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             store.discardBlankDraft(id: draft.id)
         }
 
-        let snippet = store.addSnippet(name: name ?? "", content: seededContent ?? "", tags: inheritedTags)
+        let snippet: Snippet
+        do {
+            snippet = try store.addSnippet(
+                name: name ?? "",
+                content: seededContent ?? "",
+                tags: inheritedTags)
+        } catch {
+            importExportMessage = error.localizedDescription
+            return
+        }
 
         reloadVisibleSnippets(keepSelection: true)
         // With nothing seeded the content box is where the snippet begins;
@@ -604,28 +632,66 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             return
         }
 
-        var options = SnippetStore.ImportOptions()
+        let prepared: PreparedSnippetImport
+        do {
+            prepared = try store.prepareImport(from: url)
+        } catch {
+            showErrorAlert(message: error.localizedDescription)
+            return
+        }
 
-        if store.detectsRaycastExclamationKeywords(in: url) {
+        let runImport: (Bool) -> Void = { preserveExclamation in
+            let options = SnippetStore.ImportOptions(
+                preserveExclamationPrefix: preserveExclamation)
+            do {
+                let count: Int
+                if self.store.isLibraryQuarantined {
+                    let candidateCount = try self.store
+                        .quarantinedLibraryRecoveryCandidateCount(prepared, options: options)
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = "Replace the Quarantined Library?"
+                    alert.informativeText = "The selected file contains \(candidateCount) ordinary snippet\(candidateCount == 1 ? "" : "s"). It will completely replace the unreadable ordinary-snippet library. Use only a complete Snippets JSON export—a partial or Raycast export can omit data. Secure snippets are unchanged, and the unreadable file is preserved. Sync stays paused until you review it and choose Check Again."
+                    alert.addButton(withTitle: "Cancel")
+                    alert.addButton(withTitle: "Use Complete Export")
+                    alert.buttons[1].hasDestructiveAction = true
+                    alert.buttons[1].keyEquivalent = ""
+                    guard alert.runModal() == .alertSecondButtonReturn else { return }
+                    count = try self.store.replaceQuarantinedLibrary(
+                        with: prepared,
+                        options: options)
+                    self.importExportMessage = "Installed \(count) snippet(s) as the recovery candidate. Review Sync and choose Check Again."
+                } else {
+                    count = try self.store.importSnippets(prepared, options: options)
+                    self.importExportMessage = "Imported \(count) snippet(s) from \(url.lastPathComponent)."
+                }
+                self.reloadVisibleSnippets(keepSelection: true)
+                if self.selectedSnippetID == nil, let id = self.visibleSnippets.first?.id {
+                    self.selectSnippet(id: id, focus: nil)
+                }
+                self.requestFirstResponder(self.tableView)
+            } catch {
+                self.showErrorAlert(message: error.localizedDescription)
+            }
+        }
+
+        if prepared.hasRaycastExclamationKeywords {
             let alert = NSAlert()
             alert.messageText = "Preserve \"!\" in Keywords?"
             alert.informativeText = "Some Raycast snippets use \"!\" as part of the keyword (for example \"!email\"). Keep it when importing? Leading backslashes are removed automatically."
             alert.addButton(withTitle: "Preserve \"!\"")
             alert.addButton(withTitle: "Remove \"!\"")
-            let response = alert.runModal()
-            options.preserveExclamationPrefix = (response == .alertFirstButtonReturn)
-        }
-
-        do {
-            let count = try store.importSnippets(from: url, options: options)
-            importExportMessage = "Imported \(count) snippet(s) from \(url.lastPathComponent)."
-            reloadVisibleSnippets(keepSelection: true)
-            if selectedSnippetID == nil, let id = visibleSnippets.first?.id {
-                selectSnippet(id: id, focus: nil)
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                runImport(true)
+            case .alertSecondButtonReturn:
+                runImport(false)
+            default:
+                return
             }
-            requestFirstResponder(tableView)
-        } catch {
-            showErrorAlert(message: error.localizedDescription)
+        } else {
+            runImport(false)
         }
     }
 
@@ -659,6 +725,12 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     /// authenticated encrypted container; no decrypted staging file exists.
     @objc func runEncryptedBackupExport(_ sender: Any?) {
         commitActiveEditorState(endingEditing: true)
+
+        guard !store.isLibraryQuarantined else {
+            showErrorAlert(message: SecureSnippetStore.EncryptedBackupFailure
+                .libraryRecoveryRequired.localizedDescription)
+            return
+        }
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.snippetsEncryptedBackup]
@@ -708,11 +780,27 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let result = try await app.secureStore.importEncryptedBackup(
-                    data,
-                    passphrase: passphrase,
-                    into: store)
-                importExportMessage = "Imported encrypted backup with \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet(s)."
+                let prepared = try await app.secureStore.prepareEncryptedBackupImport(
+                    data, passphrase: passphrase)
+                let authoritativeRecovery = store.isLibraryQuarantined
+                if authoritativeRecovery {
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = "Restore the Quarantined Library from This Backup?"
+                    alert.informativeText = "The authenticated backup contains \(prepared.ordinaryCount) ordinary and \(prepared.secureCount) secure snippet\(prepared.totalCount == 1 ? "" : "s"). Its ordinary library will completely replace the quarantined recovery candidate; compatible secure snippets will be restored atomically. The unreadable original remains preserved, and Sync stays paused until you choose Check Again."
+                    alert.addButton(withTitle: "Cancel")
+                    alert.addButton(withTitle: "Restore Encrypted Backup")
+                    alert.buttons[1].hasDestructiveAction = true
+                    alert.buttons[1].keyEquivalent = ""
+                    guard alert.runModal() == .alertSecondButtonReturn else { return }
+                }
+                let result = try await app.secureStore.importPreparedEncryptedBackup(
+                    prepared,
+                    into: store,
+                    authoritativeRecovery: authoritativeRecovery)
+                importExportMessage = authoritativeRecovery
+                    ? "Installed encrypted recovery with \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet(s). Review Sync and choose Check Again."
+                    : "Imported encrypted backup with \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet(s)."
                 reloadVisibleSnippets(keepSelection: true)
                 if selectedSnippetID == nil, let id = visibleSnippets.first?.id {
                     selectSnippet(id: id, focus: nil)

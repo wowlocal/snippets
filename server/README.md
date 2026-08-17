@@ -60,12 +60,17 @@ PUT    /v2/spaces/{space}/pairings/{pairing}/approval
 POST   /v2/spaces/{space}/pairings/{pairing}/claim
 ```
 
-Every space-scoped response carries a nested `scope` containing the space, opaque
-membership binding, dataset generation, and feed epoch. Clients validate it before
+Every space-scoped response carries a nested `scope` containing the server instance,
+space, opaque membership binding, dataset generation, and feed epoch. Clients validate it before
 accepting cursors, CAS versions, or ciphertext. Record versions and cursors have the
 form `v2.<canonical-base64url-payload>.<HMAC-SHA256>` and bind the server instance,
 space, dataset, and relevant record/feed position. The database stores generations,
 not those HMAC tokens.
+
+Record batch writes also carry the client's complete `expectedScope`. The server checks
+the deployment instance before entering the store, then checks the remaining scope under
+the same transaction lock used by dataset/feed rotation. It performs no record mutation
+when the instance, dataset generation, feed epoch, or membership binding is stale.
 
 Protocol JSON rejects duplicate or unknown members, trailing values, non-canonical
 standard Base64, compressed bodies, and bodies on bodyless operations. Errors use a

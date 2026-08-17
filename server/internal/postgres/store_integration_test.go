@@ -52,7 +52,7 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 		t.Fatalf("tenant isolation failed: %v", err)
 	}
 	id := uuid.New()
-	created, err := store.Submit(ctx, first, space.Scope.SpaceID, []domain.BatchItem{{Record: domain.WireRecord{ID: id, Rev: "1", Blob: []byte("opaque")}}})
+	created, err := store.Submit(ctx, first, space.Scope.SpaceID, space.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: id, Rev: "1", Blob: []byte("opaque")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrong := "v2.invalid.invalid.invalid.invalid"
-	conflict, err := store.Submit(ctx, first, space.Scope.SpaceID, []domain.BatchItem{{Record: domain.WireRecord{ID: id, Rev: "2", Blob: []byte("other")}, ExpectedRecordVersion: &wrong}})
+	conflict, err := store.Submit(ctx, first, space.Scope.SpaceID, space.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: id, Rev: "2", Blob: []byte("other")}, ExpectedRecordVersion: &wrong}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET current_record_bytes=$2 WHERE id=$1", space.Scope.SpaceID, domain.MaxStorageBytesPerSpace); err != nil {
 		t.Fatal(err)
 	}
-	quota, err := store.Submit(ctx, first, space.Scope.SpaceID, []domain.BatchItem{{Record: domain.WireRecord{ID: uuid.New(), Rev: "quota", Blob: []byte("opaque")}}})
+	quota, err := store.Submit(ctx, first, space.Scope.SpaceID, restored.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: uuid.New(), Rev: "quota", Blob: []byte("opaque")}}})
 	if err != nil || len(quota.Outcomes) != 1 || quota.Outcomes[0].Kind != "rejected" || quota.Outcomes[0].ErrorCode == nil || *quota.Outcomes[0].ErrorCode != domain.QuotaExceeded {
 		t.Fatalf("storage quota was not enforced: %v %#v", err, quota)
 	}

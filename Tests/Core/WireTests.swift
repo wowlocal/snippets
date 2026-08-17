@@ -879,6 +879,8 @@ struct WireTests {
             #expect(refusal.allowedDeletions == 10)
             #expect(refusal.requestedFraction > 0.8)
             #expect(refusal.description.contains("40 of 48"))
+            #expect(refusal.description.contains("paused before completing"))
+            #expect(refusal.description.contains("at least 8"))
         }
 
         /// An at-least-once transport delivers duplicates, and a duplicate-inflated

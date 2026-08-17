@@ -181,6 +181,15 @@ nonisolated enum SnippetStorageLocations {
         syncFolderURL.appendingPathComponent("state.json", isDirectory: false)
     }
 
+    /// Independent evidence that an unreadable primary library was deliberately moved
+    /// out of the data path. This cannot live only in `state.json`: losing or damaging
+    /// that replaceable scheduler state must not make an absent quarantined library look
+    /// like a first launch. The sync recovery flow removes this marker durably only after
+    /// `base.json` contains its non-destructive full-merge crash fence.
+    static var libraryQuarantineMarkerURL: URL {
+        syncFolderURL.appendingPathComponent("library-quarantine", isDirectory: false)
+    }
+
     /// The confirmed snapshot of the library — the common ancestor every three-way
     /// merge is resolved against. This is durable protocol state, not a disposable cache.
     static var syncBaseFileURL: URL {

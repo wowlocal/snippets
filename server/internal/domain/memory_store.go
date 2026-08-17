@@ -211,7 +211,7 @@ func (s *MemoryStore) FetchChanges(_ context.Context, principal Principal, space
 	return ChangesPage{Scope: scope, Records: records, Cursor: next, HasMore: len(available) > len(selected), FullSnapshot: false}, nil
 }
 
-func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uuid.UUID, items []BatchItem) (BatchSubmission, error) {
+func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uuid.UUID, expectedScope Scope, items []BatchItem) (BatchSubmission, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(items) == 0 || len(items) > MaxBatchRecords {
@@ -230,6 +230,10 @@ func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uui
 	}
 	if !membership.role.CanWrite() {
 		return BatchSubmission{}, NewError(Forbidden)
+	}
+	if err := expectedScope.RequireCurrentMutationScope(
+		descriptor(spaceID, state, membership).Scope); err != nil {
+		return BatchSubmission{}, err
 	}
 	type indexed struct {
 		index int

@@ -14,12 +14,15 @@ class HttpSyncClient {
     data class PullResult(
         val records: String,
         val cursor: String,
+        val serverInstanceID: String,
         val scopeBinding: String,
         val datasetGeneration: String,
         val feedEpoch: String,
     )
 
     data class PushResult(val records: String, val hadConflict: Boolean)
+
+    data class SpaceResolution(val spaceID: String, val serverInstanceID: String)
 
     data class PairingRecord(
         val pairingID: String,
@@ -100,6 +103,7 @@ class HttpSyncClient {
         return PullResult(
             records = recordsJSON(recordsByID.values),
             cursor = requireNotNull(cursor),
+            serverInstanceID = scope.getString("serverInstanceId"),
             scopeBinding = scope.getString("scopeBinding"),
             datasetGeneration = scope.getString("datasetGeneration"),
             feedEpoch = scope.getString("feedEpoch"))
@@ -136,10 +140,19 @@ class HttpSyncClient {
                         expectedRecordVersion ?: JSONObject.NULL))
             }
 
+            val expectedScope = JSONObject()
+                .put("serverInstanceId", requireNotNull(configuration.serverInstanceID))
+                .put("spaceId", configuration.spaceID)
+                .put("scopeBinding", requireNotNull(configuration.scopeBinding))
+                .put("datasetGeneration", requireNotNull(configuration.datasetGeneration))
+                .put("feedEpoch", requireNotNull(configuration.feedEpoch))
             val response = JSONObject(request(
                 configuration, "POST",
                 "v2/spaces/${configuration.spaceID}/records/batch",
-                JSONObject().put("items", items).toString(),
+                JSONObject()
+                    .put("expectedScope", expectedScope)
+                    .put("items", items)
+                    .toString(),
                 accessToken))
             validateScope(configuration, response.getJSONObject("scope"))
             val outcomes = response.getJSONArray("outcomes")
@@ -190,7 +203,7 @@ class HttpSyncClient {
         serverURL: String,
         accessToken: String,
         existingSpaceID: String? = null,
-    ): String {
+    ): SpaceResolution {
         validatedBaseURL(serverURL)
         requireAccessToken(accessToken)
         val spaces = JSONObject(request(serverURL, accessToken, "GET", "v2/spaces"))
@@ -199,17 +212,31 @@ class HttpSyncClient {
         existingSpaceID?.let { existing ->
             candidates.firstOrNull {
                 it.getJSONObject("scope").getString("spaceId").equals(existing, ignoreCase = true)
-            }?.let { return it.getJSONObject("scope").getString("spaceId") }
+            }?.let { return spaceResolution(it.getJSONObject("scope")) }
         }
-        if (candidates.size == 1) return candidates.single().getJSONObject("scope").getString("spaceId")
+        if (candidates.size == 1) return spaceResolution(candidates.single().getJSONObject("scope"))
         val owned = candidates.filter { it.optString("role") == "owner" }
-        if (owned.size == 1) return owned.single().getJSONObject("scope").getString("spaceId")
+        if (owned.size == 1) return spaceResolution(owned.single().getJSONObject("scope"))
         if (candidates.isNotEmpty()) throw SyncFailure("space_selection_required")
 
-        return JSONObject(request(
+        return spaceResolution(JSONObject(request(
             serverURL, accessToken, "POST", "v2/spaces",
             headers = mapOf("Idempotency-Key" to PERSONAL_SPACE_IDEMPOTENCY_KEY),
-        )).getJSONObject("scope").getString("spaceId")
+        )).getJSONObject("scope"))
+    }
+
+    fun resolveSpace(
+        serverURL: String,
+        spaceID: String,
+        accessToken: String,
+    ): SpaceResolution {
+        val value = JSONObject(request(
+            serverURL,
+            accessToken,
+            "GET",
+            "v2/spaces/${validatedUUID(spaceID)}",
+        ))
+        return spaceResolution(value.getJSONObject("scope"))
     }
 
     fun createPairing(
@@ -217,6 +244,7 @@ class HttpSyncClient {
         spaceID: String,
         accessToken: String,
         draft: LibraryKeyBootstrap.PairingDraft,
+        expectedServerInstanceID: String,
         expiresInSeconds: Int = LibraryKeyBootstrap.DEFAULT_PAIRING_SECONDS,
     ): PairingRecord {
         require(expiresInSeconds in 60..600)
@@ -225,7 +253,7 @@ class HttpSyncClient {
             .put("nonce", draft.nonce.standardBase64())
             .put("expiresInSeconds", expiresInSeconds)
             .toString()
-        return pairingResponse(spaceID, JSONObject(request(
+        return pairingResponse(spaceID, expectedServerInstanceID, JSONObject(request(
             serverURL,
             accessToken,
             "POST",
@@ -239,7 +267,8 @@ class HttpSyncClient {
         spaceID: String,
         pairingID: String,
         accessToken: String,
-    ): PairingRecord = pairingResponse(spaceID, JSONObject(request(
+        expectedServerInstanceID: String,
+    ): PairingRecord = pairingResponse(spaceID, expectedServerInstanceID, JSONObject(request(
         serverURL,
         accessToken,
         "GET",
@@ -253,6 +282,7 @@ class HttpSyncClient {
         recipientPublicKey: ByteArray,
         ciphertext: ByteArray,
         accessToken: String,
+        expectedServerInstanceID: String,
     ): PairingRecord {
         val body = JSONObject()
             .put(
@@ -262,7 +292,7 @@ class HttpSyncClient {
             .put("algorithm", LibraryKeyBootstrap.PAIRING_ALGORITHM)
             .put("ciphertext", ciphertext.standardBase64())
             .toString()
-        return pairingResponse(spaceID, JSONObject(request(
+        return pairingResponse(spaceID, expectedServerInstanceID, JSONObject(request(
             serverURL,
             accessToken,
             "PUT",
@@ -277,6 +307,7 @@ class HttpSyncClient {
         pairingID: String,
         accessToken: String,
         expected: PairingRecord,
+        expectedServerInstanceID: String,
     ): PairingRecord {
         val normalizedSpaceID = validatedUUID(spaceID)
         val normalizedPairingID = validatedUUID(pairingID)
@@ -289,7 +320,7 @@ class HttpSyncClient {
             serverURL, accessToken, "POST",
             "v2/spaces/$normalizedSpaceID/pairings/$normalizedPairingID/claim",
         ))
-        validateScopeID(spaceID, response.getJSONObject("scope"))
+        validateScopeID(spaceID, response.getJSONObject("scope"), expectedServerInstanceID)
         require(validatedUUID(response.getString("pairingId")) == normalizedPairingID)
         val algorithm = response.getString("algorithm")
         require(algorithm == LibraryKeyBootstrap.PAIRING_ALGORITHM)
@@ -318,6 +349,7 @@ class HttpSyncClient {
         serverURL: String,
         spaceID: String,
         accessToken: String,
+        expectedServerInstanceID: String,
     ): RecoveryEnvelopeState {
         val value = JSONObject(request(
             serverURL,
@@ -325,7 +357,7 @@ class HttpSyncClient {
             "GET",
             "v2/spaces/${validatedUUID(spaceID)}/recovery-envelope",
         ))
-        validateScopeID(spaceID, value.getJSONObject("scope"))
+        validateScopeID(spaceID, value.getJSONObject("scope"), expectedServerInstanceID)
         val recovery = if (value.isNull("recovery")) null else {
             val envelope = value.getJSONObject("recovery")
             RecoveryEnvelopeRecord(
@@ -345,6 +377,7 @@ class HttpSyncClient {
         expectedVersion: Int?,
         ciphertext: ByteArray,
         accessToken: String,
+        expectedServerInstanceID: String,
     ): RecoveryEnvelopeRecord {
         val body = JSONObject()
             .put("expectedVersion", expectedVersion ?: JSONObject.NULL)
@@ -359,7 +392,7 @@ class HttpSyncClient {
             "v2/spaces/${validatedUUID(spaceID)}/recovery-envelope",
             body,
         ))
-        validateScopeID(spaceID, value.getJSONObject("scope"))
+        validateScopeID(spaceID, value.getJSONObject("scope"), expectedServerInstanceID)
         val envelope = value.getJSONObject("recovery")
         return RecoveryEnvelopeRecord(
             version = envelope.getInt("version"),
@@ -369,14 +402,19 @@ class HttpSyncClient {
         )
     }
 
-    fun hasRemoteRecords(serverURL: String, spaceID: String, accessToken: String): Boolean {
+    fun hasRemoteRecords(
+        serverURL: String,
+        spaceID: String,
+        accessToken: String,
+        expectedServerInstanceID: String,
+    ): Boolean {
         val value = JSONObject(request(
             serverURL,
             accessToken,
             "GET",
             "v2/spaces/${validatedUUID(spaceID)}/changes?limit=1",
         ))
-        validateScopeID(spaceID, value.getJSONObject("scope"))
+        validateScopeID(spaceID, value.getJSONObject("scope"), expectedServerInstanceID)
         return value.getJSONArray("records").length() > 0
     }
 
@@ -419,8 +457,12 @@ class HttpSyncClient {
         return response
     }
 
-    private fun pairingResponse(spaceID: String, response: JSONObject): PairingRecord {
-        validateScopeID(spaceID, response.getJSONObject("scope"))
+    private fun pairingResponse(
+        spaceID: String,
+        expectedServerInstanceID: String,
+        response: JSONObject,
+    ): PairingRecord {
+        validateScopeID(spaceID, response.getJSONObject("scope"), expectedServerInstanceID)
         return pairingRecord(spaceID, response.getJSONObject("pairing"))
     }
 
@@ -449,22 +491,40 @@ class HttpSyncClient {
         )
     }
 
-    private fun validateScopeID(spaceID: String, scope: JSONObject) {
-        if (!scope.getString("spaceId").equals(spaceID, ignoreCase = true) ||
+    private fun validateScopeID(
+        spaceID: String,
+        scope: JSONObject,
+        expectedServerInstanceID: String? = null,
+    ) {
+        val serverInstanceID = validatedUUID(scope.getString("serverInstanceId"))
+        if (serverInstanceID == ZERO_UUID ||
+            !scope.getString("spaceId").equals(spaceID, ignoreCase = true) ||
             scope.getString("scopeBinding").length !in 32..256) {
             throw SyncFailure("invalid_scope_response")
+        }
+        if (expectedServerInstanceID != null &&
+            !serverInstanceID.equals(validatedUUID(expectedServerInstanceID), ignoreCase = true)) {
+            throw SyncFailure("scope_review_required")
         }
         require(validatedUUID(scope.getString("datasetGeneration")) != ZERO_UUID)
         require(validatedUUID(scope.getString("feedEpoch")) != ZERO_UUID)
     }
 
+    private fun spaceResolution(scope: JSONObject): SpaceResolution {
+        val spaceID = scope.getString("spaceId")
+        validateScopeID(spaceID, scope)
+        return SpaceResolution(
+            spaceID = validatedUUID(spaceID),
+            serverInstanceID = validatedUUID(scope.getString("serverInstanceId")),
+        )
+    }
+
     private fun validateScope(configuration: CloudConfiguration, value: JSONObject) {
-        if (!value.getString("spaceId").equals(configuration.spaceID, ignoreCase = true)) {
-            throw SyncFailure("invalid_scope_response")
-        }
+        validateScopeID(configuration.spaceID, value)
         fun mismatch(expected: String?, field: String): Boolean =
             expected != null && expected != value.getString(field)
-        if (mismatch(configuration.scopeBinding, "scopeBinding") ||
+        if (mismatch(configuration.serverInstanceID, "serverInstanceId") ||
+            mismatch(configuration.scopeBinding, "scopeBinding") ||
             mismatch(configuration.datasetGeneration, "datasetGeneration") ||
             mismatch(configuration.feedEpoch, "feedEpoch")) {
             throw SyncFailure("scope_review_required")
@@ -522,6 +582,9 @@ class HttpSyncClient {
         require(configuration.apiBaseURL == configuration.serverURL.trimEnd('/') + "/v2")
         requireAccessToken(accessToken)
         require(UUID_PATTERN.matches(configuration.spaceID))
+        if (configuration.requiresServerInstanceReview()) {
+            throw SyncFailure("scope_review_required")
+        }
     }
 
     private fun requireAccessToken(accessToken: String) {

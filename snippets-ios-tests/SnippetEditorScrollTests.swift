@@ -32,7 +32,7 @@ final class SnippetEditorScrollTests: XCTestCase {
 
     func testOuterEditorScrollsOnlyWhenTheFormExceedsTheVisibleHeight() throws {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Geometry", content: "Short")
+        let snippet = try! environment.store.addSnippet(name: "Geometry", content: "Short")
         var updated = try XCTUnwrap(environment.store.snippet(id: snippet.id))
         updated.keyword = "geometry"
         environment.store.update(updated)

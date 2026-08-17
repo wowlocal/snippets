@@ -21,6 +21,7 @@ struct SyncEngineTests {
         var envelopes: [UUID: SyncEnvelope] = [:]
         var applied: [[SyncEnvelope]] = []
         var throwOnRead: (any Error)?
+        var onApply: (([SyncEnvelope]) -> Void)?
 
         private(set) var lastAgreedBase = SyncBase()
 
@@ -66,6 +67,7 @@ struct SyncEngineTests {
                 if envelope.deleted { envelopes[envelope.id] = nil } else { envelopes[envelope.id] = envelope }
                 changed.append(envelope.id)
             }
+            onApply?(incoming)
             return ApplyOutcome(changedIDs: changed, deferredIDs: deferred)
         }
 
@@ -309,7 +311,7 @@ struct SyncEngineTests {
         #expect(h.engine.agreedBase.envelope(id) != nil)
     }
 
-    @Test func aPermanentRejectionHaltsRatherThanRetryingForever() async throws {
+    @Test func aPermanentRejectionNeedsAttentionWithoutCreatingASafetyHalt() async throws {
         let h = try harness()
         defer { try? FileManager.default.removeItem(at: h.dir) }
 
@@ -318,10 +320,10 @@ struct SyncEngineTests {
         await h.transport.configure { $0.rejectRecords[id] = .permanent(detail: "schema rejected") }
 
         let state = await h.engine.sync()
-        #expect(state.isHalted)
+        #expect(!state.isHalted)
 
-        guard case .halted(let reason, let detail) = state else {
-            Issue.record("expected .halted, got \(state)")
+        guard case .needsAttention(let detail) = state else {
+            Issue.record("expected .needsAttention, got \(state)")
             return
         }
 
@@ -331,12 +333,8 @@ struct SyncEngineTests {
         // CloudKit container whose schema had simply never been deployed to Production
         // therefore told the user their backend had been tampered with, and sent them
         // looking for corruption that was not there.
-        #expect(reason == .backendRefused)
-
-        // The backend's own words, unwrapped. `Rejection.description` prefixes "the
-        // backend permanently refused this snippet", and the halt title already says
-        // iCloud refused a snippet, so keeping both made the sentence say it twice
-        // before reaching anything a reader could act on.
+        // The backend's own words remain actionable without a scary, durable safety
+        // stop. A later manual round can retry after schema/quota/payload repair.
         #expect(detail == "schema rejected")
     }
 
@@ -354,11 +352,10 @@ struct SyncEngineTests {
         }
     }
 
-    /// The submit path already classified a permanent refusal as a backend halt. The
-    /// fetch path used to route the identical transport failure to authentication,
-    /// making an undeployed CloudKit schema look like a sign-in problem depending only
-    /// on which half of the round encountered it.
-    @Test func aPermanentFetchRejectionHaltsAsBackendRefused() async throws {
+    /// Submit and fetch must classify the same permanent refusal as non-sticky attention,
+    /// rather than making an undeployed CloudKit schema look like a sign-in problem or a
+    /// destructive safety anomaly depending on which half encountered it.
+    @Test func aPermanentFetchRejectionNeedsAttentionWithoutCreatingAStickyHalt() async throws {
         final class RejectingFetchTransport: SyncTransport, @unchecked Sendable {
             let inner = InMemoryTransport()
 
@@ -393,11 +390,10 @@ struct SyncEngineTests {
             temporaryDirectory: dir)
 
         let state = await engine.sync()
-        guard case .halted(let reason, let detail) = state else {
-            Issue.record("expected .halted, got \(state)")
+        guard case .needsAttention(let detail) = state else {
+            Issue.record("expected .needsAttention, got \(state)")
             return
         }
-        #expect(reason == .backendRefused)
         #expect(detail == "schema missing")
     }
 
@@ -423,13 +419,26 @@ struct SyncEngineTests {
         _ = await h.engine.sync()
         #expect(await h.transport.submittedBatches.count == batchesBefore)
 
+        // A visible Sync Now must not be a no-op. Automatic calls retain the deadline,
+        // while an explicit user request is allowed one immediate attempt.
+        let forced = await h.engine.sync(bypassingBackoff: true)
+        #expect(await h.transport.submittedBatches.count == batchesBefore + 1)
+        guard case .offline(let forcedDeadline) = forced else {
+            Issue.record("the forced attempt should establish its own backoff, got \(forced)")
+            return
+        }
+        #expect(forcedDeadline.timeIntervalSince(clock)
+                > firstDeadline.timeIntervalSince(clock),
+                "a failed manual attempt still advances exponential backoff")
+
         // Past the window, it tries again and backs off further.
-        clock = firstDeadline.addingTimeInterval(1)
+        clock = forcedDeadline.addingTimeInterval(1)
         let second = await h.engine.sync()
         guard case .offline(let secondDeadline) = second else {
             Issue.record("expected .offline, got \(second)"); return
         }
-        #expect(secondDeadline.timeIntervalSince(clock) > firstDeadline.timeIntervalSince(Date(timeIntervalSince1970: 1_000)),
+        #expect(secondDeadline.timeIntervalSince(clock)
+                > forcedDeadline.timeIntervalSince(Date(timeIntervalSince1970: 1_000)),
                 "backoff must grow")
     }
 
@@ -462,6 +471,371 @@ struct SyncEngineTests {
         #expect(h.library.envelopes.count == 40, "the library must be untouched")
     }
 
+    @Test func reviewedRemoteMassDeletionAppliesTheConfirmedBatch() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+        h.transport.seed(try ids.prefix(30).map {
+            try WireCodec.seal(
+                envelope($0, name: "deleted", ms: 9_000, deleted: true),
+                using: h.sealer)
+        })
+
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("the fixture must stop before confirmation")
+            return
+        }
+        guard case .loaded(let stopped) = SyncStateFile.load(
+            from: h.dir.appendingPathComponent("state.json")) else {
+            Issue.record("the deletion review context must be durable")
+            return
+        }
+        guard let context = stopped.halt?.recoveryContext,
+              case .massDeletion(
+                let liveCount,
+                let requestedDeletions,
+                let batchFingerprint) = context else {
+            Issue.record("the deletion halt must retain typed review facts")
+            return
+        }
+        #expect(liveCount == 40)
+        #expect(requestedDeletions == 30)
+        #expect(batchFingerprint.count == 64)
+
+        h.engine.performRecovery(.applyRemoteDeletions)
+        let recovered = await h.engine.sync()
+
+        #expect(!recovered.isHalted)
+        #expect(h.library.envelopes.count == 10)
+        #expect(h.library.applied.flatMap { $0 }.count == 30)
+    }
+
+    @Test func changedMassDeletionSetWithTheSameCountRequiresFreshConfirmation() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+        h.transport.seed(try ids.prefix(30).map {
+            try WireCodec.seal(
+                envelope($0, name: "deleted", ms: 9_000, deleted: true),
+                using: h.sealer)
+        })
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("the fixture must stop before confirmation")
+            return
+        }
+        guard case .loaded(let firstStopped) = SyncStateFile.load(
+            from: h.dir.appendingPathComponent("state.json")),
+              let firstContext = firstStopped.halt?.recoveryContext,
+              case .massDeletion(_, _, let reviewedFingerprint) = firstContext else {
+            Issue.record("the first deletion set must have a durable fingerprint")
+            return
+        }
+        h.engine.performRecovery(.applyRemoteDeletions)
+
+        h.transport.seed([
+            try WireCodec.seal(
+                envelope(ids[0], name: "restored remotely", ms: 9_001),
+                using: h.sealer),
+            try WireCodec.seal(
+                envelope(ids[30], name: "new deletion", ms: 9_001, deleted: true),
+                using: h.sealer),
+        ])
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("a changed destructive batch must ask again")
+            return
+        }
+        #expect(h.library.envelopes.count == 40)
+        #expect(h.library.applied.isEmpty)
+        guard case .loaded(let stopped) = SyncStateFile.load(
+            from: h.dir.appendingPathComponent("state.json")) else {
+            Issue.record("the replacement review context must be durable")
+            return
+        }
+        guard let replacementContext = stopped.halt?.recoveryContext,
+              case .massDeletion(
+                let liveCount,
+                let requestedDeletions,
+                let replacementFingerprint) = replacementContext else {
+            Issue.record("the replacement deletion set must have typed review facts")
+            return
+        }
+        #expect(liveCount == 40)
+        #expect(requestedDeletions == 30)
+        #expect(replacementFingerprint != reviewedFingerprint)
+    }
+
+    @Test func reviewedDeletionThatShrinksBelowThresholdRequiresFreshConfirmation() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+        h.transport.seed(try ids.prefix(30).map {
+            try WireCodec.seal(
+                envelope($0, name: "deleted", ms: 9_000, deleted: true),
+                using: h.sealer)
+        })
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("the fixture must first stop on the large deletion")
+            return
+        }
+        h.engine.performRecovery(.applyRemoteDeletions)
+
+        h.transport.seed(try ids.prefix(29).enumerated().map { index, id in
+            try WireCodec.seal(
+                envelope(id, name: "n\(index)", ms: 9_001), using: h.sealer)
+        })
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("a shrunken replacement batch must not inherit old authority")
+            return
+        }
+        #expect(h.library.applied.isEmpty)
+        #expect(h.library.envelopes.count == 40)
+        guard case .loaded(let stopped) = SyncStateFile.load(
+            from: h.dir.appendingPathComponent("state.json")),
+              case .massDeletion(
+                let liveCount,
+                let requestedDeletions,
+                _)? = stopped.halt?.recoveryContext else {
+            Issue.record("the exact shrunken replacement must become the new review")
+            return
+        }
+        #expect(liveCount == 40)
+        #expect(requestedDeletions == 1)
+
+        h.engine.performRecovery(.applyRemoteDeletions)
+        #expect(!(await h.engine.sync()).isHalted)
+        #expect(h.library.envelopes.count == 39)
+    }
+
+    @Test func approvedDeletionKeepsDurableFenceAcrossRestartBeforeApply() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+        h.transport.seed(try ids.prefix(30).map {
+            try WireCodec.seal(
+                envelope($0, name: "deleted", ms: 9_000, deleted: true),
+                using: h.sealer)
+        })
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("the fixture must first stop on the large deletion")
+            return
+        }
+
+        h.engine.performRecovery(.applyRemoteDeletions)
+        guard case .loaded(var stillStopped) = SyncStateFile.load(
+            from: h.dir.appendingPathComponent("state.json")),
+              case .massDeletion? = stillStopped.halt?.recoveryContext,
+              var abandonedClaim = stillStopped.halt?.recoveryClaim else {
+            Issue.record("Apply must retain the exact durable stop until commit")
+            return
+        }
+        // The fixture still retains the first engine in this XCTest process. Replace
+        // its process-local owner token to model the durable file a genuinely crashed
+        // process leaves behind; the restarted engine must require takeover.
+        abandonedClaim.ownerID = UUID()
+        stillStopped.halt?.recoveryClaim = abandonedClaim
+        try SyncStateFile.write(
+            stillStopped,
+            to: h.dir.appendingPathComponent("state.json"),
+            temporaryDirectory: h.dir)
+
+        let restarted = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: h.dir.appendingPathComponent("state.json"),
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        #expect(restarted.state.isHalted)
+
+        // The original 30-record approval cannot authorize the one record still
+        // deleted after the process died, even though one is below the normal guard.
+        h.transport.seed(try ids.prefix(29).enumerated().map { index, id in
+            try WireCodec.seal(
+                envelope(id, name: "n\(index)", ms: 9_001), using: h.sealer)
+        })
+        #expect(restarted.recoveryAction == .reclaimRecovery)
+        restarted.performRecovery(.reclaimRecovery)
+        #expect(restarted.recoveryAction == .applyRemoteDeletions)
+        restarted.performRecovery(.applyRemoteDeletions)
+        guard case .halted(.massDeletion, _) = await restarted.sync() else {
+            Issue.record("the changed post-restart batch must ask again")
+            return
+        }
+        #expect(h.library.envelopes.count == 40)
+        #expect(h.library.applied.isEmpty)
+        guard case .loaded(let replacement) = SyncStateFile.load(
+            from: h.dir.appendingPathComponent("state.json")),
+              case .massDeletion(
+                let liveCount,
+                let requestedDeletions,
+                _)? = replacement.halt?.recoveryContext else {
+            Issue.record("the replacement one-record review must be durable")
+            return
+        }
+        #expect(liveCount == 40)
+        #expect(requestedDeletions == 1)
+    }
+
+    @Test func legacyDeletionHaltRefreshesExactFactsBeforeItCanApplyAnything() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+        h.transport.seed(try ids.prefix(30).map {
+            try WireCodec.seal(
+                envelope($0, name: "deleted", ms: 9_000, deleted: true),
+                using: h.sealer)
+        })
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("the fixture must stop before confirmation")
+            return
+        }
+
+        // Simulate a schema-3 build rewriting the known Halt fields while omitting the
+        // optional typed context it did not understand.
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        guard case .loaded(var legacy) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("the halt must be durable")
+            return
+        }
+        legacy.halt?.recoveryContext = nil
+        try SyncStateFile.write(legacy, to: stateURL, temporaryDirectory: h.dir)
+
+        let restarted = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        #expect(restarted.recoveryAction == .refreshDeletionReview)
+
+        // A stale destructive button cannot clear or authorize the legacy stop.
+        restarted.performRecovery(.applyRemoteDeletions)
+        #expect(restarted.state.isHalted)
+        #expect(h.library.applied.isEmpty)
+
+        restarted.performRecovery(.refreshDeletionReview)
+        guard case .halted(.massDeletion, _) = await restarted.sync() else {
+            Issue.record("refresh must persist an exact batch and ask again")
+            return
+        }
+        #expect(h.library.applied.isEmpty)
+        #expect(h.library.envelopes.count == 40)
+        #expect(restarted.recoveryAction == .applyRemoteDeletions)
+        guard case .loaded(let refreshed) = SyncStateFile.load(from: stateURL),
+              case .massDeletion? = refreshed.halt?.recoveryContext else {
+            Issue.record("refresh must replace legacy text with typed review facts")
+            return
+        }
+
+        restarted.performRecovery(.applyRemoteDeletions)
+        #expect(!(await restarted.sync()).isHalted)
+        #expect(h.library.envelopes.count == 10)
+    }
+
+    @Test func legacyDeletionRefreshNeverAppliesAShrunkenBelowThresholdBatch() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+        h.transport.seed(try ids.prefix(30).map {
+            try WireCodec.seal(
+                envelope($0, name: "deleted", ms: 9_000, deleted: true),
+                using: h.sealer)
+        })
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("the fixture must first stop on the large deletion")
+            return
+        }
+
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        guard case .loaded(var legacy) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("the halt must be durable")
+            return
+        }
+        legacy.halt?.recoveryContext = nil
+        try SyncStateFile.write(legacy, to: stateURL, temporaryDirectory: h.dir)
+
+        // Twenty-nine remote restores leave one effective deletion — well below the
+        // ordinary allowance of eight. Refresh still has read-only semantics: it must
+        // bind that exact one-record set and ask separately before applying anything.
+        h.transport.seed(try ids.prefix(29).map { id in
+            let index = try #require(ids.firstIndex(of: id))
+            return try WireCodec.seal(
+                envelope(id, name: "n\(index)", ms: 9_001), using: h.sealer)
+        })
+        let restarted = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        restarted.performRecovery(.refreshDeletionReview)
+
+        guard case .halted(.massDeletion, _) = await restarted.sync() else {
+            Issue.record("even one remaining deletion needs exact confirmation after Refresh")
+            return
+        }
+        #expect(h.library.applied.isEmpty)
+        #expect(h.library.envelopes.count == 40)
+        guard case .loaded(let refreshed) = SyncStateFile.load(from: stateURL),
+              case .massDeletion(
+                let liveCount,
+                let requestedDeletions,
+                _)? = refreshed.halt?.recoveryContext else {
+            Issue.record("Refresh must persist the shrunken batch's exact facts")
+            return
+        }
+        #expect(liveCount == 40)
+        #expect(requestedDeletions == 1)
+
+        restarted.performRecovery(.applyRemoteDeletions)
+        #expect(!(await restarted.sync()).isHalted)
+        #expect(h.library.envelopes.count == 39)
+    }
+
     /// A halt is sticky, and only an explicit review clears it.
     @Test func aHaltSurvivesFurtherSyncAttemptsUntilReviewed() async throws {
         let h = try harness()
@@ -471,8 +845,541 @@ struct SyncEngineTests {
         #expect(await h.engine.sync().isHalted)
         #expect(await h.engine.sync().isHalted)
 
-        h.engine.clearHaltAfterUserReview()
+        #expect(h.engine.recoveryAction == .refreshDeletionReview)
+        h.engine.performRecovery(.applyRemoteDeletions)
+        #expect(h.engine.state.isHalted, "a legacy stop cannot grant destructive authority")
+        h.engine.performRecovery(.refreshDeletionReview)
         #expect(!h.engine.state.isHalted)
+    }
+
+    @Test func checkAgainCannotClearPrimaryQuarantineUntilLibraryProjects() throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        var persisted = SyncState.fresh(
+            deviceID: "aaaaaaa1",
+            now: Date(timeIntervalSince1970: 1_000))
+        persisted.halt = SyncState.Halt(
+            reason: .localLibraryQuarantined,
+            detail: "primary preserved",
+            at: Date(timeIntervalSince1970: 1_000),
+            recoveryContext: .localLibraryQuarantine)
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        try SyncStateFile.write(persisted, to: stateURL, temporaryDirectory: h.dir)
+        let restarted = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+
+        h.library.throwOnRead = SyncEngineFailure(
+            reason: .localLibraryQuarantined,
+            detail: "still unreadable")
+        restarted.performRecovery(.checkAgain)
+        #expect(restarted.state.isHalted)
+        guard case .loaded(let stillStopped) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("failed validation must retain the durable marker")
+            return
+        }
+        #expect(stillStopped.halt?.recoveryContext == .localLibraryQuarantine)
+
+        h.library.throwOnRead = nil
+        restarted.performRecovery(.checkAgain)
+        #expect(!restarted.state.isHalted)
+        guard case .loaded(let recovered) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("successful validation must update the durable state")
+            return
+        }
+        #expect(recovered.halt == nil)
+        guard case .missing = SyncBaseFile.load(
+            from: h.dir.appendingPathComponent("base.json")) else {
+            Issue.record("a never-synced library must not create base.json during local review")
+            return
+        }
+        guard case .missing = SyncJournalFile.load(
+            from: h.dir.appendingPathComponent("journal.json")) else {
+            Issue.record("a never-synced library must keep journal.json absent")
+            return
+        }
+    }
+
+    @Test func independentMarkerStillRequiresValidationAfterHaltPersistenceRecovers() throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        let markerURL = LibraryQuarantineMarker.url(beside: stateURL)
+        try LibraryQuarantineMarker.write(to: markerURL, temporaryDirectory: h.dir)
+        // A directory at the destination makes the initial typed-halt write fail. Then
+        // remove it to model a transient I/O problem resolving before the user reviews.
+        try FileManager.default.createDirectory(
+            at: stateURL, withIntermediateDirectories: false)
+        let engine = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: stateURL,
+            libraryQuarantineMarkerURL: markerURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        engine.reassertPrimaryLibraryQuarantine()
+        #expect(engine.state.isHalted)
+        try FileManager.default.removeItem(at: stateURL)
+
+        h.library.throwOnRead = SyncEngineFailure(
+            reason: .localLibraryQuarantined,
+            detail: "restored candidate still unreadable")
+        engine.performRecovery(.checkAgain)
+
+        #expect(engine.state.isHalted,
+                "the independent marker must still force primary validation")
+        #expect(LibraryQuarantineMarker.exists(at: markerURL))
+
+        h.library.throwOnRead = nil
+        engine.performRecovery(.checkAgain)
+        #expect(!engine.state.isHalted)
+        #expect(!LibraryQuarantineMarker.exists(at: markerURL))
+    }
+
+    @Test func primaryRecoveryKeepsMarkerUntilItsDurableHaltClears() throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let baseURL = h.dir.appendingPathComponent("base.json")
+        let journalURL = h.dir.appendingPathComponent("journal.json")
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        let markerURL = LibraryQuarantineMarker.url(beside: stateURL)
+        let lockURL = h.dir.appendingPathComponent("library.lock")
+        var base = SyncBase(journalEstablished: true)
+        base.upgradeToCurrentSchema()
+        try SyncBaseFile.write(base, to: baseURL, temporaryDirectory: h.dir)
+        try SyncJournalFile.write(SyncJournal(), to: journalURL, temporaryDirectory: h.dir)
+        let originalReviewID = try LibraryQuarantineMarker.write(
+            to: markerURL, temporaryDirectory: h.dir)
+        var stopped = SyncState.fresh(
+            deviceID: "aaaaaaa1", now: Date(timeIntervalSince1970: 10))
+        stopped.halt = SyncState.Halt(
+            reason: .localLibraryQuarantined,
+            detail: "primary preserved",
+            at: Date(timeIntervalSince1970: 10),
+            recoveryContext: .localLibraryQuarantine)
+        try SyncStateFile.write(stopped, to: stateURL, temporaryDirectory: h.dir)
+
+        let recovering = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            journalURL: journalURL,
+            stateURL: stateURL,
+            libraryQuarantineMarkerURL: markerURL,
+            lockURL: lockURL,
+            temporaryDirectory: h.dir,
+            stateLockTimeout: 0.01)
+
+        // Model a peer/process holding the state transaction through the whole
+        // recovery attempt. base.json may commit, but the halt cannot be cleared.
+        let held = try FileGuard.acquire(at: lockURL, timeout: 1)
+        recovering.performRecovery(.checkAgain)
+        held.release()
+
+        #expect(recovering.state.isHalted)
+        #expect(LibraryQuarantineMarker.exists(at: markerURL),
+                "the primary must remain write-blocked while its halt is durable")
+        guard case .loaded(let interruptedBase) = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("the reviewed recovery fence should already be durable")
+            return
+        }
+        #expect(interruptedBase.nonDestructiveReviewID == originalReviewID)
+        #expect(LibraryQuarantineMarker.reviewID(at: markerURL) == originalReviewID)
+
+        // Retrying after the lock clears finishes the same epoch instead of minting a
+        // second review identity from an identical recovery candidate.
+        recovering.performRecovery(.checkAgain)
+        #expect(!recovering.state.isHalted)
+        #expect(!LibraryQuarantineMarker.exists(at: markerURL))
+        guard case .loaded(let completedBase) = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("the completed recovery fence should remain durable")
+            return
+        }
+        #expect(completedBase.nonDestructiveReviewID == originalReviewID)
+    }
+
+    @Test func localRecoveryPreservesAConcurrentTransportHalt() throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        let markerURL = LibraryQuarantineMarker.url(beside: stateURL)
+        try LibraryQuarantineMarker.write(to: markerURL, temporaryDirectory: h.dir)
+        var persisted = SyncState.fresh(
+            deviceID: "aaaaaaa1", now: Date(timeIntervalSince1970: 10))
+        let accountHalt = SyncState.Halt(
+            reason: .accountChanged,
+            detail: "review the current account",
+            at: Date(timeIntervalSince1970: 10))
+        persisted.halt = accountHalt
+        try SyncStateFile.write(persisted, to: stateURL, temporaryDirectory: h.dir)
+        let engine = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: h.dir.appendingPathComponent("base.json"),
+            stateURL: stateURL,
+            libraryQuarantineMarkerURL: markerURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+
+        engine.reassertPrimaryLibraryQuarantine()
+        #expect(engine.recoveryAction == .checkAgain)
+        engine.performRecovery(.checkAgain)
+
+        #expect(!LibraryQuarantineMarker.exists(at: markerURL))
+        guard case .halted(.accountChanged, _) = engine.state else {
+            Issue.record("local review must reveal the preserved transport halt")
+            return
+        }
+        guard case .loaded(let after) = SyncStateFile.load(from: stateURL) else {
+            Issue.record("the concurrent transport halt must remain durable")
+            return
+        }
+        #expect(after.halt == accountHalt)
+        guard case .missing = SyncBaseFile.load(
+            from: h.dir.appendingPathComponent("base.json")) else {
+            Issue.record("a never-synced recovery must not initialize protocol state")
+            return
+        }
+    }
+
+    @Test func partialLibraryRecoveryNeverInfersOldAbsencesAsDeletesAcrossResetFailure() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let aID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let bID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+        let cID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
+        let tombstoneID = UUID(uuidString: "dddddddd-dddd-4ddd-8ddd-dddddddddddd")!
+        let deletedDuringMaterializeID = UUID(
+            uuidString: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")!
+        let a = envelope(aID, name: "restored A", ms: 1_000)
+        let b = envelope(bID, name: "remote-only B", ms: 1_100)
+        let c = envelope(cID, name: "journal-only C", ms: 1_200)
+        let tombstone = envelope(
+            tombstoneID, name: "deleted before quarantine", ms: 1_300, deleted: true)
+        let deletedDuringMaterialize = envelope(
+            deletedDuringMaterializeID,
+            name: "deleted during materialization",
+            ms: 1_400)
+
+        h.transport.seed([
+            try WireCodec.seal(a, using: h.sealer),
+            try WireCodec.seal(b, using: h.sealer),
+        ])
+        var oldBase = SyncBase(
+            cursor: h.transport.currentCursor,
+            journalEstablished: true)
+        for record in h.transport.snapshot {
+            oldBase.recordConfirmed(
+                try WireCodec.open(record, using: h.sealer),
+                recordVersion: record.recordVersion)
+        }
+        // Model a journaled write whose acknowledgement was lost: it exists remotely,
+        // but the old confirmed base does not yet know that.
+        h.transport.seed([try WireCodec.seal(deletedDuringMaterialize, using: h.sealer)])
+        let oldJournal = SyncJournal(entries: [
+            SyncBase.key(cID): SyncJournal.Entry(
+                desired: c, offered: nil, generation: 1,
+                modifiedAt: Date(timeIntervalSince1970: 10)),
+            SyncBase.key(tombstoneID): SyncJournal.Entry(
+                desired: tombstone, offered: nil, generation: 1,
+                modifiedAt: Date(timeIntervalSince1970: 11)),
+            SyncBase.key(deletedDuringMaterializeID): SyncJournal.Entry(
+                desired: deletedDuringMaterialize, offered: nil, generation: 1,
+                modifiedAt: Date(timeIntervalSince1970: 12)),
+        ])
+        let baseURL = h.dir.appendingPathComponent("base.json")
+        let journalURL = h.dir.appendingPathComponent("journal.json")
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        let markerURL = LibraryQuarantineMarker.url(beside: stateURL)
+        try SyncBaseFile.write(oldBase, to: baseURL, temporaryDirectory: h.dir)
+        try SyncJournalFile.write(oldJournal, to: journalURL, temporaryDirectory: h.dir)
+        try LibraryQuarantineMarker.write(to: markerURL, temporaryDirectory: h.dir)
+        var stopped = SyncState.fresh(
+            deviceID: "aaaaaaa1", now: Date(timeIntervalSince1970: 12))
+        stopped.halt = SyncState.Halt(
+            reason: .localLibraryQuarantined,
+            detail: "primary preserved",
+            at: Date(timeIntervalSince1970: 12),
+            recoveryContext: .localLibraryQuarantine)
+        try SyncStateFile.write(stopped, to: stateURL, temporaryDirectory: h.dir)
+        h.library.envelopes = [aID: a]
+        h.library.onApply = { incoming in
+            guard incoming.contains(where: { $0.id == deletedDuringMaterializeID }) else {
+                return
+            }
+            h.library.envelopes[deletedDuringMaterializeID] = nil
+            h.library.onApply = nil
+        }
+
+        let recovering = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            journalURL: journalURL,
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        recovering.performRecovery(.checkAgain)
+        #expect(!recovering.state.isHalted)
+        #expect(!LibraryQuarantineMarker.exists(at: markerURL))
+        guard case .loaded(let fencedBase) = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("review must make the non-destructive reset crash-safe")
+            return
+        }
+        #expect(fencedBase.requiresNonDestructiveLibraryMerge)
+
+        // Fail after C was materialized into primary and the rewritten journal reached
+        // disk, but before the transport checkpoint/base reset. A relaunch must repeat
+        // the preparation without losing C or manufacturing a deletion for B.
+        h.transport.configure { $0.failLocalFullResets = 1 }
+        let interrupted = await recovering.sync()
+        #expect(!interrupted.isHalted)
+        #expect(h.library.envelopes[cID] == c)
+        #expect(h.library.envelopes[deletedDuringMaterializeID] == nil)
+        #expect(h.library.envelopes[bID] == nil)
+        #expect(h.transport.localFullResetAttempts == 1)
+        guard case .loaded(let stillFenced) = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("failed checkpoint reset must retain the recovery fence")
+            return
+        }
+        #expect(stillFenced.requiresNonDestructiveLibraryMerge)
+
+        let restarted = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            journalURL: journalURL,
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        #expect(!(await restarted.sync()).isHalted)
+        #expect(h.transport.localFullResetAttempts == 2)
+        #expect(h.library.envelopes[aID] != nil)
+        #expect(h.library.envelopes[bID] == b,
+                "an old-base record absent from the partial restore must be fetched, not deleted")
+        #expect(h.library.envelopes[cID] == c,
+                "journal-only live intent must survive materialize-before-reset restart")
+
+        let submitted = try h.transport.submittedBatches.flatMap { batch in
+            try batch.map { try WireCodec.open($0, using: h.sealer) }
+        }
+        #expect(!submitted.contains { $0.id == bID && $0.deleted },
+                "partial recovery absence must never become an outbound tombstone")
+        #expect(submitted.contains { $0.id == tombstoneID && $0.deleted },
+                "an explicit journal tombstone must survive recovery")
+        #expect(submitted.contains {
+            $0.id == deletedDuringMaterializeID && $0.deleted
+        }, "a deletion immediately after materialization must survive reset and restart")
+        #expect(h.library.envelopes[deletedDuringMaterializeID] == nil)
+        let remoteTombstone = try #require(
+            h.transport.snapshot.first(where: { $0.id == tombstoneID }))
+        #expect((try WireCodec.open(remoteTombstone, using: h.sealer)).deleted)
+        guard case .loaded(let completedBase) = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("completed recovery must leave a readable base")
+            return
+        }
+        #expect(!completedBase.requiresNonDestructiveLibraryMerge)
+    }
+
+    @Test func partialJournalMaterializationPublishesAncestorsBeforeReturning() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let appliedID = UUID(uuidString: "f1000000-0000-4000-8000-000000000001")!
+        let deferredID = UUID(uuidString: "f1000000-0000-4000-8000-000000000002")!
+        let applied = envelope(appliedID, name: "applied then deleted", ms: 1_000)
+        let deferred = envelope(deferredID, name: "still deferred", ms: 1_100)
+        let baseURL = h.dir.appendingPathComponent("base.json")
+        let journalURL = h.dir.appendingPathComponent("journal.json")
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        try SyncBaseFile.write(SyncBase(
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true,
+            nonDestructiveMergeMode: .reviewedLocalSnapshot),
+            to: baseURL, temporaryDirectory: h.dir)
+        try SyncJournalFile.write(SyncJournal(entries: [
+            SyncBase.key(appliedID): SyncJournal.Entry(
+                desired: applied, offered: nil, generation: 1,
+                modifiedAt: Date(timeIntervalSince1970: 10)),
+            SyncBase.key(deferredID): SyncJournal.Entry(
+                desired: deferred, offered: nil, generation: 1,
+                modifiedAt: Date(timeIntervalSince1970: 11)),
+        ]), to: journalURL, temporaryDirectory: h.dir)
+        h.library.deferIDs = [deferredID]
+        h.library.onApply = { incoming in
+            guard incoming.contains(where: { $0.id == appliedID }) else { return }
+            h.library.envelopes[appliedID] = nil
+            h.library.onApply = nil
+        }
+
+        let recovering = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            journalURL: journalURL,
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        _ = await recovering.sync()
+
+        guard case .loaded(let afterPartialApply) = SyncJournalFile.load(from: journalURL) else {
+            Issue.record("partial materialization must persist its successful rows")
+            return
+        }
+        #expect(afterPartialApply.entry(appliedID)?.reviewedLocalAncestor == applied)
+        #expect(afterPartialApply.entry(deferredID)?.reviewedLocalAncestor == nil)
+
+        _ = await recovering.sync()
+        guard case .loaded(let afterDeletion) = SyncJournalFile.load(from: journalURL) else {
+            Issue.record("the post-materialization deletion must become durable")
+            return
+        }
+        #expect(afterDeletion.entry(appliedID)?.desired.deleted == true)
+        #expect(afterDeletion.entry(deferredID)?.desired.deleted == false)
+    }
+
+    @Test func reviewedLibraryDeletionBeforeDelayedSyncIsNotResurrected() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let id = UUID(uuidString: "abababab-abab-4bab-8bab-abababababab")!
+        let reviewed = envelope(id, name: "reviewed then deleted", ms: 1_000)
+        h.transport.seed([try WireCodec.seal(reviewed, using: h.sealer)])
+        var oldBase = SyncBase(
+            cursor: h.transport.currentCursor,
+            journalEstablished: true)
+        let remote = try #require(h.transport.snapshot.first)
+        oldBase.recordConfirmed(
+            try WireCodec.open(remote, using: h.sealer),
+            recordVersion: remote.recordVersion)
+
+        let baseURL = h.dir.appendingPathComponent("base.json")
+        let journalURL = h.dir.appendingPathComponent("journal.json")
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        let markerURL = LibraryQuarantineMarker.url(beside: stateURL)
+        try SyncBaseFile.write(oldBase, to: baseURL, temporaryDirectory: h.dir)
+        try SyncJournalFile.write(SyncJournal(), to: journalURL, temporaryDirectory: h.dir)
+        try LibraryQuarantineMarker.write(to: markerURL, temporaryDirectory: h.dir)
+        var stopped = SyncState.fresh(
+            deviceID: "aaaaaaa1", now: Date(timeIntervalSince1970: 12))
+        stopped.halt = SyncState.Halt(
+            reason: .localLibraryQuarantined,
+            detail: "review restored primary",
+            at: Date(timeIntervalSince1970: 12),
+            recoveryContext: .localLibraryQuarantine)
+        try SyncStateFile.write(stopped, to: stateURL, temporaryDirectory: h.dir)
+        h.library.envelopes = [id: reviewed]
+
+        let recovering = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            journalURL: journalURL,
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+        recovering.performRecovery(.checkAgain)
+        guard case .loaded(let fenced) = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("Check Again must commit an exact reviewed snapshot")
+            return
+        }
+        #expect(fenced.nonDestructiveMergeMode == .reviewedLocalSnapshot)
+
+        // This models sync remaining off for an arbitrary interval after Check Again.
+        h.library.envelopes[id] = nil
+        _ = await recovering.sync()
+        _ = await recovering.sync()
+
+        let submitted = try h.transport.submittedBatches.flatMap { batch in
+            try batch.map { try WireCodec.open($0, using: h.sealer) }
+        }
+        #expect(submitted.contains { $0.id == id && $0.deleted })
+        #expect(h.library.envelopes[id] == nil,
+                "the reviewed value must not be materialized over a later local deletion")
+    }
+
+    @Test func checkpointRepairLocalEditThenDeleteUsesOldConfirmedAncestor() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let id = UUID(uuidString: "acacacac-acac-4cac-8cac-acacacacacac")!
+        let confirmed = envelope(id, name: "confirmed", content: "server", ms: 1_000)
+        let reviewed = envelope(
+            id, name: "local edit before Repair", content: "local", ms: 2_000)
+        h.transport.seed([try WireCodec.seal(confirmed, using: h.sealer)])
+
+        let recoveryBase = SyncBase(
+            envelopes: [SyncBase.key(id): reviewed],
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true,
+            nonDestructiveMergeMode: .reviewedLocalSnapshot,
+            preRecoveryConfirmedEnvelopes: [SyncBase.key(id): confirmed])
+        var recoveryJournal = SyncJournal()
+        try recoveryJournal.reconcileAfterReviewedLocalSnapshot(
+            current: [id: reviewed],
+            reviewedSnapshot: recoveryBase,
+            deviceID: "aaaaaaa1",
+            now: Date(timeIntervalSince1970: 10))
+
+        let baseURL = h.dir.appendingPathComponent("base.json")
+        let journalURL = h.dir.appendingPathComponent("journal.json")
+        let stateURL = h.dir.appendingPathComponent("state.json")
+        try SyncBaseFile.write(recoveryBase, to: baseURL, temporaryDirectory: h.dir)
+        try SyncJournalFile.write(
+            recoveryJournal, to: journalURL, temporaryDirectory: h.dir)
+
+        // The explicit review saw the unconfirmed local edit. The user then deleted
+        // it before the first full fetch. A nil-CAS push conflicts with the unchanged
+        // backend value, exercising the recovery merge selector directly.
+        h.library.envelopes = [:]
+        let recovering = SyncEngine(
+            transport: h.transport,
+            library: h.library,
+            sealer: h.sealer,
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            journalURL: journalURL,
+            stateURL: stateURL,
+            lockURL: h.dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: h.dir)
+
+        _ = await recovering.sync()
+        _ = await recovering.sync()
+
+        #expect(h.library.envelopes[id] == nil,
+                "an unchanged confirmed remote must not resurrect the deleted local edit")
+        let submitted = try h.transport.submittedBatches.flatMap { batch in
+            try batch.map { try WireCodec.open($0, using: h.sealer) }
+        }
+        #expect(submitted.contains { $0.id == id && $0.deleted })
+        let remote = try #require(h.transport.snapshot.first(where: { $0.id == id }))
+        #expect((try WireCodec.open(remote, using: h.sealer)).deleted)
     }
 
     // MARK: - Undecryptable records
@@ -614,7 +1521,7 @@ struct SyncEngineTests {
         peerState.halt = peerHalt
         try SyncStateFile.write(peerState, to: stateURL, temporaryDirectory: h.dir)
 
-        restarted.clearHaltAfterUserReview()
+        restarted.performRecovery(.checkAgain)
         #expect(restarted.state == .halted(.backendRefused, detail: peerHalt.detail),
                 "reviewing an older halt must surface, not clear, the peer's newer halt")
         guard case .loaded(let stillStopped) = SyncStateFile.load(from: stateURL) else {
@@ -624,12 +1531,12 @@ struct SyncEngineTests {
         #expect(stillStopped.halt == peerHalt)
 
         // A second review now covers the halt actually displayed and may clear it.
-        restarted.clearHaltAfterUserReview()
+        restarted.performRecovery(.retrySync)
         guard case .loaded(let reviewed) = SyncStateFile.load(from: stateURL) else {
             Issue.record("expected persisted sync state after clearing the halt")
             return
         }
-        #expect(reviewed.halt == nil, "Resume After Review must clear the durable halt")
+        #expect(reviewed.halt == nil, "the matching recovery action must clear the durable halt")
     }
 
     @Test func aFutureSyncStateFailsClosedBeforeTheFirstFetch() async throws {
@@ -662,8 +1569,8 @@ struct SyncEngineTests {
         _ = await engine.sync()
         #expect(h.transport.fetchAttempts == fetches)
 
-        engine.clearHaltAfterUserReview()
-        #expect(engine.state.isHalted, "Resume cannot overwrite a future state schema")
+        engine.performRecovery(.checkAgain)
+        #expect(engine.state.isHalted, "a mismatched recovery cannot overwrite a future state schema")
     }
 
     @Test func anUnwritableHaltUsesTheIndependentFailClosedChannel() throws {
@@ -700,6 +1607,147 @@ struct SyncEngineTests {
         let state = await h.engine.sync()
         #expect(!state.isHalted)
         #expect(h.library.envelopes[id] != nil, "a resync must not lose what was already applied")
+    }
+
+    @Test func feedRestartBetweenPagesDiscardsTheObsoletePage() async throws {
+        final class RestartingPagedTransport: SyncTransport, @unchecked Sendable {
+            let identifier = "restarting-pages"
+            let supportsPush = false
+            let pollInterval: TimeInterval = 60
+            let events = AsyncStream<SyncTransportEvent> { $0.finish() }
+            var pages: [SyncFetch]
+            var fetchIndex = 0
+
+            init(pages: [SyncFetch]) { self.pages = pages }
+
+            func resolveAccountIdentity() async throws -> SyncAccountIdentity? { nil }
+
+            func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+                defer { fetchIndex += 1 }
+                return pages[fetchIndex]
+            }
+
+            func submit(
+                _ records: [WireRecord], at cursor: SyncCursor?
+            ) async throws -> SyncSubmission {
+                throw SyncTransportFailure.pushUnsupported
+            }
+        }
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("feed-restart-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sealer = SnippetCryptoSealer(
+            keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test")
+        func record(_ value: SyncEnvelope, version: String) throws -> WireRecord {
+            var wire = try WireCodec.seal(value, using: sealer)
+            wire.recordVersion = SyncRecordVersion(Data(version.utf8))
+            return wire
+        }
+        let obsoleteID = UUID(uuidString: "10101010-1010-4010-8010-101010101010")!
+        let freshAID = UUID(uuidString: "20202020-2020-4020-8020-202020202020")!
+        let freshBID = UUID(uuidString: "30303030-3030-4030-8030-303030303030")!
+        let obsolete = try record(envelope(obsoleteID, name: "obsolete"), version: "old-v1")
+        let freshA = try record(envelope(freshAID, name: "fresh-a"), version: "new-v1")
+        let freshB = try record(envelope(freshBID, name: "fresh-b"), version: "new-v2")
+        let transport = RestartingPagedTransport(pages: [
+            SyncFetch(
+                records: [obsolete], cursor: SyncCursor("old-page-1"),
+                hasMore: true, isFullResync: false),
+            SyncFetch(
+                records: [freshA], cursor: SyncCursor("new-page-1"),
+                hasMore: true, isFullResync: true, replacesPriorPages: true),
+            SyncFetch(
+                records: [freshB], cursor: SyncCursor("new-final"),
+                hasMore: false, isFullResync: true),
+        ])
+        let baseURL = dir.appendingPathComponent("base.json")
+        try SyncBaseFile.write(
+            SyncBase(cursor: SyncCursor("old-root")),
+            to: baseURL,
+            temporaryDirectory: dir)
+        let library = FakeLibrary()
+        let engine = SyncEngine(
+            transport: transport,
+            library: library,
+            sealer: sealer,
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            stateURL: dir.appendingPathComponent("state.json"),
+            lockURL: dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: dir)
+
+        let state = await engine.sync()
+
+        #expect(!state.isHalted)
+        #expect(transport.fetchIndex == 3)
+        #expect(library.envelopes[obsoleteID] == nil,
+                "a page from the rotated feed must never reach merge/apply")
+        #expect(library.envelopes[freshAID]?.fields?.name == "fresh-a")
+        #expect(library.envelopes[freshBID]?.fields?.name == "fresh-b")
+        #expect(engine.agreedBase.cursor == SyncCursor("new-final"))
+    }
+
+    @Test func pagedFetchRejectsSnapshotModeFlipWithoutAdvancingCursor() async throws {
+        final class ModeFlippingTransport: SyncTransport, @unchecked Sendable {
+            let identifier = "mode-flipping-pages"
+            let supportsPush = false
+            let pollInterval: TimeInterval = 60
+            let events = AsyncStream<SyncTransportEvent> { $0.finish() }
+            var fetchIndex = 0
+
+            func resolveAccountIdentity() async throws -> SyncAccountIdentity? { nil }
+
+            func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+                defer { fetchIndex += 1 }
+                return if fetchIndex == 0 {
+                    SyncFetch(
+                        records: [], cursor: SyncCursor("snapshot-page-2"),
+                        hasMore: true, isFullResync: true)
+                } else {
+                    SyncFetch(
+                        records: [], cursor: SyncCursor("spliced-final"),
+                        hasMore: false, isFullResync: false)
+                }
+            }
+
+            func submit(
+                _ records: [WireRecord], at cursor: SyncCursor?
+            ) async throws -> SyncSubmission {
+                throw SyncTransportFailure.pushUnsupported
+            }
+        }
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mode-flip-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let baseURL = dir.appendingPathComponent("base.json")
+        try SyncBaseFile.write(
+            SyncBase(cursor: nil),
+            to: baseURL,
+            temporaryDirectory: dir)
+        let transport = ModeFlippingTransport()
+        let engine = SyncEngine(
+            transport: transport,
+            library: FakeLibrary(),
+            sealer: SnippetCryptoSealer(
+                keyring: SnippetCrypto.Keyring.generate(), scopeID: "k-test"),
+            device: "aaaaaaa1",
+            baseURL: baseURL,
+            stateURL: dir.appendingPathComponent("state.json"),
+            lockURL: dir.appendingPathComponent("library.lock"),
+            temporaryDirectory: dir)
+
+        let state = await engine.sync()
+
+        guard case .halted(.checkpointUnreadable, _) = state else {
+            Issue.record("a paged mode flip must halt before adopting its cursor")
+            return
+        }
+        #expect(transport.fetchIndex == 2)
+        #expect(engine.agreedBase.cursor == nil)
     }
 
     // MARK: - Submit results are paired by id, not by position

@@ -319,8 +319,9 @@ components:
     Scope:
       type: object
       additionalProperties: false
-      required: [spaceId, scopeBinding, datasetGeneration, feedEpoch]
+      required: [serverInstanceId, spaceId, scopeBinding, datasetGeneration, feedEpoch]
       properties:
+        serverInstanceId: { type: string, format: uuid }
         spaceId: { type: string, format: uuid }
         scopeBinding: { type: string, minLength: 32, maxLength: 256 }
         datasetGeneration: { type: string, format: uuid }
@@ -368,8 +369,13 @@ components:
     BatchRequest:
       type: object
       additionalProperties: false
-      required: [items]
+      description: >-
+        expectedScope, including the discovered server instance, is checked before the
+        first record mutation. Record CAS alone cannot prevent a stale client from
+        creating records after a deployment replacement, dataset restore, or feed rotation.
+      required: [expectedScope, items]
       properties:
+        expectedScope: { $ref: '#/components/schemas/Scope' }
         items:
           type: array
           minItems: 1

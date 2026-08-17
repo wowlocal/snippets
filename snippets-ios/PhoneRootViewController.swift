@@ -77,7 +77,14 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
         if content.isEmpty, let draft = environment.store.blankDraftSnippet {
             snippet = draft
         } else {
-            snippet = environment.store.addSnippet(content: content)
+            do {
+                snippet = try environment.store.addSnippet(content: content)
+            } catch {
+                showMessage(
+                    title: "Library Recovery Required",
+                    message: error.localizedDescription)
+                return
+            }
         }
         showEditor(id: snippet.id, focusBody: true)
     }
@@ -241,6 +248,12 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
 
     private func showEncryptedBackupExporter() {
         topViewController?.view.endEditing(true)
+        guard !environment.store.isLibraryQuarantined else {
+            showError(
+                title: "Library Recovery Required",
+                error: SecureSnippetStore.EncryptedBackupFailure.libraryRecoveryRequired)
+            return
+        }
         promptForNewBackupPassword { [weak self] passphrase in
             guard let self, let passphrase else { return }
             libraryController.showStatus("Preparing encrypted backup…")
@@ -310,14 +323,39 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
     private func reviewAndImport(_ prepared: PreparedSnippetImport) {
         let runImport: (Bool) -> Void = { [weak self] preserveExclamation in
             guard let self else { return }
+            let options = SnippetStore.ImportOptions(
+                preserveExclamationPrefix: preserveExclamation)
             do {
-                let count = try self.environment.store.importSnippets(
-                    prepared,
-                    options: .init(preserveExclamationPrefix: preserveExclamation)
-                )
-                self.libraryController.showStatus(
-                    "Imported \(count) snippet\(count == 1 ? "" : "s")."
-                )
+                if self.environment.store.isLibraryQuarantined {
+                    let count = try self.environment.store
+                        .quarantinedLibraryRecoveryCandidateCount(prepared, options: options)
+                    let alert = UIAlertController(
+                        title: "Replace the Quarantined Library?",
+                        message: "The selected file contains \(count) ordinary snippet\(count == 1 ? "" : "s"). It will completely replace the unreadable ordinary-snippet library. Use only a complete Snippets JSON export—a partial or Raycast export can omit data. Secure snippets are unchanged, and the unreadable file is preserved. Sync stays paused until you review it and choose Check Again.",
+                        preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+                    alert.addAction(UIAlertAction(
+                        title: "Use Complete Export",
+                        style: .destructive
+                    ) { [weak self] _ in
+                        guard let self else { return }
+                        do {
+                            let replaced = try self.environment.store
+                                .replaceQuarantinedLibrary(with: prepared, options: options)
+                            self.libraryController.showStatus(
+                                "Installed \(replaced) snippet\(replaced == 1 ? "" : "s") as the recovery candidate. Review Sync and choose Check Again.")
+                        } catch {
+                            self.showError(title: "Couldn’t Recover Library", error: error)
+                        }
+                    })
+                    self.present(alert, animated: true)
+                } else {
+                    let count = try self.environment.store.importSnippets(
+                        prepared,
+                        options: options)
+                    self.libraryController.showStatus(
+                        "Imported \(count) snippet\(count == 1 ? "" : "s").")
+                }
             } catch {
                 self.showError(title: "Couldn’t Import Snippets", error: error)
             }
@@ -345,17 +383,49 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
-                    let result = try await environment.secureStore.importEncryptedBackup(
-                        data,
-                        passphrase: passphrase,
-                        into: environment.store
-                    )
-                    libraryController.showStatus(
-                        "Imported \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippets."
-                    )
+                    let prepared = try await environment.secureStore
+                        .prepareEncryptedBackupImport(data, passphrase: passphrase)
+                    guard environment.store.isLibraryQuarantined else {
+                        installEncryptedBackup(prepared, authoritativeRecovery: false)
+                        return
+                    }
+
+                    let alert = UIAlertController(
+                        title: "Restore the Quarantined Library from This Backup?",
+                        message: "The authenticated backup contains \(prepared.ordinaryCount) ordinary and \(prepared.secureCount) secure snippet\(prepared.totalCount == 1 ? "" : "s"). Its ordinary library will completely replace the quarantined recovery candidate; compatible secure snippets will be restored in the same transaction. The unreadable original remains preserved, and Sync stays paused until you choose Check Again.",
+                        preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+                    alert.addAction(UIAlertAction(
+                        title: "Restore Encrypted Backup",
+                        style: .destructive
+                    ) { [weak self] _ in
+                        self?.installEncryptedBackup(
+                            prepared, authoritativeRecovery: true)
+                    })
+                    present(alert, animated: true)
                 } catch {
                     showError(title: "Couldn’t Import Encrypted Backup", error: error)
                 }
+            }
+        }
+    }
+
+    private func installEncryptedBackup(
+        _ prepared: SecureSnippetStore.PreparedEncryptedBackupImport,
+        authoritativeRecovery: Bool
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await environment.secureStore.importPreparedEncryptedBackup(
+                    prepared,
+                    into: environment.store,
+                    authoritativeRecovery: authoritativeRecovery)
+                libraryController.showStatus(authoritativeRecovery
+                    ? "Installed encrypted recovery with \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet\(result.totalCount == 1 ? "" : "s"). Review Sync and choose Check Again."
+                    : "Imported \(result.ordinaryCount) ordinary and \(result.secureCount) secure snippet\(result.totalCount == 1 ? "" : "s").")
+            } catch {
+                showError(title: "Couldn’t Import Encrypted Backup", error: error)
             }
         }
     }

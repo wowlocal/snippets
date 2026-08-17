@@ -383,7 +383,11 @@ func validateRequiredShape(method, path string, raw any) error {
 	}
 	switch {
 	case method == http.MethodPost && strings.HasSuffix(path, "/records/batch"):
-		if !require(object, "items") {
+		if !require(object, "expectedScope", "items") {
+			return domain.NewError(domain.InvalidRequest)
+		}
+		scope, ok := object["expectedScope"].(map[string]any)
+		if !ok || !require(scope, "serverInstanceId", "spaceId", "scopeBinding", "datasetGeneration", "feedEpoch") {
 			return domain.NewError(domain.InvalidRequest)
 		}
 		items, ok := object["items"].([]any)

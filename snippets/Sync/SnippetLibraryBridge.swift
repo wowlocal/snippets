@@ -64,6 +64,23 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     }
 
     func currentSnapshot(agreedBase: SyncBase) throws -> SyncLibrarySnapshot {
+        try projectedSnapshot(agreedBase: agreedBase, allowingReviewedQuarantine: false)
+    }
+
+    /// The recovery action needs one narrow read path while ordinary mutation and sync
+    /// remain quarantined. `adoptRecoveredLibraryIfPresent` has already decoded the
+    /// exact primary bytes; this flag authorizes projection only, never writes or apply.
+    private func projectedSnapshot(
+        agreedBase: SyncBase,
+        allowingReviewedQuarantine: Bool
+    ) throws -> SyncLibrarySnapshot {
+        guard allowingReviewedQuarantine || !store.isLibraryQuarantined else {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "the primary snippet library is quarantined; restore a valid "
+                    + "library before syncing so missing records are not treated as deletions",
+                recoveryContext: .localLibraryQuarantine)
+        }
         do {
             try store.flushPendingWritesForSync()
         } catch {
@@ -152,6 +169,27 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 in: vault))
     }
 
+    func reviewRecoveredLibrary(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {
+        if store.isLibraryQuarantined {
+            guard store.adoptRecoveredLibraryIfPresent() else {
+                throw SyncEngineFailure(
+                    reason: .localLibraryQuarantined,
+                    detail: "the restored snippet library still cannot be read")
+            }
+        }
+        return try projectedSnapshot(
+            agreedBase: agreedBase,
+            allowingReviewedQuarantine: true).envelopes
+    }
+
+    func finalizeRecoveredLibraryReview() throws {
+        guard store.finalizeRecoveredLibraryReview() else {
+            throw SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "the library recovery marker is still active")
+        }
+    }
+
     private func validatedConflictInstallReceipts(
         in vault: VaultDocument?
     ) throws -> [UUID: String] {
@@ -206,8 +244,8 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     /// at the projection, which is where the damage is actually done, rather than as a
     /// precondition in a type that no longer has any other reason to know what a vault is.
     ///
-    /// Both halts are sticky, and re-checked on every round, so "Resume After Review" on a
-    /// vault that is still unreadable stops again instead of pushing.
+    /// Both halts are sticky and re-checked on every round, so "Check Again" on a vault
+    /// that is still unreadable stops again instead of pushing.
     private func refuseToSpeakForAnUnreadableVault(
         actualVault: VaultDocument? = nil,
         against base: SyncBase, metadata: SyncBase

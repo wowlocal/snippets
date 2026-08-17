@@ -7,6 +7,59 @@ import Crypto
 
 // Compiled into the app, the CLI, and the test package — see `Snippet.swift`.
 
+/// Shared destructive-change arithmetic for every platform boundary, including the
+/// small Swift core embedded in Android. Keeping the threshold and exact UUID-set
+/// fingerprint here prevents one client from silently accepting a batch another would
+/// require the user to review.
+nonisolated enum SyncDeletionSafety {
+    static let floor = 5
+
+    struct Review: Codable, Equatable, Sendable {
+        var liveCount: Int
+        var requestedDeletions: Int
+        var batchFingerprint: String
+    }
+
+    static func allowedDeletions(liveCount: Int) -> Int {
+        max(floor, (max(0, liveCount) * 2 + 9) / 10)
+    }
+
+    static func review(
+        liveIDs: Set<UUID>,
+        resultingLiveIDs: Set<UUID>
+    ) -> Review? {
+        guard let facts = facts(
+            liveIDs: liveIDs,
+            resultingLiveIDs: resultingLiveIDs),
+              facts.requestedDeletions > allowedDeletions(liveCount: liveIDs.count) else {
+            return nil
+        }
+        return facts
+    }
+
+    /// Exact facts for any non-empty effective deletion set, including one below the
+    /// normal circuit-breaker threshold. Hosts need this after a review is already on
+    /// screen: a changed batch must never inherit authority merely because it shrank.
+    static func facts(
+        liveIDs: Set<UUID>,
+        resultingLiveIDs: Set<UUID>
+    ) -> Review? {
+        let deleting = liveIDs.subtracting(resultingLiveIDs)
+        guard !deleting.isEmpty else { return nil }
+        return Review(
+            liveCount: liveIDs.count,
+            requestedDeletions: deleting.count,
+            batchFingerprint: fingerprint(ids: deleting))
+    }
+
+    static func fingerprint(ids: Set<UUID>) -> String {
+        let material = ids.map(\.uuidString).sorted().joined(separator: "\n")
+        return SHA256.hash(data: Data(material.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+}
+
 /// Three-way merge of a snippet library.
 ///
 /// ## Why three-way rather than last-writer-wins

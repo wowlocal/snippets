@@ -281,7 +281,7 @@ func (s *Store) snapshot(ctx context.Context, tx pgx.Tx, space domain.Space, aft
 	return domain.ChangesPage{Scope: space.Scope, Records: records, Cursor: cursor, HasMore: hasMore, FullSnapshot: true}, nil
 }
 
-func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID uuid.UUID, items []domain.BatchItem) (domain.BatchSubmission, error) {
+func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID uuid.UUID, expectedScope domain.Scope, items []domain.BatchItem) (domain.BatchSubmission, error) {
 	if len(items) == 0 || len(items) > domain.MaxBatchRecords {
 		return domain.BatchSubmission{}, domain.NewError(domain.InvalidRequest)
 	}
@@ -294,6 +294,16 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 	}
 	var result domain.BatchSubmission
 	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
+		// The quota lock serializes dataset/feed rotation with the scope read below.
+		// Checking an earlier unlocked snapshot would leave a window in which a stale
+		// create-only write could land in a newly restored dataset.
+		var locked bool
+		if err := tx.QueryRow(ctx, "SELECT snippets_private.lock_storage_quota($1)", spaceID).Scan(&locked); err != nil {
+			return err
+		}
+		if !locked {
+			return domain.NewError(domain.NotFound)
+		}
 		space, err := getSpace(ctx, tx, spaceID)
 		if err != nil {
 			return err
@@ -301,12 +311,8 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 		if !space.Role.CanWrite() {
 			return domain.NewError(domain.Forbidden)
 		}
-		var locked bool
-		if err := tx.QueryRow(ctx, "SELECT snippets_private.lock_storage_quota($1)", spaceID).Scan(&locked); err != nil {
+		if err := expectedScope.RequireCurrentMutationScope(space.Scope); err != nil {
 			return err
-		}
-		if !locked {
-			return domain.NewError(domain.NotFound)
 		}
 		type indexed struct {
 			index int

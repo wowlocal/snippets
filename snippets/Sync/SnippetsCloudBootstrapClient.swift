@@ -8,6 +8,15 @@ import Foundation
 nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     typealias AccessTokenProvider = @Sendable () async throws -> String
 
+    struct Scope: Sendable, Equatable {
+        let protocolMajor: Int
+        let serverInstanceID: UUID
+        let spaceID: UUID
+        let scopeBinding: String
+        let datasetGeneration: UUID
+        let feedEpoch: UUID
+    }
+
     struct RecoveryState: Sendable, Equatable {
         struct Envelope: Sendable, Equatable {
             let version: Int
@@ -17,6 +26,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         }
         let keyEpoch: Int
         let recovery: Envelope?
+        let scope: Scope
     }
 
     struct Pairing: Sendable, Equatable {
@@ -54,6 +64,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     private struct ScopeDTO: Decodable {
+        let serverInstanceId: UUID
         let spaceId: UUID
         let scopeBinding: String
         let datasetGeneration: UUID
@@ -129,12 +140,16 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
 
     let baseURL: URL
     let spaceID: UUID
+    let serverInstanceID: UUID
+    let protocolMajor: Int
     private let accessToken: AccessTokenProvider
     private let session: URLSession
 
     init(
         baseURL: URL,
         spaceID: UUID,
+        serverInstanceID: UUID,
+        protocolMajor: Int = 2,
         accessToken: @escaping AccessTokenProvider,
         session: URLSession? = nil
     ) throws {
@@ -144,11 +159,14 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
               baseURL.password == nil,
               baseURL.query == nil,
               baseURL.fragment == nil,
-              !baseURL.absoluteString.hasSuffix("/") else {
+              !baseURL.absoluteString.hasSuffix("/"),
+              protocolMajor == 2 else {
             throw Failure.invalidConfiguration
         }
         self.baseURL = baseURL
         self.spaceID = spaceID
+        self.serverInstanceID = serverInstanceID
+        self.protocolMajor = protocolMajor
         self.accessToken = accessToken
         self.session = session ?? Self.secureSession
     }
@@ -156,7 +174,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     func recoveryState() async throws -> RecoveryState {
         let dto: RecoveryStateDTO = try await request(
             method: "GET", path: "recovery-envelope")
-        try validate(dto.scope)
+        let scope = try validatedScope(dto.scope)
         guard dto.keyEpoch > 0 else { throw Failure.invalidResponse }
         let envelope = try dto.recovery.map { value in
             guard value.version > 0,
@@ -171,7 +189,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
                 algorithm: value.algorithm,
                 ciphertext: value.ciphertext)
         }
-        return RecoveryState(keyEpoch: dto.keyEpoch, recovery: envelope)
+        return RecoveryState(keyEpoch: dto.keyEpoch, recovery: envelope, scope: scope)
     }
 
     func hasRemoteRecords() async throws -> Bool {
@@ -179,7 +197,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         struct Record: Decodable { let id: UUID }
         let response: Changes = try await request(
             method: "GET", path: "changes", query: "limit=1")
-        try validate(response.scope)
+        _ = try validatedScope(response.scope)
         return !response.records.isEmpty
     }
 
@@ -353,7 +371,8 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     private func validate(_ scope: ScopeDTO) throws {
-        guard scope.spaceId == spaceID,
+        guard scope.serverInstanceId == serverInstanceID,
+              scope.spaceId == spaceID,
               (32...256).contains(scope.scopeBinding.utf8.count),
               scope.datasetGeneration != Self.zeroUUID,
               scope.feedEpoch != Self.zeroUUID else { throw Failure.invalidResponse }
@@ -443,6 +462,21 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         } catch {
             throw Failure.network
         }
+    }
+
+    private func validatedScope(_ value: ScopeDTO) throws -> Scope {
+        guard value.serverInstanceId == serverInstanceID,
+              value.spaceId == spaceID,
+              (32...256).contains(value.scopeBinding.utf8.count) else {
+            throw Failure.invalidResponse
+        }
+        return Scope(
+            protocolMajor: protocolMajor,
+            serverInstanceID: value.serverInstanceId,
+            spaceID: value.spaceId,
+            scopeBinding: value.scopeBinding,
+            datasetGeneration: value.datasetGeneration,
+            feedEpoch: value.feedEpoch)
     }
 
     private static let maximumEnvelopeBytes = 4_096

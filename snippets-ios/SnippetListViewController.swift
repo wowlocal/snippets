@@ -209,6 +209,24 @@ final class SnippetListViewController: UIViewController {
 
     private func configureToolbar() {
         let syncEnabled = SyncCoordinator.isEnabled
+        let coordinator = environment.syncCoordinator
+        let recoveryAction = coordinator.recoveryAction
+        let syncNeedsSettings = coordinator.requiresSyncSettingsAttention
+        let syncTitle: String
+        let syncImage: String
+        if let recoveryAction {
+            syncTitle = recoveryAction.buttonTitle
+            syncImage = "exclamationmark.shield"
+        } else if syncNeedsSettings {
+            syncTitle = "Open Sync Settings"
+            syncImage = "exclamationmark.triangle"
+        } else if syncEnabled {
+            syncTitle = "Sync Now"
+            syncImage = "arrow.triangle.2.circlepath"
+        } else {
+            syncTitle = "Connect \(environment.backendSelection.provider.displayName)"
+            syncImage = "icloud"
+        }
         let addMenu = UIMenu(children: [
             UIAction(title: "New Snippet", image: UIImage(systemName: "plus")) { [weak self] _ in
                 guard let self else { return }
@@ -236,16 +254,20 @@ final class SnippetListViewController: UIViewController {
                 self.delegate?.snippetListRequestedEncryptedBackup(self)
             },
             UIAction(
-                title: syncEnabled ? "Sync Now" : "Connect iCloud",
-                subtitle: environment.syncCoordinator.statusDescription,
-                image: UIImage(systemName: syncEnabled ? "arrow.triangle.2.circlepath" : "icloud")
+                title: syncTitle,
+                subtitle: coordinator.statusDescription,
+                image: UIImage(systemName: syncImage)
             ) { [weak self] _ in
                 guard let self else { return }
-                if SyncCoordinator.isEnabled {
+                if let action = self.environment.syncCoordinator.recoveryAction {
+                    self.performSyncRecovery(action)
+                } else if self.environment.syncCoordinator.requiresSyncSettingsAttention {
+                    self.delegate?.snippetListRequestedSettings(self)
+                } else if SyncCoordinator.isEnabled {
                     self.showStatus("Syncing\u{2026}")
                     self.environment.syncCoordinator.syncNow()
                 } else {
-                    self.showStatus("Connecting to iCloud\u{2026}")
+                    self.showStatus("Connecting\u{2026}")
                     self.environment.syncCoordinator.setEnabled(true)
                 }
             },
@@ -260,6 +282,21 @@ final class SnippetListViewController: UIViewController {
         ])
         let more = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: moreMenu)
         navigationItem.rightBarButtonItems = [add, more]
+    }
+
+    private func performSyncRecovery(_ action: SyncRecoveryAction) {
+        guard presentedViewController == nil else { return }
+        guard action.confirmationTitle != nil else {
+            environment.syncCoordinator.performRecovery(action)
+            return
+        }
+        let alert = SyncRecoveryConfirmation.makeAlert(
+            action: action,
+            statusDescription: environment.syncCoordinator.statusDescription
+        ) { [weak self] in
+            self?.environment.syncCoordinator.performRecovery(action)
+        }
+        present(alert, animated: true)
     }
 
     private func configureTags() {
@@ -376,7 +413,16 @@ final class SnippetListViewController: UIViewController {
             tableView.backgroundView = nil
             return
         }
-        if environment.store.snippetsSortedForDisplay().isEmpty {
+        if environment.store.isLibraryQuarantined {
+            emptyView.configure(
+                title: "Library Recovery Required",
+                message: "The ordinary snippet library could not be read and remains "
+                    + "preserved. Import a complete Snippets JSON export, then open Sync "
+                    + "Settings and choose Check Again.",
+                showsActions: true,
+                importOnly: true
+            )
+        } else if environment.store.snippetsSortedForDisplay().isEmpty {
             emptyView.configure(
                 title: "Your snippet library is empty",
                 message: "Create a snippet, start from the clipboard, or import an existing library.",
@@ -811,6 +857,14 @@ private final class EmptyLibraryView: UIView {
     private let titleLabel = UILabel()
     private let messageLabel = UILabel()
     private let actions = UIStackView()
+    private lazy var createButton = actionButton(
+        title: "New Snippet", symbol: "plus") { [weak self] in self?.onCreate?() }
+    private lazy var clipboardButton = actionButton(
+        title: "New from Clipboard", symbol: "doc.on.clipboard") {
+            [weak self] in self?.onClipboard?()
+        }
+    private lazy var importButton = actionButton(
+        title: "Import…", symbol: "square.and.arrow.down") { [weak self] in self?.onImport?() }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -818,20 +872,21 @@ private final class EmptyLibraryView: UIView {
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textAlignment = .center
         titleLabel.numberOfLines = 0
+        titleLabel.accessibilityIdentifier = "empty-library-title"
         messageLabel.font = AppTheme.scaledFont(size: 13, textStyle: .subheadline)
         messageLabel.adjustsFontForContentSizeCategory = true
         messageLabel.textColor = .secondaryLabel
         messageLabel.textAlignment = .center
         messageLabel.numberOfLines = 0
+        messageLabel.accessibilityIdentifier = "empty-library-message"
 
         actions.axis = .vertical
         actions.spacing = 7
         actions.alignment = .fill
-        let create = actionButton(title: "New Snippet", symbol: "plus") { [weak self] in self?.onCreate?() }
-        create.accessibilityIdentifier = "empty-create"
-        let clipboard = actionButton(title: "New from Clipboard", symbol: "doc.on.clipboard") { [weak self] in self?.onClipboard?() }
-        let importButton = actionButton(title: "Import…", symbol: "square.and.arrow.down") { [weak self] in self?.onImport?() }
-        [create, clipboard, importButton].forEach(actions.addArrangedSubview)
+        createButton.accessibilityIdentifier = "empty-create"
+        clipboardButton.accessibilityIdentifier = "empty-clipboard"
+        importButton.accessibilityIdentifier = "empty-import"
+        [createButton, clipboardButton, importButton].forEach(actions.addArrangedSubview)
 
         let icon = UIImageView(image: UIImage(systemName: "text.page"))
         icon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 24, weight: .regular)
@@ -854,10 +909,18 @@ private final class EmptyLibraryView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(title: String, message: String, showsActions: Bool) {
+    func configure(
+        title: String,
+        message: String,
+        showsActions: Bool,
+        importOnly: Bool = false
+    ) {
         titleLabel.text = title
         messageLabel.text = message
         actions.isHidden = !showsActions
+        createButton.isHidden = importOnly
+        clipboardButton.isHidden = importOnly
+        importButton.isHidden = false
     }
 
     private func actionButton(title: String, symbol: String, handler: @escaping () -> Void) -> UIButton {

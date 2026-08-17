@@ -379,7 +379,7 @@ final class CloudKitCASTests: XCTestCase {
         }
     }
 
-    func testNestedZoneLossStillUsesNonResumableSafetyPolicy() throws {
+    func testNestedZoneLossStillRequiresExplicitRecoveryPolicy() throws {
         let zoneID = zone()
         let offered = wire(version: nil, rev: "zone-loss")
         let failedRecord = try CloudKitRecordMapping.makeRecord(from: offered, in: zoneID)

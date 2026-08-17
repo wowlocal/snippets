@@ -61,7 +61,7 @@ final class SecureRemediationTests: XCTestCase {
             components.secureStore.prepareVaultCreationIfNeeded())
         _ = try components.secureStore.commitVaultCreation(pending)
 
-        let original = components.store.addSnippet(
+        let original = try! components.store.addSnippet(
             name: "Transition Test",
             content: "stale body")
         var latest = original
@@ -120,7 +120,7 @@ final class SecureRemediationTests: XCTestCase {
         _ = try components.secureStore.commitVaultCreation(pending)
 
         let secret = "PRIVATE-FIRST-LINE-SENTINEL\nremaining body"
-        let snippet = components.store.addSnippet(name: "", content: secret)
+        let snippet = try! components.store.addSnippet(name: "", content: secret)
         components.store.flushPendingWrites()
 
         _ = try await components.session.unlock(reason: "Test promotion metadata")
@@ -151,7 +151,7 @@ final class SecureRemediationTests: XCTestCase {
         let pending = try XCTUnwrap(
             components.secureStore.prepareVaultCreationIfNeeded())
         _ = try components.secureStore.commitVaultCreation(pending)
-        let snippet = components.store.addSnippet(
+        let snippet = try! components.store.addSnippet(
             name: "Atomic transition",
             content: "body")
         components.store.flushPendingWrites()
@@ -238,7 +238,7 @@ final class SecureRemediationTests: XCTestCase {
         let pending = try XCTUnwrap(
             components.secureStore.prepareVaultCreationIfNeeded())
         _ = try components.secureStore.commitVaultCreation(pending)
-        let snippet = components.store.addSnippet(name: "Pre-lock", content: "initial")
+        let snippet = try! components.store.addSnippet(name: "Pre-lock", content: "initial")
         let start = Date(timeIntervalSince1970: 10_000)
         var currentTime = start
         components.session.now = { currentTime }
@@ -678,7 +678,7 @@ final class SecureRemediationTests: XCTestCase {
 
     func testEncryptedBackupKDFYieldsMainActorAndStillRoundTrips() async throws {
         let components = makeComponents()
-        _ = components.store.addSnippet(name: "Backup", content: "body")
+        _ = try! components.store.addSnippet(name: "Backup", content: "body")
         let probe = MainActorHeartbeat()
         Task { @MainActor in probe.didRun = true }
 
@@ -695,6 +695,81 @@ final class SecureRemediationTests: XCTestCase {
         XCTAssertEqual(result.ordinaryCount, 1)
     }
 
+    func testEncryptedBackupExportStaysBlockedButExplicitImportRecoversQuarantine() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        let source = makeComponents()
+        var ordinary = try source.store.addSnippet(
+            name: "Recovery candidate",
+            content: "ordinary backup body")
+        ordinary.keyword = "recovery-candidate"
+        source.store.update(ordinary)
+        let pendingVault = try XCTUnwrap(
+            source.secureStore.prepareVaultCreationIfNeeded())
+        _ = try source.secureStore.commitVaultCreation(pendingVault)
+        var secure = try source.store.addSnippet(
+            name: "Secure recovery",
+            content: "secure backup body")
+        secure.keyword = "secure-recovery"
+        source.store.update(secure)
+        source.store.flushPendingWrites()
+        _ = try await source.session.unlock(reason: "Prepare encrypted recovery backup")
+        try SecureSnippetTransitionCoordinator.promote(
+            snippetID: secure.id,
+            store: source.store,
+            secureStore: source.secureStore)
+        let backup = try await source.secureStore.makeEncryptedBackup(
+            store: source.store,
+            passphrase: "test passphrase",
+            iterations: 1)
+
+        // Model the ordinary primary becoming unreadable after the good all-library
+        // backup was created. The original bytes are quarantined by the new store.
+        try Data("unreadable ordinary library".utf8).write(
+            to: SnippetStorageLocations.snippetsFileURL)
+        let recovered = makeComponents()
+        XCTAssertTrue(recovered.store.isLibraryQuarantined)
+
+        do {
+            _ = try await recovered.secureStore.makeEncryptedBackup(
+                store: recovered.store,
+                passphrase: "test passphrase",
+                iterations: 1)
+            XCTFail("a quarantined empty projection must not become an all-library backup")
+        } catch SecureSnippetStore.EncryptedBackupFailure.libraryRecoveryRequired {
+            // Export cannot represent the unreadable ordinary half.
+        }
+
+        let prepared = try await recovered.secureStore.prepareEncryptedBackupImport(
+            backup.data,
+            passphrase: "test passphrase")
+        XCTAssertEqual(prepared.ordinaryCount, 1)
+        XCTAssertEqual(prepared.secureCount, 1)
+        do {
+            _ = try await recovered.secureStore.importPreparedEncryptedBackup(
+                prepared,
+                into: recovered.store)
+            XCTFail("encrypted import must not bypass authoritative recovery review")
+        } catch SecureSnippetStore.EncryptedBackupFailure.libraryRecoveryRequired {
+            // Expected.
+        }
+
+        let result = try await recovered.secureStore.importPreparedEncryptedBackup(
+            prepared,
+            into: recovered.store,
+            authoritativeRecovery: true)
+        XCTAssertEqual(result.ordinaryCount, 1)
+        XCTAssertEqual(result.secureCount, 1)
+        XCTAssertEqual(recovered.store.snippet(id: ordinary.id)?.content, "ordinary backup body")
+        XCTAssertTrue(recovered.secureStore.isSecure(secure.id))
+        _ = try await recovered.session.unlock(reason: "Verify encrypted recovery")
+        XCTAssertEqual(
+            try recovered.secureStore.content(for: secure.id),
+            "secure backup body")
+        XCTAssertTrue(recovered.store.isLibraryQuarantined,
+                      "Check Again owns the independent non-destructive sync fence")
+        XCTAssertTrue(LibraryQuarantineMarker.exists())
+    }
+
     func testForgetEverythingPreservesOrdinarySyncStateAcrossRestart() async throws {
         SnippetStorageLocations.createAllDirectories()
         let components = makeComponents()
@@ -702,9 +777,9 @@ final class SecureRemediationTests: XCTestCase {
             components.secureStore.prepareVaultCreationIfNeeded())
         _ = try components.secureStore.commitVaultCreation(pendingVault)
 
-        let ordinary = components.store.addSnippet(
+        let ordinary = try! components.store.addSnippet(
             name: "Ordinary survivor", content: "confirmed ordinary body")
-        let toSecure = components.store.addSnippet(
+        let toSecure = try! components.store.addSnippet(
             name: "Secure removal", content: "secure body")
         components.store.flushPendingWrites()
         _ = try await components.session.unlock(reason: "Prepare secure forget regression")
@@ -804,7 +879,9 @@ final class SecureRemediationTests: XCTestCase {
             contentsOf: SnippetStorageLocations.syncBaseFileURL)
         let retainedBaseObject = try XCTUnwrap(
             JSONSerialization.jsonObject(with: retainedBaseBytes) as? [String: Any])
-        XCTAssertEqual(retainedBaseObject["schemaVersion"] as? Int, 3,
+        XCTAssertEqual(
+            retainedBaseObject["schemaVersion"] as? Int,
+            SyncBase.currentSchemaVersion,
                        "secure forget must persist the current schema fence")
         XCTAssertNil(retainedBaseObject["cursor"])
         XCTAssertNil(retainedBaseObject["cursorKind"])
@@ -1004,7 +1081,7 @@ final class SecureRemediationTests: XCTestCase {
 
     func testNotificationObserversDoNotRetainEditors() {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Lifecycle", content: "body")
+        let snippet = try! environment.store.addSnippet(name: "Lifecycle", content: "body")
         weak var phoneEditor: PhoneSnippetEditorViewController?
         weak var tabletEditor: SnippetEditorViewController?
 
@@ -1082,7 +1159,7 @@ final class SecureRemediationTests: XCTestCase {
         let pendingVault = try XCTUnwrap(
             components.secureStore.prepareVaultCreationIfNeeded())
         _ = try components.secureStore.commitVaultCreation(pendingVault)
-        let snippet = components.store.addSnippet(
+        let snippet = try! components.store.addSnippet(
             name: "Rollback secure", content: "confirmed secure content")
         components.store.flushPendingWrites()
         _ = try await components.session.unlock(reason: "Prepare forget rollback")

@@ -566,6 +566,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    func openSyncSettings() {
+        NSApp.setActivationPolicy(.regular)
+        let controller = settingsWindowController ?? SettingsWindowController()
+        settingsWindowController = controller
+        controller.showSyncSettings()
+        #if !NO_SPARKLE
+        refreshWindowUpdateAccessories()
+        #endif
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @IBAction func importSnippets(_ sender: Any?) {
         showMainWindow()?.runImport(sender)
     }
@@ -1526,7 +1537,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             store.discardBlankDraft(id: draft.id)
         }
 
-        var created = store.addSnippet(name: snippet.name, content: snippet.content, tags: snippet.tags)
+        let createdSnippet: Snippet
+        do {
+            createdSnippet = try store.addSnippet(
+                name: snippet.name,
+                content: snippet.content,
+                tags: snippet.tags)
+        } catch {
+            showDeepLinkAlert(
+                title: "Library Recovery Required",
+                message: error.localizedDescription,
+                style: .warning)
+            return
+        }
+        var created = createdSnippet
         if !snippet.normalizedKeyword.isEmpty {
             created.keyword = snippet.normalizedKeyword
             // The keyword arrives in a second call because `addSnippet` does not

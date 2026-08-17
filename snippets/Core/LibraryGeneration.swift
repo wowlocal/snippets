@@ -240,6 +240,128 @@ nonisolated enum LibraryWriter {
         }
     }
 
+    /// Replaces a quarantined primary without decoding it first.
+    ///
+    /// The unreadable bytes are copied to a sibling recovery file under the same
+    /// inter-process lock before the valid replacement is published. This path is
+    /// deliberately separate from `update`: treating corrupt bytes as a merge peer is
+    /// impossible, while treating them as a missing empty library would lose evidence.
+    static func replaceQuarantinedPrimary(
+        with replacement: [Snippet],
+        libraryURL: URL = SnippetStorageLocations.snippetsFileURL,
+        stateURL: URL = SnippetStorageLocations.syncStateFileURL,
+        lockURL: URL = SnippetStorageLocations.libraryLockFileURL,
+        temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
+        lockTimeout: TimeInterval,
+        expectedDigest: String?
+    ) throws -> Outcome {
+        let guardHeld: FileGuard.Held
+        do {
+            guardHeld = try FileGuard.acquire(at: lockURL, timeout: lockTimeout)
+        } catch {
+            throw Failure.busy
+        }
+        let wroteWithoutLock = guardHeld.isUnlocked
+        defer { guardHeld.release() }
+
+        let replacementData: Data
+        do {
+            replacementData = try SnippetLibraryCodec.encode(replacement)
+        } catch {
+            throw Failure.writeFailed("could not encode the recovered snippet library")
+        }
+        let replacementDigest = SnippetLibraryCodec.digest(of: replacementData)
+
+        var attempt = 0
+        while true {
+            attempt += 1
+            let current = try rawSnapshot(from: libraryURL)
+            let foldedIn = expectedDigest != nil && expectedDigest != current.digest
+            if current.data == replacementData {
+                return Outcome(
+                    snippets: replacement,
+                    digest: replacementDigest,
+                    data: replacementData,
+                    foldedInForeignWrite: foldedIn,
+                    wroteWithoutLock: wroteWithoutLock,
+                    attempts: attempt)
+            }
+
+            if current.fileExisted {
+                let backupURL = libraryURL.deletingLastPathComponent().appendingPathComponent(
+                    "snippets.json.recovery-preserved-\(UUID().uuidString.lowercased())",
+                    isDirectory: false)
+                do {
+                    try AtomicFileWriter.write(
+                        current.data,
+                        to: backupURL,
+                        temporaryDirectory: temporaryDirectory)
+                    guard try Data(contentsOf: backupURL) == current.data else {
+                        throw Failure.writeFailed("could not verify the preserved library bytes")
+                    }
+                } catch let failure as Failure {
+                    throw failure
+                } catch {
+                    throw Failure.writeFailed("could not preserve the quarantined library bytes")
+                }
+            }
+
+            let recheck = try rawSnapshot(from: libraryURL)
+            guard recheck.digest == current.digest,
+                  recheck.fileExisted == current.fileExisted else {
+                guard attempt < maxAttempts else { throw Failure.busy }
+                continue
+            }
+
+            do {
+                try AtomicFileWriter.write(
+                    replacementData,
+                    to: libraryURL,
+                    temporaryDirectory: temporaryDirectory)
+            } catch {
+                throw Failure.writeFailed("could not save the recovered snippet library")
+            }
+            let confirmed = try read(from: libraryURL)
+            guard confirmed.digest == replacementDigest else {
+                guard attempt < maxAttempts else { throw Failure.busy }
+                continue
+            }
+            bumpGeneration(
+                stateURL: stateURL,
+                temporaryDirectory: temporaryDirectory,
+                digest: replacementDigest,
+                observedOnDisk: current.digest)
+            return Outcome(
+                snippets: confirmed.snippets,
+                digest: confirmed.digest,
+                data: confirmed.data,
+                foldedInForeignWrite: foldedIn,
+                wroteWithoutLock: wroteWithoutLock,
+                attempts: attempt)
+        }
+    }
+
+    private struct RawSnapshot {
+        var data: Data
+        var digest: String
+        var fileExisted: Bool
+    }
+
+    private static func rawSnapshot(from url: URL) throws -> RawSnapshot {
+        do {
+            let data = try Data(contentsOf: url)
+            return RawSnapshot(
+                data: data,
+                digest: SnippetLibraryCodec.digest(of: data),
+                fileExisted: true)
+        } catch {
+            if (error as NSError).isFileNotFound {
+                return RawSnapshot(data: Data(), digest: "", fileExisted: false)
+            }
+            throw Failure.unreadable("the quarantined snippet library could not be read")
+        }
+    }
+
     /// Bounded so a pathological peer cannot spin us forever. Exceeding it reports
     /// `.busy`, which every caller already treats as "retry later", never as "done".
     private static let maxAttempts = 24

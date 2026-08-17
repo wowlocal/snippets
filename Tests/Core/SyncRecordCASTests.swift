@@ -79,7 +79,7 @@ struct SyncRecordVersionPersistenceTests {
         let url = dir.appendingPathComponent("base.json")
         let confirmed = envelope()
         let legacy = try JSONSerialization.data(withJSONObject: [
-            "schemaVersion": SyncBase.currentSchemaVersion,
+            "schemaVersion": 3,
             "journalEstablished": true,
             "envelopes": [
                 SyncBase.key(id): try confirmed.canonicalData().base64EncodedString(),
@@ -126,6 +126,7 @@ struct SyncRecordVersionPersistenceTests {
             let data = try JSONSerialization.data(withJSONObject: [
                 "schemaVersion": SyncBase.currentSchemaVersion,
                 "journalEstablished": true,
+                "requiresNonDestructiveLibraryMerge": false,
                 "envelopes": [key: validEnvelope],
                 "recordVersions": item.1,
             ])
@@ -514,7 +515,7 @@ struct SyncEngineRecordCASTests {
         let restarted = engine(
             transport: restartedTransport, library: library, paths: paths)
         #expect(restarted.state.isHalted)
-        restarted.clearHaltAfterUserReview()
+        restarted.performRecovery(.checkAgain)
         _ = await restarted.sync()
         #expect(restartedTransport.submittedBatches.isEmpty,
                 "restart must finish the ACK from durable base instead of resubmitting")
@@ -596,7 +597,7 @@ struct SyncEngineRecordCASTests {
             returnStoredOnFetch: false)
         let restarted = engine(transport: backend, library: library, paths: paths)
         #expect(restarted.state.isHalted)
-        restarted.clearHaltAfterUserReview()
+        restarted.performRecovery(.checkAgain)
         _ = await restarted.sync()
 
         let replayedOffer = try #require(backend.submittedBatches.last?.first)

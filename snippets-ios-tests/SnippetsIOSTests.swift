@@ -57,7 +57,7 @@ final class SnippetsIOSTests: XCTestCase {
         var store: SnippetStore? = SnippetStore(configuration: .iOS)
         XCTAssertTrue(store?.snippets.isEmpty == true)
 
-        let created = store!.addSnippet(name: "Greeting", content: "Hello", tags: ["Work"])
+        let created = try! store!.addSnippet(name: "Greeting", content: "Hello", tags: ["Work"])
         var updated = created
         updated.keyword = "hello"
         updated.content = "Hello from iPad"
@@ -74,7 +74,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testExportStructurallyExcludesSecureShells() throws {
         let store = SnippetStore(configuration: .iOS)
-        _ = store.addSnippet(name: "Ordinary", content: "visible")
+        _ = try! store.addSnippet(name: "Ordinary", content: "visible")
         let secureID = UUID()
         let secureProvider = SecureProviderStub(
             shell: Snippet(id: secureID, name: "Encrypted", keyword: "secret", content: "")
@@ -158,6 +158,42 @@ final class SnippetsIOSTests: XCTestCase {
         )
     }
 
+    func testIPadQuarantineEmptyStateExplainsRecoveryAndOffersOnlyImport() throws {
+        SnippetStorageLocations.createAllDirectories()
+        try Data("not a snippet library".utf8).write(
+            to: SnippetStorageLocations.snippetsFileURL,
+            options: .atomic)
+        let environment = AppEnvironment()
+        XCTAssertTrue(environment.store.isLibraryQuarantined)
+
+        let controller = SnippetListViewController(environment: environment)
+        controller.loadViewIfNeeded()
+        controller.reload(keepingSelection: false)
+        controller.view.layoutIfNeeded()
+
+        let title = try XCTUnwrap(
+            controller.view.descendant(
+                withAccessibilityIdentifier: "empty-library-title") as? UILabel)
+        let message = try XCTUnwrap(
+            controller.view.descendant(
+                withAccessibilityIdentifier: "empty-library-message") as? UILabel)
+        let create = try XCTUnwrap(
+            controller.view.descendant(
+                withAccessibilityIdentifier: "empty-create") as? UIButton)
+        let clipboard = try XCTUnwrap(
+            controller.view.descendant(
+                withAccessibilityIdentifier: "empty-clipboard") as? UIButton)
+        let importButton = try XCTUnwrap(
+            controller.view.descendant(
+                withAccessibilityIdentifier: "empty-import") as? UIButton)
+
+        XCTAssertEqual(title.text, "Library Recovery Required")
+        XCTAssertTrue(message.text?.contains("remains preserved") == true)
+        XCTAssertTrue(create.isHidden)
+        XCTAssertTrue(clipboard.isHidden)
+        XCTAssertFalse(importButton.isHidden)
+    }
+
     func testPhoneQueryBuildsPinnedAndSnippetSectionsWithANDTagFiltering() {
         let pinned = Snippet(
             name: "Café Reply",
@@ -204,7 +240,7 @@ final class SnippetsIOSTests: XCTestCase {
             secureStore: environment.secureStore,
             pasteboard: pasteboard
         )
-        let snippet = environment.store.addSnippet(
+        let snippet = try! environment.store.addSnippet(
             name: "Greeting",
             content: "Hello {clipboard}"
         )
@@ -213,7 +249,7 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(copied, .copied(name: "Greeting", secure: false))
         XCTAssertEqual(pasteboard.string, "Hello source")
 
-        let empty = environment.store.addSnippet(name: "Empty", content: "")
+        let empty = try! environment.store.addSnippet(name: "Empty", content: "")
         pasteboard.string = "keep me"
         let emptyResult = try await service.copy(id: empty.id)
         XCTAssertEqual(emptyResult, .empty(name: "Empty"))
@@ -271,7 +307,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testPhoneNavigationPushesTouchEditorWithContentAndDetailsModes() throws {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Phone", content: "Touch first")
+        let snippet = try! environment.store.addSnippet(name: "Phone", content: "Touch first")
         let root = PhoneRootViewController(environment: environment)
         root.loadViewIfNeeded()
         let library = try XCTUnwrap(root.viewControllers.first as? PhoneLibraryViewController)
@@ -385,10 +421,10 @@ final class SnippetsIOSTests: XCTestCase {
         addTeardownBlock { UIView.setAnimationsEnabled(true) }
 
         let environment = AppEnvironment()
-        var existing = environment.store.addSnippet(name: "Existing", content: "Existing")
+        var existing = try! environment.store.addSnippet(name: "Existing", content: "Existing")
         existing.keyword = "gr.dynamics.ui"
         environment.store.update(existing)
-        var conflict = environment.store.addSnippet(name: "Conflict", content: "Conflict")
+        var conflict = try! environment.store.addSnippet(name: "Conflict", content: "Conflict")
         conflict.keyword = "gr.dynamics.ui"
         environment.store.update(conflict)
 
@@ -562,7 +598,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testPhoneAndIPadOrdinaryEditorsRetainTextViewAccessibility() throws {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(
+        let snippet = try! environment.store.addSnippet(
             name: "Ordinary",
             content: "ORDINARY-BODY-AX-SENTINEL")
 
@@ -659,7 +695,7 @@ final class SnippetsIOSTests: XCTestCase {
     func testCopySnippetCommandCopiesSelection() {
         let pasteboard = TestSnippetPasteboard(string: nil)
         let environment = AppEnvironment(pasteboard: pasteboard)
-        let snippet = environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
+        let snippet = try! environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
         hosted.list.focusFilteredList()
 
@@ -718,7 +754,7 @@ final class SnippetsIOSTests: XCTestCase {
     func testReturnHandlerCopiesOnlyWhenSnippetListOwnsFocus() {
         let pasteboard = TestSnippetPasteboard(string: nil)
         let environment = AppEnvironment(pasteboard: pasteboard)
-        let snippet = environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
+        let snippet = try! environment.store.addSnippet(name: "Greeting", content: "Hello from iPad")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
 
         hosted.list.focusFilteredList()
@@ -759,7 +795,7 @@ final class SnippetsIOSTests: XCTestCase {
         UIView.setAnimationsEnabled(false)
         addTeardownBlock { UIView.setAnimationsEnabled(true) }
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Selected", content: "Search me")
+        let snippet = try! environment.store.addSnippet(name: "Selected", content: "Search me")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
 
         hosted.controller.hide(.primary)
@@ -775,7 +811,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testEditAndTabShortcutsFollowMacEditorFocusOrder() {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let snippet = try! environment.store.addSnippet(name: "Selected", content: "Edit me")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
         let body = hosted.editor.view.descendant(
             withAccessibilityIdentifier: "snippet-content"
@@ -850,10 +886,10 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testTabCompletesKeywordOnePartBeforeMovingFocus() throws {
         let environment = AppEnvironment()
-        var existing = environment.store.addSnippet(name: "Frontend docs", content: "Reference")
+        var existing = try! environment.store.addSnippet(name: "Frontend docs", content: "Reference")
         existing.keyword = "doc.frontend"
         environment.store.update(existing)
-        var editing = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        var editing = try! environment.store.addSnippet(name: "Selected", content: "Edit me")
         editing.keyword = "do"
         environment.store.update(editing)
 
@@ -881,7 +917,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testIPadReturnMovesBetweenSingleLineFieldsButBodyKeepsNewlines() throws {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let snippet = try! environment.store.addSnippet(name: "Selected", content: "Edit me")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
         let body = try XCTUnwrap(hosted.editor.view.descendant(
             withAccessibilityIdentifier: "snippet-content"
@@ -963,12 +999,12 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testIPadTabAcceptsTagCompletionBeforeLeavingTags() throws {
         let environment = AppEnvironment()
-        _ = environment.store.addSnippet(
+        _ = try! environment.store.addSnippet(
             name: "Existing",
             content: "Reference",
             tags: ["Work"]
         )
-        let editing = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let editing = try! environment.store.addSnippet(name: "Selected", content: "Edit me")
         let hosted = hostMainSplit(environment: environment, selecting: editing.id)
         let body = try XCTUnwrap(hosted.editor.view.descendant(
             withAccessibilityIdentifier: "snippet-content"
@@ -993,14 +1029,14 @@ final class SnippetsIOSTests: XCTestCase {
         UIView.setAnimationsEnabled(false)
         addTeardownBlock { UIView.setAnimationsEnabled(true) }
         let environment = AppEnvironment()
-        var existing = environment.store.addSnippet(
+        var existing = try! environment.store.addSnippet(
             name: "Frontend docs",
             content: "Reference",
             tags: ["Work"]
         )
         existing.keyword = "doc.frontend"
         environment.store.update(existing)
-        var editing = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        var editing = try! environment.store.addSnippet(name: "Selected", content: "Edit me")
         editing.keyword = "do"
         environment.store.update(editing)
 
@@ -1092,7 +1128,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testEscapeLeavesEveryEditorFieldForSnippetList() {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let snippet = try! environment.store.addSnippet(name: "Selected", content: "Edit me")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
         let fields = [
             hosted.editor.view.descendant(withAccessibilityIdentifier: "snippet-content"),
@@ -1116,7 +1152,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testDeleteShortcutIsTextEditingSafeAndOnlyRunsFromList() {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Delete me", content: "Still here")
+        let snippet = try! environment.store.addSnippet(name: "Delete me", content: "Still here")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
         let body = hosted.editor.view.descendant(
             withAccessibilityIdentifier: "snippet-content"
@@ -1151,8 +1187,8 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testIPadLeavingBlankDraftForListDiscardsItAndSelectsExistingSnippet() {
         let environment = AppEnvironment()
-        let existing = environment.store.addSnippet(name: "Existing", content: "Keep me")
-        let draft = environment.store.addSnippet()
+        let existing = try! environment.store.addSnippet(name: "Existing", content: "Keep me")
+        let draft = try! environment.store.addSnippet()
         let hosted = hostMainSplit(environment: environment, selecting: draft.id)
         let body = hosted.editor.view.descendant(
             withAccessibilityIdentifier: "snippet-content"
@@ -1170,8 +1206,8 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testIPadSelectionChangeKeepsDraftAfterPendingTextIsCommitted() {
         let environment = AppEnvironment()
-        let existing = environment.store.addSnippet(name: "Existing", content: "Keep me")
-        let draft = environment.store.addSnippet()
+        let existing = try! environment.store.addSnippet(name: "Existing", content: "Keep me")
+        let draft = try! environment.store.addSnippet()
         let hosted = hostMainSplit(environment: environment, selecting: draft.id)
         let body = hosted.editor.view.descendant(
             withAccessibilityIdentifier: "snippet-content"
@@ -1188,8 +1224,8 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testTappingAnotherSnippetLeavesEditorFocusInTheList() {
         let environment = AppEnvironment()
-        _ = environment.store.addSnippet(name: "First", content: "One")
-        _ = environment.store.addSnippet(name: "Second", content: "Two")
+        _ = try! environment.store.addSnippet(name: "First", content: "One")
+        _ = try! environment.store.addSnippet(name: "Second", content: "Two")
         let hosted = hostMainSplit(environment: environment)
         let tableView = hosted.list.view.descendant(
             withAccessibilityIdentifier: "snippet-list"
@@ -1213,7 +1249,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testCommandBTogglesSidebarAndMovesSidebarFocusIntoEditor() {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Selected", content: "Edit me")
+        let snippet = try! environment.store.addSnippet(name: "Selected", content: "Edit me")
         let hosted = hostMainSplit(environment: environment, selecting: snippet.id)
         hosted.list.focusSearch()
 
@@ -1258,8 +1294,8 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testControlNAndControlPOnlyNavigateWhenSnippetListOwnsFocus() {
         let environment = AppEnvironment()
-        _ = environment.store.addSnippet(name: "First", content: "One")
-        _ = environment.store.addSnippet(name: "Second", content: "Two")
+        _ = try! environment.store.addSnippet(name: "First", content: "One")
+        _ = try! environment.store.addSnippet(name: "Second", content: "Two")
         let hosted = hostMainSplit(environment: environment)
         let firstID = hosted.list.firstVisibleSnippetID!
         hosted.list.focusFilteredList()
@@ -1287,9 +1323,9 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testEscapeMovesFromSearchToFilteredListForArrowAndControlNavigation() {
         let environment = AppEnvironment()
-        _ = environment.store.addSnippet(name: "Match One", content: "One")
-        _ = environment.store.addSnippet(name: "Match Two", content: "Two")
-        _ = environment.store.addSnippet(name: "Different", content: "Three")
+        _ = try! environment.store.addSnippet(name: "Match One", content: "One")
+        _ = try! environment.store.addSnippet(name: "Match Two", content: "Two")
+        _ = try! environment.store.addSnippet(name: "Different", content: "Three")
         let hosted = hostMainSplit(environment: environment)
         let searchField = hosted.list.searchTextField
 
@@ -1357,7 +1393,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testSidebarKeepsProgrammaticSelectionVisibleAcrossReload() {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Selected", content: "Visible selection")
+        let snippet = try! environment.store.addSnippet(name: "Selected", content: "Visible selection")
         let controller = SnippetListViewController(environment: environment)
         let previousKeyWindow = currentKeyWindow()
         let window = testWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 800))
@@ -1427,7 +1463,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testIPadEditorMoreMenuContainsOnlyCurrentSnippetActions() throws {
         let environment = AppEnvironment()
-        let snippet = environment.store.addSnippet(name: "Menu", content: "Snippet actions")
+        let snippet = try! environment.store.addSnippet(name: "Menu", content: "Snippet actions")
         let editor = SnippetEditorViewController(environment: environment)
         editor.loadViewIfNeeded()
         editor.bind(to: snippet.id)
@@ -1441,7 +1477,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testIPadRowContextMenuOffersMatchingSecurityTransition() {
         let environment = AppEnvironment()
-        let ordinary = environment.store.addSnippet(name: "Ordinary", content: "Visible")
+        let ordinary = try! environment.store.addSnippet(name: "Ordinary", content: "Visible")
         let list = SnippetListViewController(environment: environment)
 
         let ordinaryTitles = list.contextMenu(for: ordinary).children

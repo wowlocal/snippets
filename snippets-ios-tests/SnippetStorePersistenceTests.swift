@@ -288,6 +288,165 @@ final class SnippetStorePersistenceTests: XCTestCase {
         XCTAssertEqual(recovered.first?.content, "recover me")
     }
 
+    func testUnreadablePrimaryIsDurablyQuarantinedBeforeItCanLookEmpty() throws {
+        try Data("{not-a-library".utf8).write(
+            to: SnippetStorageLocations.snippetsFileURL,
+            options: .atomic)
+
+        let store = makeStore(worker: SnippetPersistenceWorker())
+
+        XCTAssertTrue(store.isLibraryQuarantined)
+        XCTAssertTrue(store.snippets.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.snippetsFileURL.path))
+        let preserved = try FileManager.default.contentsOfDirectory(
+            atPath: SnippetStorageLocations.supportFolderURL.path)
+        XCTAssertEqual(
+            preserved.filter { $0.hasPrefix("snippets.json.corrupt-") }.count,
+            1)
+        guard case .loaded(let state) = SyncStateFile.load() else {
+            return XCTFail("the quarantine stop must be durable before the primary moves")
+        }
+        XCTAssertEqual(state.halt?.reason, .localLibraryQuarantined)
+        XCTAssertEqual(state.halt?.recoveryContext, .localLibraryQuarantine)
+        XCTAssertTrue(LibraryQuarantineMarker.exists(),
+                      "quarantine evidence must survive independently of state.json")
+
+        // A relaunch must not seed or persist an empty replacement while the marker is
+        // present. Check Again can clear sync's halt, but the bridge still sees this
+        // process-local quarantine until a valid primary is restored.
+        let restarted = makeStore(worker: SnippetPersistenceWorker())
+        XCTAssertTrue(restarted.isLibraryQuarantined)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.snippetsFileURL.path))
+
+        let recovered = snippet(name: "Recovered", content: "kept")
+        try seed([recovered])
+        let restored = makeStore(worker: SnippetPersistenceWorker())
+        XCTAssertTrue(restored.isLibraryQuarantined,
+                      "a readable recovery candidate still requires explicit review")
+        XCTAssertEqual(restored.snippet(id: recovered.id), recovered)
+        guard case .loaded(let stillStopped) = SyncStateFile.load() else {
+            return XCTFail("restoring bytes must not silently clear the review stop")
+        }
+        XCTAssertEqual(stillStopped.halt?.recoveryContext, .localLibraryQuarantine)
+    }
+
+    func testIndependentQuarantineMarkerFailsClosedWhenStateIsLostOrCorrupt() throws {
+        try Data("{not-a-library".utf8).write(
+            to: SnippetStorageLocations.snippetsFileURL,
+            options: .atomic)
+        _ = makeStore(worker: SnippetPersistenceWorker())
+        XCTAssertTrue(LibraryQuarantineMarker.exists())
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.snippetsFileURL.path))
+
+        try FileManager.default.removeItem(at: SnippetStorageLocations.syncStateFileURL)
+        let withoutState = SnippetStore(
+            configuration: .macOSDefault,
+            persistenceWorker: SnippetPersistenceWorker(),
+            persistDelay: 0,
+            persistenceRetryBaseDelay: 0)
+        XCTAssertTrue(withoutState.isLibraryQuarantined)
+        XCTAssertTrue(withoutState.snippets.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.snippetsFileURL.path),
+            "losing state must not seed a starter over a preserved corrupt library")
+
+        try Data("{not-state".utf8).write(
+            to: SnippetStorageLocations.syncStateFileURL,
+            options: .atomic)
+        let withCorruptState = SnippetStore(
+            configuration: .macOSDefault,
+            persistenceWorker: SnippetPersistenceWorker(),
+            persistDelay: 0,
+            persistenceRetryBaseDelay: 0)
+        XCTAssertTrue(withCorruptState.isLibraryQuarantined)
+        XCTAssertTrue(withCorruptState.snippets.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.snippetsFileURL.path))
+    }
+
+    func testQuarantineBlocksOrdinaryImportAndAllowsOnlyExplicitFullFileRecovery() throws {
+        let original = snippet(name: "Preserved", content: "original")
+        try seed([original])
+        try LibraryQuarantineMarker.write()
+        let store = makeStore(worker: SnippetPersistenceWorker())
+        XCTAssertTrue(store.isLibraryQuarantined)
+        XCTAssertEqual(store.snippet(id: original.id), original)
+
+        XCTAssertThrowsError(try store.addSnippet(name: "Blocked")) { error in
+            guard let typed = error as? SnippetStore.ImportExportError,
+                  case .libraryRecoveryRequired = typed else {
+                return XCTFail("expected the quarantine-specific recovery error")
+            }
+        }
+        var edited = original
+        edited.content = "must not land"
+        XCTAssertFalse(store.update(edited))
+        XCTAssertFalse(store.delete(snippetID: original.id))
+        XCTAssertFalse(store.togglePinned(snippetID: original.id))
+        XCTAssertFalse(store.toggleEnabled(snippetID: original.id))
+        XCTAssertNil(store.duplicate(snippetID: original.id))
+        XCTAssertFalse(store.undo())
+        XCTAssertFalse(store.redo())
+
+        let exportURL = rootURL.appendingPathComponent("blocked-export.json")
+        XCTAssertThrowsError(try store.exportSnippets(to: exportURL))
+        XCTAssertThrowsError(try store.importSharedSnippet(
+            snippet(name: "Shared", content: "blocked")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exportURL.path))
+        XCTAssertEqual(try diskLibrary(), [original])
+
+        let replacement = snippet(name: "Recovery", content: "candidate")
+        let importURL = rootURL.appendingPathComponent("recovery.json")
+        try SnippetLibraryCodec.encode([replacement]).write(to: importURL, options: .atomic)
+        XCTAssertThrowsError(try store.importSnippets(from: importURL)) { error in
+            guard let typed = error as? SnippetStore.ImportExportError,
+                  case .libraryRecoveryRequired = typed else {
+                return XCTFail("ordinary import must not imply authoritative replacement")
+            }
+        }
+        let prepared = try store.prepareImport(from: importURL)
+        XCTAssertEqual(try store.quarantinedLibraryRecoveryCandidateCount(prepared), 1)
+        XCTAssertEqual(try store.replaceQuarantinedLibrary(with: prepared), 1)
+        XCTAssertTrue(store.isLibraryQuarantined,
+                      "a full-file import installs a candidate but Check Again owns unlock")
+        XCTAssertEqual(try diskLibrary(), [replacement])
+        XCTAssertThrowsError(try store.addSnippet(name: "Still blocked"))
+        XCTAssertTrue(LibraryQuarantineMarker.exists(),
+                      "only Core may retire the marker after persisting the base fence")
+
+        XCTAssertTrue(store.adoptRecoveredLibraryIfPresent())
+        XCTAssertTrue(store.isLibraryQuarantined,
+                      "validation alone must not unlock mutations before Core's fence")
+        XCTAssertFalse(store.finalizeRecoveredLibraryReview(),
+                       "the store must reject an out-of-order finalize while marker exists")
+        try LibraryQuarantineMarker.removeDurably()
+        XCTAssertTrue(store.finalizeRecoveredLibraryReview())
+        XCTAssertNoThrow(try store.addSnippet(name: "Editable after commit"))
+    }
+
+    func testExplicitCompleteRecoveryMayAuthoritativelyRestoreAnEmptyLibrary() throws {
+        let original = snippet(name: "Delete everything", content: "old")
+        try seed([original])
+        try LibraryQuarantineMarker.write()
+        let store = makeStore(worker: SnippetPersistenceWorker())
+        XCTAssertTrue(store.isLibraryQuarantined)
+
+        let emptyURL = rootURL.appendingPathComponent("empty-complete-recovery.json")
+        try SnippetLibraryCodec.encode([]).write(to: emptyURL, options: .atomic)
+        let prepared = try store.prepareImport(from: emptyURL)
+
+        XCTAssertEqual(try store.quarantinedLibraryRecoveryCandidateCount(prepared), 0)
+        XCTAssertEqual(try store.replaceQuarantinedLibrary(with: prepared), 0)
+        XCTAssertTrue(try diskLibrary().isEmpty)
+        XCTAssertTrue(store.snippets.isEmpty)
+        XCTAssertTrue(store.isLibraryQuarantined,
+                      "an empty reviewed candidate still waits for Sync → Check Again")
+        XCTAssertTrue(LibraryQuarantineMarker.exists())
+    }
+
     private func makeStore(
         worker: SnippetPersistenceWorker,
         persistDelay: TimeInterval = 0

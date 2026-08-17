@@ -22,8 +22,8 @@ final class DeletionUndoTests: XCTestCase {
 
     func testScopedRestorePreservesInterveningMutationAndOriginalOrder() throws {
         let store = SnippetStore(configuration: .iOS)
-        let deleted = store.addSnippet(name: "Delete me", content: "Original")
-        let survivor = store.addSnippet(name: "Keep me", content: "Before")
+        let deleted = try! store.addSnippet(name: "Delete me", content: "Original")
+        let survivor = try! store.addSnippet(name: "Keep me", content: "Before")
 
         let token = try XCTUnwrap(store.deleteForUndo(snippetID: deleted.id))
 
@@ -47,8 +47,8 @@ final class DeletionUndoTests: XCTestCase {
 
     func testScopedRestoreIsOneShotAndCannotUndoAnotherAction() throws {
         let store = SnippetStore(configuration: .iOS)
-        let deleted = store.addSnippet(name: "Delete me")
-        let survivor = store.addSnippet(name: "Keep me")
+        let deleted = try! store.addSnippet(name: "Delete me")
+        let survivor = try! store.addSnippet(name: "Keep me")
         let token = try XCTUnwrap(store.deleteForUndo(snippetID: deleted.id))
 
         XCTAssertTrue(store.restoreDeletedSnippet(using: token))
@@ -61,7 +61,7 @@ final class DeletionUndoTests: XCTestCase {
 
     func testScopedRestoreDoesNotReplaceARecordRestoredByGlobalUndo() throws {
         let store = SnippetStore(configuration: .iOS)
-        let snippet = store.addSnippet(name: "Current")
+        let snippet = try! store.addSnippet(name: "Current")
         let token = try XCTUnwrap(store.deleteForUndo(snippetID: snippet.id))
 
         XCTAssertTrue(store.undo())

@@ -135,7 +135,7 @@ final class IncomingSnippetLinkCoordinator {
             // `addSnippet` has no keyword parameter. Creating it with no keyword first
             // means there is no instant in which an untrusted URL is an active trigger;
             // the follow-up update installs both the keyword and disabled flag together.
-            var created = store.addSnippet(
+            var created = try store.addSnippet(
                 name: review.incoming.name,
                 content: review.incoming.content,
                 tags: review.incoming.tags

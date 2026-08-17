@@ -87,7 +87,7 @@ func TestBatchCASPositionalOutcomesAndHistory(t *testing.T) {
 	}
 	id := uuid.New()
 	first := WireRecord{ID: id, Rev: "1-a", Blob: []byte("one")}
-	submission, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, []BatchItem{{Record: first}})
+	submission, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: first}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,14 +98,14 @@ func TestBatchCASPositionalOutcomesAndHistory(t *testing.T) {
 	wrong := "v2.this.is-not-a-valid-token-but-is-long-enough"
 	second := WireRecord{ID: id, Rev: "2-a", Blob: []byte("two")}
 	additional := WireRecord{ID: uuid.New(), Rev: "1-b", Blob: []byte("other")}
-	submission, err = store.Submit(context.Background(), owner, space.Scope.SpaceID, []BatchItem{{Record: second, ExpectedRecordVersion: &wrong}, {Record: additional}})
+	submission, err = store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: second, ExpectedRecordVersion: &wrong}, {Record: additional}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if submission.Outcomes[0].Kind != "conflict" || submission.Outcomes[1].Kind != "accepted" || !submission.Partial {
 		t.Fatalf("positional outcomes lost: %#v", submission.Outcomes)
 	}
-	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, []BatchItem{{Record: second, ExpectedRecordVersion: &version}}); err != nil {
+	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: second, ExpectedRecordVersion: &version}}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, &initial.Cursor, 50)
@@ -123,11 +123,11 @@ func TestBatchRejectsDuplicatesAndInvalidRecords(t *testing.T) {
 	space, _ := store.CreateSpace(context.Background(), owner, nil)
 	id := uuid.New()
 	item := BatchItem{Record: WireRecord{ID: id, Rev: "ok"}}
-	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, []BatchItem{item, item}); AsServiceError(err).Code != InvalidRequest {
+	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{item, item}); AsServiceError(err).Code != InvalidRequest {
 		t.Fatalf("duplicate accepted: %v", err)
 	}
 	invalid := BatchItem{Record: WireRecord{ID: uuid.New(), Rev: strings.Repeat("x", 257)}}
-	result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, []BatchItem{invalid})
+	result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{invalid})
 	if err != nil || result.Outcomes[0].Kind != "rejected" || *result.Outcomes[0].ErrorCode != InvalidRequest {
 		t.Fatalf("invalid outcome: %v %#v", err, result)
 	}
@@ -142,7 +142,7 @@ func TestSnapshotPaginationThenDelta(t *testing.T) {
 	for i, id := range ids {
 		items[i] = BatchItem{Record: WireRecord{ID: id, Rev: "1", Blob: []byte{byte(i)}}}
 	}
-	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, items); err != nil {
+	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, items); err != nil {
 		t.Fatal(err)
 	}
 	first, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, nil, 2)
@@ -160,7 +160,7 @@ func TestSnapshotPaginationThenDelta(t *testing.T) {
 		t.Fatalf("second snapshot page: %#v", second)
 	}
 	newRecord := WireRecord{ID: uuid.New(), Rev: "1", Blob: []byte("new")}
-	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, []BatchItem{{Record: newRecord}}); err != nil {
+	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: newRecord}}); err != nil {
 		t.Fatal(err)
 	}
 	delta, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, &second.Cursor, 50)
@@ -186,6 +186,37 @@ func TestRestoreInvalidatesDatasetAndFeedCursors(t *testing.T) {
 	}
 	if _, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, &fresh.Cursor, 50); AsServiceError(err).Code != CursorInvalid {
 		t.Fatalf("feed cursor result: %v", err)
+	}
+}
+
+func TestBatchRejectsStaleScopeBeforeCreatingRecords(t *testing.T) {
+	store := newTestStore(t, ProductionQuota)
+	owner := principal(1)
+	space, _ := store.CreateSpace(context.Background(), owner, nil)
+
+	if err := store.RotateDataset(space.Scope.SpaceID); err != nil {
+		t.Fatal(err)
+	}
+	staleDatasetRecord := WireRecord{ID: uuid.New(), Rev: "dataset", Blob: []byte("opaque")}
+	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: staleDatasetRecord}}); AsServiceError(err).Code != DatasetReset {
+		t.Fatalf("stale dataset scope was accepted: %v", err)
+	}
+
+	current, err := store.GetSpace(context.Background(), owner, space.Scope.SpaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RotateFeedEpoch(space.Scope.SpaceID); err != nil {
+		t.Fatal(err)
+	}
+	staleFeedRecord := WireRecord{ID: uuid.New(), Rev: "feed", Blob: []byte("opaque")}
+	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, current.Scope, []BatchItem{{Record: staleFeedRecord}}); AsServiceError(err).Code != CursorInvalid {
+		t.Fatalf("stale feed scope was accepted: %v", err)
+	}
+
+	page, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, nil, 50)
+	if err != nil || len(page.Records) != 0 {
+		t.Fatalf("stale writes mutated records: %v %#v", err, page.Records)
 	}
 }
 
@@ -275,7 +306,7 @@ func TestStorageQuotaRejectsWithoutPartialMutation(t *testing.T) {
 	store := newTestStore(t, quota)
 	owner := principal(1)
 	space, _ := store.CreateSpace(context.Background(), owner, nil)
-	result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, []BatchItem{{Record: WireRecord{ID: uuid.New(), Rev: "r", Blob: []byte("x")}}})
+	result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: WireRecord{ID: uuid.New(), Rev: "r", Blob: []byte("x")}}})
 	if err != nil || result.Outcomes[0].Kind != "rejected" || *result.Outcomes[0].ErrorCode != QuotaExceeded {
 		t.Fatalf("quota outcome: %v %#v", err, result)
 	}

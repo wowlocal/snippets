@@ -8,6 +8,14 @@ import Foundation
 /// backgrounding and termination. Everything the locked read/merge/write needs is
 /// therefore carried by value here.
 nonisolated struct SnippetPersistenceRequest: Sendable {
+    enum Disposition: Equatable, Sendable {
+        case merge
+        /// A full-file recovery candidate explicitly chosen while the primary is
+        /// quarantined. The selected file is the complete replacement, not one side
+        /// of a three-way merge with unreadable or superseded bytes.
+        case authoritativeReplacement
+    }
+
     let id: UInt64
     let stateVersion: UInt64
     let diskObservationVersion: UInt64
@@ -19,6 +27,7 @@ nonisolated struct SnippetPersistenceRequest: Sendable {
     let lockURL: URL
     let temporaryDirectory: URL
     let lockTimeout: TimeInterval
+    let disposition: Disposition
 }
 
 nonisolated struct SnippetPersistenceSuccess: Sendable {
@@ -157,34 +166,48 @@ nonisolated final class SnippetPersistenceWorker: @unchecked Sendable {
         var recreatedMissingFile = false
 
         do {
-            let outcome = try LibraryWriter.update(
-                libraryURL: request.libraryURL,
-                stateURL: request.stateURL,
-                lockURL: request.lockURL,
-                temporaryDirectory: request.temporaryDirectory,
-                lockTimeout: request.lockTimeout,
-                expectedDigest: request.expectedDigest
-            ) { onDisk in
-                guard onDisk.digest != request.expectedDigest else {
-                    pendingMerge = nil
-                    recreatedMissingFile = false
-                    return request.local
-                }
-
-                guard onDisk.fileExisted else {
-                    pendingMerge = nil
-                    recreatedMissingFile = request.expectedDigest != nil
-                    return request.local
-                }
-
-                let merged = SyncMerge.mergeLocal(
-                    base: ancestor,
-                    local: request.local,
-                    remote: onDisk.snippets
-                )
-                pendingMerge = merged
+            let outcome: LibraryWriter.Outcome
+            if request.disposition == .authoritativeReplacement {
+                pendingMerge = nil
                 recreatedMissingFile = false
-                return merged.snippets
+                outcome = try LibraryWriter.replaceQuarantinedPrimary(
+                    with: request.local,
+                    libraryURL: request.libraryURL,
+                    stateURL: request.stateURL,
+                    lockURL: request.lockURL,
+                    temporaryDirectory: request.temporaryDirectory,
+                    lockTimeout: request.lockTimeout,
+                    expectedDigest: request.expectedDigest)
+            } else {
+                outcome = try LibraryWriter.update(
+                    libraryURL: request.libraryURL,
+                    stateURL: request.stateURL,
+                    lockURL: request.lockURL,
+                    temporaryDirectory: request.temporaryDirectory,
+                    lockTimeout: request.lockTimeout,
+                    expectedDigest: request.expectedDigest
+                ) { onDisk in
+                    guard onDisk.digest != request.expectedDigest else {
+                        pendingMerge = nil
+                        recreatedMissingFile = false
+                        return request.local
+                    }
+
+                    guard onDisk.fileExisted else {
+                        pendingMerge = nil
+                        recreatedMissingFile = request.expectedDigest != nil
+                        return request.local
+                    }
+
+                    let merged = SyncMerge.mergeLocal(
+                        base: ancestor,
+                        local: request.local,
+                        remote: onDisk.snippets
+                    )
+                    pendingMerge = merged
+                    recreatedMissingFile = false
+                    return merged.snippets
+                }
             }
 
             return .success(SnippetPersistenceSuccess(
@@ -282,6 +305,11 @@ final class SnippetStore {
     }
 
     private(set) var snippets: [Snippet] = []
+    /// An unreadable primary library was preserved out of the data path. While true,
+    /// ordinary persistence and sync must not turn its apparent absence into a new
+    /// empty library. A full file import or a valid restored primary clears this
+    /// process-local flag; the durable sync halt still requires Check Again.
+    private(set) var isLibraryQuarantined = false
 
     var onChange: ((Change) -> Void)?
     weak var syncDelegate: SnippetStoreSyncDelegate?
@@ -401,6 +429,8 @@ final class SnippetStore {
         case emptyImport
         case invalidFormat
         case cannotAccessFile
+        case libraryRecoveryRequired
+        case libraryRecoveryNoLongerRequired
         case importConflicts([String])
 
         var errorDescription: String? {
@@ -411,6 +441,10 @@ final class SnippetStore {
                 return "Unsupported file format. Expected JSON exported from this app."
             case .cannotAccessFile:
                 return "Could not read or write the selected file."
+            case .libraryRecoveryRequired:
+                return "Restore or import a valid snippet library, then confirm recovery in Sync settings before making changes."
+            case .libraryRecoveryNoLongerRequired:
+                return "The library no longer needs recovery. Import the file again to merge it normally."
             case .importConflicts(let conflicts):
                 if conflicts.count == 1, let conflict = conflicts.first {
                     return "Import conflict: \(conflict)"
@@ -513,7 +547,14 @@ final class SnippetStore {
     /// one undo entry, and a second call to name the new snippet would push
     /// another, so one ⌘Z would clear the name and only a second would undo the
     /// creation the user actually asked to take back.
-    func addSnippet(name: String = "", content: String = "", tags: [String] = []) -> Snippet {
+    func addSnippet(
+        name: String = "",
+        content: String = "",
+        tags: [String] = []
+    ) throws -> Snippet {
+        guard !isLibraryQuarantined else {
+            throw ImportExportError.libraryRecoveryRequired
+        }
         pushUndo()
         let snippet = Snippet(name: name, keyword: "", content: content, tags: SnippetTagging.normalizedTags(tags))
         snippets.insert(snippet, at: 0)
@@ -552,6 +593,7 @@ final class SnippetStore {
     /// restore exactly what this removes.
     @discardableResult
     func discardBlankDraft(id: UUID) -> Bool {
+        guard !isLibraryQuarantined else { return false }
         guard let draft = blankDraft, draft.id == id else { return false }
         guard let index = snippets.firstIndex(where: { $0.id == id }),
               snippets[index].isBlankDraft else {
@@ -607,8 +649,12 @@ final class SnippetStore {
         return kept.reversed()
     }
 
-    func update(_ snippet: Snippet) {
-        guard let index = snippets.firstIndex(where: { $0.id == snippet.id }) else { return }
+    @discardableResult
+    func update(_ snippet: Snippet) -> Bool {
+        guard !isLibraryQuarantined else { return false }
+        guard let index = snippets.firstIndex(where: { $0.id == snippet.id }) else {
+            return false
+        }
         let existing = snippets[index]
 
         var updated = snippet
@@ -623,7 +669,7 @@ final class SnippetStore {
             existing.isEnabled != updated.isEnabled ||
             existing.isPinned != updated.isPinned
 
-        guard didChange else { return }
+        guard didChange else { return false }
 
         if editTransactionSnapshot == nil {
             pushUndo()
@@ -634,12 +680,17 @@ final class SnippetStore {
         updated.updatedAt = Date()
         snippets[index] = updated
         persist()
+        return true
     }
 
-    func delete(snippetID: UUID) {
+    @discardableResult
+    func delete(snippetID: UUID) -> Bool {
+        guard !isLibraryQuarantined else { return false }
+        guard snippets.contains(where: { $0.id == snippetID }) else { return false }
         pushUndo()
         snippets.removeAll { $0.id == snippetID }
         persist(immediately: true)
+        return true
     }
 
     /// Deletes one snippet and returns a one-use handle that can restore only that
@@ -651,6 +702,7 @@ final class SnippetStore {
     /// retain their existing undo/redo behaviour.
     @discardableResult
     func deleteForUndo(snippetID: UUID) -> DeletionUndoToken? {
+        guard !isLibraryQuarantined else { return nil }
         guard let originalIndex = snippets.firstIndex(where: { $0.id == snippetID }) else {
             return nil
         }
@@ -677,6 +729,7 @@ final class SnippetStore {
     /// validation or mutation, so every call after the first is a no-op.
     @discardableResult
     func restoreDeletedSnippet(using token: DeletionUndoToken) -> Bool {
+        guard !isLibraryQuarantined else { return false }
         guard let pending = consumePendingDeletionUndo(token.operationID) else {
             return false
         }
@@ -721,6 +774,7 @@ final class SnippetStore {
 
     @discardableResult
     func duplicate(snippetID: UUID) -> Snippet? {
+        guard !isLibraryQuarantined else { return nil }
         guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return nil }
         pushUndo()
 
@@ -744,20 +798,26 @@ final class SnippetStore {
         return duplicate
     }
 
-    func togglePinned(snippetID: UUID) {
-        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
+    @discardableResult
+    func togglePinned(snippetID: UUID) -> Bool {
+        guard !isLibraryQuarantined else { return false }
+        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return false }
         pushUndo()
         snippets[index].isPinned.toggle()
         snippets[index].updatedAt = Date()
         persist(immediately: true)
+        return true
     }
 
-    func toggleEnabled(snippetID: UUID) {
-        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
+    @discardableResult
+    func toggleEnabled(snippetID: UUID) -> Bool {
+        guard !isLibraryQuarantined else { return false }
+        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return false }
         pushUndo()
         snippets[index].isEnabled.toggle()
         snippets[index].updatedAt = Date()
         persist(immediately: true)
+        return true
     }
 
     func snippet(id: UUID) -> Snippet? {
@@ -801,8 +861,10 @@ final class SnippetStore {
             .map { (tag: $0.value, count: counts[$0.key] ?? 0) }
     }
 
-    func toggleTag(_ tag: String, snippetID: UUID) {
-        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return }
+    @discardableResult
+    func toggleTag(_ tag: String, snippetID: UUID) -> Bool {
+        guard !isLibraryQuarantined else { return false }
+        guard let index = snippets.firstIndex(where: { $0.id == snippetID }) else { return false }
         pushUndo()
 
         let key = SnippetTagging.filterKey(for: tag)
@@ -816,6 +878,7 @@ final class SnippetStore {
         snippets[index].tags = SnippetTagging.normalizedTags(tags)
         snippets[index].updatedAt = Date()
         persist(immediately: true)
+        return true
     }
 
     /// Everything the user should see in the list, plaintext and secure together.
@@ -865,6 +928,13 @@ final class SnippetStore {
 
     @discardableResult
     func importSnippets(from url: URL, options: ImportOptions) throws -> Int {
+        guard !isLibraryQuarantined else {
+            throw ImportExportError.libraryRecoveryRequired
+        }
+        return try importSnippets(prepareImport(from: url), options: options)
+    }
+
+    func prepareImport(from url: URL) throws -> PreparedSnippetImport {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -878,7 +948,7 @@ final class SnippetStore {
         } catch {
             throw ImportExportError.invalidFormat
         }
-        return try importSnippets(prepared, options: options)
+        return prepared
     }
 
     /// Applies JSON that was already decoded off the main actor by the iOS document
@@ -888,23 +958,54 @@ final class SnippetStore {
         _ prepared: PreparedSnippetImport,
         options: ImportOptions = ImportOptions()
     ) throws -> Int {
-        let decoded = prepared.snippets(
-            preservingExclamationPrefix: options.preserveExclamationPrefix
-        )
-        try preflightImportedSnippets(decoded)
-
-        let imported = normalizeImportedSnippets(decoded)
-        try preflightImportMerge(imported)
-
-        guard !imported.isEmpty else {
-            throw ImportExportError.emptyImport
+        guard !isLibraryQuarantined else {
+            throw ImportExportError.libraryRecoveryRequired
         }
+        return importSnippets(try preparedImport(
+            prepared,
+            options: options,
+            authoritativeRecovery: false))
+    }
 
-        return importSnippets(imported)
+    /// Validates the exact ordinary-library candidate before UI asks the user to make
+    /// it authoritative. This is intentionally separate from ordinary import: merely
+    /// choosing a partial JSON or Raycast export must never replace quarantined data.
+    func quarantinedLibraryRecoveryCandidateCount(
+        _ prepared: PreparedSnippetImport,
+        options: ImportOptions = ImportOptions()
+    ) throws -> Int {
+        guard isLibraryQuarantined else {
+            throw ImportExportError.libraryRecoveryNoLongerRequired
+        }
+        return try preparedImport(
+            prepared,
+            options: options,
+            authoritativeRecovery: true).count
+    }
+
+    @discardableResult
+    func replaceQuarantinedLibrary(
+        with prepared: PreparedSnippetImport,
+        options: ImportOptions = ImportOptions()
+    ) throws -> Int {
+        guard isLibraryQuarantined else {
+            throw ImportExportError.libraryRecoveryNoLongerRequired
+        }
+        let imported = try preparedImport(
+            prepared,
+            options: options,
+            authoritativeRecovery: true)
+        undoStack.removeAll()
+        redoStack.removeAll()
+        try installAuthoritativeRecoveryCandidate(imported)
+        return imported.count
     }
 
     @discardableResult
     func importSharedSnippet(_ snippet: Snippet) throws -> Snippet {
+        guard !isLibraryQuarantined else {
+            throw ImportExportError.libraryRecoveryRequired
+        }
         try preflightImportedSnippets([snippet])
 
         let imported = normalizeImportedSnippets([snippet])
@@ -962,6 +1063,9 @@ final class SnippetStore {
 
     @discardableResult
     func exportSnippets(to url: URL) throws -> Int {
+        guard !isLibraryQuarantined else {
+            throw ImportExportError.libraryRecoveryRequired
+        }
         do {
             let payload = SnippetCollection(snippets: snippets)
             let data = try encoder.encode(payload)
@@ -973,7 +1077,13 @@ final class SnippetStore {
     }
 
     private func load() {
+        let hasIndependentQuarantine = LibraryQuarantineMarker.exists()
         guard FileManager.default.fileExists(atPath: saveURL.path) else {
+            if hasIndependentQuarantine || hasDurableLibraryQuarantineMarker() {
+                snippets = []
+                isLibraryQuarantined = true
+                return
+            }
             // Seeding here is why the list's empty state carries no explanation
             // of how expansion works: a genuinely new user always has this
             // snippet, so that screen only ever appears to someone who deleted
@@ -988,35 +1098,157 @@ final class SnippetStore {
             let data = try Data(contentsOf: saveURL)
             snippets = try decodeImportData(data)
             rememberDiskBytes(data)
+            // A restored file is only a recovery candidate. Keep all mutation and
+            // ordinary sync paths closed until Check Again validates it and Core first
+            // persists the non-destructive merge fence in base.json.
+            isLibraryQuarantined = hasIndependentQuarantine
         } catch {
             Diagnostics.record(.storageFailure(
                 area: .library,
                 operation: .read,
                 failure: DiagnosticFailure(error),
                 attempt: nil))
-            snippets = configuration.seedsStarterSnippet ? [Snippet.starterSnippet] : []
+            quarantineUnreadableLibrary()
+        }
+    }
 
-            // Preserve the user's data: move the unreadable file aside before
-            // anything is written back to snippets.json. If the move fails,
-            // skip persisting so the original bytes are never overwritten.
-            let backupURL = saveFolderURL.appendingPathComponent(
-                "snippets.json.corrupt-\(Self.backupTimestamp())", isDirectory: false
-            )
-            do {
-                try FileManager.default.moveItem(at: saveURL, to: backupURL)
-                Diagnostics.record(.storageState(
-                    area: .library,
-                    state: .recovered,
-                    value: nil))
-            } catch {
-                Diagnostics.record(.storageFailure(
-                    area: .library,
-                    operation: .recover,
-                    failure: DiagnosticFailure(error),
-                    attempt: nil))
-                return
-            }
-            persist()
+    /// Re-reads a user-restored primary while the in-memory store is quarantined. This is
+    /// called by the sync recovery check so the user does not have to wait for a filesystem
+    /// observer debounce or relaunch before a valid replacement can be verified. It does
+    /// not release mutation access: Core must first durably publish the merge fence and
+    /// retire the independent quarantine marker.
+    @discardableResult
+    func adoptRecoveredLibraryIfPresent() -> Bool {
+        guard isLibraryQuarantined else { return true }
+        guard let data = try? Data(contentsOf: saveURL),
+              let recovered = try? decodeImportData(data) else { return false }
+        let changed = snippets != recovered
+        snippets = recovered
+        rememberDiskBytes(data)
+        undoStack.removeAll()
+        redoStack.removeAll()
+        if changed { notifyChanged(.external) }
+        return true
+    }
+
+    /// Completes an already validated recovery after Core commits its crash fence.
+    /// Refuse an out-of-order call while the filesystem marker still exists.
+    func finalizeRecoveredLibraryReview() -> Bool {
+        guard !LibraryQuarantineMarker.exists() else { return false }
+        isLibraryQuarantined = false
+        return true
+    }
+
+    /// Persists the stop before moving unreadable user data out of the primary path.
+    /// If the marker cannot be written atomically under the shared lock, the original
+    /// file stays in place and the in-memory quarantine still blocks this process.
+    private func quarantineUnreadableLibrary() {
+        snippets = []
+        isLibraryQuarantined = true
+
+        let held: FileGuard.Held
+        do {
+            held = try FileGuard.acquire(
+                at: SnippetStorageLocations.libraryLockFileURL,
+                timeout: lockTimeout)
+        } catch {
+            Diagnostics.record(.storageFailure(
+                area: .syncState,
+                operation: .lock,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
+            return
+        }
+        defer { held.release() }
+        guard !held.isUnlocked else {
+            Diagnostics.record(.storageState(
+                area: .syncState,
+                state: .degraded,
+                value: nil))
+            return
+        }
+
+        // A cooperating writer may have repaired the file while this process waited
+        // for the lock. Adopt those valid bytes instead of quarantining stale evidence.
+        if let currentData = try? Data(contentsOf: saveURL),
+           let repaired = try? decodeImportData(currentData) {
+            snippets = repaired
+            rememberDiskBytes(currentData)
+            isLibraryQuarantined = LibraryQuarantineMarker.exists()
+            return
+        }
+
+        do {
+            try LibraryQuarantineMarker.write()
+        } catch {
+            Diagnostics.record(.storageFailure(
+                area: .syncState,
+                operation: .write,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
+            return
+        }
+
+        var state: SyncState
+        switch SyncStateFile.load(
+            makeFresh: { SyncState.fresh(deviceID: deviceID, now: Date()) }
+        ) {
+        case .loaded(let loaded), .fresh(let loaded):
+            state = loaded
+        case .tooNew(let version):
+            Diagnostics.record(.storageState(
+                area: .syncState,
+                state: .versionTooNew,
+                value: version))
+            return
+        }
+        state.halt = SyncState.Halt(
+            reason: .localLibraryQuarantined,
+            detail: "the primary snippet library could not be read and was preserved; "
+                + "sync stopped before treating its records as deleted",
+            at: Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970)),
+            recoveryContext: .localLibraryQuarantine)
+        do {
+            try SyncStateFile.write(state)
+        } catch {
+            Diagnostics.record(.storageFailure(
+                area: .syncState,
+                operation: .write,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
+            return
+        }
+
+        guard FileManager.default.fileExists(atPath: saveURL.path) else { return }
+        let backupURL = saveFolderURL.appendingPathComponent(
+            "snippets.json.corrupt-\(Self.backupTimestamp())", isDirectory: false)
+        do {
+            try FileManager.default.moveItem(at: saveURL, to: backupURL)
+            Diagnostics.record(.storageState(
+                area: .library,
+                state: .recovered,
+                value: nil))
+        } catch {
+            // The durable stop is already in place. Retaining the unreadable primary is
+            // conservative and gives a later launch another chance to preserve it.
+            Diagnostics.record(.storageFailure(
+                area: .library,
+                operation: .recover,
+                failure: DiagnosticFailure(error),
+                attempt: nil))
+        }
+    }
+
+    private func hasDurableLibraryQuarantineMarker() -> Bool {
+        switch SyncStateFile.load() {
+        case .loaded(let state):
+            return state.halt?.recoveryContext == .localLibraryQuarantine
+        case .tooNew:
+            // A future state file may contain a safety marker this build cannot decode.
+            // With no primary library, seeding would be an irreversible downgrade write.
+            return true
+        case .fresh:
+            return false
         }
     }
 
@@ -1065,7 +1297,28 @@ final class SnippetStore {
         try throwImportConflictsIfNeeded(conflicts)
     }
 
-    private func preflightImportMerge(_ imported: [Snippet]) throws {
+    private func preparedImport(
+        _ prepared: PreparedSnippetImport,
+        options: ImportOptions,
+        authoritativeRecovery: Bool
+    ) throws -> [Snippet] {
+        let decoded = prepared.snippets(
+            preservingExclamationPrefix: options.preserveExclamationPrefix)
+        try preflightImportedSnippets(decoded)
+        let imported = normalizeImportedSnippets(decoded)
+        try preflightImportMerge(
+            imported,
+            includeExistingOrdinarySnippets: !authoritativeRecovery)
+        guard authoritativeRecovery || !imported.isEmpty else {
+            throw ImportExportError.emptyImport
+        }
+        return imported
+    }
+
+    private func preflightImportMerge(
+        _ imported: [Snippet],
+        includeExistingOrdinarySnippets: Bool = true
+    ) throws {
         var conflicts: [String] = []
 
         // Both stores. An import that reuses a secure record's id would replace its
@@ -1074,7 +1327,7 @@ final class SnippetStore {
         // in both cases with nothing said to the user, because this only ever looked at
         // `snippets`.
         let secureShells = secureProvider?.secureShellsForDisplay() ?? []
-        let existing = snippets + secureShells
+        let existing = (includeExistingOrdinarySnippets ? snippets : []) + secureShells
 
         for incoming in imported {
             if secureShells.contains(where: { $0.id == incoming.id }) {
@@ -1139,6 +1392,9 @@ final class SnippetStore {
     }
 
     private func persist(immediately: Bool = false, notifyChange: Bool = true) {
+        // Never create a replacement primary from the empty quarantine projection.
+        // Full-file recovery uses its own explicit authoritative writer below.
+        guard !isLibraryQuarantined else { return }
         restartEditTransactionIfNeeded()
         persistenceStateVersion &+= 1
         needsPersistence = true
@@ -1232,7 +1488,10 @@ final class SnippetStore {
         return applyPersistenceResult(result, for: request)
     }
 
-    private func makePersistenceRequest(lockTimeout: TimeInterval) -> SnippetPersistenceRequest {
+    private func makePersistenceRequest(
+        lockTimeout: TimeInterval,
+        disposition: SnippetPersistenceRequest.Disposition = .merge
+    ) -> SnippetPersistenceRequest {
         nextPersistenceRequestID &+= 1
         return SnippetPersistenceRequest(
             id: nextPersistenceRequestID,
@@ -1245,8 +1504,35 @@ final class SnippetStore {
             stateURL: SnippetStorageLocations.syncStateFileURL,
             lockURL: SnippetStorageLocations.libraryLockFileURL,
             temporaryDirectory: SnippetStorageLocations.tmpFolderURL,
-            lockTimeout: lockTimeout
+            lockTimeout: lockTimeout,
+            disposition: disposition
         )
+    }
+
+    /// Installs one complete recovery file without interpreting the quarantined primary
+    /// as a concurrent peer. The independent quarantine marker remains in force until
+    /// SyncEngine commits its non-destructive merge fence and explicitly unlocks edits.
+    private func installAuthoritativeRecoveryCandidate(_ replacement: [Snippet]) throws {
+        persistWorkItem?.cancel()
+        persistWorkItem = nil
+        _ = drainInFlightWrite(scheduleRetryOnFailure: false)
+
+        let previous = snippets
+        persistenceStateVersion &+= 1
+        snippets = replacement
+        needsPersistence = true
+        let request = makePersistenceRequest(
+            lockTimeout: lockTimeout,
+            disposition: .authoritativeReplacement)
+        let operation = persistenceWorker.submit(request)
+        let result = persistenceWorker.wait(for: operation)
+
+        guard applyPersistenceResult(result, for: request) else {
+            snippets = previous
+            needsPersistence = false
+            throw ImportExportError.cannotAccessFile
+        }
+        notifyChanged(.local)
     }
 
     /// Applies one worker result, in submission order, on MainActor.
@@ -1498,11 +1784,16 @@ final class SnippetStore {
     // MARK: - Undo / Redo
 
     func beginEditTransaction() {
+        guard !isLibraryQuarantined else { return }
         guard editTransactionSnapshot == nil else { return }
         editTransactionSnapshot = snippets
     }
 
     func commitEditTransaction() {
+        guard !isLibraryQuarantined else {
+            editTransactionSnapshot = nil
+            return
+        }
         guard let snapshot = editTransactionSnapshot else { return }
         editTransactionSnapshot = nil
 
@@ -1549,6 +1840,7 @@ final class SnippetStore {
     }
 
     func undo() -> Bool {
+        guard !isLibraryQuarantined else { return false }
         guard let snapshot = undoStack.popLast() else { return false }
         redoStack.append(snippets)
         snippets = snapshot
@@ -1557,6 +1849,7 @@ final class SnippetStore {
     }
 
     func redo() -> Bool {
+        guard !isLibraryQuarantined else { return false }
         guard let snapshot = redoStack.popLast() else { return false }
         undoStack.append(snippets)
         snippets = snapshot
@@ -1641,6 +1934,15 @@ final class SnippetStore {
                 failure: DiagnosticFailure(error),
                 attempt: nil))
             return false
+        }
+
+        if isLibraryQuarantined {
+            snippets = reloaded
+            rememberDiskBytes(data)
+            undoStack.removeAll()
+            redoStack.removeAll()
+            if notifyChange { notifyChanged(.external) }
+            return true
         }
 
         let ancestor = lastKnownDiskData.flatMap { try? SnippetLibraryCodec.decode($0) } ?? []

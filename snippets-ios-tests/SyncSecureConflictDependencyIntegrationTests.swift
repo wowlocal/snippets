@@ -171,7 +171,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
         guard case .halted(.localLibraryQuarantined, _) = restarted.state else {
             return XCTFail("restart must retain the explicit safety stop for review")
         }
-        restarted.clearHaltAfterUserReview()
+        restarted.performRecovery(.checkAgain)
         let restartedState = await restarted.sync()
 
         XCTAssertFalse(restartedState.isHalted)
@@ -2632,7 +2632,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
         guard case .halted(.accountChanged, _) = await restarted.sync() else {
             return XCTFail("old account scope must stop for explicit review")
         }
-        restarted.clearHaltAfterUserReview()
+        restarted.performRecovery(.useCurrentAccount)
         let firstOffset = harness.backend.submittedBatches.count
         var state = await restarted.sync()
         if case .waitingForVault = state {
@@ -2823,7 +2823,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
         guard case .halted(.accountChanged, _) = await engine.sync() else {
             return XCTFail("the old scope must require reviewed recovery")
         }
-        engine.clearHaltAfterUserReview()
+        engine.performRecovery(.useCurrentAccount)
 
         var state = await engine.sync()
         let firstBoundarySubmitted = try backend.submittedBatches.flatMap { batch in
@@ -2910,7 +2910,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
             return XCTFail("the old account binding must require review")
         }
         harness.fixture.session.lock()
-        harness.engine.clearHaltAfterUserReview()
+        harness.engine.performRecovery(.useCurrentAccount)
         let baseBefore = try Data(
             contentsOf: SnippetStorageLocations.syncBaseFileURL)
 
@@ -3146,7 +3146,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
         guard case .halted(.accountChanged, _) = await engine.sync() else {
             return XCTFail("the old account scope must require review before recovery")
         }
-        engine.clearHaltAfterUserReview()
+        engine.performRecovery(.useCurrentAccount)
 
         let state = await engine.sync()
 
@@ -3579,6 +3579,133 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
             "failed validation must not commit the new wire-key fingerprint")
         XCTAssertEqual(transport.localFullResyncAttempts, 0)
         XCTAssertTrue(transport.submittedBatches.isEmpty)
+    }
+
+    func testTransportRekeyWithFrozenPrerequisiteDoesNotDeleteMissingRecoveryAncestor()
+        async throws
+    {
+        let fixture = makeFixture()
+        let pending = try XCTUnwrap(fixture.secureStore.prepareVaultCreationIfNeeded())
+        let document = try fixture.secureStore.commitVaultCreation(pending)
+        _ = try await fixture.session.unlock(
+            reason: "Prepare partial-library rekey dependency fixture")
+        let keyring = try fixture.secureStore.unlockedKeyringForSync()
+        let ancestor = try secureEnvelope(
+            plaintext: Data("rekey recovery ancestor".utf8),
+            revision: 100,
+            device: Self.deviceA,
+            vaultKID: document.kid,
+            keyring: keyring)
+        let losing = try secureEnvelope(
+            plaintext: Data("frozen secure C0".utf8),
+            revision: 200,
+            device: Self.deviceA,
+            vaultKID: document.kid,
+            keyring: keyring)
+        let remoteWinner = plainEnvelope(
+            revision: 300,
+            device: Self.deviceB,
+            body: "plain source carrying secure conflict evidence")
+        let merge = try SyncMerge.mergeEnvelopeOutcome(
+            base: ancestor,
+            local: losing,
+            remote: remoteWinner)
+        let source = try XCTUnwrap(merge.survivor)
+        let variant = try XCTUnwrap(
+            SyncMerge.secureContentConflictVariants(in: source).only)
+        let frozenC0 = try XCTUnwrap(
+            fixture.bridge.prepareConflictCopyEvidence(from: [source]).only)
+
+        let beforeInstall = try fixture.bridge.currentSnapshot(agreedBase: SyncBase())
+        let installed = try fixture.bridge.applyRemote(
+            [source],
+            expectedPrimary: [
+                source.id: beforeInstall.primaryState(for: source.id),
+                variant.copyID: beforeInstall.primaryState(for: variant.copyID),
+            ],
+            heldConflictCopyIntents: [:],
+            preparedConflictCopyEvidence: [frozenC0])
+        XCTAssertTrue(installed.retryIDs.isEmpty)
+        XCTAssertNotNil(try loadedVault().record(variant.copyID))
+
+        let remoteOnlyID = UUID(
+            uuidString: "40000000-0000-4000-8000-000000000099")!
+        let remoteOnly = SyncEnvelope.plain(
+            Snippet(
+                id: remoteOnlyID,
+                name: "Remote-only recovery ancestor",
+                keyword: "remote-only-recovery",
+                content: "must return after full fetch",
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 1)),
+            hlc: HLC(wallMs: 150, counter: 0, device: Self.deviceA),
+            origin: Self.deviceA)
+        let transport = SecureDependencyTransport()
+        let syncKeys = SyncKeyStore(keychain: fixture.keychain)
+        let syncMaterial = try syncKeys.materialMintingIfNeeded()
+        let sealer = SnippetCryptoSealer(
+            keyring: try SyncKeyStore.keyring(from: syncMaterial),
+            scopeID: syncKeys.scopeID)
+        transport.seed([try WireCodec.seal(remoteOnly, using: sealer)])
+        let storedRemoteOnly = try XCTUnwrap(transport.snapshot.only)
+        var base = SyncBase(
+            cursor: transport.currentCursor,
+            cursorKind: .legacy,
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true)
+        base.recordConfirmed(
+            remoteOnly,
+            recordVersion: try XCTUnwrap(storedRemoteOnly.recordVersion))
+        var journal = SyncJournal()
+        try journal.stageConflictDependency(source: source, conflictCopies: [])
+        try journal.recordConflictCopyEvidence([frozenC0])
+        try SyncBaseFile.write(
+            base,
+            to: SnippetStorageLocations.syncBaseFileURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
+        try SyncJournalFile.write(
+            journal,
+            to: SnippetStorageLocations.syncJournalFileURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
+
+        let fingerprintKey = "SnippetsSyncWireKeyFingerprint"
+        let previousFingerprint = UserDefaults.standard.object(forKey: fingerprintKey)
+        defer {
+            if let previousFingerprint {
+                UserDefaults.standard.set(previousFingerprint, forKey: fingerprintKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: fingerprintKey)
+            }
+        }
+        UserDefaults.standard.set(
+            "stale-partial-recovery-key", forKey: fingerprintKey)
+        SyncCoordinator.runtimeEnabledOverride = true
+        let coordinator = SyncCoordinator(
+            library: fixture.bridge,
+            keys: syncKeys,
+            device: fixture.store.deviceID,
+            transportFactory: { transport })
+        defer { coordinator.stop() }
+
+        let result = await coordinator.requestSync(trigger: .manual)
+
+        guard case .completed(let state) = result else {
+            return XCTFail("the rekey recovery round did not start: \(result)")
+        }
+        XCTAssertFalse(state.isHalted)
+        let submitted = try transport.submittedBatches.flatMap { batch in
+            try batch.map { try WireCodec.open($0, using: sealer) }
+        }
+        XCTAssertFalse(submitted.contains { $0.id == remoteOnlyID && $0.deleted },
+                       "a frozen-C0 recovery pass must not infer an old-base absence")
+        guard case .loaded(let completedBase) = SyncBaseFile.load(),
+              case .loaded(let completedJournal) = SyncJournalFile.load() else {
+            return XCTFail("rekey recovery must leave readable protocol files")
+        }
+        let projected = try fixture.bridge.currentEnvelopes(
+            agreedBase: completedJournal.projectionKnowledge(over: completedBase))
+        XCTAssertEqual(projected[remoteOnlyID], remoteOnly,
+                       "the missing ancestor must return from the full remote fetch")
     }
 
     func testSecondConflictDuringFirstSourceCASCompletesNewCopyAndReleaseWithoutWedge()
@@ -4756,7 +4883,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
         async throws
     {
         try await assertUnsafeProjectionSidecarFailsClosed(
-            Data("{\"schemaVersion\":4,\"legacyPlaintext\":\"must remain untouched\"}".utf8),
+            Data("{\"schemaVersion\":\(SyncBase.currentSchemaVersion + 1),\"legacyPlaintext\":\"must remain untouched\"}".utf8),
             expectedReason: .schemaTooNew)
     }
 
@@ -5159,7 +5286,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
         _ = try await fixture.session.unlock(reason: "Promote without plaintext sidecar")
         let keyring = try fixture.secureStore.unlockedKeyringForSync()
         let secret = Data("promotion-success-secret-body-7f42".utf8)
-        let snippet = fixture.store.addSnippet(
+        let snippet = try! fixture.store.addSnippet(
             name: "Promotion privacy fixture",
             content: String(decoding: secret, as: UTF8.self))
         try fixture.store.flushPendingWritesForSync()
@@ -5202,7 +5329,7 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
         _ = try await fixture.session.unlock(reason: "Prepare failed promotion")
         let keyring = try fixture.secureStore.unlockedKeyringForSync()
         let secret = Data("failed-promotion-secret-body-a913".utf8)
-        let snippet = fixture.store.addSnippet(
+        let snippet = try! fixture.store.addSnippet(
             name: "Failed promotion privacy fixture",
             content: String(decoding: secret, as: UTF8.self))
         try fixture.store.flushPendingWritesForSync()
@@ -6502,7 +6629,8 @@ final class SyncSecureConflictDependencyIntegrationTests: XCTestCase {
             return XCTFail("fixture must stop for reviewed \(kind) reset, got \(stopped)")
         }
         XCTAssertNil(try loadedVault().record(harness.scenario.variant.copyID))
-        harness.engine.clearHaltAfterUserReview()
+        harness.engine.performRecovery(
+            kind == .account ? .useCurrentAccount : .repairCheckpoint)
         let beforeCopy = harness.backend.submittedBatches.count
 
         var recovered = await harness.engine.sync()
@@ -7429,21 +7557,46 @@ private final class SecureDependencyTransport: SyncTransport, @unchecked Sendabl
         }
     }
 
-    func resetAfterAccountReview() async throws {
-        lock.withLock {
+    func resetAfterAccountReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+        let matches = lock.withLock { () -> Bool in
             accountResetCount += 1
             checkpointIssue = nil
+            return scopeIdentity == expectedIdentity
         }
+        guard matches else { throw SyncTransportFailure.accountChanged }
     }
 
-    func resetAfterCheckpointReview() async throws {
-        lock.withLock {
+    func resetAfterCheckpointReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+        let matches = lock.withLock { () -> Bool in
             checkpointResetCount += 1
             checkpointIssue = nil
+            return scopeIdentity == expectedIdentity
         }
+        guard matches else { throw SyncTransportFailure.accountChanged }
     }
 
-    func resetForLocalFullResync() async throws {
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedIdentity == lock.withLock({ scopeIdentity }) else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
         lock.withLock {
             localFullResyncResetCount += 1
             if case .loaded(let base) = SyncBaseFile.load(

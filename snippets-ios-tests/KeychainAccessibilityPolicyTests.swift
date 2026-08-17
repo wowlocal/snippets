@@ -103,14 +103,16 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             keychainOperations: makeOperations(probe))
         let server = try XCTUnwrap(URL(string: "https://sync.example"))
         let space = UUID()
+        let serverInstanceID = UUID()
         let cloudKeys = SnippetsCloudKeyStore(
             keychain: cloudKeychain,
             coordinates: {
                 .init(
                     serverURL: server,
                     apiBaseURL: server.appending(path: "v2"),
-                    protocolMajor: 2,
-                    spaceID: space)
+                    spaceID: space,
+                    serverInstanceID: serverInstanceID,
+                    protocolMajor: 2)
             })
 
         let syncKeys = SyncKeyStore(
@@ -123,9 +125,23 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         XCTAssertTrue(probe.addedAccounts.isEmpty)
 
         let material = Data(repeating: 0x91, count: 64)
-        try cloudKeys.install(material, serverURL: server, spaceID: space)
+        try cloudKeys.install(
+            material,
+            serverURL: server,
+            spaceID: space,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: 2)
         XCTAssertEqual(try syncKeys.material(), material)
-        XCTAssertNil(try cloudKeys.material(serverURL: server, spaceID: UUID()))
+        XCTAssertNil(try cloudKeys.material(
+            serverURL: server,
+            spaceID: UUID(),
+            serverInstanceID: serverInstanceID,
+            protocolMajor: 2))
+        XCTAssertNil(try cloudKeys.material(
+            serverURL: server,
+            spaceID: space,
+            serverInstanceID: UUID(),
+            protocolMajor: 2))
         XCTAssertEqual(
             probe.accessibility(for: SnippetsCloudKeyStore.account),
             kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
@@ -152,14 +168,17 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             inMemory: true)
         let server = try XCTUnwrap(URL(string: "https://sync.example"))
         let space = UUID()
+        let serverInstanceID = UUID(
+            uuidString: "11111111-2222-4333-8444-555555555555")!
         let cloudKeys = SnippetsCloudKeyStore(
             keychain: cloudKeychain,
             coordinates: {
                 .init(
                     serverURL: server,
                     apiBaseURL: server.appending(path: "v2"),
-                    protocolMajor: 2,
-                    spaceID: space)
+                    spaceID: space,
+                    serverInstanceID: serverInstanceID,
+                    protocolMajor: 2)
             })
         let selection = SyncBackendSelectionStore(
             defaults: defaults,
@@ -170,11 +189,20 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         try selection.selectSnippetsCloud(
             serverURL: server,
             spaceID: space,
+            serverInstanceID: serverInstanceID,
             accessToken: "test-access-token")
-        try cloudKeys.install(Data(repeating: 0x81, count: 64), serverURL: server, spaceID: space)
+        try cloudKeys.install(
+            Data(repeating: 0x81, count: 64),
+            serverURL: server,
+            spaceID: space,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: 2)
         try credentials.storeItem(
             Data("saved OAuth session".utf8),
             account: SyncBackendSelectionStore.oauthSessionAccount)
+        try credentials.storeItem(
+            Data("saved replacement lineage".utf8),
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount)
         try bootstrap.storeItem(
             Data("pairing private state".utf8),
             account: SnippetsCloudAccountBootstrap.pairingAccount)
@@ -189,9 +217,15 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             bootstrapSecrets: bootstrap,
             snippetsCloudEnabled: true)
 
-        XCTAssertNil(try cloudKeys.material(serverURL: server, spaceID: space))
+        XCTAssertNil(try cloudKeys.material(
+            serverURL: server,
+            spaceID: space,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: 1))
         XCTAssertNil(try bootstrap.loadItem(account: SnippetsCloudAccountBootstrap.pairingAccount))
         XCTAssertNil(try credentials.loadItem(account: SyncBackendSelectionStore.oauthSessionAccount))
+        XCTAssertNil(try credentials.loadItem(
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount))
         XCTAssertNil(try credentials.loadItem(account: SyncBackendSelectionStore.pendingLocalEraseAccount))
         XCTAssertEqual(resumed.provider, .iCloud)
         XCTAssertNil(resumed.cloudCoordinates)
@@ -205,7 +239,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         defaults.set(
             SyncBackendSelectionStore.Provider.snippetsCloud.rawValue,
             forKey: SyncBackendSelectionStore.providerDefaultsKey)
-        defaults.set(true, forKey: SyncBackendSelectionStore.pendingSwitchDefaultsKey)
+        defaults.set(true, forKey: "SnippetsSyncProviderSwitchPending")
         let credentials = KeychainSecretStore(
             tier: .deviceOnly,
             service: "com.khm.snippets.cloud-gate-tests",
@@ -218,15 +252,50 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
 
         XCTAssertEqual(selection.availableProviders, [.iCloud])
         XCTAssertEqual(selection.provider, .iCloud)
-        XCTAssertFalse(selection.hasPendingProviderSwitch)
-        XCTAssertFalse(defaults.bool(forKey: SyncBackendSelectionStore.pendingSwitchDefaultsKey))
+        XCTAssertNil(defaults.object(forKey: "SnippetsSyncProviderSwitchPending"))
         XCTAssertThrowsError(try selection.selectSnippetsCloud(
             serverURL: XCTUnwrap(URL(string: "https://sync.example")),
             spaceID: UUID(),
+            serverInstanceID: UUID(),
             accessToken: "test-access-token")) { error in
             guard let failure = error as? SyncBackendSelectionStore.Failure,
                   case .featureDisabled = failure else {
                 return XCTFail("Expected the dark-launch gate, got \(type(of: error))")
+            }
+        }
+    }
+
+    func testPendingLogoutQueryFailureClosesTransportInsteadOfLookingAbsent() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.marker-query.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let probe = KeychainOperationsProbe()
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.marker-query-tests",
+            itemAccessibility: .afterFirstUnlock,
+            keychainOperations: makeOperations(probe))
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "still-readable-legacy-token")
+
+        probe.failCopies(
+            account: SyncBackendSelectionStore.pendingLocalEraseAccount,
+            status: errSecNotAvailable)
+
+        XCTAssertTrue(
+            selection.hasPendingLocalErase,
+            "a non-throwing presence hint must fail closed when Keychain is unavailable")
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .credentialStoreUnavailable = failure else {
+                return XCTFail("Expected unavailable credential store, got \(error)")
             }
         }
     }
@@ -249,30 +318,279 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         XCTAssertEqual(plan.refreshTokens, [oldRefresh, newRefresh])
     }
 
-    func testConcurrentCloudRefreshesShareOneCredentialRotation() async throws {
-        let gate = SnippetsCloudRefreshSingleFlight()
-        var rotations = 0
-        let first = Task { @MainActor in
-            try await gate.run {
-                rotations += 1
-                try await Task.sleep(for: .milliseconds(100))
-                return "one-rotated-access-token"
+    func testInteractiveSessionReplacementLogoutRevokesBothTokenFamilies() {
+        let plan = SnippetsCloudCredentialRevocationPlan(
+            sessionAccessToken: "session-b-access",
+            sessionRefreshToken: "session-b-refresh",
+            journalAccessTokens: ["session-a-access", "session-b-access"],
+            journalRefreshTokens: ["session-a-refresh", "session-b-refresh"])
+
+        // The same plan drives both the resource-session DELETE loop and provider
+        // RFC 7009 loops; keeping both generations here proves neither is forgotten.
+        XCTAssertEqual(plan.accessTokens, ["session-a-access", "session-b-access"])
+        XCTAssertEqual(plan.refreshTokens, ["session-a-refresh", "session-b-refresh"])
+    }
+
+    func testReplacementCleanupRevokesAbandonedNewRefreshBeforeSessionCommit() throws {
+        let plan = try XCTUnwrap(SnippetsCloudCredentialReplacementCleanupPlan(
+            currentAccessToken: "access-a",
+            currentRefreshToken: "refresh-a",
+            journalAccessTokens: ["access-a", "access-b"],
+            journalRefreshTokens: ["refresh-a", "refresh-b"],
+            replacementKind: .refreshRotation))
+
+        XCTAssertEqual(plan.accessTokensToRetire, ["access-b"])
+        XCTAssertEqual(plan.abandonedRefreshTokens, ["refresh-b"])
+    }
+
+    func testReplacementCleanupNeverRevokesOldRefreshAfterSessionCommit() throws {
+        let plan = try XCTUnwrap(SnippetsCloudCredentialReplacementCleanupPlan(
+            currentAccessToken: "access-b",
+            currentRefreshToken: "refresh-b",
+            journalAccessTokens: ["access-a", "access-b"],
+            journalRefreshTokens: ["refresh-a", "refresh-b"],
+            replacementKind: .refreshRotation))
+
+        XCTAssertEqual(plan.accessTokensToRetire, ["access-a"])
+        XCTAssertTrue(
+            plan.abandonedRefreshTokens.isEmpty,
+            "provider family revocation must not kill the committed B generation")
+    }
+
+    func testInteractiveReplacementRevokesOldGrantAfterNewSessionCommit() throws {
+        let plan = try XCTUnwrap(SnippetsCloudCredentialReplacementCleanupPlan(
+            currentAccessToken: "access-b",
+            currentRefreshToken: "refresh-b",
+            journalAccessTokens: ["access-a", "access-b"],
+            journalRefreshTokens: ["refresh-a", "refresh-b"],
+            replacementKind: .interactiveReplacement))
+
+        XCTAssertEqual(plan.accessTokensToRetire, ["access-a"])
+        XCTAssertEqual(plan.abandonedRefreshTokens, ["refresh-a"])
+    }
+
+    func testUnreadableInteractiveReplacementOffersCrashSafeLocalReset() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.replacement-fence.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let server = try XCTUnwrap(URL(string: "https://sync.example"))
+        let spaceID = UUID()
+        let serverInstanceID = UUID()
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.replacement-fence-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let cloudCredentialStore = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.replacement-cloud-key-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let bootstrap = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.replacement-bootstrap-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let cloudKeys = SnippetsCloudKeyStore(
+            keychain: cloudCredentialStore,
+            coordinates: {
+                .init(
+                    serverURL: server,
+                    spaceID: spaceID,
+                    serverInstanceID: serverInstanceID,
+                    protocolMajor: 1)
+            })
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            cloudKeys: cloudKeys,
+            bootstrapSecrets: bootstrap,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: server,
+            spaceID: spaceID,
+            serverInstanceID: serverInstanceID,
+            accessToken: "test-access-token")
+        try credentials.storeItem(
+            Data("durable replacement lineage".utf8),
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount)
+
+        XCTAssertTrue(selection.hasPendingCredentialCleanup)
+        XCTAssertTrue(selection.cloudCredentialResetRequired)
+        XCTAssertFalse(selection.hasCloudSession)
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .credentialResetRequired = failure else {
+                return XCTFail("Expected reset fence, got \(error)")
             }
         }
-        while !gate.isActive { await Task.yield() }
+
+        try selection.resetUnreadableCloudCredentialsLocally(
+            bootstrapSecrets: bootstrap)
+
+        XCTAssertFalse(selection.hasPendingCredentialCleanup)
+        XCTAssertFalse(selection.cloudCredentialResetRequired)
+        XCTAssertNil(try credentials.loadItem(
+            account: SyncBackendSelectionStore.pendingLocalEraseAccount))
+        XCTAssertNil(selection.cloudCoordinates)
+        XCTAssertEqual(selection.provider, .iCloud)
+    }
+
+    func testReadableInteractiveReplacementRemainsARetryableCleanupFence() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.readable-replacement.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.readable-replacement-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "test-access-token")
+        let journal: [String: Any] = [
+            "schemaVersion": 1,
+            "serverURL": "https://sync.example",
+            "issuer": "https://identity.example",
+            "resource": "https://sync.example",
+            "revocationEndpoint": "https://identity.example/revoke",
+            "clientID": "snippets-native",
+            "accessTokens": ["old-access-token"],
+            "refreshTokens": ["old-refresh-token"],
+        ]
+        try credentials.storeItem(
+            JSONSerialization.data(withJSONObject: journal, options: [.sortedKeys]),
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount)
+
+        XCTAssertTrue(selection.hasPendingCredentialCleanup)
+        XCTAssertFalse(selection.cloudCredentialResetRequired)
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .credentialCleanupRequired = failure else {
+                return XCTFail("Expected cleanup fence, got \(error)")
+            }
+        }
+    }
+
+    func testUnreadablePrimaryOAuthSessionRequiresExplicitReset() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.primary-session-reset.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.primary-session-reset-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "test-access-token")
+        try credentials.storeItem(
+            Data("unreadable primary session".utf8),
+            account: SyncBackendSelectionStore.oauthSessionAccount)
+
+        XCTAssertTrue(selection.cloudCredentialResetRequired)
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .credentialResetRequired = failure else {
+                return XCTFail("Expected reset fence, got \(error)")
+            }
+        }
+    }
+
+    func testUnreadableRevocationJournalRequiresExplicitReset() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.revocation-reset.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.revocation-reset-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "test-access-token")
+        try credentials.storeItem(
+            Data("unreadable revocation lineage".utf8),
+            account: SyncBackendSelectionStore.oauthRevocationAccount)
+
+        XCTAssertTrue(selection.cloudCredentialResetRequired)
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .credentialResetRequired = failure else {
+                return XCTFail("Expected reset fence, got \(error)")
+            }
+        }
+    }
+
+    func testCredentialMutationGateSerializesAcrossAwaitedOperations() async throws {
+        let gate = SnippetsCloudCredentialMutationGate()
+        var events: [String] = []
+        let first = Task { @MainActor in
+            try await gate.run {
+                events.append("first-start")
+                try await Task.sleep(for: .milliseconds(100))
+                events.append("first-end")
+                return "first"
+            }
+        }
+        while events.isEmpty { await Task.yield() }
         let second = Task { @MainActor in
             try await gate.run {
-                rotations += 1
-                return "unexpected-second-token"
+                events.append("second")
+                return "second"
             }
         }
 
         let firstValue = try await first.value
         let secondValue = try await second.value
-        let values = [firstValue, secondValue]
-        XCTAssertEqual(values, ["one-rotated-access-token", "one-rotated-access-token"])
-        XCTAssertEqual(rotations, 1)
-        XCTAssertFalse(gate.isActive)
+        XCTAssertEqual([firstValue, secondValue], ["first", "second"])
+        XCTAssertEqual(events, ["first-start", "first-end", "second"])
+    }
+
+    func testCancelledCredentialMutationWaiterNeverRuns() async throws {
+        let gate = SnippetsCloudCredentialMutationGate()
+        var events: [String] = []
+        let first = Task { @MainActor in
+            try await gate.run {
+                events.append("first-start")
+                try await Task.sleep(for: .milliseconds(100))
+                events.append("first-end")
+            }
+        }
+        while events.isEmpty { await Task.yield() }
+        let cancelled = Task { @MainActor in
+            try await gate.run {
+                events.append("cancelled-operation-ran")
+            }
+        }
+        cancelled.cancel()
+
+        do {
+            try await cancelled.value
+            XCTFail("A cancelled gate waiter must not acquire credential authority")
+        } catch is CancellationError {
+            // Expected: cancellation removes and resumes the queued continuation.
+        }
+        try await first.value
+        XCTAssertEqual(events, ["first-start", "first-end"])
     }
 
     func testRecoveryPresentationAuthorityIsSingleUseAndRelocksAcrossProcesses() {
@@ -336,6 +654,7 @@ private nonisolated final class KeychainOperationsProbe: @unchecked Sendable {
     private var addedAccountsStorage: [String] = []
     private var accessibilityUpdatesStorage: [String] = []
     private var copyAttemptsStorage = 0
+    private var copyFailuresByAccount: [String: OSStatus] = [:]
 
     var addedAccounts: [String] { lock.withLock { addedAccountsStorage } }
     var accessibilityUpdates: [String] {
@@ -353,6 +672,10 @@ private nonisolated final class KeychainOperationsProbe: @unchecked Sendable {
         lock.withLock { items[account]?.accessibility }
     }
 
+    func failCopies(account: String, status: OSStatus) {
+        lock.withLock { copyFailuresByAccount[account] = status }
+    }
+
     func copyMatching(
         _ rawQuery: CFDictionary,
         _ result: UnsafeMutablePointer<CFTypeRef?>?
@@ -363,6 +686,7 @@ private nonisolated final class KeychainOperationsProbe: @unchecked Sendable {
         }
         return lock.withLock {
             copyAttemptsStorage += 1
+            if let failure = copyFailuresByAccount[account] { return failure }
             guard let item = items[account] else { return errSecItemNotFound }
 
             let wantsAttributes = query[kSecReturnAttributes as String] as? Bool == true

@@ -312,12 +312,21 @@ final class KeychainSecretStore {
     }
 
     /// Whether an item exists, without reading its bytes. The legacy-tier fallback keeps
-    /// an entitlement upgrade from making an existing vault look keyless.
+    /// an entitlement upgrade from making an existing vault look keyless. A query
+    /// failure is deliberately treated as present: Boolean presentation callers must
+    /// never turn a locked/unavailable Keychain into authority to enter a data plane or
+    /// overwrite recovery state. Mutation boundaries use the throwing load API.
     func hasItem(account: String) -> Bool {
         if let inMemoryItems { return inMemoryItems[account] != nil }
-        if contains(baseQuery(account: account)) { return true }
-        if case .synchronizable = tier { return contains(deviceOnlyQuery(account: account)) }
-        return false
+        do {
+            if try itemExists(baseQuery(account: account)) { return true }
+            if case .synchronizable = tier {
+                return try itemExists(deviceOnlyQuery(account: account))
+            }
+            return false
+        } catch {
+            return true
+        }
     }
 
     /// Removes an item from every tier it may be in.
@@ -495,10 +504,6 @@ final class KeychainSecretStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-    }
-
-    private func contains(_ base: [String: Any]) -> Bool {
-        (try? itemExists(base)) == true
     }
 
     private func itemExists(_ base: [String: Any]) throws -> Bool {

@@ -141,9 +141,7 @@ final class SnippetsCloudAccountBootstrap {
                 qrPayload: try invitation.qrPayload(),
                 confirmationCode: invitation.confirmationCode)
         }
-        if try selection.cloudKeys.material(
-            serverURL: coordinates.serverURL,
-            spaceID: coordinates.spaceID) != nil {
+        if try installedMaterial(for: coordinates) != nil {
             return .ready
         }
         return .needsTrustedDeviceOrRecovery
@@ -176,19 +174,29 @@ final class SnippetsCloudAccountBootstrap {
         strong: Bool = false,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> State {
+        let previousCoordinates = selection.cloudCoordinates
         try await selection.signIn(
             serverURL: serverURL,
             requiresStrongAuthentication: strong,
             presentationContext: presentationContext)
+        if let previousCoordinates,
+           let currentCoordinates = selection.cloudCoordinates,
+           currentCoordinates != previousCoordinates {
+            // Pending approvals and recovery replacements were prepared for the old
+            // deployment/account. Never replay them merely because OAuth succeeded at
+            // the same URL; ordinary sync now owns the explicit account review.
+            try discardBootstrapIntentAfterScopeChange()
+        }
+        if try await syncCheckpointRequiresReviewBeforeBootstrap() {
+            try discardBootstrapIntentAfterScopeChange()
+        }
         return try await finishPostAuthorization()
     }
 
     @discardableResult
     func beginPairing() async throws -> State {
         let (coordinates, client) = try client()
-        guard try selection.cloudKeys.material(
-            serverURL: coordinates.serverURL,
-            spaceID: coordinates.spaceID) == nil else {
+        guard try installedMaterial(for: coordinates) == nil else {
             throw Failure.invalidState
         }
         let draft = LibraryKeyBootstrap.PairingDraft()
@@ -273,9 +281,7 @@ final class SnippetsCloudAccountBootstrap {
         let (coordinates, client) = try client()
         guard invitation.serverURL == coordinates.serverURL,
               invitation.spaceID == coordinates.spaceID,
-              try selection.cloudKeys.material(
-                serverURL: coordinates.serverURL,
-                spaceID: coordinates.spaceID) != nil else {
+              try installedMaterial(for: coordinates) != nil else {
             throw Failure.accountMismatch
         }
         let pairing = try await mapService {
@@ -328,9 +334,9 @@ final class SnippetsCloudAccountBootstrap {
     @discardableResult
     func prepareRecoveryReplacement() async throws -> State {
         let (coordinates, client) = try client()
-        guard let material = try selection.cloudKeys.material(
-            serverURL: coordinates.serverURL,
-            spaceID: coordinates.spaceID) else { throw Failure.invalidState }
+        guard let material = try installedMaterial(for: coordinates) else {
+            throw Failure.invalidState
+        }
         let remote = try await mapService { try await client.recoveryState() }
         let recovery = try LibraryKeyBootstrap.createRecoveryEnvelope(
             for: LibraryKeyBootstrap.PortableKeyBundle(material: material),
@@ -348,14 +354,21 @@ final class SnippetsCloudAccountBootstrap {
 
     func acknowledgeRecoveryKitSaved() throws {
         recoveryPresentationGate.reset()
-        try secrets.deleteItem(account: Self.recoveryPresentationAccount)
         // If the app was interrupted between persisting the presentation and removing
-        // the upload journal, acknowledging the saved kit completes that same journal.
+        // the upload journal, finish durable provider activation before consuming the
+        // journal or presentation. Every crash point remains idempotently resumable.
+        if try pendingRecovery() != nil {
+            guard case .ready = try stateIgnoringRecoveryPresentation() else {
+                throw Failure.invalidState
+            }
+            selection.activateSnippetsCloud()
+        }
         try secrets.deleteItem(account: Self.pendingRecoveryAccount)
+        try secrets.deleteItem(account: Self.recoveryPresentationAccount)
     }
 
     func signOutThisDevice() async throws {
-        if selection.hasPendingLocalErase {
+        if try selection.pendingLocalEraseExists() {
             try selection.resumePendingLocalErase(bootstrapSecrets: secrets)
             return
         }
@@ -366,6 +379,11 @@ final class SnippetsCloudAccountBootstrap {
         try selection.forgetSnippetsCloudLocally(bootstrapSecrets: secrets)
     }
 
+    func resetUnreadableCredentialsOnThisDevice() throws {
+        try selection.resetUnreadableCloudCredentialsLocally(
+            bootstrapSecrets: secrets)
+    }
+
     private func finishPostAuthorization() async throws -> State {
         let (coordinates, client) = try client()
         if let raw = try secrets.loadItem(account: Self.approvalAccount),
@@ -373,9 +391,9 @@ final class SnippetsCloudAccountBootstrap {
             let invitation = try LibraryKeyBootstrap.PairingInvitation(qrPayload: payload)
             guard invitation.serverURL == coordinates.serverURL,
                   invitation.spaceID == coordinates.spaceID,
-                  let material = try selection.cloudKeys.material(
-                    serverURL: coordinates.serverURL,
-                    spaceID: coordinates.spaceID) else { throw Failure.accountMismatch }
+                  let material = try installedMaterial(for: coordinates) else {
+                throw Failure.accountMismatch
+            }
             let serverPairing = try await mapService {
                 try await client.pairing(
                     invitation.pairingID,
@@ -416,9 +434,7 @@ final class SnippetsCloudAccountBootstrap {
             return try await uploadPendingRecovery(pending, coordinates: coordinates, client: client)
         }
 
-        if try selection.cloudKeys.material(
-            serverURL: coordinates.serverURL,
-            spaceID: coordinates.spaceID) != nil {
+        if try installedMaterial(for: coordinates) != nil {
             selection.activateSnippetsCloud()
             return .ready
         }
@@ -487,13 +503,17 @@ final class SnippetsCloudAccountBootstrap {
             try selection.cloudKeys.install(
                 material,
                 serverURL: coordinates.serverURL,
-                spaceID: coordinates.spaceID)
+                spaceID: coordinates.spaceID,
+                serverInstanceID: try requiredServerInstanceID(in: coordinates),
+                protocolMajor: try requiredProtocolMajor(in: coordinates))
         }
         try secrets.storeItem(
             Data(pending.kitPayload.utf8),
             account: Self.recoveryPresentationAccount)
-        try secrets.deleteItem(account: Self.pendingRecoveryAccount)
         selection.activateSnippetsCloud()
+        // Last write: until activation is durable this journal makes restart/ack retry
+        // the exact committed envelope and installed root rather than losing the handoff.
+        try secrets.deleteItem(account: Self.pendingRecoveryAccount)
         return .recoveryKitReady(
             qrPayload: pending.kitPayload,
             longCode: kit.longCode)
@@ -506,8 +526,34 @@ final class SnippetsCloudAccountBootstrap {
         try selection.cloudKeys.install(
             bundle.material,
             serverURL: coordinates.serverURL,
-            spaceID: coordinates.spaceID)
+            spaceID: coordinates.spaceID,
+            serverInstanceID: try requiredServerInstanceID(in: coordinates),
+            protocolMajor: try requiredProtocolMajor(in: coordinates))
         selection.activateSnippetsCloud()
+    }
+
+    private func installedMaterial(
+        for coordinates: SyncBackendSelectionStore.CloudCoordinates
+    ) throws -> Data? {
+        try selection.cloudKeys.material(
+            serverURL: coordinates.serverURL,
+            spaceID: coordinates.spaceID,
+            serverInstanceID: try requiredServerInstanceID(in: coordinates),
+            protocolMajor: try requiredProtocolMajor(in: coordinates))
+    }
+
+    private func requiredServerInstanceID(
+        in coordinates: SyncBackendSelectionStore.CloudCoordinates
+    ) throws -> UUID {
+        guard let value = coordinates.serverInstanceID else { throw Failure.invalidState }
+        return value
+    }
+
+    private func requiredProtocolMajor(
+        in coordinates: SyncBackendSelectionStore.CloudCoordinates
+    ) throws -> Int {
+        guard coordinates.protocolMajor == 2 else { throw Failure.invalidState }
+        return 2
     }
 
     private func client() throws -> (
@@ -515,10 +561,15 @@ final class SnippetsCloudAccountBootstrap {
         SnippetsCloudBootstrapClient
     ) {
         guard let coordinates = selection.cloudCoordinates,
+              coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2"),
+              let serverInstanceID = coordinates.serverInstanceID,
+              let protocolMajor = coordinates.protocolMajor,
               selection.hasCloudSession else { throw Failure.invalidState }
         let client = try SnippetsCloudBootstrapClient(
             baseURL: coordinates.serverURL,
             spaceID: coordinates.spaceID,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: protocolMajor,
             accessToken: { [selection] in
                 try await selection.freshCloudAccessToken()
             })
@@ -544,6 +595,87 @@ final class SnippetsCloudAccountBootstrap {
             throw Failure.invalidState
         }
         return value
+    }
+
+    private func stateIgnoringRecoveryPresentation() throws -> State {
+        guard selection.hasCloudSession, let coordinates = selection.cloudCoordinates,
+              try installedMaterial(for: coordinates) != nil else {
+            return .needsTrustedDeviceOrRecovery
+        }
+        return .ready
+    }
+
+    private func discardBootstrapIntentAfterScopeChange() throws {
+        recoveryPresentationGate.reset()
+        for account in Self.bootstrapSecretAccounts {
+            try secrets.deleteItem(account: account)
+        }
+    }
+
+    /// Detects whether previously prepared bootstrap authority belongs to a different
+    /// or unreadable protocol state. The caller discards those one-shot intents, then
+    /// continues clean onboarding: an empty new cloud may safely get a new encrypted
+    /// root, while existing remote data still requires pairing or recovery. Record sync
+    /// independently retains its explicit account/dataset review before uploading data.
+    private func syncCheckpointRequiresReviewBeforeBootstrap() async throws -> Bool {
+        let journalOutcome = SyncJournalFile.load()
+        let stateFileExists = FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncStateFileURL.path)
+        switch SyncStateFile.load() {
+        case .tooNew:
+            return true
+        case .fresh where stateFileExists:
+            return true
+        case .loaded(let state) where state.halt != nil:
+            return true
+        case .loaded, .fresh:
+            break
+        }
+
+        let base: SyncBase
+        switch SyncBaseFile.load() {
+        case .missing:
+            if case .missing = journalOutcome { return false }
+            return true
+        case .loaded(let loaded):
+            base = loaded
+        case .tooNew, .unreadable:
+            return true
+        }
+        switch journalOutcome {
+        case .tooNew, .unreadable:
+            return true
+        case .missing where base.journalEstablished:
+            return true
+        case .missing, .loaded:
+            break
+        }
+        let meaningful = !base.envelopes.isEmpty
+            || !base.recordVersions.isEmpty
+            || base.cursor != nil
+            || base.journalEstablished
+            || base.accountIdentity != nil
+            || base.datasetIdentity != nil
+        guard meaningful else { return false }
+
+        let (coordinates, client) = try client()
+        guard let serverInstanceID = coordinates.serverInstanceID,
+              let protocolMajor = coordinates.protocolMajor else { return true }
+        let remote = try await mapService { try await client.recoveryState() }
+        let account = SnippetsCloudTransport.accountIdentity(
+            baseURL: coordinates.serverURL,
+            protocolMajor: protocolMajor,
+            serverInstanceID: serverInstanceID,
+            spaceID: coordinates.spaceID,
+            scopeBinding: remote.scope.scopeBinding)
+        let dataset = SnippetsCloudTransport.datasetIdentity(
+            baseURL: coordinates.serverURL,
+            protocolMajor: protocolMajor,
+            serverInstanceID: serverInstanceID,
+            spaceID: coordinates.spaceID,
+            scopeBinding: remote.scope.scopeBinding,
+            datasetGeneration: remote.scope.datasetGeneration)
+        return base.accountIdentity != account || base.datasetIdentity != dataset
     }
 
     private func storePendingRecovery(_ value: PendingRecovery) throws {

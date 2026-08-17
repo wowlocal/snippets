@@ -208,7 +208,13 @@ extension ViewController {
         let message: String
         let actions: Set<ListEmptyStateAction>
 
-        if store.snippets.isEmpty {
+        if store.isLibraryQuarantined {
+            iconName = "exclamationmark.shield"
+            message = "Library recovery required.\nYour snippets remain preserved. "
+                + "Import a complete Snippets JSON export, then open Sync Settings "
+                + "and choose Check Again."
+            actions = [.importSnippets]
+        } else if store.snippets.isEmpty {
             // No teaching sentence here, because this screen cannot be a first
             // run: `SnippetStore.load()` seeds the starter snippet when there is
             // no file, so an empty library only happens to someone who deleted

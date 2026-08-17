@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import XCTest
 @testable import Snippets
 
@@ -64,6 +65,115 @@ final class SyncLifecycleTests: XCTestCase {
 
         XCTAssertEqual(disposition, .notStarted(.off))
         XCTAssertNil(environment.syncCoordinator.engine)
+    }
+
+    func testLocalLibraryReviewWorksWhileSyncIsOffWithoutInitializingSync() throws {
+        SnippetStorageLocations.createAllDirectories()
+        try Data("{not-a-library".utf8).write(
+            to: SnippetStorageLocations.snippetsFileURL,
+            options: .atomic)
+        let store = SnippetStore(
+            configuration: .iOS,
+            persistenceWorker: SnippetPersistenceWorker(),
+            persistDelay: 0,
+            persistenceRetryBaseDelay: 0)
+        XCTAssertTrue(store.isLibraryQuarantined)
+        XCTAssertTrue(LibraryQuarantineMarker.exists())
+
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.local-recovery-tests.\(UUID().uuidString.lowercased())",
+            inMemory: true)
+        let session = VaultSession(keychain: keychain)
+        let secureStore = SecureSnippetStore(
+            session: session,
+            keychain: keychain,
+            deviceID: store.deviceID)
+        let library = SnippetLibraryBridge(store: store, secureStore: secureStore)
+        var transportFactoryCalls = 0
+        let coordinator = SyncCoordinator(
+            library: library,
+            keys: SyncKeyStore(keychain: keychain),
+            device: store.deviceID,
+            transportFactory: {
+                transportFactoryCalls += 1
+                return SyncLifecycleTransport()
+            })
+
+        XCTAssertFalse(SyncCoordinator.isEnabled)
+        XCTAssertNil(coordinator.engine)
+        XCTAssertEqual(coordinator.recoveryAction, .checkAgain)
+        guard case .halted(.localLibraryQuarantined, _) = coordinator.state else {
+            return XCTFail("local recovery must remain visible while cloud sync is off")
+        }
+
+        let recovered = Snippet(
+            name: "Recovered",
+            keyword: "recovered",
+            content: "kept",
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000))
+        let importURL = rootURL.appendingPathComponent("recovered-library.json")
+        try SnippetLibraryCodec.encode([recovered]).write(to: importURL, options: .atomic)
+        let prepared = try store.prepareImport(from: importURL)
+        XCTAssertEqual(try store.quarantinedLibraryRecoveryCandidateCount(prepared), 1)
+        XCTAssertEqual(try store.replaceQuarantinedLibrary(with: prepared), 1)
+
+        coordinator.performRecovery(.checkAgain)
+
+        XCTAssertNil(coordinator.engine)
+        XCTAssertNil(coordinator.recoveryAction)
+        XCTAssertEqual(coordinator.state, .disabled)
+        XCTAssertEqual(transportFactoryCalls, 0)
+        XCTAssertFalse(LibraryQuarantineMarker.exists())
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+        guard case .loaded(let reviewedState) = SyncStateFile.load() else {
+            return XCTFail("review must durably clear the local-library halt")
+        }
+        XCTAssertNil(reviewedState.halt)
+        XCTAssertNoThrow(try store.addSnippet(name: "Editable after review"))
+    }
+
+    func testBridgeProjectsAReviewedCandidateWithoutUnlockingItBeforeTheFence() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let recovered = Snippet(
+            name: "Recovered",
+            keyword: "recovered",
+            content: "kept",
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000))
+        try SnippetLibraryCodec.encode([recovered]).write(
+            to: SnippetStorageLocations.snippetsFileURL,
+            options: .atomic)
+        try LibraryQuarantineMarker.write()
+        let store = SnippetStore(
+            configuration: .iOS,
+            persistenceWorker: SnippetPersistenceWorker(),
+            persistDelay: 0,
+            persistenceRetryBaseDelay: 0)
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.bridge-recovery-tests.\(UUID().uuidString.lowercased())",
+            inMemory: true)
+        let secureStore = SecureSnippetStore(
+            session: VaultSession(keychain: keychain),
+            keychain: keychain,
+            deviceID: store.deviceID)
+        let bridge = SnippetLibraryBridge(store: store, secureStore: secureStore)
+
+        let projected = try bridge.reviewRecoveredLibrary(agreedBase: SyncBase())
+
+        XCTAssertNotNil(projected[recovered.id])
+        XCTAssertTrue(store.isLibraryQuarantined)
+        XCTAssertThrowsError(try store.addSnippet(name: "Still fenced"))
+        XCTAssertThrowsError(try bridge.finalizeRecoveredLibraryReview(),
+                             "finalize must follow marker retirement")
+        try LibraryQuarantineMarker.removeDurably()
+        XCTAssertNoThrow(try bridge.finalizeRecoveredLibraryReview())
+        XCTAssertNoThrow(try store.addSnippet(name: "Editable after fence"))
     }
 
     func testAppEnvironmentStartIsIdempotentAndPublishesInitialLibraryOnce() {
@@ -204,6 +314,7 @@ final class SyncLifecycleTests: XCTestCase {
             .idle(lastSync: now),
             .syncing,
             .needsAuthentication("review"),
+            .needsAttention("repair backend"),
             .waitingForVault("unlock"),
             .halted(.accountChanged, detail: "review"),
             .disabled,
@@ -263,12 +374,44 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertEqual(publishedChange?.source, .remoteSync)
         XCTAssertEqual(publishedChange?.changedIDs, [changedID])
 
-        _ = environment.store.addSnippet(name: "From CLI", content: "one")
-        _ = environment.store.addSnippet(name: "From CLI", content: "two")
+        _ = try! environment.store.addSnippet(name: "From CLI", content: "one")
+        _ = try! environment.store.addSnippet(name: "From CLI", content: "two")
         XCTAssertTrue(environment.syncCoordinator.hasPendingLibraryChangeSync)
 
         environment.syncCoordinator.stop()
         XCTAssertFalse(environment.syncCoordinator.hasPendingLibraryChangeSync)
+    }
+
+    func testManualSyncBypassesBackoffWhileAutomaticRequestWaits() async {
+        SnippetStorageLocations.createAllDirectories()
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let transport = SyncLifecycleTransport()
+        let coordinator = makeCoordinatorForRekeyTests(transport: transport)
+        defer { coordinator.setEnabled(false) }
+
+        let initial = await coordinator.requestSync(trigger: .manual)
+        guard case .completed(.offline) = initial else {
+            return XCTFail("the inert transport should establish backoff, got \(initial)")
+        }
+        XCTAssertEqual(transport.fetchAttempts, 1)
+
+        let automatic = await coordinator.requestSync(trigger: .poll)
+        guard case .completed(.offline) = automatic else {
+            return XCTFail("an automatic request should remain in backoff, got \(automatic)")
+        }
+        XCTAssertEqual(
+            transport.fetchAttempts,
+            1,
+            "automatic scheduling must honor the current retry deadline")
+
+        let manual = await coordinator.requestSync(trigger: .manual)
+        guard case .completed(.offline) = manual else {
+            return XCTFail("the forced attempt should establish new backoff, got \(manual)")
+        }
+        XCTAssertEqual(
+            transport.fetchAttempts,
+            2,
+            "Sync Now must make exactly one immediate attempt despite existing backoff")
     }
 
     func testTransportRekeyRefusesMissingBaseWhenJournalExists() throws {
@@ -292,7 +435,11 @@ final class SyncLifecycleTests: XCTestCase {
             XCTFail("missing base plus existing journal must be a start prerequisite failure")
             return
         }
-        XCTAssertTrue(detail.contains("confirmed sync state is missing"))
+        XCTAssertEqual(detail, "The local sync checkpoint could not be read.")
+        XCTAssertEqual(coordinator.recoveryAction, .repairCheckpoint)
+        guard case .halted(.checkpointUnreadable, _) = coordinator.state else {
+            return XCTFail("the closed startup copy must retain the typed repair state")
+        }
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: SnippetStorageLocations.syncBaseFileURL.path))
         XCTAssertEqual(
@@ -324,7 +471,11 @@ final class SyncLifecycleTests: XCTestCase {
             XCTFail("marked base plus missing journal must prevent rekey startup")
             return
         }
-        XCTAssertTrue(detail.contains("pending sync state is missing"))
+        XCTAssertEqual(detail, "The local sync checkpoint could not be read.")
+        XCTAssertEqual(coordinator.recoveryAction, .repairCheckpoint)
+        guard case .halted(.checkpointUnreadable, _) = coordinator.state else {
+            return XCTFail("the closed startup copy must retain the typed repair state")
+        }
         XCTAssertEqual(
             try Data(contentsOf: SnippetStorageLocations.syncBaseFileURL),
             baseBytes)
@@ -333,6 +484,401 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertEqual(
             UserDefaults.standard.string(forKey: Self.wireKeyFingerprintDefaultsKey),
             "stale-fingerprint")
+    }
+
+    func testStartupCheckpointRepairIsCrashSafeAtEveryCommitBoundary() throws {
+        enum Damage: CaseIterable {
+            case missingJournal
+            case unreadableJournal
+            case unreadableBase
+        }
+        struct InjectedCrash: Error {}
+
+        let localID = UUID(uuidString: "31000000-0000-4000-8000-000000000001")!
+        let oldRemoteID = UUID(uuidString: "31000000-0000-4000-8000-000000000002")!
+        func envelope(_ id: UUID, name: String) -> SyncEnvelope {
+            SyncEnvelope(
+                id: id,
+                hlc: HLC(wallMs: 1_000, counter: 0, device: "aaaaaaa1"),
+                origin: "aaaaaaa1",
+                secure: false,
+                deleted: false,
+                fields: SyncEnvelope.Fields(
+                    name: name,
+                    keyword: name,
+                    content: Data(name.utf8),
+                    tags: [],
+                    isEnabled: true,
+                    isPinned: false,
+                    createdAt: Date(timeIntervalSince1970: 1),
+                    updatedAt: Date(timeIntervalSince1970: 2)))
+        }
+        let local = envelope(localID, name: "local-survivor")
+        let oldRemote = envelope(oldRemoteID, name: "old-remote-ancestor")
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+
+        for damage in Damage.allCases {
+            for boundary in SyncCoordinator.ProtocolRepairBoundary.allCases {
+                try? FileManager.default.removeItem(at: SnippetStorageLocations.syncFolderURL)
+                SnippetStorageLocations.createAllDirectories()
+                var oldBase = SyncBase(journalEstablished: true)
+                oldBase.record(local)
+                oldBase.record(oldRemote)
+                switch damage {
+                case .missingJournal:
+                    try SyncBaseFile.write(oldBase)
+                case .unreadableJournal:
+                    try SyncBaseFile.write(oldBase)
+                    try Data("{not-a-journal".utf8).write(
+                        to: SnippetStorageLocations.syncJournalFileURL,
+                        options: .atomic)
+                case .unreadableBase:
+                    try Data("{not-a-base".utf8).write(
+                        to: SnippetStorageLocations.syncBaseFileURL,
+                        options: .atomic)
+                    try SyncJournalFile.write(SyncJournal())
+                }
+
+                let keychain = KeychainSecretStore(
+                    tier: .deviceOnly,
+                    service: "com.khm.snippets.protocol-repair-tests."
+                        + UUID().uuidString.lowercased(),
+                    inMemory: true)
+                var transportFactoryCalls = 0
+                let coordinator = SyncCoordinator(
+                    library: SnapshotSyncLibrary([local]),
+                    keys: SyncKeyStore(keychain: keychain),
+                    device: "aaaaaaa1",
+                    transportFactory: {
+                        transportFactoryCalls += 1
+                        return SyncLifecycleTransport()
+                    })
+                coordinator.start()
+                XCTAssertEqual(coordinator.recoveryAction, .repairCheckpoint)
+                XCTAssertEqual(transportFactoryCalls, 0)
+                coordinator.protocolRepairBoundaryHook = { observed in
+                    if observed == boundary { throw InjectedCrash() }
+                }
+
+                coordinator.performRecovery(.repairCheckpoint)
+
+                guard case .loaded(let fencedBase) = SyncBaseFile.load() else {
+                    return XCTFail("Repair must commit a readable base before \(boundary)")
+                }
+                XCTAssertTrue(
+                    fencedBase.requiresNonDestructiveLibraryMerge,
+                    "\(damage) at \(boundary) must never expose the old deletion ancestor")
+                XCTAssertEqual(fencedBase.envelope(localID), local)
+                XCTAssertEqual(
+                    fencedBase.nonDestructiveMergeMode,
+                    .reviewedLocalSnapshot,
+                    "Repair must retain the exact reviewed primary as a deletion witness")
+                XCTAssertEqual(coordinator.recoveryAction, .repairCheckpoint)
+                XCTAssertEqual(transportFactoryCalls, 0)
+
+                if boundary == .journalCommitted {
+                    guard case .loaded(let repairedJournal) = SyncJournalFile.load() else {
+                        return XCTFail("the second boundary must leave a readable journal")
+                    }
+                    XCTAssertEqual(repairedJournal.entry(localID)?.desired, local)
+                    let reconstructedOldDeletion = repairedJournal.entries.values.contains {
+                        $0.desired.id == oldRemoteID && $0.desired.deleted
+                    }
+                    switch damage {
+                    case .missingJournal, .unreadableJournal:
+                        XCTAssertTrue(
+                            reconstructedOldDeletion,
+                            "a readable confirmed ancestor proves the pre-Repair deletion")
+                    case .unreadableBase:
+                        XCTAssertFalse(
+                            reconstructedOldDeletion,
+                            "an unreadable ancestor cannot authorize a deletion")
+                    }
+                }
+                coordinator.stop()
+            }
+        }
+    }
+
+    func testRepeatedRepairAfterBaseCommitKeepsFirstReviewAndPostReviewDelete() async throws {
+        struct InjectedCrash: Error {}
+
+        SnippetStorageLocations.createAllDirectories()
+        let id = UUID(uuidString: "31000000-0000-4000-8000-000000000003")!
+        let local = SyncEnvelope(
+            id: id,
+            hlc: HLC(wallMs: 1_000, counter: 0, device: "aaaaaaa1"),
+            origin: "aaaaaaa1",
+            secure: false,
+            deleted: false,
+            fields: SyncEnvelope.Fields(
+                name: "delete after interrupted Repair",
+                keyword: "repair-crash-delete",
+                content: Data("must stay deleted".utf8),
+                tags: [],
+                isEnabled: true,
+                isPinned: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)))
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.repeated-repair-tests."
+                + UUID().uuidString.lowercased(),
+            inMemory: true)
+        let keys = SyncKeyStore(keychain: keychain)
+        let material = try keys.materialMintingIfNeeded()
+        let sealer = SnippetCryptoSealer(
+            keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
+        let transport = RekeyRecoveryTransport(records: [
+            try WireCodec.seal(local, using: sealer),
+        ])
+        let remote = try XCTUnwrap(transport.snapshot.first)
+        var damagedBase = SyncBase(
+            cursor: transport.currentCursor,
+            journalEstablished: true)
+        damagedBase.recordConfirmed(
+            local, recordVersion: remote.recordVersion)
+        try SyncBaseFile.write(damagedBase)
+        // Missing journal is the damage which makes Repair available.
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        UserDefaults.standard.set(
+            SHA256.hash(data: material).prefix(8)
+                .map { String(format: "%02x", $0) }.joined(),
+            forKey: Self.wireKeyFingerprintDefaultsKey)
+        let library = SnapshotSyncLibrary([local])
+
+        let interrupted = SyncCoordinator(
+            library: library,
+            keys: keys,
+            device: "aaaaaaa1",
+            transportFactory: { transport })
+        interrupted.start()
+        XCTAssertEqual(interrupted.recoveryAction, .repairCheckpoint)
+        interrupted.protocolRepairBoundaryHook = { boundary in
+            if boundary == .baseCommitted { throw InjectedCrash() }
+        }
+        interrupted.performRecovery(.repairCheckpoint)
+        guard case .loaded(let firstReview) = SyncBaseFile.load(),
+              let firstReviewID = firstReview.nonDestructiveReviewID else {
+            return XCTFail("the interrupted Repair must leave its first review fence")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+        interrupted.stop()
+
+        // Checkpoint damage freezes sync, not the primary editor. This deletion is
+        // intentionally after R1 and before the user retries Repair.
+        library.remove(id)
+        let retry = SyncCoordinator(
+            library: library,
+            keys: keys,
+            device: "aaaaaaa1",
+            transportFactory: { transport })
+        defer { retry.setEnabled(false) }
+        retry.start()
+        XCTAssertEqual(retry.recoveryAction, .repairCheckpoint)
+        retry.performRecovery(.repairCheckpoint)
+
+        guard case .loaded(let retriedBase) = SyncBaseFile.load(),
+              case .loaded(let retriedJournal) = SyncJournalFile.load() else {
+            return XCTFail("the repeated Repair must commit a readable protocol pair")
+        }
+        XCTAssertEqual(retriedBase.nonDestructiveReviewID, firstReviewID)
+        XCTAssertTrue(retriedJournal.entry(id)?.desired.deleted == true,
+                      "the deletion after R1 must become durable outbound intent")
+
+        _ = await retry.requestSync(trigger: .manual)
+        let didSubmit = await eventually { !transport.submittedBatches.isEmpty }
+        XCTAssertTrue(didSubmit)
+        let submitted = try transport.submittedBatches.flatMap { batch in
+            try batch.map { try WireCodec.open($0, using: sealer) }
+        }
+        XCTAssertTrue(submitted.contains { $0.id == id && $0.deleted })
+        XCTAssertNil(library.envelope(id),
+                     "the old remote live row must not resurrect after full recovery")
+    }
+
+    func testStartupCheckpointRepairPreservesDeletionBeforeItsFirstRound() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        let id = UUID(uuidString: "31111111-1111-4111-8111-111111111111")!
+        let local = SyncEnvelope(
+            id: id,
+            hlc: HLC(wallMs: 1_000, counter: 0, device: "aaaaaaa1"),
+            origin: "aaaaaaa1",
+            secure: false,
+            deleted: false,
+            fields: SyncEnvelope.Fields(
+                name: "delete after repair",
+                keyword: "delete-after-repair",
+                content: Data("must stay deleted".utf8),
+                tags: [],
+                isEnabled: true,
+                isPinned: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)))
+        var damagedPairBase = SyncBase(journalEstablished: true)
+        damagedPairBase.record(local)
+        try SyncBaseFile.write(damagedPairBase)
+
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.protocol-repair-delete-tests."
+                + UUID().uuidString.lowercased(),
+            inMemory: true)
+        let keys = SyncKeyStore(keychain: keychain)
+        let material = try keys.materialMintingIfNeeded()
+        UserDefaults.standard.set(
+            SHA256.hash(data: material).prefix(8)
+                .map { String(format: "%02x", $0) }.joined(),
+            forKey: Self.wireKeyFingerprintDefaultsKey)
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let library = SnapshotSyncLibrary([local])
+        let transport = SyncLifecycleTransport()
+        let coordinator = SyncCoordinator(
+            library: library,
+            keys: keys,
+            device: "aaaaaaa1",
+            transportFactory: { transport })
+        defer { coordinator.setEnabled(false) }
+
+        coordinator.start()
+        XCTAssertEqual(coordinator.recoveryAction, .repairCheckpoint)
+        coordinator.performRecovery(.repairCheckpoint)
+        // `start()` queues its first round on MainActor. This mutation is deliberately
+        // made before yielding, which is the smallest Repair -> edit race window.
+        library.remove(id)
+
+        let submittedDeletion = await eventually {
+            transport.submitAttempts > 0 || transport.fetchAttempts > 0
+        }
+        XCTAssertTrue(submittedDeletion)
+        XCTAssertEqual(transport.submitAttempts, 1)
+        guard case .loaded(let journal) = SyncJournalFile.load() else {
+            return XCTFail("the post-Repair deletion must be durable")
+        }
+        XCTAssertTrue(journal.entry(id)?.desired.deleted == true)
+    }
+
+    func testCheckpointRepairReconstructsDeletionAlreadyPresentAtReview() throws {
+        SnippetStorageLocations.createAllDirectories()
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let id = UUID(uuidString: "31111111-1111-4111-8111-111111111112")!
+        let confirmed = SyncEnvelope(
+            id: id,
+            hlc: HLC(wallMs: 1_000, counter: 0, device: "aaaaaaa1"),
+            origin: "aaaaaaa1",
+            secure: false,
+            deleted: false,
+            fields: SyncEnvelope.Fields(
+                name: "deleted before Repair",
+                keyword: "deleted-before-repair",
+                content: Data("must remain deleted".utf8),
+                tags: [],
+                isEnabled: true,
+                isPinned: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)))
+        try SyncBaseFile.write(SyncBase(
+            envelopes: [SyncBase.key(id): confirmed],
+            journalEstablished: true))
+
+        let coordinator = SyncCoordinator(
+            library: SnapshotSyncLibrary([]),
+            keys: SyncKeyStore(keychain: KeychainSecretStore(
+                tier: .deviceOnly,
+                service: "com.khm.snippets.pre-repair-delete-tests."
+                    + UUID().uuidString.lowercased(),
+                inMemory: true)),
+            device: "aaaaaaa1",
+            transportFactory: { SyncLifecycleTransport() })
+        defer { coordinator.stop() }
+
+        coordinator.start()
+        XCTAssertEqual(coordinator.recoveryAction, .repairCheckpoint)
+        coordinator.performRecovery(.repairCheckpoint)
+
+        guard case .loaded(let repairedBase) = SyncBaseFile.load(),
+              case .loaded(let repairedJournal) = SyncJournalFile.load(),
+              let entry = repairedJournal.entry(id) else {
+            return XCTFail("Repair must durably reconstruct the reviewed deletion")
+        }
+        XCTAssertEqual(repairedBase.preRecoveryConfirmedEnvelopes?[SyncBase.key(id)], confirmed)
+        XCTAssertTrue(entry.desired.deleted)
+        XCTAssertTrue(entry.reviewedLocalSnapshotKnown)
+        XCTAssertNil(entry.reviewedLocalAncestor)
+        XCTAssertEqual(entry.preReviewMergeAncestor, confirmed)
+    }
+
+    func testDeletionDuringAwaitedRecoveryResetUsesDurableExistenceFence() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        let id = UUID(uuidString: "31222222-2222-4222-8222-222222222222")!
+        let local = SyncEnvelope(
+            id: id,
+            hlc: HLC(wallMs: 1_000, counter: 0, device: "aaaaaaa1"),
+            origin: "aaaaaaa1",
+            secure: false,
+            deleted: false,
+            fields: SyncEnvelope.Fields(
+                name: "delete during reset",
+                keyword: "delete-during-reset",
+                content: Data("must stay deleted".utf8),
+                tags: [],
+                isEnabled: true,
+                isPinned: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)))
+        let recoveryBase = SyncBase(
+            envelopes: [SyncBase.key(id): local],
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true,
+            nonDestructiveMergeMode: .reviewedLocalSnapshot)
+        try SyncBaseFile.write(recoveryBase)
+        try SyncJournalFile.write(SyncJournal())
+
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.async-recovery-delete-tests."
+                + UUID().uuidString.lowercased(),
+            inMemory: true)
+        let keys = SyncKeyStore(keychain: keychain)
+        let material = try keys.materialMintingIfNeeded()
+        UserDefaults.standard.set(
+            SHA256.hash(data: material).prefix(8)
+                .map { String(format: "%02x", $0) }.joined(),
+            forKey: Self.wireKeyFingerprintDefaultsKey)
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let library = SnapshotSyncLibrary([local])
+        let transport = SyncLifecycleTransport(suspendsLocalFullResync: true)
+        let coordinator = SyncCoordinator(
+            library: library,
+            keys: keys,
+            device: "aaaaaaa1",
+            transportFactory: { transport })
+        defer {
+            transport.releaseLocalFullResync()
+            coordinator.setEnabled(false)
+        }
+
+        coordinator.start()
+        let resetStarted = await eventually { transport.localFullResyncIsInFlight }
+        XCTAssertTrue(resetStarted)
+        guard case .loaded(let beforeAwait) = SyncJournalFile.load() else {
+            return XCTFail("the recovery journal must precede the awaited reset")
+        }
+        XCTAssertTrue(beforeAwait.entry(id)?.reviewedLocalExistence == true)
+
+        library.remove(id)
+        transport.releaseLocalFullResync()
+
+        let resumedAfterReset = await eventually {
+            transport.submitAttempts > 0 || transport.fetchAttempts > 0
+        }
+        XCTAssertTrue(resumedAfterReset)
+        XCTAssertEqual(transport.submitAttempts, 1)
+        guard case .loaded(let afterAwait) = SyncJournalFile.load() else {
+            return XCTFail("the deletion observed after reset must be durable")
+        }
+        XCTAssertTrue(afterAwait.entry(id)?.desired.deleted == true)
     }
 
     func testFreshTransportRekeyDoesNotManufactureProtocolFiles() {
@@ -393,10 +939,12 @@ final class SyncLifecycleTests: XCTestCase {
         let ordinaryVersion = SyncRecordVersion(Data("ordinary-system-fields".utf8))
         let secureVersion = SyncRecordVersion(Data("secure-system-fields".utf8))
         let accountIdentity = SyncAccountIdentity(Data(repeating: 0x56, count: 32))
+        let datasetIdentity = SyncDatasetIdentity(Data(repeating: 0x57, count: 32))
         var confirmed = SyncBase(
             cursor: SyncCursor("rekey-cursor"),
             journalEstablished: true,
-            accountIdentity: accountIdentity)
+            accountIdentity: accountIdentity,
+            datasetIdentity: datasetIdentity)
         confirmed.recordConfirmed(ordinary, recordVersion: ordinaryVersion)
         confirmed.recordConfirmed(secure, recordVersion: secureVersion)
         try SyncBaseFile.write(confirmed)
@@ -404,7 +952,9 @@ final class SyncLifecycleTests: XCTestCase {
         UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
         UserDefaults.standard.set(
             "stale-fingerprint", forKey: Self.wireKeyFingerprintDefaultsKey)
-        let transport = SyncLifecycleTransport(accountIdentity: accountIdentity)
+        let transport = SyncLifecycleTransport(
+            accountIdentity: accountIdentity,
+            datasetIdentity: datasetIdentity)
         let coordinator = makeCoordinatorForRekeyTests(
             transport: transport,
             liveEnvelopes: [ordinary, secure])
@@ -426,6 +976,8 @@ final class SyncLifecycleTests: XCTestCase {
                      "K1 scheduler progress cannot be used in the fresh K2 epoch")
         XCTAssertEqual(reset.accountIdentity, accountIdentity,
                        "transport rekey must not detach CloudKit ancestry from its account")
+        XCTAssertEqual(reset.datasetIdentity, datasetIdentity,
+                       "transport rekey must retain the exact remote dataset fence")
         XCTAssertEqual(reset.recordVersion(ordinaryID), ordinaryVersion)
         XCTAssertEqual(reset.recordVersion(secureID), secureVersion)
 
@@ -438,6 +990,82 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertEqual(journal.entry(secureID)?.offered?.recordVersion, secureVersion)
         XCTAssertEqual(transport.localFullResyncAttempts, 1)
         XCTAssertGreaterThanOrEqual(transport.submitAttempts, 1)
+    }
+
+    func testTransportRekeyDuringPartialLibraryRecoveryNeverInventsRemoteDeletes() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        let aID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let bID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+        func envelope(_ id: UUID, name: String) -> SyncEnvelope {
+            SyncEnvelope(
+                id: id,
+                hlc: HLC(wallMs: 1_000, counter: 0, device: "aaaaaaa1"),
+                origin: "aaaaaaa1",
+                secure: false,
+                deleted: false,
+                fields: SyncEnvelope.Fields(
+                    name: name,
+                    keyword: name,
+                    content: Data(name.utf8),
+                    tags: [],
+                    isEnabled: true,
+                    isPinned: false,
+                    createdAt: Date(timeIntervalSince1970: 1),
+                    updatedAt: Date(timeIntervalSince1970: 2)))
+        }
+        let a = envelope(aID, name: "restored-a")
+        let b = envelope(bID, name: "remote-only-b")
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.partial-rekey-tests.\(UUID().uuidString.lowercased())",
+            inMemory: true)
+        let keys = SyncKeyStore(keychain: keychain)
+        let material = try keys.materialMintingIfNeeded()
+        let sealer = SnippetCryptoSealer(
+            keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
+        let transport = RekeyRecoveryTransport(records: [
+            try WireCodec.seal(a, using: sealer),
+            try WireCodec.seal(b, using: sealer),
+        ])
+        var confirmed = SyncBase(
+            cursor: transport.currentCursor,
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true)
+        for record in transport.snapshot {
+            confirmed.recordConfirmed(
+                try WireCodec.open(record, using: sealer),
+                recordVersion: record.recordVersion)
+        }
+        try SyncBaseFile.write(confirmed)
+        try SyncJournalFile.write(SyncJournal())
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        UserDefaults.standard.set(
+            "fingerprint-for-losing-key", forKey: Self.wireKeyFingerprintDefaultsKey)
+        let library = SnapshotSyncLibrary([a])
+        let coordinator = SyncCoordinator(
+            library: library,
+            keys: keys,
+            device: "aaaaaaa1",
+            transportFactory: { transport })
+        defer { coordinator.setEnabled(false) }
+
+        let result = await coordinator.requestSync(trigger: .manual)
+
+        guard case .completed(let finalState) = result else {
+            return XCTFail("recovery round did not start: \(result)")
+        }
+        XCTAssertFalse(finalState.isHalted)
+        XCTAssertEqual(library.envelope(bID), b,
+                       "the old-base absence must be restored by the full fetch")
+        let submitted = try transport.submittedBatches.flatMap { batch in
+            try batch.map { try WireCodec.open($0, using: sealer) }
+        }
+        XCTAssertFalse(submitted.contains { $0.id == bID && $0.deleted },
+                       "wire-key convergence must not turn a partial restore into deletes")
+        guard case .loaded(let completed) = SyncBaseFile.load() else {
+            return XCTFail("recovery must leave a readable base")
+        }
+        XCTAssertFalse(completed.requiresNonDestructiveLibraryMerge)
     }
 
     func testWireKeyConvergenceResetsTransportInboxBeforeOldCiphertextCanReplay() async throws {
@@ -687,6 +1315,107 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertTrue(coordinatorDrained)
     }
 
+    func testCloudMutationWaitsForShutdownAndBlocksReplacementUntilItCompletes() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        UserDefaults.standard.removeObject(forKey: Self.wireKeyFingerprintDefaultsKey)
+        let account = SyncAccountIdentity(Data(repeating: 0xD6, count: 32))
+        let probe = RapidReenableCloudKitLifecycleProbe(accountIdentity: account)
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.cloud-mutation-tests.\(UUID().uuidString.lowercased())",
+            inMemory: true)
+        let coordinator = SyncCoordinator(
+            library: EmptySyncLibrary(),
+            keys: SyncKeyStore(keychain: keychain),
+            device: "aaaaaaa1",
+            transportFactory: { probe.makeTransport() })
+        var mutationEntered = false
+        var releaseMutation: CheckedContinuation<Void, Never>?
+        defer {
+            releaseMutation?.resume()
+            probe.releaseAllFetches()
+            coordinator.setEnabled(false)
+            probe.forceRetireAllEngines()
+        }
+
+        coordinator.setEnabled(true)
+        let firstFetchStarted = await eventually { probe.firstFetchIsInFlight }
+        XCTAssertTrue(firstFetchStarted)
+
+        let mutation = Task { @MainActor in
+            try await coordinator.withQuiescedCloudTransport {
+                mutationEntered = true
+                await withCheckedContinuation { releaseMutation = $0 }
+            }
+        }
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(mutationEntered)
+        XCTAssertEqual(probe.transportCount, 1)
+
+        probe.firstTransport?.releaseFetch()
+        let didEnterMutation = await eventually { mutationEntered }
+        XCTAssertTrue(didEnterMutation)
+        XCTAssertTrue(probe.firstShutdownCompleted)
+        XCTAssertEqual(probe.transportCount, 1)
+        XCTAssertEqual(
+            coordinator.syncNow(trigger: .manual),
+            .notStarted(.cannotStart("Cloud account maintenance is in progress.")))
+        coordinator.libraryDidChange(.local)
+        XCTAssertFalse(coordinator.hasPendingLibraryChangeSync)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(
+            probe.transportCount,
+            1,
+            "the replacement must not be constructed while credentials/root state mutate")
+
+        releaseMutation?.resume()
+        releaseMutation = nil
+        try await mutation.value
+        let replacementStarted = await eventually { probe.transportCount == 2 }
+        XCTAssertTrue(replacementStarted)
+        XCTAssertEqual(probe.maximumLiveEngineCount, 1)
+    }
+
+    func testUnreadableSyncKeyOffersCheckAgainAndStartsAfterExternalRepair() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        UserDefaults.standard.removeObject(forKey: Self.wireKeyFingerprintDefaultsKey)
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let keychain = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.sync-key-check-again-tests."
+                + UUID().uuidString.lowercased(),
+            inMemory: true)
+        try keychain.storeItem(Data("malformed sync key".utf8), account: SyncKeyStore.account)
+        let transport = SyncLifecycleTransport()
+        var factoryCalls = 0
+        let coordinator = SyncCoordinator(
+            library: EmptySyncLibrary(),
+            keys: SyncKeyStore(keychain: keychain),
+            device: "aaaaaaa1",
+            transportFactory: {
+                factoryCalls += 1
+                return transport
+            })
+        defer { coordinator.setEnabled(false) }
+
+        coordinator.start()
+        XCTAssertEqual(coordinator.recoveryAction, .checkAgain)
+        XCTAssertEqual(factoryCalls, 0)
+        XCTAssertFalse(coordinator.canRequestManualSync)
+        guard case .needsAttention("sync_key_unreadable") = coordinator.state else {
+            return XCTFail("the malformed key needs an actionable, non-generic stop")
+        }
+
+        try keychain.storeItem(Data(repeating: 0xA7, count: 64), account: SyncKeyStore.account)
+        coordinator.performRecovery(.checkAgain)
+
+        let repairedStart = await eventually {
+            factoryCalls == 1 && coordinator.engine != nil
+        }
+        XCTAssertTrue(repairedStart)
+        XCTAssertNil(coordinator.recoveryAction)
+    }
+
     private func makeCoordinatorForRekeyTests(
         transport: SyncLifecycleTransport = SyncLifecycleTransport(),
         liveEnvelopes: [SyncEnvelope] = []
@@ -740,6 +1469,91 @@ private final class SnapshotSyncLibrary: SyncLibraryAccess {
     }
 
     func liveIDs() -> Set<UUID> { Set(envelopes.keys) }
+
+    func envelope(_ id: UUID) -> SyncEnvelope? { envelopes[id] }
+
+    func remove(_ id: UUID) { envelopes[id] = nil }
+}
+
+/// A tiny stateful backend for the app-target rekey integration test. The package-only
+/// `InMemoryTransport` is deliberately not linked into either product target, so this
+/// fixture models just the one contract the test needs: a local scheduler reset makes
+/// the next fetch an authoritative full snapshot even when push-first ordering has
+/// already returned a newer cursor.
+private nonisolated final class RekeyRecoveryTransport: SyncTransport, @unchecked Sendable {
+    let identifier = "rekey-recovery-test"
+    let supportsPush = true
+    let pollInterval: TimeInterval = 3_600
+    let events = AsyncStream<SyncTransportEvent> { _ in }
+
+    private let lock = NSLock()
+    private var recordsByID: [UUID: WireRecord]
+    private var sequence = 1
+    private var needsFullSnapshot = false
+    private var submittedBatchStorage: [[WireRecord]] = []
+
+    init(records: [WireRecord]) {
+        let versioned = records.enumerated().map { index, seeded in
+            var record = seeded
+            record.recordVersion = SyncRecordVersion(Data("seed-\(index + 1)".utf8))
+            return record
+        }
+        recordsByID = Dictionary(uniqueKeysWithValues: versioned.map { ($0.id, $0) })
+        sequence = max(1, versioned.count)
+    }
+
+    var currentCursor: SyncCursor { lock.withLock { SyncCursor("cursor-\(sequence)") } }
+    var snapshot: [WireRecord] {
+        lock.withLock { recordsByID.values.sorted { $0.id.uuidString < $1.id.uuidString } }
+    }
+    var submittedBatches: [[WireRecord]] { lock.withLock { submittedBatchStorage } }
+
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedIdentity == nil else { throw SyncTransportFailure.accountChanged }
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+        lock.withLock { needsFullSnapshot = true }
+    }
+
+    func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+        lock.withLock {
+            sequence += 1
+            let fullSnapshot = needsFullSnapshot
+            needsFullSnapshot = false
+            return SyncFetch(
+                records: fullSnapshot
+                    ? recordsByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
+                    : [],
+                cursor: SyncCursor("cursor-\(sequence)"),
+                isFullResync: fullSnapshot)
+        }
+    }
+
+    func submit(
+        _ records: [WireRecord],
+        at cursor: SyncCursor?
+    ) async throws -> SyncSubmission {
+        lock.withLock {
+            submittedBatchStorage.append(records)
+            let results = records.map { offered -> SyncSubmitResult in
+                sequence += 1
+                let version = SyncRecordVersion(Data("version-\(sequence)".utf8))
+                var accepted = offered
+                accepted.recordVersion = version
+                recordsByID[accepted.id] = accepted
+                return SyncSubmitResult(
+                    id: accepted.id,
+                    outcome: .accepted(rev: accepted.rev, recordVersion: version))
+            }
+            return SyncSubmission(
+                results: results,
+                cursor: SyncCursor("cursor-\(sequence)"))
+        }
+    }
 }
 
 @MainActor
@@ -1059,14 +1873,23 @@ nonisolated final class SyncLifecycleTransport: SyncTransport, @unchecked Sendab
     private var localFullResyncAttemptCount = 0
     private var localFullResyncBaseStorage: SyncBase?
     private var localFullResyncJournalStorage: SyncJournal?
+    private var localFullResyncIsInFlightStorage = false
+    private var localFullResyncWasReleased = false
+    private var localFullResyncContinuation: CheckedContinuation<Void, Never>?
     private let accountIdentity: SyncAccountIdentity?
+    private let datasetIdentity: SyncDatasetIdentity?
+    private let suspendsLocalFullResync: Bool
     private let localFullResyncAction: @Sendable () throws -> Void
 
     init(
         accountIdentity: SyncAccountIdentity? = nil,
+        datasetIdentity: SyncDatasetIdentity? = nil,
+        suspendsLocalFullResync: Bool = false,
         localFullResyncAction: @escaping @Sendable () throws -> Void = {}
     ) {
         self.accountIdentity = accountIdentity
+        self.datasetIdentity = datasetIdentity
+        self.suspendsLocalFullResync = suspendsLocalFullResync
         self.localFullResyncAction = localFullResyncAction
     }
 
@@ -1079,19 +1902,56 @@ nonisolated final class SyncLifecycleTransport: SyncTransport, @unchecked Sendab
     var beforeLocalFullResyncJournal: SyncJournal? {
         lock.withLock { localFullResyncJournalStorage }
     }
+    var localFullResyncIsInFlight: Bool {
+        lock.withLock { localFullResyncIsInFlightStorage }
+    }
+
+    func releaseLocalFullResync() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            localFullResyncWasReleased = true
+            defer { localFullResyncContinuation = nil }
+            return localFullResyncContinuation
+        }
+        continuation?.resume()
+    }
 
     func resolveAccountIdentity() async throws -> SyncAccountIdentity? {
         accountIdentity
     }
 
-    func resetForLocalFullResync() async throws {
+    func preflightScope() async throws -> SyncScopePreflight {
+        SyncScopePreflight(identity: accountIdentity, datasetIdentity: datasetIdentity)
+    }
+
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedIdentity == accountIdentity else {
+            throw SyncTransportFailure.accountChanged
+        }
+        guard expectedDatasetIdentity == datasetIdentity else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
         lock.withLock {
             localFullResyncAttemptCount += 1
+            localFullResyncIsInFlightStorage = true
             if case .loaded(let base) = SyncBaseFile.load() {
                 localFullResyncBaseStorage = base
             }
             if case .loaded(let journal) = SyncJournalFile.load() {
                 localFullResyncJournalStorage = journal
+            }
+        }
+        defer { lock.withLock { localFullResyncIsInFlightStorage = false } }
+        if suspendsLocalFullResync {
+            await withCheckedContinuation { continuation in
+                let resumeImmediately = lock.withLock { () -> Bool in
+                    guard !localFullResyncWasReleased else { return true }
+                    localFullResyncContinuation = continuation
+                    return false
+                }
+                if resumeImmediately { continuation.resume() }
             }
         }
         try localFullResyncAction()

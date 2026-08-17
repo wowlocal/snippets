@@ -213,7 +213,7 @@ struct SyncEngineJournalSafetyTests {
         }
     }
 
-    @Test func schemaThreeBaseRejectsUnknownFutureTopLevelField() throws {
+    @Test func currentBaseRejectsUnknownFutureTopLevelField() throws {
         let scratch = try ScratchDirectory("strict-base-future-field")
         defer { scratch.remove() }
         let baseURL = scratch.file("base.json")
@@ -224,6 +224,7 @@ struct SyncEngineJournalSafetyTests {
                 "envelopes": [:],
                 "recordVersions": [:],
                 "journalEstablished": true,
+                "requiresNonDestructiveLibraryMerge": false,
                 futureField: "unknown-protocol-sentinel",
             ],
             options: [.sortedKeys])
@@ -235,6 +236,53 @@ struct SyncEngineJournalSafetyTests {
             return
         }
         #expect(try Data(contentsOf: baseURL) == document)
+    }
+
+    @Test func currentBaseCannotLoseItsRequiredLibraryRecoveryFenceField() throws {
+        let scratch = try ScratchDirectory("strict-base-recovery-fence")
+        defer { scratch.remove() }
+        let baseURL = scratch.file("base.json")
+        try SyncBaseFile.write(
+            SyncBase(journalEstablished: true),
+            to: baseURL,
+            temporaryDirectory: scratch.file("Tmp"))
+        var object = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: baseURL)) as? [String: Any])
+        object.removeValue(forKey: "requiresNonDestructiveLibraryMerge")
+        try JSONSerialization.data(withJSONObject: object).write(to: baseURL)
+
+        guard case .unreadable = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("stripping the crash fence must fail closed, not decode as false")
+            return
+        }
+    }
+
+    @Test func schemaFiveRecoveryFenceRequiresItsExactReviewedSnapshotMode() throws {
+        let scratch = try ScratchDirectory("strict-base-recovery-mode")
+        defer { scratch.remove() }
+        let baseURL = scratch.file("base.json")
+        let reviewed = SyncBase(
+            journalEstablished: true,
+            requiresNonDestructiveLibraryMerge: true,
+            nonDestructiveMergeMode: .reviewedLocalSnapshot)
+        try SyncBaseFile.write(
+            reviewed,
+            to: baseURL,
+            temporaryDirectory: scratch.file("Tmp"))
+        guard case .loaded(let roundTrip) = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("the schema-5 reviewed recovery fence must round trip")
+            return
+        }
+        #expect(roundTrip.nonDestructiveMergeMode == .reviewedLocalSnapshot)
+
+        var object = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: baseURL)) as? [String: Any])
+        object.removeValue(forKey: "nonDestructiveMergeMode")
+        try JSONSerialization.data(withJSONObject: object).write(to: baseURL)
+        guard case .unreadable = SyncBaseFile.load(from: baseURL) else {
+            Issue.record("a schema-5 recovery fence without its mode must fail closed")
+            return
+        }
     }
 
     @Test func legacySchemaOneWithoutJournalMarkerLoadsAndMigratesOnFirstRound() async throws {
@@ -292,8 +340,8 @@ struct SyncEngineJournalSafetyTests {
         let legacy = try decoder.decode(LegacyBaseDecoder.self, from: baseBytes)
 
         #expect(legacy.schemaVersion == SyncBase.currentSchemaVersion)
-        #expect(legacy.schemaVersion == 3,
-                "schema 3 must stop schema-2 builds before they ignore CKSyncEngine cursorKind and reinterpret a synthetic inbox receipt as a legacy CloudKit token; the account-binding fence remains intact")
+        #expect(legacy.schemaVersion == 7,
+                "schema 7 must stop older builds before they ignore review-epoch identity; two-phase recovery ancestry, dataset, cursor-kind and account fences remain intact")
         #expect(throws: (any Error).self) {
             try decoder.decode(SchemaTwoBaseReader.self, from: baseBytes)
         }
@@ -364,7 +412,7 @@ struct SyncEngineJournalSafetyTests {
         #expect(detail.contains("journal"))
         _ = await engine.sync()
         expectNoTransportCalls(transport)
-        engine.clearHaltAfterUserReview()
+        engine.performRecovery(.checkAgain)
         #expect(engine.state.isHalted, "Resume alone must not synthesize the missing journal")
         expectNoTransportCalls(transport)
 
@@ -375,7 +423,7 @@ struct SyncEngineJournalSafetyTests {
         case .deleteBoth:
             try FileManager.default.removeItem(at: baseURL)
         }
-        engine.clearHaltAfterUserReview()
+        engine.performRecovery(.checkAgain)
         #expect(!engine.state.isHalted)
         _ = await engine.sync()
         #expect(transport.fetchAttempts == 1)
@@ -415,7 +463,7 @@ struct SyncEngineJournalSafetyTests {
             SyncBase(cursor: SyncCursor("19"), journalEstablished: true),
             to: baseURL,
             temporaryDirectory: scratch.file("Tmp"))
-        engine.clearHaltAfterUserReview()
+        engine.performRecovery(.checkAgain)
 
         guard case .halted(let resumedReason, let detail) = engine.state else {
             Issue.record("repairing base alone must not bypass the missing-journal fence")
@@ -510,7 +558,7 @@ struct SyncEngineJournalSafetyTests {
             label: "corrupt-resume", journalData: Data("{still-not-json".utf8))
         defer { h.scratch.remove() }
 
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.checkAgain)
         guard case .halted(let reason, _) = h.engine.state else {
             Issue.record("Resume must not replace a corrupt journal with an empty one")
             return
@@ -522,7 +570,7 @@ struct SyncEngineJournalSafetyTests {
         // Deliberate deletion is the recovery action under test. The file lives in this
         // test's private temporary directory and contains no user data.
         try FileManager.default.removeItem(at: h.journalURL)
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.checkAgain)
         #expect(!h.engine.state.isHalted)
 
         _ = await h.engine.sync()
@@ -546,7 +594,7 @@ struct SyncEngineJournalSafetyTests {
         #expect(try Data(contentsOf: h.journalURL) == futureBytes)
         expectNoTransportCalls(h.transport)
 
-        h.engine.clearHaltAfterUserReview()
+        h.engine.performRecovery(.checkAgain)
         guard case .halted(let resumedReason, _) = h.engine.state else {
             Issue.record("Resume must not let an older build cross a future journal")
             return

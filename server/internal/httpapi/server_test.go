@@ -52,6 +52,53 @@ func TestDiscoveryIsProtocolTwoAndUsesSeparateOriginResource(t *testing.T) {
 	if oidc["resource"] != "https://sync.example.test" {
 		t.Fatalf("bad resource: %#v", oidc)
 	}
+	capabilities := value["capabilities"].([]any)
+	if !containsJSONValue(capabilities, "oauth-refresh-token-rotation") {
+		t.Fatalf("refresh-token rotation capability missing: %#v", capabilities)
+	}
+}
+
+func TestBatchRequiresAndAppliesExpectedScope(t *testing.T) {
+	server, store, principal, _ := testHTTPServer(t)
+	space, err := store.CreateSpace(context.Background(), principal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"expectedScope": map[string]any{
+			"serverInstanceId": "00000000-0000-4000-8000-000000000001",
+			"spaceId":          space.Scope.SpaceID, "scopeBinding": space.Scope.ScopeBinding,
+			"datasetGeneration": space.Scope.DatasetGeneration, "feedEpoch": space.Scope.FeedEpoch,
+		},
+		"items": []any{map[string]any{
+			"record": map[string]any{
+				"id": uuid.New(), "rev": "1", "deleted": false, "blob": []byte("opaque"),
+			},
+			"expectedRecordVersion": nil,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/v2/spaces/" + space.Scope.SpaceID.String() + "/records/batch"
+	response := perform(t, server, http.MethodPost, path, string(body), "valid-token")
+	if response.Code != http.StatusOK {
+		t.Fatalf("submit %d: %s", response.Code, response.Body.String())
+	}
+	var wrongInstance map[string]any
+	if err := json.Unmarshal(body, &wrongInstance); err != nil {
+		t.Fatal(err)
+	}
+	wrongInstance["expectedScope"].(map[string]any)["serverInstanceId"] = uuid.New()
+	wrongBody, err := json.Marshal(wrongInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongResponse := perform(t, server, http.MethodPost, path, string(wrongBody), "valid-token")
+	assertProblem(t, wrongResponse, http.StatusForbidden, domain.Forbidden)
+
+	missingScope := perform(t, server, http.MethodPost, path, `{"items":[]}`, "valid-token")
+	assertProblem(t, missingScope, http.StatusBadRequest, domain.InvalidRequest)
 }
 
 func TestCreateAndListSpacesUseNestedScope(t *testing.T) {
@@ -69,7 +116,8 @@ func TestCreateAndListSpacesUseNestedScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope, ok := value["scope"].(map[string]any)
-	if !ok || scope["spaceId"] == nil || value["role"] != "owner" {
+	if !ok || scope["serverInstanceId"] != "00000000-0000-4000-8000-000000000001" ||
+		scope["spaceId"] == nil || value["role"] != "owner" {
 		t.Fatalf("flat/invalid response: %#v", value)
 	}
 	listed := perform(t, server, http.MethodGet, "/v2/spaces", "", "valid-token")
@@ -92,11 +140,19 @@ func TestStrictJSONRejectsDuplicateUnknownMissingAndNoncanonicalBase64(t *testin
 		t.Fatal(err)
 	}
 	path := "/v2/spaces/" + space.Scope.SpaceID.String() + "/records/batch"
+	expectedScope, err := json.Marshal(map[string]any{
+		"serverInstanceId": "00000000-0000-4000-8000-000000000001",
+		"spaceId":          space.Scope.SpaceID, "scopeBinding": space.Scope.ScopeBinding,
+		"datasetGeneration": space.Scope.DatasetGeneration, "feedEpoch": space.Scope.FeedEpoch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := []string{
 		`{"items":[],"items":[]}`,
 		`{"items":[],"unexpected":true}`,
-		`{"items":[{"record":{"id":"00000000-0000-4000-8000-000000000001","rev":"r","deleted":false,"blob":""}}]}`,
-		`{"items":[{"record":{"id":"00000000-0000-4000-8000-000000000001","rev":"r","deleted":false,"blob":"YQ==\n"},"expectedRecordVersion":null}]}`,
+		`{"expectedScope":` + string(expectedScope) + `,"items":[{"record":{"id":"00000000-0000-4000-8000-000000000001","rev":"r","deleted":false,"blob":""}}]}`,
+		`{"expectedScope":` + string(expectedScope) + `,"items":[{"record":{"id":"00000000-0000-4000-8000-000000000001","rev":"r","deleted":false,"blob":"YQ==\n"},"expectedRecordVersion":null}]}`,
 	}
 	for _, body := range cases {
 		response := perform(t, server, http.MethodPost, path, body, "valid-token")
@@ -235,6 +291,15 @@ func perform(t *testing.T, handler http.Handler, method, path, body, token strin
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func containsJSONValue(values []any, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 func assertProblem(t *testing.T, response *httptest.ResponseRecorder, status int, code domain.ErrorCode) {
 	t.Helper()

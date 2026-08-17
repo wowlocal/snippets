@@ -68,6 +68,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
     enum EncryptedBackupFailure: Error, LocalizedError {
         case incompatibleVault
         case vaultKeyMismatch
+        case libraryRecoveryRequired
         case conflicts([String])
 
         var errorDescription: String? {
@@ -77,6 +78,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
                     + "Import it into a fresh Snippets library or a device already using the same vault."
             case .vaultKeyMismatch:
                 return "The backup and this device have different keys for the same secure-snippet vault. Nothing was imported."
+            case .libraryRecoveryRequired:
+                return "A new all-library backup cannot be created while the ordinary "
+                    + "snippet library is unreadable. You can still restore an existing "
+                    + "encrypted backup, or use a complete Snippets JSON export."
             case .conflicts(let conflicts):
                 if conflicts.count == 1 { return "Import conflict: \(conflicts[0])" }
                 return "Import conflicts:\n" + conflicts.map { "- \($0)" }.joined(separator: "\n")
@@ -89,6 +94,13 @@ final class SecureSnippetStore: SecureSnippetProviding {
         var ordinaryCount: Int
         var secureCount: Int
         var totalCount: Int { ordinaryCount + secureCount }
+    }
+
+    struct PreparedEncryptedBackupImport {
+        fileprivate var opened: EncryptedSnippetBackup.Opened
+        var ordinaryCount: Int { opened.ordinaryCount }
+        var secureCount: Int { opened.secureCount }
+        var totalCount: Int { opened.totalCount }
     }
 
     struct EncryptedBackupImportResult {
@@ -786,6 +798,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
         passphrase: String,
         iterations: Int = PassphraseKDF.iterations
     ) async throws -> EncryptedBackupExport {
+        guard !store.isLibraryQuarantined else {
+            throw EncryptedBackupFailure.libraryRecoveryRequired
+        }
         store.flushPendingWrites()
         reload(notifyChange: false)
 
@@ -826,17 +841,47 @@ final class SecureSnippetStore: SecureSnippetProviding {
         passphrase: String,
         into store: SnippetStore
     ) async throws -> EncryptedBackupImportResult {
-        // Authenticate/decrypt the untrusted backup away from MainActor. Only the
-        // resulting immutable value crosses back; all file/keychain mutations remain
-        // actor-isolated below.
+        let prepared = try await prepareEncryptedBackupImport(
+            data, passphrase: passphrase)
+        return try await importPreparedEncryptedBackup(prepared, into: store)
+    }
+
+    /// Authenticates and validates a backup without changing either primary file. The
+    /// UI uses the returned exact counts for an action-specific quarantine confirmation.
+    func prepareEncryptedBackupImport(
+        _ data: Data,
+        passphrase: String
+    ) async throws -> PreparedEncryptedBackupImport {
         let opened = try await Task.detached(priority: .userInitiated) {
             try EncryptedSnippetBackup.open(data, passphrase: passphrase)
         }.value
+        return PreparedEncryptedBackupImport(opened: opened)
+    }
+
+    /// Applies a previously authenticated backup. During ordinary-library quarantine,
+    /// only the explicit authoritative path is legal: its ordinary half is a complete
+    /// replacement, its vault half follows the existing key/vault compatibility rules,
+    /// and the independent quarantine marker remains until Sync → Check Again commits
+    /// the non-destructive cloud merge fence.
+    func importPreparedEncryptedBackup(
+        _ prepared: PreparedEncryptedBackupImport,
+        into store: SnippetStore,
+        authoritativeRecovery: Bool = false
+    ) async throws -> EncryptedBackupImportResult {
+        guard !store.isLibraryQuarantined || authoritativeRecovery else {
+            throw EncryptedBackupFailure.libraryRecoveryRequired
+        }
+        guard store.isLibraryQuarantined || !authoritativeRecovery else {
+            throw EncryptedBackupFailure.libraryRecoveryRequired
+        }
+        let opened = prepared.opened
         store.flushPendingWrites()
         reload()
 
         guard let incomingVault = opened.vault else {
-            return try mergeEncryptedBackup(opened, into: store)
+            return try mergeEncryptedBackup(
+                opened, into: store,
+                authoritativeOrdinaryRecovery: authoritativeRecovery)
         }
         guard let incomingKey = opened.vaultKey else {
             throw EncryptedSnippetBackup.Failure.damagedBackup
@@ -860,7 +905,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
                     guard currentKeyBytes == incomingKeyBytes else {
                         throw EncryptedBackupFailure.vaultKeyMismatch
                     }
-                    return try self.mergeEncryptedBackup(opened, into: store)
+                    return try self.mergeEncryptedBackup(
+                        opened, into: store,
+                        authoritativeOrdinaryRecovery: authoritativeRecovery)
                 }
             } catch {
                 // No vault was installed, so do not leave the session addressing a key
@@ -876,7 +923,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // `kid` between the check above and this write.
         try keychain.store(incomingKeyBytes, keyID: incomingVault.kid)
         do {
-            return try mergeEncryptedBackup(opened, into: store)
+            return try mergeEncryptedBackup(
+                opened, into: store,
+                authoritativeOrdinaryRecovery: authoritativeRecovery)
         } catch {
             if self.document == nil { self.session.adopt(keyID: previousKeyID) }
             throw error
@@ -1547,7 +1596,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
     private func mergeEncryptedBackup(
         _ opened: EncryptedSnippetBackup.Opened,
-        into store: SnippetStore
+        into store: SnippetStore,
+        authoritativeOrdinaryRecovery: Bool = false
     ) throws -> EncryptedBackupImportResult {
         let incomingPlain = opened.snippets.map(Self.normalizedBackupSnippet)
         var incomingVault = opened.vault
@@ -1561,7 +1611,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
 
         let outcome = try runTransaction { contents in
             var conflicts: [String] = []
-            let existingPlain = contents.snippets
+            let existingPlain = authoritativeOrdinaryRecovery ? [] : contents.snippets
             let existingSecure = contents.vault?.records ?? []
 
             if let incomingVault, let existingVault = contents.vault {
@@ -1626,7 +1676,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 throw EncryptedBackupFailure.conflicts(Array(conflicts.prefix(8)))
             }
 
-            var mergedPlain = contents.snippets
+            var mergedPlain = authoritativeOrdinaryRecovery ? [] : contents.snippets
             for snippet in incomingPlain {
                 Self.upsertBackupSnippet(snippet, into: &mergedPlain)
             }

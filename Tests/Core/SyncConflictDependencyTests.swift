@@ -3105,7 +3105,10 @@ struct SyncConflictDependencyTests {
             sealer: sealer,
             device: Self.deviceB,
             directory: directory)
-        if rebasing.state.isHalted { rebasing.clearHaltAfterUserReview() }
+        if case .halted = rebasing.state,
+           let action = rebasing.recoveryAction {
+            rebasing.performRecovery(action)
+        }
         #expect(await rebasing.sync() == .disabled)
         let rebasedWire = try #require(cancelling.capturedBatches.only?.only)
         #expect(rebasedWire.id == releaseE.id)
@@ -3434,14 +3437,14 @@ struct SyncConflictDependencyTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journalURL = directory.appendingPathComponent("journal.json")
         let future = Data(
-            "{\"schemaVersion\":4,\"entries\":{},\"conflictDependencies\":{}}".utf8)
+            "{\"schemaVersion\":6,\"entries\":{},\"conflictDependencies\":{}}".utf8)
         try future.write(to: journalURL)
 
         guard case .tooNew(let version) = SyncJournalFile.load(from: journalURL) else {
             Issue.record("a future dependency schema must fail closed")
             return
         }
-        #expect(version == 4)
+        #expect(version == 6)
         #expect(try Data(contentsOf: journalURL) == future)
     }
 

@@ -10,12 +10,14 @@ struct SnippetsCloudTransportTests {
             _ = try SnippetsCloudTransport.Configuration(
                 baseURL: #require(URL(string: "http://sync.example.test")),
                 spaceID: UUID(),
+                serverInstanceID: Self.serverInstanceID,
                 accessToken: "valid-token")
         }
         #expect(throws: SnippetsCloudTransport.ConfigurationFailure.invalidAccessToken) {
             _ = try SnippetsCloudTransport.Configuration(
                 baseURL: #require(URL(string: "https://sync.example.test")),
                 spaceID: UUID(),
+                serverInstanceID: Self.serverInstanceID,
                 accessToken: "short")
         }
     }
@@ -29,6 +31,7 @@ struct SnippetsCloudTransportTests {
         let configuration = try SnippetsCloudTransport.Configuration(
             baseURL: #require(URL(string: "https://sync.example.test")),
             spaceID: space,
+            serverInstanceID: Self.serverInstanceID,
             accessToken: "test-access-token")
 
         let sessionConfiguration = URLSessionConfiguration.ephemeral
@@ -79,6 +82,7 @@ struct SnippetsCloudTransportTests {
         let configuration = try SnippetsCloudTransport.Configuration(
             baseURL: #require(URL(string: "https://sync.example.test")),
             spaceID: space,
+            serverInstanceID: Self.serverInstanceID,
             accessToken: "expired-access-token")
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [CloudURLProtocol.self]
@@ -102,6 +106,7 @@ struct SnippetsCloudTransportTests {
         let configuration = try SnippetsCloudTransport.Configuration(
             baseURL: #require(URL(string: "https://sync.example.test")),
             spaceID: space,
+            serverInstanceID: Self.serverInstanceID,
             accessToken: "expired-access-token")
         let probe = AuthRetryProbe()
         let sessionConfiguration = URLSessionConfiguration.ephemeral
@@ -132,6 +137,34 @@ struct SnippetsCloudTransportTests {
         #expect(probe.refreshFlags == [false, true])
     }
 
+    @Test func scopedResponseFromReplacementServerRequiresAccountReview() async throws {
+        let space = UUID()
+        let configuration = try SnippetsCloudTransport.Configuration(
+            baseURL: #require(URL(string: "https://sync.example.test")),
+            spaceID: space,
+            serverInstanceID: Self.serverInstanceID,
+            accessToken: "test-access-token")
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [CloudURLProtocol.self]
+        CloudURLProtocol.handler = { _ in
+            var value = Self.space(space: space, dataset: UUID(), feed: UUID())
+            var scope = try #require(value["scope"] as? [String: Any])
+            scope["serverInstanceId"] = UUID().uuidString.lowercased()
+            value["scope"] = scope
+            return (200, try JSONSerialization.data(withJSONObject: value))
+        }
+
+        let transport = SnippetsCloudTransport(
+            configuration: configuration,
+            session: URLSession(configuration: sessionConfiguration))
+        do {
+            _ = try await transport.resolveAccountIdentity()
+            Issue.record("replacement server instance was accepted")
+        } catch SyncTransportFailure.accountChanged {
+            // Expected: the remote instance, not a locally substituted pin, owns this fact.
+        }
+    }
+
     @Test func createEncodesRequiredExpectedVersionAsExplicitNull() async throws {
         let space = UUID()
         let dataset = UUID()
@@ -141,6 +174,7 @@ struct SnippetsCloudTransportTests {
         let configuration = try SnippetsCloudTransport.Configuration(
             baseURL: #require(URL(string: "https://sync.example.test")),
             spaceID: space,
+            serverInstanceID: Self.serverInstanceID,
             accessToken: "test-access-token")
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [CloudURLProtocol.self]
@@ -152,6 +186,20 @@ struct SnippetsCloudTransportTests {
             }
             let body = try Self.bodyData(request)
             let root = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let expectedScope = try #require(root["expectedScope"] as? [String: Any])
+            #expect(
+                (expectedScope["serverInstanceId"] as? String)?.lowercased()
+                    == Self.serverInstanceID.uuidString.lowercased())
+            #expect(
+                (expectedScope["spaceId"] as? String)?.lowercased()
+                    == space.uuidString.lowercased())
+            #expect(expectedScope["scopeBinding"] as? String == String(repeating: "b", count: 32))
+            #expect(
+                (expectedScope["datasetGeneration"] as? String)?.lowercased()
+                    == dataset.uuidString.lowercased())
+            #expect(
+                (expectedScope["feedEpoch"] as? String)?.lowercased()
+                    == feed.uuidString.lowercased())
             let items = try #require(root["items"] as? [[String: Any]])
             let item = try #require(items.first)
             #expect(item.keys.contains("expectedRecordVersion"))
@@ -187,9 +235,12 @@ struct SnippetsCloudTransportTests {
         let server = try #require(environment["SNIPPETS_CLOUD_E2E_SERVER_URL"])
         let token = try #require(environment["SNIPPETS_CLOUD_E2E_ACCESS_TOKEN"])
         let space = try #require(environment["SNIPPETS_CLOUD_E2E_SPACE_ID"])
+        let serverInstance = try #require(
+            environment["SNIPPETS_CLOUD_E2E_SERVER_INSTANCE_ID"])
         let configuration = try SnippetsCloudTransport.Configuration(
             baseURL: try #require(URL(string: server)),
             spaceID: try #require(UUID(uuidString: space)),
+            serverInstanceID: try #require(UUID(uuidString: serverInstance)),
             accessToken: token)
         let transport = SnippetsCloudTransport(configuration: configuration)
         let initial = try await transport.fetchChanges(since: nil)
@@ -229,12 +280,16 @@ struct SnippetsCloudTransportTests {
 
     private static func scope(space: UUID, dataset: UUID, feed: UUID) -> [String: Any] {
         [
+            "serverInstanceId": serverInstanceID.uuidString.lowercased(),
             "spaceId": space.uuidString.lowercased(),
             "scopeBinding": String(repeating: "b", count: 32),
             "datasetGeneration": dataset.uuidString.lowercased(),
             "feedEpoch": feed.uuidString.lowercased(),
         ]
     }
+
+    private static let serverInstanceID = UUID(
+        uuidString: "11111111-2222-4333-8444-555555555555")!
 
     private static func space(space: UUID, dataset: UUID, feed: UUID) -> [String: Any] {
         [

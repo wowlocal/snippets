@@ -56,6 +56,11 @@ nonisolated final class InMemoryTransport: SyncTransport, @unchecked Sendable {
         /// Fail the next N submissions outright. Counts down.
         var failSubmits = 0
 
+        /// Fail the next N local full-resync checkpoint replacements. This models a
+        /// crash/network failure after recovery intent was made durable but before the
+        /// transport reset completed.
+        var failLocalFullResets = 0
+
         /// Fail *everything* until cleared. The "aeroplane mode" switch, as distinct
         /// from the counted flakiness above.
         var unreachable = false
@@ -112,6 +117,7 @@ nonisolated final class InMemoryTransport: SyncTransport, @unchecked Sendable {
     private var faultsStorage = Faults.none
     private var submissionLog: [[WireRecord]] = []
     private var fetchCount = 0
+    private var localFullResetCount = 0
 
     /// Injected so latency costs no wall-clock time in the suite. Nothing in this type
     /// reads a real clock or sleeps directly.
@@ -185,6 +191,11 @@ nonisolated final class InMemoryTransport: SyncTransport, @unchecked Sendable {
         return fetchCount
     }
 
+    var localFullResetAttempts: Int {
+        lock.lock(); defer { lock.unlock() }
+        return localFullResetCount
+    }
+
     var currentCursor: SyncCursor? {
         lock.lock(); defer { lock.unlock() }
         return cursorLocked()
@@ -224,6 +235,40 @@ nonisolated final class InMemoryTransport: SyncTransport, @unchecked Sendable {
         // `NSLock` is not async-safe and holding one over an `await` is a deadlock
         // waiting for a slow enough backend.
         return try performSubmit(records, at: cursor)
+    }
+
+    /// This backend has no transport-private scheduler, account binding, or remote
+    /// zone lifecycle. Explicitly opting in documents why Core's reviewed reset is a
+    /// safe no-op here; stateful transports inherit the fail-closed default instead.
+    func resetAfterRemoteDataResetReview(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedIdentity == nil else { throw SyncTransportFailure.accountChanged }
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+    }
+
+    func resetForLocalFullResync(
+        expectedIdentity: SyncAccountIdentity?,
+        expectedDatasetIdentity: SyncDatasetIdentity?
+    ) async throws {
+        guard expectedIdentity == nil else { throw SyncTransportFailure.accountChanged }
+        guard expectedDatasetIdentity == nil else {
+            throw SyncTransportFailure.remoteDataReset(detail: "unexpected dataset scope")
+        }
+        try performLocalFullReset()
+    }
+
+    private func performLocalFullReset() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        localFullResetCount += 1
+        if faultsStorage.failLocalFullResets > 0 {
+            faultsStorage.failLocalFullResets -= 1
+            throw SyncTransportFailure.unreachable(detail: "injected full-resync failure")
+        }
     }
 
     // MARK: - Internals
@@ -282,7 +327,11 @@ nonisolated final class InMemoryTransport: SyncTransport, @unchecked Sendable {
         }
 
         return SyncFetch(
-            records: records, cursor: nextCursor, hasMore: hasMore, isFullResync: isFullResync)
+            records: records,
+            cursor: nextCursor,
+            hasMore: hasMore,
+            isFullResync: isFullResync,
+            replacesPriorPages: isFullResync && cursor != nil)
     }
 
     private func performSubmit(_ records: [WireRecord], at cursor: SyncCursor?) throws -> SyncSubmission {

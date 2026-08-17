@@ -689,7 +689,7 @@ struct ClockAndStateTests {
 
             // The halt that corresponds to this outcome is the one that never
             // auto-heals: there is no safe way for an older build to resume writing.
-            #expect(SyncState.HaltReason.schemaTooNew.isUserRecoverable == false)
+            #expect(SyncState.HaltReason.schemaTooNew.recoveryAction == nil)
         }
 
         /// A halt written before `backendRefused` existed must still decode.
@@ -722,11 +722,10 @@ struct ClockAndStateTests {
             #expect(outcome.loadedState?.halt?.reason == .manifestIntegrityFailed)
         }
 
-        /// Every halt a backend can cause is one a human can clear once they have fixed
-        /// the thing — deploying the schema, freeing space, shrinking the snippet. It
-        /// stays sticky because none of them is fixed by waiting.
-        @Test func aBackendRefusalIsRecoverableAndSaysWhereToLook() {
-            #expect(SyncState.HaltReason.backendRefused.isUserRecoverable)
+        /// New backend refusals are non-sticky attention states. The action remains for
+        /// durable halts written by older builds so an upgrade has a clear retry path.
+        @Test func aLegacyBackendRefusalOffersRetryAndSaysWhereToLook() {
+            #expect(SyncState.HaltReason.backendRefused.recoveryAction == .retrySync)
             #expect(SyncState.HaltReason.backendRefused.title.contains("refused"))
             #expect(SyncState.HaltReason.backendRefused.guidance != nil)
 
@@ -735,13 +734,17 @@ struct ClockAndStateTests {
             #expect(!SyncState.HaltReason.backendRefused.title.contains("backendRefused"))
         }
 
-        @Test func newSafetyHaltsBumpSchemaAndKeepTheirRecoveryPoliciesDistinct() throws {
-            #expect(SyncState.currentSchemaVersion == 3,
-                    "adding durable halt cases requires a downgrade fence")
-            #expect(!SyncState.HaltReason.remoteDataReset.isUserRecoverable,
-                    "zone purge/reset must never offer a path that can reupload local data")
-            #expect(SyncState.HaltReason.checkpointUnreadable.isUserRecoverable,
-                    "an authenticated local-checkpoint failure has an explicit reviewed reset")
+        @Test func safetyHaltsKeepTheirRecoveryPoliciesDistinct() throws {
+            #expect(SyncState.currentSchemaVersion == 5,
+                    "review claims and primary quarantine require a downgrade fence")
+            #expect(SyncState.HaltReason.remoteDataReset.recoveryAction
+                    == .restoreCloudFromThisDevice)
+            #expect(SyncState.HaltReason.checkpointUnreadable.recoveryAction
+                    == .repairCheckpoint)
+            #expect(SyncState.HaltReason.massDeletion.recoveryAction
+                    == .applyRemoteDeletions)
+            #expect(SyncState.HaltReason.accountChanged.recoveryAction
+                    == .useCurrentAccount)
 
             for reason in [
                 SyncState.HaltReason.remoteDataReset,
@@ -759,6 +762,33 @@ struct ClockAndStateTests {
                 decoder.dateDecodingStrategy = .iso8601
                 #expect(try decoder.decode(SyncState.self, from: data) == state)
             }
+
+            var deletionState = Self.sampleState()
+            deletionState.halt = SyncState.Halt(
+                reason: .massDeletion,
+                detail: "49 of 117",
+                at: Date(timeIntervalSince1970: 0),
+                recoveryContext: .massDeletion(
+                    liveCount: 117,
+                    requestedDeletions: 49,
+                    batchFingerprint: String(repeating: "a", count: 64)))
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            #expect(try decoder.decode(
+                SyncState.self,
+                from: encoder.encode(deletionState)) == deletionState)
+
+            var quarantineState = Self.sampleState()
+            quarantineState.halt = SyncState.Halt(
+                reason: .localLibraryQuarantined,
+                detail: "primary library preserved",
+                at: Date(timeIntervalSince1970: 0),
+                recoveryContext: .localLibraryQuarantine)
+            #expect(try decoder.decode(
+                SyncState.self,
+                from: encoder.encode(quarantineState)) == quarantineState)
         }
 
         /// A file at the current version loads, so the probe is not simply refusing
@@ -858,6 +888,28 @@ struct ClockAndStateTests {
                 #expect(outcome.tooNewVersion == nil, "\(label)")
             }
         }
+
+        @Test func quarantineMarkerRetainsOneReviewIDAcrossCrashRetries() throws {
+            let scratch = ScratchDirectory("quarantine-review-id")
+            defer { scratch.remove() }
+            let marker = scratch.file("library-quarantine")
+
+            let first = try LibraryQuarantineMarker.write(
+                to: marker,
+                temporaryDirectory: scratch.file("Tmp"))
+            let retry = try LibraryQuarantineMarker.write(
+                to: marker,
+                temporaryDirectory: scratch.file("Tmp"))
+
+            #expect(first == retry)
+            #expect(LibraryQuarantineMarker.reviewID(at: marker) == first)
+
+            try LibraryQuarantineMarker.removeDurably(at: marker)
+            let nextRecovery = try LibraryQuarantineMarker.write(
+                to: marker,
+                temporaryDirectory: scratch.file("Tmp"))
+            #expect(nextRecovery != first)
+        }
     }
 
     // MARK: - Storage layout
@@ -870,6 +922,7 @@ struct ClockAndStateTests {
             ("Usage/usage.json", SnippetStorageLocations.usageFileURL),
             ("Usage/usage.lock", SnippetStorageLocations.usageLockFileURL),
             ("Sync/state.json", SnippetStorageLocations.syncStateFileURL),
+            ("Sync/library-quarantine", SnippetStorageLocations.libraryQuarantineMarkerURL),
             ("Sync/base.json", SnippetStorageLocations.syncBaseFileURL),
             ("Sync/journal.json", SnippetStorageLocations.syncJournalFileURL),
             ("Sync/library-metadata.json", SnippetStorageLocations.syncLibraryMetadataFileURL),
