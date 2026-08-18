@@ -680,7 +680,8 @@ final class SuggestionPanelController: NSObject,
         case #selector(NSResponder.moveDown(_:)):
             moveSelectionDown()
             return true
-        case #selector(NSResponder.insertNewline(_:)):
+        case #selector(NSResponder.insertNewline(_:)),
+             #selector(NSResponder.insertTab(_:)):
             guard let snippet = selectedSnippet() else {
                 NSSound.beep()
                 return true
