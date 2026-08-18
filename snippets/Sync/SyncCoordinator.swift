@@ -521,7 +521,14 @@ final class SyncCoordinator {
         // Re-enabling is intentionally deferred while the prior transport drains. The
         // shutdown task calls start again after its awaited backend barrier completes.
         guard roundTask == nil, shutdownTask == nil else { return }
-        restoreLocalLibraryRecoveryIfNeeded()
+        // Initialization already restored a typed state-only quarantine. During this
+        // coordinator's lifetime, a new primary quarantine publishes the independent
+        // marker before its typed halt, so the cheap marker probe is sufficient to know
+        // whether another state-file decode is needed here. This keeps the ordinary
+        // launch path from decoding state.json twice before constructing the engine.
+        if LibraryQuarantineMarker.exists() {
+            restoreLocalLibraryRecoveryIfNeeded()
+        }
         if let localRecoveryEngine {
             publish(localRecoveryEngine.state)
             return

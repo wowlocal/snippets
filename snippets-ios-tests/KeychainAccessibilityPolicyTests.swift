@@ -265,6 +265,51 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         }
     }
 
+    func testDarkLaunchGateSkipsUnrelatedCredentialLineageQueries() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.cloud-launch.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let probe = KeychainOperationsProbe()
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.cloud-launch-tests",
+            itemAccessibility: .afterFirstUnlock,
+            keychainOperations: makeOperations(probe))
+
+        _ = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: false)
+
+        XCTAssertEqual(
+            probe.copyAttempts,
+            1,
+            "shipping iCloud launch should inspect only the crash-safe local erase marker")
+    }
+
+    func testICloudTransportDoesNotDependOnSnippetsCloudKeychainAvailability() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.icloud-launch.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let probe = KeychainOperationsProbe()
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.icloud-launch-tests",
+            itemAccessibility: .afterFirstUnlock,
+            keychainOperations: makeOperations(probe))
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        probe.failCopies(
+            account: SyncBackendSelectionStore.pendingLocalEraseAccount,
+            status: errSecNotAvailable)
+
+        let transport = try selection.makeTransport()
+
+        XCTAssertEqual(transport.identifier, "icloud")
+    }
+
     func testPendingLogoutQueryFailureClosesTransportInsteadOfLookingAbsent() throws {
         let defaultsName = "KeychainAccessibilityPolicyTests.marker-query.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))

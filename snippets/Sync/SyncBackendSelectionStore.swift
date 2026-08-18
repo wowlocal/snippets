@@ -256,6 +256,14 @@ final class SyncBackendSelectionStore {
         // secret. Finishing it during normal app construction makes process death at
         // every subsequent deletion boundary recoverable and fail-closed.
         try? resumePendingLocalErase()
+        // Shipping builds expose only iCloud. Credential replacement/revocation state
+        // belongs exclusively to the dark-launched Snippets Cloud data plane, and that
+        // plane revalidates the same lineage before constructing a transport. Avoid
+        // making every ordinary iCloud launch synchronously read three unrelated
+        // Keychain items. The local-erase journal remains above this gate because it is
+        // the crash-safe tail of an already-authorized destructive operation and must
+        // finish even if a later build disables Snippets Cloud.
+        guard snippetsCloudEnabled else { return }
         let startupLineage = try? SnippetsCloudOAuthClient(
             keychain: self.keychain,
             redirectURL: Self.bundledOAuthRedirectURL
@@ -655,19 +663,24 @@ final class SyncBackendSelectionStore {
     }
 
     func makeTransport() throws -> any SyncTransport {
-        do {
-            guard try !pendingLocalEraseExists() else {
-                throw Failure.missingCredential
-            }
-        } catch let failure as Failure {
-            throw failure
-        } catch {
-            throw Failure.credentialStoreUnavailable
-        }
         switch provider {
         case .iCloud:
+            // Snippets Cloud journals authorize and fence only that provider's local
+            // root and credentials. `resumePendingLocalErase()` already attempts their
+            // crash recovery during construction; neither a remaining marker nor a
+            // temporarily unavailable credential Keychain may hold up the independent
+            // iCloud/CloudKit data plane.
             return CloudKitTransport()
         case .snippetsCloud:
+            do {
+                guard try !pendingLocalEraseExists() else {
+                    throw Failure.missingCredential
+                }
+            } catch let failure as Failure {
+                throw failure
+            } catch {
+                throw Failure.credentialStoreUnavailable
+            }
             if let cleanupFailure = credentialLineageFailure() {
                 if case .credentialCleanupRequired = cleanupFailure {
                     schedulePendingCredentialCleanup()
