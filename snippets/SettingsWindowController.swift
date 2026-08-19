@@ -3,27 +3,32 @@ import AuthenticationServices
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import LocalAuthentication
+import ServiceManagement
 import UniformTypeIdentifiers
 import Vision
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
-    private let settingsViewController = SettingsTabViewController()
+    private let settingsViewController = SettingsSplitViewController()
 
     init() {
         let window = NSWindow(contentViewController: settingsViewController)
         window.title = "Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 720, height: 480))
-        window.contentMinSize = NSSize(width: 1, height: 1)
-        window.minSize = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 1, height: 1)).size
+        window.setContentSize(NSSize(width: 940, height: 640))
+        window.contentMinSize = NSSize(width: 760, height: 520)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.titleVisibility = .hidden
-        if #available(macOS 11.0, *) {
-            window.toolbarStyle = .preference
-            window.titlebarSeparatorStyle = .none
-        }
+        window.titleVisibility = .visible
+        window.toolbarStyle = .unified
+        window.titlebarSeparatorStyle = .automatic
+
+        let toolbar = NSToolbar(identifier: "SnippetsSettingsToolbar")
+        toolbar.delegate = settingsViewController
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+        window.toolbar = toolbar
 
         super.init(window: window)
         shouldCascadeWindows = false
@@ -34,77 +39,809 @@ final class SettingsWindowController: NSWindowController {
     }
 
     func showSettings() {
-        settingsViewController.reloadFromStorage()
+        show(destination: .general)
+    }
+
+    func showSyncSettings() {
+        show(destination: .sync)
+    }
+
+    func showAboutSettings() {
+        show(destination: .about)
+    }
+
+    private func show(destination: SettingsDestination) {
+        settingsViewController.prepareToShow(destination: destination)
         if window?.isVisible == false {
             window?.center()
         }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-    }
-
-    func showSyncSettings() {
-        settingsViewController.selectSync()
-        showSettings()
+        settingsViewController.focusSearchIfRequested()
     }
 }
 
 @MainActor
-private final class SettingsTabViewController: NSTabViewController {
-    private let generalViewController = GeneralSettingsViewController()
+private final class SettingsSplitViewController: NSSplitViewController, NSToolbarDelegate, NSSearchFieldDelegate {
+    private static let backItemIdentifier = NSToolbarItem.Identifier("SnippetsSettingsBack")
+    private static let forwardItemIdentifier = NSToolbarItem.Identifier("SnippetsSettingsForward")
+    private static let searchItemIdentifier = NSToolbarItem.Identifier("SnippetsSettingsSearch")
+
+    private let sidebarViewController = SettingsSidebarViewController()
+    private let detailViewController = SettingsDetailHostViewController()
+    private let generalViewController = ApplicationSettingsViewController()
+    private let expansionViewController = ExpansionSettingsViewController()
     private let vaultViewController = VaultSettingsViewController()
     private let syncViewController = SyncSettingsViewController()
     private let browsersViewController = BrowserSettingsViewController()
     private let diagnosticsViewController = DiagnosticsSettingsViewController()
+    private let backupViewController = BackupSettingsViewController()
+    private let aboutViewController = AboutSettingsViewController()
+
+    private var currentDestination: SettingsDestination = .general
+    private var backHistory: [SettingsDestination] = []
+    private var forwardHistory: [SettingsDestination] = []
+    private weak var searchField: NSSearchField?
 
     init() {
         super.init(nibName: nil, bundle: nil)
-        tabStyle = .toolbar
-        canPropagateSelectedChildViewControllerTitle = false
 
-        addTab(title: "General", symbolName: "gearshape", viewController: generalViewController)
-        addTab(title: "Secure", symbolName: "lock", viewController: vaultViewController)
-        // After Secure, because sync depends on it: the sealing key is the vault's.
-        addTab(title: "Sync", symbolName: "arrow.triangle.2.circlepath", viewController: syncViewController)
-        addTab(title: "Browsers", symbolName: "globe", viewController: browsersViewController)
-        addTab(title: "Diagnostics", symbolName: "waveform.path.ecg", viewController: diagnosticsViewController)
+        sidebarViewController.onSelection = { [weak self] selection in
+            switch selection {
+            case .destination(let destination):
+                self?.navigate(to: destination, row: nil, recordsHistory: true)
+            case .searchResult(let entry):
+                self?.navigate(to: entry.destination, row: entry, recordsHistory: true)
+            }
+        }
+
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarViewController)
+        sidebarItem.minimumThickness = 210
+        sidebarItem.maximumThickness = 310
+        sidebarItem.canCollapse = true
+        addSplitViewItem(sidebarItem)
+
+        let detailItem = NSSplitViewItem(viewController: detailViewController)
+        detailItem.minimumThickness = 520
+        addSplitViewItem(detailItem)
+
+        splitView.dividerStyle = .thin
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        guard let toolbar = view.window?.toolbar else { return }
-        toolbar.displayMode = .iconAndLabel
-        toolbar.allowsUserCustomization = false
-        toolbar.autosavesConfiguration = false
+    func prepareToShow(destination: SettingsDestination) {
+        reloadFromStorage()
+        backHistory.removeAll()
+        forwardHistory.removeAll()
+        searchField?.stringValue = ""
+        sidebarViewController.updateSearch(query: "")
+        navigate(to: destination, row: nil, recordsHistory: false)
     }
 
-    func reloadFromStorage() {
+    func focusSearchIfRequested() {
+        updateToolbarState()
+    }
+
+    private func reloadFromStorage() {
         generalViewController.reloadFromStorage()
+        expansionViewController.reloadFromStorage()
         vaultViewController.reloadFromStorage()
         syncViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
         diagnosticsViewController.reloadFromStorage()
+        aboutViewController.reloadFromStorage()
     }
 
-    func selectSync() {
-        selectedTabViewItemIndex = 2
+    private func pane(for destination: SettingsDestination) -> NSViewController {
+        switch destination {
+        case .general: generalViewController
+        case .expansion: expansionViewController
+        case .sync: syncViewController
+        case .secureSnippets: vaultViewController
+        case .backup: backupViewController
+        case .integrations: browsersViewController
+        case .diagnostics: diagnosticsViewController
+        case .about: aboutViewController
+        }
     }
 
-    private func addTab(title: String, symbolName: String, viewController: NSViewController) {
-        viewController.title = title
+    private func navigate(
+        to destination: SettingsDestination,
+        row: SettingsSearchEntry?,
+        recordsHistory: Bool
+    ) {
+        if recordsHistory, destination != currentDestination {
+            backHistory.append(currentDestination)
+            forwardHistory.removeAll()
+        }
+        currentDestination = destination
+        sidebarViewController.select(destination: destination)
+        detailViewController.show(
+            pane(for: destination),
+            destination: destination,
+            highlightedEntry: row
+        )
+        updateToolbarState()
+    }
 
-        let item = NSTabViewItem(viewController: viewController)
-        item.label = title
-        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title)
-        addTabViewItem(item)
+    @objc private func goBack() {
+        guard let destination = backHistory.popLast() else { return }
+        forwardHistory.append(currentDestination)
+        navigate(to: destination, row: nil, recordsHistory: false)
+    }
+
+    @objc private func goForward() {
+        guard let destination = forwardHistory.popLast() else { return }
+        backHistory.append(currentDestination)
+        navigate(to: destination, row: nil, recordsHistory: false)
+    }
+
+    private func updateToolbarState() {
+        guard let toolbar = view.window?.toolbar else { return }
+        toolbar.items.first(where: { $0.itemIdentifier == Self.backItemIdentifier })?.isEnabled = !backHistory.isEmpty
+        toolbar.items.first(where: { $0.itemIdentifier == Self.forwardItemIdentifier })?.isEnabled = !forwardHistory.isEmpty
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSSearchField else { return }
+        sidebarViewController.updateSearch(query: field.stringValue)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSSearchField, field.stringValue.isEmpty else { return }
+        sidebarViewController.select(destination: currentDestination)
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.toggleSidebar, Self.backItemIdentifier, Self.forwardItemIdentifier, .flexibleSpace, Self.searchItemIdentifier]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.toggleSidebar, Self.backItemIdentifier, Self.forwardItemIdentifier, .flexibleSpace, Self.searchItemIdentifier]
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        switch itemIdentifier {
+        case Self.backItemIdentifier:
+            return navigationToolbarItem(
+                identifier: itemIdentifier,
+                label: "Back",
+                symbolName: "chevron.left",
+                action: #selector(goBack)
+            )
+        case Self.forwardItemIdentifier:
+            return navigationToolbarItem(
+                identifier: itemIdentifier,
+                label: "Forward",
+                symbolName: "chevron.right",
+                action: #selector(goForward)
+            )
+        case Self.searchItemIdentifier:
+            let item = NSSearchToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Search Settings"
+            item.searchField.placeholderString = "Search Settings"
+            item.searchField.delegate = self
+            item.searchField.sendsSearchStringImmediately = true
+            searchField = item.searchField
+            return item
+        default:
+            return nil
+        }
+    }
+
+    private func navigationToolbarItem(
+        identifier: NSToolbarItem.Identifier,
+        label: String,
+        symbolName: String,
+        action: Selector
+    ) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = label
+        item.paletteLabel = label
+        item.toolTip = label
+        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: label)
+        item.target = self
+        item.action = action
+        item.isEnabled = false
+        return item
     }
 }
 
 @MainActor
-private final class GeneralSettingsViewController: NSViewController {
+private final class SettingsSidebarViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate {
+    enum Selection {
+        case destination(SettingsDestination)
+        case searchResult(SettingsSearchEntry)
+    }
+
+    private final class Node {
+        enum Value {
+            case section(String)
+            case destination(SettingsDestination)
+            case searchResult(SettingsSearchEntry)
+        }
+
+        let value: Value
+        var children: [Node]
+
+        init(_ value: Value, children: [Node] = []) {
+            self.value = value
+            self.children = children
+        }
+    }
+
+    var onSelection: ((Selection) -> Void)?
+
+    private let outlineView = NSOutlineView()
+    private var nodes: [Node] = []
+    private var isShowingSearchResults = false
+
+    override func loadView() {
+        let effectView = NSVisualEffectView()
+        effectView.material = .sidebar
+        effectView.blendingMode = .behindWindow
+        effectView.state = .active
+
+        let scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("SettingsSidebarColumn"))
+        outlineView.addTableColumn(column)
+        outlineView.outlineTableColumn = column
+        outlineView.headerView = nil
+        outlineView.backgroundColor = .clear
+        outlineView.rowSizeStyle = .medium
+        outlineView.indentationPerLevel = 14
+        outlineView.dataSource = self
+        outlineView.delegate = self
+        outlineView.style = .sourceList
+        scrollView.documentView = outlineView
+
+        effectView.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: effectView.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+        ])
+        view = effectView
+
+        rebuildNavigationNodes()
+        outlineView.reloadData()
+        expandAllSections()
+    }
+
+    func updateSearch(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        isShowingSearchResults = !trimmed.isEmpty
+        if isShowingSearchResults {
+            let results = SettingsCatalog.search(trimmed, platform: .macOS)
+            nodes = [Node(.section("Search Results"), children: results.map { Node(.searchResult($0)) })]
+        } else {
+            rebuildNavigationNodes()
+        }
+        outlineView.reloadData()
+        expandAllSections()
+    }
+
+    func select(destination: SettingsDestination) {
+        guard !isShowingSearchResults else { return }
+        for row in 0..<outlineView.numberOfRows {
+            guard let node = outlineView.item(atRow: row) as? Node else { continue }
+            if case .destination(let nodeDestination) = node.value,
+               nodeDestination == destination {
+                outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                return
+            }
+        }
+    }
+
+    private func rebuildNavigationNodes() {
+        nodes = SettingsCatalog.navigationSections(for: .macOS).map { section in
+            Node(
+                .section(section.title),
+                children: section.destinations.map { Node(.destination($0)) }
+            )
+        }
+    }
+
+    private func expandAllSections() {
+        nodes.forEach { outlineView.expandItem($0) }
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        (item as? Node)?.children.count ?? nodes.count
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        (item as? Node)?.children[index] ?? nodes[index]
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        guard let node = item as? Node else { return false }
+        return !node.children.isEmpty
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isGroupItem item: Any) -> Bool {
+        guard let node = item as? Node else { return false }
+        if case .section = node.value { return true }
+        return false
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
+        guard let node = item as? Node else { return false }
+        if case .section = node.value { return false }
+        return true
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
+        guard let node = item as? Node else { return 28 }
+        if case .searchResult = node.value { return 44 }
+        return 28
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
+        guard let node = item as? Node else { return nil }
+
+        switch node.value {
+        case .section(let title):
+            let field = NSTextField(labelWithString: title.uppercased())
+            field.font = .systemFont(ofSize: 11, weight: .semibold)
+            field.textColor = .secondaryLabelColor
+            return field
+        case .destination(let destination):
+            let cell = NSTableCellView()
+            let imageView = NSImageView()
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            imageView.symbolConfiguration = .init(pointSize: 14, weight: .regular)
+            imageView.image = NSImage(
+                systemSymbolName: destination.systemImageName,
+                accessibilityDescription: destination.title
+            )
+            imageView.contentTintColor = .secondaryLabelColor
+            let field = NSTextField(labelWithString: destination.title)
+            field.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(imageView)
+            cell.addSubview(field)
+            cell.imageView = imageView
+            cell.textField = field
+            NSLayoutConstraint.activate([
+                imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                imageView.widthAnchor.constraint(equalToConstant: 18),
+                field.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 7),
+                field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+                field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+            return cell
+        case .searchResult(let entry):
+            let cell = NSTableCellView()
+            let title = NSTextField(labelWithString: entry.title)
+            title.translatesAutoresizingMaskIntoConstraints = false
+            title.font = .systemFont(ofSize: 13)
+            title.lineBreakMode = .byTruncatingTail
+            let detail = NSTextField(labelWithString: entry.destination.title)
+            detail.translatesAutoresizingMaskIntoConstraints = false
+            detail.font = .systemFont(ofSize: 11)
+            detail.textColor = .secondaryLabelColor
+            cell.addSubview(title)
+            cell.addSubview(detail)
+            cell.textField = title
+            NSLayoutConstraint.activate([
+                title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                title.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+                title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 5),
+                detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+                detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+                detail.topAnchor.constraint(equalTo: title.bottomAnchor),
+            ])
+            return cell
+        }
+    }
+
+    func outlineViewSelectionDidChange(_ notification: Notification) {
+        let row = outlineView.selectedRow
+        guard row >= 0, let node = outlineView.item(atRow: row) as? Node else { return }
+        switch node.value {
+        case .destination(let destination): onSelection?(.destination(destination))
+        case .searchResult(let entry): onSelection?(.searchResult(entry))
+        case .section: break
+        }
+    }
+}
+
+@MainActor
+private final class SettingsDetailHostViewController: NSViewController {
+    private final class FlippedView: NSView {
+        override var isFlipped: Bool { true }
+    }
+
+    private let scrollView = NSScrollView()
+    private let documentView = FlippedView()
+    private var currentViewController: NSViewController?
+
+    override func loadView() {
+        let root = NSView()
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = documentView
+        documentView.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(scrollView)
+
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: root.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            documentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+        ])
+        view = root
+    }
+
+    func show(
+        _ viewController: NSViewController,
+        destination: SettingsDestination,
+        highlightedEntry: SettingsSearchEntry?
+    ) {
+        loadViewIfNeeded()
+        currentViewController?.view.removeFromSuperview()
+        currentViewController?.removeFromParent()
+
+        addChild(viewController)
+        currentViewController = viewController
+        let content = viewController.view
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: destination.title)
+        title.translatesAutoresizingMaskIntoConstraints = false
+        title.font = .systemFont(ofSize: 26, weight: .bold)
+        title.setAccessibilityRole(.staticText)
+
+        documentView.subviews.forEach { $0.removeFromSuperview() }
+        documentView.addSubview(title)
+        documentView.addSubview(content)
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 28),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: documentView.trailingAnchor, constant: -28),
+            title.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 24),
+            content.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
+            content.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
+            content.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -16),
+            content.heightAnchor.constraint(greaterThanOrEqualToConstant: 420),
+        ])
+        view.layoutSubtreeIfNeeded()
+
+        if let highlightedEntry {
+            DispatchQueue.main.async { [weak self] in
+                self?.reveal(entry: highlightedEntry, in: content)
+            }
+        } else {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+    }
+
+    private func reveal(entry: SettingsSearchEntry, in root: NSView) {
+        let needles = [entry.title, entry.rowID.rawValue]
+            .map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) }
+        let target = firstMatchingView(in: root, needles: needles) ?? root
+        let rect = target.convert(target.bounds, to: documentView).insetBy(dx: -8, dy: -8)
+        documentView.scrollToVisible(rect)
+
+        target.alphaValue = 0.35
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.55
+            target.animator().alphaValue = 1
+        }
+        NSAccessibility.post(element: target, notification: .focusedUIElementChanged)
+    }
+
+    private func firstMatchingView(in root: NSView, needles: [String]) -> NSView? {
+        let candidate: String?
+        if let field = root as? NSTextField {
+            candidate = field.stringValue
+        } else if let button = root as? NSButton {
+            candidate = button.title
+        } else {
+            candidate = nil
+        }
+
+        if let candidate {
+            let normalized = candidate.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+            if needles.contains(where: normalized.contains) { return root }
+        }
+        for child in root.subviews {
+            if let match = firstMatchingView(in: child, needles: needles) { return match }
+        }
+        return nil
+    }
+}
+
+@MainActor
+private final class ApplicationSettingsViewController: NSViewController {
+    private let launchAtLoginCheckbox = NSButton(
+        checkboxWithTitle: "Open Snippets at Login",
+        target: nil,
+        action: nil
+    )
+    private let launchStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let quitBehaviorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let quitSummaryLabel = NSTextField(wrappingLabelWithString: "")
+
+    override func loadView() {
+        let (root, stack) = makeSettingsPane()
+        view = root
+
+        let launchGroup = makeSettingsGroup(title: "Startup")
+        launchAtLoginCheckbox.target = self
+        launchAtLoginCheckbox.action = #selector(toggleLaunchAtLogin)
+        launchStatusLabel.font = .systemFont(ofSize: 12)
+        launchStatusLabel.textColor = .secondaryLabelColor
+        launchGroup.stack.addArrangedSubview(launchAtLoginCheckbox)
+        launchGroup.stack.addArrangedSubview(launchStatusLabel)
+
+        let quitGroup = makeSettingsGroup(title: "Closing Snippets")
+        let quitLabel = NSTextField(labelWithString: "Pressing Cmd+Q:")
+        quitBehaviorPopup.target = self
+        quitBehaviorPopup.action = #selector(quitBehaviorChanged)
+        let row = NSStackView(views: [quitLabel, quitBehaviorPopup, NSView()])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        quitSummaryLabel.font = .systemFont(ofSize: 12)
+        quitSummaryLabel.textColor = .secondaryLabelColor
+        quitGroup.stack.addArrangedSubview(row)
+        quitGroup.stack.addArrangedSubview(quitSummaryLabel)
+
+        stack.addArrangedSubview(launchGroup.view)
+        stack.addArrangedSubview(quitGroup.view)
+        launchGroup.view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        quitGroup.view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        configureQuitBehaviorPopup()
+        reloadFromStorage()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(reloadNotification),
+            name: .snippetsQuitBehaviorChanged,
+            object: nil
+        )
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    func reloadFromStorage() {
+        let service = SMAppService.mainApp
+        launchAtLoginCheckbox.state = service.status == .enabled ? .on : .off
+        switch service.status {
+        case .enabled:
+            launchStatusLabel.stringValue = "Snippets opens automatically when you sign in."
+        case .requiresApproval:
+            launchStatusLabel.stringValue = "Allow Snippets in System Settings → General → Login Items."
+        case .notFound:
+            launchStatusLabel.stringValue = "Launch at Login is unavailable for this copy of Snippets."
+        default:
+            launchStatusLabel.stringValue = "Snippets opens only when you launch it."
+        }
+
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        for item in quitBehaviorPopup.itemArray
+        where (item.representedObject as? String) == app.quitBehaviorPreference.rawValue {
+            quitBehaviorPopup.select(item)
+            break
+        }
+        quitSummaryLabel.stringValue = app.hasRememberedQuitBehavior
+            ? app.quitBehaviorPreferenceDescription
+            : "Snippets will ask the next time you press Cmd+Q."
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        guard let app = NSApp.delegate as? AppDelegate else { return }
+        app.toggleLaunchAtLogin(nil)
+        reloadFromStorage()
+    }
+
+    @objc private func quitBehaviorChanged(_ sender: NSPopUpButton) {
+        guard let raw = sender.selectedItem?.representedObject as? String,
+              let preference = AppDelegate.QuitBehaviorPreference(rawValue: raw),
+              let app = NSApp.delegate as? AppDelegate else { return }
+        app.updateQuitBehaviorPreference(preference)
+        reloadFromStorage()
+    }
+
+    @objc private func reloadNotification() { reloadFromStorage() }
+
+    private func configureQuitBehaviorPopup() {
+        quitBehaviorPopup.removeAllItems()
+        for preference in AppDelegate.QuitBehaviorPreference.allCases {
+            quitBehaviorPopup.addItem(withTitle: preference.menuTitle)
+            quitBehaviorPopup.lastItem?.representedObject = preference.rawValue
+        }
+    }
+}
+
+@MainActor
+private final class BackupSettingsViewController: NSViewController {
+    override func loadView() {
+        let (root, stack) = makeSettingsPane()
+        view = root
+
+        let sharing = makeSettingsGroup(title: "Move or Share Your Library")
+        sharing.stack.addArrangedSubview(makeSecondaryLabel(
+            "Import a Snippets library or export a portable copy for sharing. Sharing exports are not encrypted."
+        ))
+        let importButton = NSButton(title: "Import Library…", target: self, action: #selector(importLibrary))
+        let exportButton = NSButton(title: "Export for Sharing…", target: self, action: #selector(exportLibrary))
+        LiquidGlassDesign.configureActionButton(importButton, symbolName: "square.and.arrow.down")
+        LiquidGlassDesign.configureActionButton(exportButton, symbolName: "square.and.arrow.up")
+        let sharingButtons = NSStackView(views: [importButton, exportButton, NSView()])
+        sharingButtons.orientation = .horizontal
+        sharingButtons.spacing = 8
+        sharing.stack.addArrangedSubview(sharingButtons)
+
+        let protected = makeSettingsGroup(title: "Protected Archive")
+        protected.stack.addArrangedSubview(makeSecondaryLabel(
+            "Create an encrypted backup for safekeeping. You will need its password to restore it."
+        ))
+        let backupButton = NSButton(
+            title: "Export Encrypted Backup…",
+            target: self,
+            action: #selector(exportEncryptedBackup)
+        )
+        LiquidGlassDesign.configureActionButton(backupButton, symbolName: "lock.doc")
+        let backupRow = NSStackView(views: [backupButton, NSView()])
+        backupRow.orientation = .horizontal
+        protected.stack.addArrangedSubview(backupRow)
+
+        stack.addArrangedSubview(sharing.view)
+        stack.addArrangedSubview(protected.view)
+        sharing.view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        protected.view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+    }
+
+    @objc private func importLibrary() { (NSApp.delegate as? AppDelegate)?.importSnippets(nil) }
+    @objc private func exportLibrary() { (NSApp.delegate as? AppDelegate)?.exportSnippets(nil) }
+    @objc private func exportEncryptedBackup() { (NSApp.delegate as? AppDelegate)?.exportEncryptedBackup(nil) }
+}
+
+@MainActor
+private final class AboutSettingsViewController: NSViewController {
+    private let versionLabel = NSTextField(labelWithString: "")
+
+    override func loadView() {
+        let (root, stack) = makeSettingsPane()
+        view = root
+
+        let identityRow = NSStackView()
+        identityRow.orientation = .horizontal
+        identityRow.alignment = .centerY
+        identityRow.spacing = 18
+        let icon = NSImageView(image: NSApp.applicationIconImage)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 82),
+            icon.heightAnchor.constraint(equalToConstant: 82),
+        ])
+        let name = NSTextField(labelWithString: "Snippets")
+        name.font = .systemFont(ofSize: 24, weight: .bold)
+        versionLabel.font = .systemFont(ofSize: 13)
+        versionLabel.textColor = .secondaryLabelColor
+        let labels = NSStackView(views: [name, versionLabel])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 5
+        identityRow.addArrangedSubview(icon)
+        identityRow.addArrangedSubview(labels)
+        identityRow.addArrangedSubview(NSView())
+
+        let projectGroup = makeSettingsGroup(title: "Project")
+        projectGroup.stack.addArrangedSubview(makeSecondaryLabel(
+            "Snippets is open-source software released under the MIT License."
+        ))
+        let projectButton = NSButton(title: "View on GitHub", target: self, action: #selector(openProject))
+        LiquidGlassDesign.configureActionButton(projectButton, symbolName: "safari")
+        let projectRow = NSStackView(views: [projectButton, NSView()])
+        projectRow.orientation = .horizontal
+        projectGroup.stack.addArrangedSubview(projectRow)
+
+        stack.addArrangedSubview(identityRow)
+        stack.addArrangedSubview(projectGroup.view)
+        identityRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        projectGroup.view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        #if !NO_SPARKLE
+        let updatesGroup = makeSettingsGroup(title: "Software Updates")
+        updatesGroup.stack.addArrangedSubview(makeSecondaryLabel(
+            "Updates are installed securely through Sparkle. Automatic update checks remain enabled."
+        ))
+        let updateButton = NSButton(title: "Check for Updates…", target: self, action: #selector(checkForUpdates))
+        LiquidGlassDesign.configureActionButton(updateButton, symbolName: "arrow.clockwise")
+        let updateRow = NSStackView(views: [updateButton, NSView()])
+        updateRow.orientation = .horizontal
+        updatesGroup.stack.addArrangedSubview(updateRow)
+        stack.addArrangedSubview(updatesGroup.view)
+        updatesGroup.view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        #endif
+
+        reloadFromStorage()
+    }
+
+    func reloadFromStorage() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info["CFBundleVersion"] as? String ?? "—"
+        versionLabel.stringValue = "Version \(version) (\(build))"
+    }
+
+    @objc private func openProject() {
+        guard let url = URL(string: "https://github.com/wowlocal/snippets") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    #if !NO_SPARKLE
+    @objc private func checkForUpdates() {
+        (NSApp.delegate as? AppDelegate)?.checkForUpdates(nil)
+    }
+    #endif
+}
+
+private struct SettingsGroup {
+    let view: NSView
+    let stack: NSStackView
+}
+
+private func makeSettingsGroup(title: String) -> SettingsGroup {
+    let box = NSBox()
+    box.translatesAutoresizingMaskIntoConstraints = false
+    box.boxType = .custom
+    box.title = title
+    box.titlePosition = .atTop
+    box.contentViewMargins = NSSize(width: 16, height: 14)
+    box.cornerRadius = 10
+    box.borderColor = .separatorColor.withAlphaComponent(0.45)
+    box.borderWidth = 1
+    box.fillColor = .controlBackgroundColor.withAlphaComponent(0.45)
+
+    let stack = NSStackView()
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.spacing = 10
+    box.contentView?.addSubview(stack)
+    if let contentView = box.contentView {
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+    }
+    return SettingsGroup(view: box, stack: stack)
+}
+
+@MainActor
+private final class ExpansionSettingsViewController: NSViewController {
     private let quitBehaviorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let selectionSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
@@ -139,8 +876,6 @@ private final class GeneralSettingsViewController: NSViewController {
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
         view = rootView
-
-        let introLabel = makeSecondaryLabel("Choose what happens when you press Cmd+Q. This matches the remembered choice from the quit confirmation dialog.")
 
         let behaviorLabel = NSTextField(labelWithString: "Pressing Cmd+Q:")
         behaviorLabel.textColor = .secondaryLabelColor
@@ -186,6 +921,16 @@ private final class GeneralSettingsViewController: NSViewController {
 
         globalHotkeyStatusLabel.font = .systemFont(ofSize: 12)
         globalHotkeyStatusLabel.textColor = .secondaryLabelColor
+
+        let accessibilityButton = NSButton(
+            title: "Open Accessibility Settings…",
+            target: self,
+            action: #selector(openAccessibilitySettings)
+        )
+        LiquidGlassDesign.configureActionButton(accessibilityButton, symbolName: "hand.raised")
+        let accessibilityRow = NSStackView(views: [accessibilityButton, NSView()])
+        accessibilityRow.orientation = .horizontal
+        accessibilityRow.alignment = .centerY
 
         let matchHighlightIntroLabel = makeSecondaryLabel("Choose how the panel that appears after you type \u{201C}\\\u{201D} marks the letters your query matched. The next panel picks up the change \u{2014} no need to restart.")
 
@@ -241,8 +986,6 @@ private final class GeneralSettingsViewController: NSViewController {
         let cliSeparator = NSBox()
         cliSeparator.boxType = .separator
 
-        let cliIntroLabel = makeSecondaryLabel("Install snippets-cli to /usr/local/bin so agents and terminal scripts can interact with your snippets.")
-
         cliInstallButton.target = self
         cliInstallButton.action = #selector(installCLI)
         LiquidGlassDesign.configureActionButton(cliInstallButton, symbolName: "terminal")
@@ -254,15 +997,10 @@ private final class GeneralSettingsViewController: NSViewController {
         cliRow.orientation = .horizontal
         cliRow.alignment = .centerY
 
-        stack.addArrangedSubview(introLabel)
-        stack.addArrangedSubview(behaviorRow)
-        stack.addArrangedSubview(selectionSummaryLabel)
-        stack.addArrangedSubview(promptSummaryLabel)
-        stack.addArrangedSubview(resetRow)
-        stack.addArrangedSubview(hotkeySeparator)
         stack.addArrangedSubview(hotkeyIntroLabel)
         stack.addArrangedSubview(globalHotkeyRow)
         stack.addArrangedSubview(globalHotkeyStatusLabel)
+        stack.addArrangedSubview(accessibilityRow)
         stack.addArrangedSubview(matchHighlightIntroLabel)
         stack.addArrangedSubview(matchHighlightRow)
         stack.addArrangedSubview(matchHighlightSummaryLabel)
@@ -272,15 +1010,7 @@ private final class GeneralSettingsViewController: NSViewController {
         stack.addArrangedSubview(selectionMemoryRow)
         stack.addArrangedSubview(frecencyStatusLabel)
         stack.addArrangedSubview(resetUsageRow)
-        stack.addArrangedSubview(cliSeparator)
-        stack.addArrangedSubview(cliIntroLabel)
-        stack.addArrangedSubview(cliRow)
-        stack.addArrangedSubview(cliStatusLabel)
 
-        behaviorRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        selectionSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        promptSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        hotkeySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         hotkeyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         globalHotkeyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         matchHighlightIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -289,9 +1019,6 @@ private final class GeneralSettingsViewController: NSViewController {
         frecencySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         frecencyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         frecencyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        cliSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        cliIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        cliStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         configureQuitBehaviorPopup()
         configureMatchHighlightPopup()
@@ -479,6 +1206,10 @@ private final class GeneralSettingsViewController: NSViewController {
         updateGlobalHotkeyControls()
     }
 
+    @objc private func openAccessibilitySettings() {
+        (NSApp.delegate as? AppDelegate)?.expansionEngine.openAccessibilitySettings()
+    }
+
     private func applyFrecencyControls() {
         guard let usageStore = (NSApp.delegate as? AppDelegate)?.usageStore else { return }
 
@@ -601,6 +1332,11 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
     private let tableView = NSTableView()
     private let removeButton = NSButton(title: "Remove Selected", target: nil, action: nil)
     private let clearButton = NSButton(title: "Clear All", target: nil, action: nil)
+    private let cliInstallButton = NSButton(title: "Install CLI Tool", target: nil, action: nil)
+    private let cliStatusLabel = NSTextField(wrappingLabelWithString: "")
+
+    private static let cliInstallURL = URL(filePath: "/usr/local/bin/snippets-cli")
+    private static let cliBinaryName = "snippets-cli"
 
     private var customBundleIDs: [String] = []
     private var rows: [BundleIDRow] = []
@@ -677,12 +1413,32 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
 
+        let cliSeparator = NSBox()
+        cliSeparator.boxType = .separator
+        let cliTitle = NSTextField(labelWithString: "Command Line Tool")
+        cliTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        let cliIntro = makeSecondaryLabel(
+            "Install snippets-cli in /usr/local/bin so terminal scripts and local agents can work with your library."
+        )
+        cliInstallButton.target = self
+        cliInstallButton.action = #selector(installCLI)
+        LiquidGlassDesign.configureActionButton(cliInstallButton, symbolName: "terminal")
+        cliStatusLabel.font = .systemFont(ofSize: 12)
+        cliStatusLabel.textColor = .secondaryLabelColor
+        let cliRow = NSStackView(views: [cliInstallButton, NSView()])
+        cliRow.orientation = .horizontal
+
         stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(builtInLabel)
         stack.addArrangedSubview(countLabel)
         stack.addArrangedSubview(tableSurface)
         stack.addArrangedSubview(buttonRow)
         stack.addArrangedSubview(statusLabel)
+        stack.addArrangedSubview(cliSeparator)
+        stack.addArrangedSubview(cliTitle)
+        stack.addArrangedSubview(cliIntro)
+        stack.addArrangedSubview(cliRow)
+        stack.addArrangedSubview(cliStatusLabel)
 
         tableSurface.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         let preferredTableHeight = tableSurface.heightAnchor.constraint(greaterThanOrEqualToConstant: 300)
@@ -696,6 +1452,9 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         ])
         buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        cliSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        cliIntro.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        cliStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         reloadFromStorage()
     }
@@ -709,6 +1468,78 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         customBundleIDs = ChromiumBundleIDSettings.additionalBundleIDs()
         statusLabel.stringValue = ""
         rebuildRows()
+        updateCLIStatus()
+    }
+
+    private func updateCLIStatus() {
+        guard let source = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent(Self.cliBinaryName) else {
+            cliInstallButton.isEnabled = false
+            cliStatusLabel.stringValue = "snippets-cli was not found in this app bundle."
+            return
+        }
+
+        cliInstallButton.isEnabled = true
+        let destination = Self.cliInstallURL
+        let fileManager = FileManager.default
+        let pointsToBundledTool = (try? fileManager.destinationOfSymbolicLink(atPath: destination.path)) == source.path
+        if pointsToBundledTool {
+            cliInstallButton.title = "Reinstall CLI Tool"
+            cliStatusLabel.stringValue = "Installed at \(destination.path)"
+        } else if fileManager.fileExists(atPath: destination.path) {
+            cliInstallButton.title = "Install CLI Tool"
+            cliStatusLabel.stringValue = "\(destination.path) exists and will be replaced after confirmation."
+        } else {
+            cliInstallButton.title = "Install CLI Tool"
+            cliStatusLabel.stringValue = "Not installed."
+        }
+    }
+
+    @objc private func installCLI() {
+        guard let source = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent(Self.cliBinaryName) else { return }
+        let destination = Self.cliInstallURL
+        let fileManager = FileManager.default
+
+        do {
+            try fileManager.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.createSymbolicLink(at: destination, withDestinationURL: source)
+            updateCLIStatus()
+        } catch {
+            installCLIWithPrivileges(source: source, destination: destination)
+        }
+    }
+
+    private func installCLIWithPrivileges(source: URL, destination: URL) {
+        func appleScriptLiteral(_ value: String) -> String {
+            let escaped = value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(escaped)\""
+        }
+
+        let script = """
+        set srcPath to \(appleScriptLiteral(source.path))
+        set dstPath to \(appleScriptLiteral(destination.path))
+        set dirPath to \(appleScriptLiteral(destination.deletingLastPathComponent().path))
+        do shell script "mkdir -p " & quoted form of dirPath & " && ln -sf " & quoted form of srcPath & " " & quoted form of dstPath with administrator privileges
+        """
+        var scriptError: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&scriptError)
+        if let scriptError {
+            let message = scriptError[NSAppleScript.errorMessage] as? String ?? "unknown error"
+            cliStatusLabel.stringValue = "Installation failed: \(message)"
+        } else {
+            updateCLIStatus()
+        }
     }
 
     @objc private func addApp() {

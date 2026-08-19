@@ -859,10 +859,23 @@ final class MainSplitViewController: UISplitViewController {
 
     private func showSettings() {
         editorController.prepareForModalPresentation()
-        let settings = SettingsViewController(environment: environment)
-        let navigation = UINavigationController(rootViewController: settings)
-        navigation.modalPresentationStyle = .formSheet
-        present(navigation, animated: true)
+        let actions = SettingsBackupActions(
+            importLibrary: { [weak self] in
+                guard let self else { return }
+                dismiss(animated: true) { [weak self] in self?.showImporter() }
+            },
+            exportForSharing: { [weak self] in
+                guard let self else { return }
+                dismiss(animated: true) { [weak self] in self?.showExporter() }
+            },
+            exportEncryptedBackup: { [weak self] in
+                guard let self else { return }
+                dismiss(animated: true) { [weak self] in self?.showEncryptedBackupExporter() }
+            }
+        )
+        let settings = SettingsViewController(environment: environment, backupActions: actions)
+        settings.modalPresentationStyle = .formSheet
+        present(settings, animated: true)
     }
 
     private func showShortcuts() {

@@ -201,6 +201,32 @@ final class SnippetsIOSUITests: XCTestCase {
         )
     }
 
+    func testSettingsSearchRoutesToBackup() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset"]
+        app.launch()
+
+        let more = app.buttons["More"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 5))
+        more.tap()
+
+        let settingsAction = app.buttons["Settings"].firstMatch
+        XCTAssertTrue(settingsAction.waitForExistence(timeout: 3))
+        settingsAction.tap()
+
+        let search = app.searchFields["settings-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("encrypted backup")
+
+        let result = app.cells["settings-search-encryptedBackup"]
+        XCTAssertTrue(result.waitForExistence(timeout: 3))
+        result.tap()
+
+        XCTAssertTrue(app.navigationBars["Backup"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.cells["settings-backup-exportEncryptedBackup"].exists)
+    }
+
     /// Captures deterministic, real-device-size App Store screenshots when explicitly
     /// requested by the release workflow. Ordinary verification runs skip this test so
     /// adding marketing assets does not make the smoke suite slower or stateful.

@@ -6,7 +6,397 @@ import LocalAuthentication
 import Vision
 import VisionKit
 
-final class SettingsViewController: UITableViewController, UIDocumentPickerDelegate {
+struct SettingsBackupActions {
+    let importLibrary: () -> Void
+    let exportForSharing: () -> Void
+    let exportEncryptedBackup: () -> Void
+}
+
+final class SettingsViewController: UIViewController {
+    private let environment: AppEnvironment
+    private let backupActions: SettingsBackupActions
+    private var phoneNavigationController: UINavigationController?
+    private var splitController: UISplitViewController?
+
+    init(environment: AppEnvironment, backupActions: SettingsBackupActions) {
+        self.environment = environment
+        self.backupActions = backupActions
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .formSheet
+        preferredContentSize = CGSize(width: 900, height: 700)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemGroupedBackground
+        view.accessibilityIdentifier = "settings-root"
+
+        let sidebar = SettingsSidebarViewController()
+        sidebar.navigationItem.rightBarButtonItem = UIBarButtonItem(
+            systemItem: .done,
+            primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
+        )
+
+        if traitCollection.userInterfaceIdiom == .phone {
+            let navigation = UINavigationController(rootViewController: sidebar)
+            AppTheme.configureNavigationBar(navigation.navigationBar)
+            phoneNavigationController = navigation
+            sidebar.onSelection = { [weak self, weak navigation] destination, rowID in
+                guard let self else { return }
+                navigation?.pushViewController(
+                    self.makePane(destination: destination, highlightedRow: rowID),
+                    animated: true
+                )
+            }
+            embed(navigation)
+        } else {
+            let split = UISplitViewController(style: .doubleColumn)
+            split.preferredDisplayMode = .oneBesideSecondary
+            split.preferredSplitBehavior = .tile
+            split.minimumPrimaryColumnWidth = 250
+            split.maximumPrimaryColumnWidth = 340
+
+            let primary = UINavigationController(rootViewController: sidebar)
+            let initial = makePane(destination: .sync, highlightedRow: nil)
+            let secondary = UINavigationController(rootViewController: initial)
+            AppTheme.configureNavigationBar(primary.navigationBar)
+            AppTheme.configureNavigationBar(secondary.navigationBar)
+            split.setViewController(primary, for: .primary)
+            split.setViewController(secondary, for: .secondary)
+            splitController = split
+
+            sidebar.onSelection = { [weak self, weak split] destination, rowID in
+                guard let self else { return }
+                let pane = self.makePane(destination: destination, highlightedRow: rowID)
+                let navigation = UINavigationController(rootViewController: pane)
+                AppTheme.configureNavigationBar(navigation.navigationBar)
+                split?.setViewController(navigation, for: .secondary)
+                split?.show(.secondary)
+            }
+            embed(split)
+            sidebar.select(destination: .sync)
+        }
+    }
+
+    private func embed(_ child: UIViewController) {
+        addChild(child)
+        child.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(child.view)
+        NSLayoutConstraint.activate([
+            child.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            child.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            child.view.topAnchor.constraint(equalTo: view.topAnchor),
+            child.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        child.didMove(toParent: self)
+    }
+
+    private func makePane(
+        destination: SettingsDestination,
+        highlightedRow: SettingsRowID?
+    ) -> UIViewController {
+        switch destination {
+        case .sync, .secureSnippets, .diagnostics:
+            return SettingsPaneViewController(
+                environment: environment,
+                destination: destination,
+                highlightedRow: highlightedRow
+            )
+        case .backup:
+            return BackupSettingsViewController(actions: backupActions, highlightedRow: highlightedRow)
+        case .about:
+            return AboutSettingsViewController(highlightedRow: highlightedRow)
+        case .general, .expansion, .integrations:
+            preconditionFailure("macOS-only Settings destination used on iOS")
+        }
+    }
+}
+
+private final class SettingsSidebarViewController: UITableViewController, UISearchResultsUpdating {
+    var onSelection: ((SettingsDestination, SettingsRowID?) -> Void)?
+
+    private let navigationSections = SettingsCatalog.navigationSections(for: .iOS)
+    private var searchResults: [SettingsSearchEntry] = []
+    private var isSearching = false
+
+    init() {
+        super.init(style: .insetGrouped)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Settings"
+        navigationItem.largeTitleDisplayMode = .always
+        navigationController?.navigationBar.prefersLargeTitles = true
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "destination")
+
+        let search = UISearchController(searchResultsController: nil)
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchResultsUpdater = self
+        search.searchBar.placeholder = "Search Settings"
+        search.searchBar.searchTextField.accessibilityIdentifier = "settings-search"
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+        definesPresentationContext = true
+    }
+
+    func select(destination: SettingsDestination) {
+        for (sectionIndex, section) in navigationSections.enumerated() {
+            guard let row = section.destinations.firstIndex(of: destination) else { continue }
+            tableView.selectRow(
+                at: IndexPath(row: row, section: sectionIndex),
+                animated: false,
+                scrollPosition: .none
+            )
+            return
+        }
+    }
+
+    func updateSearchResults(for searchController: UISearchController) {
+        let query = searchController.searchBar.text ?? ""
+        isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        searchResults = isSearching ? SettingsCatalog.search(query, platform: .iOS) : []
+        tableView.reloadData()
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        isSearching ? 1 : navigationSections.count
+    }
+
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        isSearching ? "Search Results" : navigationSections[section].title
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        isSearching ? searchResults.count : navigationSections[section].destinations.count
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: isSearching ? .subtitle : .default, reuseIdentifier: nil)
+        cell.accessoryType = .disclosureIndicator
+        if isSearching {
+            let entry = searchResults[indexPath.row]
+            cell.textLabel?.text = entry.title
+            cell.detailTextLabel?.text = entry.destination.title
+            cell.detailTextLabel?.textColor = .secondaryLabel
+            cell.imageView?.image = UIImage(systemName: entry.destination.systemImageName)
+            cell.accessibilityIdentifier = "settings-search-\(entry.rowID.rawValue)"
+        } else {
+            let destination = navigationSections[indexPath.section].destinations[indexPath.row]
+            cell.textLabel?.text = destination.title
+            cell.imageView?.image = UIImage(systemName: destination.systemImageName)
+            cell.accessibilityIdentifier = "settings-destination-\(destination.rawValue)"
+        }
+        cell.imageView?.tintColor = AppTheme.tint
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        if isSearching {
+            let result = searchResults[indexPath.row]
+            onSelection?(result.destination, result.rowID)
+        } else {
+            let destination = navigationSections[indexPath.section].destinations[indexPath.row]
+            onSelection?(destination, nil)
+        }
+    }
+}
+
+private final class BackupSettingsViewController: UITableViewController {
+    private enum Row: Int, CaseIterable {
+        case importLibrary
+        case exportForSharing
+        case exportEncryptedBackup
+    }
+
+    private let actions: SettingsBackupActions
+    private let highlightedRow: SettingsRowID?
+
+    init(actions: SettingsBackupActions, highlightedRow: SettingsRowID?) {
+        self.actions = actions
+        self.highlightedRow = highlightedRow
+        super.init(style: .insetGrouped)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = SettingsDestination.backup.title
+        navigationItem.largeTitleDisplayMode = .never
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard let highlightedRow,
+              let row = row(for: highlightedRow) else { return }
+        let indexPath = IndexPath(row: row.rawValue, section: 0)
+        tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
+        tableView.selectRow(at: indexPath, animated: true, scrollPosition: .none)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.tableView.deselectRow(at: indexPath, animated: true)
+        }
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int { 1 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { Row.allCases.count }
+
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        "Exports for sharing are readable JSON. Use an encrypted backup for safekeeping."
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let row = Row(rawValue: indexPath.row)!
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.accessoryType = .disclosureIndicator
+        switch row {
+        case .importLibrary:
+            cell.textLabel?.text = "Import Library"
+            cell.detailTextLabel?.text = "Add snippets from a JSON library or restore an encrypted archive."
+            cell.imageView?.image = UIImage(systemName: "square.and.arrow.down")
+        case .exportForSharing:
+            cell.textLabel?.text = "Export for Sharing"
+            cell.detailTextLabel?.text = "Create a readable JSON copy of the library."
+            cell.imageView?.image = UIImage(systemName: "square.and.arrow.up")
+        case .exportEncryptedBackup:
+            cell.textLabel?.text = "Export Encrypted Backup"
+            cell.detailTextLabel?.text = "Create a password-protected archive."
+            cell.imageView?.image = UIImage(systemName: "lock.doc")
+        }
+        cell.accessibilityIdentifier = "settings-backup-\(row)"
+        cell.detailTextLabel?.numberOfLines = 0
+        cell.imageView?.tintColor = AppTheme.tint
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        switch Row(rawValue: indexPath.row)! {
+        case .importLibrary: actions.importLibrary()
+        case .exportForSharing: actions.exportForSharing()
+        case .exportEncryptedBackup: actions.exportEncryptedBackup()
+        }
+    }
+
+    private func row(for rowID: SettingsRowID) -> Row? {
+        switch rowID {
+        case .importLibrary: .importLibrary
+        case .exportSharing: .exportForSharing
+        case .encryptedBackup: .exportEncryptedBackup
+        default: nil
+        }
+    }
+}
+
+private final class AboutSettingsViewController: UITableViewController {
+    private let highlightedRow: SettingsRowID?
+
+    init(highlightedRow: SettingsRowID?) {
+        self.highlightedRow = highlightedRow
+        super.init(style: .insetGrouped)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = SettingsDestination.about.title
+        navigationItem.largeTitleDisplayMode = .never
+        tableView.tableHeaderView = makeHeader()
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int { 1 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 2 }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.accessoryType = .disclosureIndicator
+        cell.imageView?.tintColor = AppTheme.tint
+        if indexPath.row == 0 {
+            cell.textLabel?.text = "View on GitHub"
+            cell.detailTextLabel?.text = "Source code, releases, and issue tracker"
+            cell.imageView?.image = UIImage(systemName: "safari")
+        } else {
+            cell.textLabel?.text = "MIT License"
+            cell.detailTextLabel?.text = "Open-source license"
+            cell.imageView?.image = UIImage(systemName: "doc.text")
+        }
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let urlString = indexPath.row == 0
+            ? "https://github.com/wowlocal/snippets"
+            : "https://github.com/wowlocal/snippets/blob/main/LICENSE"
+        guard let url = URL(string: urlString) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if highlightedRow == .version, let header = tableView.tableHeaderView {
+            header.alpha = 0.35
+            UIView.animate(withDuration: 0.55) { header.alpha = 1 }
+            return
+        }
+        guard highlightedRow == .projectLink else { return }
+        let indexPath = IndexPath(row: 0, section: 0)
+        tableView.selectRow(at: indexPath, animated: true, scrollPosition: .middle)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.tableView.deselectRow(at: indexPath, animated: true)
+        }
+    }
+
+    private func makeHeader() -> UIView {
+        let header = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 180))
+        let icon = UIImageView(
+            image: UIImage(named: "AppIcon") ?? UIImage(systemName: "text.quote")
+        )
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.contentMode = .scaleAspectFit
+        icon.layer.cornerRadius = 18
+        icon.clipsToBounds = true
+        let title = UILabel()
+        title.translatesAutoresizingMaskIntoConstraints = false
+        title.text = "Snippets"
+        title.font = .preferredFont(forTextStyle: .title1)
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info["CFBundleVersion"] as? String ?? "—"
+        let versionLabel = UILabel()
+        versionLabel.translatesAutoresizingMaskIntoConstraints = false
+        versionLabel.text = "Version \(version) (\(build))"
+        versionLabel.textColor = .secondaryLabel
+        versionLabel.font = .preferredFont(forTextStyle: .subheadline)
+        let labels = UIStackView(arrangedSubviews: [title, versionLabel])
+        labels.translatesAutoresizingMaskIntoConstraints = false
+        labels.axis = .vertical
+        labels.spacing = 4
+        header.addSubview(icon)
+        header.addSubview(labels)
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 92),
+            icon.heightAnchor.constraint(equalToConstant: 92),
+            icon.leadingAnchor.constraint(equalTo: header.layoutMarginsGuide.leadingAnchor, constant: 8),
+            icon.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            labels.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 20),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: header.layoutMarginsGuide.trailingAnchor),
+            labels.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+        ])
+        return header
+    }
+}
+
+final class SettingsPaneViewController: UITableViewController, UIDocumentPickerDelegate {
     private enum Section: Int, CaseIterable {
         case sync
         case security
@@ -27,6 +417,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         case syncStatus
         case syncNow
         case syncRecovery
+        case vaultStatus
         case keychainStatus
         case lockVault
         case addRecovery
@@ -38,15 +429,31 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     }
 
     private let environment: AppEnvironment
-    private let showsDoneButton: Bool
+    private let destination: SettingsDestination
+    private let highlightedRow: SettingsRowID?
+    private var didRevealHighlightedRow = false
     private var temporaryExportURL: URL?
     private var syncObservation: UUID?
     private lazy var cloudBootstrap = SnippetsCloudAccountBootstrap(
         selection: environment.backendSelection)
 
-    init(environment: AppEnvironment, showsDoneButton: Bool = true) {
+    private var visibleSections: [Section] {
+        switch destination {
+        case .sync: [.sync]
+        case .secureSnippets: [.security]
+        case .diagnostics: [.diagnostics]
+        case .general, .expansion, .backup, .integrations, .about: []
+        }
+    }
+
+    init(
+        environment: AppEnvironment,
+        destination: SettingsDestination,
+        highlightedRow: SettingsRowID?
+    ) {
         self.environment = environment
-        self.showsDoneButton = showsDoneButton
+        self.destination = destination
+        self.highlightedRow = highlightedRow
         super.init(style: .insetGrouped)
     }
 
@@ -56,13 +463,8 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Settings"
-        if showsDoneButton {
-            navigationItem.rightBarButtonItem = UIBarButtonItem(
-                systemItem: .done,
-                primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
-            )
-        }
+        title = destination.title
+        navigationItem.largeTitleDisplayMode = .never
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
         syncObservation = environment.syncCoordinator.addStateObserver { [weak self] _ in
             self?.tableView.reloadData()
@@ -77,9 +479,12 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        if traitCollection.userInterfaceIdiom == .phone {
-            navigationController?.setToolbarHidden(true, animated: animated)
-        }
+        navigationController?.setToolbarHidden(true, animated: animated)
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        revealHighlightedRowIfNeeded()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -96,18 +501,18 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
         self.syncObservation = nil
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int { Section.allCases.count }
+    override func numberOfSections(in tableView: UITableView) -> Int { visibleSections.count }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        Section(rawValue: section)?.title
+        visibleSections[section].title
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        rows(in: Section(rawValue: section)!).count
+        rows(in: visibleSections[section]).count
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let row = rows(in: Section(rawValue: indexPath.section)!)[indexPath.row]
+        let row = rows(in: visibleSections[indexPath.section])[indexPath.row]
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         cell.textLabel?.numberOfLines = 0
         cell.detailTextLabel?.numberOfLines = 0
@@ -152,6 +557,19 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             }
             cell.imageView?.image = UIImage(systemName: "exclamationmark.shield")
             cell.textLabel?.textColor = AppTheme.warning
+        case .vaultStatus:
+            cell.textLabel?.text = "Secure Snippets Status"
+            if !environment.secureStore.hasVault {
+                cell.detailTextLabel?.text = "Not set up. Make any snippet secure to create your encrypted vault."
+            } else if environment.vaultSession.state.isUnlocked {
+                cell.detailTextLabel?.text = "Unlocked for this session. Secure snippets still authenticate before reveal or insertion."
+            } else {
+                cell.detailTextLabel?.text = "Locked. Secure snippets stay encrypted until you authenticate."
+            }
+            cell.imageView?.image = UIImage(
+                systemName: environment.vaultSession.state.isUnlocked ? "lock.open" : "lock"
+            )
+            cell.selectionStyle = .none
         case .keychainStatus:
             cell.textLabel?.text = "Key Storage"
             cell.detailTextLabel?.text = environment.vaultSession.keychainStatusDescription
@@ -206,7 +624,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let row = rows(in: Section(rawValue: indexPath.section)!)[indexPath.row]
+        let row = rows(in: visibleSections[indexPath.section])[indexPath.row]
         switch row {
         case .syncProvider:
             chooseSyncProvider()
@@ -244,7 +662,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             }
             return rows
         case .security:
-            var rows: [Row] = [.keychainStatus]
+            var rows: [Row] = [.vaultStatus, .keychainStatus]
             if environment.secureStore.hasVault {
                 rows.append(.lockVault)
                 if !environment.secureStore.hasRecoveryKey { rows.append(.addRecovery) }
@@ -254,6 +672,58 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
             return rows
         case .diagnostics:
             return [.diagnosticsStatus, .exportDiagnostics, .deleteDiagnostics]
+        }
+    }
+
+    private func revealHighlightedRowIfNeeded() {
+        guard !didRevealHighlightedRow, let highlightedRow else { return }
+        didRevealHighlightedRow = true
+
+        let candidateIDs: Set<SettingsRowID> = switch highlightedRow {
+        case .cloudAccount: [.cloudProvider, .syncEnabled]
+        case .vaultSetup: [.vaultStatus]
+        case .recoveryKey, .restoreRecovery, .forgetVault: [highlightedRow, .vaultStatus]
+        default: [highlightedRow]
+        }
+
+        for (sectionIndex, section) in visibleSections.enumerated() {
+            let sectionRows = rows(in: section)
+            guard let rowIndex = sectionRows.firstIndex(where: {
+                candidateIDs.contains(settingsRowID(for: $0))
+            }) else { continue }
+            reveal(indexPath: IndexPath(row: rowIndex, section: sectionIndex))
+            return
+        }
+
+        if let firstSection = visibleSections.first, !rows(in: firstSection).isEmpty {
+            reveal(indexPath: IndexPath(row: 0, section: 0))
+        }
+    }
+
+    private func reveal(indexPath: IndexPath) {
+        tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
+        tableView.selectRow(at: indexPath, animated: true, scrollPosition: .none)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.tableView.deselectRow(at: indexPath, animated: true)
+        }
+    }
+
+    private func settingsRowID(for row: Row) -> SettingsRowID {
+        switch row {
+        case .syncProvider: .cloudProvider
+        case .syncToggle: .syncEnabled
+        case .syncStatus: .syncStatus
+        case .syncNow: .syncNow
+        case .syncRecovery: .syncRecovery
+        case .vaultStatus: .vaultStatus
+        case .keychainStatus: .keyStorage
+        case .lockVault: .lockVault
+        case .addRecovery: .recoveryKey
+        case .restoreRecovery: .restoreRecovery
+        case .forgetVault: .forgetVault
+        case .diagnosticsStatus: .persistentLogs
+        case .exportDiagnostics: .exportLogs
+        case .deleteDiagnostics: .deleteLogs
         }
     }
 
@@ -862,7 +1332,7 @@ final class SettingsViewController: UITableViewController, UIDocumentPickerDeleg
     }
 }
 
-extension SettingsViewController: ASWebAuthenticationPresentationContextProviding {
+extension SettingsPaneViewController: ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         _ = session
         return view.window!

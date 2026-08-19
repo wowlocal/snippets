@@ -80,6 +80,7 @@
 		28A200000000000000000033 /* SnippetsCloudBootstrapClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000033 /* SnippetsCloudBootstrapClient.swift */; };
 		28A200000000000000000034 /* SnippetsCloudAccountBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000034 /* SnippetsCloudAccountBootstrap.swift */; };
 		28D000000000000000000002 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000001 /* Diagnostics.swift */; };
+		28F000000000000000000002 /* SettingsCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F000000000000000000001 /* SettingsCatalog.swift */; };
 		28D000000000000000000004 /* DiagnosticsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000003 /* DiagnosticsService.swift */; };
 		28D000000000000000000008 /* CocoaLumberjack in Frameworks */ = {isa = PBXBuildFile; productRef = 28D000000000000000000006 /* CocoaLumberjack */; };
 		28D000000000000000000009 /* CocoaLumberjack in Frameworks */ = {isa = PBXBuildFile; productRef = 28D000000000000000000007 /* CocoaLumberjack */; };
@@ -207,6 +208,7 @@
 		28C000000000000000000001 /* Snippets iOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iOSUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28E000000000000000000001 /* Snippets macOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets macOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28D000000000000000000001 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Diagnostics.swift; path = snippets/Core/Diagnostics.swift; sourceTree = SOURCE_ROOT; };
+		28F000000000000000000001 /* SettingsCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsCatalog.swift; path = snippets/Core/SettingsCatalog.swift; sourceTree = SOURCE_ROOT; };
 		28D000000000000000000003 /* DiagnosticsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DiagnosticsService.swift; path = snippets/Diagnostics/DiagnosticsService.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -356,6 +358,7 @@
 				28A100000000000000000001 /* AtomicFileWriter.swift */,
 				28A100000000000000000002 /* DeletionGuard.swift */,
 				28D000000000000000000001 /* Diagnostics.swift */,
+				28F000000000000000000001 /* SettingsCatalog.swift */,
 				28D000000000000000000003 /* DiagnosticsService.swift */,
 				28A100000000000000000028 /* EncryptedSnippetBackup.swift */,
 				28A100000000000000000003 /* HybridLogicalClock.swift */,
@@ -690,6 +693,7 @@
 				28A200000000000000000001 /* AtomicFileWriter.swift in Sources */,
 				28A200000000000000000002 /* DeletionGuard.swift in Sources */,
 				28D000000000000000000002 /* Diagnostics.swift in Sources */,
+				28F000000000000000000002 /* SettingsCatalog.swift in Sources */,
 				28D000000000000000000004 /* DiagnosticsService.swift in Sources */,
 				28A200000000000000000028 /* EncryptedSnippetBackup.swift in Sources */,
 				28A200000000000000000003 /* HybridLogicalClock.swift in Sources */,

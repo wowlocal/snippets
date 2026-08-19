@@ -207,9 +207,24 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
     }
 
     private func showSettings() {
-        let settings = SettingsViewController(environment: environment, showsDoneButton: false)
-        settings.navigationItem.largeTitleDisplayMode = .never
-        pushViewController(settings, animated: true)
+        topViewController?.view.endEditing(true)
+        let actions = SettingsBackupActions(
+            importLibrary: { [weak self] in
+                guard let self else { return }
+                dismiss(animated: true) { [weak self] in self?.showImporter() }
+            },
+            exportForSharing: { [weak self] in
+                guard let self else { return }
+                dismiss(animated: true) { [weak self] in self?.showExporter() }
+            },
+            exportEncryptedBackup: { [weak self] in
+                guard let self else { return }
+                dismiss(animated: true) { [weak self] in self?.showEncryptedBackupExporter() }
+            }
+        )
+        let settings = SettingsViewController(environment: environment, backupActions: actions)
+        settings.modalPresentationStyle = .pageSheet
+        present(settings, animated: true)
     }
 
     private func showImporter() {

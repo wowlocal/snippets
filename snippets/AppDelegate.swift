@@ -566,6 +566,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @IBAction func openAboutSettings(_ sender: Any?) {
+        NSApp.setActivationPolicy(.regular)
+        let controller = settingsWindowController ?? SettingsWindowController()
+        settingsWindowController = controller
+        controller.showAboutSettings()
+        #if !NO_SPARKLE
+        refreshWindowUpdateAccessories()
+        #endif
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func openSyncSettings() {
         NSApp.setActivationPolicy(.regular)
         let controller = settingsWindowController ?? SettingsWindowController()
@@ -872,13 +883,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // `menuWillOpen` fills the title in: it carries a preview of what the
         // clipboard holds right now, which is only knowable at open time.
         statusMenuClipboardItem = clipboardItem
-        let resetQuitBehaviorItem = NSMenuItem(
-            title: "Reset Remembered Cmd+Q Choice",
-            action: #selector(resetQuitBehaviorPreference(_:)),
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings(_:)),
             keyEquivalent: ""
         )
-        resetQuitBehaviorItem.target = self
-        LiquidGlassDesign.applyMenuSymbol("arrow.uturn.backward", to: resetQuitBehaviorItem)
+        settingsItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("gearshape", to: settingsItem)
         let quitItem = NSMenuItem(title: "Quit Snippets", action: #selector(quitCompletely(_:)), keyEquivalent: "")
         quitItem.target = self
         LiquidGlassDesign.applyMenuSymbol("power", to: quitItem)
@@ -888,7 +899,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.addItem(securePasteItem)
         menu.addItem(clipboardItem)
         menu.addItem(.separator())
-        menu.addItem(resetQuitBehaviorItem)
+        menu.addItem(settingsItem)
         menu.addItem(quitItem)
         refreshStatusMenuClipboardItem()
         statusItem.menu = menu
@@ -1186,25 +1197,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func configureAppMenuItems() {
         guard let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
 
+        if let aboutItem = appMenu.items.first(where: { $0.title.hasPrefix("About ") }) {
+            aboutItem.target = self
+            aboutItem.action = #selector(openAboutSettings(_:))
+        }
+
+        if let launchIndex = appMenu.items.firstIndex(where: {
+            $0.action == #selector(toggleLaunchAtLogin(_:)) || $0.title == "Launch at Login"
+        }) {
+            appMenu.removeItem(at: launchIndex)
+            if launchIndex < appMenu.items.count, appMenu.items[launchIndex].isSeparatorItem {
+                appMenu.removeItem(at: launchIndex)
+            }
+        }
+
+        if let resetItem = appMenu.items.first(where: {
+            $0.action == #selector(resetQuitBehaviorPreference(_:))
+        }) {
+            appMenu.removeItem(resetItem)
+        }
+
         if let settingsItem = appMenu.items.first(where: { $0.keyEquivalent == "," }) {
             settingsItem.title = "Settings…"
             settingsItem.target = self
             settingsItem.action = #selector(openSettings(_:))
-        }
-
-        if appMenu.items.contains(where: { $0.action == #selector(resetQuitBehaviorPreference(_:)) }) == false {
-            let resetQuitBehaviorItem = NSMenuItem(
-                title: "Reset Remembered Cmd+Q Choice",
-                action: #selector(resetQuitBehaviorPreference(_:)),
-                keyEquivalent: ""
-            )
-            resetQuitBehaviorItem.target = self
-
-            if let settingsIndex = appMenu.items.firstIndex(where: { $0.keyEquivalent == "," }) {
-                appMenu.insertItem(resetQuitBehaviorItem, at: settingsIndex + 1)
-            } else {
-                appMenu.insertItem(resetQuitBehaviorItem, at: 0)
-            }
         }
 
         #if !NO_SPARKLE

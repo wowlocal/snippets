@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import UniformTypeIdentifiers
 
 private extension NSUserInterfaceItemIdentifier {
@@ -245,15 +244,6 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
             return selectedSnippet != nil
         }
 
-        if menuItem.action == #selector(toggleLaunchAtLogin) {
-            menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-            return true
-        }
-
-        if menuItem.action == #selector(resetQuitChoice(_:)) {
-            return (NSApp.delegate as? AppDelegate)?.hasRememberedQuitBehavior == true
-        }
-
         return true
     }
 
@@ -327,22 +317,6 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         menu.addItem(backupItem)
         menu.addItem(syncItem)
         menu.addItem(shortcutsItem)
-        menu.addItem(.separator())
-        let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        loginItem.target = self
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        LiquidGlassDesign.applyMenuSymbol("power", to: loginItem)
-        menu.addItem(loginItem)
-        if (NSApp.delegate as? AppDelegate)?.hasRememberedQuitBehavior == true {
-            menu.addItem(.separator())
-            let resetQuitItem = LiquidGlassDesign.menuItem(
-                title: "Reset Remembered Cmd+Q Choice",
-                symbolName: "arrow.uturn.backward",
-                action: #selector(resetQuitChoice),
-                target: self
-            )
-            menu.addItem(resetQuitItem)
-        }
     }
 
     /// Sync remains opt-in: while it is off the explicit Connect iCloud title is the
@@ -920,32 +894,6 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         store.beginEditTransaction()
         updateSelectedSnippetFromEditor()
         store.commitEditTransaction()
-    }
-
-    @objc func toggleLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled {
-                try service.unregister()
-                importExportMessage = "Launch at Login disabled."
-            } else {
-                try service.register()
-                importExportMessage = "Launch at Login enabled."
-            }
-        } catch {
-            importExportMessage = "Couldn't update Launch at Login."
-            Diagnostics.record(.storageFailure(
-                area: .launchAtLogin,
-                operation: .register,
-                failure: DiagnosticFailure(error),
-                attempt: nil))
-        }
-    }
-
-    @objc func resetQuitChoice(_ sender: Any?) {
-        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
-        appDelegate.resetQuitBehaviorPreference(sender)
-        importExportMessage = "Remembered Cmd+Q choice reset. You will be asked next time."
     }
 
     func performUndo() {
