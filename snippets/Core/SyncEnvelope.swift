@@ -805,6 +805,19 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
     /// keeps a pre-existing library from quarantining itself on upgrade.
     static let vaultKeyIDExtensionKey = "vaultKID"
 
+    /// Authenticated proof that this tombstone came from an explicit delete action in
+    /// a Snippets UI, rather than from an unexplained local absence. Its value is the
+    /// bounded set of exact live-envelope hashes that action meant to remove. Binding
+    /// the authority to ancestors is load-bearing: an old valid tombstone replayed
+    /// after a recreation must not retain permission to delete the recreated record.
+    /// The marker lives inside the encrypted envelope, so the backend cannot add it,
+    /// inspect it, or copy it onto another record without failing AEAD/hash verification.
+    ///
+    /// It is tombstone-only and intentionally does not survive a recreation. A later
+    /// deletion of the recreated record must earn its own user-intent marker instead of
+    /// inheriting authority from an older delete/undo cycle.
+    static let userInitiatedDeletionExtensionKey = "userDeletion.v1"
+
     /// Exactly these, forever. `WireTests` asserts the count, mirroring the "exactly
     /// nine keys" discipline for `snippets.json`.
     static let topLevelKeys: Set<String> = [
@@ -1000,7 +1013,8 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
     private(set) var deleted: Bool
     private(set) var fields: Fields?
     /// Forward-compatibility bag: anything a newer build added, preserved verbatim by
-    /// every older build. Empty in every record this version writes.
+    /// every older build. It also carries narrowly typed encrypted protocol metadata,
+    /// including vault scope and explicit tombstone intent.
     var x: [String: CanonicalJSON.Value]
 
     init(
@@ -1025,6 +1039,9 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
         // of an envelope somebody pasted into an issue.
         self.fields = deleted ? nil : fields
         self.x = x
+        if !deleted {
+            self.x[Self.userInitiatedDeletionExtensionKey] = nil
+        }
     }
 
     /// Reconstitutes a validated wire value without feeding persisted fields through
@@ -1120,6 +1137,14 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
         digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        let bytes = value.utf8
+        return bytes.count == 64 && bytes.allSatisfy {
+            ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
+                || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
+        }
+    }
+
     // MARK: Parsing
 
     /// Reads an envelope back out of canonical bytes and checks that it describes
@@ -1180,6 +1205,22 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
             throw Failure.malformed("\"x\" is not an object")
         }
 
+        if let userDeletion = x[Self.userInitiatedDeletionExtensionKey] {
+            let values = userDeletion.array
+            let hashes = values?.compactMap(\.text)
+            guard deleted,
+                  let values,
+                  let hashes,
+                  hashes.count == values.count,
+                  (1...8).contains(hashes.count),
+                  Set(hashes).count == hashes.count,
+                  hashes.allSatisfy(Self.isLowercaseSHA256) else {
+                throw Failure.malformed(
+                    "\"userDeletion.v1\" must contain one to eight unique lowercase "
+                        + "SHA-256 ancestor hashes and may appear only on a tombstone")
+            }
+        }
+
         let fieldsValue = try require("fields")
         let fields = fieldsValue.isNull ? nil : try Fields.parse(fieldsValue)
 
@@ -1212,6 +1253,21 @@ nonisolated struct SyncEnvelope: Equatable, Sendable {
 // MARK: - Conversions
 
 nonisolated extension SyncEnvelope {
+
+    var userInitiatedDeletionAncestorHashes: Set<String> {
+        guard deleted,
+              let values = x[Self.userInitiatedDeletionExtensionKey]?.array else { return [] }
+        let hashes = values.compactMap(\.text)
+        guard hashes.count == values.count,
+              (1...8).contains(hashes.count),
+              Set(hashes).count == hashes.count,
+              hashes.allSatisfy(Self.isLowercaseSHA256) else { return [] }
+        return Set(hashes)
+    }
+
+    var carriesUserInitiatedDeletion: Bool {
+        !userInitiatedDeletionAncestorHashes.isEmpty
+    }
 
     /// An ordinary snippet from `snippets.json`.
     static func plain(

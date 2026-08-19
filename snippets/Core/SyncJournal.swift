@@ -1009,7 +1009,8 @@ nonisolated struct SyncJournal: Equatable {
         current: [UUID: SyncEnvelope],
         confirmed: SyncBase,
         deviceID: String,
-        now: Date
+        now: Date,
+        userInitiatedDeletionIDs: Set<UUID> = []
     ) {
         let ids = Set(current.keys)
             .union(confirmed.envelopes.values.map(\.id))
@@ -1091,9 +1092,34 @@ nonisolated struct SyncJournal: Equatable {
                 desired = nil
             }
 
-            guard let desired else {
+            guard var desired else {
                 entries[key] = nil
                 continue
+            }
+
+            // The delete action itself is the user's review. Bind that intent to every
+            // exact live ancestor this journal knows the action may be removing. The
+            // confirmed hash lets an ordinary peer recognize the permission; newer
+            // desired/offered hashes cover a delete of an edit whose ACK is pending.
+            // A replay after recreation cannot match the recreated envelope and stays
+            // behind the mass-deletion breaker.
+            if desired.deleted,
+               userInitiatedDeletionIDs.contains(id),
+               !desired.carriesUserInitiatedDeletion {
+                let ancestorHashes = Set([
+                    previous?.desired,
+                    offered?.envelope,
+                    confirmedEnvelope,
+                    previous?.reviewedLocalAncestor,
+                    conflictExistenceProof(for: id),
+                ].compactMap { envelope -> String? in
+                    guard let envelope, !envelope.deleted else { return nil }
+                    return try? envelope.envelopeHash()
+                }).sorted()
+                if !ancestorHashes.isEmpty {
+                    desired.x[SyncEnvelope.userInitiatedDeletionExtensionKey] = .array(
+                        ancestorHashes.prefix(8).map(CanonicalJSON.Value.string))
+                }
             }
 
             if offered == nil,

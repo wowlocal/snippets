@@ -264,6 +264,11 @@ final class SyncCoordinator {
     private var localRecoveryEngine: SyncEngine?
     private(set) var state: SyncEngine.State = .disabled
 
+    /// UI deletions waiting for the shared journal to own their authenticated intent
+    /// marker. This survives engine rebuilds within the process; a full process crash
+    /// deliberately falls back to the conservative receiver confirmation.
+    private var pendingUserDeletionIDs: Set<UUID> = []
+
     /// Compatibility hook used by the macOS settings window.
     var onStateChange: ((SyncEngine.State) -> Void)?
 
@@ -579,6 +584,7 @@ final class SyncCoordinator {
 
         let engine = SyncEngine(
             transport: transport, library: library, sealer: sealer, device: device)
+        engine.noteUserInitiatedDeletions(pendingUserDeletionIDs)
         engine.onSafetyHaltPersistenceFailure = {
             // Independent fail-closed channel: if state.json or its lock is unavailable,
             // this process remains halted in memory and the next launch does not build a
@@ -587,6 +593,14 @@ final class SyncCoordinator {
             _ = UserDefaults.standard.synchronize()
         }
         let generation = lifecycleGeneration
+        engine.onUserDeletionIntentsConsumed = { [weak self, weak engine] ids in
+            MainActor.assumeIsolated {
+                guard let self, engine != nil, self.lifecycleGeneration == generation else {
+                    return
+                }
+                self.pendingUserDeletionIDs.subtract(ids)
+            }
+        }
         engine.onStateChange = { [weak self, weak engine] state in
             MainActor.assumeIsolated {
                 guard let self, engine != nil, self.lifecycleGeneration == generation else { return }
@@ -740,6 +754,22 @@ final class SyncCoordinator {
         case .remoteSync:
             break
         }
+    }
+
+    /// Records the user's delete action before the debounced sync round snapshots the
+    /// library. The marker is embedded only in the tombstone; no identifier is logged.
+    func userDidDeleteSnippets(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        pendingUserDeletionIDs.formUnion(ids)
+        engine?.noteUserInitiatedDeletions(ids)
+    }
+
+    /// Undo/recreation must revoke the old intent so a later unrelated absence cannot
+    /// inherit authority from an earlier delete cycle.
+    func userDidRestoreSnippets(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        pendingUserDeletionIDs.subtract(ids)
+        engine?.cancelUserInitiatedDeletions(ids)
     }
 
     private func scheduleLibraryChangeSync() {

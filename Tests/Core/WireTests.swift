@@ -381,6 +381,48 @@ struct WireTests {
             ])
         }
 
+        @Test func malformedUserDeletionAuthorityIsRejectedAtTheWireBoundary() throws {
+            let hashA = String(repeating: "a", count: 64)
+            let hashB = String(repeating: "b", count: 64)
+            let tombstone = SyncEnvelope.tombstone(
+                id: id(7), secure: false, hlc: clock(2_000), origin: thisDevice)
+
+            func data(
+                for envelope: SyncEnvelope,
+                marker: CanonicalJSON.Value
+            ) throws -> Data {
+                var object = try canonicalObject(envelope)
+                var extensions = try #require(object["x"]?.object)
+                extensions[SyncEnvelope.userInitiatedDeletionExtensionKey] = marker
+                object["x"] = .object(extensions)
+                return try canonicalDataRefreshingHash(object)
+            }
+
+            let malformedTombstoneMarkers: [CanonicalJSON.Value] = [
+                .array([]),
+                .array([.string(hashA), .string(hashA)]),
+                .array((0..<9).map { .string(String(repeating: String(format: "%x", $0), count: 64)) }),
+                .array([.string(String(repeating: "A", count: 64))]),
+                .array([.string("not-a-sha-256")]),
+                .array([.string(hashA), .int(7)]),
+                .string(hashA),
+            ]
+
+            for marker in malformedTombstoneMarkers {
+                let bytes = try data(for: tombstone, marker: marker)
+                #expect(throws: (any Error).self) {
+                    try SyncEnvelope.parse(bytes)
+                }
+            }
+
+            let live = SyncEnvelope.plain(
+                snippet(7), hlc: clock(2_000), origin: thisDevice)
+            let liveBytes = try data(for: live, marker: .array([.string(hashB)]))
+            #expect(throws: (any Error).self) {
+                try SyncEnvelope.parse(liveBytes)
+            }
+        }
+
         @Test func theFieldsObjectHasExactlyEightKeysAndTheyAreTheseEight() throws {
             let envelope = SyncEnvelope.plain(snippet(0), hlc: clock(1_000), origin: thisDevice)
             let fields = try #require(try canonicalObject(envelope)["fields"]?.object)

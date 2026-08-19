@@ -2,7 +2,7 @@ import Foundation
 
 // Compiled into the app, the CLI, and the test package — see `Snippet.swift`.
 
-/// The circuit breaker between a broken backend and the user's library.
+/// The circuit breaker between an unexplained remote deletion and the user's library.
 ///
 /// ## What this is defending against
 ///
@@ -18,8 +18,9 @@ import Foundation
 /// - Our own bug. A cursor handled wrongly, an off-by-one in a page loop.
 ///
 /// In every one of those, the correct sync behaviour and the disastrous one are the
-/// same code path. The merge cannot tell them apart, because the remote is telling it
-/// the truth about what the remote contains.
+/// same code path. The merge cannot tell them apart unless the producing app bound an
+/// explicit UI delete action into the authenticated tombstone. Callers remove those
+/// already-authorized tombstones before evaluating this guard.
 ///
 /// ## Why a threshold rather than a smarter test
 ///

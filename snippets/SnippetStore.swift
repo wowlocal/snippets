@@ -240,6 +240,8 @@ nonisolated final class SnippetPersistenceWorker: @unchecked Sendable {
 @MainActor
 protocol SnippetStoreSyncDelegate: AnyObject {
     func libraryDidChange(_ source: SnippetStore.ChangeSource)
+    func userDidDeleteSnippets(_ ids: Set<UUID>)
+    func userDidRestoreSnippets(_ ids: Set<UUID>)
 }
 
 @MainActor
@@ -689,6 +691,7 @@ final class SnippetStore {
         guard snippets.contains(where: { $0.id == snippetID }) else { return false }
         pushUndo()
         snippets.removeAll { $0.id == snippetID }
+        syncDelegate?.userDidDeleteSnippets(Set([snippetID]))
         persist(immediately: true)
         return true
     }
@@ -720,6 +723,7 @@ final class SnippetStore {
         )
         pendingDeletionUndoOrder.append(token.operationID)
         trimPendingDeletionUndosIfNeeded()
+        syncDelegate?.userDidDeleteSnippets(Set([snippetID]))
         persist(immediately: true)
         return token
     }
@@ -743,6 +747,7 @@ final class SnippetStore {
 
         pushUndo()
         snippets.insert(pending.snippet, at: min(pending.originalIndex, snippets.count))
+        syncDelegate?.userDidRestoreSnippets(Set([pending.snippet.id]))
         persist(immediately: true)
         return true
     }
@@ -1842,8 +1847,12 @@ final class SnippetStore {
     func undo() -> Bool {
         guard !isLibraryQuarantined else { return false }
         guard let snapshot = undoStack.popLast() else { return false }
+        let beforeIDs = Set(snippets.map(\.id))
+        let afterIDs = Set(snapshot.map(\.id))
         redoStack.append(snippets)
         snippets = snapshot
+        syncDelegate?.userDidDeleteSnippets(beforeIDs.subtracting(afterIDs))
+        syncDelegate?.userDidRestoreSnippets(afterIDs.subtracting(beforeIDs))
         persist(immediately: true)
         return true
     }
@@ -1851,8 +1860,12 @@ final class SnippetStore {
     func redo() -> Bool {
         guard !isLibraryQuarantined else { return false }
         guard let snapshot = redoStack.popLast() else { return false }
+        let beforeIDs = Set(snippets.map(\.id))
+        let afterIDs = Set(snapshot.map(\.id))
         undoStack.append(snippets)
         snippets = snapshot
+        syncDelegate?.userDidDeleteSnippets(beforeIDs.subtracting(afterIDs))
+        syncDelegate?.userDidRestoreSnippets(afterIDs.subtracting(beforeIDs))
         persist(immediately: true)
         return true
     }

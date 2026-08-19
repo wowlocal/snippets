@@ -173,6 +173,7 @@ final class PhoneRootViewController: UINavigationController, SnippetsRootControl
                 try self.environment.performLocalSecureChange {
                     try self.environment.secureStore.delete(id: snippet.id)
                 }
+                self.environment.syncCoordinator.userDidDeleteSnippets(Set([snippet.id]))
                 if self.topViewController is PhoneSnippetEditorViewController {
                     self.popToRootViewController(animated: true)
                 }

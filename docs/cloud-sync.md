@@ -715,13 +715,27 @@ invalidation, and duplicate delivery — is what the engine is proven against **
 byte reaches a real backend. The wire format cannot change after the first production deploy, so
 it has to be right while it is still free to change.
 
-A `DeletionGuard` refuses any remote change that would delete more than `max(5, 20%)` of the
-library. **Confirm Deletions → Apply Deletions** authorizes exactly one immediate attempt for the
-exact effective deletion set. The durable review context contains counts plus a SHA-256 fingerprint
-of the sorted record UUID set, never names or content; a changed set, even with the same count,
-requires a fresh confirmation. A halt written by an older build without that fingerprint exposes only
+An explicit delete/undo-to-delete through an updated Snippets UI adds a narrowly typed
+`userDeletion.v1` marker to the resulting tombstone before the journal offers it. Its value is a
+bounded list of exact live-envelope hashes that the action intended to remove. The marker is inside
+the encrypted, hashed envelope, is valid only on a tombstone, and is stripped from every live
+recreation. The cloud service therefore cannot manufacture or transplant it. A receiving device
+accepts the marker only when one of those hashes matches its live causal ancestor; replaying an old
+valid tombstone after a recreation remains review-required. Another updated device can therefore
+treat the original delete action as the user's review instead of asking the same question again. A
+process crash before the journal owns the marker loses this convenience only in the conservative
+direction.
+
+For tombstones without that authenticated UI-intent marker, `DeletionGuard` still refuses any remote
+change that would delete more than `max(5, 20%)` of the remaining unapproved library. This covers
+older clients, external valid-file rewrites, and unexplained/buggy deletion sources. **Confirm
+Deletions → Apply Deletions** authorizes exactly one immediate attempt for the exact effective
+unapproved deletion set. The durable review context contains counts plus a SHA-256 fingerprint of
+the sorted record UUID set, never names or content; a changed set, even with the same count, requires
+a fresh confirmation. A halt written by an older build without that fingerprint exposes only
 **Refresh Deletion Details**; the refresh applies nothing, persists the exact batch, and then offers
-the destructive confirmation.
+the destructive confirmation. On macOS the same recovery action is available directly from the main
+Sync menu; Settings remains an alternate entry point.
 
 The Snippets Cloud client pins the server instance and protocol major from discovery. Every scoped
 response echoes that instance, and each mutating batch carries it with the space, scope binding,

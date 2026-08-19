@@ -790,6 +790,41 @@ struct SyncJournalTests {
 
     // MARK: - Causal recreation
 
+    @Test func explicitUserDeletionMarksOnlyTheDurableTombstone() throws {
+        let snippetID = id(29)
+        let ancestor = envelope(snippetID, revision: 100, content: "ancestor")
+        let confirmed = base([ancestor])
+        var journal = SyncJournal()
+
+        journal.reconcile(
+            current: [:],
+            confirmed: confirmed,
+            deviceID: Self.device,
+            now: time(1),
+            userInitiatedDeletionIDs: Set([snippetID]))
+
+        let deletion = try #require(journal.entry(snippetID)?.desired)
+        #expect(deletion.deleted)
+        #expect(deletion.carriesUserInitiatedDeletion)
+        #expect(deletion.userInitiatedDeletionAncestorHashes == Set([
+            try ancestor.envelopeHash()
+        ]))
+
+        let recreated = SyncEnvelope(
+            id: snippetID,
+            hlc: HLC(wallMs: 200, counter: 0, device: Self.device),
+            origin: Self.device,
+            secure: false,
+            deleted: false,
+            fields: ancestor.fields,
+            x: [SyncEnvelope.userInitiatedDeletionExtensionKey: .array([
+                .string(try ancestor.envelopeHash())
+            ])])
+        #expect(!recreated.carriesUserInitiatedDeletion)
+        #expect(recreated.x[SyncEnvelope.userInitiatedDeletionExtensionKey] == nil,
+                "a recreation must not inherit authority from the older deletion")
+    }
+
     @Test func recreateAfterConfirmedTombstoneGetsAClockAboveTheDelete() throws {
         let snippetID = id(30)
         let ancestor = envelope(snippetID, revision: 100, content: "ancestor")

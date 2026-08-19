@@ -471,6 +471,138 @@ struct SyncEngineTests {
         #expect(h.library.envelopes.count == 40, "the library must be untouched")
     }
 
+    @Test func userInitiatedRemoteMassDeletionDoesNotAskEveryDeviceAgain() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+
+        let records = try ids.prefix(30).map { id -> WireRecord in
+            var tombstone = envelope(id, name: "deleted", ms: 9_000, deleted: true)
+            let ancestor = try #require(h.library.envelopes[id])
+            tombstone.x[SyncEnvelope.userInitiatedDeletionExtensionKey] = .array([
+                .string(try ancestor.envelopeHash())
+            ])
+            return try WireCodec.seal(tombstone, using: h.sealer)
+        }
+        await h.transport.seed(records)
+
+        let state = await h.engine.sync()
+        #expect(!state.isHalted)
+        #expect(h.library.envelopes.count == 10)
+        #expect(h.library.applied.flatMap { $0 }.count == 30)
+    }
+
+    @Test func localDeleteIntentIsDurableBeforeItsTombstonesLeaveTheDevice() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<12).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+
+        let deletedIDs = Set(ids.prefix(8))
+        for id in deletedIDs { h.library.envelopes[id] = nil }
+        var consumed: Set<UUID> = []
+        h.engine.onUserDeletionIntentsConsumed = { consumed.formUnion($0) }
+        h.engine.noteUserInitiatedDeletions(deletedIDs)
+
+        let state = await h.engine.sync()
+        #expect(!state.isHalted)
+        #expect(consumed == deletedIDs)
+        guard case .loaded(let confirmed) = SyncBaseFile.load(
+            from: h.dir.appendingPathComponent("base.json")) else {
+            Issue.record("the accepted tombstones must be durable in the confirmed base")
+            return
+        }
+        for id in deletedIDs {
+            #expect(confirmed.envelope(id)?.carriesUserInitiatedDeletion == true)
+        }
+    }
+
+    @Test func unexplainedDeletionsStillTripTheGuardBesideApprovedOnes() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+
+        let records = try ids.prefix(36).enumerated().map { index, id -> WireRecord in
+            var tombstone = envelope(id, name: "deleted", ms: 9_000, deleted: true)
+            if index < 30 {
+                let ancestor = try #require(h.library.envelopes[id])
+                tombstone.x[SyncEnvelope.userInitiatedDeletionExtensionKey] = .array([
+                    .string(try ancestor.envelopeHash())
+                ])
+            }
+            return try WireCodec.seal(tombstone, using: h.sealer)
+        }
+        await h.transport.seed(records)
+
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("six unexplained deletions among ten remaining records must stop")
+            return
+        }
+        #expect(h.library.applied.isEmpty)
+        #expect(h.library.envelopes.count == 40)
+
+        h.engine.performRecovery(.applyRemoteDeletions)
+        let recovered = await h.engine.sync()
+        #expect(!recovered.isHalted,
+                "the unchanged mixed batch must need exactly one confirmation")
+        #expect(h.library.envelopes.count == 4)
+    }
+
+    @Test func replayedMarkedTombstonesCannotDeleteLaterRecreationsWithoutReview() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<40).map { _ in UUID() }
+        var originalByID: [UUID: SyncEnvelope] = [:]
+        for (index, id) in ids.enumerated() {
+            let original = envelope(id, name: "old-\(index)", ms: 1_000)
+            originalByID[id] = original
+            h.library.envelopes[id] = original
+        }
+        _ = await h.engine.sync()
+
+        // Recreate/update every record and let that newer generation become the
+        // confirmed ancestor before the backend rolls back to the old deletions.
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "new-\(index)", ms: 5_000)
+        }
+        _ = await h.engine.sync()
+        h.library.applied.removeAll()
+
+        let replay = try ids.prefix(30).map { id -> WireRecord in
+            let oldAncestor = try #require(originalByID[id])
+            var tombstone = envelope(id, name: "deleted", ms: 2_000, deleted: true)
+            tombstone.x[SyncEnvelope.userInitiatedDeletionExtensionKey] = .array([
+                .string(try oldAncestor.envelopeHash())
+            ])
+            return try WireCodec.seal(tombstone, using: h.sealer)
+        }
+        await h.transport.seed(replay)
+
+        guard case .halted(.massDeletion, _) = await h.engine.sync() else {
+            Issue.record("an old marked tombstone must not authorize deleting a recreation")
+            return
+        }
+        #expect(h.library.applied.isEmpty)
+        #expect(h.library.envelopes.count == 40)
+    }
+
     @Test func reviewedRemoteMassDeletionAppliesTheConfirmedBatch() async throws {
         let h = try harness()
         defer { try? FileManager.default.removeItem(at: h.dir) }

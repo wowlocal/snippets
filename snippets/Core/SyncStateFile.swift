@@ -74,7 +74,9 @@ nonisolated enum SyncRecoveryAction: Equatable, Sendable {
     var explanation: String {
         switch self {
         case .applyRemoteDeletions:
-            "This authorizes the exact deletion batch described above and lets sync finish it. "
+            "These deletions did not include proof of an explicit delete action from "
+                + "an updated Snippets device. This authorizes the exact batch described "
+                + "above and lets sync finish it. "
                 + "If an earlier confirmed attempt was interrupted, some records may already "
                 + "have been applied. Continue only if the deletion was intentional."
         case .refreshDeletionReview:
@@ -208,7 +210,9 @@ nonisolated struct SyncState: Codable, Equatable {
                 return "No local data was deleted or re-uploaded. Choose Restore only on "
                     + "the device whose current library should repopulate the cloud."
             case .massDeletion:
-                return "Review the deletion count before applying it on this device."
+                return "Updated Snippets devices normally approve their own explicit delete "
+                    + "actions at the source. This batch has no such proof, so review its "
+                    + "count before applying it on this device."
             case .schemaTooNew:
                 return "Update Snippets on this device."
             case .localLibraryQuarantined:

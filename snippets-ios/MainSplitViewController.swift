@@ -539,6 +539,7 @@ final class MainSplitViewController: UISplitViewController {
                     try self.environment.performLocalSecureChange {
                         try self.environment.secureStore.delete(id: id)
                     }
+                    self.environment.syncCoordinator.userDidDeleteSnippets(Set([id]))
                 } else {
                     self.environment.store.delete(snippetID: id)
                 }

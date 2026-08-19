@@ -349,9 +349,19 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
     /// consent that enables it; subsequent presses request an immediate round.
     @objc private func syncFromMoreMenu() {
         guard let app = NSApp.delegate as? AppDelegate else { return }
-        if app.syncCoordinator.recoveryAction != nil
-            || app.syncCoordinator.requiresSyncSettingsAttention
-        {
+        if let action = app.syncCoordinator.recoveryAction {
+            guard action == .applyRemoteDeletions else {
+                app.openSyncSettings()
+                return
+            }
+            guard MacSyncRecoveryConfirmation.shouldPerform(
+                action,
+                coordinator: app.syncCoordinator
+            ) else { return }
+            app.syncCoordinator.performRecovery(action)
+            return
+        }
+        if app.syncCoordinator.requiresSyncSettingsAttention {
             app.openSyncSettings()
             return
         }
@@ -473,7 +483,13 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         if store.isSecure(targetSnippetID) {
             // Deleting ciphertext needs no key — requiring Touch ID to throw something
             // away would be friction in the one direction that cannot leak anything.
-            try? (NSApp.delegate as? AppDelegate)?.secureStore.delete(id: targetSnippetID)
+            guard let app = NSApp.delegate as? AppDelegate else { return }
+            do {
+                try app.secureStore.delete(id: targetSnippetID)
+                app.syncCoordinator.userDidDeleteSnippets(Set([targetSnippetID]))
+            } catch {
+                return
+            }
         } else {
             store.delete(snippetID: targetSnippetID)
         }

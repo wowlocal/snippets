@@ -312,6 +312,7 @@ final class SyncEngine {
 
     private(set) var state: State = .disabled
     var onStateChange: ((State) -> Void)?
+    var onUserDeletionIntentsConsumed: ((Set<UUID>) -> Void)?
 
     /// Injected. Nothing here reads the system clock directly.
     var now: () -> Date = { Date() }
@@ -328,6 +329,10 @@ final class SyncEngine {
     private let stateLockTimeout: TimeInterval
     private let device: String
     private let recoveryClaimOwnerID = UUID()
+    /// Process-local bridge between an explicit UI delete and the next durable journal
+    /// tombstone. If the process dies before journal persistence, the marker is lost in
+    /// the conservative direction and another device may ask for review as before.
+    private var userInitiatedDeletionIDs: Set<UUID> = []
     private var base: SyncBase
     private var journal: SyncJournal
     /// Once journal.json exists, base.json must also exist: the engine establishes them
@@ -517,6 +522,14 @@ final class SyncEngine {
     }
 
     // MARK: - Halting
+
+    func noteUserInitiatedDeletions(_ ids: Set<UUID>) {
+        userInitiatedDeletionIDs.formUnion(ids)
+    }
+
+    func cancelUserInitiatedDeletions(_ ids: Set<UUID>) {
+        userInitiatedDeletionIDs.subtract(ids)
+    }
 
     /// Refuses to run again until a human clears it.
     func halt(_ reason: SyncState.HaltReason, detail: String) {
@@ -1423,8 +1436,13 @@ final class SyncEngine {
                     + "unrelated or malformed data; sync stopped without overwriting it")
         }
         reconciled.reconcile(
-            current: current, confirmed: base, deviceID: device, now: now())
+            current: current,
+            confirmed: base,
+            deviceID: device,
+            now: now(),
+            userInitiatedDeletionIDs: userInitiatedDeletionIDs)
         try persistJournal(reconciled)
+        consumeUserDeletionIntents(afterReconciling: current)
 
         let resolutions = journal.carrierResolutions(current: current, confirmed: base)
         if !resolutions.isEmpty {
@@ -1460,8 +1478,10 @@ final class SyncEngine {
                 current: resolvedCurrent,
                 confirmed: base,
                 deviceID: device,
-                now: now())
+                now: now(),
+                userInitiatedDeletionIDs: userInitiatedDeletionIDs)
             try persistJournal(resolvedJournal)
+            consumeUserDeletionIntents(afterReconciling: resolvedCurrent)
         }
         let pending = journal.pending(confirmed: base)
 
@@ -1858,6 +1878,7 @@ final class SyncEngine {
             }
         }
         var mergedByID: [UUID: SyncEnvelope] = [:]
+        var mergeAncestorsByID: [UUID: SyncEnvelope] = [:]
         var dependencyStages: [(source: SyncEnvelope, copies: [SyncEnvelope])] = []
         for remote in incoming {
             let envelope = remote.envelope
@@ -1889,6 +1910,7 @@ final class SyncEngine {
                     ancestor = base.envelope(envelope.id)
                 }
             }
+            mergeAncestorsByID[envelope.id] = ancestor
             let merge: SyncMerge.EnvelopeOutcome
             do {
                 merge = try SyncMerge.mergeEnvelopeOutcome(
@@ -1974,11 +1996,23 @@ final class SyncEngine {
 
         // The circuit breaker.
         let live = library.liveIDs()
-        let effectiveDeletionIDs = Set(
-            classification.applicable.lazy.filter(\.deleted).map(\.id))
-            .intersection(live)
+        let approvedDeletionIDs = Set(classification.applicable.lazy.filter {
+            Self.hasMatchingUserDeletionAncestor(
+                $0,
+                knownLiveEnvelopes: [
+                    projectedLocal[$0.id],
+                    mergeAncestorsByID[$0.id],
+                ])
+        }.map(\.id)).intersection(live)
+        // Evaluate unexplained deletions against the library that remains after the
+        // already-authorized UI deletions. Otherwise a large intentional batch could
+        // make a second, genuinely unexplained batch look artificially small.
+        let guardedLive = live.subtracting(approvedDeletionIDs)
+        let effectiveDeletionIDs = Set(classification.applicable.lazy.filter {
+            $0.deleted && !approvedDeletionIDs.contains($0.id)
+        }.map(\.id)).intersection(guardedLive)
         let decision = DeletionGuard.evaluate(
-            liveCount: live.count,
+            liveCount: guardedLive.count,
             deletions: effectiveDeletionIDs.count)
         let hasExactReviewBoundary = refreshingLegacyDeletionReview
             || approvedMassDeletion != nil
@@ -1986,9 +2020,10 @@ final class SyncEngine {
         let refusal: DeletionGuard.Refusal? = if hasExactReviewBoundary,
                                                 !effectiveDeletionIDs.isEmpty {
             DeletionGuard.Refusal(
-                liveCount: live.count,
+                liveCount: guardedLive.count,
                 requestedDeletions: effectiveDeletionIDs.count,
-                allowedDeletions: DeletionGuard.allowedDeletions(liveCount: live.count))
+                allowedDeletions: DeletionGuard.allowedDeletions(
+                    liveCount: guardedLive.count))
         } else if case .refuse(let refusal) = decision {
             refusal
         } else {
@@ -1996,8 +2031,10 @@ final class SyncEngine {
         }
         if let refusal {
             let fingerprint = Self.massDeletionFingerprint(
-                live: live,
-                incoming: classification.applicable)
+                live: guardedLive,
+                incoming: classification.applicable.filter {
+                    !approvedDeletionIDs.contains($0.id)
+                })
             if approvedMassDeletion?.matches(refusal, fingerprint: fingerprint) == true {
                 // Consume before the first fallible apply step. A failure or crash asks
                 // again instead of carrying destructive authority into another round.
@@ -2937,6 +2974,40 @@ final class SyncEngine {
             return lhs == rhs
         case (.some, nil), (nil, .some): return false
         }
+    }
+
+    /// Retires process-local UI intent only after the journal owns the corresponding
+    /// marker (or proves there is no deletion left to publish). A conflict-protected
+    /// live desired value keeps the intent for the later round that can finally make
+    /// its tombstone.
+    private func consumeUserDeletionIntents(
+        afterReconciling current: [UUID: SyncEnvelope]
+    ) {
+        guard !userInitiatedDeletionIDs.isEmpty else { return }
+        let consumed = Set(userInitiatedDeletionIDs.filter { id in
+            if current[id] != nil { return true }
+            guard let desired = journal.entry(id)?.desired else { return true }
+            return desired.carriesUserInitiatedDeletion
+        })
+        guard !consumed.isEmpty else { return }
+        userInitiatedDeletionIDs.subtract(consumed)
+        onUserDeletionIntentsConsumed?(consumed)
+    }
+
+    /// A UI-delete marker authorizes only deletion of a live generation named by the
+    /// producing journal. The encrypted marker proves who created the authority; this
+    /// causal match bounds what it can destroy. In particular, replaying an old valid
+    /// marked tombstone after a newer recreation cannot bypass the circuit breaker.
+    private static func hasMatchingUserDeletionAncestor(
+        _ deletion: SyncEnvelope,
+        knownLiveEnvelopes: [SyncEnvelope?]
+    ) -> Bool {
+        let permittedHashes = deletion.userInitiatedDeletionAncestorHashes
+        guard !permittedHashes.isEmpty else { return false }
+        return knownLiveEnvelopes.compactMap { envelope -> String? in
+            guard let envelope, !envelope.deleted else { return nil }
+            return try? envelope.envelopeHash()
+        }.contains(where: permittedHashes.contains)
     }
 
     /// Opaque, local-only binding for a destructive confirmation. Hashing the sorted

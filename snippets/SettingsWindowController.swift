@@ -1906,25 +1906,10 @@ private final class SyncSettingsViewController: NSViewController {
     @objc private func performRecovery() {
         guard let coordinator = Self.coordinator,
               let action = coordinator.recoveryAction else { return }
-
-        if let title = action.confirmationTitle,
-           let buttonTitle = action.confirmationButtonTitle {
-            let alert = NSAlert()
-            alert.alertStyle = action.isDestructiveConfirmation ? .critical : .warning
-            alert.messageText = title
-            alert.informativeText = coordinator.statusDescription + "\n\n" + action.explanation
-            // Return must never approve a trust-boundary decision. Account change and
-            // cloud restore can disclose/replace remote data even though they are not
-            // styled red, so Cancel is the default for every confirmation.
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: buttonTitle)
-            alert.buttons[1].keyEquivalent = ""
-            if action.isDestructiveConfirmation {
-                alert.buttons[1].hasDestructiveAction = true
-            }
-            guard alert.runModal() == .alertSecondButtonReturn else { return }
-        }
-
+        guard MacSyncRecoveryConfirmation.shouldPerform(
+            action,
+            coordinator: coordinator
+        ) else { return }
         coordinator.performRecovery(action)
         reloadFromStorage()
     }
@@ -2171,4 +2156,33 @@ private func makeTertiaryLabel(_ text: String) -> NSTextField {
     label.font = .systemFont(ofSize: 12)
     label.textColor = .tertiaryLabelColor
     return label
+}
+
+@MainActor
+enum MacSyncRecoveryConfirmation {
+    /// Shared by the main Sync menu and Settings so a safety action behaves identically
+    /// wherever the user notices it. Returning false leaves the exact durable halt
+    /// untouched; the coordinator still rejects a stale action after a positive result.
+    static func shouldPerform(
+        _ action: SyncRecoveryAction,
+        coordinator: SyncCoordinator
+    ) -> Bool {
+        guard let title = action.confirmationTitle,
+              let buttonTitle = action.confirmationButtonTitle else { return true }
+
+        let alert = NSAlert()
+        alert.alertStyle = action.isDestructiveConfirmation ? .critical : .warning
+        alert.messageText = title
+        alert.informativeText = coordinator.statusDescription + "\n\n" + action.explanation
+        // Return must never approve a trust-boundary decision. Account change and
+        // cloud restore can disclose/replace remote data even though they are not
+        // styled red, so Cancel is the default for every confirmation.
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: buttonTitle)
+        alert.buttons[1].keyEquivalent = ""
+        if action.isDestructiveConfirmation {
+            alert.buttons[1].hasDestructiveAction = true
+        }
+        return alert.runModal() == .alertSecondButtonReturn
+    }
 }

@@ -72,4 +72,34 @@ final class DeletionUndoTests: XCTestCase {
         XCTAssertFalse(store.restoreDeletedSnippet(using: token))
         XCTAssertEqual(store.snippet(id: snippet.id)?.name, "Newer")
     }
+
+    func testScopedDeleteAndRestoreReportUserIntentToSync() throws {
+        let store = SnippetStore(configuration: .iOS)
+        let snippet = try! store.addSnippet(name: "Delete me")
+        let delegate = SyncIntentDelegateSpy()
+        store.syncDelegate = delegate
+
+        let token = try XCTUnwrap(store.deleteForUndo(snippetID: snippet.id))
+        XCTAssertEqual(delegate.deletedIDs, Set([snippet.id]))
+        XCTAssertTrue(delegate.restoredIDs.isEmpty)
+
+        XCTAssertTrue(store.restoreDeletedSnippet(using: token))
+        XCTAssertEqual(delegate.restoredIDs, Set([snippet.id]))
+    }
+}
+
+@MainActor
+private final class SyncIntentDelegateSpy: SnippetStoreSyncDelegate {
+    private(set) var deletedIDs: Set<UUID> = []
+    private(set) var restoredIDs: Set<UUID> = []
+
+    func libraryDidChange(_ source: SnippetStore.ChangeSource) {}
+
+    func userDidDeleteSnippets(_ ids: Set<UUID>) {
+        deletedIDs.formUnion(ids)
+    }
+
+    func userDidRestoreSnippets(_ ids: Set<UUID>) {
+        restoredIDs.formUnion(ids)
+    }
 }
