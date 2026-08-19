@@ -6,24 +6,80 @@ import LocalAuthentication
 import UniformTypeIdentifiers
 import Vision
 
+private enum SettingsLayout {
+    static let defaultContentWidth: CGFloat = 660
+    static let minimumContentWidth: CGFloat = 620
+}
+
+private enum SettingsPane: String, CaseIterable {
+    case general
+    case expansion
+    case sync
+    case secure
+    case backup
+    case integrations
+    case diagnostics
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .expansion: "Expansion"
+        case .sync: "Sync"
+        case .secure: "Secure"
+        case .backup: "Backup"
+        case .integrations: "Integrations"
+        case .diagnostics: "Diagnostics"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .general: "gearshape"
+        case .expansion: "textformat"
+        case .sync: "arrow.triangle.2.circlepath"
+        case .secure: "lock"
+        case .backup: "externaldrive"
+        case .integrations: "puzzlepiece.extension"
+        case .diagnostics: "waveform.path.ecg"
+        }
+    }
+
+    var contentHeight: CGFloat {
+        switch self {
+        case .general: 330
+        case .expansion: 560
+        case .sync: 480
+        case .secure: 480
+        case .backup: 300
+        case .integrations: 500
+        case .diagnostics: 480
+        }
+    }
+}
+
 @MainActor
 final class SettingsWindowController: NSWindowController {
     private let settingsViewController = SettingsTabViewController()
 
     init() {
         let window = NSWindow(contentViewController: settingsViewController)
-        window.title = "Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 720, height: 480))
-        window.contentMinSize = NSSize(width: 1, height: 1)
-        window.minSize = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 1, height: 1)).size
+        window.title = SettingsPane.general.title
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(
+            width: SettingsLayout.defaultContentWidth,
+            height: SettingsPane.general.contentHeight
+        ))
+        window.contentMinSize = NSSize(
+            width: SettingsLayout.minimumContentWidth,
+            height: SettingsPane.general.contentHeight
+        )
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.titleVisibility = .hidden
+        window.titleVisibility = .visible
         if #available(macOS 11.0, *) {
             window.toolbarStyle = .preference
-            window.titlebarSeparatorStyle = .none
         }
+        window.setFrameAutosaveName("SnippetsCompactSettingsWindow")
 
         super.init(window: window)
         shouldCascadeWindows = false
@@ -35,6 +91,7 @@ final class SettingsWindowController: NSWindowController {
 
     func showSettings() {
         settingsViewController.reloadFromStorage()
+        settingsViewController.resizeForCurrentPane(animated: false)
         if window?.isVisible == false {
             window?.center()
         }
@@ -49,24 +106,37 @@ final class SettingsWindowController: NSWindowController {
 }
 
 @MainActor
-private final class SettingsTabViewController: NSTabViewController {
+private final class SettingsTabViewController: NSTabViewController, NSSearchFieldDelegate {
+    private static let searchItemIdentifier = NSToolbarItem.Identifier("SnippetsSettingsSearch")
+
     private let generalViewController = GeneralSettingsViewController()
+    private let expansionViewController = ExpansionSettingsViewController()
     private let vaultViewController = VaultSettingsViewController()
     private let syncViewController = SyncSettingsViewController()
+    private let backupViewController = BackupSettingsViewController()
     private let browsersViewController = BrowserSettingsViewController()
     private let diagnosticsViewController = DiagnosticsSettingsViewController()
+    private let searchResultsViewController = SettingsSearchResultsViewController()
+    private var searchPopover: NSPopover?
+    private weak var searchField: NSSearchField?
 
     init() {
         super.init(nibName: nil, bundle: nil)
         tabStyle = .toolbar
         canPropagateSelectedChildViewControllerTitle = false
 
-        addTab(title: "General", symbolName: "gearshape", viewController: generalViewController)
-        addTab(title: "Secure", symbolName: "lock", viewController: vaultViewController)
-        // After Secure, because sync depends on it: the sealing key is the vault's.
-        addTab(title: "Sync", symbolName: "arrow.triangle.2.circlepath", viewController: syncViewController)
-        addTab(title: "Browsers", symbolName: "globe", viewController: browsersViewController)
-        addTab(title: "Diagnostics", symbolName: "waveform.path.ecg", viewController: diagnosticsViewController)
+        addTab(.general, viewController: generalViewController)
+        addTab(.expansion, viewController: expansionViewController)
+        addTab(.sync, viewController: syncViewController)
+        addTab(.secure, viewController: vaultViewController)
+        addTab(.backup, viewController: backupViewController)
+        addTab(.integrations, viewController: browsersViewController)
+        addTab(.diagnostics, viewController: diagnosticsViewController)
+
+        searchResultsViewController.onSelection = { [weak self] entry in
+            self?.select(entry.pane, highlighting: entry.needles)
+            self?.finishSearch()
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -79,10 +149,12 @@ private final class SettingsTabViewController: NSTabViewController {
         toolbar.displayMode = .iconAndLabel
         toolbar.allowsUserCustomization = false
         toolbar.autosavesConfiguration = false
+        resizeForCurrentPane(animated: false)
     }
 
     func reloadFromStorage() {
         generalViewController.reloadFromStorage()
+        expansionViewController.reloadFromStorage()
         vaultViewController.reloadFromStorage()
         syncViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
@@ -90,16 +162,357 @@ private final class SettingsTabViewController: NSTabViewController {
     }
 
     func selectSync() {
-        selectedTabViewItemIndex = 2
+        select(.sync, highlighting: [])
     }
 
-    private func addTab(title: String, symbolName: String, viewController: NSViewController) {
-        viewController.title = title
+    func resizeForCurrentPane(animated: Bool) {
+        guard selectedTabViewItemIndex >= 0,
+              selectedTabViewItemIndex < tabViewItems.count,
+              let rawValue = tabViewItems[selectedTabViewItemIndex].identifier as? String,
+              let pane = SettingsPane(rawValue: rawValue) else { return }
+        resizeWindow(for: pane, animated: animated)
+    }
+
+    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: tabViewItem)
+        guard let rawValue = tabViewItem?.identifier as? String,
+              let pane = SettingsPane(rawValue: rawValue) else { return }
+        view.window?.title = pane.title
+        resizeWindow(for: pane, animated: view.window?.isVisible == true)
+    }
+
+    override func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        var identifiers = super.toolbarAllowedItemIdentifiers(toolbar)
+        identifiers.append(contentsOf: [.flexibleSpace, Self.searchItemIdentifier])
+        return identifiers
+    }
+
+    override func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        var identifiers = super.toolbarDefaultItemIdentifiers(toolbar)
+        identifiers.append(contentsOf: [.flexibleSpace, Self.searchItemIdentifier])
+        return identifiers
+    }
+
+    override func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        guard itemIdentifier == Self.searchItemIdentifier else {
+            return super.toolbar(
+                toolbar,
+                itemForItemIdentifier: itemIdentifier,
+                willBeInsertedIntoToolbar: flag
+            )
+        }
+
+        let item = NSSearchToolbarItem(itemIdentifier: itemIdentifier)
+        item.label = ""
+        item.paletteLabel = "Search Settings"
+        item.toolTip = "Search Settings"
+        item.visibilityPriority = .high
+        item.preferredWidthForSearchField = 160
+        item.searchField.placeholderString = "Search Settings"
+        item.searchField.delegate = self
+        item.searchField.sendsSearchStringImmediately = true
+        item.searchField.widthAnchor.constraint(lessThanOrEqualToConstant: 180).isActive = true
+        searchField = item.searchField
+        return item
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSSearchField else { return }
+        let query = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchResultsViewController.update(query: query)
+
+        guard !query.isEmpty else {
+            closeSearchPopover()
+            return
+        }
+        if searchPopover?.isShown != true {
+            let popover = makeSearchPopover()
+            searchPopover = popover
+            popover.show(relativeTo: field.bounds, of: field, preferredEdge: .maxY)
+        }
+    }
+
+    private func addTab(_ pane: SettingsPane, viewController: NSViewController) {
+        viewController.title = pane.title
 
         let item = NSTabViewItem(viewController: viewController)
-        item.label = title
-        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title)
+        item.identifier = pane.rawValue
+        item.label = pane.title
+        item.image = NSImage(
+            systemSymbolName: pane.symbolName,
+            accessibilityDescription: pane.title
+        )
         addTabViewItem(item)
+    }
+
+    private func select(_ pane: SettingsPane, highlighting needles: [String]) {
+        guard let index = tabViewItems.firstIndex(where: {
+            ($0.identifier as? String) == pane.rawValue
+        }) else { return }
+        let didChangePane = selectedTabViewItemIndex != index
+        selectedTabViewItemIndex = index
+        view.window?.title = pane.title
+        if !didChangePane {
+            resizeWindow(for: pane, animated: view.window?.isVisible == true)
+        }
+
+        guard !needles.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let target = self.firstMatchingView(
+                    in: self.tabViewItems[index].viewController?.view,
+                    needles: needles
+                  ) else { return }
+            target.scrollToVisible(target.bounds)
+            target.alphaValue = 0.35
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.55
+                target.animator().alphaValue = 1
+            }
+            NSAccessibility.post(element: target, notification: .focusedUIElementChanged)
+        }
+    }
+
+    private func resizeWindow(for pane: SettingsPane, animated: Bool) {
+        guard let window = view.window else { return }
+
+        let contentWidth = max(
+            SettingsLayout.minimumContentWidth,
+            window.contentLayoutRect.width
+        )
+        let contentHeight = measuredContentHeight(for: pane, width: contentWidth)
+        let contentSize = NSSize(width: contentWidth, height: contentHeight)
+        window.contentMinSize = NSSize(
+            width: SettingsLayout.minimumContentWidth,
+            height: contentHeight
+        )
+        let targetSize = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: contentSize)
+        ).size
+        guard abs(window.frame.width - targetSize.width) > 0.5
+                || abs(window.frame.height - targetSize.height) > 0.5 else { return }
+
+        var frame = window.frame
+        frame.origin.x += (frame.width - targetSize.width) / 2
+        frame.origin.y += frame.height - targetSize.height
+        frame.size = targetSize
+        window.setFrame(frame, display: true, animate: animated)
+    }
+
+    private func measuredContentHeight(for pane: SettingsPane, width: CGFloat) -> CGFloat {
+        guard let controller = viewController(for: pane) else { return pane.contentHeight }
+        controller.loadViewIfNeeded()
+
+        let paneView = controller.view
+        paneView.frame = NSRect(
+            x: paneView.frame.minX,
+            y: paneView.frame.minY,
+            width: width,
+            height: max(pane.contentHeight, paneView.frame.height)
+        )
+        paneView.layoutSubtreeIfNeeded()
+
+        guard let stack = paneView.subviews.first(where: { $0 is NSStackView }) as? NSStackView else {
+            return pane.contentHeight
+        }
+        let measuredHeight = ceil(stack.frame.height + 48)
+        guard measuredHeight.isFinite, measuredHeight > 48 else {
+            return pane.contentHeight
+        }
+        return max(220, measuredHeight)
+    }
+
+    private func viewController(for pane: SettingsPane) -> NSViewController? {
+        tabViewItems.first(where: {
+            ($0.identifier as? String) == pane.rawValue
+        })?.viewController
+    }
+
+    private func firstMatchingView(in root: NSView?, needles: [String]) -> NSView? {
+        guard let root else { return nil }
+        let normalizedNeedles = needles.map {
+            $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        }
+        let candidate: String?
+        if let field = root as? NSTextField {
+            candidate = field.stringValue
+        } else if let button = root as? NSButton {
+            candidate = button.title
+        } else {
+            candidate = nil
+        }
+
+        if let candidate {
+            let normalized = candidate.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+            if normalizedNeedles.contains(where: normalized.contains) { return root }
+        }
+        for child in root.subviews {
+            if let result = firstMatchingView(in: child, needles: needles) { return result }
+        }
+        return nil
+    }
+
+    private func finishSearch() {
+        closeSearchPopover()
+        searchField?.stringValue = ""
+        searchResultsViewController.update(query: "")
+    }
+
+    private func makeSearchPopover() -> NSPopover {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentSize = NSSize(width: 340, height: 300)
+        popover.contentViewController = searchResultsViewController
+        return popover
+    }
+
+    private func closeSearchPopover() {
+        searchPopover?.close()
+        searchPopover = nil
+    }
+}
+
+private struct SettingsSearchEntry {
+    let title: String
+    let pane: SettingsPane
+    let terms: [String]
+    let needles: [String]
+
+    static let all: [SettingsSearchEntry] = [
+        .init(title: "Cmd+Q behavior", pane: .general,
+              terms: ["quit", "close", "ask every time"], needles: ["Pressing Cmd+Q"]),
+        .init(title: "Command Line Tool", pane: .general,
+              terms: ["cli", "terminal", "snippets-cli"], needles: ["Command Line Tool"]),
+        .init(title: "Global Shortcuts", pane: .expansion,
+              terms: ["hotkey", "keyboard", "paste", "accessibility"], needles: ["Global Shortcuts"]),
+        .init(title: "Matched Letters", pane: .expansion,
+              terms: ["highlight", "accent", "search match"], needles: ["Matched Letters"]),
+        .init(title: "Suggestion Ranking", pane: .expansion,
+              terms: ["usage", "frecency", "most used", "prefix"], needles: ["Suggestion Ranking"]),
+        .init(title: "Cloud Sync", pane: .sync,
+              terms: ["icloud", "provider", "sync now"], needles: ["Cloud Sync"]),
+        .init(title: "Secure Snippets", pane: .secure,
+              terms: ["vault", "touch id", "password", "lock"], needles: ["Secure Snippets"]),
+        .init(title: "Import and Export", pane: .backup,
+              terms: ["backup", "sharing", "library", "restore"], needles: ["Library Transfer"]),
+        .init(title: "Encrypted Backup", pane: .backup,
+              terms: ["password", "secure", "restore", "private"], needles: ["Encrypted Backup"]),
+        .init(title: "Chromium Apps", pane: .integrations,
+              terms: ["browser", "chrome", "bundle id", "arc"], needles: ["Chromium"]),
+        .init(title: "Persistent Diagnostics", pane: .diagnostics,
+              terms: ["logs", "export", "delete", "privacy"], needles: ["Persistent Diagnostics"]),
+    ]
+
+    func matches(_ query: String) -> Bool {
+        let normalized = query.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
+        return ([title, pane.title] + terms).contains {
+            $0.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            ).contains(normalized)
+        }
+    }
+}
+
+@MainActor
+private final class SettingsSearchResultsViewController: NSViewController,
+    NSTableViewDataSource,
+    NSTableViewDelegate
+{
+    var onSelection: ((SettingsSearchEntry) -> Void)?
+
+    private let tableView = NSTableView()
+    private let emptyLabel = NSTextField(labelWithString: "No Results")
+    private var entries: [SettingsSearchEntry] = []
+
+    override func loadView() {
+        let root = NSView()
+        let scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("SettingsSearchResult"))
+        tableView.addTableColumn(column)
+        tableView.headerView = nil
+        tableView.backgroundColor = .clear
+        tableView.rowHeight = 46
+        tableView.intercellSpacing = NSSize(width: 0, height: 0)
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.style = .inset
+        scrollView.documentView = tableView
+
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        emptyLabel.font = .systemFont(ofSize: 13)
+        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.isHidden = true
+
+        root.addSubview(scrollView)
+        root.addSubview(emptyLabel)
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: root.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            emptyLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+        ])
+        view = root
+    }
+
+    func update(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        entries = trimmed.isEmpty ? [] : SettingsSearchEntry.all.filter { $0.matches(trimmed) }
+        loadViewIfNeeded()
+        emptyLabel.isHidden = trimmed.isEmpty || !entries.isEmpty
+        tableView.reloadData()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        entries.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard entries.indices.contains(row) else { return nil }
+        let entry = entries[row]
+        let cell = NSTableCellView()
+        let title = NSTextField(labelWithString: entry.title)
+        let detail = NSTextField(labelWithString: entry.pane.title)
+        title.translatesAutoresizingMaskIntoConstraints = false
+        detail.translatesAutoresizingMaskIntoConstraints = false
+        title.font = .systemFont(ofSize: 13, weight: .medium)
+        detail.font = .systemFont(ofSize: 11)
+        detail.textColor = .secondaryLabelColor
+        cell.addSubview(title)
+        cell.addSubview(detail)
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -8),
+            title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 6),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
+        ])
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        let row = tableView.selectedRow
+        guard entries.indices.contains(row) else { return }
+        onSelection?(entries[row])
     }
 }
 
@@ -109,26 +522,6 @@ private final class GeneralSettingsViewController: NSViewController {
     private let selectionSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let resetButton = NSButton(title: "Reset to Ask Every Time", target: nil, action: nil)
-    private let globalHotkeyCheckbox = NSButton(
-        checkboxWithTitle: "Enable \(GlobalHotkeyManager.securePasteDisplayString) and \(GlobalHotkeyManager.displayString) global shortcuts",
-        target: nil,
-        action: nil
-    )
-    private let globalHotkeyStatusLabel = NSTextField(wrappingLabelWithString: "")
-    private let matchHighlightPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let matchHighlightSummaryLabel = NSTextField(wrappingLabelWithString: "")
-    private let frecencyCheckbox = NSButton(
-        checkboxWithTitle: "Rank suggestions by how often I use them",
-        target: nil,
-        action: nil
-    )
-    private let selectionMemoryCheckbox = NSButton(
-        checkboxWithTitle: "Remember which snippet I pick for each typed prefix",
-        target: nil,
-        action: nil
-    )
-    private let frecencyStatusLabel = NSTextField(wrappingLabelWithString: "")
-    private let resetUsageButton = NSButton(title: "Reset Usage Data", target: nil, action: nil)
     private let cliInstallButton = NSButton(title: "Install CLI Tool", target: nil, action: nil)
     private let cliStatusLabel = NSTextField(wrappingLabelWithString: "")
 
@@ -140,6 +533,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let (rootView, stack) = makeSettingsPane()
         view = rootView
 
+        let closingTitle = makeSettingsSectionTitle("Closing Snippets")
         let introLabel = makeSecondaryLabel("Choose what happens when you press Cmd+Q. This matches the remembered choice from the quit confirmation dialog.")
 
         let behaviorLabel = NSTextField(labelWithString: "Pressing Cmd+Q:")
@@ -172,74 +566,8 @@ private final class GeneralSettingsViewController: NSViewController {
         resetRow.orientation = .horizontal
         resetRow.alignment = .centerY
 
-        let hotkeySeparator = NSBox()
-        hotkeySeparator.boxType = .separator
-
-        let hotkeyIntroLabel = makeSecondaryLabel("Press \(GlobalHotkeyManager.securePasteDisplayString) to search all snippets: with a text or password field focused, it inserts without using the clipboard; with no text field focused, it copies an ordinary snippet instead. Press \(GlobalHotkeyManager.displayString) to show, hide, or launch Snippets. Secure snippets authenticate on every insertion and are never copied. Both shortcuts keep the same actions in Secure Input. Turn this off to leave the shortcuts to other apps.")
-
-        globalHotkeyCheckbox.target = self
-        globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))
-
-        let globalHotkeyRow = NSStackView(views: [globalHotkeyCheckbox, NSView()])
-        globalHotkeyRow.orientation = .horizontal
-        globalHotkeyRow.alignment = .centerY
-
-        globalHotkeyStatusLabel.font = .systemFont(ofSize: 12)
-        globalHotkeyStatusLabel.textColor = .secondaryLabelColor
-
-        let matchHighlightIntroLabel = makeSecondaryLabel("Choose how the panel that appears after you type \u{201C}\\\u{201D} marks the letters your query matched. The next panel picks up the change \u{2014} no need to restart.")
-
-        let matchHighlightLabel = NSTextField(labelWithString: "Matched letters:")
-        matchHighlightLabel.textColor = .secondaryLabelColor
-        matchHighlightLabel.font = .systemFont(ofSize: 13)
-        matchHighlightLabel.alignment = .right
-        matchHighlightLabel.setContentHuggingPriority(.required, for: .horizontal)
-        matchHighlightLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
-
-        matchHighlightPopup.target = self
-        matchHighlightPopup.action = #selector(handleMatchHighlightChanged(_:))
-        matchHighlightPopup.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-
-        let matchHighlightRow = NSStackView(views: [matchHighlightLabel, matchHighlightPopup, NSView()])
-        matchHighlightRow.orientation = .horizontal
-        matchHighlightRow.alignment = .centerY
-        matchHighlightRow.spacing = 12
-
-        matchHighlightSummaryLabel.font = .systemFont(ofSize: 12)
-        matchHighlightSummaryLabel.textColor = .secondaryLabelColor
-
-        let frecencySeparator = NSBox()
-        frecencySeparator.boxType = .separator
-
-        let frecencyIntroLabel = makeSecondaryLabel("Snippets you expand most often move to the top of the panel that appears after you type \u{201C}\\\u{201D}. Typing a full keyword always wins over usage, and pinned snippets always stay on top. Usage stays on this Mac \u{2014} it is never included in exports or share links.")
-
-        frecencyCheckbox.target = self
-        frecencyCheckbox.action = #selector(handleFrecencyChanged(_:))
-
-        let frecencyRow = NSStackView(views: [frecencyCheckbox, NSView()])
-        frecencyRow.orientation = .horizontal
-        frecencyRow.alignment = .centerY
-
-        selectionMemoryCheckbox.target = self
-        selectionMemoryCheckbox.action = #selector(handleSelectionMemoryChanged(_:))
-
-        let selectionMemoryRow = NSStackView(views: [selectionMemoryCheckbox, NSView()])
-        selectionMemoryRow.orientation = .horizontal
-        selectionMemoryRow.alignment = .centerY
-
-        frecencyStatusLabel.font = .systemFont(ofSize: 12)
-        frecencyStatusLabel.textColor = .secondaryLabelColor
-
-        resetUsageButton.target = self
-        resetUsageButton.action = #selector(resetUsageData)
-        LiquidGlassDesign.configureActionButton(resetUsageButton, symbolName: "arrow.counterclockwise")
-
-        let resetUsageRow = NSStackView(views: [resetUsageButton, NSView()])
-        resetUsageRow.orientation = .horizontal
-        resetUsageRow.alignment = .centerY
-
-        let cliSeparator = NSBox()
-        cliSeparator.boxType = .separator
+        let cliSeparator = NSBox.horizontalSeparator()
+        let cliTitle = makeSettingsSectionTitle("Command Line Tool")
 
         let cliIntroLabel = makeSecondaryLabel("Install snippets-cli to /usr/local/bin so agents and terminal scripts can interact with your snippets.")
 
@@ -254,25 +582,14 @@ private final class GeneralSettingsViewController: NSViewController {
         cliRow.orientation = .horizontal
         cliRow.alignment = .centerY
 
+        stack.addArrangedSubview(closingTitle)
         stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(behaviorRow)
         stack.addArrangedSubview(selectionSummaryLabel)
         stack.addArrangedSubview(promptSummaryLabel)
         stack.addArrangedSubview(resetRow)
-        stack.addArrangedSubview(hotkeySeparator)
-        stack.addArrangedSubview(hotkeyIntroLabel)
-        stack.addArrangedSubview(globalHotkeyRow)
-        stack.addArrangedSubview(globalHotkeyStatusLabel)
-        stack.addArrangedSubview(matchHighlightIntroLabel)
-        stack.addArrangedSubview(matchHighlightRow)
-        stack.addArrangedSubview(matchHighlightSummaryLabel)
-        stack.addArrangedSubview(frecencySeparator)
-        stack.addArrangedSubview(frecencyIntroLabel)
-        stack.addArrangedSubview(frecencyRow)
-        stack.addArrangedSubview(selectionMemoryRow)
-        stack.addArrangedSubview(frecencyStatusLabel)
-        stack.addArrangedSubview(resetUsageRow)
         stack.addArrangedSubview(cliSeparator)
+        stack.addArrangedSubview(cliTitle)
         stack.addArrangedSubview(cliIntroLabel)
         stack.addArrangedSubview(cliRow)
         stack.addArrangedSubview(cliStatusLabel)
@@ -280,38 +597,21 @@ private final class GeneralSettingsViewController: NSViewController {
         behaviorRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         selectionSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         promptSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        hotkeySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        hotkeyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        globalHotkeyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        matchHighlightIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        matchHighlightRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        matchHighlightSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        frecencySeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        frecencyIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        frecencyStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         cliStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         configureQuitBehaviorPopup()
-        configureMatchHighlightPopup()
         reloadFromStorage()
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        preferredContentSize = NSSize(width: 720, height: 480)
 
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleExternalQuitBehaviorChange),
             name: .snippetsQuitBehaviorChanged,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleExternalGlobalHotkeyChange),
-            name: .snippetsGlobalHotkeyChanged,
             object: nil
         )
     }
@@ -333,30 +633,7 @@ private final class GeneralSettingsViewController: NSViewController {
         }
 
         resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
-        applyMatchHighlightControls()
-        updateGlobalHotkeyControls()
-        applyFrecencyControls()
         updateCLIStatus()
-    }
-
-    private func updateGlobalHotkeyControls() {
-        let manager = GlobalHotkeyManager.shared
-        // Opening Settings is the natural moment to retry a registration that
-        // lost the shortcut to another app at launch.
-        manager.syncRegistration()
-
-        globalHotkeyCheckbox.state = manager.isEnabled ? .on : .off
-        if !manager.isEnabled {
-            globalHotkeyStatusLabel.stringValue = "Global shortcuts are off. Open Snippets from the Dock or the menu bar item."
-        } else if manager.isActive && manager.isSecurePasteActive {
-            globalHotkeyStatusLabel.stringValue = "Both shortcuts are ready. Secure Paste requires Accessibility access."
-        } else if manager.isActive {
-            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) works, but macOS wouldn't register \(GlobalHotkeyManager.securePasteDisplayString) — another app is probably using it."
-        } else if manager.isSecurePasteActive {
-            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.securePasteDisplayString) works, but macOS wouldn't register \(GlobalHotkeyManager.displayString) — another app is probably using it."
-        } else {
-            globalHotkeyStatusLabel.stringValue = "macOS wouldn't register either shortcut. Quit the conflicting app and reopen Settings to try again."
-        }
     }
 
     private func updateCLIStatus() {
@@ -470,100 +747,6 @@ private final class GeneralSettingsViewController: NSViewController {
         reloadFromStorage()
     }
 
-    @objc private func handleExternalGlobalHotkeyChange() {
-        updateGlobalHotkeyControls()
-    }
-
-    @objc private func handleGlobalHotkeyChanged(_ sender: NSButton) {
-        GlobalHotkeyManager.shared.isEnabled = sender.state == .on
-        updateGlobalHotkeyControls()
-    }
-
-    private func applyFrecencyControls() {
-        guard let usageStore = (NSApp.delegate as? AppDelegate)?.usageStore else { return }
-
-        frecencyCheckbox.state = usageStore.isRankingEnabled ? .on : .off
-        selectionMemoryCheckbox.state = usageStore.isSelectionMemoryEnabled ? .on : .off
-        // Selection memory refines the ranking; without ranking it has nothing
-        // to refine.
-        selectionMemoryCheckbox.isEnabled = usageStore.isRankingEnabled && !usageStore.isReadOnly
-        let tracked = usageStore.trackedSnippetCount
-        if usageStore.isReadOnly {
-            frecencyStatusLabel.stringValue = "Usage data was written by a newer version of Snippets. Ranking is paused and nothing is being saved."
-        } else if tracked == 0 {
-            frecencyStatusLabel.stringValue = "No usage recorded yet."
-        } else if let top = usageStore.mostUsedSummary {
-            frecencyStatusLabel.stringValue = "Tracking \(tracked) snippet\(tracked == 1 ? "" : "s") \u{2014} \(usageStore.storageFootprintDescription). Most used: \(top.name) (\(top.count) use\(top.count == 1 ? "" : "s"))."
-        } else {
-            frecencyStatusLabel.stringValue = "Tracking \(tracked) snippet\(tracked == 1 ? "" : "s") \u{2014} \(usageStore.storageFootprintDescription)."
-        }
-
-        resetUsageButton.isEnabled = tracked > 0 && !usageStore.isReadOnly
-    }
-
-    @objc private func handleFrecencyChanged(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: SnippetUsageStore.rankingEnabledKey)
-        applyFrecencyControls()
-    }
-
-    @objc private func handleSelectionMemoryChanged(_ sender: NSButton) {
-        let enabled = sender.state == .on
-        UserDefaults.standard.set(enabled, forKey: SnippetUsageStore.selectionMemoryEnabledKey)
-        // Switching this off deletes the table rather than merely stopping
-        // collection: a guard in `record` alone would leave the stored prefixes
-        // on disk forever, and the merge would bring them back.
-        if !enabled {
-            (NSApp.delegate as? AppDelegate)?.usageStore.forgetAllBindings()
-        }
-        applyFrecencyControls()
-    }
-
-    @objc private func resetUsageData() {
-        guard let usageStore = (NSApp.delegate as? AppDelegate)?.usageStore,
-              usageStore.trackedSnippetCount > 0 else { return }
-
-        let alert = NSAlert()
-        alert.messageText = "Reset Usage Data?"
-        alert.informativeText = "Suggestions go back to pinned-then-newest-first order until you start using snippets again. Your snippets are not changed."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Reset Usage Data")
-        alert.addButton(withTitle: "Cancel")
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        usageStore.eraseAll()
-        applyFrecencyControls()
-        frecencyStatusLabel.stringValue = "Usage data reset."
-    }
-
-    private func configureMatchHighlightPopup() {
-        matchHighlightPopup.removeAllItems()
-
-        for style in MatchHighlightStyle.allCases {
-            matchHighlightPopup.addItem(withTitle: style.menuTitle)
-            matchHighlightPopup.lastItem?.representedObject = style.rawValue
-        }
-    }
-
-    private func applyMatchHighlightControls() {
-        let style = MatchHighlightPreference.style
-
-        for item in matchHighlightPopup.itemArray where (item.representedObject as? String) == style.rawValue {
-            matchHighlightPopup.select(item)
-            break
-        }
-
-        matchHighlightSummaryLabel.stringValue = style.summary
-    }
-
-    @objc private func handleMatchHighlightChanged(_ sender: NSPopUpButton) {
-        guard let rawValue = sender.selectedItem?.representedObject as? String,
-              let style = MatchHighlightStyle(rawValue: rawValue)
-        else { return }
-
-        MatchHighlightPreference.style = style
-        applyMatchHighlightControls()
-    }
-
     private func configureQuitBehaviorPopup() {
         quitBehaviorPopup.removeAllItems()
 
@@ -580,6 +763,336 @@ private final class GeneralSettingsViewController: NSViewController {
             quitBehaviorPopup.select(item)
             return
         }
+    }
+}
+
+@MainActor
+private final class ExpansionSettingsViewController: NSViewController {
+    private let globalHotkeyCheckbox = NSButton(
+        checkboxWithTitle: "Enable \(GlobalHotkeyManager.securePasteDisplayString) and \(GlobalHotkeyManager.displayString) global shortcuts",
+        target: nil,
+        action: nil
+    )
+    private let globalHotkeyStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let matchHighlightPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let matchHighlightSummaryLabel = NSTextField(wrappingLabelWithString: "")
+    private let frecencyCheckbox = NSButton(
+        checkboxWithTitle: "Rank suggestions by how often I use them",
+        target: nil,
+        action: nil
+    )
+    private let selectionMemoryCheckbox = NSButton(
+        checkboxWithTitle: "Remember which snippet I pick for each typed prefix",
+        target: nil,
+        action: nil
+    )
+    private let frecencyStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let resetUsageButton = NSButton(title: "Reset Usage Data", target: nil, action: nil)
+
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+
+        let shortcutsTitle = makeSettingsSectionTitle("Global Shortcuts")
+        let hotkeyIntro = makeSecondaryLabel(
+            "Press \(GlobalHotkeyManager.securePasteDisplayString) to search and insert without using the clipboard. "
+            + "Press \(GlobalHotkeyManager.displayString) to show, hide, or launch Snippets. "
+            + "Secure snippets authenticate on every insertion and are never copied."
+        )
+        globalHotkeyCheckbox.target = self
+        globalHotkeyCheckbox.action = #selector(handleGlobalHotkeyChanged(_:))
+        globalHotkeyStatusLabel.font = .systemFont(ofSize: 12)
+        globalHotkeyStatusLabel.textColor = .secondaryLabelColor
+
+        let accessibilityButton = NSButton(
+            title: "Open Accessibility Settings…",
+            target: self,
+            action: #selector(openAccessibilitySettings)
+        )
+        LiquidGlassDesign.configureActionButton(accessibilityButton, symbolName: "hand.raised")
+        let accessibilityRow = NSStackView(views: [accessibilityButton, NSView()])
+        accessibilityRow.orientation = .horizontal
+
+        let matchSeparator = NSBox.horizontalSeparator()
+        let matchTitle = makeSettingsSectionTitle("Matched Letters")
+        let matchIntro = makeSecondaryLabel(
+            "Choose how the suggestion panel marks letters matched by your query. Changes apply to the next panel you open."
+        )
+        let matchLabel = NSTextField(labelWithString: "Appearance:")
+        matchLabel.textColor = .secondaryLabelColor
+        matchLabel.alignment = .right
+        matchLabel.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        matchHighlightPopup.target = self
+        matchHighlightPopup.action = #selector(handleMatchHighlightChanged(_:))
+        let matchRow = NSStackView(views: [matchLabel, matchHighlightPopup, NSView()])
+        matchRow.orientation = .horizontal
+        matchRow.alignment = .centerY
+        matchRow.spacing = 10
+        matchHighlightSummaryLabel.font = .systemFont(ofSize: 12)
+        matchHighlightSummaryLabel.textColor = .secondaryLabelColor
+
+        let rankingSeparator = NSBox.horizontalSeparator()
+        let rankingTitle = makeSettingsSectionTitle("Suggestion Ranking")
+        let rankingIntro = makeSecondaryLabel(
+            "Frequently used snippets can move to the top. Pinned snippets and exact keyword matches always keep priority; usage stays on this Mac."
+        )
+        frecencyCheckbox.target = self
+        frecencyCheckbox.action = #selector(handleFrecencyChanged(_:))
+        selectionMemoryCheckbox.target = self
+        selectionMemoryCheckbox.action = #selector(handleSelectionMemoryChanged(_:))
+        frecencyStatusLabel.font = .systemFont(ofSize: 12)
+        frecencyStatusLabel.textColor = .secondaryLabelColor
+        resetUsageButton.target = self
+        resetUsageButton.action = #selector(resetUsageData)
+        LiquidGlassDesign.configureActionButton(resetUsageButton, symbolName: "arrow.counterclockwise")
+        let resetRow = NSStackView(views: [resetUsageButton, NSView()])
+        resetRow.orientation = .horizontal
+
+        for item in [
+            shortcutsTitle,
+            hotkeyIntro,
+            globalHotkeyCheckbox,
+            globalHotkeyStatusLabel,
+            accessibilityRow,
+            matchSeparator,
+            matchTitle,
+            matchIntro,
+            matchRow,
+            matchHighlightSummaryLabel,
+            rankingSeparator,
+            rankingTitle,
+            rankingIntro,
+            frecencyCheckbox,
+            selectionMemoryCheckbox,
+            frecencyStatusLabel,
+            resetRow,
+        ] {
+            stack.addArrangedSubview(item)
+        }
+
+        for item in [
+            hotkeyIntro,
+            globalHotkeyStatusLabel,
+            matchSeparator,
+            matchIntro,
+            matchRow,
+            matchHighlightSummaryLabel,
+            rankingSeparator,
+            rankingIntro,
+            frecencyStatusLabel,
+        ] {
+            item.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+
+        configureMatchHighlightPopup()
+        reloadFromStorage()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleExternalGlobalHotkeyChange),
+            name: .snippetsGlobalHotkeyChanged,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    func reloadFromStorage() {
+        guard isViewLoaded else { return }
+        updateGlobalHotkeyControls()
+        applyMatchHighlightControls()
+        applyFrecencyControls()
+    }
+
+    private func updateGlobalHotkeyControls() {
+        let manager = GlobalHotkeyManager.shared
+        manager.syncRegistration()
+        globalHotkeyCheckbox.state = manager.isEnabled ? .on : .off
+        if !manager.isEnabled {
+            globalHotkeyStatusLabel.stringValue = "Global shortcuts are off."
+        } else if manager.isActive && manager.isSecurePasteActive {
+            globalHotkeyStatusLabel.stringValue = "Both shortcuts are ready. Secure Paste requires Accessibility access."
+        } else if manager.isActive {
+            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.displayString) works, but macOS couldn't register \(GlobalHotkeyManager.securePasteDisplayString)."
+        } else if manager.isSecurePasteActive {
+            globalHotkeyStatusLabel.stringValue = "\(GlobalHotkeyManager.securePasteDisplayString) works, but macOS couldn't register \(GlobalHotkeyManager.displayString)."
+        } else {
+            globalHotkeyStatusLabel.stringValue = "macOS couldn't register either shortcut. Another app may be using them."
+        }
+    }
+
+    @objc private func handleExternalGlobalHotkeyChange() {
+        updateGlobalHotkeyControls()
+    }
+
+    @objc private func handleGlobalHotkeyChanged(_ sender: NSButton) {
+        GlobalHotkeyManager.shared.isEnabled = sender.state == .on
+        updateGlobalHotkeyControls()
+    }
+
+    @objc private func openAccessibilitySettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func configureMatchHighlightPopup() {
+        matchHighlightPopup.removeAllItems()
+        for style in MatchHighlightStyle.allCases {
+            matchHighlightPopup.addItem(withTitle: style.menuTitle)
+            matchHighlightPopup.lastItem?.representedObject = style.rawValue
+        }
+    }
+
+    private func applyMatchHighlightControls() {
+        let style = MatchHighlightPreference.style
+        for item in matchHighlightPopup.itemArray
+        where (item.representedObject as? String) == style.rawValue {
+            matchHighlightPopup.select(item)
+            break
+        }
+        matchHighlightSummaryLabel.stringValue = style.summary
+    }
+
+    @objc private func handleMatchHighlightChanged(_ sender: NSPopUpButton) {
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let style = MatchHighlightStyle(rawValue: rawValue) else { return }
+        MatchHighlightPreference.style = style
+        applyMatchHighlightControls()
+    }
+
+    private func applyFrecencyControls() {
+        guard let usageStore = (NSApp.delegate as? AppDelegate)?.usageStore else { return }
+
+        frecencyCheckbox.state = usageStore.isRankingEnabled ? .on : .off
+        selectionMemoryCheckbox.state = usageStore.isSelectionMemoryEnabled ? .on : .off
+        selectionMemoryCheckbox.isEnabled = usageStore.isRankingEnabled && !usageStore.isReadOnly
+        let tracked = usageStore.trackedSnippetCount
+        if usageStore.isReadOnly {
+            frecencyStatusLabel.stringValue = "Usage data was written by a newer version. Ranking is paused."
+        } else {
+            frecencyStatusLabel.stringValue = tracked == 0
+                ? "No usage recorded yet."
+                : "Tracking \(tracked) snippet\(tracked == 1 ? "" : "s") — \(usageStore.storageFootprintDescription)."
+        }
+        resetUsageButton.isEnabled = tracked > 0 && !usageStore.isReadOnly
+    }
+
+    @objc private func handleFrecencyChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: SnippetUsageStore.rankingEnabledKey)
+        applyFrecencyControls()
+    }
+
+    @objc private func handleSelectionMemoryChanged(_ sender: NSButton) {
+        let enabled = sender.state == .on
+        UserDefaults.standard.set(enabled, forKey: SnippetUsageStore.selectionMemoryEnabledKey)
+        if !enabled {
+            (NSApp.delegate as? AppDelegate)?.usageStore.forgetAllBindings()
+        }
+        applyFrecencyControls()
+    }
+
+    @objc private func resetUsageData() {
+        guard let usageStore = (NSApp.delegate as? AppDelegate)?.usageStore,
+              usageStore.trackedSnippetCount > 0 else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Reset Usage Data?"
+        alert.informativeText = "Suggestions return to pinned-then-newest-first order. Your snippets are not changed."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reset Usage Data")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        usageStore.eraseAll()
+        applyFrecencyControls()
+        frecencyStatusLabel.stringValue = "Usage data reset."
+    }
+}
+
+@MainActor
+private final class BackupSettingsViewController: NSViewController {
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+
+        let transferTitle = makeSettingsSectionTitle("Library Transfer")
+        let transferDescription = makeSecondaryLabel(
+            "Import a Snippets library or export ordinary snippets for sharing. "
+            + "Sharing exports are not encrypted and never include secure-snippet text."
+        )
+        let importButton = NSButton(
+            title: "Import Library…",
+            target: self,
+            action: #selector(importLibrary)
+        )
+        LiquidGlassDesign.configureActionButton(importButton, symbolName: "square.and.arrow.down")
+        let exportButton = NSButton(
+            title: "Export for Sharing…",
+            target: self,
+            action: #selector(exportForSharing)
+        )
+        LiquidGlassDesign.configureActionButton(exportButton, symbolName: "square.and.arrow.up")
+        let transferButtons = NSStackView(views: [importButton, exportButton, NSView()])
+        transferButtons.orientation = .horizontal
+        transferButtons.alignment = .centerY
+        transferButtons.spacing = 8
+
+        let separator = NSBox.horizontalSeparator()
+
+        let encryptedTitle = makeSettingsSectionTitle("Encrypted Backup")
+        let encryptedDescription = makeSecondaryLabel(
+            "Create a password-protected backup of ordinary and secure snippets for safekeeping. "
+            + "You need the password to restore it."
+        )
+        let encryptedButton = NSButton(
+            title: "Export Encrypted Backup…",
+            target: self,
+            action: #selector(exportEncryptedBackup)
+        )
+        LiquidGlassDesign.configureActionButton(encryptedButton, symbolName: "lock.doc")
+        let encryptedButtonRow = NSStackView(views: [encryptedButton, NSView()])
+        encryptedButtonRow.orientation = .horizontal
+        encryptedButtonRow.alignment = .centerY
+
+        for item in [
+            transferTitle,
+            transferDescription,
+            transferButtons,
+            separator,
+            encryptedTitle,
+            encryptedDescription,
+            encryptedButtonRow,
+        ] {
+            stack.addArrangedSubview(item)
+        }
+
+        for item in [
+            transferDescription,
+            transferButtons,
+            separator,
+            encryptedDescription,
+            encryptedButtonRow,
+        ] {
+            item.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+    }
+
+    @objc private func importLibrary() {
+        (NSApp.delegate as? AppDelegate)?.importSnippets(nil)
+    }
+
+    @objc private func exportForSharing() {
+        (NSApp.delegate as? AppDelegate)?.exportSnippets(nil)
+    }
+
+    @objc private func exportEncryptedBackup() {
+        (NSApp.delegate as? AppDelegate)?.exportEncryptedBackup(nil)
     }
 }
 
@@ -609,6 +1122,7 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         let (rootView, stack) = makeSettingsPane()
         view = rootView
 
+        let title = makeSettingsSectionTitle("Chromium Apps")
         let introLabel = makeSecondaryLabel("Add custom Chromium-based apps so Snippets primes their accessibility and inserts text the way Chromium accepts it. Built-in support already includes Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and Arc.")
         let builtInLabel = makeTertiaryLabel("Use this pane only for extra apps that are not covered by the built-in browser list.")
 
@@ -677,6 +1191,7 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
 
+        stack.addArrangedSubview(title)
         stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(builtInLabel)
         stack.addArrangedSubview(countLabel)
@@ -685,7 +1200,7 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         stack.addArrangedSubview(statusLabel)
 
         tableSurface.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        let preferredTableHeight = tableSurface.heightAnchor.constraint(greaterThanOrEqualToConstant: 300)
+        let preferredTableHeight = tableSurface.heightAnchor.constraint(greaterThanOrEqualToConstant: 200)
         preferredTableHeight.priority = .defaultLow
         preferredTableHeight.isActive = true
         NSLayoutConstraint.activate([
@@ -698,11 +1213,6 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         reloadFromStorage()
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        preferredContentSize = NSSize(width: 720, height: 480)
     }
 
     func reloadFromStorage() {
@@ -1223,6 +1733,10 @@ private extension NSBox {
     static func horizontalSeparator() -> NSBox {
         let box = NSBox()
         box.boxType = .separator
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        box.setContentHuggingPriority(.required, for: .vertical)
+        box.setContentCompressionResistancePriority(.required, for: .vertical)
         return box
     }
 }
@@ -1335,7 +1849,10 @@ private final class SyncSettingsViewController: NSViewController {
         super.viewWillAppear()
         guard let coordinator = Self.coordinator else { return }
         // Redraw as rounds complete, so "Syncing…" does not stay on screen after it stops.
-        coordinator.onStateChange = { [weak self] _ in self?.reloadFromStorage() }
+        coordinator.onStateChange = { [weak self] _ in
+            self?.reloadFromStorage()
+            (self?.parent as? SettingsTabViewController)?.resizeForCurrentPane(animated: true)
+        }
         reloadFromStorage()
     }
 
@@ -1381,7 +1898,9 @@ private final class SyncSettingsViewController: NSViewController {
             recoveryButton.isHidden = true
         }
 
-        secondMacLabel.stringValue = secondMacAdvice()
+        let advice = secondMacAdvice()
+        secondMacLabel.stringValue = advice
+        secondMacLabel.isHidden = advice.isEmpty
     }
 
     /// What to do about another Mac — which, for the first time, is usually "nothing".
@@ -1426,6 +1945,7 @@ private final class SyncSettingsViewController: NSViewController {
         guard let coordinator = Self.coordinator else { return }
         coordinator.setEnabled(sender.state == .on)
         reloadFromStorage()
+        (parent as? SettingsTabViewController)?.resizeForCurrentPane(animated: true)
     }
 
     @objc private func handleProviderChanged(_ sender: NSPopUpButton) {
@@ -1985,7 +2505,6 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         expansionVerboseRow.orientation = .horizontal
         expansionVerboseRow.alignment = .centerY
         expansionVerboseRow.spacing = 10
-        expansionVerboseRow.widthAnchor.constraint(equalToConstant: 620).isActive = true
         let expansionVerboseHelp = makeTertiaryLabel(
             "Off records no per-keystroke AX diagnostics. This Session resets when Snippets quits; "
             + "Always remains enabled across launches. Typed text is never recorded.")
@@ -2015,6 +2534,8 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         stack.addArrangedSubview(buttons)
         stack.addArrangedSubview(NSBox.horizontalSeparator())
         stack.addArrangedSubview(privacy)
+
+        expansionVerboseRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         for label in [intro, expansionVerboseHelp, privacy, statusLabel, privacyLabel] {
             label.preferredMaxLayoutWidth = 620
@@ -2121,12 +2642,15 @@ private func makeSettingsPane() -> (NSView, NSStackView) {
     rootView.translatesAutoresizingMaskIntoConstraints = false
     rootView.wantsLayer = true
     rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    if #available(macOS 26.0, *) {
+        rootView.prefersCompactControlSizeMetrics = true
+    }
 
     let stack = NSStackView()
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.distribution = .fill
-    stack.spacing = 14
+    stack.spacing = 12
     stack.translatesAutoresizingMaskIntoConstraints = false
     stack.setHuggingPriority(.required, for: .vertical)
     stack.setContentCompressionResistancePriority(.required, for: .vertical)
@@ -2142,6 +2666,13 @@ private func makeSettingsPane() -> (NSView, NSStackView) {
     ])
 
     return (rootView, stack)
+}
+
+private func makeSettingsSectionTitle(_ text: String) -> NSTextField {
+    let label = NSTextField(labelWithString: text)
+    label.font = .systemFont(ofSize: 14, weight: .semibold)
+    label.textColor = .labelColor
+    return label
 }
 
 private func makeSecondaryLabel(_ text: String) -> NSTextField {
