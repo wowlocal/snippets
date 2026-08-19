@@ -117,7 +117,7 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
     private let browsersViewController = BrowserSettingsViewController()
     private let diagnosticsViewController = DiagnosticsSettingsViewController()
     private let searchResultsViewController = SettingsSearchResultsViewController()
-    private var searchPopover: NSPopover?
+    private var searchResultsPanel: SettingsSearchResultsPanel?
     private weak var searchField: NSSearchField?
 
     init() {
@@ -226,13 +226,35 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
         searchResultsViewController.update(query: query)
 
         guard !query.isEmpty else {
-            closeSearchPopover()
+            closeSearchResults()
             return
         }
-        if searchPopover?.isShown != true {
-            let popover = makeSearchPopover()
-            searchPopover = popover
-            popover.show(relativeTo: field.bounds, of: field, preferredEdge: .maxY)
+        showSearchResults(relativeTo: field)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        closeSearchResults()
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        switch commandSelector {
+        case #selector(NSResponder.moveDown(_:)):
+            searchResultsViewController.moveSelection(by: 1)
+            return true
+        case #selector(NSResponder.moveUp(_:)):
+            searchResultsViewController.moveSelection(by: -1)
+            return true
+        case #selector(NSResponder.insertNewline(_:)):
+            return searchResultsViewController.activateSelection()
+        case #selector(NSResponder.cancelOperation(_:)):
+            finishSearch()
+            return true
+        default:
+            return false
         }
     }
 
@@ -360,68 +382,237 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
     }
 
     private func finishSearch() {
-        closeSearchPopover()
+        closeSearchResults()
         searchField?.stringValue = ""
         searchResultsViewController.update(query: "")
     }
 
-    private func makeSearchPopover() -> NSPopover {
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        popover.contentSize = NSSize(width: 340, height: 300)
-        popover.contentViewController = searchResultsViewController
-        return popover
+    private func showSearchResults(relativeTo field: NSSearchField) {
+        guard let parentWindow = field.window else { return }
+        let originalFirstResponder = parentWindow.firstResponder
+        let panel = searchResultsPanel ?? makeSearchResultsPanel()
+        searchResultsPanel = panel
+
+        let fieldRectInWindow = field.convert(field.bounds, to: nil)
+        let fieldRectOnScreen = parentWindow.convertToScreen(fieldRectInWindow)
+        let panelSize = NSSize(
+            width: 340,
+            height: searchResultsViewController.preferredPanelHeight
+        )
+        let visibleFrame = parentWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        var origin = NSPoint(
+            x: fieldRectOnScreen.maxX - panelSize.width,
+            y: fieldRectOnScreen.minY - panelSize.height - 6
+        )
+        if let visibleFrame {
+            origin.x = min(
+                max(origin.x, visibleFrame.minX + 8),
+                visibleFrame.maxX - panelSize.width - 8
+            )
+            if origin.y < visibleFrame.minY + 8 {
+                origin.y = min(
+                    fieldRectOnScreen.maxY + 6,
+                    visibleFrame.maxY - panelSize.height - 8
+                )
+            }
+        }
+        panel.setFrame(NSRect(origin: origin, size: panelSize), display: panel.isVisible)
+
+        if panel.parent !== parentWindow {
+            panel.parent?.removeChildWindow(panel)
+            parentWindow.addChildWindow(panel, ordered: .above)
+        }
+        panel.orderFront(nil)
+
+        // A results window is informational while the user types. Keep the exact
+        // field editor alive even if AppKit adjusts the toolbar during panel ordering.
+        if let originalFirstResponder,
+           parentWindow.firstResponder !== originalFirstResponder {
+            parentWindow.makeFirstResponder(originalFirstResponder)
+        }
     }
 
-    private func closeSearchPopover() {
-        searchPopover?.close()
-        searchPopover = nil
+    private func makeSearchResultsPanel() -> SettingsSearchResultsPanel {
+        let panel = SettingsSearchResultsPanel(contentViewController: searchResultsViewController)
+        panel.hidesOnDeactivate = true
+        panel.isReleasedWhenClosed = false
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
+        return panel
+    }
+
+    private func closeSearchResults() {
+        guard let panel = searchResultsPanel else { return }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
     }
 }
 
-private struct SettingsSearchEntry {
+@MainActor
+private final class SettingsSearchResultsPanel: NSPanel {
+    convenience init(contentViewController: NSViewController) {
+        self.init(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        self.contentViewController = contentViewController
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        becomesKeyOnlyIfNeeded = true
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+private struct MacSettingsSearchEntry {
     let title: String
     let pane: SettingsPane
     let terms: [String]
     let needles: [String]
 
-    static let all: [SettingsSearchEntry] = [
-        .init(title: "Cmd+Q behavior", pane: .general,
-              terms: ["quit", "close", "ask every time"], needles: ["Pressing Cmd+Q"]),
-        .init(title: "Command Line Tool", pane: .general,
-              terms: ["cli", "terminal", "snippets-cli"], needles: ["Command Line Tool"]),
+    static let all: [MacSettingsSearchEntry] = [
+        .init(title: "Cmd+Q Behavior", pane: .general,
+              terms: ["quit", "close", "hide", "menu bar", "ask every time"],
+              needles: ["Pressing Cmd+Q"]),
+        .init(title: "Install Command Line Tool", pane: .general,
+              terms: ["cli", "terminal", "snippets-cli", "/usr/local/bin"],
+              needles: ["Command Line Tool"]),
         .init(title: "Global Shortcuts", pane: .expansion,
-              terms: ["hotkey", "keyboard", "paste", "accessibility"], needles: ["Global Shortcuts"]),
-        .init(title: "Matched Letters", pane: .expansion,
-              terms: ["highlight", "accent", "search match"], needles: ["Matched Letters"]),
-        .init(title: "Suggestion Ranking", pane: .expansion,
-              terms: ["usage", "frecency", "most used", "prefix"], needles: ["Suggestion Ranking"]),
-        .init(title: "Cloud Sync", pane: .sync,
-              terms: ["icloud", "provider", "sync now"], needles: ["Cloud Sync"]),
-        .init(title: "Secure Snippets", pane: .secure,
-              terms: ["vault", "touch id", "password", "lock"], needles: ["Secure Snippets"]),
+              terms: ["hotkey", "keyboard", "secure paste", "command backslash"],
+              needles: ["Global Shortcuts"]),
+        .init(title: "Accessibility Permission", pane: .expansion,
+              terms: ["open accessibility settings", "paste", "permission"],
+              needles: ["Open Accessibility Settings"]),
+        .init(title: "Matched Letters Appearance", pane: .expansion,
+              terms: ["highlight", "accent", "tint", "search match"],
+              needles: ["Matched Letters"]),
+        .init(title: "Rank Suggestions by Usage", pane: .expansion,
+              terms: ["ranking", "frecency", "frequently used", "most used"],
+              needles: ["Rank suggestions"]),
+        .init(title: "Remember Selection for Typed Prefix", pane: .expansion,
+              terms: ["suggestion ranking", "picked snippet", "query prefix"],
+              needles: ["Remember which snippet"]),
+        .init(title: "Reset Usage Data", pane: .expansion,
+              terms: ["clear ranking", "forget usage", "suggestions"],
+              needles: ["Reset Usage Data"]),
+        .init(title: "Enable iCloud Sync", pane: .sync,
+              terms: ["cloud sync", "turn on", "devices"],
+              needles: ["Cloud Sync"]),
+        .init(title: "Cloud Provider", pane: .sync,
+              terms: ["icloud", "snippets cloud", "server"],
+              needles: ["Cloud provider"]),
+        .init(title: "Sync Now", pane: .sync,
+              terms: ["refresh", "download", "upload", "cloud"],
+              needles: ["Sync Now"]),
+        .init(title: "Sync Account Recovery", pane: .sync,
+              terms: ["account review", "resume", "reset cloud", "binding mismatch"],
+              needles: ["Cloud Sync"]),
+        .init(title: "Set Up Secure Snippets", pane: .secure,
+              terms: ["vault", "touch id", "login password", "encrypt"],
+              needles: ["Secure Snippets"]),
+        .init(title: "Lock Secure Snippets", pane: .secure,
+              terms: ["lock now", "vault", "authentication"],
+              needles: ["Lock Now"]),
+        .init(title: "Recovery Key", pane: .secure,
+              terms: ["restore", "recover", "vault key"],
+              needles: ["Secure Snippets"]),
+        .init(title: "Secure Snippet Storage", pane: .secure,
+              terms: ["health", "encrypted on disk", "keychain"],
+              needles: ["Storage"]),
+        .init(title: "Forget Secure Snippets", pane: .secure,
+              terms: ["delete vault", "remove", "reset secure"],
+              needles: ["Forget Secure Snippets"]),
         .init(title: "Import and Export", pane: .backup,
-              terms: ["backup", "sharing", "library", "restore"], needles: ["Library Transfer"]),
+              terms: ["backup", "sharing", "library", "restore", "transfer"],
+              needles: ["Library Transfer"]),
         .init(title: "Encrypted Backup", pane: .backup,
-              terms: ["password", "secure", "restore", "private"], needles: ["Encrypted Backup"]),
+              terms: ["password", "secure", "restore", "private", "safekeeping"],
+              needles: ["Encrypted Backup"]),
         .init(title: "Chromium Apps", pane: .integrations,
-              terms: ["browser", "chrome", "bundle id", "arc"], needles: ["Chromium"]),
+              terms: ["browser", "chrome", "edge", "brave", "opera", "vivaldi", "arc"],
+              needles: ["Chromium Apps"]),
+        .init(title: "Add Chromium App", pane: .integrations,
+              terms: ["choose app", "custom browser", "application"],
+              needles: ["Add App"]),
+        .init(title: "Add Bundle ID", pane: .integrations,
+              terms: ["bundle identifier", "custom chromium"],
+              needles: ["Add Bundle ID"]),
+        .init(title: "Remove Chromium App", pane: .integrations,
+              terms: ["remove selected", "clear all", "bundle id"],
+              needles: ["Remove Selected"]),
         .init(title: "Persistent Diagnostics", pane: .diagnostics,
-              terms: ["logs", "export", "delete", "privacy"], needles: ["Persistent Diagnostics"]),
+              terms: ["logs", "retention", "privacy", "json lines"],
+              needles: ["Persistent Diagnostics"]),
+        .init(title: "Expansion Accessibility Logging", pane: .diagnostics,
+              terms: ["verbose", "ax diagnostics", "keystroke", "this session", "always"],
+              needles: ["Expansion Accessibility logging"]),
+        .init(title: "Export Diagnostic Logs", pane: .diagnostics,
+              terms: ["share logs", "jsonl", "support"],
+              needles: ["Export Logs"]),
+        .init(title: "Delete Diagnostic Logs", pane: .diagnostics,
+              terms: ["clear logs", "remove diagnostics", "privacy"],
+              needles: ["Delete Logs"]),
     ]
 
-    func matches(_ query: String) -> Bool {
-        let normalized = query.folding(
+    static func results(for query: String) -> [MacSettingsSearchEntry] {
+        all.compactMap { entry -> (entry: MacSettingsSearchEntry, score: Int)? in
+            guard let score = entry.score(for: query) else { return nil }
+            return (entry, score)
+        }
+        .sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            return lhs.entry.title.localizedCaseInsensitiveCompare(rhs.entry.title) == .orderedAscending
+        }
+        .map(\.entry)
+    }
+
+    private func score(for query: String) -> Int? {
+        let normalizedQuery = Self.normalize(query)
+        let tokens = normalizedQuery.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return nil }
+
+        let normalizedTitle = Self.normalize(title)
+        let normalizedPane = Self.normalize(pane.title)
+        let normalizedTerms = terms.map(Self.normalize)
+        let titleWords = normalizedTitle.split(whereSeparator: \.isWhitespace).map(String.init)
+        let paneWords = normalizedPane.split(whereSeparator: \.isWhitespace).map(String.init)
+        let fields = [normalizedTitle, normalizedPane] + normalizedTerms
+        guard tokens.allSatisfy({ token in
+            if token.count < 3 {
+                return titleWords.contains(where: { $0.hasPrefix(token) })
+                    || paneWords.contains(where: { $0.hasPrefix(token) })
+            }
+            return fields.contains(where: { $0.contains(token) })
+        }) else { return nil }
+
+        var score = 0
+        if normalizedTitle == normalizedQuery { score += 1_000 }
+        else if normalizedTitle.hasPrefix(normalizedQuery) { score += 700 }
+        else if normalizedTitle.contains(normalizedQuery) { score += 500 }
+        if normalizedPane == normalizedQuery { score += 350 }
+        else if normalizedPane.hasPrefix(normalizedQuery) { score += 220 }
+
+        for token in tokens {
+            if titleWords.contains(where: { $0 == token }) { score += 160 }
+            else if titleWords.contains(where: { $0.hasPrefix(token) }) { score += 120 }
+            else if normalizedTitle.contains(token) { score += 80 }
+
+            if normalizedTerms.contains(where: { $0 == token }) { score += 70 }
+            else if normalizedTerms.contains(where: { $0.hasPrefix(token) }) { score += 50 }
+            else if normalizedTerms.contains(where: { $0.contains(token) }) { score += 30 }
+        }
+        return score - min(normalizedTitle.count, 80)
+    }
+
+    nonisolated private static func normalize(_ value: String) -> String {
+        value.folding(
             options: [.caseInsensitive, .diacriticInsensitive],
             locale: .current
         )
-        return ([title, pane.title] + terms).contains {
-            $0.folding(
-                options: [.caseInsensitive, .diacriticInsensitive],
-                locale: .current
-            ).contains(normalized)
-        }
     }
 }
 
@@ -430,14 +621,25 @@ private final class SettingsSearchResultsViewController: NSViewController,
     NSTableViewDataSource,
     NSTableViewDelegate
 {
-    var onSelection: ((SettingsSearchEntry) -> Void)?
+    var onSelection: ((MacSettingsSearchEntry) -> Void)?
 
     private let tableView = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "No Results")
-    private var entries: [SettingsSearchEntry] = []
+    private var entries: [MacSettingsSearchEntry] = []
+
+    var preferredPanelHeight: CGFloat {
+        entries.isEmpty ? 82 : CGFloat(min(entries.count, 6)) * tableView.rowHeight + 12
+    }
 
     override func loadView() {
-        let root = NSView()
+        let root = NSVisualEffectView()
+        root.material = .popover
+        root.blendingMode = .behindWindow
+        root.state = .active
+        root.wantsLayer = true
+        root.layer?.cornerRadius = 12
+        root.layer?.masksToBounds = true
+
         let scrollView = NSScrollView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.drawsBackground = false
@@ -454,6 +656,9 @@ private final class SettingsSearchResultsViewController: NSViewController,
         tableView.dataSource = self
         tableView.delegate = self
         tableView.style = .inset
+        tableView.refusesFirstResponder = true
+        tableView.target = self
+        tableView.action = #selector(activateClickedResult)
         scrollView.documentView = tableView
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -464,10 +669,10 @@ private final class SettingsSearchResultsViewController: NSViewController,
         root.addSubview(scrollView)
         root.addSubview(emptyLabel)
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: root.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 6),
+            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -6),
+            scrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 6),
+            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6),
             emptyLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor),
         ])
@@ -476,10 +681,35 @@ private final class SettingsSearchResultsViewController: NSViewController,
 
     func update(query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        entries = trimmed.isEmpty ? [] : SettingsSearchEntry.all.filter { $0.matches(trimmed) }
+        entries = trimmed.isEmpty ? [] : MacSettingsSearchEntry.results(for: trimmed)
         loadViewIfNeeded()
         emptyLabel.isHidden = trimmed.isEmpty || !entries.isEmpty
         tableView.reloadData()
+        if entries.isEmpty {
+            tableView.deselectAll(nil)
+        } else {
+            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        }
+    }
+
+    func moveSelection(by delta: Int) {
+        guard !entries.isEmpty else { return }
+        let current = tableView.selectedRow
+        let next: Int
+        if current < 0 {
+            next = delta < 0 ? entries.count - 1 : 0
+        } else {
+            next = min(max(current + delta, 0), entries.count - 1)
+        }
+        tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
+        tableView.scrollRowToVisible(next)
+    }
+
+    func activateSelection() -> Bool {
+        guard !entries.isEmpty else { return false }
+        let row = entries.indices.contains(tableView.selectedRow) ? tableView.selectedRow : 0
+        onSelection?(entries[row])
+        return true
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -509,8 +739,10 @@ private final class SettingsSearchResultsViewController: NSViewController,
         return cell
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        let row = tableView.selectedRow
+    @objc private func activateClickedResult() {
+        let row = entries.indices.contains(tableView.clickedRow)
+            ? tableView.clickedRow
+            : tableView.selectedRow
         guard entries.indices.contains(row) else { return }
         onSelection?(entries[row])
     }

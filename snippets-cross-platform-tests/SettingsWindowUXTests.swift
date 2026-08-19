@@ -112,6 +112,8 @@ final class SettingsWindowUXTests: XCTestCase {
         XCTAssertEqual(table.numberOfRows, 2)
 
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let tableAction = try XCTUnwrap(table.action)
+        XCTAssertTrue(NSApp.sendAction(tableAction, to: table.target, from: table))
         settle()
         XCTAssertEqual(window.title, "Backup")
         XCTAssertEqual(field.stringValue, "")
@@ -158,6 +160,96 @@ final class SettingsWindowUXTests: XCTestCase {
         updateSearch(field, text: "")
         settle(0.1)
         XCTAssertFalse(emptyResultsController.view.window?.isVisible ?? false)
+    }
+
+    func testSearchKeepsFieldEditorFocusWhileUpdatingResults() throws {
+        let controller = SettingsWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+
+        controller.showSettings()
+        settle()
+
+        let searchItem = try currentSearchItem(in: window)
+        searchItem.beginSearchInteraction()
+        settle(0.1)
+        let field = searchItem.searchField
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let fieldEditor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        XCTAssertTrue(window.firstResponder === fieldEditor)
+
+        updateSearch(field, text: "b")
+        settle(0.1)
+        XCTAssertTrue(window.firstResponder === fieldEditor)
+        XCTAssertTrue(field.currentEditor() === fieldEditor)
+
+        updateSearch(field, text: "ba")
+        settle(0.1)
+        XCTAssertTrue(window.firstResponder === fieldEditor)
+        XCTAssertTrue(field.currentEditor() === fieldEditor)
+
+        let resultsController = try XCTUnwrap(searchResultsController())
+        let table = try XCTUnwrap(searchResultsTable(in: resultsController.view))
+        XCTAssertEqual(table.numberOfRows, 2)
+        XCTAssertFalse(resultsController.view.window?.isKeyWindow ?? true)
+    }
+
+    func testSearchSupportsKeyboardSelectionAndEscape() throws {
+        let controller = SettingsWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+
+        controller.showSettings()
+        settle()
+
+        let searchItem = try currentSearchItem(in: window)
+        searchItem.beginSearchInteraction()
+        settle(0.1)
+        let field = searchItem.searchField
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let fieldEditor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+
+        updateSearch(field, text: "backup")
+        settle(0.1)
+        let resultsController = try XCTUnwrap(searchResultsController())
+        let table = try XCTUnwrap(searchResultsTable(in: resultsController.view))
+        XCTAssertEqual(table.numberOfRows, 2)
+        XCTAssertEqual(table.selectedRow, 0)
+
+        let moved = field.delegate?.control?(
+            field,
+            textView: fieldEditor,
+            doCommandBy: #selector(NSResponder.moveDown(_:))
+        )
+        XCTAssertEqual(moved, true)
+        XCTAssertEqual(table.selectedRow, 1)
+        XCTAssertTrue(window.firstResponder === fieldEditor)
+
+        let cancelled = field.delegate?.control?(
+            field,
+            textView: fieldEditor,
+            doCommandBy: #selector(NSResponder.cancelOperation(_:))
+        )
+        XCTAssertEqual(cancelled, true)
+        XCTAssertEqual(field.stringValue, "")
+        XCTAssertFalse(resultsController.view.window?.isVisible ?? false)
+
+        updateSearch(field, text: "export logs")
+        settle(0.1)
+        let reopenedResultsController = try XCTUnwrap(searchResultsController())
+        let reopenedTable = try XCTUnwrap(searchResultsTable(in: reopenedResultsController.view))
+        XCTAssertEqual(reopenedTable.numberOfRows, 1)
+
+        let activated = field.delegate?.control?(
+            field,
+            textView: fieldEditor,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertEqual(activated, true)
+        settle()
+        XCTAssertEqual(window.title, "Diagnostics")
+        XCTAssertEqual(field.stringValue, "")
+        XCTAssertFalse(reopenedResultsController.view.window?.isVisible ?? false)
     }
 
     func testBackupUsesPlainSectionsInsteadOfOutlinedCards() throws {
