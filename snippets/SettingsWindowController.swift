@@ -2762,7 +2762,7 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         LiquidGlassDesign.configureActionButton(exportButton, symbolName: "square.and.arrow.up")
         deleteButton.target = self
         deleteButton.action = #selector(confirmDeleteLogs)
-        deleteButton.bezelStyle = .rounded
+        LiquidGlassDesign.configureActionButton(deleteButton, symbolName: "trash")
 
         let buttons = NSStackView(views: [exportButton, deleteButton, NSView()])
         buttons.orientation = .horizontal

@@ -328,6 +328,26 @@ final class SettingsWindowUXTests: XCTestCase {
         XCTAssertTrue(boxes.allSatisfy { $0.boxType == NSBox.BoxType.separator })
     }
 
+    func testDiagnosticsActionsUseConsistentButtonStyle() throws {
+        let controller = SettingsWindowController()
+        let window = try XCTUnwrap(controller.window)
+        let tabs = try XCTUnwrap(window.contentViewController as? NSTabViewController)
+        defer { window.close() }
+
+        tabs.selectedTabViewItemIndex = 6
+        let diagnosticsView = try XCTUnwrap(tabs.tabViewItems[6].viewController?.view)
+        let buttons = descendants(of: diagnosticsView).compactMap { $0 as? NSButton }
+        let exportButton = try XCTUnwrap(buttons.first { $0.title == "Export Logs…" })
+        let deleteButton = try XCTUnwrap(buttons.first { $0.title == "Delete Logs" })
+
+        XCTAssertEqual(exportButton.bezelStyle, deleteButton.bezelStyle)
+        XCTAssertEqual(exportButton.controlSize, deleteButton.controlSize)
+        XCTAssertEqual(exportButton.imagePosition, .imageLeading)
+        XCTAssertEqual(deleteButton.imagePosition, .imageLeading)
+        XCTAssertNotNil(exportButton.image)
+        XCTAssertNotNil(deleteButton.image)
+    }
+
     private func updateSearch(_ field: NSSearchField, text: String) {
         field.stringValue = text
         field.delegate?.controlTextDidChange?(
