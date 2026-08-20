@@ -2871,7 +2871,6 @@ private final class DiagnosticsSettingsViewController: NSViewController {
 
 private func makeSettingsPane() -> (NSView, NSStackView) {
     let rootView = NSView()
-    rootView.translatesAutoresizingMaskIntoConstraints = false
     rootView.wantsLayer = true
     rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     if #available(macOS 26.0, *) {
@@ -2888,13 +2887,16 @@ private func makeSettingsPane() -> (NSView, NSStackView) {
     stack.setContentCompressionResistancePriority(.required, for: .vertical)
     rootView.addSubview(stack)
 
-    let guide = rootView.safeAreaLayoutGuide
-
     NSLayoutConstraint.activate([
-        stack.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 24),
-        stack.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -24),
-        stack.topAnchor.constraint(equalTo: guide.topAnchor, constant: 24),
-        stack.bottomAnchor.constraint(lessThanOrEqualTo: guide.bottomAnchor, constant: -24)
+        // NSTabViewController already places each pane below the settings toolbar. A
+        // pane's window-derived safe area can briefly retain the previous toolbar
+        // geometry while the window animates between pane heights, which used to add
+        // a second, sometimes very large top inset. Pinning to the pane itself also
+        // matches measuredContentHeight's fixed 24pt top and bottom allowance.
+        stack.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: 24),
+        stack.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -24),
+        stack.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 24),
+        stack.bottomAnchor.constraint(lessThanOrEqualTo: rootView.bottomAnchor, constant: -24)
     ])
 
     return (rootView, stack)

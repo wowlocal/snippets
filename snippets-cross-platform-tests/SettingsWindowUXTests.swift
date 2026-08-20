@@ -47,12 +47,27 @@ final class SettingsWindowUXTests: XCTestCase {
             let paneView = try XCTUnwrap(tabs.tabViewItems[index].viewController?.view)
             paneView.layoutSubtreeIfNeeded()
             XCTAssertFalse(paneView is NSScrollView, "The pane root must not trigger a toolbar scroll pocket")
+            XCTAssertTrue(
+                paneView.translatesAutoresizingMaskIntoConstraints,
+                "\(title) must let NSTabViewController manage its root frame"
+            )
+            let paneContainer = try XCTUnwrap(paneView.superview)
+            XCTAssertEqual(paneView.frame.minX, paneContainer.bounds.minX, accuracy: 1)
+            XCTAssertEqual(paneView.frame.minY, paneContainer.bounds.minY, accuracy: 1)
+            XCTAssertEqual(paneView.frame.width, paneContainer.bounds.width, accuracy: 1)
+            XCTAssertEqual(paneView.frame.height, paneContainer.bounds.height, accuracy: 1)
 
             let stack = try XCTUnwrap(
                 paneView.subviews.first(where: { $0 is NSStackView }) as? NSStackView,
                 "\(title) should use the standard settings stack"
             )
             XCTAssertGreaterThan(stack.frame.height, 0)
+            XCTAssertEqual(
+                paneView.bounds.maxY - stack.frame.maxY,
+                24,
+                accuracy: 1,
+                "\(title) should not inherit an extra toolbar safe-area inset"
+            )
             XCTAssertGreaterThanOrEqual(stack.frame.minY, paneView.bounds.minY - 1)
             XCTAssertLessThanOrEqual(stack.frame.maxY, paneView.bounds.maxY + 1)
 
@@ -89,6 +104,38 @@ final class SettingsWindowUXTests: XCTestCase {
         settle()
         XCTAssertEqual(window.frame.width, 780, accuracy: 1)
         XCTAssertEqual(window.title, "Backup")
+    }
+
+    func testRapidPaneNavigationKeepsSelectedPaneFillingItsContainer() throws {
+        let controller = SettingsWindowController()
+        let window = try XCTUnwrap(controller.window)
+        let tabs = try XCTUnwrap(window.contentViewController as? NSTabViewController)
+        defer { window.close() }
+
+        controller.showSettings()
+        settle()
+
+        // Exercise a short/tall mix while the preceding window resize is still in flight.
+        for index in [1, 4, 6, 0, 5, 4, 3] {
+            tabs.selectedTabViewItemIndex = index
+            settle(0.03)
+        }
+        settle()
+
+        let paneView = try XCTUnwrap(
+            tabs.tabViewItems[tabs.selectedTabViewItemIndex].viewController?.view
+        )
+        let paneContainer = try XCTUnwrap(paneView.superview)
+        XCTAssertTrue(paneView.translatesAutoresizingMaskIntoConstraints)
+        XCTAssertEqual(paneView.frame.minX, paneContainer.bounds.minX, accuracy: 1)
+        XCTAssertEqual(paneView.frame.minY, paneContainer.bounds.minY, accuracy: 1)
+        XCTAssertEqual(paneView.frame.width, paneContainer.bounds.width, accuracy: 1)
+        XCTAssertEqual(paneView.frame.height, paneContainer.bounds.height, accuracy: 1)
+
+        let stack = try XCTUnwrap(
+            paneView.subviews.first(where: { $0 is NSStackView }) as? NSStackView
+        )
+        XCTAssertEqual(paneView.bounds.maxY - stack.frame.maxY, 24, accuracy: 1)
     }
 
     func testSearchFindsResultsWithoutSidebarAndNavigates() throws {
