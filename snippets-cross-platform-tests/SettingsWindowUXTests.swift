@@ -63,6 +63,12 @@ final class SettingsWindowUXTests: XCTestCase {
             )
             XCTAssertGreaterThan(stack.frame.height, 0)
             XCTAssertEqual(
+                window.contentLayoutRect.height,
+                max(220, ceil(stack.fittingSize.height + 48)),
+                accuracy: 1,
+                "\(title) should use its compact fitting height"
+            )
+            XCTAssertEqual(
                 paneView.bounds.maxY - stack.frame.maxY,
                 24,
                 accuracy: 1,

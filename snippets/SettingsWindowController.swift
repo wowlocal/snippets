@@ -341,7 +341,11 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
         guard let stack = paneView.subviews.first(where: { $0 is NSStackView }) as? NSStackView else {
             return pane.contentHeight
         }
-        let measuredHeight = ceil(stack.frame.height + 48)
+        // `frame.height` can include space distributed into a flexible arranged view
+        // from the previously selected (taller) pane. Feeding that expanded frame back
+        // into the window size makes the extra space permanent. `fittingSize` is the
+        // compact Auto Layout height for the current visible controls.
+        let measuredHeight = ceil(stack.fittingSize.height + 48)
         guard measuredHeight.isFinite, measuredHeight > 48 else {
             return pane.contentHeight
         }
@@ -1992,6 +1996,11 @@ private final class SyncSettingsViewController: NSViewController {
     private let syncNowButton = NSButton(title: "Sync Now", target: nil, action: nil)
     private let recoveryButton = NSButton(title: "", target: nil, action: nil)
     private let secondMacLabel = NSTextField(wrappingLabelWithString: "")
+    private lazy var actionRow = NSStackView(views: [
+        syncNowButton,
+        recoveryButton,
+        NSView(),
+    ])
     private var presentedRecoveryAlert: NSAlert?
     private var backendSelection: SyncBackendSelectionStore {
         (NSApp.delegate as? AppDelegate)?.backendSelection ?? SyncBackendSelectionStore()
@@ -2049,9 +2058,8 @@ private final class SyncSettingsViewController: NSViewController {
         recoveryButton.action = #selector(performRecovery)
         recoveryButton.bezelStyle = .rounded
 
-        let buttonRow = NSStackView(views: [syncNowButton, recoveryButton, NSView()])
-        buttonRow.orientation = .horizontal
-        buttonRow.spacing = 8
+        actionRow.orientation = .horizontal
+        actionRow.spacing = 8
 
         // Usage data is the one thing that must never travel, and README already promises
         // it. Saying so here is cheaper than a support question.
@@ -2067,7 +2075,7 @@ private final class SyncSettingsViewController: NSViewController {
         stack.addArrangedSubview(providerRow)
         stack.addArrangedSubview(enableCheckbox)
         stack.addArrangedSubview(statusLabel)
-        stack.addArrangedSubview(buttonRow)
+        stack.addArrangedSubview(actionRow)
         stack.addArrangedSubview(NSBox.horizontalSeparator())
         stack.addArrangedSubview(secondMacLabel)
         stack.addArrangedSubview(limits)
@@ -2129,6 +2137,7 @@ private final class SyncSettingsViewController: NSViewController {
             syncNowButton.isHidden = !coordinator.canRequestManualSync
             recoveryButton.isHidden = true
         }
+        actionRow.isHidden = syncNowButton.isHidden && recoveryButton.isHidden
 
         let advice = secondMacAdvice()
         secondMacLabel.stringValue = advice
