@@ -51,6 +51,11 @@ final class SettingsWindowUXTests: XCTestCase {
                 paneView.translatesAutoresizingMaskIntoConstraints,
                 "\(title) must let NSTabViewController manage its root frame"
             )
+            XCTAssertTrue(
+                paneView.autoresizingMask.contains(.width)
+                    && paneView.autoresizingMask.contains(.height),
+                "\(title) must follow its tab container while the window resizes"
+            )
             let paneContainer = try XCTUnwrap(paneView.superview)
             XCTAssertEqual(paneView.frame.minX, paneContainer.bounds.minX, accuracy: 1)
             XCTAssertEqual(paneView.frame.minY, paneContainer.bounds.minY, accuracy: 1)
@@ -133,6 +138,8 @@ final class SettingsWindowUXTests: XCTestCase {
         )
         let paneContainer = try XCTUnwrap(paneView.superview)
         XCTAssertTrue(paneView.translatesAutoresizingMaskIntoConstraints)
+        XCTAssertTrue(paneView.autoresizingMask.contains(.width))
+        XCTAssertTrue(paneView.autoresizingMask.contains(.height))
         XCTAssertEqual(paneView.frame.minX, paneContainer.bounds.minX, accuracy: 1)
         XCTAssertEqual(paneView.frame.minY, paneContainer.bounds.minY, accuracy: 1)
         XCTAssertEqual(paneView.frame.width, paneContainer.bounds.width, accuracy: 1)

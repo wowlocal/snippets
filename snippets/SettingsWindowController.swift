@@ -330,12 +330,14 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
         controller.loadViewIfNeeded()
 
         let paneView = controller.view
-        paneView.frame = NSRect(
-            x: paneView.frame.minX,
-            y: paneView.frame.minY,
-            width: width,
-            height: max(pane.contentHeight, paneView.frame.height)
-        )
+        // The selected pane is already installed in NSTabViewController's content
+        // container at this width. Do not give it a provisional height here: doing so
+        // detaches its frame from that container just before the window animation.
+        // When the window then grows, AppKit can leave the pane at the old bottom edge,
+        // producing a large empty area above its content.
+        if abs(paneView.frame.width - width) > 0.5 {
+            paneView.setFrameSize(NSSize(width: width, height: paneView.frame.height))
+        }
         paneView.layoutSubtreeIfNeeded()
 
         guard let stack = paneView.subviews.first(where: { $0 is NSStackView }) as? NSStackView else {
@@ -2880,6 +2882,10 @@ private final class DiagnosticsSettingsViewController: NSViewController {
 
 private func makeSettingsPane() -> (NSView, NSStackView) {
     let rootView = NSView()
+    // NSTabViewController sizes pane roots by frame. Pane switches and the window-height
+    // animation happen in the same run-loop turn, so the newly selected root must grow
+    // with its container instead of retaining the previous pane's shorter height.
+    rootView.autoresizingMask = [.width, .height]
     rootView.wantsLayer = true
     rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     if #available(macOS 26.0, *) {
