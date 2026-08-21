@@ -26,13 +26,21 @@ class HttpSyncClient {
         val feedEpoch: String,
     )
 
-    data class SpaceResolution(val spaceID: String, val serverInstanceID: String)
+    data class SpaceResolution(
+        val spaceID: String,
+        val serverInstanceID: String,
+        val role: String,
+    ) {
+        val canWrite: Boolean get() = role == "owner" || role == "writer"
+    }
 
     data class SpaceCandidate(
         val spaceID: String,
         val serverInstanceID: String,
         val role: String,
-    )
+    ) {
+        val canWrite: Boolean get() = role == "owner" || role == "writer"
+    }
 
     data class PairingRecord(
         val pairingID: String,
@@ -222,6 +230,9 @@ class HttpSyncClient {
     ): SpaceResolution {
         val candidates = personalSpaceCandidates(serverURL, accessToken)
         automaticPersonalSpace(candidates, existingSpaceID)?.let { return it }
+        if (candidates.isNotEmpty() && candidates.none(SpaceCandidate::canWrite)) {
+            throw SyncFailure("read_only_library")
+        }
         if (candidates.isNotEmpty()) throw SyncFailure("space_selection_required")
         return createPersonalSpace(serverURL, accessToken)
     }
@@ -236,7 +247,10 @@ class HttpSyncClient {
             .getJSONArray("spaces")
         return (0 until spaces.length()).map { index ->
             val value = spaces.getJSONObject(index)
-            val resolution = spaceResolution(value.getJSONObject("scope"))
+            val resolution = spaceResolution(
+                value.getJSONObject("scope"),
+                value.getString("role"),
+            )
             SpaceCandidate(
                 spaceID = resolution.spaceID,
                 serverInstanceID = resolution.serverInstanceID,
@@ -248,10 +262,12 @@ class HttpSyncClient {
     }
 
     fun createPersonalSpace(serverURL: String, accessToken: String): SpaceResolution =
-        spaceResolution(JSONObject(request(
+        JSONObject(request(
             serverURL, accessToken, "POST", "v2/spaces",
             headers = mapOf("Idempotency-Key" to PERSONAL_SPACE_IDEMPOTENCY_KEY),
-        )).getJSONObject("scope"))
+        )).let { value ->
+            spaceResolution(value.getJSONObject("scope"), value.getString("role"))
+        }
 
     fun resolveSpace(
         serverURL: String,
@@ -264,7 +280,7 @@ class HttpSyncClient {
             "GET",
             "v2/spaces/${validatedUUID(spaceID)}",
         ))
-        return spaceResolution(value.getJSONObject("scope"))
+        return spaceResolution(value.getJSONObject("scope"), value.getString("role"))
     }
 
     fun createPairing(
@@ -538,12 +554,14 @@ class HttpSyncClient {
         require(validatedUUID(scope.getString("feedEpoch")) != ZERO_UUID)
     }
 
-    private fun spaceResolution(scope: JSONObject): SpaceResolution {
+    private fun spaceResolution(scope: JSONObject, role: String): SpaceResolution {
         val spaceID = scope.getString("spaceId")
         validateScopeID(spaceID, scope)
+        require(role == "owner" || role == "writer" || role == "reader")
         return SpaceResolution(
             spaceID = validatedUUID(spaceID),
             serverInstanceID = validatedUUID(scope.getString("serverInstanceId")),
+            role = role,
         )
     }
 
@@ -667,20 +685,21 @@ internal fun automaticPersonalSpace(
     candidates: List<HttpSyncClient.SpaceCandidate>,
     existingSpaceID: String?,
 ): HttpSyncClient.SpaceResolution? {
+    val writable = candidates.filter(HttpSyncClient.SpaceCandidate::canWrite)
     existingSpaceID?.let { existing ->
-        candidates.firstOrNull { it.spaceID.equals(existing, ignoreCase = true) }?.let {
-            return HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID)
+        writable.firstOrNull { it.spaceID.equals(existing, ignoreCase = true) }?.let {
+            return HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID, it.role)
         }
     }
-    if (candidates.size == 1) {
-        return candidates.single().let {
-            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID)
+    if (writable.size == 1) {
+        return writable.single().let {
+            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID, it.role)
         }
     }
-    val owned = candidates.filter { it.role == "owner" }
+    val owned = writable.filter { it.role == "owner" }
     if (owned.size == 1) {
         return owned.single().let {
-            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID)
+            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID, it.role)
         }
     }
     return null

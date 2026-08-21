@@ -1270,7 +1270,11 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
 
     if (state.libraryChoices.isNotEmpty()) {
         AlertDialog(
-            onDismissRequest = {},
+            onDismissRequest = {
+                if (!state.isBusy) {
+                    scope.launch { repository.cancelCloudLibrarySelection() }
+                }
+            },
             title = {
                 Text(if (state.librarySwitchFromID == null) {
                     "Choose a Snippets library"
@@ -1279,31 +1283,51 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                 })
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         state.librarySwitchFromID?.let {
                             "Current: Library ID $it\nChoose the new library below. The current cloud library will not be deleted."
                         } ?: "This account can open more than one library. Choose which one to use on this device.",
                     )
-                    state.libraryChoices.forEach { choice ->
-                        OutlinedButton(
-                            enabled = !state.isBusy,
-                            onClick = {
-                                scope.launch {
-                                    val completion = repository.selectCloudLibrary(choice.spaceID)
-                                    completion.recoveryKit?.let { recoveryPresentation = it }
-                                }
-                            },
-                        ) {
-                            Text(
-                                "Library ID ${choice.libraryID} · " +
-                                    choice.role.replaceFirstChar(Char::uppercase),
-                            )
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(state.libraryChoices, key = CloudLibraryChoice::spaceID) { choice ->
+                            val writable = choice.role != "reader"
+                            OutlinedButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !state.isBusy && writable,
+                                onClick = {
+                                    scope.launch {
+                                        val completion = repository.selectCloudLibrary(
+                                            choice.spaceID,
+                                        )
+                                        completion.recoveryKit?.let {
+                                            recoveryPresentation = it
+                                        }
+                                    }
+                                },
+                            ) {
+                                Text(if (writable) {
+                                    "Library ID ${choice.libraryID} · " +
+                                        choice.role.replaceFirstChar(Char::uppercase)
+                                } else {
+                                    "Library ID ${choice.libraryID} · Read-only — unavailable"
+                                })
+                            }
                         }
                     }
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                TextButton(
+                    enabled = !state.isBusy,
+                    onClick = {
+                        scope.launch { repository.cancelCloudLibrarySelection() }
+                    },
+                ) { Text(if (state.librarySwitchFromID == null) "Cancel" else "Keep current account") }
+            },
         )
     }
 
@@ -1859,9 +1883,21 @@ private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when 
         "Choose a library",
         "This account has access to more than one Snippets library. Select one from the secure chooser.",
     )
+    "read_only_library" -> CloudErrorPresentation(
+        "This library is read-only",
+        "Snippets cannot use a read-only library as active storage. Choose a library where you are an owner or writer.",
+    )
     "recovery_kit_not_saved" -> CloudErrorPresentation(
         "Save the new recovery kit first",
         "The previous kit has already been replaced. Finish saving the new kit before disconnecting this device.",
+    )
+    "recovery_kit_changed" -> CloudErrorPresentation(
+        "Recovery kit was replaced",
+        "Another device replaced this library’s recovery envelope. Verify the current kit before disconnecting this device.",
+    )
+    "recovery_status_unconfirmed" -> CloudErrorPresentation(
+        "Recovery kit status could not be confirmed",
+        "Snippets Cloud could not verify the current recovery envelope. This device was not disconnected; try again when the service is reachable.",
     )
     "server_auth_insecure" -> CloudErrorPresentation(
         "Secure sign-in is unavailable",

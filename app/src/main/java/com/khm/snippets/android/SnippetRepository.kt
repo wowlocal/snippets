@@ -57,6 +57,7 @@ class SnippetRepository(
         // durable state with the temporary empty snapshot.
         recoveryScope.launch {
             var remoteLogoutPending = false
+            var shouldRefreshRecoveryVerification = false
             try {
                 if (store.read(PENDING_LOCAL_ERASE) != null) {
                     completePendingLocalErase()
@@ -78,19 +79,38 @@ class SnippetRepository(
                         .onFailure { store.delete(PENDING_SPACE_SELECTION) }
                         .getOrNull()
                 }
+                if (configuration.pendingAuthorizationCommit) {
+                    // The selected library and its key state were committed before a
+                    // crash, so finish the staged credential handoff instead of
+                    // returning to an already-confirmed chooser.
+                    authenticator.commitPendingAuthorization(configuration.serverURL)
+                    configuration = configuration.copy(pendingAuthorizationCommit = false)
+                    store.write(CONFIG, configuration.toJSON())
+                    store.delete(PENDING_SPACE_SELECTION)
+                    pendingLibrarySelection = null
+                    authenticator.finalizePendingAuthorization()
+                } else if (pendingLibrarySelection == null &&
+                    authenticator.hasPendingAuthorization()) {
+                    // No durable chooser or selected-library commit refers to this
+                    // candidate. It was abandoned before the account boundary moved.
+                    authenticator.discardPendingAuthorization()
+                }
                 recoveryKitVerified = store.read(RECOVERY_VERIFICATION_FILE)
                     ?.let(RecoveryKitVerification::fromJSON)
-                    ?.matches(configuration) == true
+                    ?.matchesCoordinates(configuration) == true
                 if (!recoveryKitVerified) invalidateRecoveryVerification(store)
                 deviceID = store.read(DEVICE_ID) ?: freshDeviceID().also {
                     store.write(DEVICE_ID, it)
                 }
-                cloudSessionAvailable = authenticator.hasSession(
-                    pendingLibrarySelection?.serverURL
-                        ?: configuration.serverURL.takeIf(String::isNotBlank))
+                cloudSessionAvailable = if (pendingLibrarySelection != null) {
+                    authenticator.hasPendingAuthorization(pendingLibrarySelection?.serverURL)
+                } else {
+                    authenticator.hasSession(configuration.serverURL.takeIf(String::isNotBlank))
+                }
                 if (!cloudSessionAvailable && pendingLibrarySelection != null) {
                     store.delete(PENDING_SPACE_SELECTION)
                     pendingLibrarySelection = null
+                    authenticator.discardPendingAuthorization()
                 }
                 cloudKeyStatus = when {
                     !cloudSessionAvailable -> CloudKeyStatus.SIGNED_OUT
@@ -141,6 +161,8 @@ class SnippetRepository(
                     cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
                     cloudSessionAvailable = false
                 }
+                shouldRefreshRecoveryVerification = recoveryKitVerified && cloudSessionAvailable &&
+                    pendingLibrarySelection == null && !remoteLogoutPending
                 didInitialize = true
                 publish()
             } catch (_: Exception) {
@@ -150,6 +172,7 @@ class SnippetRepository(
                 initialization.complete(Unit)
             }
             if (remoteLogoutPending) disconnectCloudAccount()
+            else if (shouldRefreshRecoveryVerification) refreshRecoveryVerification()
         }
     }
 
@@ -254,6 +277,8 @@ class SnippetRepository(
                                 authorization.serverURL,
                                 authorization.accessToken,
                             )
+                        } else if (candidates.none(HttpSyncClient.SpaceCandidate::canWrite)) {
+                            throw SyncFailure("read_only_library")
                         } else {
                             val pending = PendingLibrarySelection(
                                 serverURL = authorization.serverURL,
@@ -295,7 +320,7 @@ class SnippetRepository(
                         } ?: CloudLibraryChoice(
                             resolution.spaceID,
                             resolution.serverInstanceID,
-                            "owner",
+                            resolution.role,
                         )
                         val pending = PendingLibrarySelection(
                             serverURL = authorization.serverURL,
@@ -309,12 +334,14 @@ class SnippetRepository(
                             needsLibrarySelection = true,
                         )
                     }
-                    PostAuthorizationCompletion(
-                        recoveryKit = completeResolvedAuthorization(
+                    val recoveryKit = completeResolvedAuthorization(
                             authorization.serverURL,
                             authorization.accessToken,
                             resolution,
-                        ),
+                        )
+                    commitResolvedAuthorization()
+                    PostAuthorizationCompletion(
+                        recoveryKit = recoveryKit,
                         needsLibrarySelection = false,
                     )
                 }
@@ -329,12 +356,21 @@ class SnippetRepository(
                     )
                 }
             } catch (error: CloudAuthFailure) {
+                if (pendingLibrarySelection == null && !configuration.pendingAuthorizationCommit) {
+                    authenticator.discardPendingAuthorization()
+                }
                 publish(errorCode = error.code)
                 CloudSignInCompletion(succeeded = false)
             } catch (error: SyncFailure) {
+                if (pendingLibrarySelection == null && !configuration.pendingAuthorizationCommit) {
+                    authenticator.discardPendingAuthorization()
+                }
                 publish(errorCode = error.code)
                 CloudSignInCompletion(succeeded = false)
             } catch (_: Exception) {
+                if (pendingLibrarySelection == null && !configuration.pendingAuthorizationCommit) {
+                    authenticator.discardPendingAuthorization()
+                }
                 publish(errorCode = "sign_in_failed")
                 CloudSignInCompletion(succeeded = false)
             }
@@ -352,7 +388,8 @@ class SnippetRepository(
                     val selected = pending.choices.singleOrNull {
                         it.spaceID.equals(spaceID, ignoreCase = true)
                     } ?: throw SyncFailure("space_selection_required")
-                    val token = authenticator.freshAccessToken(pending.serverURL)
+                    if (selected.role == "reader") throw SyncFailure("read_only_library")
+                    val token = authenticator.freshPendingAccessToken(pending.serverURL)
                     val verified = client.resolveSpace(
                         pending.serverURL,
                         selected.spaceID,
@@ -364,11 +401,14 @@ class SnippetRepository(
                         )) {
                         throw SyncFailure("scope_review_required")
                     }
-                    completeResolvedAuthorization(
+                    if (!verified.canWrite) throw SyncFailure("read_only_library")
+                    val presentation = completeResolvedAuthorization(
                         pending.serverURL,
                         token,
                         verified,
                     )
+                    commitResolvedAuthorization()
+                    presentation
                 }
                 publish(label = "Account connected")
                 CloudSignInCompletion(succeeded = true, recoveryKit = recoveryKit)
@@ -385,11 +425,44 @@ class SnippetRepository(
         }
     }
 
+    suspend fun cancelCloudLibrarySelection() = mutate {
+        if (pendingLibrarySelection == null) return@mutate
+        if (configuration.pendingAuthorizationCommit) {
+            // The user already confirmed and the selected library state committed;
+            // only the crash-safe credential handoff remains.
+            commitResolvedAuthorization()
+            return@mutate
+        }
+        authenticator.discardPendingAuthorization()
+        store.delete(PENDING_SPACE_SELECTION)
+        pendingLibrarySelection = null
+        // Selection may have failed after mutating attempt-local in-memory state.
+        // The durable primary files still describe the old account until the commit
+        // marker is written, so reload them as the cancellation rollback boundary.
+        configuration = store.read(CONFIG)?.let(::cloudConfiguration) ?: CloudConfiguration()
+        baseJSON = store.read(BASE) ?: "[]"
+        remoteRecordsJSON = store.read(REMOTE) ?: "[]"
+        keys = store.read(KEYS)?.let(::keyBundle)
+        keyBinding = store.read(KEY_BINDING)?.let(::cloudKeyBinding)
+        recoveryKitVerified = store.read(RECOVERY_VERIFICATION_FILE)
+            ?.let(RecoveryKitVerification::fromJSON)
+            ?.matchesCoordinates(configuration) == true
+        cloudSessionAvailable = authenticator.hasSession(
+            configuration.serverURL.takeIf(String::isNotBlank),
+        )
+        cloudKeyStatus = when {
+            !cloudSessionAvailable -> CloudKeyStatus.SIGNED_OUT
+            hasBoundKey() -> CloudKeyStatus.READY
+            else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+        }
+    }
+
     private fun completeResolvedAuthorization(
         serverURL: String,
         accessToken: String,
         resolution: HttpSyncClient.SpaceResolution,
     ): RecoveryKitPresentation? {
+        if (!resolution.canWrite) throw SyncFailure("read_only_library")
         val changedScope = configuration.serverURL != serverURL ||
             !configuration.spaceID.equals(resolution.spaceID, ignoreCase = true) ||
             !configuration.serverInstanceID.equals(
@@ -416,19 +489,43 @@ class SnippetRepository(
             clearBootstrapState()
             invalidateRecoveryVerification(store)
             recoveryKitVerified = false
-        } else {
-            store.delete(PENDING_SPACE_SELECTION)
-            pendingLibrarySelection = null
         }
         val presentation = finishPostAuthorization(accessToken)
+        configuration = configuration.copy(pendingAuthorizationCommit = true)
         persistSyncState()
         return presentation
+    }
+
+    private fun commitResolvedAuthorization() {
+        require(configuration.pendingAuthorizationCommit)
+        authenticator.commitPendingAuthorization(configuration.serverURL)
+        configuration = configuration.copy(pendingAuthorizationCommit = false)
+        store.delete(PENDING_SPACE_SELECTION)
+        pendingLibrarySelection = null
+        cloudSessionAvailable = true
+        persistSyncState()
+        authenticator.finalizePendingAuthorization()
     }
 
     suspend fun disconnectCloudAccount() = mutate {
         if (store.read(PENDING_LOCAL_ERASE) == null) {
             if (disconnectBlockedForRecovery(cloudKeyStatus)) {
                 throw SyncFailure("recovery_kit_not_saved")
+            }
+            if (recoveryKitVerified) {
+                val token = try {
+                    freshPinnedAccessToken()
+                } catch (error: Exception) {
+                    recoveryKitVerified = false
+                    throw SyncFailure("recovery_status_unconfirmed")
+                }
+                val current = try {
+                    refreshRecoveryVerification(token)
+                } catch (error: Exception) {
+                    recoveryKitVerified = false
+                    throw SyncFailure("recovery_status_unconfirmed")
+                }
+                if (!current) throw SyncFailure("recovery_kit_changed")
             }
             authenticator.revokeCurrentSession()
             // This marker is the commit point between confirmed remote revocation and
@@ -719,9 +816,26 @@ class SnippetRepository(
         val kit = LibraryKeyBootstrap.RecoveryKit.fromQRPayload(presentation)
         require(kit.serverURL == configuration.serverURL)
         require(kit.spaceID.equals(configuration.spaceID, ignoreCase = true))
+        val token = freshPinnedAccessToken()
+        val state = client.recoveryEnvelope(
+            configuration.serverURL,
+            configuration.spaceID,
+            token,
+            requireServerInstanceID(),
+        )
+        val envelope = requireNotNull(state.recovery)
+        require(envelope.algorithm == LibraryKeyBootstrap.RECOVERY_ALGORITHM)
+        require(state.keyEpoch == kit.keyEpoch && envelope.keyEpoch == kit.keyEpoch)
+        // Verification is accepted only if this exact kit opens the envelope that is
+        // current now. A replacement from another device therefore invalidates the
+        // old presentation even when keyEpoch did not change.
+        require(keyBundle(LibraryKeyBootstrap.openRecoveryEnvelope(
+            kit,
+            envelope.ciphertext,
+        )) == requireNotNull(keys))
         store.write(
             RECOVERY_VERIFICATION_FILE,
-            RecoveryKitVerification.fromRecoveryKit(kit).toJSON(),
+            RecoveryKitVerification.fromRecoveryKit(kit, envelope).toJSON(),
         )
         store.delete(RECOVERY_PRESENTATION)
         store.delete(PENDING_RECOVERY)
@@ -788,6 +902,15 @@ class SnippetRepository(
                     var forcedRefreshAttempted = false
                     while (true) {
                         try {
+                            validateWritableSpace(accessToken)
+                            try {
+                                refreshRecoveryVerification(accessToken)
+                            } catch (_: Exception) {
+                                // Sync may continue offline from recovery metadata, but
+                                // the UI must stop claiming that the current envelope
+                                // was confirmed.
+                                recoveryKitVerified = false
+                            }
                             syncWithAccessToken(accessToken)
                             succeeded = true
                             return@withContext
@@ -1144,15 +1267,62 @@ class SnippetRepository(
     private suspend fun freshPinnedAccessToken(): String {
         requireSignedInCoordinates()
         val token = authenticator.freshAccessToken(configuration.serverURL)
+        validateWritableSpace(token)
+        return token
+    }
+
+    private fun validateWritableSpace(accessToken: String) {
         val resolution = client.resolveSpace(
             configuration.serverURL,
             configuration.spaceID,
-            token,
+            accessToken,
         )
         if (!resolution.serverInstanceID.equals(requireServerInstanceID(), ignoreCase = true)) {
             throw SyncFailure("scope_review_required")
         }
-        return token
+        if (!resolution.canWrite) throw SyncFailure("read_only_library")
+    }
+
+    private fun refreshRecoveryVerification(accessToken: String): Boolean {
+        val verification = store.read(RECOVERY_VERIFICATION_FILE)
+            ?.let(RecoveryKitVerification::fromJSON)
+        if (verification == null || !verification.matchesCoordinates(configuration)) {
+            invalidateRecoveryVerification(store)
+            recoveryKitVerified = false
+            return false
+        }
+        val state = client.recoveryEnvelope(
+            configuration.serverURL,
+            configuration.spaceID,
+            accessToken,
+            requireServerInstanceID(),
+        )
+        val current = verification.matches(configuration, state)
+        recoveryKitVerified = current
+        if (!current) invalidateRecoveryVerification(store)
+        return current
+    }
+
+    private suspend fun refreshRecoveryVerification() {
+        initialization.await()
+        mutex.withLock {
+            if (!recoveryKitVerified || pendingLibrarySelection != null) return@withLock
+            try {
+                withContext(Dispatchers.IO) {
+                    val token = freshPinnedAccessToken()
+                    if (!refreshRecoveryVerification(token)) {
+                        throw SyncFailure("recovery_kit_changed")
+                    }
+                }
+                publish()
+            } catch (error: SyncFailure) {
+                recoveryKitVerified = false
+                publish(errorCode = error.code)
+            } catch (_: Exception) {
+                recoveryKitVerified = false
+                publish(errorCode = "recovery_status_unconfirmed")
+            }
+        }
     }
 
     private fun clearBootstrapState() {
@@ -1161,13 +1331,11 @@ class SnippetRepository(
             PENDING_APPROVAL,
             PENDING_RECOVERY,
             RECOVERY_PRESENTATION,
-            PENDING_SPACE_SELECTION,
         ).forEach(store::delete)
         pairingQRCode = null
         pairingConfirmationCode = null
         pairingExpiresAtEpochSeconds = null
         approvalConfirmationCode = null
-        pendingLibrarySelection = null
     }
 
     /**
@@ -1186,6 +1354,8 @@ class SnippetRepository(
         recoveryKitVerified = false
 
         clearBootstrapState()
+        store.delete(PENDING_SPACE_SELECTION)
+        pendingLibrarySelection = null
 
         authenticator.forgetLocalSession()
         cloudSessionAvailable = false

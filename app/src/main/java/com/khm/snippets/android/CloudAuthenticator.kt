@@ -202,7 +202,10 @@ class CloudAuthenticator(
                     maximumAccessTokenAgeSeconds = pending.getInt("maximumAccessTokenAgeSeconds"),
                     response = tokenResponse,
                 )
-                store.write(AUTH_SESSION, stored.toJSON())
+                // Keep an existing account usable until the repository has resolved
+                // and the user has confirmed the target library. The staged session
+                // is device-bound and survives process death with the chooser.
+                store.write(PENDING_AUTH_SESSION, stored.toJSON())
                 store.delete(LEGACY_AUTH_STATE)
                 store.delete(LEGACY_AUTH_SERVER)
                 CompletedAuthorization(
@@ -218,8 +221,19 @@ class CloudAuthenticator(
     suspend fun freshAccessToken(
         expectedServerURL: String,
         forceRefresh: Boolean = false,
+    ): String = freshAccessToken(AUTH_SESSION, expectedServerURL, forceRefresh)
+
+    suspend fun freshPendingAccessToken(
+        expectedServerURL: String,
+        forceRefresh: Boolean = false,
+    ): String = freshAccessToken(PENDING_AUTH_SESSION, expectedServerURL, forceRefresh)
+
+    private suspend fun freshAccessToken(
+        sessionFile: String,
+        expectedServerURL: String,
+        forceRefresh: Boolean,
     ): String = withContext(Dispatchers.IO) {
-        val stored = loadSession() ?: throw CloudAuthFailure("sign_in_required")
+        val stored = loadSession(sessionFile) ?: throw CloudAuthFailure("sign_in_required")
         val pinnedServerURL = configuredServerURL()
         guard(
             stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
@@ -260,8 +274,10 @@ class CloudAuthenticator(
         // If logout forced this refresh, journal both generations before replacing
         // the stored session. Process death cannot otherwise strand the old refresh
         // token at a provider that does not invalidate it during rotation.
-        extendRevocationJournalIfPresent(listOf(stored, updated))
-        store.write(AUTH_SESSION, updated.toJSON())
+        if (sessionFile == AUTH_SESSION) {
+            extendRevocationJournalIfPresent(listOf(stored, updated))
+        }
+        store.write(sessionFile, updated.toJSON())
         updated.accessToken
     }
 
@@ -275,6 +291,40 @@ class CloudAuthenticator(
         } catch (_: Exception) {
             false
         }
+    }
+
+    fun hasPendingAuthorization(serverURL: String? = null): Boolean {
+        return try {
+            val stored = loadSession(PENDING_AUTH_SESSION) ?: return false
+            val pinnedServerURL = configuredServerURL()
+            stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
+                stored.serverURL == pinnedServerURL &&
+                (serverURL == null || normalizedBaseURL(serverURL) == pinnedServerURL)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Commits a previously staged browser session after library confirmation. */
+    fun commitPendingAuthorization(expectedServerURL: String) {
+        val candidate = loadSession(PENDING_AUTH_SESSION)
+            ?: throw CloudAuthFailure("authorization_state_invalid")
+        guard(
+            candidate.serverURL == normalizedBaseURL(expectedServerURL),
+            "authorization_state_invalid",
+        )
+        store.write(AUTH_SESSION, candidate.toJSON())
+    }
+
+    /** Removes the staged copy only after the repository cleared its commit marker. */
+    fun finalizePendingAuthorization() {
+        store.delete(PENDING_AUTH_SESSION)
+    }
+
+    /** Cancels only the uncommitted browser result; the active account is untouched. */
+    fun discardPendingAuthorization() {
+        store.delete(PENDING)
+        store.delete(PENDING_AUTH_SESSION)
     }
 
     fun hasPendingRevocation(): Boolean =
@@ -313,6 +363,7 @@ class CloudAuthenticator(
 
     fun forgetLocalSession() {
         store.delete(PENDING)
+        store.delete(PENDING_AUTH_SESSION)
         store.delete(AUTH_SESSION)
         store.delete(LEGACY_AUTH_STATE)
         store.delete(LEGACY_AUTH_SERVER)
@@ -408,8 +459,8 @@ class CloudAuthenticator(
         .toString()
         .also { guard(it.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid") }
 
-    private fun loadSession(): StoredSession? {
-        val raw = store.read(AUTH_SESSION) ?: return null
+    private fun loadSession(sessionFile: String = AUTH_SESSION): StoredSession? {
+        val raw = store.read(sessionFile) ?: return null
         try {
             guard(raw.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid")
             val value = JSONObject(raw)
@@ -869,6 +920,7 @@ class CloudAuthenticator(
         const val MIN_TOKEN_LIFETIME_MILLIS = 30_000L
         const val MAX_TOKEN_LIFETIME_MILLIS = 86_460_000L
         const val AUTH_SESSION = "oidc-session.enc"
+        const val PENDING_AUTH_SESSION = "oidc-pending-session.enc"
         const val AUTH_REVOCATION = "oidc-revocation-journal.enc"
         const val LEGACY_AUTH_STATE = "oidc-auth-state.enc"
         const val LEGACY_AUTH_SERVER = "oidc-auth-server.enc"

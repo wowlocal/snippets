@@ -28,7 +28,7 @@ class CloudConfigurationMigrationTest {
     }
 
     @Test
-    fun v3RoundTripRetainsServerInstancePin() {
+    fun v4RoundTripRetainsServerInstancePin() {
         val original = CloudConfiguration(
             provider = SyncProvider.SNIPPETS_CLOUD,
             serverURL = "https://sync.example",
@@ -41,7 +41,7 @@ class CloudConfigurationMigrationTest {
         val json = original.toJSON()
         val decoded = cloudConfiguration(json)
 
-        assertEquals(3, JSONObject(json).getInt("schemaVersion"))
+        assertEquals(4, JSONObject(json).getInt("schemaVersion"))
         assertEquals(original, decoded)
         assertFalse(decoded.requiresServerInstanceReview())
     }

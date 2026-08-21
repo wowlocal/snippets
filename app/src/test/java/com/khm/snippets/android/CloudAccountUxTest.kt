@@ -32,6 +32,7 @@ class CloudAccountUxTest {
             protocolMajor = 2,
             spaceID = "00000000-0000-0000-0000-000000000001",
             lastSuccessfulSyncEpochSeconds = 1_788_000_000,
+            pendingAuthorizationCommit = true,
         )
 
         assertEquals(value, cloudConfiguration(value.toJSON()))
@@ -54,17 +55,38 @@ class CloudAccountUxTest {
             keyEpoch = 7,
             secret = ByteArray(32) { it.toByte() },
         )
-        val stored = RecoveryKitVerification.fromRecoveryKit(kit)
+        val envelope = HttpSyncClient.RecoveryEnvelopeRecord(
+            version = 3,
+            keyEpoch = 7,
+            algorithm = LibraryKeyBootstrap.RECOVERY_ALGORITHM,
+            ciphertext = byteArrayOf(1, 2, 3),
+        )
+        val stored = RecoveryKitVerification.fromRecoveryKit(kit, envelope)
         val restored = RecoveryKitVerification.fromJSON(stored.toJSON())
-
-        assertEquals(stored, restored)
-        assertTrue(restored!!.matches(CloudConfiguration(
+        val configuration = CloudConfiguration(
             serverURL = "https://cloud.example",
             spaceID = "00000000-0000-4000-8000-000000000001",
-        )))
-        assertFalse(restored.matches(CloudConfiguration(
+        )
+
+        assertEquals(stored, restored)
+        assertTrue(restored!!.matches(
+            configuration,
+            HttpSyncClient.RecoveryEnvelopeState(7, envelope),
+        ))
+        assertFalse(restored.matchesCoordinates(CloudConfiguration(
             serverURL = "https://cloud.example",
             spaceID = "00000000-0000-4000-8000-000000000002",
+        )))
+        assertFalse(restored.matches(
+            configuration,
+            HttpSyncClient.RecoveryEnvelopeState(
+                7,
+                envelope.copy(version = 4, ciphertext = byteArrayOf(4, 5, 6)),
+            ),
+        ))
+        assertEquals(null, RecoveryKitVerification.fromJSON(stored.toJSON().replace(
+            "\"schemaVersion\":2",
+            "\"schemaVersion\":1",
         )))
         assertEquals(null, RecoveryKitVerification.fromJSON("true"))
     }
@@ -91,6 +113,25 @@ class CloudAccountUxTest {
         assertEquals(
             second.spaceID,
             automaticPersonalSpace(listOf(first, second), second.spaceID)?.spaceID,
+        )
+    }
+
+    @Test
+    fun readerLibrariesAreNeverSelectedAsWritableStorage() {
+        val reader = HttpSyncClient.SpaceCandidate(
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000010",
+            "reader",
+        )
+        val writer = reader.copy(
+            spaceID = "00000000-0000-4000-8000-000000000002",
+            role = "writer",
+        )
+
+        assertEquals(null, automaticPersonalSpace(listOf(reader), reader.spaceID))
+        assertEquals(
+            writer.spaceID,
+            automaticPersonalSpace(listOf(reader, writer), reader.spaceID)?.spaceID,
         )
     }
 

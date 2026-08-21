@@ -50,6 +50,12 @@ data class CloudConfiguration(
     val datasetGeneration: String? = null,
     val feedEpoch: String? = null,
     val lastSuccessfulSyncEpochSeconds: Long? = null,
+    /**
+     * The selected library state is durable, but the staged OAuth session has not
+     * necessarily replaced the active session yet. Startup completes this commit
+     * before allowing the cloud data plane to run.
+     */
+    val pendingAuthorizationCommit: Boolean = false,
 )
 
 internal fun CloudConfiguration.requiresServerInstanceReview(): Boolean =
@@ -105,46 +111,75 @@ internal data class RecoveryKitVerification(
     val serverURL: String,
     val spaceID: String,
     val keyEpoch: Int,
+    val envelopeVersion: Int,
+    val envelopeFingerprint: String,
     val kitFingerprint: String,
 ) {
-    fun matches(configuration: CloudConfiguration): Boolean =
+    fun matchesCoordinates(configuration: CloudConfiguration): Boolean =
         serverURL == configuration.serverURL.trim().trimEnd('/') &&
             spaceID.equals(configuration.spaceID, ignoreCase = true)
 
+    fun matches(
+        configuration: CloudConfiguration,
+        state: HttpSyncClient.RecoveryEnvelopeState,
+    ): Boolean {
+        val envelope = state.recovery ?: return false
+        return matchesCoordinates(configuration) &&
+            keyEpoch == state.keyEpoch &&
+            keyEpoch == envelope.keyEpoch &&
+            envelopeVersion == envelope.version &&
+            envelopeFingerprint == fingerprint(envelope.ciphertext)
+    }
+
     fun toJSON(): String = JSONObject()
-        .put("schemaVersion", 1)
+        .put("schemaVersion", 2)
         .put("serverURL", serverURL)
         .put("spaceID", spaceID)
         .put("keyEpoch", keyEpoch)
+        .put("envelopeVersion", envelopeVersion)
+        .put("envelopeFingerprint", envelopeFingerprint)
         .put("kitFingerprint", kitFingerprint)
         .toString()
 
     companion object {
-        fun fromRecoveryKit(kit: LibraryKeyBootstrap.RecoveryKit): RecoveryKitVerification =
+        fun fromRecoveryKit(
+            kit: LibraryKeyBootstrap.RecoveryKit,
+            envelope: HttpSyncClient.RecoveryEnvelopeRecord,
+        ): RecoveryKitVerification =
             RecoveryKitVerification(
                 serverURL = kit.serverURL.trim().trimEnd('/'),
                 spaceID = kit.spaceID,
                 keyEpoch = kit.keyEpoch,
-                kitFingerprint = MessageDigest.getInstance("SHA-256")
-                    .digest(kit.toQRPayload().toByteArray(Charsets.UTF_8))
-                    .joinToString("") { "%02x".format(it) },
+                envelopeVersion = envelope.version,
+                envelopeFingerprint = fingerprint(envelope.ciphertext),
+                kitFingerprint = fingerprint(kit.toQRPayload().toByteArray(Charsets.UTF_8)),
             )
 
         fun fromJSON(raw: String): RecoveryKitVerification? = runCatching {
             val value = JSONObject(raw)
-            require(value.getInt("schemaVersion") == 1)
+            // Schema 1 could identify only the library. It cannot prove that another
+            // device has not replaced the envelope, so it deliberately fails closed.
+            require(value.getInt("schemaVersion") == 2)
             RecoveryKitVerification(
                 serverURL = value.getString("serverURL").trim().trimEnd('/'),
                 spaceID = value.getString("spaceID"),
                 keyEpoch = value.getInt("keyEpoch"),
+                envelopeVersion = value.getInt("envelopeVersion"),
+                envelopeFingerprint = value.getString("envelopeFingerprint"),
                 kitFingerprint = value.getString("kitFingerprint"),
             ).also {
                 require(it.serverURL.startsWith("https://"))
                 require(it.spaceID.isNotBlank())
                 require(it.keyEpoch > 0)
+                require(it.envelopeVersion > 0)
+                require(it.envelopeFingerprint.matches(Regex("^[0-9a-f]{64}$")))
                 require(it.kitFingerprint.matches(Regex("^[0-9a-f]{64}$")))
             }
         }.getOrNull()
+
+        private fun fingerprint(value: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(value)
+                .joinToString("") { "%02x".format(it) }
     }
 }
 
@@ -189,7 +224,7 @@ fun parseLibrary(json: String): List<SnippetItem> {
 fun tagsJSON(tags: List<String>): String = JSONArray(tags).toString()
 
 fun CloudConfiguration.toJSON(): String = JSONObject()
-    .put("schemaVersion", 3)
+    .put("schemaVersion", 4)
     .put("provider", provider.name)
     .put("serverURL", serverURL)
     .put("apiBaseURL", apiBaseURL)
@@ -202,6 +237,7 @@ fun CloudConfiguration.toJSON(): String = JSONObject()
     .put("datasetGeneration", datasetGeneration)
     .put("feedEpoch", feedEpoch)
     .put("lastSuccessfulSyncEpochSeconds", lastSuccessfulSyncEpochSeconds)
+    .put("pendingAuthorizationCommit", pendingAuthorizationCommit)
     .toString()
 
 fun cloudConfiguration(json: String): CloudConfiguration {
@@ -214,7 +250,7 @@ fun cloudConfiguration(json: String): CloudConfiguration {
         .getOrDefault(SyncProvider.DEVICE)
     // Schema 2 is kept readable so an existing v2 checkpoint can fail closed with
     // scope_review_required instead of being mistaken for an unsupported provider.
-    val hasCurrentHTTPBinding = schemaVersion in 2..3 && protocolMajor == 2 &&
+    val hasCurrentHTTPBinding = schemaVersion in 2..4 && protocolMajor == 2 &&
         apiBaseURL == serverURL.trimEnd('/') + "/v2"
     return CloudConfiguration(
         provider = if (storedProvider == SyncProvider.SNIPPETS_CLOUD && !hasCurrentHTTPBinding) {
@@ -232,6 +268,10 @@ fun cloudConfiguration(json: String): CloudConfiguration {
         feedEpoch = objectValue.optNullableString("feedEpoch"),
         lastSuccessfulSyncEpochSeconds = objectValue.optNullableLong(
             "lastSuccessfulSyncEpochSeconds",
+        ),
+        pendingAuthorizationCommit = objectValue.optBoolean(
+            "pendingAuthorizationCommit",
+            false,
         ),
     )
 }

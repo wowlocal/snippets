@@ -48,6 +48,27 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             second.spaceID)
     }
 
+    func testReaderCloudLibrariesAreNeverAutomaticWritableTargets() {
+        let server = UUID(uuidString: "00000000-0000-4000-8000-000000000010")!
+        let reader = SnippetsCloudLibraryChoice(
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            serverInstanceID: server,
+            role: "reader")
+        let writer = SnippetsCloudLibraryChoice(
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
+            serverInstanceID: server,
+            role: "writer")
+
+        XCTAssertNil(automaticSnippetsCloudLibraryChoice(
+            [reader],
+            existingSpaceID: reader.spaceID))
+        XCTAssertEqual(
+            automaticSnippetsCloudLibraryChoice(
+                [reader, writer],
+                existingSpaceID: reader.spaceID),
+            writer.spaceID)
+    }
+
     func testPendingRecoveryKitBlocksCloudDisconnectBeforeRevocation() async throws {
         let defaultsName = "KeychainAccessibilityPolicyTests.recovery-disconnect.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))

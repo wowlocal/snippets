@@ -29,6 +29,8 @@ struct SnippetsCloudLibraryChoice: Equatable {
     let serverInstanceID: UUID
     let role: String
 
+    var canWrite: Bool { role == "owner" || role == "writer" }
+
     var libraryID: String {
         let source = "\(serverInstanceID.uuidString.lowercased()):\(spaceID.uuidString.lowercased())"
         return SHA256.hash(data: Data(source.utf8)).prefix(4)
@@ -40,11 +42,12 @@ func automaticSnippetsCloudLibraryChoice(
     _ choices: [SnippetsCloudLibraryChoice],
     existingSpaceID: UUID?
 ) -> UUID? {
-    if let existingSpaceID, choices.contains(where: { $0.spaceID == existingSpaceID }) {
+    let writable = choices.filter(\.canWrite)
+    if let existingSpaceID, writable.contains(where: { $0.spaceID == existingSpaceID }) {
         return existingSpaceID
     }
-    if choices.count == 1 { return choices[0].spaceID }
-    let owned = choices.filter { $0.role == "owner" }
+    if writable.count == 1 { return writable[0].spaceID }
+    let owned = writable.filter { $0.role == "owner" }
     return owned.count == 1 ? owned[0].spaceID : nil
 }
 
@@ -824,6 +827,7 @@ private final class SnippetsCloudOAuthClient {
         case tokenExchangeFailed
         case backgroundAccessMissing
         case spaceSelectionRequired
+        case readOnlyLibraryUnavailable
         case invalidStoredSession
 
         var description: String {
@@ -837,6 +841,7 @@ private final class SnippetsCloudOAuthClient {
             case .tokenExchangeFailed: "The identity provider could not complete sign-in."
             case .backgroundAccessMissing: "The identity provider did not grant background access."
             case .spaceSelectionRequired: "This account has multiple libraries; explicit selection is required."
+            case .readOnlyLibraryUnavailable: "This account has no writable Snippets library. Reader access cannot be used as active sync storage."
             case .invalidStoredSession: "The saved Snippets Cloud session is invalid. Sign in again."
             }
         }
@@ -1868,11 +1873,17 @@ private final class SnippetsCloudOAuthClient {
             $0.scope.serverInstanceId == serverInstanceID
                 && (32...256).contains($0.scope.scopeBinding.utf8.count)
         }) else { throw Failure.insecureServerProfile }
-        let choices = response.spaces.map {
+        guard response.spaces.allSatisfy({ ["owner", "writer", "reader"].contains($0.role) })
+        else { throw Failure.insecureServerProfile }
+        let discoveredChoices = response.spaces.map {
             SnippetsCloudLibraryChoice(
                 spaceID: $0.spaceId,
                 serverInstanceID: $0.scope.serverInstanceId,
                 role: $0.role)
+        }
+        let choices = discoveredChoices.filter(\.canWrite)
+        if choices.isEmpty && !discoveredChoices.isEmpty {
+            throw Failure.readOnlyLibraryUnavailable
         }
         if let automatic = automaticSnippetsCloudLibraryChoice(
             choices,
@@ -1901,7 +1912,8 @@ private final class SnippetsCloudOAuthClient {
                 "Idempotency-Key": idempotencyKey.uuidString.lowercased()
             ])
         guard created.scope.serverInstanceId == serverInstanceID,
-              (32...256).contains(created.scope.scopeBinding.utf8.count) else {
+              (32...256).contains(created.scope.scopeBinding.utf8.count),
+              ["owner", "writer"].contains(created.role) else {
             throw Failure.insecureServerProfile
         }
         if confirmAccountChange, existingSpaceID != nil {
