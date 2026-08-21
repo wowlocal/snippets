@@ -56,6 +56,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
@@ -111,6 +112,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -118,6 +120,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -194,7 +197,7 @@ class MainActivity : ComponentActivity() {
     companion object { const val EXTRA_SEARCH_QUERY = "search_query" }
 }
 
-private enum class Screen { LIBRARY, EDITOR, SETTINGS }
+private enum class Screen { LIBRARY, EDITOR, SETTINGS, CLOUD_ACCOUNT }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -230,7 +233,9 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
     LaunchedEffect(availableTags) {
         activeTagKeys = activeTagKeys.intersect(availableTags.mapTo(mutableSetOf()) { it.key })
     }
-    BackHandler(enabled = screen != Screen.LIBRARY) { screen = Screen.LIBRARY }
+    BackHandler(enabled = screen != Screen.LIBRARY) {
+        screen = if (screen == Screen.CLOUD_ACCOUNT) Screen.SETTINGS else Screen.LIBRARY
+    }
 
     BoxWithConstraints {
         val twoPane = shouldUseTwoPane(maxWidth.value, maxHeight.value)
@@ -238,6 +243,7 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
             twoPane || screen == Screen.LIBRARY -> "Snippets"
             screen == Screen.EDITOR && editing?.name.isNullOrBlank() -> "New snippet"
             screen == Screen.EDITOR -> "Edit snippet"
+            screen == Screen.CLOUD_ACCOUNT -> "Snippets Cloud"
             else -> if (BuildConfig.SNIPPETS_CLOUD_ENABLED) "Cloud & storage" else "Storage"
         }
         Scaffold(
@@ -255,8 +261,15 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
                         )
                     },
                     navigationIcon = {
-                        if (!twoPane && screen != Screen.LIBRARY) {
-                            IconButton(onClick = { screen = Screen.LIBRARY }) {
+                        if ((!twoPane && screen != Screen.LIBRARY) ||
+                            screen == Screen.CLOUD_ACCOUNT) {
+                            IconButton(onClick = {
+                                screen = if (screen == Screen.CLOUD_ACCOUNT) {
+                                    Screen.SETTINGS
+                                } else {
+                                    Screen.LIBRARY
+                                }
+                            }) {
                                 Icon(
                                     painterResource(R.drawable.ic_arrow_back),
                                     contentDescription = "Back",
@@ -340,6 +353,7 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
                             editing = editing,
                             repository = repository,
                             state = state,
+                            onOpenCloudAccount = { screen = Screen.CLOUD_ACCOUNT },
                             onSave = {
                                 scope.launch { repository.save(it); screen = Screen.LIBRARY }
                             },
@@ -379,7 +393,12 @@ private fun SnippetsApp(repository: SnippetRepository, initialQuery: String) {
                                 scope.launch { repository.delete(id); screen = Screen.LIBRARY }
                             },
                         )
-                        Screen.SETTINGS -> SettingsScreen(repository, state)
+                        Screen.SETTINGS -> SettingsScreen(
+                            state = state,
+                            onOpenCloudAccount = { screen = Screen.CLOUD_ACCOUNT },
+                            onUseDeviceOnly = { scope.launch { repository.useDeviceOnly() } },
+                        )
+                        Screen.CLOUD_ACCOUNT -> CloudAccountScreen(repository, state)
                     }
                 }
             }
@@ -403,9 +422,11 @@ private fun DetailPane(
     editing: SnippetItem?,
     repository: SnippetRepository,
     state: LibraryState,
+    onOpenCloudAccount: () -> Unit,
     onSave: (SnippetItem) -> Unit,
     onDelete: (String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     AnimatedContent(targetState = screen, label = "Detail pane") { target ->
         when (target) {
             Screen.LIBRARY -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -433,7 +454,12 @@ private fun DetailPane(
                 }
             }
             Screen.EDITOR -> EditorScreen(requireNotNull(editing), onSave, onDelete)
-            Screen.SETTINGS -> SettingsScreen(repository, state)
+            Screen.SETTINGS -> SettingsScreen(
+                state = state,
+                onOpenCloudAccount = onOpenCloudAccount,
+                onUseDeviceOnly = { scope.launch { repository.useDeviceOnly() } },
+            )
+            Screen.CLOUD_ACCOUNT -> CloudAccountScreen(repository, state)
         }
     }
 }
@@ -533,7 +559,7 @@ internal fun LibraryScreen(
                 shape = MaterialTheme.shapes.medium,
             ) {
                 Text(
-                    "Sync needs attention · ${state.errorCode.orEmpty()}",
+                    "Snippets Cloud needs attention. Open Cloud & storage for details.",
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     style = MaterialTheme.typography.labelLarge,
                 )
@@ -1068,7 +1094,62 @@ internal fun EditorScreen(
 }
 
 @Composable
-private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
+private fun SettingsScreen(
+    state: LibraryState,
+    onOpenCloudAccount: () -> Unit,
+    onUseDeviceOnly: () -> Unit,
+) {
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Text(
+                if (BuildConfig.SNIPPETS_CLOUD_ENABLED) "Cloud & storage" else "Storage",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                "Account, library access, active storage, and current sync status are shown separately.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        item {
+            SettingsCard(title = "Active storage") {
+                Text(
+                    if (state.provider == SyncProvider.SNIPPETS_CLOUD) {
+                        "Snippets Cloud"
+                    } else {
+                        "On device"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    state.syncLabel,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (state.provider == SyncProvider.SNIPPETS_CLOUD) {
+                    OutlinedButton(onClick = onUseDeviceOnly, enabled = !state.isBusy) {
+                        Text("Use this library on device only")
+                    }
+                }
+            }
+        }
+        if (BuildConfig.SNIPPETS_CLOUD_ENABLED) item {
+            SettingsCard(title = "Snippets Cloud") {
+                Text(
+                    state.accountFingerprint?.let { "Connected · Account $it" }
+                        ?: "Not connected",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onOpenCloudAccount) { Text("Open Snippets Cloud") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryState) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val activity = LocalActivity.current as? MainActivity
@@ -1077,7 +1158,14 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
         !BuildConfig.SNIPPETS_OAUTH_REDIRECT_URI.contains(".invalid/")
     // Recovery input is a decryption secret: never serialize it into SavedState.
     var recoveryCode by remember { mutableStateOf("") }
+    var recoveryCodeVisible by remember { mutableStateOf(false) }
     var scannerFailed by rememberSaveable { mutableStateOf(false) }
+    var showDisconnectConfirmation by remember { mutableStateOf(false) }
+    var showSwitchConfirmation by remember { mutableStateOf(false) }
+    var verifyingRecoveryKit by remember { mutableStateOf(false) }
+    var recoveryVerificationInput by remember { mutableStateOf("") }
+    var recoveryVerificationFailed by remember { mutableStateOf(false) }
+    var pairingSecondsRemaining by remember { mutableStateOf<Long?>(null) }
     // Intentionally not saveable: leaving Settings or backgrounding the activity
     // destroys this disclosed copy and the durable kit remains biometric-locked.
     var recoveryPresentation by remember { mutableStateOf<RecoveryKitPresentation?>(null) }
@@ -1089,6 +1177,8 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
             override fun onPause(owner: LifecycleOwner) {
                 recoveryPresentation = null
                 recoveryCode = ""
+                verifyingRecoveryKit = false
+                recoveryVerificationInput = ""
             }
         }
         activity?.lifecycle?.addObserver(observer)
@@ -1096,6 +1186,7 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
             activity?.lifecycle?.removeObserver(observer)
             recoveryPresentation = null
             recoveryCode = ""
+            recoveryVerificationInput = ""
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
@@ -1108,7 +1199,38 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
         scope.launch {
             val completion = repository.completeCloudSignIn(result.data)
             completion.recoveryKit?.let { recoveryPresentation = it }
-            if (completion.succeeded) repository.syncNow()
+        }
+    }
+
+    LaunchedEffect(
+        state.cloudKeyStatus,
+        state.provider,
+        repository.configuration().lastSuccessfulSyncEpochSeconds,
+    ) {
+        if (state.cloudKeyStatus == CloudKeyStatus.READY &&
+            state.provider == SyncProvider.SNIPPETS_CLOUD &&
+            repository.configuration().lastSuccessfulSyncEpochSeconds == null) {
+            repository.syncNow()
+        }
+    }
+
+    LaunchedEffect(state.cloudKeyStatus, state.pairingExpiresAtEpochSeconds) {
+        val expiresAt = state.pairingExpiresAtEpochSeconds
+        if (state.cloudKeyStatus != CloudKeyStatus.WAITING_FOR_APPROVAL || expiresAt == null) {
+            pairingSecondsRemaining = null
+            return@LaunchedEffect
+        }
+        var tick = 0
+        while (true) {
+            val remaining = (expiresAt - System.currentTimeMillis() / 1_000).coerceAtLeast(0)
+            pairingSecondsRemaining = remaining
+            if (remaining == 0L) {
+                repository.cancelDevicePairing()
+                return@LaunchedEffect
+            }
+            if (tick > 0 && tick % 3 == 0) repository.checkDevicePairing()
+            tick += 1
+            delay(1_000)
         }
     }
 
@@ -1145,6 +1267,56 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
         )
     }
 
+    if (showDisconnectConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirmation = false },
+            title = { Text("Disconnect Snippets Cloud from this device?") },
+            text = {
+                Text(
+                    "This removes this device’s Snippets Cloud connection and its access " +
+                        "to open the library. Your cloud library is not deleted. To reconnect, " +
+                        "you will need an approved device or your recovery kit.\n\n" +
+                        "Recovery kit: ${if (state.recoveryKitVerified) "saved and verified" else "not verified on this device"}.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showDisconnectConfirmation = false
+                    scope.launch { repository.disconnectCloudAccount() }
+                }) { Text("Disconnect this device") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisconnectConfirmation = false }) { Text("Cancel") }
+            },
+        )
+    }
+    if (showSwitchConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showSwitchConfirmation = false },
+            title = { Text("Switch sync to Snippets Cloud?") },
+            text = {
+                Text(
+                    "Current storage: On device\n" +
+                        "New storage: Snippets Cloud · Account ${state.accountFingerprint ?: "—"}\n" +
+                        "Library: Personal · ${state.snippets.size} snippets\n\n" +
+                        "Your on-device library will not be deleted. Changes are compared and merged before sync is verified.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showSwitchConfirmation = false
+                    scope.launch {
+                        repository.useSnippetsCloud()
+                        repository.syncNow()
+                    }
+                }) { Text("Switch and sync") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSwitchConfirmation = false }) { Text("Cancel") }
+            },
+        )
+    }
+
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
@@ -1152,60 +1324,54 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
     ) {
         item {
             Text(
-                if (BuildConfig.SNIPPETS_CLOUD_ENABLED) "Cloud & storage" else "Storage",
+                "Snippets Cloud",
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
-                if (BuildConfig.SNIPPETS_CLOUD_ENABLED) {
-                    "Choose the active writable provider without migrating or deleting the other cloud."
-                } else {
-                    "Snippets stay encrypted on this device."
-                },
+                cloudSetupDescription(state.setupStage),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         item {
-            SettingsCard(title = "Active storage") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = state.provider == SyncProvider.DEVICE,
-                        onClick = { scope.launch { repository.useDeviceOnly() } },
-                        label = { Text("On device") },
-                    )
-                    if (BuildConfig.SNIPPETS_CLOUD_ENABLED) {
-                        FilterChip(
-                            selected = state.provider == SyncProvider.SNIPPETS_CLOUD,
-                            onClick = {
-                                scope.launch {
-                                    repository.useSnippetsCloud()
-                                    repository.syncNow()
-                                }
-                            },
-                            label = { Text("Snippets Cloud") },
-                        )
-                    }
-                }
+            SettingsCard(title = "Sync") {
+                Text(
+                    "Active storage: ${if (state.provider == SyncProvider.SNIPPETS_CLOUD) "Snippets Cloud" else "On device"}",
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 Text(
                     state.syncLabel,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                 )
+                Text(
+                    "${state.snippets.size} snippets on this device",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (signedIn && state.cloudKeyStatus == CloudKeyStatus.READY &&
+                    state.provider != SyncProvider.SNIPPETS_CLOUD) {
+                    Button(
+                        enabled = !state.isBusy,
+                        onClick = { showSwitchConfirmation = true },
+                    ) { Text("Use Snippets Cloud for sync") }
+                }
+                if (state.provider == SyncProvider.SNIPPETS_CLOUD) {
+                    OutlinedButton(
+                        enabled = !state.isBusy,
+                        onClick = { scope.launch { repository.syncNow() } },
+                    ) { Text("Sync now") }
+                }
             }
         }
         if (BuildConfig.SNIPPETS_CLOUD_ENABLED) item {
-            SettingsCard(title = "Snippets Cloud") {
+            SettingsCard(title = "Account") {
                 Text(
-                    if (signedIn) "Signed in. Your personal space and session renew automatically."
+                    if (signedIn) {
+                        "Snippets Cloud · Account ${state.accountFingerprint ?: "—"}\nPersonal library"
+                    }
                     else "Continue in your browser with a passkey, Apple, or Google. Snippets has no password and does not require your email.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (cloudConfigured) {
-                    Text(
-                        BuildConfig.SNIPPETS_CLOUD_URL,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
+                if (!cloudConfigured) {
                     Text(
                         "This build has no pinned cloud endpoint and verified HTTPS sign-in callback.",
                         style = MaterialTheme.typography.labelMedium,
@@ -1220,12 +1386,12 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                                 ?.let(loginLauncher::launch)
                         }
                     },
-                ) { Text(if (signedIn) "Sign in again" else "Continue securely") }
+                ) { Text(if (signedIn) "Change account" else "Sign in to Snippets Cloud") }
                 if (signedIn) {
                     OutlinedButton(
                         enabled = !state.isBusy,
-                        onClick = { scope.launch { repository.disconnectCloudAccount() } },
-                    ) { Text("Sign out on this device") }
+                        onClick = { showDisconnectConfirmation = true },
+                    ) { Text("Disconnect this device") }
                 }
                 if (scannerFailed) {
                     Text(
@@ -1233,34 +1399,83 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                state.errorCode?.let { code ->
-                    Text(
-                        cloudErrorDescription(code),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
             }
         }
         if (signedIn) item {
-            SettingsCard(title = "Encrypted library key") {
+            SettingsCard(title = "Security") {
                 val visibleRecoveryKit = recoveryPresentation
                 if (visibleRecoveryKit != null) {
-                    Text(
-                        "Save this offline. It is the only fallback if every authorized device is lost.",
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    SnippetsQRCode(visibleRecoveryKit.qrPayload, "Offline recovery kit QR")
-                    Text(visibleRecoveryKit.longCode, style = MaterialTheme.typography.bodyMedium)
-                    OutlinedButton(
-                        onClick = { copySensitiveText(context, visibleRecoveryKit.longCode) },
-                    ) { Text("Copy long code") }
-                    Button(
-                        onClick = {
-                            recoveryPresentation = null
-                            scope.launch { repository.acknowledgeRecoveryKitSaved() }
-                        },
-                    ) { Text("I saved it") }
+                    if (verifyingRecoveryKit) {
+                        Text(
+                            "Now use the copy you saved. Enter its final 8 characters to verify that it can be recovered.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            recoveryVerificationInput,
+                            {
+                                recoveryVerificationInput = normalizedRecoveryCode(it).takeLast(8)
+                                recoveryVerificationFailed = false
+                            },
+                            Modifier.fillMaxWidth(),
+                            label = { Text("Final 8 characters") },
+                            shape = MaterialTheme.shapes.medium,
+                        )
+                        if (recoveryVerificationFailed) {
+                            Text(
+                                "Those characters do not match the recovery kit.",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        Button(
+                            enabled = recoveryVerificationInput.length == 8 && !state.isBusy,
+                            onClick = {
+                                if (recoveryKitVerificationMatches(
+                                        visibleRecoveryKit.longCode,
+                                        recoveryVerificationInput,
+                                    )) {
+                                    recoveryPresentation = null
+                                    recoveryVerificationInput = ""
+                                    verifyingRecoveryKit = false
+                                    scope.launch {
+                                        repository.acknowledgeRecoveryKitSaved()
+                                        repository.syncNow()
+                                    }
+                                } else {
+                                    recoveryVerificationFailed = true
+                                }
+                            },
+                        ) { Text("Verify recovery kit") }
+                        TextButton(onClick = {
+                            verifyingRecoveryKit = false
+                            recoveryVerificationInput = ""
+                        }) { Text("Show recovery kit again") }
+                    } else {
+                        Text(
+                            "Save this offline. It is the only fallback if every authorized device is lost.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        SnippetsQRCode(visibleRecoveryKit.qrPayload, "Offline recovery kit QR")
+                        Text(
+                            visibleRecoveryKit.longCode,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.semantics {
+                                contentDescription = "Recovery code ${visibleRecoveryKit.longCode}"
+                            },
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    copySensitiveText(context, visibleRecoveryKit.longCode)
+                                },
+                            ) { Text("Copy code") }
+                            OutlinedButton(
+                                onClick = { shareRecoveryKit(context, visibleRecoveryKit) },
+                            ) { Text("Save or share") }
+                        }
+                        Button(onClick = { verifyingRecoveryKit = true }) {
+                            Text("Verify recovery kit")
+                        }
+                    }
                 } else when (state.cloudKeyStatus) {
                     CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY -> {
                         Text(
@@ -1270,21 +1485,46 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                         Button(
                             enabled = !state.isBusy,
                             onClick = { scope.launch { repository.beginDevicePairing() } },
-                        ) { Text("Use nearby device") }
+                        ) { Text("Use an approved device") }
                         OutlinedButton(
                             enabled = !state.isBusy,
                             onClick = { scan(repository::restoreWithRecoveryKit) },
                         ) { Text("Scan recovery kit") }
                         OutlinedTextField(
                             recoveryCode,
-                            { recoveryCode = it },
+                            { recoveryCode = formattedRecoveryCode(it) },
                             Modifier.fillMaxWidth(),
                             label = { Text("Long recovery code") },
-                            visualTransformation = PasswordVisualTransformation(),
+                            visualTransformation = if (recoveryCodeVisible) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
                             shape = MaterialTheme.shapes.medium,
                         )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                val clipboard = context.getSystemService(
+                                    Context.CLIPBOARD_SERVICE,
+                                ) as ClipboardManager
+                                recoveryCode = formattedRecoveryCode(
+                                    clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)
+                                        ?.toString().orEmpty(),
+                                )
+                            }) { Text("Paste") }
+                            TextButton(onClick = { recoveryCodeVisible = !recoveryCodeVisible }) {
+                                Text(if (recoveryCodeVisible) "Hide code" else "Show code")
+                            }
+                        }
+                        if (normalizedRecoveryCode(recoveryCode).length < 52) {
+                            Text(
+                                "Code is incomplete · ${normalizedRecoveryCode(recoveryCode).length}/52 characters",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         OutlinedButton(
-                            enabled = recoveryCode.isNotBlank() && !state.isBusy,
+                            enabled = normalizedRecoveryCode(recoveryCode).length == 52 &&
+                                !state.isBusy,
                             onClick = {
                                 val value = recoveryCode
                                 recoveryCode = ""
@@ -1299,15 +1539,23 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                     }
 
                     CloudKeyStatus.WAITING_FOR_APPROVAL -> {
-                        Text("Scan this one-time QR on a device that already opens the library.")
+                        Text(
+                            "On a device that already opens this library, open Snippets Cloud, " +
+                                "choose Add device, and scan this QR. Confirm that both devices " +
+                                "show the same code.",
+                        )
                         state.pairingQRCode?.let { SnippetsQRCode(it, "One-time device pairing QR") }
                         state.pairingConfirmationCode?.let {
                             Text("Check code: $it", style = MaterialTheme.typography.titleMedium)
                         }
-                        Button(
+                        Text(
+                            "Waiting for approval… ${formatCountdown(pairingSecondsRemaining)}",
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        OutlinedButton(
                             enabled = !state.isBusy,
                             onClick = { scope.launch { repository.checkDevicePairing() } },
-                        ) { Text("I approved it") }
+                        ) { Text("Check again") }
                         TextButton(
                             enabled = !state.isBusy,
                             onClick = { scope.launch { repository.cancelDevicePairing() } },
@@ -1332,7 +1580,7 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
 
                     CloudKeyStatus.RECOVERY_AUTH_REQUIRED -> {
                         Text(
-                            "Your library key is local. Confirm once to publish only its encrypted recovery envelope.",
+                            "Confirm this security change once to finish protecting your recovery kit.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Button(
@@ -1360,13 +1608,18 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
 
                     CloudKeyStatus.READY -> {
                         Text(
-                            "Ready. The server has encrypted snippets and envelopes only; this device holds its own credential and library key.",
+                            "Library access: unlocked\nRecovery kit: " +
+                                if (state.recoveryKitVerified) {
+                                    "saved and verified"
+                                } else {
+                                    "not verified on this device"
+                                },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Button(
                             enabled = !state.isBusy,
                             onClick = { scan(repository::preparePairingApproval) },
-                        ) { Text("Add another device") }
+                        ) { Text("Scan a new device invitation") }
                         OutlinedButton(
                             enabled = !state.isBusy,
                             onClick = {
@@ -1384,12 +1637,34 @@ private fun SettingsScreen(repository: SnippetRepository, state: LibraryState) {
                 }
             }
         }
-        if (BuildConfig.SNIPPETS_CLOUD_ENABLED) item {
-            Text(
-                "iCloud remains available and unchanged in the Apple apps. Snippets Cloud uses the same encrypted record format, so switching providers is a sync operation rather than a data migration.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+        state.errorCode?.let { code ->
+            item {
+                val error = cloudErrorPresentation(code)
+                SettingsCard(title = error.title) {
+                    Text(error.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    when (error.action) {
+                        CloudErrorAction.SIGN_IN -> Button(onClick = {
+                            scope.launch {
+                                repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL)
+                                    ?.let(loginLauncher::launch)
+                            }
+                        }) { Text(error.actionTitle) }
+                        CloudErrorAction.RECOVER_LIBRARY -> Button(onClick = {
+                            scan(repository::restoreWithRecoveryKit)
+                        }) { Text(error.actionTitle) }
+                        CloudErrorAction.CHECK_PAIRING -> Button(onClick = {
+                            scope.launch { repository.checkDevicePairing() }
+                        }) { Text(error.actionTitle) }
+                        CloudErrorAction.NEW_PAIRING -> Button(onClick = {
+                            scope.launch { repository.beginDevicePairing() }
+                        }) { Text(error.actionTitle) }
+                        CloudErrorAction.SYNC_NOW -> Button(onClick = {
+                            scope.launch { repository.syncNow() }
+                        }) { Text(error.actionTitle) }
+                        CloudErrorAction.NONE -> Unit
+                    }
+                }
+            }
         }
     }
 }
@@ -1443,22 +1718,130 @@ private fun SettingsCard(
     }
 }
 
-private fun cloudErrorDescription(code: String): String = when (code) {
-    "cloud_feature_disabled" -> "Snippets Cloud is disabled in this build."
-    "authorization_cancelled" -> "Sign-in was cancelled. Nothing changed."
-    "sign_in_required", "authentication_required" -> "Please sign in again to continue syncing."
-    "reauthentication_required" -> "Confirm this sensitive action with your passkey."
-    "library_key_required" -> "Unlock this library from a trusted device or recovery kit first."
-    "pairing_expired" -> "That one-time pairing expired. Create a new QR code."
-    "pairing_missing" -> "That pairing is no longer available. Create a new QR code."
-    "secure_setup_failed" -> "The QR, recovery code, or encrypted envelope did not validate. Nothing changed."
-    "refresh_token_missing" -> "The identity provider did not grant background access. Check its native-app offline_access policy."
-    "space_selection_required" -> "This account has multiple libraries. Space selection is required."
-    "server_auth_insecure" -> "This server does not advertise the required secure sign-in profile."
+private enum class CloudErrorAction {
+    NONE, SIGN_IN, RECOVER_LIBRARY, CHECK_PAIRING, NEW_PAIRING, SYNC_NOW,
+}
+
+private data class CloudErrorPresentation(
+    val title: String,
+    val message: String,
+    val action: CloudErrorAction = CloudErrorAction.NONE,
+    val actionTitle: String = "",
+)
+
+private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when (code) {
+    "cloud_feature_disabled" -> CloudErrorPresentation(
+        "Snippets Cloud is unavailable",
+        "This build does not include Snippets Cloud. Your snippets remain on this device.",
+    )
+    "authorization_cancelled" -> CloudErrorPresentation(
+        "Sign-in was cancelled",
+        "Nothing changed and your snippets are safe.",
+        CloudErrorAction.SIGN_IN,
+        "Sign in to Snippets Cloud",
+    )
+    "sign_in_required", "authentication_required", "refresh_token_missing" ->
+        CloudErrorPresentation(
+            "Sign-in needs to be completed again",
+            "Your snippets are safe. Sign in again so Snippets Cloud can keep this device connected.",
+            CloudErrorAction.SIGN_IN,
+            "Continue sign-in",
+        )
+    "reauthentication_required" -> CloudErrorPresentation(
+        "Confirm this security change",
+        "Your snippets are safe. Continue sign-in to confirm with your passkey.",
+        CloudErrorAction.SIGN_IN,
+        "Re-authenticate",
+    )
+    "library_key_required" -> CloudErrorPresentation(
+        "Unlock this library",
+        "The account is connected, but this device cannot decrypt the library yet.",
+        CloudErrorAction.RECOVER_LIBRARY,
+        "Scan recovery kit",
+    )
+    "pairing_expired", "pairing_missing" -> CloudErrorPresentation(
+        "Device invitation expired",
+        "Nothing changed. Create a new invitation and approve it within five minutes.",
+        CloudErrorAction.NEW_PAIRING,
+        "Create new invitation",
+    )
+    "secure_setup_failed" -> CloudErrorPresentation(
+        "Recovery could not be verified",
+        "The QR or recovery code could not be verified. Your existing data is unchanged.",
+        CloudErrorAction.RECOVER_LIBRARY,
+        "Try recovery again",
+    )
+    "space_selection_required" -> CloudErrorPresentation(
+        "Choose a library",
+        "This account has access to more than one Snippets library. Continue sign-in to choose one.",
+        CloudErrorAction.SIGN_IN,
+        "Choose library",
+    )
+    "server_auth_insecure" -> CloudErrorPresentation(
+        "Secure sign-in is unavailable",
+        "This server does not meet Snippets Cloud’s sign-in security requirements. Your data was not sent.",
+    )
     "identity_provider_unavailable", "server_discovery_failed", "dependency_unavailable" ->
-        "Snippets Cloud sign-in is temporarily unavailable. Try again shortly."
-    "scope_review_required" -> "The cloud account or library changed. Review it before resuming."
-    else -> "Snippets Cloud couldn’t complete the request. Try again."
+        CloudErrorPresentation(
+            "Snippets Cloud is temporarily unavailable",
+            "Your snippets are safe. Try sign-in again when the service is reachable.",
+            CloudErrorAction.SIGN_IN,
+            "Try sign-in again",
+        )
+    "scope_review_required" -> CloudErrorPresentation(
+        "Review the connected account",
+        "The cloud account or library changed. Your snippets are safe; sign in again before sync resumes.",
+        CloudErrorAction.SIGN_IN,
+        "Review account",
+    )
+    else -> CloudErrorPresentation(
+        "Snippets Cloud needs attention",
+        "The request could not be completed. Your local snippets are unchanged; try again.",
+        CloudErrorAction.SYNC_NOW,
+        "Try again",
+    )
+}
+
+internal fun normalizedRecoveryCode(value: String): String =
+    value.filter(Char::isLetterOrDigit).uppercase()
+
+internal fun formattedRecoveryCode(value: String): String =
+    normalizedRecoveryCode(value)
+        .filter { it in 'A'..'Z' || it in '2'..'7' }
+        .take(52)
+        .chunked(4)
+        .joinToString("-")
+
+internal fun recoveryKitVerificationMatches(longCode: String, enteredSuffix: String): Boolean {
+    val expected = normalizedRecoveryCode(longCode).takeLast(8)
+    return expected.length == 8 && normalizedRecoveryCode(enteredSuffix) == expected
+}
+
+private fun cloudSetupDescription(stage: CloudSetupStage): String = when (stage) {
+    CloudSetupStage.SIGNED_OUT -> "Sign in to connect your encrypted library."
+    CloudSetupStage.ACCOUNT_CONNECTED -> "Account connected. Library setup is not complete yet."
+    CloudSetupStage.LIBRARY_LOCKED -> "Account connected. Unlock the encrypted library to continue."
+    CloudSetupStage.WAITING_FOR_APPROVAL -> "Waiting for an approved device to unlock this library."
+    CloudSetupStage.RECOVERY_KIT_NEEDS_VERIFICATION ->
+        "The recovery kit still needs to be saved and verified."
+    CloudSetupStage.SYNCING -> "Syncing your library…"
+    CloudSetupStage.UP_TO_DATE -> "Connected and up to date."
+    CloudSetupStage.NEEDS_ATTENTION -> "Setup needs attention. Your local snippets are safe."
+}
+
+private fun formatCountdown(seconds: Long?): String {
+    val value = seconds ?: return ""
+    return "%02d:%02d".format(value / 60, value % 60)
+}
+
+private fun shareRecoveryKit(context: Context, kit: RecoveryKitPresentation) {
+    val sheet = "Snippets Cloud recovery kit\n\n${kit.longCode}\n\n" +
+        "Keep this offline. Anyone with this code and access to your account can unlock your library."
+    val intent = Intent(Intent.ACTION_SEND)
+        .setType("text/plain")
+        .putExtra(Intent.EXTRA_SUBJECT, "Snippets Cloud recovery kit")
+        .putExtra(Intent.EXTRA_TEXT, sheet)
+    context.startActivity(Intent.createChooser(intent, "Save recovery kit"))
 }
 
 @SuppressLint("InlinedApi")

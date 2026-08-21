@@ -746,6 +746,40 @@ rotation between preflight and POST from writing the local library into another 
 A reviewed remote reset may rotate dataset/feed generations only while retaining the pinned owner
 binding; only **Use This Account** may repin that binding.
 
+### Snippets Cloud account UX contract
+
+The account UI presents six distinct facts in order: account, selected library, library-key
+access, recovery status, active sync provider, and current sync result. OAuth completion or a
+locally available key means **Account connected**, never **Ready**. **Up to date** is reserved for
+a completed sync round whose final engine state contains a successful timestamp.
+
+The macOS, iOS/iPadOS, and Android clients expose a dedicated Snippets Cloud account screen with a
+four-hex-character fingerprint derived from the pinned server instance and space. The fingerprint
+is stable across that library's devices without retaining email or OIDC profile claims. It is UI
+only and must not enter diagnostics.
+
+A newly issued or replaced recovery kit remains a durable, encrypted pending setup step until the
+user saves it and proves possession by entering the final eight normalized characters. Apple
+clients provide Copy, Save, and Print; Android provides Copy and Save/Share. Clipboard disclosures
+expire after two minutes where the platform supports expiry, or are conditionally cleared if the
+app still owns the same clipboard entry. Backgrounding synchronously hides the secret, while the
+pending state survives and requires fresh device-owner authentication to reveal again.
+
+Recipient pairing polls automatically while showing the invitation's server-issued expiry as a
+countdown. **Check Again** is only a recovery control after network trouble. Provider changes show
+the old provider, new provider/account, library and local count, promise that the source is not
+deleted, then expose the existing sync round as human phases: destination check, comparison,
+upload, and verification. A failed round leaves the selected account visible with an actionable
+attention state; it never reports completion.
+
+The protocol currently revokes only the credential presented to `DELETE /v2/session`; pairing
+resources are invitations, not a durable device registry. It also has no remote-space or account
+deletion endpoint. Clients must therefore not synthesize a misleading Devices list, pretend that
+another installation was revoked, or offer destructive remote deletion that only signs out the
+current device. Device/session inventory and remote library/account deletion require an additive
+server contract, authorization model, activity metadata, and cross-client implementation before
+those account-management sections can ship.
+
 ### Recovery policy
 
 The UI does not expose a generic Resume operation. Each condition is classified by whether a user

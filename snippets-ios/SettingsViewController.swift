@@ -3,6 +3,7 @@ import AuthenticationServices
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import LocalAuthentication
+import UniformTypeIdentifiers
 import Vision
 import VisionKit
 
@@ -735,13 +736,10 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             message: "Switch and Sync preserves the local library and the other cloud. iCloud continues using the existing CloudKit implementation.",
             preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: "iCloud", style: .default) { [weak self] _ in
-            guard let self else { return }
-            selection.selectICloud()
-            self.environment.syncCoordinator.reloadProviderSelection()
-            self.tableView.reloadData()
+            self?.confirmProviderSwitch(to: .iCloud)
         })
         alert.addAction(UIAlertAction(title: "Snippets Cloud…", style: .default) { [weak self] _ in
-            self?.configureSnippetsCloud()
+            self?.showSnippetsCloudAccount()
         })
         if selection.cloudCredentialResetRequired {
             alert.addAction(UIAlertAction(
@@ -772,6 +770,88 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
         }
         present(alert, animated: true)
+    }
+
+    private func showSnippetsCloudAccount() {
+        let controller = SnippetsCloudAccountViewController(
+            environment: environment,
+            bootstrap: cloudBootstrap,
+            continueSetup: { [weak self] in self?.configureSnippetsCloud() },
+            switchToCloud: { [weak self] in self?.confirmProviderSwitch(to: .snippetsCloud) },
+            syncNow: { [weak self] in self?.syncSnippetsCloudBeforeShowingReady() },
+            addDevice: { [weak self] in self?.presentCloudScanner(mode: .pairing) },
+            replaceRecoveryKit: { [weak self] in
+                self?.runCloudTask(title: "Couldn’t Replace Recovery Kit") {
+                    guard let self else { return }
+                    try self.presentCloudState(
+                        try await self.cloudBootstrap.prepareRecoveryReplacement())
+                }
+            },
+            changeAccount: { [weak self] in
+                guard let self,
+                      let server = SyncBackendSelectionStore.bundledServerURL else { return }
+                self.signInToSnippetsCloud(server, selection: self.environment.backendSelection)
+            },
+            disconnect: { [weak self] in self?.confirmCloudSignOut() })
+        navigationController?.pushViewController(controller, animated: true)
+    }
+
+    private func confirmProviderSwitch(to provider: SyncBackendSelectionStore.Provider) {
+        let current = environment.backendSelection.provider
+        guard current != provider else { return }
+        if provider == .snippetsCloud {
+            guard (try? cloudBootstrap.state()) == .ready else {
+                configureSnippetsCloud()
+                return
+            }
+        }
+        let alert = UIAlertController(
+            title: "Switch Sync to \(provider.displayName)?",
+            message: "Current provider: \(current.displayName)\nNew provider: \(provider.displayName)\(provider == .snippetsCloud ? " · Account \(cloudBootstrap.accountFingerprint ?? "—")" : "")\nLibrary: Personal · \(environment.store.snippets.count) snippets\n\nThe current cloud library will not be deleted. Changes from both copies are compared and merged before sync is verified.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Switch and Sync", style: .default) {
+            [weak self] _ in
+            guard let self else { return }
+            switch provider {
+            case .iCloud: environment.backendSelection.selectICloud()
+            case .snippetsCloud: environment.backendSelection.activateSnippetsCloud()
+            }
+            environment.syncCoordinator.reloadProviderSelection()
+            tableView.reloadData()
+            syncSelectedProviderAfterSwitch(provider)
+        })
+        present(alert, animated: true)
+    }
+
+    private func syncSelectedProviderAfterSwitch(_ provider: SyncBackendSelectionStore.Provider) {
+        let progress = UIAlertController(
+            title: "Switching to \(provider.displayName)…",
+            message: "Checking destination · comparing libraries · uploading changes · verifying sync",
+            preferredStyle: .alert)
+        present(progress, animated: true)
+        Task { @MainActor [weak self, weak progress] in
+            guard let self else { return }
+            let result = await environment.syncCoordinator.requestSync()
+            progress?.dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                tableView.reloadData()
+                let succeeded: Bool
+                if case .completed(.idle(let lastSync)) = result, lastSync != nil {
+                    succeeded = true
+                } else {
+                    succeeded = false
+                }
+                let done = UIAlertController(
+                    title: succeeded ? "Switch Complete" : "Switch Needs Attention",
+                    message: succeeded
+                        ? "\(provider.displayName) is active and the library is up to date."
+                        : "Your libraries were not deleted. \(environment.syncCoordinator.statusDescription)",
+                    preferredStyle: .alert)
+                done.addAction(UIAlertAction(title: "OK", style: .default))
+                present(done, animated: true)
+            }
+        }
     }
 
     private func configureSnippetsCloud() {
@@ -809,7 +889,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     private func confirmUnreadableCloudCredentialReset() {
         let alert = UIAlertController(
             title: "Reset Unreadable Cloud Sign-In?",
-            message: "Snippets cannot verify the saved sign-in history or prove that every older token was revoked. First revoke Snippets in your identity provider’s connected-app settings. Reset removes this device’s cloud login and device-only library key; local snippets and cloud ciphertext are not deleted.",
+            message: "Snippets cannot verify the saved sign-in history or confirm that every older sign-in was disconnected. First revoke Snippets in your identity provider’s connected-app settings. Reset removes this device’s cloud connection and its access to open the library; local snippets and the cloud library are not deleted.",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Reset This Device", style: .destructive) {
@@ -858,13 +938,15 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             configureSnippetsCloud()
         case .ready:
             environment.syncCoordinator.reloadProviderSelection()
-            environment.syncCoordinator.syncNow()
             tableView.reloadData()
-            presentCloudReadyMenu()
+            syncSnippetsCloudBeforeShowingReady()
         case .needsTrustedDeviceOrRecovery:
             presentCloudUnlockMenu()
-        case .waitingForApproval(let payload, let code):
-            presentPairingQR(payload: payload, confirmationCode: code)
+        case .waitingForApproval(let payload, let code, let expiresAt):
+            presentPairingQR(
+                payload: payload,
+                confirmationCode: code,
+                expiresAt: expiresAt)
         case .approvalReady(let code):
             confirmPairingApproval(code: code)
         case .strongAuthenticationRequired(let action):
@@ -891,7 +973,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             title: "Unlock Your Encrypted Library",
             message: "Use a device that already has this library, or your offline recovery kit. Snippets Cloud cannot read or recover the library key.",
             preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "Use Nearby Device", style: .default) {
+        alert.addAction(UIAlertAction(title: "Use an Approved Device", style: .default) {
             [weak self] _ in
             self?.runCloudTask(title: "Couldn’t Create Invitation") {
                 guard let self else { return }
@@ -911,72 +993,68 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         presentActionSheet(alert)
     }
 
-    private func presentCloudReadyMenu() {
-        let alert = UIAlertController(
-            title: "Snippets Cloud Is Ready",
-            message: "No Snippets password or required email. This device has its own login session and a device-only copy of the encrypted library key.",
-            preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "Add Another Device", style: .default) {
-            [weak self] _ in self?.presentCloudScanner(mode: .pairing)
-        })
-        alert.addAction(UIAlertAction(title: "Replace Recovery Kit", style: .default) {
-            [weak self] _ in
-            self?.runCloudTask(title: "Couldn’t Replace Recovery Kit") {
+    private func syncSnippetsCloudBeforeShowingReady() {
+        let progress = UIAlertController(
+            title: "Syncing Your Library…",
+            message: "Account connected. Snippets is downloading and verifying your encrypted library.",
+            preferredStyle: .alert)
+        present(progress, animated: true)
+        Task { @MainActor [weak self, weak progress] in
+            guard let self else { return }
+            let result = await environment.syncCoordinator.requestSync()
+            progress?.dismiss(animated: true) { [weak self] in
                 guard let self else { return }
-                try self.presentCloudState(
-                    try await self.cloudBootstrap.prepareRecoveryReplacement())
+                tableView.reloadData()
+                let alert: UIAlertController
+                if case .completed(.idle(let lastSync)) = result, lastSync != nil {
+                    alert = UIAlertController(
+                        title: "Snippets Cloud Is Up to Date",
+                        message: "\(environment.store.snippets.count) snippets are available on this device. The first verified sync completed successfully.",
+                        preferredStyle: .alert)
+                } else {
+                    alert = UIAlertController(
+                        title: "Account Connected — Sync Needs Attention",
+                        message: "Your local snippets are safe. Setup will remain incomplete until a sync finishes. \(environment.syncCoordinator.statusDescription)",
+                        preferredStyle: .alert)
+                }
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                present(alert, animated: true)
             }
-        })
-        alert.addAction(UIAlertAction(title: "Sign Out on This Device", style: .destructive) {
-            [weak self] _ in self?.confirmCloudSignOut()
-        })
-        alert.addAction(UIAlertAction(title: "Done", style: .cancel))
-        presentActionSheet(alert)
+        }
     }
 
-    private func presentPairingQR(payload: String, confirmationCode: String) {
-        let controller = CloudQRViewController(
-            title: "Add This Device",
-            message: "Scan this one-time QR on a device that already has the library. Compare the code on both devices. Expires in about five minutes.",
+    private func presentPairingQR(
+        payload: String,
+        confirmationCode: String,
+        expiresAt: Date
+    ) {
+        let controller = CloudPairingWaitViewController(
             payload: payload,
-            displayedCode: confirmationCode,
-            warning: "The QR contains only a nonce and this device’s ephemeral public key — never the library key.",
-            primaryTitle: "Check Approval",
-            primary: { [weak self] in
-                self?.runCloudTask(title: "Pairing Isn’t Ready") {
-                    guard let self else { return }
-                    try self.presentCloudState(try await self.cloudBootstrap.checkPairing())
-                }
+            confirmationCode: confirmationCode,
+            expiresAt: expiresAt,
+            poll: { [cloudBootstrap] in try await cloudBootstrap.checkPairing() },
+            stateChanged: { [weak self] state in
+                try? self?.presentCloudState(state)
             },
-            secondaryTitle: "Cancel Pairing",
-            secondary: { [weak self] in
-                self?.runCloudTask(title: "Couldn’t Cancel Pairing") {
-                    try await self?.cloudBootstrap.cancelPairing()
-                }
-            })
+            cancel: { [cloudBootstrap] in try? await cloudBootstrap.cancelPairing() })
         present(UINavigationController(rootViewController: controller), animated: true)
     }
 
     private func presentRecoveryKit(payload: String, longCode: String) {
-        let controller = CloudQRViewController(
-            title: "Save Your Recovery Kit",
-            message: "Keep this QR or long code offline. It is the only fallback if every approved device is lost.",
+        let controller = RecoveryKitViewController(
             payload: payload,
-            displayedCode: longCode,
-            warning: "If you lose this kit and every approved device, old encrypted snippets are permanently unrecoverable — including by Snippets Cloud.",
-            primaryTitle: "I Saved It",
-            primary: { [weak self] in
+            longCode: longCode,
+            verified: { [weak self] in
                 guard let self else { return }
                 do {
                     try cloudBootstrap.acknowledgeRecoveryKitSaved()
                     environment.syncCoordinator.reloadProviderSelection()
-                    environment.syncCoordinator.syncNow()
                     tableView.reloadData()
+                    syncSnippetsCloudBeforeShowingReady()
                 } catch {
                     showError(title: "Couldn’t Finish Setup", error: error)
                 }
-            },
-            relocksWhenInactive: true)
+            })
         present(UINavigationController(rootViewController: controller), animated: true)
     }
 
@@ -1069,22 +1147,10 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     }
 
     private func promptForCloudRecoveryCode() {
-        let alert = UIAlertController(
-            title: "Recovery Code",
-            message: "Enter the long code from your offline recovery kit.",
-            preferredStyle: .alert)
-        alert.addTextField { field in
-            field.autocapitalizationType = .allCharacters
-            field.autocorrectionType = .no
-            field.spellCheckingType = .no
-            field.placeholder = "XXXX-XXXX-…"
-        }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Restore", style: .default) { [weak self, weak alert] _ in
-            guard let value = alert?.textFields?.first?.text else { return }
-            self?.restoreCloudLibrary(with: value)
-        })
-        present(alert, animated: true)
+        let controller = CloudRecoveryCodeViewController(
+            restore: { [weak self] value in self?.restoreCloudLibrary(with: value) },
+            scan: { [weak self] in self?.presentCloudScanner(mode: .recovery) })
+        present(UINavigationController(rootViewController: controller), animated: true)
     }
 
     private func restoreCloudLibrary(with value: String) {
@@ -1105,11 +1171,11 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
 
     private func confirmCloudSignOut() {
         let alert = UIAlertController(
-            title: "Sign Out on This Device?",
-            message: "This removes this device’s login credential and device-only library key. Cloud ciphertext is not deleted. You will need another approved device or the recovery kit to reconnect.",
+            title: "Disconnect Snippets Cloud from This Device?",
+            message: "This removes this device’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery kit: \(cloudBootstrap.recoveryKitStatus == .verified ? "saved and verified on this device" : "not verified on this device").",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Sign Out", style: .destructive) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "Disconnect This Device", style: .destructive) { [weak self] _ in
             self?.runCloudTask(title: "Couldn’t Sign Out") {
                 guard let self else { return }
                 try await self.environment.syncCoordinator.withQuiescedCloudTransport {
@@ -1321,14 +1387,283 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     }
 
     private func showError(title: String, error: Error) {
-        let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        let message = (error as? LocalizedError)?.errorDescription
+            ?? "The request could not be completed. Your local snippets are unchanged; try again."
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        if let failure = error as? SnippetsCloudAccountBootstrap.Failure {
+            switch failure {
+            case .service(let code) where [
+                "sign_in_required", "authentication_required", "refresh_token_missing",
+                "reauthentication_required", "space_selection_required", "scope_review_required",
+            ].contains(code):
+                alert.addAction(UIAlertAction(title: "Continue Sign-In", style: .default) {
+                    [weak self] _ in
+                    guard let self,
+                          let server = SyncBackendSelectionStore.bundledServerURL else { return }
+                    self.signInToSnippetsCloud(
+                        server,
+                        selection: self.environment.backendSelection)
+                })
+            case .service("library_key_required"), .recoveryUnavailable:
+                alert.addAction(UIAlertAction(title: "Choose Recovery Method", style: .default) {
+                    [weak self] _ in self?.presentCloudUnlockMenu()
+                })
+            case .pairingExpired, .service("pairing_expired"), .service("pairing_missing"):
+                alert.addAction(UIAlertAction(title: "Create New Invitation", style: .default) {
+                    [weak self] _ in
+                    self?.runCloudTask(title: "Couldn’t Create Invitation") {
+                        guard let self else { return }
+                        try self.presentCloudState(
+                            try await self.cloudBootstrap.beginPairing())
+                    }
+                })
+            default:
+                break
+            }
+        }
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
 
     @objc private func vaultChanged() {
         tableView.reloadData()
+    }
+}
+
+@MainActor
+private final class SnippetsCloudAccountViewController: UITableViewController {
+    private enum Section: Int, CaseIterable { case account, sync, security, actions }
+    private enum Action: CaseIterable {
+        case continueSetup, switchToCloud, syncNow, addDevice, replaceRecovery, changeAccount, disconnect
+    }
+
+    private let environment: AppEnvironment
+    private let bootstrap: SnippetsCloudAccountBootstrap
+    private let continueSetup: () -> Void
+    private let switchToCloud: () -> Void
+    private let syncNowAction: () -> Void
+    private let addDevice: () -> Void
+    private let replaceRecoveryKit: () -> Void
+    private let changeAccount: () -> Void
+    private let disconnect: () -> Void
+    private var syncObservation: UUID?
+
+    init(
+        environment: AppEnvironment,
+        bootstrap: SnippetsCloudAccountBootstrap,
+        continueSetup: @escaping () -> Void,
+        switchToCloud: @escaping () -> Void,
+        syncNow: @escaping () -> Void,
+        addDevice: @escaping () -> Void,
+        replaceRecoveryKit: @escaping () -> Void,
+        changeAccount: @escaping () -> Void,
+        disconnect: @escaping () -> Void
+    ) {
+        self.environment = environment
+        self.bootstrap = bootstrap
+        self.continueSetup = continueSetup
+        self.switchToCloud = switchToCloud
+        self.syncNowAction = syncNow
+        self.addDevice = addDevice
+        self.replaceRecoveryKit = replaceRecoveryKit
+        self.changeAccount = changeAccount
+        self.disconnect = disconnect
+        super.init(style: .insetGrouped)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Snippets Cloud"
+        navigationItem.largeTitleDisplayMode = .never
+        syncObservation = environment.syncCoordinator.addStateObserver { [weak self] _ in
+            self?.tableView.reloadData()
+        }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        tableView.reloadData()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        guard isMovingFromParent || navigationController?.isBeingDismissed == true,
+              let syncObservation else { return }
+        environment.syncCoordinator.removeStateObserver(syncObservation)
+        self.syncObservation = nil
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int { Section.allCases.count }
+
+    override func tableView(
+        _ tableView: UITableView,
+        titleForHeaderInSection section: Int
+    ) -> String? {
+        switch Section(rawValue: section)! {
+        case .account: "Account"
+        case .sync: "Sync"
+        case .security: "Security"
+        case .actions: "Account Actions"
+        }
+    }
+
+    override func tableView(
+        _ tableView: UITableView,
+        numberOfRowsInSection section: Int
+    ) -> Int {
+        switch Section(rawValue: section)! {
+        case .account: 2
+        case .sync: 3
+        case .security: 2
+        case .actions: visibleActions.count
+        }
+    }
+
+    override func tableView(
+        _ tableView: UITableView,
+        cellForRowAt indexPath: IndexPath
+    ) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.textLabel?.numberOfLines = 0
+        cell.detailTextLabel?.numberOfLines = 0
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        switch Section(rawValue: indexPath.section)! {
+        case .account:
+            if indexPath.row == 0 {
+                cell.textLabel?.text = accountStatusTitle
+                cell.detailTextLabel?.text = bootstrap.accountFingerprint.map {
+                    "Snippets Cloud · Account \($0)"
+                } ?? "No Snippets Cloud account is connected."
+            } else {
+                cell.textLabel?.text = "Personal library"
+                cell.detailTextLabel?.text = "The library selected for this account."
+            }
+            cell.selectionStyle = .none
+        case .sync:
+            if indexPath.row == 0 {
+                cell.textLabel?.text = "Active storage"
+                cell.detailTextLabel?.text = environment.backendSelection.provider.displayName
+            } else if indexPath.row == 1 {
+                cell.textLabel?.text = syncStatusTitle
+                cell.detailTextLabel?.text = environment.syncCoordinator.statusDescription
+            } else {
+                cell.textLabel?.text = "On this device"
+                cell.detailTextLabel?.text = "\(environment.store.snippets.count) snippets"
+            }
+            cell.selectionStyle = .none
+        case .security:
+            if indexPath.row == 0 {
+                cell.textLabel?.text = "Library access"
+                cell.detailTextLabel?.text = libraryAccessDescription
+            } else {
+                cell.textLabel?.text = "Recovery kit"
+                cell.detailTextLabel?.text = recoveryKitDescription
+            }
+            cell.selectionStyle = .none
+        case .actions:
+            let action = visibleActions[indexPath.row]
+            cell.textLabel?.text = actionTitle(action)
+            cell.textLabel?.textColor = action == .disconnect ? .systemRed : AppTheme.tint
+            cell.accessoryType = .disclosureIndicator
+        }
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard Section(rawValue: indexPath.section) == .actions else { return }
+        switch visibleActions[indexPath.row] {
+        case .continueSetup: continueSetup()
+        case .switchToCloud: switchToCloud()
+        case .syncNow: syncNowAction()
+        case .addDevice: addDevice()
+        case .replaceRecovery: replaceRecoveryKit()
+        case .changeAccount: changeAccount()
+        case .disconnect: disconnect()
+        }
+    }
+
+    private var state: SnippetsCloudAccountBootstrap.State {
+        (try? bootstrap.state()) ?? .signedOut
+    }
+
+    private var visibleActions: [Action] {
+        switch state {
+        case .signedOut:
+            [.continueSetup]
+        case .ready:
+            (environment.backendSelection.provider == .snippetsCloud
+                ? [.syncNow]
+                : [.switchToCloud])
+                + [.addDevice, .replaceRecovery, .changeAccount, .disconnect]
+        case .needsTrustedDeviceOrRecovery, .waitingForApproval,
+             .approvalReady, .strongAuthenticationRequired,
+             .recoveryKitAuthenticationRequired, .recoveryKitReady:
+            [.continueSetup, .changeAccount, .disconnect]
+        }
+    }
+
+    private var accountStatusTitle: String {
+        switch state {
+        case .signedOut: "Not connected"
+        default: "Connected"
+        }
+    }
+
+    private var syncStatusTitle: String {
+        guard environment.backendSelection.provider == .snippetsCloud else {
+            return "Snippets Cloud is not the active storage"
+        }
+        if case .idle(let lastSync) = environment.syncCoordinator.state, lastSync != nil {
+            return "Up to date"
+        }
+        if case .syncing = environment.syncCoordinator.state { return "Syncing your library…" }
+        return "Sync needs attention"
+    }
+
+    private var libraryAccessDescription: String {
+        switch state {
+        case .ready, .recoveryKitAuthenticationRequired, .recoveryKitReady,
+             .strongAuthenticationRequired(.replaceRecovery), .approvalReady:
+            "Unlocked on this device"
+        case .needsTrustedDeviceOrRecovery, .waitingForApproval:
+            "Waiting for an approved device or recovery kit"
+        case .strongAuthenticationRequired(.createInitialRecovery):
+            "Preparing library access"
+        case .signedOut:
+            "Sign in first"
+        case .strongAuthenticationRequired(.approveDevice):
+            "Unlocked on this device"
+        }
+    }
+
+    private var recoveryKitDescription: String {
+        switch bootstrap.recoveryKitStatus {
+        case .needsVerification: "Still needs to be saved and verified"
+        case .verified: "Saved and verified on this device"
+        case .notVerifiedOnThisDevice: "Not verified on this device"
+        }
+    }
+
+    private func actionTitle(_ action: Action) -> String {
+        switch action {
+        case .continueSetup:
+            switch state {
+            case .signedOut: "Sign in to Snippets Cloud"
+            case .waitingForApproval: "Return to device approval"
+            case .recoveryKitAuthenticationRequired, .recoveryKitReady:
+                "Save and verify recovery kit"
+            default: "Continue setup"
+            }
+        case .switchToCloud: "Use Snippets Cloud for sync"
+        case .syncNow: "Sync now"
+        case .addDevice: "Scan a new device invitation"
+        case .replaceRecovery: "Replace recovery kit"
+        case .changeAccount: "Change account"
+        case .disconnect: "Disconnect this device"
+        }
     }
 }
 
@@ -1365,7 +1700,10 @@ private final class CloudQRViewController: UIViewController {
     private let secondaryTitle: String?
     private let secondary: (() -> Void)?
     private let relocksWhenInactive: Bool
+    private let expiresAt: Date?
     private var inactivityObserver: NSObjectProtocol?
+    private weak var countdownLabel: UILabel?
+    private var countdownTimer: Timer?
 
     init(
         title: String,
@@ -1377,7 +1715,8 @@ private final class CloudQRViewController: UIViewController {
         primary: @escaping () -> Void,
         secondaryTitle: String? = nil,
         secondary: (() -> Void)? = nil,
-        relocksWhenInactive: Bool = false
+        relocksWhenInactive: Bool = false,
+        expiresAt: Date? = nil
     ) {
         self.message = message
         self.payload = payload
@@ -1388,6 +1727,7 @@ private final class CloudQRViewController: UIViewController {
         self.secondaryTitle = secondaryTitle
         self.secondary = secondary
         self.relocksWhenInactive = relocksWhenInactive
+        self.expiresAt = expiresAt
         super.init(nibName: nil, bundle: nil)
         self.title = title
         modalPresentationStyle = .formSheet
@@ -1415,6 +1755,8 @@ private final class CloudQRViewController: UIViewController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         if let inactivityObserver {
             NotificationCenter.default.removeObserver(inactivityObserver)
             self.inactivityObserver = nil
@@ -1447,6 +1789,7 @@ private final class CloudQRViewController: UIViewController {
         code.adjustsFontSizeToFitWidth = true
         code.minimumScaleFactor = 0.65
         code.accessibilityLabel = "Verification or recovery code"
+        code.accessibilityValue = displayedCode
 
         let warningLabel = UILabel()
         warningLabel.text = warning
@@ -1454,6 +1797,13 @@ private final class CloudQRViewController: UIViewController {
         warningLabel.textAlignment = .center
         warningLabel.font = .preferredFont(forTextStyle: .footnote)
         warningLabel.textColor = .systemRed
+
+        let countdown = UILabel()
+        countdown.font = .monospacedDigitSystemFont(ofSize: 17, weight: .semibold)
+        countdown.textColor = AppTheme.tint
+        countdown.textAlignment = .center
+        countdown.isHidden = expiresAt == nil
+        countdownLabel = countdown
 
         let primaryButton = UIButton(type: .system)
         var primaryConfiguration = UIButton.Configuration.filled()
@@ -1465,7 +1815,7 @@ private final class CloudQRViewController: UIViewController {
         }, for: .touchUpInside)
 
         let stack = UIStackView(arrangedSubviews: [
-            explanation, imageView, code, warningLabel, primaryButton,
+            explanation, imageView, code, countdown, warningLabel, primaryButton,
         ])
         stack.axis = .vertical
         stack.spacing = 16
@@ -1490,9 +1840,26 @@ private final class CloudQRViewController: UIViewController {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             imageView.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
         ])
+        updateCountdown()
+        if expiresAt != nil {
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateCountdown() }
+            }
+            countdownTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
 
-    private static func qrImage(_ value: String) -> UIImage? {
+    private func updateCountdown() {
+        guard let expiresAt else { return }
+        let seconds = max(0, Int(ceil(expiresAt.timeIntervalSinceNow)))
+        countdownLabel?.text = String(
+            format: "Waiting for approval… %02d:%02d",
+            seconds / 60,
+            seconds % 60)
+    }
+
+    fileprivate static func qrImage(_ value: String) -> UIImage? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(value.utf8)
         filter.correctionLevel = "M"
@@ -1501,6 +1868,519 @@ private final class CloudQRViewController: UIViewController {
         let context = CIContext(options: [.useSoftwareRenderer: false])
         guard let image = context.createCGImage(scaled, from: scaled.extent) else { return nil }
         return UIImage(cgImage: image)
+    }
+}
+
+@MainActor
+private final class CloudPairingWaitViewController: UIViewController {
+    private let payload: String
+    private let confirmationCode: String
+    private let expiresAt: Date
+    private let poll: () async throws -> SnippetsCloudAccountBootstrap.State
+    private let stateChanged: (SnippetsCloudAccountBootstrap.State) -> Void
+    private let cancel: () async -> Void
+    private let statusLabel = UILabel()
+    private var pollingTask: Task<Void, Never>?
+    private var checkInProgress = false
+
+    init(
+        payload: String,
+        confirmationCode: String,
+        expiresAt: Date,
+        poll: @escaping () async throws -> SnippetsCloudAccountBootstrap.State,
+        stateChanged: @escaping (SnippetsCloudAccountBootstrap.State) -> Void,
+        cancel: @escaping () async -> Void
+    ) {
+        self.payload = payload
+        self.confirmationCode = confirmationCode
+        self.expiresAt = expiresAt
+        self.poll = poll
+        self.stateChanged = stateChanged
+        self.cancel = cancel
+        super.init(nibName: nil, bundle: nil)
+        title = "Add This Device"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "Cancel Pairing",
+            primaryAction: UIAction { [weak self] _ in
+                guard let self else { return }
+                Task { await self.cancel() }
+                self.dismiss(animated: true)
+            })
+
+        let instructions = UILabel()
+        instructions.text = "On a device that already opens this library, open Snippets Cloud, choose Add device, and scan this QR. Confirm that both devices show the same code."
+        instructions.numberOfLines = 0
+        instructions.textAlignment = .center
+
+        let image = UIImageView(image: CloudQRViewController.qrImage(payload))
+        image.contentMode = .scaleAspectFit
+        image.heightAnchor.constraint(equalTo: image.widthAnchor).isActive = true
+
+        let code = UILabel()
+        code.text = "Check code: \(confirmationCode)"
+        code.font = .monospacedDigitSystemFont(ofSize: 20, weight: .semibold)
+        code.textAlignment = .center
+        code.accessibilityLabel = "Confirmation code"
+        code.accessibilityValue = confirmationCode
+
+        statusLabel.textAlignment = .center
+        statusLabel.textColor = AppTheme.tint
+        statusLabel.numberOfLines = 0
+        statusLabel.font = .monospacedDigitSystemFont(ofSize: 17, weight: .semibold)
+
+        let checkAgain = UIButton(type: .system)
+        checkAgain.setTitle("Check Again", for: .normal)
+        checkAgain.addAction(UIAction { [weak self] _ in
+            self?.checkOnce()
+        }, for: .touchUpInside)
+
+        let stack = UIStackView(arrangedSubviews: [instructions, image, code, statusLabel, checkAgain])
+        stack.axis = .vertical
+        stack.spacing = 16
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            image.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+        ])
+        updateStatus()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        startPolling()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        pollingTask?.cancel()
+        pollingTask = nil
+        super.viewWillDisappear(animated)
+    }
+
+    private func startPolling() {
+        guard pollingTask == nil else { return }
+        pollingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                updateStatus()
+                guard expiresAt > Date() else {
+                    statusLabel.text = "Invitation expired. Create a new invitation to continue."
+                    statusLabel.textColor = .systemRed
+                    return
+                }
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await checkOnceAndWait()
+            }
+        }
+    }
+
+    private func checkOnce() {
+        Task { @MainActor [weak self] in await self?.checkOnceAndWait() }
+    }
+
+    private func checkOnceAndWait() async {
+        guard !checkInProgress, expiresAt > Date() else { return }
+        checkInProgress = true
+        defer { checkInProgress = false }
+        do {
+            let state = try await poll()
+            if case .waitingForApproval = state {
+                updateStatus()
+                return
+            }
+            pollingTask?.cancel()
+            dismiss(animated: true) { [stateChanged] in stateChanged(state) }
+        } catch {
+            statusLabel.text = "Couldn’t check approval. Your invitation is still safe; Snippets will keep trying."
+            statusLabel.textColor = .systemOrange
+        }
+    }
+
+    private func updateStatus() {
+        let seconds = max(0, Int(ceil(expiresAt.timeIntervalSinceNow)))
+        statusLabel.textColor = AppTheme.tint
+        statusLabel.text = String(
+            format: "Waiting for approval… %02d:%02d",
+            seconds / 60,
+            seconds % 60)
+    }
+}
+
+@MainActor
+private final class RecoveryKitViewController: UIViewController, UITextFieldDelegate {
+    private let payload: String
+    private let longCode: String
+    private let verified: () -> Void
+    private let contentStack = UIStackView()
+    private let verificationStack = UIStackView()
+    private let verificationField = UITextField()
+    private let verificationError = UILabel()
+    private var inactivityObserver: NSObjectProtocol?
+
+    init(payload: String, longCode: String, verified: @escaping () -> Void) {
+        self.payload = payload
+        self.longCode = longCode
+        self.verified = verified
+        super.init(nibName: nil, bundle: nil)
+        title = "Save Your Recovery Kit"
+        modalPresentationStyle = .formSheet
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        view.isHidden = false
+        guard inactivityObserver == nil else { return }
+        inactivityObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.view.isHidden = true
+                self.dismiss(animated: false)
+            }
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        verificationField.text = nil
+        if let inactivityObserver {
+            NotificationCenter.default.removeObserver(inactivityObserver)
+            self.inactivityObserver = nil
+        }
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "Save Later",
+            primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+
+        let explanation = UILabel()
+        explanation.text = "Keep this QR or long code offline. It is the only fallback if every approved device is lost."
+        explanation.numberOfLines = 0
+        explanation.textAlignment = .center
+
+        let imageView = UIImageView(image: CloudQRViewController.qrImage(payload))
+        imageView.contentMode = .scaleAspectFit
+        imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor).isActive = true
+
+        let codeLabel = UILabel()
+        codeLabel.text = longCode
+        codeLabel.numberOfLines = 0
+        codeLabel.textAlignment = .center
+        codeLabel.font = .monospacedSystemFont(ofSize: 17, weight: .semibold)
+        codeLabel.adjustsFontSizeToFitWidth = true
+        codeLabel.minimumScaleFactor = 0.65
+        codeLabel.accessibilityLabel = "Recovery code"
+        codeLabel.accessibilityValue = longCode
+
+        let copy = actionButton("Copy Code", selector: #selector(copyCode))
+        let share = actionButton("Save or Share", selector: #selector(shareSheet))
+        let printButton = actionButton("Print", selector: #selector(printSheet))
+        let actions = UIStackView(arrangedSubviews: [copy, share, printButton])
+        actions.axis = .horizontal
+        actions.distribution = .fillEqually
+        actions.spacing = 8
+
+        let warning = UILabel()
+        warning.text = "Anyone with this kit and access to your account can unlock the library. Keep it offline and private."
+        warning.numberOfLines = 0
+        warning.textAlignment = .center
+        warning.font = .preferredFont(forTextStyle: .footnote)
+        warning.textColor = .systemRed
+
+        let beginVerification = UIButton(type: .system)
+        var primary = UIButton.Configuration.filled()
+        primary.title = "Verify Recovery Kit"
+        beginVerification.configuration = primary
+        beginVerification.addAction(UIAction { [weak self] _ in
+            self?.showVerification()
+        }, for: .touchUpInside)
+
+        contentStack.addArrangedSubview(explanation)
+        contentStack.addArrangedSubview(imageView)
+        contentStack.addArrangedSubview(codeLabel)
+        contentStack.addArrangedSubview(actions)
+        contentStack.addArrangedSubview(warning)
+        contentStack.addArrangedSubview(beginVerification)
+
+        let verificationMessage = UILabel()
+        verificationMessage.text = "Use the copy you saved and enter its final 8 characters."
+        verificationMessage.numberOfLines = 0
+        verificationMessage.textAlignment = .center
+
+        verificationField.borderStyle = .roundedRect
+        verificationField.placeholder = "Final 8 characters"
+        verificationField.autocapitalizationType = .allCharacters
+        verificationField.autocorrectionType = .no
+        verificationField.spellCheckingType = .no
+        verificationField.textContentType = .oneTimeCode
+        verificationField.delegate = self
+        RecoveryKeyInputProtection.configure(verificationField)
+
+        verificationError.text = "Those characters do not match the recovery kit."
+        verificationError.textColor = .systemRed
+        verificationError.numberOfLines = 0
+        verificationError.isHidden = true
+
+        let verifyButton = UIButton(type: .system)
+        var verifyConfiguration = UIButton.Configuration.filled()
+        verifyConfiguration.title = "Verify Recovery Kit"
+        verifyButton.configuration = verifyConfiguration
+        verifyButton.addAction(UIAction { [weak self] _ in self?.verify() }, for: .touchUpInside)
+
+        let showAgain = UIButton(type: .system)
+        showAgain.setTitle("Show Recovery Kit Again", for: .normal)
+        showAgain.addAction(UIAction { [weak self] _ in self?.showContent() }, for: .touchUpInside)
+
+        [verificationMessage, verificationField, verificationError, verifyButton, showAgain]
+            .forEach(verificationStack.addArrangedSubview)
+        verificationStack.isHidden = true
+
+        let stack = UIStackView(arrangedSubviews: [contentStack, verificationStack])
+        stack.axis = .vertical
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        for arranged in [contentStack, verificationStack] {
+            arranged.axis = .vertical
+            arranged.spacing = 16
+        }
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            imageView.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+        ])
+    }
+
+    func textField(
+        _ textField: UITextField,
+        shouldChangeCharactersIn range: NSRange,
+        replacementString string: String
+    ) -> Bool {
+        guard let current = textField.text, let swiftRange = Range(range, in: current) else {
+            return false
+        }
+        textField.text = String(
+            SnippetsCloudRecoveryVerification.normalized(
+                current.replacingCharacters(in: swiftRange, with: string))
+                .suffix(SnippetsCloudRecoveryVerification.suffixLength))
+        verificationError.isHidden = true
+        return false
+    }
+
+    private func actionButton(_ title: String, selector: Selector) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setTitle(title, for: .normal)
+        button.addTarget(self, action: selector, for: .touchUpInside)
+        return button
+    }
+
+    private func recoverySheetText() -> String {
+        "Snippets Cloud Recovery Kit\n\n\(longCode)\n\nKeep this offline. Anyone with this kit and access to your account can unlock your library."
+    }
+
+    @objc private func copyCode() {
+        UIPasteboard.general.setItems(
+            [[UTType.utf8PlainText.identifier: longCode]],
+            options: [
+                .localOnly: true,
+                .expirationDate: Date().addingTimeInterval(120),
+            ])
+    }
+
+    @objc private func shareSheet() {
+        let controller = UIActivityViewController(
+            activityItems: [recoverySheetText()],
+            applicationActivities: nil)
+        controller.popoverPresentationController?.sourceView = view
+        controller.popoverPresentationController?.sourceRect = view.bounds
+        present(controller, animated: true)
+    }
+
+    @objc private func printSheet() {
+        let controller = UIPrintInteractionController.shared
+        let formatter = UISimpleTextPrintFormatter(text: recoverySheetText())
+        formatter.perPageContentInsets = UIEdgeInsets(top: 72, left: 72, bottom: 72, right: 72)
+        controller.printFormatter = formatter
+        controller.present(animated: true)
+    }
+
+    private func showVerification() {
+        contentStack.isHidden = true
+        verificationStack.isHidden = false
+        verificationField.becomeFirstResponder()
+    }
+
+    private func showContent() {
+        verificationField.text = nil
+        verificationError.isHidden = true
+        verificationStack.isHidden = true
+        contentStack.isHidden = false
+    }
+
+    private func verify() {
+        guard SnippetsCloudRecoveryVerification.matches(
+            longCode: longCode,
+            enteredSuffix: verificationField.text ?? "") else {
+            verificationError.isHidden = false
+            return
+        }
+        verificationField.text = nil
+        dismiss(animated: true, completion: verified)
+    }
+}
+
+@MainActor
+private final class CloudRecoveryCodeViewController: UIViewController, UITextFieldDelegate {
+    private static let codeLength = 52
+    private let restore: (String) -> Void
+    private let scan: () -> Void
+    private let field = UITextField()
+    private let progress = UILabel()
+    private let restoreButton = UIButton(type: .system)
+
+    init(restore: @escaping (String) -> Void, scan: @escaping () -> Void) {
+        self.restore = restore
+        self.scan = scan
+        super.init(nibName: nil, bundle: nil)
+        title = "Recovery Kit"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .cancel,
+            primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+
+        let explanation = UILabel()
+        explanation.text = "Paste or enter the long code from your offline recovery kit. Spaces and hyphens are handled automatically."
+        explanation.numberOfLines = 0
+        explanation.textAlignment = .center
+
+        field.borderStyle = .roundedRect
+        field.placeholder = "XXXX-XXXX-…"
+        field.font = .monospacedSystemFont(ofSize: 16, weight: .medium)
+        field.autocapitalizationType = .allCharacters
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        field.textContentType = .oneTimeCode
+        field.isSecureTextEntry = true
+        field.delegate = self
+        RecoveryKeyInputProtection.configure(field)
+
+        progress.text = "Code is incomplete · 0/52 characters"
+        progress.textColor = .secondaryLabel
+        progress.textAlignment = .center
+
+        let paste = UIButton(type: .system)
+        paste.setTitle("Paste", for: .normal)
+        paste.addAction(UIAction { [weak self] _ in
+            self?.setCode(UIPasteboard.general.string ?? "")
+        }, for: .touchUpInside)
+
+        let visibility = UIButton(type: .system)
+        visibility.setTitle("Show Code", for: .normal)
+        visibility.addAction(UIAction { [weak self, weak visibility] _ in
+            guard let self else { return }
+            field.isSecureTextEntry.toggle()
+            visibility?.setTitle(field.isSecureTextEntry ? "Show Code" : "Hide Code", for: .normal)
+        }, for: .touchUpInside)
+
+        let scanButton = UIButton(type: .system)
+        scanButton.setTitle("Scan Recovery QR", for: .normal)
+        scanButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            field.text = nil
+            dismiss(animated: true, completion: scan)
+        }, for: .touchUpInside)
+
+        let actions = UIStackView(arrangedSubviews: [paste, visibility, scanButton])
+        actions.axis = .horizontal
+        actions.distribution = .fillEqually
+        actions.spacing = 8
+
+        var primary = UIButton.Configuration.filled()
+        primary.title = "Restore Encrypted Library"
+        restoreButton.configuration = primary
+        restoreButton.isEnabled = false
+        restoreButton.addAction(UIAction { [weak self] _ in
+            guard let self, let value = field.text else { return }
+            field.text = nil
+            dismiss(animated: true) { [restore] in restore(value) }
+        }, for: .touchUpInside)
+
+        let stack = UIStackView(arrangedSubviews: [
+            explanation, field, progress, actions, restoreButton,
+        ])
+        stack.axis = .vertical
+        stack.spacing = 16
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 32),
+        ])
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        field.text = nil
+        super.viewDidDisappear(animated)
+    }
+
+    func textField(
+        _ textField: UITextField,
+        shouldChangeCharactersIn range: NSRange,
+        replacementString string: String
+    ) -> Bool {
+        guard let current = textField.text, let swiftRange = Range(range, in: current) else {
+            return false
+        }
+        setCode(current.replacingCharacters(in: swiftRange, with: string))
+        return false
+    }
+
+    private func setCode(_ value: String) {
+        let normalized = SnippetsCloudRecoveryVerification.normalized(value)
+            .filter { ($0 >= "A" && $0 <= "Z") || ($0 >= "2" && $0 <= "7") }
+        let bounded = String(normalized.prefix(Self.codeLength))
+        var groups: [String] = []
+        var index = bounded.startIndex
+        while index < bounded.endIndex {
+            let end = bounded.index(index, offsetBy: 4, limitedBy: bounded.endIndex)
+                ?? bounded.endIndex
+            groups.append(String(bounded[index..<end]))
+            index = end
+        }
+        field.text = groups.joined(separator: "-")
+        restoreButton.isEnabled = bounded.count == Self.codeLength
+        progress.text = bounded.count == Self.codeLength
+            ? "Code is complete"
+            : "Code is incomplete · \(bounded.count)/\(Self.codeLength) characters"
+        progress.textColor = bounded.count == Self.codeLength ? .systemGreen : .secondaryLabel
     }
 }
 

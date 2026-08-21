@@ -25,6 +25,17 @@ enum class CloudKeyStatus {
     RECOVERY_KIT_LOCKED,
 }
 
+enum class CloudSetupStage {
+    SIGNED_OUT,
+    ACCOUNT_CONNECTED,
+    LIBRARY_LOCKED,
+    WAITING_FOR_APPROVAL,
+    RECOVERY_KIT_NEEDS_VERIFICATION,
+    SYNCING,
+    UP_TO_DATE,
+    NEEDS_ATTENTION,
+}
+
 data class CloudConfiguration(
     val provider: SyncProvider = SyncProvider.DEVICE,
     val serverURL: String = "",
@@ -37,6 +48,7 @@ data class CloudConfiguration(
     val scopeBinding: String? = null,
     val datasetGeneration: String? = null,
     val feedEpoch: String? = null,
+    val lastSuccessfulSyncEpochSeconds: Long? = null,
 )
 
 internal fun CloudConfiguration.requiresServerInstanceReview(): Boolean =
@@ -64,6 +76,10 @@ data class LibraryState(
     val pairingQRCode: String? = null,
     val pairingConfirmationCode: String? = null,
     val approvalConfirmationCode: String? = null,
+    val pairingExpiresAtEpochSeconds: Long? = null,
+    val accountFingerprint: String? = null,
+    val recoveryKitVerified: Boolean = false,
+    val setupStage: CloudSetupStage = CloudSetupStage.SIGNED_OUT,
 )
 
 /** A one-screen value. It must never be placed in LibraryState or saved by Compose. */
@@ -109,6 +125,7 @@ fun CloudConfiguration.toJSON(): String = JSONObject()
     .put("scopeBinding", scopeBinding)
     .put("datasetGeneration", datasetGeneration)
     .put("feedEpoch", feedEpoch)
+    .put("lastSuccessfulSyncEpochSeconds", lastSuccessfulSyncEpochSeconds)
     .toString()
 
 fun cloudConfiguration(json: String): CloudConfiguration {
@@ -137,6 +154,9 @@ fun cloudConfiguration(json: String): CloudConfiguration {
         scopeBinding = objectValue.optNullableString("scopeBinding"),
         datasetGeneration = objectValue.optNullableString("datasetGeneration"),
         feedEpoch = objectValue.optNullableString("feedEpoch"),
+        lastSuccessfulSyncEpochSeconds = objectValue.optNullableLong(
+            "lastSuccessfulSyncEpochSeconds",
+        ),
     )
 }
 
@@ -171,3 +191,6 @@ fun cloudKeyBinding(json: String): CloudKeyBinding {
 
 private fun JSONObject.optNullableString(name: String): String? =
     if (isNull(name)) null else optString(name).takeIf(String::isNotBlank)
+
+private fun JSONObject.optNullableLong(name: String): Long? =
+    if (!has(name) || isNull(name)) null else getLong(name)

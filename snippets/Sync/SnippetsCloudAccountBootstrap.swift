@@ -1,4 +1,5 @@
 import AuthenticationServices
+import CryptoKit
 import Foundation
 
 enum SnippetsCloudPairingApprovalCopy {
@@ -26,11 +27,30 @@ struct SnippetsCloudRecoveryPresentationGate {
     }
 }
 
+enum SnippetsCloudRecoveryVerification {
+    static let suffixLength = 8
+
+    static func normalized(_ value: String) -> String {
+        value.filter { $0.isLetter || $0.isNumber }.uppercased()
+    }
+
+    static func matches(longCode: String, enteredSuffix: String) -> Bool {
+        let expected = String(normalized(longCode).suffix(suffixLength))
+        return expected.count == suffixLength && normalized(enteredSuffix) == expected
+    }
+}
+
 /// Coordinates passkey-first account sign-in with zero-knowledge key onboarding.
 /// Secret intermediate state lives only in this device's Keychain, so an app restart
 /// cannot turn a half-finished pairing or recovery replacement into a key-loss event.
 @MainActor
 final class SnippetsCloudAccountBootstrap {
+    enum RecoveryKitStatus: Equatable {
+        case needsVerification
+        case verified
+        case notVerifiedOnThisDevice
+    }
+
     enum StrongAction: String, Equatable {
         case createInitialRecovery
         case approveDevice
@@ -41,14 +61,17 @@ final class SnippetsCloudAccountBootstrap {
         case signedOut
         case ready
         case needsTrustedDeviceOrRecovery
-        case waitingForApproval(qrPayload: String, confirmationCode: String)
+        case waitingForApproval(
+            qrPayload: String,
+            confirmationCode: String,
+            expiresAt: Date)
         case approvalReady(confirmationCode: String)
         case strongAuthenticationRequired(StrongAction)
         case recoveryKitAuthenticationRequired
         case recoveryKitReady(qrPayload: String, longCode: String)
     }
 
-    enum Failure: Error, CustomStringConvertible {
+    enum Failure: Error, CustomStringConvertible, LocalizedError {
         case invalidState
         case invalidInvitation
         case pairingExpired
@@ -66,6 +89,44 @@ final class SnippetsCloudAccountBootstrap {
             case .service(let code): code
             }
         }
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidState:
+                "Snippets Cloud setup could not continue from its saved step. Your local snippets are safe; open Snippets Cloud and try again."
+            case .invalidInvitation:
+                "This device invitation could not be verified. Nothing changed; create a new invitation and compare the confirmation code on both devices."
+            case .pairingExpired:
+                "This device invitation expired. Nothing changed; create a new invitation to continue."
+            case .recoveryUnavailable:
+                "This library has no usable recovery kit. Use a device that already opens the library."
+            case .accountMismatch:
+                "This code belongs to a different Snippets Cloud account or library. Your existing data is unchanged."
+            case .service(let code):
+                Self.userFacingServiceFailure(code)
+            }
+        }
+
+        private static func userFacingServiceFailure(_ code: String) -> String {
+            switch code {
+            case "sign_in_required", "authentication_required", "refresh_token_missing":
+                "Sign-in needs to be completed again. Your local snippets are safe; continue sign-in from Snippets Cloud settings."
+            case "reauthentication_required":
+                "Confirm this security-sensitive change with a fresh passkey sign-in."
+            case "library_key_required":
+                "This account is connected, but the library is still locked. Use an approved device or your recovery kit."
+            case "pairing_expired", "pairing_missing":
+                "The device invitation is no longer available. Create a new invitation and approve it within five minutes."
+            case "space_selection_required":
+                "This account has more than one library. Continue sign-in to choose which library to use."
+            case "scope_review_required":
+                "The connected account or library changed. Review the account before sync resumes; your local snippets are safe."
+            case "server_auth_insecure":
+                "The server does not meet Snippets Cloud’s secure sign-in requirements. No data was sent."
+            default:
+                "Snippets Cloud could not complete the request. Your local snippets are unchanged; try again."
+            }
+        }
     }
 
     private struct PendingRecovery: Codable {
@@ -80,12 +141,14 @@ final class SnippetsCloudAccountBootstrap {
     static let approvalAccount = "pairing-approval-v2"
     static let pendingRecoveryAccount = "recovery-upload-v1"
     static let recoveryPresentationAccount = "recovery-display-v1"
+    static let recoveryVerifiedAccount = "recovery-verified-v1"
     static let bootstrapService = "com.khm.snippets.cloud-bootstrap"
     static let bootstrapSecretAccounts = [
         pairingAccount,
         approvalAccount,
         pendingRecoveryAccount,
         recoveryPresentationAccount,
+        recoveryVerifiedAccount,
     ]
 
     let selection: SyncBackendSelectionStore
@@ -101,6 +164,26 @@ final class SnippetsCloudAccountBootstrap {
             tier: .deviceOnly,
             service: Self.bootstrapService,
             itemAccessibility: .afterFirstUnlock)
+    }
+
+    var accountFingerprint: String? {
+        guard selection.hasCloudSession, let coordinates = selection.cloudCoordinates else {
+            return nil
+        }
+        let source = "\(coordinates.serverInstanceID?.uuidString ?? ""):\(coordinates.spaceID.uuidString.lowercased())"
+        let digest = SHA256.hash(data: Data(source.utf8))
+        return digest.prefix(2).map { String(format: "%02X", $0) }.joined()
+    }
+
+    var recoveryKitStatus: RecoveryKitStatus {
+        if (try? secrets.loadItem(account: Self.recoveryPresentationAccount)) != nil
+            || (try? secrets.loadItem(account: Self.pendingRecoveryAccount)) != nil {
+            return .needsVerification
+        }
+        if (try? secrets.loadItem(account: Self.recoveryVerifiedAccount)) != nil {
+            return .verified
+        }
+        return .notVerifiedOnThisDevice
     }
 
     func state() throws -> State {
@@ -139,7 +222,9 @@ final class SnippetsCloudAccountBootstrap {
            invitation.spaceID == coordinates.spaceID {
             return .waitingForApproval(
                 qrPayload: try invitation.qrPayload(),
-                confirmationCode: invitation.confirmationCode)
+                confirmationCode: invitation.confirmationCode,
+                expiresAt: Date(timeIntervalSince1970:
+                    TimeInterval(invitation.expiresAtEpochSeconds)))
         }
         if try installedMaterial(for: coordinates) != nil {
             return .ready
@@ -216,7 +301,8 @@ final class SnippetsCloudAccountBootstrap {
         try secrets.storeItem(try pending.jsonData, account: Self.pairingAccount)
         return .waitingForApproval(
             qrPayload: try invitation.qrPayload(),
-            confirmationCode: invitation.confirmationCode)
+            confirmationCode: invitation.confirmationCode,
+            expiresAt: pairing.expiresAt)
     }
 
     @discardableResult
@@ -242,7 +328,8 @@ final class SnippetsCloudAccountBootstrap {
         guard status.state == "approved" else {
             return .waitingForApproval(
                 qrPayload: try invitation.qrPayload(),
-                confirmationCode: invitation.confirmationCode)
+                confirmationCode: invitation.confirmationCode,
+                expiresAt: status.expiresAt)
         }
         let taken = try await mapService {
             try await client.takeApprovedPairing(
@@ -349,6 +436,7 @@ final class SnippetsCloudAccountBootstrap {
             ciphertext: recovery.ciphertext,
             expectedVersion: remote.recovery?.version,
             newLibraryMaterial: nil))
+        try secrets.deleteItem(account: Self.recoveryVerifiedAccount)
         return .strongAuthenticationRequired(.replaceRecovery)
     }
 
@@ -363,6 +451,7 @@ final class SnippetsCloudAccountBootstrap {
             }
             selection.activateSnippetsCloud()
         }
+        try secrets.storeItem(Data("verified".utf8), account: Self.recoveryVerifiedAccount)
         try secrets.deleteItem(account: Self.pendingRecoveryAccount)
         try secrets.deleteItem(account: Self.recoveryPresentationAccount)
     }

@@ -38,9 +38,20 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
   pairing approval and recovery replacement. Every installation has a distinct
   device-only refresh credential. Sign-out durably journals every refresh generation,
   calls resource logout plus RFC 7009, then removes the local cloud root before OAuth
-  state; interrupted remote or local phases resume automatically on launch. Pending
-  recovery kits are encrypted at rest and their QR/code presentation is one-screen:
-  every later reveal requires new device-owner authentication.
+  state; interrupted remote or local phases resume automatically on launch. Disconnect
+  always presents the key-removal consequence and the locally known recovery status.
+  Pending recovery kits are encrypted at rest and use a resumable save flow with QR,
+  clipboard expiry, Save/Share, and an eight-character saved-copy challenge. Backgrounding
+  relocks the presentation; every later reveal requires new device-owner authentication.
+- A dedicated Snippets Cloud account screen separates account identity, library-key
+  access, active storage, and sync status. It shows a cross-device account fingerprint,
+  local snippet count, recovery status, and explicit account actions. Provider changes
+  have a destination/account/library preflight instead of behaving like an immediate
+  radio-button change.
+- Device pairing displays step-by-step instructions, a live five-minute countdown, and
+  polls automatically with a manual **Check Again** fallback. Account onboarding does
+  not claim readiness when OAuth or key bootstrap finishes: **Up to date** is published
+  only after the first pull/merge/push verification round succeeds.
 - Single-writer provider selection. Switching to Snippets Cloud performs pull, shared
   three-way merge, encrypted offer generation, CAS push, pull-to-confirm, and only then
   advances the local base. Device-only mode never deletes either cloud.
@@ -61,6 +72,12 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
   harness; the shipping settings UI never asks for a token or space UUID.
 - Diagnostic errors are closed codes. HTTP bodies, tokens, keys, snippet text, UUIDs,
   paths, and server exception strings are not logged.
+- Machine error codes stay out of the account UI. Every surfaced account/sync error says
+  what happened, confirms the local-data outcome, and offers the relevant sign-in,
+  recovery, pairing, or retry action. Codes remain available only to diagnostics.
+- The v2 service can revoke only the current credential and does not expose durable device
+  inventory or remote library/account deletion. The account screen does not fake those actions;
+  they remain blocked on an additive, authorization-reviewed server contract shared by all clients.
 
 ## Build
 

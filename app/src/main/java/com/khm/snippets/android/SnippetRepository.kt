@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.UUID
@@ -40,6 +41,8 @@ class SnippetRepository(
     private var pairingQRCode: String? = null
     private var pairingConfirmationCode: String? = null
     private var approvalConfirmationCode: String? = null
+    private var pairingExpiresAtEpochSeconds: Long? = null
+    private var recoveryKitVerified = false
 
     private val mutableState = MutableStateFlow(LibraryState(isBusy = true))
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
@@ -70,6 +73,7 @@ class SnippetRepository(
                 }
                 keys = store.read(KEYS)?.let(::keyBundle)
                 keyBinding = store.read(KEY_BINDING)?.let(::cloudKeyBinding)
+                recoveryKitVerified = store.read(RECOVERY_VERIFIED) == "true"
                 deviceID = store.read(DEVICE_ID) ?: freshDeviceID().also {
                     store.write(DEVICE_ID, it)
                 }
@@ -85,6 +89,7 @@ class SnippetRepository(
                         .onSuccess { pending ->
                             pairingQRCode = pending.invitation.toQRPayload()
                             pairingConfirmationCode = pending.invitation.confirmationCode
+                            pairingExpiresAtEpochSeconds = pending.invitation.expiresAtEpochSeconds
                             cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
                         }
                         .onFailure { store.delete(PENDING_PAIRING) }
@@ -171,8 +176,15 @@ class SnippetRepository(
             cursor = if (changedScope) null else configuration.cursor,
             scopeBinding = if (changedScope) null else configuration.scopeBinding,
             datasetGeneration = if (changedScope) null else configuration.datasetGeneration,
-            feedEpoch = if (changedScope) null else configuration.feedEpoch)
-        if (changedScope) remoteRecordsJSON = "[]"
+            feedEpoch = if (changedScope) null else configuration.feedEpoch,
+            lastSuccessfulSyncEpochSeconds = if (changedScope) null
+                else configuration.lastSuccessfulSyncEpochSeconds)
+        if (changedScope) {
+            remoteRecordsJSON = "[]"
+            clearBootstrapState()
+            store.delete(RECOVERY_VERIFIED)
+            recoveryKitVerified = false
+        }
         if (keys == null) keys = freshKeyBundle().also { store.write(KEYS, it.toJSON()) }
         bindCurrentKey(normalizedServerURL, resolution.spaceID)
         cloudKeyStatus = CloudKeyStatus.READY
@@ -238,18 +250,20 @@ class SnippetRepository(
                         scopeBinding = if (changedScope) null else configuration.scopeBinding,
                         datasetGeneration = if (changedScope) null else configuration.datasetGeneration,
                         feedEpoch = if (changedScope) null else configuration.feedEpoch,
+                        lastSuccessfulSyncEpochSeconds = if (changedScope) null
+                            else configuration.lastSuccessfulSyncEpochSeconds,
                     )
-                    if (changedScope) remoteRecordsJSON = "[]"
+                    if (changedScope) {
+                        remoteRecordsJSON = "[]"
+                        clearBootstrapState()
+                        store.delete(RECOVERY_VERIFIED)
+                        recoveryKitVerified = false
+                    }
                     val presentation = finishPostAuthorization(authorization.accessToken)
                     persistSyncState()
                     presentation
                 }
-                publish(label = if (cloudKeyStatus == CloudKeyStatus.READY ||
-                    cloudKeyStatus == CloudKeyStatus.RECOVERY_KIT_LOCKED) {
-                    "Connected — encrypted library ready"
-                } else {
-                    "Signed in — unlock this library"
-                })
+                publish(label = "Account connected")
                 CloudSignInCompletion(succeeded = true, recoveryKit = recoveryKit)
             } catch (error: CloudAuthFailure) {
                 publish(errorCode = error.code)
@@ -277,6 +291,7 @@ class SnippetRepository(
         keyBinding = null
         configuration = CloudConfiguration(provider = SyncProvider.DEVICE)
         cloudKeyStatus = CloudKeyStatus.SIGNED_OUT
+        recoveryKitVerified = false
         completePendingLocalErase()
     }
 
@@ -320,7 +335,11 @@ class SnippetRepository(
         baseJSON = "[]"
         remoteRecordsJSON = "[]"
         configuration = configuration.copy(
-            cursor = null, scopeBinding = null, datasetGeneration = null, feedEpoch = null)
+            cursor = null,
+            scopeBinding = null,
+            datasetGeneration = null,
+            feedEpoch = null,
+            lastSuccessfulSyncEpochSeconds = null)
         store.write(KEYS, imported.toJSON())
         persistSyncState()
     }
@@ -358,6 +377,7 @@ class SnippetRepository(
         store.write(PENDING_PAIRING, pending.toJSON())
         pairingQRCode = invitation.toQRPayload()
         pairingConfirmationCode = invitation.confirmationCode
+        pairingExpiresAtEpochSeconds = invitation.expiresAtEpochSeconds
         cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
     }
 
@@ -409,6 +429,7 @@ class SnippetRepository(
         store.delete(PENDING_PAIRING)
         pairingQRCode = null
         pairingConfirmationCode = null
+        pairingExpiresAtEpochSeconds = null
         cloudKeyStatus = CloudKeyStatus.READY
     }
 
@@ -426,6 +447,7 @@ class SnippetRepository(
         store.delete(PENDING_PAIRING)
         pairingQRCode = null
         pairingConfirmationCode = null
+        pairingExpiresAtEpochSeconds = null
         cloudKeyStatus = CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
     }
 
@@ -538,6 +560,8 @@ class SnippetRepository(
     suspend fun acknowledgeRecoveryKitSaved() = bootstrap {
         store.delete(RECOVERY_PRESENTATION)
         store.delete(PENDING_RECOVERY)
+        store.write(RECOVERY_VERIFIED, "true")
+        recoveryKitVerified = true
         cloudKeyStatus = CloudKeyStatus.READY
     }
 
@@ -574,17 +598,23 @@ class SnippetRepository(
         }
     }
 
-    suspend fun syncNow() {
+    suspend fun syncNow(): Boolean {
         initialization.await()
-        mutex.withLock {
+        return mutex.withLock {
             if (!snippetsCloudEnabled || store.read(PENDING_LOCAL_ERASE) != null ||
                 authenticator.hasPendingRevocation() ||
-                configuration.provider != SyncProvider.SNIPPETS_CLOUD) return
+                configuration.provider != SyncProvider.SNIPPETS_CLOUD) return@withLock false
             if (!hasBoundKey()) {
                 publish(errorCode = "library_key_required")
-                return
+                return@withLock false
             }
-            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            mutableState.value = mutableState.value.copy(
+                isBusy = true,
+                errorCode = null,
+                syncLabel = "Syncing your library…",
+                setupStage = CloudSetupStage.SYNCING,
+            )
+            var succeeded = false
             withContext(Dispatchers.IO) {
                 try {
                     val manualAccessToken = configuration.accessToken.takeIf(String::isNotBlank)
@@ -594,6 +624,7 @@ class SnippetRepository(
                     while (true) {
                         try {
                             syncWithAccessToken(accessToken)
+                            succeeded = true
                             return@withContext
                         } catch (error: SyncFailure) {
                             if (manualAccessToken == null &&
@@ -619,6 +650,7 @@ class SnippetRepository(
                     publish(errorCode = "sync_failed")
                 }
             }
+            succeeded
         }
     }
 
@@ -645,10 +677,13 @@ class SnippetRepository(
             if (reconciliation.offers == "[]") {
                 baseJSON = libraryJSON
                 remoteRecordsJSON = reconciliation.records
+                configuration = configuration.copy(
+                    lastSuccessfulSyncEpochSeconds = Instant.now().epochSecond,
+                )
                 persistSyncState()
                 publish(
                     label = if (reconciliation.needsUserAttention)
-                        "Synced — review conflicts" else "Synced")
+                        "Up to date — review conflicts" else "Up to date")
                 return
             }
 
@@ -909,6 +944,7 @@ class SnippetRepository(
             scopeBinding = null,
             datasetGeneration = null,
             feedEpoch = null,
+            lastSuccessfulSyncEpochSeconds = null,
         )
     }
 
@@ -957,6 +993,7 @@ class SnippetRepository(
         ).forEach(store::delete)
         pairingQRCode = null
         pairingConfirmationCode = null
+        pairingExpiresAtEpochSeconds = null
         approvalConfirmationCode = null
     }
 
@@ -970,8 +1007,10 @@ class SnippetRepository(
 
         store.delete(KEYS)
         store.delete(KEY_BINDING)
+        store.delete(RECOVERY_VERIFIED)
         keys = null
         keyBinding = null
+        recoveryKitVerified = false
 
         clearBootstrapState()
 
@@ -1013,19 +1052,53 @@ class SnippetRepository(
 
     private fun publish(label: String? = null, errorCode: String? = null) {
         val snippets = runCatching { parseLibrary(libraryJSON) }.getOrDefault(emptyList())
+        val signedIn = cloudSessionAvailable && configuration.serverURL.isNotBlank() &&
+            cloudKeyStatus != CloudKeyStatus.SIGNED_OUT
+        val stage = when {
+            errorCode != null -> CloudSetupStage.NEEDS_ATTENTION
+            !signedIn -> CloudSetupStage.SIGNED_OUT
+            cloudKeyStatus == CloudKeyStatus.WAITING_FOR_APPROVAL ->
+                CloudSetupStage.WAITING_FOR_APPROVAL
+            cloudKeyStatus == CloudKeyStatus.RECOVERY_KIT_LOCKED ||
+                cloudKeyStatus == CloudKeyStatus.RECOVERY_AUTH_REQUIRED ->
+                CloudSetupStage.RECOVERY_KIT_NEEDS_VERIFICATION
+            cloudKeyStatus == CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY ->
+                CloudSetupStage.LIBRARY_LOCKED
+            configuration.provider == SyncProvider.SNIPPETS_CLOUD &&
+                configuration.lastSuccessfulSyncEpochSeconds != null ->
+                CloudSetupStage.UP_TO_DATE
+            else -> CloudSetupStage.ACCOUNT_CONNECTED
+        }
         mutableState.value = LibraryState(
             snippets = snippets,
             provider = configuration.provider,
-            syncLabel = label ?: when (configuration.provider) {
+            syncLabel = label ?: if (errorCode != null) {
+                "Sync needs attention"
+            } else when (configuration.provider) {
                 SyncProvider.DEVICE -> "On device"
-                SyncProvider.SNIPPETS_CLOUD -> "Snippets Cloud"
+                SyncProvider.SNIPPETS_CLOUD ->
+                    if (configuration.lastSuccessfulSyncEpochSeconds != null) "Up to date"
+                    else "Account connected"
             },
             isBusy = false,
             errorCode = errorCode,
             cloudKeyStatus = cloudKeyStatus,
             pairingQRCode = pairingQRCode,
             pairingConfirmationCode = pairingConfirmationCode,
-            approvalConfirmationCode = approvalConfirmationCode)
+            approvalConfirmationCode = approvalConfirmationCode,
+            pairingExpiresAtEpochSeconds = pairingExpiresAtEpochSeconds,
+            accountFingerprint = accountFingerprint(),
+            recoveryKitVerified = recoveryKitVerified,
+            setupStage = stage)
+    }
+
+    private fun accountFingerprint(): String? {
+        if (!cloudSessionAvailable || configuration.spaceID.isBlank()) return null
+        val source = "${configuration.serverInstanceID.orEmpty()}:${configuration.spaceID.lowercase()}"
+        return MessageDigest.getInstance("SHA-256")
+            .digest(source.toByteArray(Charsets.UTF_8))
+            .take(2)
+            .joinToString("") { "%02X".format(it) }
     }
 
     private fun freshKeyBundle(): KeyBundle {
@@ -1099,6 +1172,7 @@ class SnippetRepository(
         private const val PENDING_APPROVAL = "pending-approval.enc"
         private const val PENDING_RECOVERY = "pending-recovery.enc"
         private const val RECOVERY_PRESENTATION = "recovery-presentation.enc"
+        private const val RECOVERY_VERIFIED = "recovery-verified.enc"
         private const val PENDING_LOCAL_ERASE = "cloud-local-erase.enc"
     }
 }
