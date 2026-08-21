@@ -33,6 +33,17 @@ class AndroidBoundaryTest {
     }
 
     @Test
+    fun recoveryReplacementInvalidationSurvivesStoreReopen() {
+        val firstProcess = EncryptedStore(context)
+        firstProcess.write(RECOVERY_VERIFICATION_FILE, "previous verified kit")
+
+        invalidateRecoveryVerification(firstProcess)
+
+        val restartedProcess = EncryptedStore(context)
+        assertEquals(null, restartedProcess.read(RECOVERY_VERIFICATION_FILE))
+    }
+
+    @Test
     fun swiftCoreLoadsThroughGeneratedJniBoundary() {
         assertEquals(0, JSONArray(CoreBridge().canonicalize("[]")).length())
     }

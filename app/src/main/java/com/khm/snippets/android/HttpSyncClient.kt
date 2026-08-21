@@ -24,6 +24,12 @@ class HttpSyncClient {
 
     data class SpaceResolution(val spaceID: String, val serverInstanceID: String)
 
+    data class SpaceCandidate(
+        val spaceID: String,
+        val serverInstanceID: String,
+        val role: String,
+    )
+
     data class PairingRecord(
         val pairingID: String,
         val spaceID: String,
@@ -204,26 +210,38 @@ class HttpSyncClient {
         accessToken: String,
         existingSpaceID: String? = null,
     ): SpaceResolution {
+        val candidates = personalSpaceCandidates(serverURL, accessToken)
+        automaticPersonalSpace(candidates, existingSpaceID)?.let { return it }
+        if (candidates.isNotEmpty()) throw SyncFailure("space_selection_required")
+        return createPersonalSpace(serverURL, accessToken)
+    }
+
+    fun personalSpaceCandidates(
+        serverURL: String,
+        accessToken: String,
+    ): List<SpaceCandidate> {
         validatedBaseURL(serverURL)
         requireAccessToken(accessToken)
         val spaces = JSONObject(request(serverURL, accessToken, "GET", "v2/spaces"))
             .getJSONArray("spaces")
-        val candidates = (0 until spaces.length()).map { spaces.getJSONObject(it) }
-        existingSpaceID?.let { existing ->
-            candidates.firstOrNull {
-                it.getJSONObject("scope").getString("spaceId").equals(existing, ignoreCase = true)
-            }?.let { return spaceResolution(it.getJSONObject("scope")) }
+        return (0 until spaces.length()).map { index ->
+            val value = spaces.getJSONObject(index)
+            val resolution = spaceResolution(value.getJSONObject("scope"))
+            SpaceCandidate(
+                spaceID = resolution.spaceID,
+                serverInstanceID = resolution.serverInstanceID,
+                role = value.getString("role").also {
+                    require(it == "owner" || it == "writer" || it == "reader")
+                },
+            )
         }
-        if (candidates.size == 1) return spaceResolution(candidates.single().getJSONObject("scope"))
-        val owned = candidates.filter { it.optString("role") == "owner" }
-        if (owned.size == 1) return spaceResolution(owned.single().getJSONObject("scope"))
-        if (candidates.isNotEmpty()) throw SyncFailure("space_selection_required")
+    }
 
-        return spaceResolution(JSONObject(request(
+    fun createPersonalSpace(serverURL: String, accessToken: String): SpaceResolution =
+        spaceResolution(JSONObject(request(
             serverURL, accessToken, "POST", "v2/spaces",
             headers = mapOf("Idempotency-Key" to PERSONAL_SPACE_IDEMPOTENCY_KEY),
         )).getJSONObject("scope"))
-    }
 
     fun resolveSpace(
         serverURL: String,
@@ -633,6 +651,29 @@ class HttpSyncClient {
         const val ZERO_UUID = "00000000-0000-0000-0000-000000000000"
         val UUID_PATTERN = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}")
     }
+}
+
+internal fun automaticPersonalSpace(
+    candidates: List<HttpSyncClient.SpaceCandidate>,
+    existingSpaceID: String?,
+): HttpSyncClient.SpaceResolution? {
+    existingSpaceID?.let { existing ->
+        candidates.firstOrNull { it.spaceID.equals(existing, ignoreCase = true) }?.let {
+            return HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID)
+        }
+    }
+    if (candidates.size == 1) {
+        return candidates.single().let {
+            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID)
+        }
+    }
+    val owned = candidates.filter { it.role == "owner" }
+    if (owned.size == 1) {
+        return owned.single().let {
+            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID)
+        }
+    }
+    return null
 }
 
 class SyncFailure(val code: String) : Exception(code)

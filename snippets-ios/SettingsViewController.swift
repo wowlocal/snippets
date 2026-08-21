@@ -788,9 +788,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                 }
             },
             changeAccount: { [weak self] in
-                guard let self,
-                      let server = SyncBackendSelectionStore.bundledServerURL else { return }
-                self.signInToSnippetsCloud(server, selection: self.environment.backendSelection)
+                self?.confirmCloudAccountChange()
             },
             disconnect: { [weak self] in self?.confirmCloudSignOut() })
         navigationController?.pushViewController(controller, animated: true)
@@ -807,7 +805,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         }
         let alert = UIAlertController(
             title: "Switch Sync to \(provider.displayName)?",
-            message: "Current provider: \(current.displayName)\nNew provider: \(provider.displayName)\(provider == .snippetsCloud ? " · Account \(cloudBootstrap.accountFingerprint ?? "—")" : "")\nLibrary: Personal · \(environment.store.snippets.count) snippets\n\nThe current cloud library will not be deleted. Changes from both copies are compared and merged before sync is verified.",
+            message: "Current provider: \(current.displayName)\nNew provider: \(provider.displayName)\(provider == .snippetsCloud ? " · Library ID \(cloudBootstrap.libraryID ?? "—")" : "")\nOn this device: \(environment.store.snippets.count) snippets\n\nThe current cloud library will not be deleted. Changes from both copies are compared and merged before sync is verified.",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Switch and Sync", style: .default) {
@@ -917,18 +915,68 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
 
     private func signInToSnippetsCloud(
         _ serverURL: URL,
-        selection: SyncBackendSelectionStore
+        selection: SyncBackendSelectionStore,
+        changeAccount: Bool = false
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let state = try await cloudBootstrap.signIn(
                     serverURL: serverURL,
+                    changeAccount: changeAccount,
+                    chooseLibrary: chooseCloudLibrary,
                     presentationContext: self)
                 try presentCloudState(state)
             } catch {
                 showError(title: "Couldn’t Sign In to Snippets Cloud", error: error)
             }
+        }
+    }
+
+    private func confirmCloudAccountChange() {
+        guard let server = SyncBackendSelectionStore.bundledServerURL else { return }
+        let alert = UIAlertController(
+            title: "Change Snippets Cloud Account?",
+            message: "Current library: Library ID \(cloudBootstrap.libraryID ?? "—")\n\nYour current cloud library and local snippets will not be deleted. After sign-in, Snippets will show the new Library ID and ask before switching.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Choose Another Account", style: .default) {
+            [weak self] _ in
+            guard let self else { return }
+            self.signInToSnippetsCloud(
+                server,
+                selection: self.environment.backendSelection,
+                changeAccount: true)
+        })
+        present(alert, animated: true)
+    }
+
+    private func chooseCloudLibrary(
+        _ choices: [SnippetsCloudLibraryChoice]
+    ) async throws -> UUID {
+        try await withCheckedThrowingContinuation { continuation in
+            let isSwitchConfirmation = choices.count == 1 && cloudBootstrap.libraryID != nil
+            let alert = UIAlertController(
+                title: isSwitchConfirmation
+                    ? "Switch Snippets Library?"
+                    : "Choose a Snippets Library",
+                message: isSwitchConfirmation
+                    ? "Current: Library ID \(cloudBootstrap.libraryID ?? "—")\nNew: Library ID \(choices[0].libraryID)\n\nThe current cloud library will not be deleted. The new library may require an approved device or recovery kit."
+                    : "This account can open more than one encrypted library. Choose which one to use on this device.",
+                preferredStyle: .alert)
+            for choice in choices {
+                let role = choice.role.prefix(1).uppercased() + choice.role.dropFirst()
+                alert.addAction(UIAlertAction(
+                    title: "Library ID \(choice.libraryID) · \(role)",
+                    style: .default
+                ) { _ in
+                    continuation.resume(returning: choice.spaceID)
+                })
+            }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                continuation.resume(throwing: CancellationError())
+            })
+            present(alert, animated: true)
         }
     }
 
@@ -1141,6 +1189,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             let state = try await cloudBootstrap.signIn(
                 serverURL: server,
                 strong: true,
+                chooseLibrary: chooseCloudLibrary,
                 presentationContext: self)
             try presentCloudState(state)
         }
@@ -1172,7 +1221,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     private func confirmCloudSignOut() {
         let alert = UIAlertController(
             title: "Disconnect Snippets Cloud from This Device?",
-            message: "This removes this device’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery kit: \(cloudBootstrap.recoveryKitStatus == .verified ? "saved and verified on this device" : "not verified on this device").",
+            message: "This removes this device’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(cloudBootstrap.recoveryKitStatus == .verified ? "completed on this device" : "not completed on this device").",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Disconnect This Device", style: .destructive) { [weak self] _ in
@@ -1394,7 +1443,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             switch failure {
             case .service(let code) where [
                 "sign_in_required", "authentication_required", "refresh_token_missing",
-                "reauthentication_required", "space_selection_required", "scope_review_required",
+                "reauthentication_required", "scope_review_required",
             ].contains(code):
                 alert.addAction(UIAlertAction(title: "Continue Sign-In", style: .default) {
                     [weak self] _ in
@@ -1533,12 +1582,12 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .account:
             if indexPath.row == 0 {
                 cell.textLabel?.text = accountStatusTitle
-                cell.detailTextLabel?.text = bootstrap.accountFingerprint.map {
-                    "Snippets Cloud · Account \($0)"
+                cell.detailTextLabel?.text = bootstrap.libraryID.map {
+                    "Snippets Cloud · Library ID \($0)"
                 } ?? "No Snippets Cloud account is connected."
             } else {
-                cell.textLabel?.text = "Personal library"
-                cell.detailTextLabel?.text = "The library selected for this account."
+                cell.textLabel?.text = "Selected library"
+                cell.detailTextLabel?.text = "The encrypted library used on this device."
             }
             cell.selectionStyle = .none
         case .sync:
@@ -1598,9 +1647,11 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
                 ? [.syncNow]
                 : [.switchToCloud])
                 + [.addDevice, .replaceRecovery, .changeAccount, .disconnect]
-        case .needsTrustedDeviceOrRecovery, .waitingForApproval,
-             .approvalReady, .strongAuthenticationRequired,
+        case .strongAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
+            [.continueSetup, .changeAccount]
+        case .needsTrustedDeviceOrRecovery, .waitingForApproval,
+             .approvalReady, .strongAuthenticationRequired:
             [.continueSetup, .changeAccount, .disconnect]
         }
     }
@@ -1608,7 +1659,15 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     private var accountStatusTitle: String {
         switch state {
         case .signedOut: "Not connected"
-        default: "Connected"
+        case .ready: "Account connected"
+        case .needsTrustedDeviceOrRecovery: "Library locked"
+        case .waitingForApproval: "Waiting for device approval"
+        case .approvalReady, .strongAuthenticationRequired(.approveDevice):
+            "Device approval required"
+        case .strongAuthenticationRequired(.createInitialRecovery),
+             .strongAuthenticationRequired(.replaceRecovery),
+             .recoveryKitAuthenticationRequired, .recoveryKitReady:
+            "Recovery kit needs to be saved"
         }
     }
 
@@ -1641,8 +1700,8 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
 
     private var recoveryKitDescription: String {
         switch bootstrap.recoveryKitStatus {
-        case .needsVerification: "Still needs to be saved and verified"
-        case .verified: "Saved and verified on this device"
+        case .needsVerification: "Still needs to be saved and checked"
+        case .verified: "Recovery check completed on this device"
         case .notVerifiedOnThisDevice: "Not verified on this device"
         }
     }
@@ -1654,7 +1713,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
             case .signedOut: "Sign in to Snippets Cloud"
             case .waitingForApproval: "Return to device approval"
             case .recoveryKitAuthenticationRequired, .recoveryKitReady:
-                "Save and verify recovery kit"
+                "Save and check recovery kit"
             default: "Continue setup"
             }
         case .switchToCloud: "Use Snippets Cloud for sync"
@@ -2092,7 +2151,7 @@ private final class RecoveryKitViewController: UIViewController, UITextFieldDele
         codeLabel.accessibilityValue = longCode
 
         let copy = actionButton("Copy Code", selector: #selector(copyCode))
-        let share = actionButton("Save or Share", selector: #selector(shareSheet))
+        let share = actionButton("Share (May Use Cloud)", selector: #selector(shareSheet))
         let printButton = actionButton("Print", selector: #selector(printSheet))
         let actions = UIStackView(arrangedSubviews: [copy, share, printButton])
         actions.axis = .horizontal
@@ -2100,7 +2159,7 @@ private final class RecoveryKitViewController: UIViewController, UITextFieldDele
         actions.spacing = 8
 
         let warning = UILabel()
-        warning.text = "Anyone with this kit and access to your account can unlock the library. Keep it offline and private."
+        warning.text = "Anyone with this kit and access to your account can unlock the library. Keep it offline and private. The system share menu may offer mail, messages, or cloud storage; Print is the safer offline option."
         warning.numberOfLines = 0
         warning.textAlignment = .center
         warning.font = .preferredFont(forTextStyle: .footnote)
@@ -2122,7 +2181,7 @@ private final class RecoveryKitViewController: UIViewController, UITextFieldDele
         contentStack.addArrangedSubview(beginVerification)
 
         let verificationMessage = UILabel()
-        verificationMessage.text = "Use the copy you saved and enter its final 8 characters."
+        verificationMessage.text = "Use the copy you saved and enter its final 8 characters. This checks the copy on this device; it cannot prove where it was stored."
         verificationMessage.numberOfLines = 0
         verificationMessage.textAlignment = .center
 
@@ -2142,7 +2201,7 @@ private final class RecoveryKitViewController: UIViewController, UITextFieldDele
 
         let verifyButton = UIButton(type: .system)
         var verifyConfiguration = UIButton.Configuration.filled()
-        verifyConfiguration.title = "Verify Recovery Kit"
+        verifyConfiguration.title = "Complete Recovery Check"
         verifyButton.configuration = verifyConfiguration
         verifyButton.addAction(UIAction { [weak self] _ in self?.verify() }, for: .touchUpInside)
 

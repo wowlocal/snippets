@@ -24,6 +24,30 @@ nonisolated enum SnippetsCloudFeature {
     }
 }
 
+struct SnippetsCloudLibraryChoice: Equatable {
+    let spaceID: UUID
+    let serverInstanceID: UUID
+    let role: String
+
+    var libraryID: String {
+        let source = "\(serverInstanceID.uuidString.lowercased()):\(spaceID.uuidString.lowercased())"
+        return SHA256.hash(data: Data(source.utf8)).prefix(4)
+            .map { String(format: "%02X", $0) }.joined()
+    }
+}
+
+func automaticSnippetsCloudLibraryChoice(
+    _ choices: [SnippetsCloudLibraryChoice],
+    existingSpaceID: UUID?
+) -> UUID? {
+    if let existingSpaceID, choices.contains(where: { $0.spaceID == existingSpaceID }) {
+        return existingSpaceID
+    }
+    if choices.count == 1 { return choices[0].spaceID }
+    let owned = choices.filter { $0.role == "owner" }
+    return owned.count == 1 ? owned[0].spaceID : nil
+}
+
 /// The durable revocation journal is authoritative when a refresh rotated credentials
 /// but process death happened before the primary session could be replaced.
 struct SnippetsCloudCredentialRevocationPlan: Equatable {
@@ -433,6 +457,8 @@ final class SyncBackendSelectionStore {
     func signIn(
         serverURL: URL,
         requiresStrongAuthentication: Bool = false,
+        chooseAccount: Bool = false,
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
@@ -458,6 +484,8 @@ final class SyncBackendSelectionStore {
                 ? cloudCoordinates?.spaceID
                 : nil,
             requiresStrongAuthentication: requiresStrongAuthentication,
+            chooseAccount: chooseAccount,
+            chooseLibrary: chooseLibrary,
             presentationContext: presentationContext)
         defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
         defaults.set(result.apiBaseURL.absoluteString, forKey: Self.apiBaseDefaultsKey)
@@ -937,6 +965,8 @@ private final class SnippetsCloudOAuthClient {
         serverURL: URL,
         existingSpaceID: UUID?,
         requiresStrongAuthentication: Bool,
+        chooseAccount: Bool,
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> SignInResult {
         try await Self.credentialMutationGate.run { [self] in
@@ -945,6 +975,8 @@ private final class SnippetsCloudOAuthClient {
                 serverURL: serverURL,
                 existingSpaceID: existingSpaceID,
                 requiresStrongAuthentication: requiresStrongAuthentication,
+                chooseAccount: chooseAccount,
+                chooseLibrary: chooseLibrary,
                 presentationContext: presentationContext)
         }
     }
@@ -953,6 +985,8 @@ private final class SnippetsCloudOAuthClient {
         serverURL: URL,
         existingSpaceID: UUID?,
         requiresStrongAuthentication: Bool,
+        chooseAccount: Bool,
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> SignInResult {
         guard try keychain.loadItem(
@@ -1073,6 +1107,8 @@ private final class SnippetsCloudOAuthClient {
                     name: "acr_values",
                     value: discovery.oidc.stepUpACRValues.joined(separator: " ")))
             }
+        } else if chooseAccount {
+            requestItems.append(URLQueryItem(name: "prompt", value: "select_account"))
         }
         guard existingItems.count <= 16,
               Set(existingItems.map(\.name)).count == existingItems.count,
@@ -1159,7 +1195,9 @@ private final class SnippetsCloudOAuthClient {
             serverURL: serverURL,
             serverInstanceID: discovery.serverInstanceId,
             accessToken: token.accessToken,
-            existingSpaceID: existingSpaceID)
+            existingSpaceID: existingSpaceID,
+            confirmAccountChange: chooseAccount,
+            chooseLibrary: chooseLibrary)
         let sessionAtCommit = try loadSession()
         try storeSessionReplacementJournal(
             sessions: [sessionAtStart, sessionAtCommit, stored].compactMap { $0 },
@@ -1818,7 +1856,9 @@ private final class SnippetsCloudOAuthClient {
         serverURL: URL,
         serverInstanceID: UUID,
         accessToken: String,
-        existingSpaceID: UUID?
+        existingSpaceID: UUID?,
+        confirmAccountChange: Bool,
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID
     ) async throws -> UUID {
         let response: SpacesResponse = try await authorizedJSON(
             url: serverURL.appending(path: "v2/spaces"),
@@ -1828,13 +1868,30 @@ private final class SnippetsCloudOAuthClient {
             $0.scope.serverInstanceId == serverInstanceID
                 && (32...256).contains($0.scope.scopeBinding.utf8.count)
         }) else { throw Failure.insecureServerProfile }
-        if let existingSpaceID, response.spaces.contains(where: { $0.spaceId == existingSpaceID }) {
-            return existingSpaceID
+        let choices = response.spaces.map {
+            SnippetsCloudLibraryChoice(
+                spaceID: $0.spaceId,
+                serverInstanceID: $0.scope.serverInstanceId,
+                role: $0.role)
         }
-        if response.spaces.count == 1 { return response.spaces[0].spaceId }
-        let owned = response.spaces.filter { $0.role == "owner" }
-        if owned.count == 1 { return owned[0].spaceId }
-        guard response.spaces.isEmpty else { throw Failure.spaceSelectionRequired }
+        if let automatic = automaticSnippetsCloudLibraryChoice(
+            choices,
+            existingSpaceID: existingSpaceID
+        ) {
+            if confirmAccountChange, existingSpaceID != automatic,
+               let choice = choices.first(where: { $0.spaceID == automatic }) {
+                let selected = try await chooseLibrary([choice])
+                guard selected == automatic else { throw Failure.spaceSelectionRequired }
+            }
+            return automatic
+        }
+        if !choices.isEmpty {
+            let selected = try await chooseLibrary(choices)
+            guard choices.contains(where: { $0.spaceID == selected }) else {
+                throw Failure.spaceSelectionRequired
+            }
+            return selected
+        }
         let idempotencyKey = UUID(uuidString: "7b28d156-77fd-4f7f-bdf3-234f7d97ac91")!
         let created: Space = try await authorizedJSON(
             url: serverURL.appending(path: "v2/spaces"),
@@ -1846,6 +1903,13 @@ private final class SnippetsCloudOAuthClient {
         guard created.scope.serverInstanceId == serverInstanceID,
               (32...256).contains(created.scope.scopeBinding.utf8.count) else {
             throw Failure.insecureServerProfile
+        }
+        if confirmAccountChange, existingSpaceID != nil {
+            let selected = try await chooseLibrary([.init(
+                spaceID: created.spaceId,
+                serverInstanceID: created.scope.serverInstanceId,
+                role: created.role)])
+            guard selected == created.spaceId else { throw Failure.spaceSelectionRequired }
         }
         return created.spaceId
     }

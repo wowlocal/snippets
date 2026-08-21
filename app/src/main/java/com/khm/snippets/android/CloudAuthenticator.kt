@@ -55,6 +55,7 @@ class CloudAuthenticator(
     data class CompletedAuthorization(
         val serverURL: String,
         val accessToken: String,
+        val accountChange: Boolean,
     )
 
     private data class ServiceDiscovery(
@@ -99,7 +100,9 @@ class CloudAuthenticator(
     suspend fun authorizationIntent(
         rawServerURL: String,
         stepUp: Boolean = false,
+        chooseAccount: Boolean = false,
     ): Intent = withContext(Dispatchers.IO) {
+        guard(!(stepUp && chooseAccount), "authorization_session_invalid")
         guard(store.read(AUTH_REVOCATION) == null, "credential_revocation_incomplete")
         val pinnedServerURL = configuredServerURL()
         guard(normalizedBaseURL(rawServerURL) == pinnedServerURL, "server_identity_mismatch")
@@ -121,6 +124,8 @@ class CloudAuthenticator(
             if (discovery.stepUpACRValues.isNotEmpty()) {
                 parameters["acr_values"] = discovery.stepUpACRValues.joinToString(" ")
             }
+        } else if (chooseAccount) {
+            builder.setPrompt("select_account")
         }
         builder.setAdditionalParameters(parameters)
         val request = builder.build()
@@ -132,13 +137,14 @@ class CloudAuthenticator(
             "authorization_session_invalid",
         )
         store.write(PENDING, JSONObject()
-            .put("schemaVersion", 2)
+            .put("schemaVersion", 3)
             .put("serverURL", discovery.serverURL)
             .put("issuer", discovery.issuer)
             .put("resource", discovery.resource)
             .put("clientID", discovery.clientID)
             .put("redirectURI", redirectURI.toString())
             .put("maximumAccessTokenAgeSeconds", discovery.maximumAccessTokenAgeSeconds)
+            .put("accountChange", chooseAccount)
             .put("state", request.state)
             .toString())
 
@@ -155,7 +161,7 @@ class CloudAuthenticator(
             val pending = store.read(PENDING)?.let(::JSONObject)
                 ?: throw CloudAuthFailure("authorization_session_missing")
             try {
-                guard(pending.optInt("schemaVersion") == 2, "authorization_session_missing")
+                guard(pending.optInt("schemaVersion") in 2..3, "authorization_session_missing")
                 val exception = intent?.let(AuthorizationException::fromIntent)
                 val response = intent?.let(AuthorizationResponse::fromIntent)
                 if (exception != null || response == null) {
@@ -202,6 +208,7 @@ class CloudAuthenticator(
                 CompletedAuthorization(
                     serverURL = stored.serverURL,
                     accessToken = stored.accessToken,
+                    accountChange = pending.optBoolean("accountChange", false),
                 )
             } finally {
                 store.delete(PENDING)

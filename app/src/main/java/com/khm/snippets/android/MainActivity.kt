@@ -1138,7 +1138,7 @@ private fun SettingsScreen(
         if (BuildConfig.SNIPPETS_CLOUD_ENABLED) item {
             SettingsCard(title = "Snippets Cloud") {
                 Text(
-                    state.accountFingerprint?.let { "Connected · Account $it" }
+                    state.libraryID?.let { "Connected · Library ID $it" }
                         ?: "Not connected",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1162,6 +1162,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
     var scannerFailed by rememberSaveable { mutableStateOf(false) }
     var showDisconnectConfirmation by remember { mutableStateOf(false) }
     var showSwitchConfirmation by remember { mutableStateOf(false) }
+    var showChangeAccountConfirmation by remember { mutableStateOf(false) }
     var verifyingRecoveryKit by remember { mutableStateOf(false) }
     var recoveryVerificationInput by remember { mutableStateOf("") }
     var recoveryVerificationFailed by remember { mutableStateOf(false) }
@@ -1267,6 +1268,75 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         )
     }
 
+    if (state.libraryChoices.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = {
+                Text(if (state.librarySwitchFromID == null) {
+                    "Choose a Snippets library"
+                } else {
+                    "Switch Snippets library?"
+                })
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        state.librarySwitchFromID?.let {
+                            "Current: Library ID $it\nChoose the new library below. The current cloud library will not be deleted."
+                        } ?: "This account can open more than one library. Choose which one to use on this device.",
+                    )
+                    state.libraryChoices.forEach { choice ->
+                        OutlinedButton(
+                            enabled = !state.isBusy,
+                            onClick = {
+                                scope.launch {
+                                    val completion = repository.selectCloudLibrary(choice.spaceID)
+                                    completion.recoveryKit?.let { recoveryPresentation = it }
+                                }
+                            },
+                        ) {
+                            Text(
+                                "Library ID ${choice.libraryID} · " +
+                                    choice.role.replaceFirstChar(Char::uppercase),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+        )
+    }
+
+    if (showChangeAccountConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showChangeAccountConfirmation = false },
+            title = { Text("Change Snippets Cloud account?") },
+            text = {
+                Text(
+                    "Current library: Library ID ${state.libraryID ?: "—"}\n\n" +
+                        "Your current cloud library and local snippets will not be deleted. " +
+                        "After sign-in, Snippets will show the new Library ID and ask you to confirm before switching.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showChangeAccountConfirmation = false
+                    scope.launch {
+                        repository.beginCloudSignIn(
+                            BuildConfig.SNIPPETS_CLOUD_URL,
+                            chooseAccount = true,
+                        )?.let(loginLauncher::launch)
+                    }
+                }) { Text("Choose another account") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showChangeAccountConfirmation = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
     if (showDisconnectConfirmation) {
         AlertDialog(
             onDismissRequest = { showDisconnectConfirmation = false },
@@ -1276,11 +1346,18 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     "This removes this device’s Snippets Cloud connection and its access " +
                         "to open the library. Your cloud library is not deleted. To reconnect, " +
                         "you will need an approved device or your recovery kit.\n\n" +
-                        "Recovery kit: ${if (state.recoveryKitVerified) "saved and verified" else "not verified on this device"}.",
+                        if (disconnectBlockedForRecovery(state.cloudKeyStatus)) {
+                            "A new recovery kit has replaced the previous one, but has not " +
+                                "been saved yet. Finish saving it before disconnecting this device."
+                        } else {
+                            "Recovery check: ${if (state.recoveryKitVerified) "completed on this device" else "not completed on this device"}."
+                        },
                 )
             },
             confirmButton = {
-                Button(onClick = {
+                Button(
+                    enabled = !disconnectBlockedForRecovery(state.cloudKeyStatus),
+                    onClick = {
                     showDisconnectConfirmation = false
                     scope.launch { repository.disconnectCloudAccount() }
                 }) { Text("Disconnect this device") }
@@ -1297,8 +1374,8 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
             text = {
                 Text(
                     "Current storage: On device\n" +
-                        "New storage: Snippets Cloud · Account ${state.accountFingerprint ?: "—"}\n" +
-                        "Library: Personal · ${state.snippets.size} snippets\n\n" +
+                        "New storage: Snippets Cloud · Library ID ${state.libraryID ?: "—"}\n" +
+                        "On this device: ${state.snippets.size} snippets\n\n" +
                         "Your on-device library will not be deleted. Changes are compared and merged before sync is verified.",
                 )
             },
@@ -1366,7 +1443,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
             SettingsCard(title = "Account") {
                 Text(
                     if (signedIn) {
-                        "Snippets Cloud · Account ${state.accountFingerprint ?: "—"}\nPersonal library"
+                        "Snippets Cloud\nLibrary ID ${state.libraryID ?: "—"}"
                     }
                     else "Continue in your browser with a passkey, Apple, or Google. Snippets has no password and does not require your email.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1381,15 +1458,20 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                 Button(
                     enabled = !state.isBusy && cloudConfigured,
                     onClick = {
-                        scope.launch {
-                            repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL)
-                                ?.let(loginLauncher::launch)
+                        if (signedIn) {
+                            showChangeAccountConfirmation = true
+                        } else {
+                            scope.launch {
+                                repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL)
+                                    ?.let(loginLauncher::launch)
+                            }
                         }
                     },
                 ) { Text(if (signedIn) "Change account" else "Sign in to Snippets Cloud") }
                 if (signedIn) {
                     OutlinedButton(
-                        enabled = !state.isBusy,
+                        enabled = !state.isBusy &&
+                            !disconnectBlockedForRecovery(state.cloudKeyStatus),
                         onClick = { showDisconnectConfirmation = true },
                     ) { Text("Disconnect this device") }
                 }
@@ -1407,7 +1489,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                 if (visibleRecoveryKit != null) {
                     if (verifyingRecoveryKit) {
                         Text(
-                            "Now use the copy you saved. Enter its final 8 characters to verify that it can be recovered.",
+                            "Now use the copy you saved and enter its final 8 characters. This checks the copy on this device; it cannot prove where it was stored.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         OutlinedTextField(
@@ -1444,7 +1526,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                                     recoveryVerificationFailed = true
                                 }
                             },
-                        ) { Text("Verify recovery kit") }
+                        ) { Text("Complete recovery check") }
                         TextButton(onClick = {
                             verifyingRecoveryKit = false
                             recoveryVerificationInput = ""
@@ -1470,10 +1552,14 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                             ) { Text("Copy code") }
                             OutlinedButton(
                                 onClick = { shareRecoveryKit(context, visibleRecoveryKit) },
-                            ) { Text("Save or share") }
+                            ) { Text("Share (may use cloud)") }
                         }
+                        Text(
+                            "The system share menu may include mail, messages, or cloud storage. Print or save offline when possible.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Button(onClick = { verifyingRecoveryKit = true }) {
-                            Text("Verify recovery kit")
+                            Text("Check saved copy")
                         }
                     }
                 } else when (state.cloudKeyStatus) {
@@ -1610,7 +1696,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                         Text(
                             "Library access: unlocked\nRecovery kit: " +
                                 if (state.recoveryKitVerified) {
-                                    "saved and verified"
+                                    "recovery check completed on this device"
                                 } else {
                                     "not verified on this device"
                                 },
@@ -1755,9 +1841,7 @@ private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when 
     )
     "library_key_required" -> CloudErrorPresentation(
         "Unlock this library",
-        "The account is connected, but this device cannot decrypt the library yet.",
-        CloudErrorAction.RECOVER_LIBRARY,
-        "Scan recovery kit",
+        "The account is connected, but this device cannot decrypt the library yet. Choose an approved device, scan a QR, or enter a recovery code in Security.",
     )
     "pairing_expired", "pairing_missing" -> CloudErrorPresentation(
         "Device invitation expired",
@@ -1773,9 +1857,11 @@ private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when 
     )
     "space_selection_required" -> CloudErrorPresentation(
         "Choose a library",
-        "This account has access to more than one Snippets library. Continue sign-in to choose one.",
-        CloudErrorAction.SIGN_IN,
-        "Choose library",
+        "This account has access to more than one Snippets library. Select one from the secure chooser.",
+    )
+    "recovery_kit_not_saved" -> CloudErrorPresentation(
+        "Save the new recovery kit first",
+        "The previous kit has already been replaced. Finish saving the new kit before disconnecting this device.",
     )
     "server_auth_insecure" -> CloudErrorPresentation(
         "Secure sign-in is unavailable",
@@ -1796,9 +1882,7 @@ private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when 
     )
     else -> CloudErrorPresentation(
         "Snippets Cloud needs attention",
-        "The request could not be completed. Your local snippets are unchanged; try again.",
-        CloudErrorAction.SYNC_NOW,
-        "Try again",
+        "The request could not be completed. Your local snippets are unchanged. Return to the action that failed and retry it there.",
     )
 }
 
@@ -1823,7 +1907,7 @@ private fun cloudSetupDescription(stage: CloudSetupStage): String = when (stage)
     CloudSetupStage.LIBRARY_LOCKED -> "Account connected. Unlock the encrypted library to continue."
     CloudSetupStage.WAITING_FOR_APPROVAL -> "Waiting for an approved device to unlock this library."
     CloudSetupStage.RECOVERY_KIT_NEEDS_VERIFICATION ->
-        "The recovery kit still needs to be saved and verified."
+        "The recovery kit still needs to be saved and checked."
     CloudSetupStage.SYNCING -> "Syncing your library…"
     CloudSetupStage.UP_TO_DATE -> "Connected and up to date."
     CloudSetupStage.NEEDS_ATTENTION -> "Setup needs attention. Your local snippets are safe."

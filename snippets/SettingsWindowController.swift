@@ -2209,7 +2209,9 @@ private final class SyncSettingsViewController: NSViewController {
             bootstrap: cloudBootstrap,
             selection: backendSelection,
             coordinator: Self.coordinator,
-            snippetCount: (NSApp.delegate as? AppDelegate)?.store.snippets.count ?? 0,
+            snippetCount: {
+                (NSApp.delegate as? AppDelegate)?.store.snippets.count ?? 0
+            },
             continueSetup: { [weak self] in
                 self?.closeCloudAccountSheet()
                 self?.configureSnippetsCloud()
@@ -2235,10 +2237,8 @@ private final class SyncSettingsViewController: NSViewController {
                 }
             },
             changeAccount: { [weak self] in
-                guard let self,
-                      let server = SyncBackendSelectionStore.bundledServerURL else { return }
-                closeCloudAccountSheet()
-                signInToSnippetsCloud(server, selection: backendSelection)
+                self?.closeCloudAccountSheet()
+                self?.confirmCloudAccountChange()
             },
             disconnect: { [weak self] in
                 self?.closeCloudAccountSheet()
@@ -2267,7 +2267,7 @@ private final class SyncSettingsViewController: NSViewController {
         let alert = NSAlert()
         alert.messageText = "Switch Sync to \(provider.displayName)?"
         let count = (NSApp.delegate as? AppDelegate)?.store.snippets.count ?? 0
-        alert.informativeText = "Current provider: \(current.displayName)\nNew provider: \(provider.displayName)\(provider == .snippetsCloud ? " · Account \(cloudBootstrap.accountFingerprint ?? "—")" : "")\nLibrary: Personal · \(count) snippets\n\nThe current cloud library will not be deleted. Changes from both copies are compared and merged before sync is verified."
+        alert.informativeText = "Current provider: \(current.displayName)\nNew provider: \(provider.displayName)\(provider == .snippetsCloud ? " · Library ID \(cloudBootstrap.libraryID ?? "—")" : "")\nOn this Mac: \(count) snippets\n\nThe current cloud library will not be deleted. Changes from both copies are compared and merged before sync is verified."
         alert.addButton(withTitle: "Switch and Sync")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else {
@@ -2388,13 +2388,16 @@ private final class SyncSettingsViewController: NSViewController {
 
     private func signInToSnippetsCloud(
         _ serverURL: URL,
-        selection: SyncBackendSelectionStore
+        selection: SyncBackendSelectionStore,
+        changeAccount: Bool = false
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let state = try await cloudBootstrap.signIn(
                     serverURL: serverURL,
+                    changeAccount: changeAccount,
+                    chooseLibrary: chooseCloudLibrary,
                     presentationContext: self)
                 try presentCloudState(state)
             } catch {
@@ -2402,6 +2405,42 @@ private final class SyncSettingsViewController: NSViewController {
             }
             reloadFromStorage()
         }
+    }
+
+    private func confirmCloudAccountChange() {
+        guard let server = SyncBackendSelectionStore.bundledServerURL else { return }
+        let alert = NSAlert()
+        alert.messageText = "Change Snippets Cloud Account?"
+        alert.informativeText = "Current library: Library ID \(cloudBootstrap.libraryID ?? "—")\n\nYour current cloud library and local snippets will not be deleted. After sign-in, Snippets will show the new Library ID and ask before switching."
+        alert.addButton(withTitle: "Choose Another Account")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        signInToSnippetsCloud(
+            server,
+            selection: backendSelection,
+            changeAccount: true)
+    }
+
+    private func chooseCloudLibrary(
+        _ choices: [SnippetsCloudLibraryChoice]
+    ) async throws -> UUID {
+        let alert = NSAlert()
+        let isSwitchConfirmation = choices.count == 1 && cloudBootstrap.libraryID != nil
+        alert.messageText = isSwitchConfirmation
+            ? "Switch Snippets Library?"
+            : "Choose a Snippets Library"
+        alert.informativeText = isSwitchConfirmation
+            ? "Current: Library ID \(cloudBootstrap.libraryID ?? "—")\nNew: Library ID \(choices[0].libraryID)\n\nThe current cloud library will not be deleted. The new library may require an approved device or recovery kit."
+            : "This account can open more than one encrypted library. Choose which one to use on this Mac."
+        for choice in choices {
+            let role = choice.role.prefix(1).uppercased() + choice.role.dropFirst()
+            alert.addButton(withTitle: "Library ID \(choice.libraryID) · \(role)")
+        }
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        guard choices.indices.contains(index) else { throw CancellationError() }
+        return choices[index].spaceID
     }
 
     private func presentCloudState(_ state: SnippetsCloudAccountBootstrap.State) throws {
@@ -2714,6 +2753,7 @@ private final class SyncSettingsViewController: NSViewController {
             try self.presentCloudState(try await self.cloudBootstrap.signIn(
                 serverURL: server,
                 strong: true,
+                chooseLibrary: self.chooseCloudLibrary,
                 presentationContext: self))
         }
     }
@@ -2722,7 +2762,7 @@ private final class SyncSettingsViewController: NSViewController {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Disconnect Snippets Cloud from This Mac?"
-        alert.informativeText = "This removes this Mac’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery kit: \(cloudBootstrap.recoveryKitStatus == .verified ? "saved and verified on this Mac" : "not verified on this Mac")."
+        alert.informativeText = "This removes this Mac’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(cloudBootstrap.recoveryKitStatus == .verified ? "completed on this Mac" : "not completed on this Mac")."
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Disconnect This Mac")
         alert.buttons[1].hasDestructiveAction = true
@@ -2762,7 +2802,7 @@ private final class SyncSettingsViewController: NSViewController {
             switch failure {
             case .service(let code) where [
                 "sign_in_required", "authentication_required", "refresh_token_missing",
-                "reauthentication_required", "space_selection_required", "scope_review_required",
+                "reauthentication_required", "scope_review_required",
             ].contains(code):
                 alert.addButton(withTitle: "Continue Sign-In")
                 recovery = { [weak self] in
@@ -2823,7 +2863,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     private let bootstrap: SnippetsCloudAccountBootstrap
     private let selection: SyncBackendSelectionStore
     private let coordinator: SyncCoordinator?
-    private let snippetCount: Int
+    private let snippetCount: () -> Int
     private let continueSetup: () -> Void
     private let switchToCloud: () -> Void
     private let syncNowAction: () -> Void
@@ -2831,13 +2871,14 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     private let replaceRecoveryKit: () -> Void
     private let changeAccount: () -> Void
     private let disconnect: () -> Void
+    private var syncObservation: UUID?
     var close: (() -> Void)?
 
     init(
         bootstrap: SnippetsCloudAccountBootstrap,
         selection: SyncBackendSelectionStore,
         coordinator: SyncCoordinator?,
-        snippetCount: Int,
+        snippetCount: @escaping () -> Int,
         continueSetup: @escaping () -> Void,
         switchToCloud: @escaping () -> Void,
         syncNow: @escaping () -> Void,
@@ -2861,6 +2902,25 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard syncObservation == nil else { return }
+        syncObservation = coordinator?.addStateObserver { [weak self] _ in
+            guard let self, self.isViewLoaded else { return }
+            let frame = self.view.frame
+            self.loadView()
+            self.view.frame = frame
+        }
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        if let syncObservation {
+            coordinator?.removeStateObserver(syncObservation)
+            self.syncObservation = nil
+        }
+    }
 
     override func loadView() {
         view = NSView()
@@ -2886,16 +2946,16 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         stack.addArrangedSubview(section(
             title: "Account",
             lines: [
-                bootstrap.accountFingerprint.map { "Snippets Cloud · Account \($0)" }
+                bootstrap.libraryID.map { "Snippets Cloud · Library ID \($0)" }
                     ?? "No Snippets Cloud account is connected.",
-                "Personal library",
+                "Selected encrypted library",
             ]))
         stack.addArrangedSubview(section(
             title: "Sync",
             lines: [
                 "Active storage: \(selection.provider.displayName)",
                 syncStatus,
-                "\(snippetCount) snippets on this Mac",
+                "\(snippetCount()) snippets on this Mac",
             ]))
         stack.addArrangedSubview(section(
             title: "Security",
@@ -2960,7 +3020,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
                 case .signedOut: "Sign In to Snippets Cloud…"
                 case .waitingForApproval: "Return to Device Approval…"
                 case .recoveryKitAuthenticationRequired, .recoveryKitReady:
-                    "Save and Verify Recovery Kit…"
+                    "Save and Check Recovery Kit…"
                 default: "Continue Setup…"
                 }
             case .switchToCloud: "Use Snippets Cloud for Sync…"
@@ -2984,16 +3044,28 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         case .ready:
             (selection.provider == .snippetsCloud ? [.syncNow] : [.switchToCloud])
                 + [.addDevice, .replaceRecovery, .changeAccount, .disconnect]
-        case .needsTrustedDeviceOrRecovery, .waitingForApproval,
-             .approvalReady, .strongAuthenticationRequired,
+        case .strongAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
+            [.continueSetup, .changeAccount]
+        case .needsTrustedDeviceOrRecovery, .waitingForApproval,
+             .approvalReady, .strongAuthenticationRequired:
             [.continueSetup, .changeAccount, .disconnect]
         }
     }
 
     private var accountStatusTitle: String {
-        if case .signedOut = state { return "Not Connected" }
-        return "Connected"
+        switch state {
+        case .signedOut: "Not Connected"
+        case .ready: "Account Connected"
+        case .needsTrustedDeviceOrRecovery: "Library Locked"
+        case .waitingForApproval: "Waiting for Device Approval"
+        case .approvalReady, .strongAuthenticationRequired(.approveDevice):
+            "Device Approval Required"
+        case .strongAuthenticationRequired(.createInitialRecovery),
+             .strongAuthenticationRequired(.replaceRecovery),
+             .recoveryKitAuthenticationRequired, .recoveryKitReady:
+            "Recovery Kit Needs to Be Saved"
+        }
     }
 
     private var syncStatus: String {
@@ -3024,8 +3096,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
 
     private var recoveryKitStatus: String {
         switch bootstrap.recoveryKitStatus {
-        case .needsVerification: "still needs to be saved and verified"
-        case .verified: "saved and verified on this Mac"
+        case .needsVerification: "still needs to be saved and checked"
+        case .verified: "recovery check completed on this Mac"
         case .notVerifiedOnThisDevice: "not verified on this Mac"
         }
     }
@@ -3258,7 +3330,7 @@ private final class MacRecoveryKitViewController: NSViewController, NSTextFieldD
             "Anyone with this kit and access to your account can unlock the library. Keep it offline and private.")
         warning.textColor = .systemRed
 
-        let verify = NSButton(title: "Verify Recovery Kit", target: self, action: #selector(showVerification))
+        let verify = NSButton(title: "Check Saved Copy", target: self, action: #selector(showVerification))
         verify.keyEquivalent = "\r"
         let later = NSButton(title: "Save Later", target: self, action: #selector(closeSheet))
 
@@ -3267,12 +3339,12 @@ private final class MacRecoveryKitViewController: NSViewController, NSTextFieldD
         configure(stack: contentStack)
 
         let verifyMessage = centeredLabel(
-            "Use the copy you saved and enter its final 8 characters.")
+            "Use the copy you saved and enter its final 8 characters. This checks the copy on this Mac; it cannot prove where it was stored.")
         verificationField.placeholderString = "Final 8 characters"
         verificationField.delegate = self
         verificationError.textColor = .systemRed
         verificationError.isHidden = true
-        let confirm = NSButton(title: "Verify Recovery Kit", target: self, action: #selector(verifyCode))
+        let confirm = NSButton(title: "Complete Recovery Check", target: self, action: #selector(verifyCode))
         confirm.keyEquivalent = "\r"
         let showAgain = NSButton(
             title: "Show Recovery Kit Again",

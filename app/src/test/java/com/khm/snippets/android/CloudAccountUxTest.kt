@@ -45,4 +45,62 @@ class CloudAccountUxTest {
             ).lastSuccessfulSyncEpochSeconds,
         )
     }
+
+    @Test
+    fun recoveryVerificationIsVersionedAndBoundToTheCurrentLibrary() {
+        val kit = LibraryKeyBootstrap.RecoveryKit(
+            serverURL = "https://cloud.example",
+            spaceID = "00000000-0000-4000-8000-000000000001",
+            keyEpoch = 7,
+            secret = ByteArray(32) { it.toByte() },
+        )
+        val stored = RecoveryKitVerification.fromRecoveryKit(kit)
+        val restored = RecoveryKitVerification.fromJSON(stored.toJSON())
+
+        assertEquals(stored, restored)
+        assertTrue(restored!!.matches(CloudConfiguration(
+            serverURL = "https://cloud.example",
+            spaceID = "00000000-0000-4000-8000-000000000001",
+        )))
+        assertFalse(restored.matches(CloudConfiguration(
+            serverURL = "https://cloud.example",
+            spaceID = "00000000-0000-4000-8000-000000000002",
+        )))
+        assertEquals(null, RecoveryKitVerification.fromJSON("true"))
+    }
+
+    @Test
+    fun unfinishedRecoveryReplacementBlocksDisconnectAcrossBothDurableStages() {
+        assertTrue(disconnectBlockedForRecovery(CloudKeyStatus.RECOVERY_AUTH_REQUIRED))
+        assertTrue(disconnectBlockedForRecovery(CloudKeyStatus.RECOVERY_KIT_LOCKED))
+        assertFalse(disconnectBlockedForRecovery(CloudKeyStatus.READY))
+    }
+
+    @Test
+    fun ambiguousLibrariesRequireAnExplicitChoiceInsteadOfRepeatingOAuth() {
+        val first = HttpSyncClient.SpaceCandidate(
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000010",
+            "owner",
+        )
+        val second = first.copy(
+            spaceID = "00000000-0000-4000-8000-000000000002",
+        )
+
+        assertEquals(null, automaticPersonalSpace(listOf(first, second), null))
+        assertEquals(
+            second.spaceID,
+            automaticPersonalSpace(listOf(first, second), second.spaceID)?.spaceID,
+        )
+    }
+
+    @Test
+    fun libraryIdentifierNamesTheLibraryAndUsesEightHexCharacters() {
+        val identifier = cloudLibraryID(
+            "00000000-0000-4000-8000-000000000010",
+            "00000000-0000-4000-8000-000000000001",
+        )
+        assertEquals("1A60C0E7", identifier)
+        assertTrue(identifier.matches(Regex("^[0-9A-F]{8}$")))
+    }
 }

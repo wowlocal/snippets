@@ -2,6 +2,7 @@ package com.khm.snippets.android
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 
 data class SnippetItem(
     val id: String,
@@ -77,10 +78,85 @@ data class LibraryState(
     val pairingConfirmationCode: String? = null,
     val approvalConfirmationCode: String? = null,
     val pairingExpiresAtEpochSeconds: Long? = null,
-    val accountFingerprint: String? = null,
+    val libraryID: String? = null,
+    val libraryChoices: List<CloudLibraryChoice> = emptyList(),
+    val librarySwitchFromID: String? = null,
     val recoveryKitVerified: Boolean = false,
     val setupStage: CloudSetupStage = CloudSetupStage.SIGNED_OUT,
 )
+
+data class CloudLibraryChoice(
+    val spaceID: String,
+    val serverInstanceID: String,
+    val role: String,
+) {
+    val libraryID: String get() = cloudLibraryID(serverInstanceID, spaceID)
+}
+
+internal fun cloudLibraryID(serverInstanceID: String, spaceID: String): String {
+    val source = "${serverInstanceID.lowercase()}:${spaceID.lowercase()}"
+    return MessageDigest.getInstance("SHA-256")
+        .digest(source.toByteArray(Charsets.UTF_8))
+        .take(4)
+        .joinToString("") { "%02X".format(it) }
+}
+
+internal data class RecoveryKitVerification(
+    val serverURL: String,
+    val spaceID: String,
+    val keyEpoch: Int,
+    val kitFingerprint: String,
+) {
+    fun matches(configuration: CloudConfiguration): Boolean =
+        serverURL == configuration.serverURL.trim().trimEnd('/') &&
+            spaceID.equals(configuration.spaceID, ignoreCase = true)
+
+    fun toJSON(): String = JSONObject()
+        .put("schemaVersion", 1)
+        .put("serverURL", serverURL)
+        .put("spaceID", spaceID)
+        .put("keyEpoch", keyEpoch)
+        .put("kitFingerprint", kitFingerprint)
+        .toString()
+
+    companion object {
+        fun fromRecoveryKit(kit: LibraryKeyBootstrap.RecoveryKit): RecoveryKitVerification =
+            RecoveryKitVerification(
+                serverURL = kit.serverURL.trim().trimEnd('/'),
+                spaceID = kit.spaceID,
+                keyEpoch = kit.keyEpoch,
+                kitFingerprint = MessageDigest.getInstance("SHA-256")
+                    .digest(kit.toQRPayload().toByteArray(Charsets.UTF_8))
+                    .joinToString("") { "%02x".format(it) },
+            )
+
+        fun fromJSON(raw: String): RecoveryKitVerification? = runCatching {
+            val value = JSONObject(raw)
+            require(value.getInt("schemaVersion") == 1)
+            RecoveryKitVerification(
+                serverURL = value.getString("serverURL").trim().trimEnd('/'),
+                spaceID = value.getString("spaceID"),
+                keyEpoch = value.getInt("keyEpoch"),
+                kitFingerprint = value.getString("kitFingerprint"),
+            ).also {
+                require(it.serverURL.startsWith("https://"))
+                require(it.spaceID.isNotBlank())
+                require(it.keyEpoch > 0)
+                require(it.kitFingerprint.matches(Regex("^[0-9a-f]{64}$")))
+            }
+        }.getOrNull()
+    }
+}
+
+internal fun disconnectBlockedForRecovery(status: CloudKeyStatus): Boolean =
+    status == CloudKeyStatus.RECOVERY_AUTH_REQUIRED ||
+        status == CloudKeyStatus.RECOVERY_KIT_LOCKED
+
+internal const val RECOVERY_VERIFICATION_FILE = "recovery-verified.enc"
+
+internal fun invalidateRecoveryVerification(store: EncryptedStore) {
+    store.delete(RECOVERY_VERIFICATION_FILE)
+}
 
 /** A one-screen value. It must never be placed in LibraryState or saved by Compose. */
 internal data class RecoveryKitPresentation(

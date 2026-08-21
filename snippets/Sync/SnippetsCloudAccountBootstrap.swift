@@ -118,7 +118,7 @@ final class SnippetsCloudAccountBootstrap {
             case "pairing_expired", "pairing_missing":
                 "The device invitation is no longer available. Create a new invitation and approve it within five minutes."
             case "space_selection_required":
-                "This account has more than one library. Continue sign-in to choose which library to use."
+                "This account has more than one library. Choose one in the library selector shown during sign-in."
             case "scope_review_required":
                 "The connected account or library changed. Review the account before sync resumes; your local snippets are safe."
             case "server_auth_insecure":
@@ -166,13 +166,13 @@ final class SnippetsCloudAccountBootstrap {
             itemAccessibility: .afterFirstUnlock)
     }
 
-    var accountFingerprint: String? {
+    var libraryID: String? {
         guard selection.hasCloudSession, let coordinates = selection.cloudCoordinates else {
             return nil
         }
-        let source = "\(coordinates.serverInstanceID?.uuidString ?? ""):\(coordinates.spaceID.uuidString.lowercased())"
+        let source = "\(coordinates.serverInstanceID?.uuidString.lowercased() ?? ""):\(coordinates.spaceID.uuidString.lowercased())"
         let digest = SHA256.hash(data: Data(source.utf8))
-        return digest.prefix(2).map { String(format: "%02X", $0) }.joined()
+        return digest.prefix(4).map { String(format: "%02X", $0) }.joined()
     }
 
     var recoveryKitStatus: RecoveryKitStatus {
@@ -257,12 +257,16 @@ final class SnippetsCloudAccountBootstrap {
     func signIn(
         serverURL: URL,
         strong: Bool = false,
+        changeAccount: Bool = false,
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> State {
         let previousCoordinates = selection.cloudCoordinates
         try await selection.signIn(
             serverURL: serverURL,
             requiresStrongAuthentication: strong,
+            chooseAccount: changeAccount,
+            chooseLibrary: chooseLibrary,
             presentationContext: presentationContext)
         if let previousCoordinates,
            let currentCoordinates = selection.cloudCoordinates,
@@ -460,6 +464,9 @@ final class SnippetsCloudAccountBootstrap {
         if try selection.pendingLocalEraseExists() {
             try selection.resumePendingLocalErase(bootstrapSecrets: secrets)
             return
+        }
+        guard recoveryKitStatus != .needsVerification else {
+            throw Failure.invalidState
         }
         // Do not destroy retry state until both the resource server and identity
         // provider confirm revocation. The selection layer then journals local erase,

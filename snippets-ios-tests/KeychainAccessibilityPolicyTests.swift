@@ -15,6 +15,77 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
     private let accessGroup = "TESTTEAM.com.khm.snippets"
     private let service = "com.khm.snippets.keychain-policy-tests"
 
+    func testCloudLibraryIdentifierUsesEightHexCharacters() {
+        let choice = SnippetsCloudLibraryChoice(
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            serverInstanceID: UUID(uuidString: "00000000-0000-4000-8000-000000000010")!,
+            role: "owner")
+
+        XCTAssertEqual(choice.libraryID, "1A60C0E7")
+        XCTAssertNotNil(choice.libraryID.range(
+            of: "^[0-9A-F]{8}$",
+            options: .regularExpression))
+    }
+
+    func testAmbiguousCloudLibrariesRequireExplicitSelection() {
+        let server = UUID(uuidString: "00000000-0000-4000-8000-000000000010")!
+        let first = SnippetsCloudLibraryChoice(
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            serverInstanceID: server,
+            role: "owner")
+        let second = SnippetsCloudLibraryChoice(
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
+            serverInstanceID: server,
+            role: "owner")
+
+        XCTAssertNil(automaticSnippetsCloudLibraryChoice(
+            [first, second],
+            existingSpaceID: nil))
+        XCTAssertEqual(
+            automaticSnippetsCloudLibraryChoice(
+                [first, second],
+                existingSpaceID: second.spaceID),
+            second.spaceID)
+    }
+
+    func testPendingRecoveryKitBlocksCloudDisconnectBeforeRevocation() async throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.recovery-disconnect.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.recovery-disconnect-credentials",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let bootstrapSecrets = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.recovery-disconnect-bootstrap",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        try bootstrapSecrets.storeItem(
+            Data("pending recovery kit".utf8),
+            account: SnippetsCloudAccountBootstrap.recoveryPresentationAccount)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            bootstrapSecrets: bootstrapSecrets,
+            snippetsCloudEnabled: true)
+        let bootstrap = SnippetsCloudAccountBootstrap(
+            selection: selection,
+            secrets: bootstrapSecrets)
+
+        do {
+            try await bootstrap.signOutThisDevice()
+            XCTFail("Expected pending recovery setup to block disconnect")
+        } catch let failure as SnippetsCloudAccountBootstrap.Failure {
+            guard case .invalidState = failure else {
+                return XCTFail("Expected invalidState, got \(failure)")
+            }
+        }
+        XCTAssertNotNil(try bootstrapSecrets.loadItem(
+            account: SnippetsCloudAccountBootstrap.recoveryPresentationAccount))
+    }
+
     func testSynchronizableSyncKeyUsesAfterFirstUnlockWhileVaultItemsStayWhenUnlocked() throws {
         let probe = KeychainOperationsProbe()
         let keychain = makeStore(probe)
