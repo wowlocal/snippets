@@ -181,7 +181,7 @@ func (s *Store) GetPairing(ctx context.Context, principal domain.Principal, spac
 func (s *Store) ClaimPairing(ctx context.Context, principal domain.Principal, spaceID, pairingID uuid.UUID) (domain.Space, domain.Pairing, error) {
 	var space domain.Space
 	var pairing domain.Pairing
-	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
+	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, userID uuid.UUID) error {
 		var err error
 		space, err = getSpace(ctx, tx, spaceID)
 		if err != nil {
@@ -201,7 +201,17 @@ func (s *Store) ClaimPairing(ctx context.Context, principal domain.Principal, sp
 		if pairing.State != domain.PairingApproved {
 			return domain.NewError(domain.Conflict)
 		}
-		_, err = tx.Exec(ctx, "DELETE FROM pairings WHERE space_id=$1 AND pairing_id=$2", spaceID, pairingID)
+		var claimedBy uuid.UUID
+		var alreadyClaimed bool
+		if err := tx.QueryRow(ctx, "SELECT coalesce(claimed_by_user_id,'00000000-0000-0000-0000-000000000000'::uuid),claimed_by_user_id IS NOT NULL FROM pairings WHERE space_id=$1 AND pairing_id=$2", spaceID, pairingID).Scan(&claimedBy, &alreadyClaimed); err != nil {
+			return err
+		}
+		if alreadyClaimed && claimedBy != userID {
+			return domain.NewError(domain.Conflict)
+		}
+		if !alreadyClaimed {
+			_, err = tx.Exec(ctx, "UPDATE pairings SET claimed_by_user_id=$3,claimed_at=clock_timestamp() WHERE space_id=$1 AND pairing_id=$2", spaceID, pairingID, userID)
+		}
 		return err
 	})
 	return space, pairing, err

@@ -199,10 +199,20 @@ func (v *OIDCValidator) ensureKey(ctx context.Context, keyID string) error {
 	now := v.now()
 	v.mu.Lock()
 	if _, ok := v.keys[keyID]; ok {
-		stale := now.Sub(v.lastRefresh) >= v.configuration.JWKSRefreshInterval && now.Sub(v.lastAttempt) >= v.configuration.UnknownKeyRefreshInterval
+		age := now.Sub(v.lastRefresh)
+		stale := age >= v.configuration.JWKSRefreshInterval && now.Sub(v.lastAttempt) >= v.configuration.UnknownKeyRefreshInterval
+		expired := v.configuration.JWKSMaximumStaleness > 0 && age >= v.configuration.JWKSMaximumStaleness
 		v.mu.Unlock()
 		if stale {
-			_ = v.refresh(ctx, false)
+			if err := v.refresh(ctx, expired); err != nil {
+				return err
+			}
+		}
+		v.mu.Lock()
+		tooOld := v.configuration.JWKSMaximumStaleness > 0 && v.now().Sub(v.lastRefresh) >= v.configuration.JWKSMaximumStaleness
+		v.mu.Unlock()
+		if tooOld {
+			return domain.NewError(domain.DependencyUnavailable)
 		}
 		return nil
 	}

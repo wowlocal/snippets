@@ -13,6 +13,10 @@ psql \
     --set runtime_password="$SNIPPETS_RUNTIME_PASSWORD" <<'SQL'
 DO $role$
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'snippets_function_owner') THEN
+        CREATE ROLE snippets_function_owner NOLOGIN
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'snippets_runtime') THEN
         CREATE ROLE snippets_runtime LOGIN
             NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;

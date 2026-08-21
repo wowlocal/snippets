@@ -26,8 +26,8 @@ type Store struct {
 	codec            *domain.TokenCodec
 }
 
-const minimumSchemaVersion int64 = 1
-const maximumSchemaVersion int64 = 1
+const minimumSchemaVersion int64 = 2
+const maximumSchemaVersion int64 = 2
 
 func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool, error) {
 	poolConfig, err := newPoolConfig(configuration)
@@ -147,25 +147,27 @@ func (s *Store) revokeAccessTokenAttempt(ctx context.Context, principal domain.P
 }
 
 func (s *Store) ListSpaces(ctx context.Context, principal domain.Principal) ([]domain.Space, error) {
-	var result []domain.Space
-	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
+	return withPrincipalValue(s, ctx, principal, func(tx pgx.Tx, _ uuid.UUID) ([]domain.Space, error) {
 		rows, err := tx.Query(ctx, `SELECT s.id, encode(sm.scope_binding, 'base64'), s.dataset_generation, s.feed_epoch, sm.role, s.key_epoch
             FROM spaces s JOIN space_memberships sm ON sm.space_id = s.id
             WHERE sm.user_id = snippets_private.current_user_id() ORDER BY s.id`)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		defer rows.Close()
+		result := make([]domain.Space, 0)
 		for rows.Next() {
 			value, err := scanSpace(rows)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			result = append(result, value)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return result, nil
 	})
-	return result, err
 }
 
 func (s *Store) CreateSpace(ctx context.Context, principal domain.Principal, idempotencyKey *uuid.UUID) (domain.Space, error) {
@@ -357,19 +359,8 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 		}
 		seen[item.Record.ID] = struct{}{}
 	}
-	var incomingChangeBytes int64
-	for _, item := range items {
-		incomingChangeBytes += int64(len(item.Record.Blob) + len([]byte(item.Record.Rev)))
-	}
-	compacted, err := s.compactChangeHistoryIfNeeded(ctx, principal, spaceID, incomingChangeBytes, int64(len(items)))
-	if err != nil {
-		return domain.BatchSubmission{}, err
-	}
-	if compacted {
-		return domain.BatchSubmission{}, domain.NewError(domain.CursorInvalid)
-	}
 	var result domain.BatchSubmission
-	err = s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
+	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
 		space, err := getSpace(ctx, tx, spaceID)
 		if err != nil {
 			return err
@@ -412,6 +403,7 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 			}
 		}
 		outcomes := make([]domain.BatchOutcome, len(items))
+		accepted := false
 		for _, value := range ordered {
 			item := value.item
 			if err := item.Record.Validate(); err != nil {
@@ -465,6 +457,25 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 				return err
 			}
 			if !within {
+				// A capacity-saving rotation is allowed only after scope, payload,
+				// and CAS validation established that this exact mutation can succeed
+				// once reclaimable history is removed. It remains in this transaction.
+				var compacted bool
+				if err := tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,$2,$3,$4,true)", spaceID, newBytes-oldBytes, newBytes, countDelta).Scan(&compacted); err != nil {
+					return err
+				}
+				if compacted {
+					if err := tx.QueryRow(ctx, "SELECT snippets_private.record_write_within_quota($1,$2,$3,$4)", spaceID, newBytes-oldBytes, newBytes, countDelta).Scan(&within); err != nil {
+						return err
+					}
+					if !within {
+						// A maintenance predicate and the definitive quota check must
+						// agree. Roll back the rotation on any invariant failure.
+						return domain.NewError(domain.InternalError)
+					}
+				}
+			}
+			if !within {
 				code := domain.QuotaExceeded
 				outcomes[value.index] = domain.BatchOutcome{Kind: "rejected", ErrorCode: &code}
 				continue
@@ -482,6 +493,7 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 			if _, err := tx.Exec(ctx, "INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, sequence, item.Record.ID, item.Record.Rev, item.Record.Deleted, blob, generation); err != nil {
 				return err
 			}
+			accepted = true
 			storedRecord := item.Record
 			storedRecord.Blob = blob
 			serverRecord, err := s.makeServerRecord(space, storedRecord, generation)
@@ -490,6 +502,18 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 			}
 			version, revision := serverRecord.RecordVersion, item.Record.Rev
 			outcomes[value.index] = domain.BatchOutcome{Kind: "accepted", RecordVersion: &version, Revision: &revision}
+		}
+		if accepted {
+			var compacted bool
+			if err := tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,0,0,0,false)", spaceID).Scan(&compacted); err != nil {
+				return err
+			}
+			// Return the committed scope even when this write performed feed
+			// maintenance. The writer does not need a failing retry round trip.
+			space, err = getSpace(ctx, tx, spaceID)
+			if err != nil {
+				return err
+			}
 		}
 		partial := false
 		for _, outcome := range outcomes {
@@ -504,76 +528,66 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 	return result, err
 }
 
-func (s *Store) compactChangeHistoryIfNeeded(ctx context.Context, principal domain.Principal, spaceID uuid.UUID, incomingBytes, incomingCount int64) (bool, error) {
-	compacted := false
-	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
-		compacted = false
-		space, err := getSpace(ctx, tx, spaceID)
-		if err != nil {
-			return err
-		}
-		if !space.Role.CanWrite() {
-			return domain.NewError(domain.Forbidden)
-		}
-		var locked bool
-		if err := tx.QueryRow(ctx, "SELECT snippets_private.lock_storage_quota($1)", spaceID).Scan(&locked); err != nil {
-			return err
-		}
-		if !locked {
-			return domain.NewError(domain.NotFound)
-		}
-		return tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,$2,$3)", spaceID, incomingBytes, incomingCount).Scan(&compacted)
+func (s *Store) withPrincipal(ctx context.Context, principal domain.Principal, operation func(pgx.Tx, uuid.UUID) error) error {
+	_, err := withPrincipalValue(s, ctx, principal, func(tx pgx.Tx, userID uuid.UUID) (struct{}, error) {
+		return struct{}{}, operation(tx, userID)
 	})
-	return compacted, err
+	return err
 }
 
-func (s *Store) withPrincipal(ctx context.Context, principal domain.Principal, operation func(pgx.Tx, uuid.UUID) error) error {
+func withPrincipalValue[T any](s *Store, ctx context.Context, principal domain.Principal, operation func(pgx.Tx, uuid.UUID) (T, error)) (T, error) {
+	var zero T
 	for attempt := 0; attempt < 3; attempt++ {
-		err := s.withPrincipalAttempt(ctx, principal, operation)
+		value, err := withPrincipalValueAttempt(s, ctx, principal, operation)
 		if !isRetryableTransactionError(err) {
-			return mapDatabaseError(err)
+			return value, mapDatabaseError(err)
 		}
 		if err := waitForTransactionRetry(ctx, attempt); err != nil {
-			return mapDatabaseError(err)
+			return zero, mapDatabaseError(err)
 		}
 	}
-	return domain.ErrorWithRetry(domain.DependencyUnavailable, 1)
+	return zero, domain.ErrorWithRetry(domain.DependencyUnavailable, 1)
 }
 
-func (s *Store) withPrincipalAttempt(ctx context.Context, principal domain.Principal, operation func(pgx.Tx, uuid.UUID) error) error {
+func withPrincipalValueAttempt[T any](s *Store, ctx context.Context, principal domain.Principal, operation func(pgx.Tx, uuid.UUID) (T, error)) (T, error) {
+	var zero T
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
-		return err
+		return zero, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := lockCredentialShared(ctx, tx, principal.CredentialDigest); err != nil {
-		return err
+		return zero, err
 	}
 	var revoked bool
 	if err := tx.QueryRow(ctx, "SELECT snippets_private.is_access_token_revoked($1)", principal.CredentialDigest[:]).Scan(&revoked); err != nil {
-		return err
+		return zero, err
 	}
 	if revoked {
-		return domain.NewError(domain.AuthenticationRequired)
+		return zero, domain.NewError(domain.AuthenticationRequired)
 	}
 	userID := uuid.New()
 	if err := tx.QueryRow(ctx, "SELECT snippets_private.resolve_identity($1,$2)", principal.IdentityDigest[:], userID).Scan(&userID); err != nil {
-		return err
+		return zero, err
 	}
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.user_id',$1,true)", userID.String()); err != nil {
-		return err
+		return zero, err
 	}
 	var status string
 	if err := tx.QueryRow(ctx, "SELECT status FROM users WHERE id=$1", userID).Scan(&status); err != nil {
-		return err
+		return zero, err
 	}
 	if status != "active" {
-		return domain.NewError(domain.Forbidden)
+		return zero, domain.NewError(domain.Forbidden)
 	}
-	if err := operation(tx, userID); err != nil {
-		return err
+	value, err := operation(tx, userID)
+	if err != nil {
+		return zero, err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return zero, err
+	}
+	return value, nil
 }
 
 func lockCredentialExclusive(ctx context.Context, tx pgx.Tx, digest [32]byte) error {

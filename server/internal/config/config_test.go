@@ -3,6 +3,9 @@ package config
 import (
 	"encoding/base64"
 	"testing"
+	"time"
+
+	"github.com/wowlocal/snippets/server/internal/domain"
 )
 
 func TestProductionDatabaseRequiresVerifiedTLSAndSCRAM(t *testing.T) {
@@ -21,6 +24,8 @@ func TestProductionDatabaseRequiresVerifiedTLSAndSCRAM(t *testing.T) {
 		"missing root CA":                 func(values map[string]string) { delete(values, "DATABASE_TLS_ROOT_CERT") },
 		"optional channel binding":        func(values map[string]string) { values["DATABASE_CHANNEL_BINDING"] = "prefer" },
 		"password authentication":         func(values map[string]string) { values["DATABASE_REQUIRE_AUTH"] = "password" },
+		"JWKS staleness below refresh":    func(values map[string]string) { values["OIDC_JWKS_MAX_STALENESS_SECONDS"] = "899" },
+		"unbounded JWKS staleness":        func(values map[string]string) { values["OIDC_JWKS_MAX_STALENESS_SECONDS"] = "86401" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -28,6 +33,31 @@ func TestProductionDatabaseRequiresVerifiedTLSAndSCRAM(t *testing.T) {
 			mutate(candidate)
 			if _, err := LoadFrom(mapLookup(candidate)); err == nil {
 				t.Fatal("weak production database configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestHTTPBudgetsCoverRequestAmplificationAndGracefulDrain(t *testing.T) {
+	values := productionEnvironment()
+	configuration, err := LoadFrom(mapLookup(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.HTTP.BodyMemoryBudget < domain.MaxRequestMemoryReservation ||
+		configuration.HTTP.ShutdownTimeout < configuration.HTTP.RequestTimeout+5*time.Second {
+		t.Fatalf("unsafe HTTP defaults: %#v", configuration.HTTP)
+	}
+
+	for name, mutate := range map[string]func(map[string]string){
+		"raw-body-only budget": func(values map[string]string) { values["HTTP_BODY_MEMORY_BUDGET_BYTES"] = "16777216" },
+		"short shutdown":       func(values map[string]string) { values["HTTP_SHUTDOWN_TIMEOUT_SECONDS"] = "25" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := productionEnvironment()
+			mutate(candidate)
+			if _, err := LoadFrom(mapLookup(candidate)); err == nil {
+				t.Fatal("unsafe HTTP configuration was accepted")
 			}
 		})
 	}

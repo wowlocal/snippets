@@ -229,6 +229,64 @@ struct SnippetsCloudTransportTests {
         #expect(submission.acceptedIDs == [recordID])
     }
 
+    @Test func successfulSubmitAdoptsAtomicFeedRotationForLaterChunks() async throws {
+        let space = UUID()
+        let dataset = UUID()
+        let firstFeed = UUID()
+        let compactedFeed = UUID()
+        let records = (0..<11).map { index in
+            WireRecord(
+                id: UUID(),
+                rev: "revision-\(index)",
+                deleted: false,
+                blob: Data("ciphertext-\(index)".utf8))
+        }
+        let configuration = try SnippetsCloudTransport.Configuration(
+            baseURL: #require(URL(string: "https://sync.example.test")),
+            spaceID: space,
+            serverInstanceID: Self.serverInstanceID,
+            accessToken: "test-access-token")
+        let probe = AuthRetryProbe()
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [CloudURLProtocol.self]
+        CloudURLProtocol.handler = { request in
+            let path = try #require(request.url?.path)
+            guard path.hasSuffix("/records/batch") else {
+                return (200, try JSONSerialization.data(withJSONObject:
+                    Self.space(space: space, dataset: dataset, feed: firstFeed)))
+            }
+            let attempt = probe.nextRequest()
+            let root = try #require(JSONSerialization.jsonObject(
+                with: Self.bodyData(request)) as? [String: Any])
+            let expectedScope = try #require(root["expectedScope"] as? [String: Any])
+            let expectedFeed = attempt == 1 ? firstFeed : compactedFeed
+            #expect(
+                (expectedScope["feedEpoch"] as? String)?.lowercased()
+                    == expectedFeed.uuidString.lowercased())
+            let items = try #require(root["items"] as? [[String: Any]])
+            let outcomes = items.map { _ in
+                [
+                    "kind": "accepted",
+                    "revision": "accepted",
+                    "recordVersion": String(repeating: "v", count: 32),
+                ]
+            }
+            let response = Self.scoped(
+                space: space,
+                dataset: dataset,
+                feed: compactedFeed,
+                values: ["outcomes": outcomes, "partial": false])
+            return (200, try JSONSerialization.data(withJSONObject: response))
+        }
+
+        let transport = SnippetsCloudTransport(
+            configuration: configuration,
+            session: URLSession(configuration: sessionConfiguration))
+        let submission = try await transport.submit(records, at: SyncCursor("old-feed-cursor"))
+        #expect(submission.acceptedIDs.count == records.count)
+        #expect(probe.requestCount == 2)
+    }
+
     @Test func liveHTTPSServiceCarriesAppleCiphertextThatAndroidCanOpen() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["SNIPPETS_CLOUD_E2E"] == "1" else { return }

@@ -91,11 +91,16 @@ with no usable verification key fail closed. Unknown-key
 refresh is single-flight, cooled down, and negatively cached. JWT `jku`, `x5u`, `crit`,
 duplicate JSON members, invalid times, and symmetric algorithms fail closed. Identity
 and concrete-credential lookups are keyed HMAC digests; raw issuer subjects and tokens
-never enter PostgreSQL or logs. ES256 credential identity uses a low-S canonical
+never enter PostgreSQL or logs. Known cached verification keys use a bounded
+stale-while-revalidate window and fail with dependency unavailability after the absolute
+JWKS staleness limit. ES256 credential identity uses a low-S canonical
 signature so signature malleability cannot evade logout.
 
 Recovery-envelope replacement and pairing approval require recent provider-asserted
-phishing-resistant authentication. Logout stores only a keyed credential digest.
+phishing-resistant authentication. The first successful pairing claim is bound to the
+claiming account and remains idempotently retrievable until invitation expiry or
+cancellation, so a lost HTTP response does not consume the encrypted envelope. Logout
+stores only a keyed credential digest.
 Data-plane transactions take the shared form of the credential advisory lock; logout
 takes its exclusive form. Both recheck the denylist inside the transaction, so a
 returned `204` is a strict boundary across server instances without serializing all
@@ -109,18 +114,26 @@ server has connection, request, pool-connect, SQL-statement, lock, body-memory,
 response-memory, global-rate, and identity-rate limits. Production output is sanitized
 JSON logging containing only operation, status, duration, random request ID, and closed
 error codes. Application panic recovery returns a closed `500` problem when headers
-have not already been committed.
+have not already been committed. The configurable shutdown drain is validated to exceed
+the maximum request deadline plus response-flush grace.
 
 PostgreSQL uses `FORCE ROW LEVEL SECURITY`. The runtime login is
 `NOSUPERUSER NOBYPASSRLS`, owns no protected object, cannot change ownership or quota
 counter columns, and receives only narrow table columns and security-definer functions.
+Those functions are owned by the dedicated `NOLOGIN BYPASSRLS`
+`snippets_function_owner`, not by the runtime or an assumed-superuser database owner;
+their `search_path` and table grants are explicit. A cluster administrator must create
+that role (and grant the migration role membership) when the schema installer cannot
+create `BYPASSRLS` roles itself.
 Write
 locking is credential, quota owner/space, then sorted per-record advisory locks; absent
 record CAS is serialized too. Quotas are 512 MiB/100,000 records/250,000 changes per
-space and 2 GiB per owner. Before history reaches its byte/count ceiling, the runtime
-compacts it to one immutable version per current record and rotates the feed epoch;
-clients with an old cursor restart from a full snapshot. This bounds repeated-update
-history without a long-lived database snapshot. Tombstones remain current records;
+space and 2 GiB per owner. After a successful mutation accumulates meaningful
+reclaimable history near the byte/count high-water mark, the same transaction compacts
+history to one immutable version per current record, rotates the feed epoch, and returns
+the new scope to the writer. Invalid, stale, conflicting, and quota-rejected batches do
+not perform maintenance. This bounds repeated-update history without a long-lived
+database snapshot or repeated baseline rotation. Tombstones remain current records;
 safe physical tombstone reclamation still requires the client-checkpoint lifecycle
 listed under future work.
 
@@ -163,10 +176,11 @@ are independent Base64/Base64url values decoding to 32–64 bytes. Keep
 than five minutes, `openid offline_access`, and an explicitly configured step-up AMR
 and/or ACR allow-list.
 
-`10-schema.sql` bootstraps an empty database at schema version 1 and is executed once by
+`10-schema.sql` bootstraps an empty database at schema version 2 and is executed once by
 PostgreSQL's standard first-boot initializer. Outside Compose,
-provision the restricted `snippets_runtime` role with `00-runtime-role.sh`, then apply
-the schema as the database owner with
+provision `snippets_runtime` plus the dedicated function owner with
+`00-runtime-role.sh`, then apply the schema as a migration role that is a member of
+`snippets_function_owner` with
 `psql --set ON_ERROR_STOP=1 --file Container/postgres-init/10-schema.sql`. Later
 forward-only migrations are applied with owner credentials and a repository advisory
 lock:

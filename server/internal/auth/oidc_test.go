@@ -122,6 +122,26 @@ func TestOIDCValidatorIgnoresUnknownJWKSFieldsAndUnusableKeys(t *testing.T) {
 	}
 }
 
+func TestOIDCValidatorFailsClosedAfterAbsoluteJWKSStaleness(t *testing.T) {
+	fixture := newOIDCFixture(t, false)
+	validator, err := NewOIDCValidator(context.Background(), fixture.configuration, fixture.server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := fixture.token(t, "resource", "client", true)
+	refreshedAt := validator.lastRefresh
+	fixture.server.Close()
+
+	validator.now = func() time.Time { return refreshedAt.Add(fixture.configuration.JWKSRefreshInterval + time.Second) }
+	if _, err := validator.Validate(context.Background(), token, Standard); err != nil {
+		t.Fatalf("cached key was not allowed inside stale-while-revalidate window: %v", err)
+	}
+	validator.now = func() time.Time { return refreshedAt.Add(fixture.configuration.JWKSMaximumStaleness + time.Second) }
+	if _, err := validator.Validate(context.Background(), token, Standard); domain.AsServiceError(err).Code != domain.DependencyUnavailable {
+		t.Fatalf("absolutely stale verification key remained usable: %v", err)
+	}
+}
+
 type oidcFixture struct {
 	key           *rsa.PrivateKey
 	server        *httptest.Server
@@ -154,7 +174,7 @@ func newOIDCFixtureWithJWKS(t *testing.T, documentBuilder func(map[string]any) m
 	}))
 	jwks, _ := url.Parse(server.URL)
 	issuer, _ := url.Parse("https://issuer.example/")
-	configuration := config.OIDC{Issuer: issuer, Audience: "resource", ClientID: "client", JWKSURL: jwks, AllowedAlgorithms: []string{"RS256"}, MaximumTokenAge: 5 * time.Minute, ClockSkew: time.Minute, IdentityPepper: make([]byte, 32), JWKSRefreshInterval: 15 * time.Minute, UnknownKeyRefreshInterval: time.Minute, UnknownKeyCacheTTL: 5 * time.Minute, StepUpAMR: map[string]struct{}{"webauthn": {}}, StepUpACR: map[string]struct{}{}, StepUpMaximumAge: 5 * time.Minute}
+	configuration := config.OIDC{Issuer: issuer, Audience: "resource", ClientID: "client", JWKSURL: jwks, AllowedAlgorithms: []string{"RS256"}, MaximumTokenAge: 5 * time.Minute, ClockSkew: time.Minute, IdentityPepper: make([]byte, 32), JWKSRefreshInterval: time.Minute, JWKSMaximumStaleness: 3 * time.Minute, UnknownKeyRefreshInterval: time.Minute, UnknownKeyCacheTTL: 5 * time.Minute, StepUpAMR: map[string]struct{}{"webauthn": {}}, StepUpACR: map[string]struct{}{}, StepUpMaximumAge: 5 * time.Minute}
 	return oidcFixture{key: key, server: server, configuration: configuration}
 }
 func (f oidcFixture) token(t *testing.T, audience, client string, strong bool) string {

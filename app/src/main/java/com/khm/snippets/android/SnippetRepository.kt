@@ -854,7 +854,12 @@ class SnippetRepository(
 
             val pushed = client.push(
                 configuration, remoteRecordsJSON, reconciliation.offers, accessToken)
-            remoteRecordsJSON = pushed.records
+            val feedRotated = pushed.feedEpoch != configuration.feedEpoch
+            configuration = configuration.copy(
+                cursor = if (feedRotated) null else configuration.cursor,
+                feedEpoch = pushed.feedEpoch,
+            )
+            remoteRecordsJSON = if (feedRotated) "[]" else pushed.records
             persistSyncState()
         }
         throw SyncFailure("sync_did_not_converge")

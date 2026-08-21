@@ -137,6 +137,26 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET current_record_bytes=$2 WHERE id=$1", space.Scope.SpaceID, currentBytes); err != nil {
 		t.Fatal(err)
 	}
+	nearBaseline, err := store.CreateSpace(ctx, first, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const nearHalfQuota = int64(240 * 1024 * 1024)
+	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET current_record_bytes=$2,change_history_bytes=$2 WHERE id=$1", nearBaseline.Scope.SpaceID, nearHalfQuota); err != nil {
+		t.Fatal(err)
+	}
+	feedBefore := nearBaseline.Scope.FeedEpoch
+	staleScope := nearBaseline.Scope
+	staleScope.FeedEpoch = uuid.New()
+	if _, err := store.Submit(ctx, first, nearBaseline.Scope.SpaceID, staleScope, []domain.BatchItem{{Record: domain.WireRecord{ID: uuid.New(), Rev: "stale"}}}); domain.AsServiceError(err).Code != domain.CursorInvalid {
+		t.Fatalf("stale near-threshold submit returned %v", err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := store.Submit(ctx, first, nearBaseline.Scope.SpaceID, nearBaseline.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: uuid.New(), Rev: "r", Blob: []byte("x")}}})
+		if err != nil || result.Outcomes[0].Kind != "accepted" || result.Scope.FeedEpoch != feedBefore {
+			t.Fatalf("near-baseline write %d repeated compaction: %v %#v", attempt, err, result)
+		}
+	}
 	lockConnection, err := ownerPool.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

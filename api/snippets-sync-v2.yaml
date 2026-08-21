@@ -186,7 +186,7 @@ paths:
         - { $ref: '#/components/parameters/SpaceID' }
         - { $ref: '#/components/parameters/PairingID' }
       responses:
-        '204': { description: Pairing cancelled, already consumed, or already cancelled. }
+        '204': { description: Pairing cancelled or already cancelled. }
         default: { $ref: '#/components/responses/Error' }
   /v2/spaces/{space}/pairings/{pairing}/approval:
     put:
@@ -215,7 +215,7 @@ paths:
         - { $ref: '#/components/parameters/PairingID' }
       responses:
         '200':
-          description: Atomically returns and consumes the approved encrypted key envelope.
+          description: Atomically binds the first claimant and idempotently returns the approved encrypted key envelope to that account until expiry or cancellation.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ClaimPairingResponse' }

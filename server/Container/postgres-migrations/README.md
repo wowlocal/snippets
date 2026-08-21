@@ -1,11 +1,12 @@
 # PostgreSQL migrations
 
-The empty-database bootstrap is schema version 1. Add forward-only migrations here as
-`0002_description.sql`, `0003_description.sql`, and so on. Each migration must be safe
+The empty-database bootstrap tracks the latest pre-deployment schema (currently version
+2). Add forward-only migrations here as `0003_description.sql`, `0004_description.sql`,
+and so on. Each migration must be safe
 to re-run and must finish with:
 
 ```sql
-INSERT INTO snippets_private.schema_migrations(version) VALUES (2)
+INSERT INTO snippets_private.schema_migrations(version) VALUES (3)
 ON CONFLICT (version) DO NOTHING;
 ```
 

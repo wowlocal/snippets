@@ -14,22 +14,26 @@ import (
 )
 
 const (
-	MaxBlobBytes            = 900_000
-	MaxRevisionBytes        = 256
-	MaxBatchRecords         = 50
-	MaxPageRecords          = 50
-	MaxRequestBytes         = 16 * 1024 * 1024
-	MaxResponseBytes        = 64 * 1024 * 1024
-	MaxSpacesPerUser        = 100
-	MaxKeyEnvelopeBytes     = 4_096
-	MaxPairingSeconds       = 600
-	MaxPairingsPerSpace     = 16
-	MaxStorageBytesPerSpace = int64(512 * 1024 * 1024)
-	MaxStorageBytesPerUser  = int64(2 * 1024 * 1024 * 1024)
-	MaxRecordsPerSpace      = int64(100_000)
-	MaxChangesPerSpace      = int64(250_000)
-	RecoveryAlgorithm       = "snippets-recovery-hkdf-sha256-aes256gcm-v1"
-	PairingAlgorithm        = "snippets-pairing-p256-hkdf-sha256-aes256gcm-v1"
+	MaxBlobBytes     = 900_000
+	MaxRevisionBytes = 256
+	MaxBatchRecords  = 50
+	MaxPageRecords   = 50
+	MaxRequestBytes  = 16 * 1024 * 1024
+	// Strict request handling retains the raw JSON while token validation and
+	// Base64 decoding allocate additional representations. Admission reserves a
+	// conservative multiple until parsing can be fully streamed.
+	MaxRequestMemoryReservation = 3 * MaxRequestBytes
+	MaxResponseBytes            = 64 * 1024 * 1024
+	MaxSpacesPerUser            = 100
+	MaxKeyEnvelopeBytes         = 4_096
+	MaxPairingSeconds           = 600
+	MaxPairingsPerSpace         = 16
+	MaxStorageBytesPerSpace     = int64(512 * 1024 * 1024)
+	MaxStorageBytesPerUser      = int64(2 * 1024 * 1024 * 1024)
+	MaxRecordsPerSpace          = int64(100_000)
+	MaxChangesPerSpace          = int64(250_000)
+	RecoveryAlgorithm           = "snippets-recovery-hkdf-sha256-aes256gcm-v1"
+	PairingAlgorithm            = "snippets-pairing-p256-hkdf-sha256-aes256gcm-v1"
 )
 
 type StorageQuota struct {

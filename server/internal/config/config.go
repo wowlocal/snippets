@@ -16,10 +16,10 @@ import (
 type Environment string
 
 const (
-	Development                       Environment = "development"
-	Testing                           Environment = "testing"
-	Production                        Environment = "production"
-	maximumChangesResponseReservation             = int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
+	Development                      Environment = "development"
+	Testing                          Environment = "testing"
+	Production                       Environment = "production"
+	maximumRecordResponseReservation             = int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
 )
 
 type OIDC struct {
@@ -33,6 +33,7 @@ type OIDC struct {
 	ClockSkew                 time.Duration
 	IdentityPepper            []byte
 	JWKSRefreshInterval       time.Duration
+	JWKSMaximumStaleness      time.Duration
 	UnknownKeyRefreshInterval time.Duration
 	UnknownKeyCacheTTL        time.Duration
 	StepUpAMR                 map[string]struct{}
@@ -44,6 +45,7 @@ type HTTP struct {
 	IdleTimeout          time.Duration
 	BodyTimeout          time.Duration
 	RequestTimeout       time.Duration
+	ShutdownTimeout      time.Duration
 	ReadinessTimeout     time.Duration
 	MaximumConnections   int
 	MaximumConcurrent    int
@@ -209,6 +211,10 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
+	maximumStaleness, err := positive("OIDC_JWKS_MAX_STALENESS_SECONDS", 3600)
+	if err != nil {
+		return Server{}, err
+	}
 	unknownRefresh, err := positive("OIDC_UNKNOWN_KID_REFRESH_SECONDS", 60)
 	if err != nil {
 		return Server{}, err
@@ -237,7 +243,7 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if len(stepAMR)+len(stepACR) == 0 || len(stepAMR) > 16 || len(stepACR) > 16 {
 		return Server{}, errors.New("invalid OIDC step-up assurance values")
 	}
-	if maximumTokenAge < 60 || maximumTokenAge > 86400 || clockSkew > 300 || refresh < 60 || unknownRefresh < 60 || unknownRefresh > refresh || unknownTTL < unknownRefresh || unknownTTL > 3600 || stepUpAge < 60 || stepUpAge > 3600 {
+	if maximumTokenAge < 60 || maximumTokenAge > 86400 || clockSkew > 300 || refresh < 60 || refresh > 3600 || maximumStaleness < refresh || maximumStaleness > 86400 || unknownRefresh < 60 || unknownRefresh > refresh || unknownTTL < unknownRefresh || unknownTTL > 3600 || stepUpAge < 60 || stepUpAge > 3600 {
 		return Server{}, errors.New("invalid OIDC timing")
 	}
 	if environment == Production {
@@ -262,6 +268,10 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 		return Server{}, err
 	}
 	requestTimeout, err := positive("HTTP_REQUEST_TIMEOUT_SECONDS", 25)
+	if err != nil {
+		return Server{}, err
+	}
+	shutdownTimeout, err := positive("HTTP_SHUTDOWN_TIMEOUT_SECONDS", requestTimeout+10)
 	if err != nil {
 		return Server{}, err
 	}
@@ -301,7 +311,7 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
-	if port > 65535 || idle < 5 || idle > 300 || body < 5 || body > 120 || requestTimeout < body || requestTimeout > 120 || ready > 30 || maxConnections < 16 || maxConnections > 10000 || maxConcurrent < 8 || maxConcurrent > maxConnections || bodyBudget < domain.MaxRequestBytes || int64(bodyBudget) > 4*1024*1024*1024 || int64(responseBudget) < maximumChangesResponseReservation || int64(responseBudget) > 4*1024*1024*1024 || globalBurst < globalRate || principalBurst < principalRate {
+	if port > 65535 || idle < 5 || idle > 300 || body < 5 || body > 120 || requestTimeout < body || requestTimeout > 120 || shutdownTimeout < requestTimeout+5 || shutdownTimeout > 300 || ready > 30 || maxConnections < 16 || maxConnections > 10000 || maxConcurrent < 8 || maxConcurrent > maxConnections || bodyBudget < domain.MaxRequestMemoryReservation || int64(bodyBudget) > 4*1024*1024*1024 || int64(responseBudget) < maximumRecordResponseReservation || int64(responseBudget) > 4*1024*1024*1024 || globalBurst < globalRate || principalBurst < principalRate {
 		return Server{}, errors.New("invalid HTTP configuration")
 	}
 	dbPort, err := positive("DATABASE_PORT", 5432)
@@ -390,8 +400,8 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	}
 	return Server{
 		Environment: environment, BindHost: bindHost, Port: port, PublicBaseURL: publicBase, ServerInstanceID: instanceID, ServerVersion: serverVersion, TokenSecret: tokenSecret,
-		OIDC:     OIDC{Issuer: issuer, Audience: audience, ClientID: clientID, Scopes: scopes, JWKSURL: jwksURL, AllowedAlgorithms: algorithms, MaximumTokenAge: time.Duration(maximumTokenAge) * time.Second, ClockSkew: time.Duration(clockSkew) * time.Second, IdentityPepper: pepper, JWKSRefreshInterval: time.Duration(refresh) * time.Second, UnknownKeyRefreshInterval: time.Duration(unknownRefresh) * time.Second, UnknownKeyCacheTTL: time.Duration(unknownTTL) * time.Second, StepUpAMR: stepAMR, StepUpACR: stepACR, StepUpMaximumAge: time.Duration(stepUpAge) * time.Second},
-		HTTP:     HTTP{IdleTimeout: time.Duration(idle) * time.Second, BodyTimeout: time.Duration(body) * time.Second, RequestTimeout: time.Duration(requestTimeout) * time.Second, ReadinessTimeout: time.Duration(ready) * time.Second, MaximumConnections: maxConnections, MaximumConcurrent: maxConcurrent, BodyMemoryBudget: int64(bodyBudget), ResponseMemoryBudget: int64(responseBudget), GlobalRate: globalRate, GlobalBurst: globalBurst, PrincipalRate: principalRate, PrincipalBurst: principalBurst},
+		OIDC:     OIDC{Issuer: issuer, Audience: audience, ClientID: clientID, Scopes: scopes, JWKSURL: jwksURL, AllowedAlgorithms: algorithms, MaximumTokenAge: time.Duration(maximumTokenAge) * time.Second, ClockSkew: time.Duration(clockSkew) * time.Second, IdentityPepper: pepper, JWKSRefreshInterval: time.Duration(refresh) * time.Second, JWKSMaximumStaleness: time.Duration(maximumStaleness) * time.Second, UnknownKeyRefreshInterval: time.Duration(unknownRefresh) * time.Second, UnknownKeyCacheTTL: time.Duration(unknownTTL) * time.Second, StepUpAMR: stepAMR, StepUpACR: stepACR, StepUpMaximumAge: time.Duration(stepUpAge) * time.Second},
+		HTTP:     HTTP{IdleTimeout: time.Duration(idle) * time.Second, BodyTimeout: time.Duration(body) * time.Second, RequestTimeout: time.Duration(requestTimeout) * time.Second, ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second, ReadinessTimeout: time.Duration(ready) * time.Second, MaximumConnections: maxConnections, MaximumConcurrent: maxConcurrent, BodyMemoryBudget: int64(bodyBudget), ResponseMemoryBudget: int64(responseBudget), GlobalRate: globalRate, GlobalBurst: globalBurst, PrincipalRate: principalRate, PrincipalBurst: principalBurst},
 		Database: Database{Host: dbHost, Port: dbPort, Name: dbName, RuntimeUser: dbUser, RuntimePassword: dbPassword, TLSMode: tlsMode, TLSRootCert: tlsRootCert, ChannelBinding: channelBinding, RequireAuth: requireAuth, ConnectTimeout: time.Duration(dbConnectTimeout) * time.Second, StatementTimeout: time.Duration(dbStatementTimeout) * time.Second, LockTimeout: time.Duration(dbLockTimeout) * time.Second, MaxConnections: int32(dbMax)},
 	}, nil
 }

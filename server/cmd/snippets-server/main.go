@@ -66,7 +66,7 @@ func main() {
 	logger.Info("server_started", "port", configuration.Port)
 	select {
 	case <-ctx.Done():
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), configuration.HTTP.ShutdownTimeout)
 		defer shutdownCancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			logger.Error("shutdown_failed", "error_code", "shutdown_timeout")

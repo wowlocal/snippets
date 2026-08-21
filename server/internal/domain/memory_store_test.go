@@ -276,17 +276,13 @@ func TestChangeHistoryCompactionRotatesFeedBeforeQuotaExhaustion(t *testing.T) {
 	for revision := 2; revision <= 20; revision++ {
 		item := BatchItem{Record: WireRecord{ID: recordID, Rev: string(rune('a' + revision)), Blob: []byte("value")}, ExpectedRecordVersion: &version}
 		result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{item})
-		if AsServiceError(err).Code == CursorInvalid {
-			compacted = true
-			space, err = store.GetSpace(context.Background(), owner, space.Scope.SpaceID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result, err = store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{item})
-		}
 		if err != nil || result.Outcomes[0].Kind != "accepted" {
-			t.Fatalf("revision %d was not accepted after maintenance: %v %#v", revision, err, result)
+			t.Fatalf("revision %d was not accepted with maintenance: %v %#v", revision, err, result)
 		}
+		if result.Scope.FeedEpoch != space.Scope.FeedEpoch {
+			compacted = true
+		}
+		space.Scope = result.Scope
 		version = *result.Outcomes[0].RecordVersion
 	}
 	if !compacted {
@@ -300,6 +296,88 @@ func TestChangeHistoryCompactionRotatesFeedBeforeQuotaExhaustion(t *testing.T) {
 	store.mu.Unlock()
 	if changeCount > int(quota.MaxChangesPerSpace) {
 		t.Fatalf("compacted history exceeded quota: %d", changeCount)
+	}
+}
+
+func TestCompactedBaselineDoesNotRotateAgainWithoutReclaimableHistory(t *testing.T) {
+	quota := StorageQuota{MaxBytesPerSpace: 1_000, MaxBytesPerUser: 10_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 100}
+	store := newTestStore(t, quota)
+	owner := principal(1)
+	space, err := store.CreateSpace(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := make([]BatchItem, 48)
+	for index := range items {
+		items[index] = BatchItem{Record: WireRecord{ID: uuid.New(), Rev: "r", Blob: bytesOf(byte(index), 9)}}
+	}
+	created, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, items)
+	if err != nil || created.Scope.FeedEpoch != space.Scope.FeedEpoch {
+		t.Fatalf("baseline setup unexpectedly rotated: %v %#v", err, created.Scope)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: WireRecord{ID: uuid.New(), Rev: "r", Blob: []byte("x")}}})
+		if err != nil || result.Outcomes[0].Kind != "accepted" || result.Scope.FeedEpoch != space.Scope.FeedEpoch {
+			t.Fatalf("small write %d looped baseline compaction: %v %#v", attempt, err, result)
+		}
+	}
+}
+
+func TestRejectedSubmitsDoNotRotateFeedAtCompactionThreshold(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(Scope, uuid.UUID) BatchItem
+		stale  bool
+	}{
+		{name: "stale scope", mutate: func(_ Scope, _ uuid.UUID) BatchItem { return BatchItem{Record: WireRecord{ID: uuid.New(), Rev: "r"}} }, stale: true},
+		{name: "CAS conflict", mutate: func(_ Scope, id uuid.UUID) BatchItem {
+			wrong := strings.Repeat("x", 32)
+			return BatchItem{Record: WireRecord{ID: id, Rev: "next"}, ExpectedRecordVersion: &wrong}
+		}},
+		{name: "invalid record", mutate: func(_ Scope, _ uuid.UUID) BatchItem {
+			return BatchItem{Record: WireRecord{ID: uuid.New(), Rev: strings.Repeat("x", 257)}}
+		}},
+		{name: "quota rejection", mutate: func(_ Scope, _ uuid.UUID) BatchItem {
+			return BatchItem{Record: WireRecord{ID: uuid.New(), Rev: "r", Blob: bytesOf(9, 100)}}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			quota := StorageQuota{MaxBytesPerSpace: 100, MaxBytesPerUser: 1_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 5}
+			store := newTestStore(t, quota)
+			owner := principal(1)
+			space, err := store.CreateSpace(context.Background(), owner, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recordID := uuid.New()
+			if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: WireRecord{ID: recordID, Rev: "r", Blob: []byte("x")}}}); err != nil {
+				t.Fatal(err)
+			}
+			store.mu.Lock()
+			state := store.spaces[space.Scope.SpaceID]
+			baseline := state.changes[0]
+			for len(state.changes) < int(quota.MaxChangesPerSpace) {
+				state.nextSequence++
+				change := baseline
+				change.sequence = state.nextSequence
+				state.changes = append(state.changes, change)
+			}
+			feedBefore, changesBefore := state.feedEpoch, len(state.changes)
+			store.mu.Unlock()
+
+			expected := space.Scope
+			if test.stale {
+				expected.FeedEpoch = uuid.New()
+			}
+			_, _ = store.Submit(context.Background(), owner, space.Scope.SpaceID, expected, []BatchItem{test.mutate(space.Scope, recordID)})
+			store.mu.Lock()
+			feedAfter, changesAfter := state.feedEpoch, len(state.changes)
+			store.mu.Unlock()
+			if feedAfter != feedBefore || changesAfter != changesBefore {
+				t.Fatalf("rejected submit performed compaction: feed %s -> %s, changes %d -> %d", feedBefore, feedAfter, changesBefore, changesAfter)
+			}
+		})
 	}
 }
 
@@ -412,8 +490,9 @@ func TestPairingApprovalClaimAndIdempotentCancellation(t *testing.T) {
 	if err != nil || string(claimed.Ciphertext) != "sealed" {
 		t.Fatalf("claim: %v %#v", err, claimed)
 	}
-	if _, _, err := store.ClaimPairing(context.Background(), owner, space.Scope.SpaceID, pairing.ID); AsServiceError(err).Code != NotFound {
-		t.Fatalf("second claim: %v", err)
+	_, replayed, err := store.ClaimPairing(context.Background(), owner, space.Scope.SpaceID, pairing.ID)
+	if err != nil || string(replayed.Ciphertext) != "sealed" {
+		t.Fatalf("idempotent second claim: %v %#v", err, replayed)
 	}
 	if err := store.CancelPairing(context.Background(), owner, space.Scope.SpaceID, pairing.ID); err != nil {
 		t.Fatalf("idempotent cancellation failed: %v", err)

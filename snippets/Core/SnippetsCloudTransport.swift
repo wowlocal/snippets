@@ -201,10 +201,21 @@ actor SnippetsCloudTransport: SyncTransport {
                 _ = try await currentScope()
                 throw failure
             }
-            try validate(
-                response.scope,
-                against: established.identity,
-                datasetIdentity: established.datasetIdentity)
+            if response.scope != expectedScope {
+                // History maintenance is committed with the accepted mutation. The
+                // response therefore may advance only the feed epoch; adopt it for
+                // later chunks while keeping account and dataset boundaries pinned.
+                try adoptFeedRotation(
+                    response.scope,
+                    expectedIdentity: established.identity,
+                    expectedDatasetIdentity: established.datasetIdentity)
+                expectedScope = response.scope
+            } else {
+                try validate(
+                    response.scope,
+                    against: established.identity,
+                    datasetIdentity: established.datasetIdentity)
+            }
             guard response.outcomes.count == chunk.count else {
                 throw SyncTransportFailure.unreachable(detail: "invalid_batch_response")
             }

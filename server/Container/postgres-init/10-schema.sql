@@ -1,5 +1,19 @@
 BEGIN;
 
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'snippets_function_owner') THEN
+        EXECUTE 'CREATE ROLE snippets_function_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles
+        WHERE rolname = 'snippets_function_owner' AND rolbypassrls AND NOT rolcanlogin
+    ) THEN
+        RAISE EXCEPTION 'snippets_function_owner must be NOLOGIN BYPASSRLS';
+    END IF;
+END
+$$;
+
 CREATE SCHEMA snippets_private;
 REVOKE ALL ON SCHEMA snippets_private FROM PUBLIC;
 
@@ -7,7 +21,7 @@ CREATE TABLE snippets_private.schema_migrations (
     version bigint PRIMARY KEY CHECK (version > 0),
     applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-INSERT INTO snippets_private.schema_migrations(version) VALUES (1);
+INSERT INTO snippets_private.schema_migrations(version) VALUES (2);
 
 CREATE TABLE users (
     id uuid PRIMARY KEY,
@@ -101,11 +115,15 @@ CREATE TABLE pairings (
     algorithm text CHECK (algorithm IS NULL OR algorithm = 'snippets-pairing-p256-hkdf-sha256-aes256gcm-v1'),
     ciphertext bytea CHECK (ciphertext IS NULL OR octet_length(ciphertext) <= 4096),
     approved_at timestamptz,
+    claimed_by_user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+    claimed_at timestamptz,
     expires_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (space_id, pairing_id),
     CHECK ((approved_at IS NULL AND algorithm IS NULL AND ciphertext IS NULL)
-        OR (approved_at IS NOT NULL AND algorithm IS NOT NULL AND ciphertext IS NOT NULL))
+        OR (approved_at IS NOT NULL AND algorithm IS NOT NULL AND ciphertext IS NOT NULL)),
+    CONSTRAINT pairings_claim_consistency CHECK ((claimed_by_user_id IS NULL AND claimed_at IS NULL)
+        OR (claimed_by_user_id IS NOT NULL AND claimed_at IS NOT NULL AND approved_at IS NOT NULL))
 );
 CREATE INDEX pairings_expiry_idx ON pairings(expires_at);
 
@@ -202,29 +220,53 @@ END
 $$;
 
 CREATE OR REPLACE FUNCTION snippets_private.compact_change_history_if_needed(
-    target_space uuid, incoming_change_bytes bigint, incoming_change_count bigint
+    target_space uuid, current_byte_delta bigint, new_change_bytes bigint,
+    record_count_delta bigint, force_for_capacity boolean
 ) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
     owner_id uuid; current_bytes bigint; history_bytes bigint; records_count bigint;
-    changes_count bigint; owner_bytes bigint;
+    changes_count bigint; owner_bytes bigint; write_fits boolean;
 BEGIN
-    IF incoming_change_bytes NOT BETWEEN 0 AND 45012800 OR incoming_change_count NOT BETWEEN 0 AND 50
+    IF current_byte_delta NOT BETWEEN -900256 AND 900256
+       OR new_change_bytes NOT BETWEEN 0 AND 900256 OR record_count_delta NOT IN (0, 1)
        OR NOT snippets_private.can_write_space(target_space) THEN RETURN false; END IF;
     SELECT owner_user_id, current_record_bytes, change_history_bytes, record_count, change_count
       INTO owner_id, current_bytes, history_bytes, records_count, changes_count
       FROM public.spaces WHERE id = target_space FOR UPDATE;
-    IF NOT FOUND OR (changes_count + incoming_change_count <= 200000
-       AND current_bytes + history_bytes + incoming_change_bytes <= 503316480) THEN RETURN false; END IF;
+    IF NOT FOUND THEN RETURN false; END IF;
     SELECT storage_bytes INTO owner_bytes FROM public.users WHERE id = owner_id FOR UPDATE;
-    -- A compacted feed contains one immutable baseline version per current record.
-    -- If even that baseline cannot fit, preserve the old feed and let the normal
-    -- quota response fail closed rather than discarding history.
-    IF current_bytes * 2 + incoming_change_bytes > 536870912
-       OR records_count + incoming_change_count > 250000
-       OR owner_bytes - history_bytes + current_bytes + incoming_change_bytes > 2147483648 THEN
-        RETURN false;
+    IF NOT FOUND THEN RETURN false; END IF;
+
+    write_fits := current_bytes + current_byte_delta >= 0
+      AND current_bytes + current_byte_delta + history_bytes + new_change_bytes <= 536870912
+      AND records_count + record_count_delta <= 100000 AND changes_count + 1 <= 250000
+      AND owner_bytes + current_byte_delta + new_change_bytes BETWEEN 0 AND 2147483648;
+
+    IF force_for_capacity THEN
+        -- The caller already established payload validity and CAS success. Rotate
+        -- only when reclaiming history makes this exact write fit every hard quota.
+        IF write_fits OR (history_bytes <= current_bytes AND changes_count <= records_count)
+           OR current_bytes * 2 + current_byte_delta + new_change_bytes > 536870912
+           OR records_count + record_count_delta > 100000
+           OR records_count + 1 > 250000
+           OR owner_bytes - history_bytes + current_bytes + current_byte_delta + new_change_bytes
+                NOT BETWEEN 0 AND 2147483648 THEN
+            RETURN false;
+        END IF;
+    ELSE
+        IF current_byte_delta <> 0 OR new_change_bytes <> 0 OR record_count_delta <> 0 THEN RETURN false; END IF;
+        -- High-water plus a minimum reclaimable delta provides hysteresis. A
+        -- baseline by itself can never trigger another identical compaction.
+        IF (changes_count <= 200000 AND current_bytes + history_bytes <= 503316480)
+           OR (history_bytes - current_bytes < 33554432
+               AND changes_count - records_count < 25000)
+           OR current_bytes * 2 > 536870912 OR records_count > 250000
+           OR owner_bytes - history_bytes + current_bytes NOT BETWEEN 0 AND 2147483648 THEN
+            RETURN false;
+        END IF;
     END IF;
+
     UPDATE public.spaces SET feed_epoch = gen_random_uuid(), next_sequence = 0 WHERE id = target_space;
     DELETE FROM public.changes WHERE space_id = target_space;
     INSERT INTO public.changes(space_id, sequence, record_id, rev, deleted, blob, record_generation)
@@ -357,6 +399,27 @@ ALTER TABLE pairings ENABLE ROW LEVEL SECURITY; ALTER TABLE pairings FORCE ROW L
 CREATE POLICY pairings_select ON pairings FOR SELECT USING (snippets_private.is_space_member(space_id));
 CREATE POLICY pairings_write ON pairings FOR ALL USING (snippets_private.can_write_space(space_id)) WITH CHECK (snippets_private.can_write_space(space_id));
 
+GRANT USAGE ON SCHEMA public TO snippets_function_owner;
+GRANT USAGE, CREATE ON SCHEMA snippets_private TO snippets_function_owner;
+GRANT SELECT, INSERT, UPDATE, DELETE ON users, identities, spaces, space_memberships,
+  space_creation_requests, records, changes, recovery_envelopes, pairings TO snippets_function_owner;
+GRANT SELECT, INSERT, UPDATE, DELETE ON snippets_private.revoked_access_tokens TO snippets_function_owner;
+ALTER FUNCTION snippets_private.current_user_id() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.is_space_member(uuid) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.is_personal_space_owner(uuid) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.can_write_space(uuid) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.owns_space(uuid) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.resolve_identity(bytea, uuid) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.lock_storage_quota(uuid) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.record_write_within_quota(uuid, bigint, bigint, bigint) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.compact_change_history_if_needed(uuid, bigint, bigint, bigint, boolean) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_record_storage() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_change_storage() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_deleted_space_storage() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.rotate_dataset_after_restore(uuid) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.is_access_token_revoked(bytea) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.revoke_access_token(bytea, timestamptz) OWNER TO snippets_function_owner;
+
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA snippets_private FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA snippets_private FROM PUBLIC;
@@ -365,7 +428,7 @@ GRANT EXECUTE ON FUNCTION snippets_private.current_user_id(), snippets_private.i
   snippets_private.is_personal_space_owner(uuid), snippets_private.can_write_space(uuid), snippets_private.owns_space(uuid),
   snippets_private.resolve_identity(bytea, uuid), snippets_private.lock_storage_quota(uuid),
   snippets_private.record_write_within_quota(uuid, bigint, bigint, bigint),
-  snippets_private.compact_change_history_if_needed(uuid, bigint, bigint), snippets_private.is_access_token_revoked(bytea),
+  snippets_private.compact_change_history_if_needed(uuid, bigint, bigint, bigint, boolean), snippets_private.is_access_token_revoked(bytea),
   snippets_private.revoke_access_token(bytea, timestamptz) TO snippets_runtime;
 GRANT SELECT ON users TO snippets_runtime;
 GRANT SELECT ON snippets_private.schema_migrations TO snippets_runtime;
@@ -375,11 +438,19 @@ GRANT INSERT ON space_memberships, space_creation_requests, records, changes, re
 GRANT UPDATE (next_sequence) ON spaces TO snippets_runtime;
 GRANT UPDATE (rev, deleted, blob, record_generation, last_sequence, updated_at) ON records TO snippets_runtime;
 GRANT UPDATE (version, key_epoch, algorithm, ciphertext, created_at, updated_at) ON recovery_envelopes TO snippets_runtime;
-GRANT UPDATE (algorithm, ciphertext, approved_at) ON pairings TO snippets_runtime;
+GRANT UPDATE (algorithm, ciphertext, approved_at, claimed_by_user_id, claimed_at) ON pairings TO snippets_runtime;
 GRANT DELETE ON pairings TO snippets_runtime;
 
 -- Deliberately not granted to snippets_runtime: only the database owner
 -- invokes restore rotation after verified restore or accepted data loss.
 REVOKE ALL ON FUNCTION snippets_private.rotate_dataset_after_restore(uuid) FROM snippets_runtime;
+DO $$
+BEGIN
+    EXECUTE format(
+        'GRANT EXECUTE ON FUNCTION snippets_private.rotate_dataset_after_restore(uuid) TO %I',
+        current_user
+    );
+END
+$$;
 
 COMMIT;

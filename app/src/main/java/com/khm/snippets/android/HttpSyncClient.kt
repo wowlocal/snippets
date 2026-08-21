@@ -20,7 +20,11 @@ class HttpSyncClient {
         val feedEpoch: String,
     )
 
-    data class PushResult(val records: String, val hadConflict: Boolean)
+    data class PushResult(
+        val records: String,
+        val hadConflict: Boolean,
+        val feedEpoch: String,
+    )
 
     data class SpaceResolution(val spaceID: String, val serverInstanceID: String)
 
@@ -125,6 +129,7 @@ class HttpSyncClient {
         val recordsByID = recordsByID(cachedRecords)
         val offers = JSONArray(offersJSON)
         var hadConflict = false
+        var feedEpoch = requireNotNull(configuration.feedEpoch)
 
         var offset = 0
         while (offset < offers.length()) {
@@ -151,7 +156,7 @@ class HttpSyncClient {
                 .put("spaceId", configuration.spaceID)
                 .put("scopeBinding", requireNotNull(configuration.scopeBinding))
                 .put("datasetGeneration", requireNotNull(configuration.datasetGeneration))
-                .put("feedEpoch", requireNotNull(configuration.feedEpoch))
+                .put("feedEpoch", feedEpoch)
             val response = JSONObject(request(
                 configuration, "POST",
                 "v2/spaces/${configuration.spaceID}/records/batch",
@@ -160,7 +165,12 @@ class HttpSyncClient {
                     .put("items", items)
                     .toString(),
                 accessToken))
-            validateScope(configuration, response.getJSONObject("scope"))
+            val responseScope = response.getJSONObject("scope")
+            // A successful mutation may atomically compact history and return a
+            // newer feed. Account, membership, and dataset remain pinned; only the
+            // cursor-maintenance epoch may advance between chunks.
+            validateScope(configuration.copy(feedEpoch = null), responseScope)
+            feedEpoch = validatedUUID(responseScope.getString("feedEpoch"))
             val outcomes = response.getJSONArray("outcomes")
             check(outcomes.length() == batch.size)
 
@@ -188,7 +198,7 @@ class HttpSyncClient {
             offset += count
         }
 
-        return PushResult(recordsJSON(recordsByID.values), hadConflict)
+        return PushResult(recordsJSON(recordsByID.values), hadConflict, feedEpoch)
     }
 
     private fun request(

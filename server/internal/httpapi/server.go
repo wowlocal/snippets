@@ -36,6 +36,8 @@ type Server struct {
 	handler       http.Handler
 }
 
+const maximumRecordResponseReservation = int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
+
 func NewServer(configuration config.Server, store domain.Store, validator auth.Validator, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -120,8 +122,7 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 			writeProblem(statusWriter, domain.ErrorWithRetry(domain.RateLimited, 1))
 			return
 		}
-		if operation == "get_changes" && s.configuration.HTTP.ResponseMemoryBudget > 0 {
-			reservation := int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
+		if reservation := responseMemoryReservation(operation); reservation > 0 && s.configuration.HTTP.ResponseMemoryBudget > 0 {
 			if s.responseBytes.Add(reservation) > s.configuration.HTTP.ResponseMemoryBudget {
 				s.responseBytes.Add(-reservation)
 				writeProblem(statusWriter, domain.ErrorWithRetry(domain.RateLimited, 1))
@@ -138,6 +139,18 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(statusWriter, r)
 	})
+}
+
+func responseMemoryReservation(operation string) int64 {
+	switch operation {
+	case "get_changes", "submit_records":
+		// Both operations can materialize a full page of ciphertext and then a
+		// Base64-expanded JSON response. Submit needs this reservation for the
+		// authoritative records returned by a worst-case all-conflict batch.
+		return maximumRecordResponseReservation
+	default:
+		return 0
+	}
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -200,9 +213,9 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 			writeProblem(w, domain.ErrorWithLimit(domain.PayloadTooLarge, domain.MaxRequestBytes))
 			return
 		}
-		reservation := int64(domain.MaxRequestBytes)
+		reservation := int64(domain.MaxRequestMemoryReservation)
 		if r.ContentLength >= 0 {
-			reservation = r.ContentLength
+			reservation = r.ContentLength * int64(domain.MaxRequestMemoryReservation/domain.MaxRequestBytes)
 		}
 		if reservation < 1 {
 			reservation = 1
@@ -337,30 +350,9 @@ func validateStrictBody(operation string, body []byte) error {
 	if err := rejectDuplicateJSONKeys(body); err != nil {
 		return domain.NewError(domain.InvalidRequest)
 	}
-	var target any
-	switch operation {
-	case "submit_records":
-		target = &api.BatchRequest{}
-	case "put_recovery_envelope":
-		target = &api.PutRecoveryEnvelopeRequest{}
-	case "create_pairing":
-		target = &api.CreatePairingRequest{}
-	case "approve_pairing":
-		target = &api.ApprovePairingRequest{}
-	default:
-		return domain.NewError(domain.InvalidRequest)
-	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return domain.NewError(domain.InvalidRequest)
-	}
-	if err := ensureEOF(decoder); err != nil {
-		return domain.NewError(domain.InvalidRequest)
-	}
-	var raw any
-	decoder = json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
+	var raw any
 	if err := decoder.Decode(&raw); err != nil {
 		return domain.NewError(domain.InvalidRequest)
 	}

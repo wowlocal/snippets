@@ -196,14 +196,22 @@ func TestHealthChecksBypassUserConcurrencyAdmission(t *testing.T) {
 	}
 }
 
-func TestChangesResponseMemoryHasIndependentAdmissionBudget(t *testing.T) {
-	service, _, _, _ := testServer(t)
-	reservation := int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
-	service.configuration.HTTP.ResponseMemoryBudget = reservation
-	service.responseBytes.Store(reservation)
-	path := "/v2/spaces/00000000-0000-4000-8000-000000000001/changes"
-	response := perform(t, service.Handler(), http.MethodGet, path, "", "valid-token")
-	assertProblem(t, response, http.StatusTooManyRequests, domain.RateLimited)
+func TestRecordResponsesShareIndependentMemoryAdmissionBudget(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/v2/spaces/00000000-0000-4000-8000-000000000001/changes"},
+		{method: http.MethodPost, path: "/v2/spaces/00000000-0000-4000-8000-000000000001/records/batch", body: `{}`},
+	}
+	for _, test := range tests {
+		service, _, _, _ := testServer(t)
+		service.configuration.HTTP.ResponseMemoryBudget = maximumRecordResponseReservation
+		service.responseBytes.Store(maximumRecordResponseReservation)
+		response := perform(t, service.Handler(), test.method, test.path, test.body, "valid-token")
+		assertProblem(t, response, http.StatusTooManyRequests, domain.RateLimited)
+	}
 }
 
 func TestPanicRecoveryUsesCorrelatedRequestID(t *testing.T) {
@@ -343,7 +351,9 @@ func TestPairingEnvelopeIsReleasedOnlyByAtomicClaim(t *testing.T) {
 		t.Fatalf("claim did not release envelope: %d %s", claimed.Code, claimed.Body.String())
 	}
 	replay := perform(t, server, http.MethodPost, pairingPath+"/claim", "", "valid-token")
-	assertProblem(t, replay, http.StatusNotFound, domain.NotFound)
+	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), `"ciphertext":"AQID"`) {
+		t.Fatalf("claim retry was not idempotent: %d %s", replay.Code, replay.Body.String())
+	}
 }
 
 func testHTTPServer(t *testing.T) (http.Handler, *domain.MemoryStore, domain.Principal, *fakeValidator) {
