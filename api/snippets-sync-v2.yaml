@@ -135,6 +135,7 @@ paths:
         default: { $ref: '#/components/responses/Error' }
     put:
       operationId: putRecoveryEnvelope
+      x-snippets-auth-requirement: recent-phishing-resistant
       parameters:
         - { $ref: '#/components/parameters/SpaceID' }
       requestBody:
@@ -190,6 +191,7 @@ paths:
   /v2/spaces/{space}/pairings/{pairing}/approval:
     put:
       operationId: approvePairing
+      x-snippets-auth-requirement: recent-phishing-resistant
       parameters:
         - { $ref: '#/components/parameters/SpaceID' }
         - { $ref: '#/components/parameters/PairingID' }

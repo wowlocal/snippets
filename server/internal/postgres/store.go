@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -25,13 +26,66 @@ type Store struct {
 	codec            *domain.TokenCodec
 }
 
+const minimumSchemaVersion int64 = 1
+const maximumSchemaVersion int64 = 1
+
 func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool, error) {
+	poolConfig, err := newPoolConfig(configuration)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if err := validateSchemaCompatibility(ctx, pool); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
+}
+
+func validateSchemaCompatibility(ctx context.Context, pool *pgxpool.Pool) error {
+	var version int64
+	if err := pool.QueryRow(ctx, "SELECT coalesce(max(version),0) FROM snippets_private.schema_migrations").Scan(&version); err != nil {
+		return fmt.Errorf("database schema version unavailable: %w", err)
+	}
+	if version < minimumSchemaVersion || version > maximumSchemaVersion {
+		return fmt.Errorf("database schema version %d is outside supported range %d..%d", version, minimumSchemaVersion, maximumSchemaVersion)
+	}
+	return nil
+}
+
+func newPoolConfig(configuration config.Database) (*pgxpool.Config, error) {
+	query := url.Values{"sslmode": []string{configuration.TLSMode}}
+	if configuration.TLSRootCert != "" {
+		query.Set("sslrootcert", configuration.TLSRootCert)
+	}
+	if configuration.ChannelBinding != "" {
+		query.Set("channel_binding", configuration.ChannelBinding)
+	}
+	if configuration.RequireAuth != "" {
+		query.Set("require_auth", configuration.RequireAuth)
+	}
+	if configuration.ConnectTimeout > 0 {
+		query.Set("connect_timeout", strconv.Itoa(int(configuration.ConnectTimeout/time.Second)))
+	}
+	if configuration.StatementTimeout > 0 {
+		query.Set("statement_timeout", strconv.FormatInt(configuration.StatementTimeout.Milliseconds(), 10))
+	}
+	if configuration.LockTimeout > 0 {
+		query.Set("lock_timeout", strconv.FormatInt(configuration.LockTimeout.Milliseconds(), 10))
+	}
 	dsn := (&url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(configuration.RuntimeUser, configuration.RuntimePassword),
-		Host:     configuration.Host + ":" + strconv.Itoa(configuration.Port),
+		Host:     net.JoinHostPort(configuration.Host, strconv.Itoa(configuration.Port)),
 		Path:     "/" + configuration.Name,
-		RawQuery: url.Values{"sslmode": []string{configuration.TLSMode}}.Encode(),
+		RawQuery: query.Encode(),
 	}).String()
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -42,15 +96,7 @@ func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool,
 	poolConfig.MaxConnLifetime = 30 * time.Minute
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
 	poolConfig.HealthCheckPeriod = 30 * time.Second
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		return nil, err
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return pool, nil
+	return poolConfig, nil
 }
 
 func NewStore(pool *pgxpool.Pool, serverInstanceID uuid.UUID, tokenSecret []byte) (*Store, error) {
@@ -73,18 +119,31 @@ func (s *Store) IsAccessTokenRevoked(ctx context.Context, principal domain.Princ
 }
 
 func (s *Store) RevokeAccessToken(ctx context.Context, principal domain.Principal) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		err := s.revokeAccessTokenAttempt(ctx, principal)
+		if !isRetryableTransactionError(err) {
+			return mapDatabaseError(err)
+		}
+		if err := waitForTransactionRetry(ctx, attempt); err != nil {
+			return mapDatabaseError(err)
+		}
+	}
+	return domain.ErrorWithRetry(domain.DependencyUnavailable, 1)
+}
+
+func (s *Store) revokeAccessTokenAttempt(ctx context.Context, principal domain.Principal) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := lockCredential(ctx, tx, principal.CredentialDigest); err != nil {
+	if err := lockCredentialExclusive(ctx, tx, principal.CredentialDigest); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, "SELECT snippets_private.revoke_access_token($1, $2)", principal.CredentialDigest[:], principal.ExpiresAt); err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
-	return mapDatabaseError(tx.Commit(ctx))
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ListSpaces(ctx context.Context, principal domain.Principal) ([]domain.Space, error) {
@@ -243,8 +302,14 @@ func (s *Store) FetchChanges(ctx context.Context, principal domain.Principal, sp
 }
 
 func (s *Store) snapshot(ctx context.Context, tx pgx.Tx, space domain.Space, after *uuid.UUID, highWater int64, limit int) (domain.ChangesPage, error) {
-	rows, err := tx.Query(ctx, `SELECT record_id,rev,deleted,blob,record_generation FROM records
-        WHERE space_id=$1 AND ($2::uuid IS NULL OR record_id>$2) ORDER BY record_id LIMIT $3`, space.Scope.SpaceID, after, limit+1)
+	rows, err := tx.Query(ctx, `SELECT record_id,rev,deleted,blob,record_generation
+	        FROM (
+	            SELECT DISTINCT ON (record_id) record_id,rev,deleted,blob,record_generation
+	            FROM changes
+	            WHERE space_id=$1 AND sequence<=$2 AND ($3::uuid IS NULL OR record_id>$3)
+	            ORDER BY record_id,sequence DESC
+	        ) AS snapshot
+	        ORDER BY record_id LIMIT $4`, space.Scope.SpaceID, highWater, after, limit+1)
 	if err != nil {
 		return domain.ChangesPage{}, err
 	}
@@ -292,8 +357,26 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 		}
 		seen[item.Record.ID] = struct{}{}
 	}
+	var incomingChangeBytes int64
+	for _, item := range items {
+		incomingChangeBytes += int64(len(item.Record.Blob) + len([]byte(item.Record.Rev)))
+	}
+	compacted, err := s.compactChangeHistoryIfNeeded(ctx, principal, spaceID, incomingChangeBytes, int64(len(items)))
+	if err != nil {
+		return domain.BatchSubmission{}, err
+	}
+	if compacted {
+		return domain.BatchSubmission{}, domain.NewError(domain.CursorInvalid)
+	}
 	var result domain.BatchSubmission
-	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
+	err = s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
+		space, err := getSpace(ctx, tx, spaceID)
+		if err != nil {
+			return err
+		}
+		if !space.Role.CanWrite() {
+			return domain.NewError(domain.Forbidden)
+		}
 		// The quota lock serializes dataset/feed rotation with the scope read below.
 		// Checking an earlier unlocked snapshot would leave a window in which a stale
 		// create-only write could land in a newly restored dataset.
@@ -304,7 +387,7 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 		if !locked {
 			return domain.NewError(domain.NotFound)
 		}
-		space, err := getSpace(ctx, tx, spaceID)
+		space, err = getSpace(ctx, tx, spaceID)
 		if err != nil {
 			return err
 		}
@@ -364,11 +447,15 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 				outcomes[value.index] = domain.BatchOutcome{Kind: "conflict", AuthoritativeRecord: authoritative}
 				continue
 			}
+			blob := item.Record.Blob
+			if blob == nil {
+				blob = []byte{}
+			}
 			oldBytes := 0
 			if exists {
 				oldBytes = len(current.Blob) + len([]byte(current.Rev))
 			}
-			newBytes := len(item.Record.Blob) + len([]byte(item.Record.Rev))
+			newBytes := len(blob) + len([]byte(item.Record.Rev))
 			countDelta := int64(0)
 			if !exists {
 				countDelta = 1
@@ -388,14 +475,16 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 				return err
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO records(space_id,record_id,rev,deleted,blob,record_generation,last_sequence) VALUES($1,$2,$3,$4,$5,$6,$7)
-                    ON CONFLICT(space_id,record_id) DO UPDATE SET rev=EXCLUDED.rev,deleted=EXCLUDED.deleted,blob=EXCLUDED.blob,record_generation=EXCLUDED.record_generation,last_sequence=EXCLUDED.last_sequence,updated_at=clock_timestamp()`, spaceID, item.Record.ID, item.Record.Rev, item.Record.Deleted, item.Record.Blob, generation, sequence)
+				    ON CONFLICT(space_id,record_id) DO UPDATE SET rev=EXCLUDED.rev,deleted=EXCLUDED.deleted,blob=EXCLUDED.blob,record_generation=EXCLUDED.record_generation,last_sequence=EXCLUDED.last_sequence,updated_at=clock_timestamp()`, spaceID, item.Record.ID, item.Record.Rev, item.Record.Deleted, blob, generation, sequence)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, sequence, item.Record.ID, item.Record.Rev, item.Record.Deleted, item.Record.Blob, generation); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, sequence, item.Record.ID, item.Record.Rev, item.Record.Deleted, blob, generation); err != nil {
 				return err
 			}
-			serverRecord, err := s.makeServerRecord(space, item.Record, generation)
+			storedRecord := item.Record
+			storedRecord.Blob = blob
+			serverRecord, err := s.makeServerRecord(space, storedRecord, generation)
 			if err != nil {
 				return err
 			}
@@ -415,45 +504,107 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 	return result, err
 }
 
+func (s *Store) compactChangeHistoryIfNeeded(ctx context.Context, principal domain.Principal, spaceID uuid.UUID, incomingBytes, incomingCount int64) (bool, error) {
+	compacted := false
+	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
+		compacted = false
+		space, err := getSpace(ctx, tx, spaceID)
+		if err != nil {
+			return err
+		}
+		if !space.Role.CanWrite() {
+			return domain.NewError(domain.Forbidden)
+		}
+		var locked bool
+		if err := tx.QueryRow(ctx, "SELECT snippets_private.lock_storage_quota($1)", spaceID).Scan(&locked); err != nil {
+			return err
+		}
+		if !locked {
+			return domain.NewError(domain.NotFound)
+		}
+		return tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,$2,$3)", spaceID, incomingBytes, incomingCount).Scan(&compacted)
+	})
+	return compacted, err
+}
+
 func (s *Store) withPrincipal(ctx context.Context, principal domain.Principal, operation func(pgx.Tx, uuid.UUID) error) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		err := s.withPrincipalAttempt(ctx, principal, operation)
+		if !isRetryableTransactionError(err) {
+			return mapDatabaseError(err)
+		}
+		if err := waitForTransactionRetry(ctx, attempt); err != nil {
+			return mapDatabaseError(err)
+		}
+	}
+	return domain.ErrorWithRetry(domain.DependencyUnavailable, 1)
+}
+
+func (s *Store) withPrincipalAttempt(ctx context.Context, principal domain.Principal, operation func(pgx.Tx, uuid.UUID) error) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := lockCredential(ctx, tx, principal.CredentialDigest); err != nil {
+	if err := lockCredentialShared(ctx, tx, principal.CredentialDigest); err != nil {
 		return err
 	}
 	var revoked bool
 	if err := tx.QueryRow(ctx, "SELECT snippets_private.is_access_token_revoked($1)", principal.CredentialDigest[:]).Scan(&revoked); err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
 	if revoked {
 		return domain.NewError(domain.AuthenticationRequired)
 	}
 	userID := uuid.New()
 	if err := tx.QueryRow(ctx, "SELECT snippets_private.resolve_identity($1,$2)", principal.IdentityDigest[:], userID).Scan(&userID); err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.user_id',$1,true)", userID.String()); err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
 	var status string
 	if err := tx.QueryRow(ctx, "SELECT status FROM users WHERE id=$1", userID).Scan(&status); err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
 	if status != "active" {
 		return domain.NewError(domain.Forbidden)
 	}
 	if err := operation(tx, userID); err != nil {
-		return mapDatabaseError(err)
+		return err
 	}
-	return mapDatabaseError(tx.Commit(ctx))
+	return tx.Commit(ctx)
 }
 
-func lockCredential(ctx context.Context, tx pgx.Tx, digest [32]byte) error {
+func lockCredentialExclusive(ctx context.Context, tx pgx.Tx, digest [32]byte) error {
 	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(encode($1::bytea,'hex'), 11))", digest[:])
-	return mapDatabaseError(err)
+	return err
+}
+
+func lockCredentialShared(ctx context.Context, tx pgx.Tx, digest [32]byte) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock_shared(hashtextextended(encode($1::bytea,'hex'), 11))", digest[:])
+	return err
+}
+
+func isRetryableTransactionError(err error) bool {
+	var pgError *pgconn.PgError
+	return errors.As(err, &pgError) && (pgError.Code == "40001" || pgError.Code == "40P01")
+}
+
+func waitForTransactionRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(10*(1<<attempt)) * time.Millisecond
+	var jitter [1]byte
+	if _, err := rand.Read(jitter[:]); err == nil {
+		delay += time.Duration(jitter[0]%10) * time.Millisecond
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type rowScanner interface{ Scan(...any) error }
@@ -511,13 +662,13 @@ func mapDatabaseError(err error) error {
 			return domain.NewError(domain.Conflict)
 		case "23514", "22023", "22P02":
 			return domain.NewError(domain.InvalidRequest)
-		case "40001", "40P01":
-			return domain.ErrorWithRetry(domain.RateLimited, 1)
+		case "40001", "40P01", "55P03":
+			return domain.ErrorWithRetry(domain.DependencyUnavailable, 1)
 		case "42501":
 			return domain.NewError(domain.Forbidden)
 		}
 	}
-	return fmt.Errorf("database operation failed: %w", domain.NewError(domain.DependencyUnavailable))
+	return fmt.Errorf("database operation failed: %w: %w", domain.NewError(domain.DependencyUnavailable), err)
 }
 
 var _ domain.Store = (*Store)(nil)

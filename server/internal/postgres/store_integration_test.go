@@ -21,7 +21,7 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	}
 	port, _ := strconv.Atoi(os.Getenv("DATABASE_PORT"))
 	ctx := context.Background()
-	pool, err := NewPool(ctx, config.Database{Host: os.Getenv("DATABASE_HOST"), Port: port, Name: os.Getenv("DATABASE_NAME"), RuntimeUser: os.Getenv("DATABASE_RUNTIME_USER"), RuntimePassword: os.Getenv("DATABASE_RUNTIME_PASSWORD"), TLSMode: os.Getenv("DATABASE_TLS_MODE"), MaxConnections: 8})
+	pool, err := NewPool(ctx, config.Database{Host: os.Getenv("DATABASE_HOST"), Port: port, Name: os.Getenv("DATABASE_NAME"), RuntimeUser: os.Getenv("DATABASE_RUNTIME_USER"), RuntimePassword: os.Getenv("DATABASE_RUNTIME_PASSWORD"), TLSMode: os.Getenv("DATABASE_TLS_MODE"), StatementTimeout: 2 * time.Second, LockTimeout: 250 * time.Millisecond, MaxConnections: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +74,26 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.ListSpaces(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	var secondUser uuid.UUID
+	if err := ownerPool.QueryRow(ctx, "SELECT user_id FROM identities WHERE identity_digest=$1", second.IdentityDigest[:]).Scan(&secondUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownerPool.Exec(ctx, "INSERT INTO space_memberships(space_id,user_id,role,scope_binding) VALUES($1,$2,'reader',$3)", space.Scope.SpaceID, secondUser, make([]byte, 32)); err != nil {
+		t.Fatal(err)
+	}
+	readerSpace, err := store.GetSpace(ctx, second, space.Scope.SpaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Submit(ctx, second, space.Scope.SpaceID, readerSpace.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: uuid.New(), Rev: "reader"}}}); domain.AsServiceError(err).Code != domain.Forbidden {
+		t.Fatalf("reader submit returned %v", err)
+	}
+	if err := store.CancelPairing(ctx, second, space.Scope.SpaceID, uuid.New()); domain.AsServiceError(err).Code != domain.Forbidden {
+		t.Fatalf("reader pairing cancellation returned %v", err)
+	}
 	wrong := "v2.invalid.invalid.invalid.invalid"
 	conflict, err := store.Submit(ctx, first, space.Scope.SpaceID, space.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: id, Rev: "2", Blob: []byte("other")}, ExpectedRecordVersion: &wrong}})
 	if err != nil {
@@ -103,11 +123,11 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	if err != nil || len(restoredPage.Records) != 1 || restoredPage.Records[0].RecordVersion == *created.Outcomes[0].RecordVersion {
 		t.Fatalf("restore snapshot/version failed: %v %#v", err, restoredPage)
 	}
-	var currentBytes int64
-	if err := ownerPool.QueryRow(ctx, "SELECT current_record_bytes FROM spaces WHERE id=$1", space.Scope.SpaceID).Scan(&currentBytes); err != nil {
+	var currentBytes, historyBytes int64
+	if err := ownerPool.QueryRow(ctx, "SELECT current_record_bytes,change_history_bytes FROM spaces WHERE id=$1", space.Scope.SpaceID).Scan(&currentBytes, &historyBytes); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET current_record_bytes=$2 WHERE id=$1", space.Scope.SpaceID, domain.MaxStorageBytesPerSpace); err != nil {
+	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET current_record_bytes=$2 WHERE id=$1", space.Scope.SpaceID, domain.MaxStorageBytesPerSpace-historyBytes); err != nil {
 		t.Fatal(err)
 	}
 	quota, err := store.Submit(ctx, first, space.Scope.SpaceID, restored.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: uuid.New(), Rev: "quota", Blob: []byte("opaque")}}})
@@ -117,11 +137,92 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET current_record_bytes=$2 WHERE id=$1", space.Scope.SpaceID, currentBytes); err != nil {
 		t.Fatal(err)
 	}
+	lockConnection, err := ownerPool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockConnection.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended(encode($1::bytea,'hex'),11))", first.CredentialDigest[:]); err != nil {
+		lockConnection.Release()
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, lockErr := store.ListSpaces(ctx, first)
+	if _, err := lockConnection.Exec(ctx, "SELECT pg_advisory_unlock(hashtextextended(encode($1::bytea,'hex'),11))", first.CredentialDigest[:]); err != nil {
+		lockConnection.Release()
+		t.Fatal(err)
+	}
+	lockConnection.Release()
+	if domain.AsServiceError(lockErr).Code != domain.DependencyUnavailable || time.Since(started) > time.Second {
+		t.Fatalf("credential lock timeout was not bounded: duration=%s error=%v", time.Since(started), lockErr)
+	}
 	if err := store.RevokeAccessToken(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.ListSpaces(ctx, first); domain.AsServiceError(err).Code != domain.AuthenticationRequired {
 		t.Fatalf("logout was not linearized: %v", err)
+	}
+}
+
+func TestPostgresSnapshotPaginationIsStableAcrossInterleavedWrites(t *testing.T) {
+	if os.Getenv("SNIPPETS_INTEGRATION_TESTS") != "1" {
+		t.Skip("set SNIPPETS_INTEGRATION_TESTS=1")
+	}
+	port, _ := strconv.Atoi(os.Getenv("DATABASE_PORT"))
+	ctx := context.Background()
+	pool, err := NewPool(ctx, config.Database{Host: os.Getenv("DATABASE_HOST"), Port: port, Name: os.Getenv("DATABASE_NAME"), RuntimeUser: os.Getenv("DATABASE_RUNTIME_USER"), RuntimePassword: os.Getenv("DATABASE_RUNTIME_PASSWORD"), TLSMode: os.Getenv("DATABASE_TLS_MODE"), StatementTimeout: 2 * time.Second, LockTimeout: 250 * time.Millisecond, MaxConnections: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := NewStore(pool, uuid.New(), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := integrationPrincipal(21)
+	space, err := store.CreateSpace(ctx, owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []uuid.UUID{
+		uuid.MustParse("10000000-0000-0000-0000-000000000001"),
+		uuid.MustParse("10000000-0000-0000-0000-000000000002"),
+		uuid.MustParse("10000000-0000-0000-0000-000000000003"),
+		uuid.MustParse("10000000-0000-0000-0000-000000000004"),
+		uuid.MustParse("10000000-0000-0000-0000-000000000005"),
+	}
+	items := make([]domain.BatchItem, 4)
+	for index := range items {
+		items[index] = domain.BatchItem{Record: domain.WireRecord{ID: ids[index], Rev: "1", Blob: []byte{byte(index)}}}
+	}
+	created, err := store.Submit(ctx, owner, space.Scope.SpaceID, space.Scope, items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.FetchChanges(ctx, owner, space.Scope.SpaceID, nil, 2)
+	if err != nil || !first.HasMore || len(first.Records) != 2 {
+		t.Fatalf("first snapshot page: %v %#v", err, first)
+	}
+	updateVersion := *created.Outcomes[2].RecordVersion
+	deleteVersion := *created.Outcomes[3].RecordVersion
+	_, err = store.Submit(ctx, owner, space.Scope.SpaceID, space.Scope, []domain.BatchItem{
+		{Record: domain.WireRecord{ID: ids[2], Rev: "2", Blob: []byte("updated")}, ExpectedRecordVersion: &updateVersion},
+		{Record: domain.WireRecord{ID: ids[3], Rev: "2", Deleted: true}, ExpectedRecordVersion: &deleteVersion},
+		{Record: domain.WireRecord{ID: ids[4], Rev: "1", Blob: []byte("new")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.FetchChanges(ctx, owner, space.Scope.SpaceID, &first.Cursor, 2)
+	if err != nil || second.HasMore || len(second.Records) != 2 {
+		t.Fatalf("second snapshot page: %v %#v", err, second)
+	}
+	if second.Records[0].Record.ID != ids[2] || second.Records[0].Record.Rev != "1" ||
+		second.Records[1].Record.ID != ids[3] || second.Records[1].Record.Rev != "1" || second.Records[1].Record.Deleted {
+		t.Fatalf("snapshot crossed its watermark: %#v", second.Records)
+	}
+	delta, err := store.FetchChanges(ctx, owner, space.Scope.SpaceID, &second.Cursor, 50)
+	if err != nil || delta.FullSnapshot || len(delta.Records) != 3 {
+		t.Fatalf("delta after snapshot: %v %#v", err, delta)
 	}
 }
 

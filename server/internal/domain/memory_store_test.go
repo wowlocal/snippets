@@ -32,7 +32,11 @@ func TestTokenCodecRoundTripAndTamper(t *testing.T) {
 	if decoded != payload {
 		t.Fatalf("roundtrip mismatch: %#v", decoded)
 	}
-	tampered := token[:len(token)-1] + "A"
+	replacement := "A"
+	if strings.HasSuffix(token, replacement) {
+		replacement = "B"
+	}
+	tampered := token[:len(token)-1] + replacement
 	if err := codec.Decode(tampered, &decoded); AsServiceError(err).Code != CursorInvalid {
 		t.Fatalf("tamper accepted: %v", err)
 	}
@@ -133,6 +137,29 @@ func TestBatchRejectsDuplicatesAndInvalidRecords(t *testing.T) {
 	}
 }
 
+func TestReaderCannotSubmitOrCancelPairing(t *testing.T) {
+	store := newTestStore(t, ProductionQuota)
+	owner, reader := principal(1), principal(2)
+	space, err := store.CreateSpace(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.spaces[space.Scope.SpaceID].memberships[digestKey(reader.IdentityDigest)] = memoryMembership{role: Reader, scopeBinding: randomScopeBinding()}
+	store.mu.Unlock()
+	readerSpace, err := store.GetSpace(context.Background(), reader, space.Scope.SpaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Submit(context.Background(), reader, space.Scope.SpaceID, readerSpace.Scope, []BatchItem{{Record: WireRecord{ID: uuid.New(), Rev: "1"}}})
+	if AsServiceError(err).Code != Forbidden {
+		t.Fatalf("reader submit returned %v", err)
+	}
+	if err := store.CancelPairing(context.Background(), reader, space.Scope.SpaceID, uuid.New()); AsServiceError(err).Code != Forbidden {
+		t.Fatalf("reader pairing cancellation returned %v", err)
+	}
+}
+
 func TestSnapshotPaginationThenDelta(t *testing.T) {
 	store := newTestStore(t, ProductionQuota)
 	owner := principal(1)
@@ -166,6 +193,113 @@ func TestSnapshotPaginationThenDelta(t *testing.T) {
 	delta, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, &second.Cursor, 50)
 	if err != nil || delta.FullSnapshot || len(delta.Records) != 1 || delta.Records[0].Record.ID != newRecord.ID {
 		t.Fatalf("delta mismatch: %v %#v", err, delta)
+	}
+}
+
+func TestSnapshotPaginationIsStableAcrossInterleavedWrites(t *testing.T) {
+	store := newTestStore(t, ProductionQuota)
+	owner := principal(1)
+	space, err := store.CreateSpace(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []uuid.UUID{
+		uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000002"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000003"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000004"),
+		uuid.MustParse("00000000-0000-0000-0000-000000000005"),
+	}
+	items := make([]BatchItem, 4)
+	for index := range items {
+		items[index] = BatchItem{Record: WireRecord{ID: ids[index], Rev: "1", Blob: []byte{byte(index)}}}
+	}
+	created, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, items)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, nil, 2)
+	if err != nil || !first.HasMore || len(first.Records) != 2 {
+		t.Fatalf("first snapshot page: %v %#v", err, first)
+	}
+	updateVersion := *created.Outcomes[2].RecordVersion
+	deleteVersion := *created.Outcomes[3].RecordVersion
+	mutations := []BatchItem{
+		{Record: WireRecord{ID: ids[2], Rev: "2", Blob: []byte("updated")}, ExpectedRecordVersion: &updateVersion},
+		{Record: WireRecord{ID: ids[3], Rev: "2", Deleted: true}, ExpectedRecordVersion: &deleteVersion},
+		{Record: WireRecord{ID: ids[4], Rev: "1", Blob: []byte("new")}},
+	}
+	if _, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, mutations); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, &first.Cursor, 2)
+	if err != nil || second.HasMore || len(second.Records) != 2 {
+		t.Fatalf("second snapshot page: %v %#v", err, second)
+	}
+	if second.Records[0].Record.ID != ids[2] || second.Records[0].Record.Rev != "1" ||
+		second.Records[1].Record.ID != ids[3] || second.Records[1].Record.Rev != "1" || second.Records[1].Record.Deleted {
+		t.Fatalf("snapshot crossed its watermark: %#v", second.Records)
+	}
+
+	delta, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, &second.Cursor, 50)
+	if err != nil || delta.FullSnapshot || len(delta.Records) != 3 {
+		t.Fatalf("delta after snapshot: %v %#v", err, delta)
+	}
+	if delta.Records[0].Record.ID != ids[2] || delta.Records[0].Record.Rev != "2" ||
+		delta.Records[1].Record.ID != ids[3] || !delta.Records[1].Record.Deleted ||
+		delta.Records[2].Record.ID != ids[4] {
+		t.Fatalf("interleaved writes were not preserved in delta order: %#v", delta.Records)
+	}
+}
+
+func TestChangeHistoryCompactionRotatesFeedBeforeQuotaExhaustion(t *testing.T) {
+	quota := StorageQuota{MaxBytesPerSpace: 10_000, MaxBytesPerUser: 100_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 5}
+	store := newTestStore(t, quota)
+	owner := principal(1)
+	space, err := store.CreateSpace(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordID := uuid.New()
+	created, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{Record: WireRecord{ID: recordID, Rev: "1", Blob: []byte("value")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := *created.Outcomes[0].RecordVersion
+	oldFeedPage, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, nil, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compacted := false
+	for revision := 2; revision <= 20; revision++ {
+		item := BatchItem{Record: WireRecord{ID: recordID, Rev: string(rune('a' + revision)), Blob: []byte("value")}, ExpectedRecordVersion: &version}
+		result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{item})
+		if AsServiceError(err).Code == CursorInvalid {
+			compacted = true
+			space, err = store.GetSpace(context.Background(), owner, space.Scope.SpaceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err = store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{item})
+		}
+		if err != nil || result.Outcomes[0].Kind != "accepted" {
+			t.Fatalf("revision %d was not accepted after maintenance: %v %#v", revision, err, result)
+		}
+		version = *result.Outcomes[0].RecordVersion
+	}
+	if !compacted {
+		t.Fatal("history never compacted")
+	}
+	if _, err := store.FetchChanges(context.Background(), owner, space.Scope.SpaceID, &oldFeedPage.Cursor, 50); AsServiceError(err).Code != CursorInvalid {
+		t.Fatalf("old feed cursor survived compaction: %v", err)
+	}
+	store.mu.Lock()
+	changeCount := len(store.spaces[space.Scope.SpaceID].changes)
+	store.mu.Unlock()
+	if changeCount > int(quota.MaxChangesPerSpace) {
+		t.Fatalf("compacted history exceeded quota: %d", changeCount)
 	}
 }
 

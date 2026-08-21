@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -27,7 +28,13 @@ func main() {
 		logger.Error("startup_failed", "error_code", "invalid_configuration")
 		os.Exit(1)
 	}
-	debug.SetMemoryLimit(configuration.HTTP.BodyMemoryBudget + 128*1024*1024)
+	configuredMemoryLimit := configuration.HTTP.BodyMemoryBudget + configuration.HTTP.ResponseMemoryBudget + 128*1024*1024
+	processMemoryLimit, fitsContainer := boundedProcessMemoryLimit(configuredMemoryLimit)
+	if !fitsContainer {
+		logger.Error("startup_failed", "error_code", "memory_budget_exceeds_container")
+		os.Exit(1)
+	}
+	debug.SetMemoryLimit(processMemoryLimit)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	pool, err := postgres.NewPool(ctx, configuration.Database)
@@ -53,7 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 	limited := newLimitListener(listener, configuration.HTTP.MaximumConnections)
-	httpServer := &http.Server{Handler: service.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: configuration.HTTP.BodyTimeout + 5*time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: configuration.HTTP.IdleTimeout, MaxHeaderBytes: 32 * 1024}
+	httpServer := &http.Server{Handler: service.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: configuration.HTTP.BodyTimeout + 5*time.Second, WriteTimeout: configuration.HTTP.RequestTimeout + 5*time.Second, IdleTimeout: configuration.HTTP.IdleTimeout, MaxHeaderBytes: 32 * 1024}
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- httpServer.Serve(limited) }()
 	logger.Info("server_started", "port", configuration.Port)
@@ -74,22 +81,68 @@ func main() {
 	}
 }
 
+func boundedProcessMemoryLimit(configured int64) (int64, bool) {
+	values := make([]string, 0, 2)
+	for _, path := range []string{"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"} {
+		if data, err := os.ReadFile(path); err == nil {
+			values = append(values, strings.TrimSpace(string(data)))
+		}
+	}
+	return boundedProcessMemoryLimitFrom(configured, values)
+}
+
+func boundedProcessMemoryLimitFrom(configured int64, cgroupValues []string) (int64, bool) {
+	containerLimit := int64(0)
+	for _, raw := range cgroupValues {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 || value >= 1<<60 {
+			continue
+		}
+		if containerLimit == 0 || value < containerLimit {
+			containerLimit = value
+		}
+	}
+	if containerLimit == 0 {
+		return configured, true
+	}
+	safeContainerLimit := containerLimit / 100 * 85
+	if configured > safeContainerLimit {
+		return safeContainerLimit, false
+	}
+	return configured, true
+}
+
 type limitListener struct {
 	net.Listener
-	slots chan struct{}
+	slots     chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func newLimitListener(listener net.Listener, maximum int) *limitListener {
-	return &limitListener{Listener: listener, slots: make(chan struct{}, maximum)}
+	return &limitListener{Listener: listener, slots: make(chan struct{}, maximum), done: make(chan struct{})}
 }
 func (l *limitListener) Accept() (net.Conn, error) {
-	l.slots <- struct{}{}
+	select {
+	case l.slots <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
 	connection, err := l.Listener.Accept()
 	if err != nil {
 		<-l.slots
 		return nil, err
 	}
 	return &limitConnection{Conn: connection, release: func() { <-l.slots }}, nil
+}
+
+func (l *limitListener) Close() error {
+	l.closeOnce.Do(func() {
+		close(l.done)
+		l.closeErr = l.Listener.Close()
+	})
+	return l.closeErr
 }
 
 type limitConnection struct {

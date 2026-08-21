@@ -16,9 +16,10 @@ import (
 type Environment string
 
 const (
-	Development Environment = "development"
-	Testing     Environment = "testing"
-	Production  Environment = "production"
+	Development                       Environment = "development"
+	Testing                           Environment = "testing"
+	Production                        Environment = "production"
+	maximumChangesResponseReservation             = int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
 )
 
 type OIDC struct {
@@ -40,26 +41,34 @@ type OIDC struct {
 }
 
 type HTTP struct {
-	IdleTimeout        time.Duration
-	BodyTimeout        time.Duration
-	ReadinessTimeout   time.Duration
-	MaximumConnections int
-	MaximumConcurrent  int
-	BodyMemoryBudget   int64
-	GlobalRate         int
-	GlobalBurst        int
-	PrincipalRate      int
-	PrincipalBurst     int
+	IdleTimeout          time.Duration
+	BodyTimeout          time.Duration
+	RequestTimeout       time.Duration
+	ReadinessTimeout     time.Duration
+	MaximumConnections   int
+	MaximumConcurrent    int
+	BodyMemoryBudget     int64
+	ResponseMemoryBudget int64
+	GlobalRate           int
+	GlobalBurst          int
+	PrincipalRate        int
+	PrincipalBurst       int
 }
 
 type Database struct {
-	Host            string
-	Port            int
-	Name            string
-	RuntimeUser     string
-	RuntimePassword string
-	TLSMode         string
-	MaxConnections  int32
+	Host             string
+	Port             int
+	Name             string
+	RuntimeUser      string
+	RuntimePassword  string
+	TLSMode          string
+	TLSRootCert      string
+	ChannelBinding   string
+	RequireAuth      string
+	ConnectTimeout   time.Duration
+	StatementTimeout time.Duration
+	LockTimeout      time.Duration
+	MaxConnections   int32
 }
 
 type Server struct {
@@ -252,6 +261,10 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
+	requestTimeout, err := positive("HTTP_REQUEST_TIMEOUT_SECONDS", 25)
+	if err != nil {
+		return Server{}, err
+	}
 	ready, err := positive("HTTP_READINESS_TIMEOUT_SECONDS", 3)
 	if err != nil {
 		return Server{}, err
@@ -265,6 +278,10 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 		return Server{}, err
 	}
 	bodyBudget, err := positive("HTTP_BODY_MEMORY_BUDGET_BYTES", 256*1024*1024)
+	if err != nil {
+		return Server{}, err
+	}
+	responseBudget, err := positive("HTTP_RESPONSE_MEMORY_BUDGET_BYTES", 384*1024*1024)
 	if err != nil {
 		return Server{}, err
 	}
@@ -284,7 +301,7 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
-	if port > 65535 || idle < 5 || idle > 300 || body < 5 || body > 120 || ready > 30 || maxConnections < 16 || maxConnections > 10000 || maxConcurrent < 8 || maxConcurrent > maxConnections || bodyBudget < domain.MaxRequestBytes || int64(bodyBudget) > 4*1024*1024*1024 || globalBurst < globalRate || principalBurst < principalRate {
+	if port > 65535 || idle < 5 || idle > 300 || body < 5 || body > 120 || requestTimeout < body || requestTimeout > 120 || ready > 30 || maxConnections < 16 || maxConnections > 10000 || maxConcurrent < 8 || maxConcurrent > maxConnections || bodyBudget < domain.MaxRequestBytes || int64(bodyBudget) > 4*1024*1024*1024 || int64(responseBudget) < maximumChangesResponseReservation || int64(responseBudget) > 4*1024*1024*1024 || globalBurst < globalRate || principalBurst < principalRate {
 		return Server{}, errors.New("invalid HTTP configuration")
 	}
 	dbPort, err := positive("DATABASE_PORT", 5432)
@@ -295,7 +312,19 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
-	if dbPort > 65535 || dbMax > 512 {
+	dbConnectTimeout, err := positive("DATABASE_CONNECT_TIMEOUT_SECONDS", 5)
+	if err != nil {
+		return Server{}, err
+	}
+	dbStatementTimeout, err := positive("DATABASE_STATEMENT_TIMEOUT_SECONDS", 20)
+	if err != nil {
+		return Server{}, err
+	}
+	dbLockTimeout, err := positive("DATABASE_LOCK_TIMEOUT_SECONDS", 5)
+	if err != nil {
+		return Server{}, err
+	}
+	if dbPort > 65535 || dbMax > 512 || dbConnectTimeout > 30 || dbStatementTimeout > requestTimeout || dbLockTimeout > dbStatementTimeout {
 		return Server{}, errors.New("invalid database configuration")
 	}
 	dbHost, err := required("DATABASE_HOST")
@@ -314,12 +343,39 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
-	tlsMode := "require"
+	tlsMode := "verify-full"
+	if environment != Production {
+		tlsMode = "require"
+	}
 	if value, ok := lookup("DATABASE_TLS_MODE"); ok {
 		tlsMode = value
 	}
-	if tlsMode != "require" && !(environment != Production && tlsMode == "disable") {
+	if (environment == Production && tlsMode != "verify-full") || (environment != Production && tlsMode != "disable" && tlsMode != "require" && tlsMode != "verify-full") {
 		return Server{}, errors.New("invalid DATABASE_TLS_MODE")
+	}
+	tlsRootCert, hasTLSRootCert := lookup("DATABASE_TLS_ROOT_CERT")
+	if (tlsMode == "verify-full" && (!hasTLSRootCert || tlsRootCert == "")) || len(tlsRootCert) > 4096 || strings.ContainsRune(tlsRootCert, '\x00') {
+		return Server{}, errors.New("invalid DATABASE_TLS_ROOT_CERT")
+	}
+	channelBinding := "prefer"
+	if environment == Production {
+		channelBinding = "require"
+	}
+	if value, ok := lookup("DATABASE_CHANNEL_BINDING"); ok {
+		channelBinding = value
+	}
+	if (environment == Production && channelBinding != "require") || (channelBinding != "disable" && channelBinding != "prefer" && channelBinding != "require") {
+		return Server{}, errors.New("invalid DATABASE_CHANNEL_BINDING")
+	}
+	requireAuth := ""
+	if environment == Production {
+		requireAuth = "scram-sha-256"
+	}
+	if value, ok := lookup("DATABASE_REQUIRE_AUTH"); ok {
+		requireAuth = value
+	}
+	if environment == Production && requireAuth != "scram-sha-256" {
+		return Server{}, errors.New("invalid DATABASE_REQUIRE_AUTH")
 	}
 	serverVersion := "dev"
 	if value, ok := lookup("SERVER_VERSION"); ok {
@@ -335,8 +391,8 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	return Server{
 		Environment: environment, BindHost: bindHost, Port: port, PublicBaseURL: publicBase, ServerInstanceID: instanceID, ServerVersion: serverVersion, TokenSecret: tokenSecret,
 		OIDC:     OIDC{Issuer: issuer, Audience: audience, ClientID: clientID, Scopes: scopes, JWKSURL: jwksURL, AllowedAlgorithms: algorithms, MaximumTokenAge: time.Duration(maximumTokenAge) * time.Second, ClockSkew: time.Duration(clockSkew) * time.Second, IdentityPepper: pepper, JWKSRefreshInterval: time.Duration(refresh) * time.Second, UnknownKeyRefreshInterval: time.Duration(unknownRefresh) * time.Second, UnknownKeyCacheTTL: time.Duration(unknownTTL) * time.Second, StepUpAMR: stepAMR, StepUpACR: stepACR, StepUpMaximumAge: time.Duration(stepUpAge) * time.Second},
-		HTTP:     HTTP{IdleTimeout: time.Duration(idle) * time.Second, BodyTimeout: time.Duration(body) * time.Second, ReadinessTimeout: time.Duration(ready) * time.Second, MaximumConnections: maxConnections, MaximumConcurrent: maxConcurrent, BodyMemoryBudget: int64(bodyBudget), GlobalRate: globalRate, GlobalBurst: globalBurst, PrincipalRate: principalRate, PrincipalBurst: principalBurst},
-		Database: Database{Host: dbHost, Port: dbPort, Name: dbName, RuntimeUser: dbUser, RuntimePassword: dbPassword, TLSMode: tlsMode, MaxConnections: int32(dbMax)},
+		HTTP:     HTTP{IdleTimeout: time.Duration(idle) * time.Second, BodyTimeout: time.Duration(body) * time.Second, RequestTimeout: time.Duration(requestTimeout) * time.Second, ReadinessTimeout: time.Duration(ready) * time.Second, MaximumConnections: maxConnections, MaximumConcurrent: maxConcurrent, BodyMemoryBudget: int64(bodyBudget), ResponseMemoryBudget: int64(responseBudget), GlobalRate: globalRate, GlobalBurst: globalBurst, PrincipalRate: principalRate, PrincipalBurst: principalBurst},
+		Database: Database{Host: dbHost, Port: dbPort, Name: dbName, RuntimeUser: dbUser, RuntimePassword: dbPassword, TLSMode: tlsMode, TLSRootCert: tlsRootCert, ChannelBinding: channelBinding, RequireAuth: requireAuth, ConnectTimeout: time.Duration(dbConnectTimeout) * time.Second, StatementTimeout: time.Duration(dbStatementTimeout) * time.Second, LockTimeout: time.Duration(dbLockTimeout) * time.Second, MaxConnections: int32(dbMax)},
 	}, nil
 }
 

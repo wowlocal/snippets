@@ -103,9 +103,9 @@ func (s *Store) CreatePairing(ctx context.Context, principal domain.Principal, s
 			return domain.ErrorWithRetry(domain.RateLimited, 60)
 		}
 		hash := sha256.Sum256(request.RecipientPublicKey)
-		pairing = domain.Pairing{ID: uuid.New(), SpaceID: spaceID, RecipientPublicKey: append([]byte(nil), request.RecipientPublicKey...), Nonce: append([]byte(nil), request.Nonce...), AuthenticationTag: pairingTag(request.Nonce, request.RecipientPublicKey), State: domain.PairingPending, ExpiresAt: time.Now().UTC().Add(time.Duration(request.ExpiresInSeconds) * time.Second)}
-		_, err = tx.Exec(ctx, "INSERT INTO pairings(space_id,pairing_id,recipient_public_key,recipient_key_hash,nonce,authentication_tag,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, pairing.ID, pairing.RecipientPublicKey, hash[:], pairing.Nonce, pairing.AuthenticationTag, pairing.ExpiresAt)
-		return err
+		pairing = domain.Pairing{ID: uuid.New(), SpaceID: spaceID, RecipientPublicKey: append([]byte(nil), request.RecipientPublicKey...), Nonce: append([]byte(nil), request.Nonce...), AuthenticationTag: pairingTag(request.Nonce, request.RecipientPublicKey), State: domain.PairingPending}
+		return tx.QueryRow(ctx, `INSERT INTO pairings(space_id,pairing_id,recipient_public_key,recipient_key_hash,nonce,authentication_tag,expires_at)
+		    VALUES($1,$2,$3,$4,$5,$6,clock_timestamp()+$7*interval '1 second') RETURNING expires_at`, spaceID, pairing.ID, pairing.RecipientPublicKey, hash[:], pairing.Nonce, pairing.AuthenticationTag, request.ExpiresInSeconds).Scan(&pairing.ExpiresAt)
 	})
 	return space, pairing, err
 }
@@ -130,7 +130,11 @@ func (s *Store) ApprovePairing(ctx context.Context, principal domain.Principal, 
 		if err != nil {
 			return err
 		}
-		if !pairing.ExpiresAt.After(time.Now()) {
+		active, err := pairingIsActive(ctx, tx, spaceID, pairingID)
+		if err != nil {
+			return err
+		}
+		if !active {
 			return domain.NewError(domain.PairingExpired)
 		}
 		if pairing.State != domain.PairingPending || !domain.ConstantTimeEqual(request.RecipientKeyHash, keyHash) {
@@ -162,7 +166,11 @@ func (s *Store) GetPairing(ctx context.Context, principal domain.Principal, spac
 		if err != nil {
 			return err
 		}
-		if !pairing.ExpiresAt.After(time.Now()) {
+		active, err := pairingIsActive(ctx, tx, spaceID, pairingID)
+		if err != nil {
+			return err
+		}
+		if !active {
 			return domain.NewError(domain.PairingExpired)
 		}
 		return nil
@@ -183,7 +191,11 @@ func (s *Store) ClaimPairing(ctx context.Context, principal domain.Principal, sp
 		if err != nil {
 			return err
 		}
-		if !pairing.ExpiresAt.After(time.Now()) {
+		active, err := pairingIsActive(ctx, tx, spaceID, pairingID)
+		if err != nil {
+			return err
+		}
+		if !active {
 			return domain.NewError(domain.PairingExpired)
 		}
 		if pairing.State != domain.PairingApproved {
@@ -226,6 +238,12 @@ func scanPairing(row rowScanner) (domain.Pairing, []byte, error) {
 		value.State = domain.PairingApproved
 	}
 	return value, keyHash, nil
+}
+
+func pairingIsActive(ctx context.Context, tx pgx.Tx, spaceID, pairingID uuid.UUID) (bool, error) {
+	var active bool
+	err := tx.QueryRow(ctx, "SELECT expires_at>clock_timestamp() FROM pairings WHERE space_id=$1 AND pairing_id=$2", spaceID, pairingID).Scan(&active)
+	return active, err
 }
 
 func pairingTag(nonce, publicKey []byte) string {

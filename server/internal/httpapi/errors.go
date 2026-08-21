@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 
 	"github.com/google/uuid"
@@ -17,55 +18,55 @@ func newRequestID() uuid.UUID {
 	return value
 }
 
-func revokeError(err error) api.RevokeCurrentSessionResponseObject {
-	p := problemFrom(err)
+func revokeError(ctx context.Context, err error) api.RevokeCurrentSessionResponseObject {
+	p := problemFrom(ctx, err)
 	return api.RevokeCurrentSessiondefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func listError(err error) api.ListSpacesResponseObject {
-	p := problemFrom(err)
+func listError(ctx context.Context, err error) api.ListSpacesResponseObject {
+	p := problemFrom(ctx, err)
 	return api.ListSpacesdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func createSpaceError(err error) api.CreateSpaceResponseObject {
-	p := problemFrom(err)
+func createSpaceError(ctx context.Context, err error) api.CreateSpaceResponseObject {
+	p := problemFrom(ctx, err)
 	return api.CreateSpacedefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func getSpaceError(err error) api.GetSpaceResponseObject {
-	p := problemFrom(err)
+func getSpaceError(ctx context.Context, err error) api.GetSpaceResponseObject {
+	p := problemFrom(ctx, err)
 	return api.GetSpacedefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func changesError(err error) api.GetChangesResponseObject {
-	p := problemFrom(err)
+func changesError(ctx context.Context, err error) api.GetChangesResponseObject {
+	p := problemFrom(ctx, err)
 	return api.GetChangesdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func submitError(err error) api.SubmitRecordsResponseObject {
-	p := problemFrom(err)
+func submitError(ctx context.Context, err error) api.SubmitRecordsResponseObject {
+	p := problemFrom(ctx, err)
 	return api.SubmitRecordsdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func getRecoveryError(err error) api.GetRecoveryEnvelopeResponseObject {
-	p := problemFrom(err)
+func getRecoveryError(ctx context.Context, err error) api.GetRecoveryEnvelopeResponseObject {
+	p := problemFrom(ctx, err)
 	return api.GetRecoveryEnvelopedefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func putRecoveryError(err error) api.PutRecoveryEnvelopeResponseObject {
-	p := problemFrom(err)
+func putRecoveryError(ctx context.Context, err error) api.PutRecoveryEnvelopeResponseObject {
+	p := problemFrom(ctx, err)
 	return api.PutRecoveryEnvelopedefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func createPairingError(err error) api.CreatePairingResponseObject {
-	p := problemFrom(err)
+func createPairingError(ctx context.Context, err error) api.CreatePairingResponseObject {
+	p := problemFrom(ctx, err)
 	return api.CreatePairingdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func getPairingError(err error) api.GetPairingResponseObject {
-	p := problemFrom(err)
+func getPairingError(ctx context.Context, err error) api.GetPairingResponseObject {
+	p := problemFrom(ctx, err)
 	return api.GetPairingdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func cancelPairingError(err error) api.CancelPairingResponseObject {
-	p := problemFrom(err)
+func cancelPairingError(ctx context.Context, err error) api.CancelPairingResponseObject {
+	p := problemFrom(ctx, err)
 	return api.CancelPairingdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func approvePairingError(err error) api.ApprovePairingResponseObject {
-	p := problemFrom(err)
+func approvePairingError(ctx context.Context, err error) api.ApprovePairingResponseObject {
+	p := problemFrom(ctx, err)
 	return api.ApprovePairingdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }
-func claimPairingError(err error) api.ClaimPairingResponseObject {
-	p := problemFrom(err)
+func claimPairingError(ctx context.Context, err error) api.ClaimPairingResponseObject {
+	p := problemFrom(ctx, err)
 	return api.ClaimPairingdefaultApplicationProblemPlusJSONResponse{Body: p, StatusCode: p.Status}
 }

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wowlocal/snippets/server/internal/api"
 	"github.com/wowlocal/snippets/server/internal/auth"
 	"github.com/wowlocal/snippets/server/internal/config"
@@ -26,10 +27,12 @@ type Server struct {
 	validator     auth.Validator
 	logger        *slog.Logger
 	concurrent    chan struct{}
+	readiness     chan struct{}
 	bodyBytes     atomic.Int64
+	responseBytes atomic.Int64
 	global        *tokenBucket
 	principalMu   sync.Mutex
-	principals    map[[32]byte]*tokenBucket
+	principals    map[[32]byte]*principalBucket
 	handler       http.Handler
 }
 
@@ -37,7 +40,7 @@ func NewServer(configuration config.Server, store domain.Store, validator auth.V
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	server := &Server{configuration: configuration, store: store, validator: validator, logger: logger, concurrent: make(chan struct{}, configuration.HTTP.MaximumConcurrent), global: newTokenBucket(float64(configuration.HTTP.GlobalRate), configuration.HTTP.GlobalBurst), principals: make(map[[32]byte]*tokenBucket)}
+	server := &Server{configuration: configuration, store: store, validator: validator, logger: logger, concurrent: make(chan struct{}, configuration.HTTP.MaximumConcurrent), readiness: make(chan struct{}, 2), global: newTokenBucket(float64(configuration.HTTP.GlobalRate), configuration.HTTP.GlobalBurst), principals: make(map[[32]byte]*principalBucket)}
 	implementation := NewHandler(configuration, store)
 	strict := api.NewStrictHandlerWithOptions(implementation, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -48,7 +51,7 @@ func NewServer(configuration config.Server, store domain.Store, validator auth.V
 		},
 	})
 	generated := api.HandlerFromMux(strict, http.NewServeMux())
-	server.handler = server.limitMiddleware(server.authMiddleware(server.bodyMiddleware(server.secondRevocationMiddleware(generated))))
+	server.handler = server.limitMiddleware(server.authMiddleware(server.bodyMiddleware(generated)))
 	return server
 }
 
@@ -58,14 +61,33 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		requestID := newRequestID()
-		operation := operationName(r.Method, r.URL.Path)
-		statusWriter := &statusRecorder{ResponseWriter: w}
+		r = r.WithContext(withRequestID(r.Context(), requestID))
+		w.Header().Set("X-Request-ID", requestID.String())
+		policy := policyForRequest(r.Method, r.URL.Path)
+		r = r.WithContext(withOperationPolicy(r.Context(), policy))
+		operation := policy.name
+		statusWriter := &statusRecorder{ResponseWriter: w, requestID: requestID}
 		defer func() {
+			abortCommittedResponse := false
+			if recovered := recover(); recovered != nil {
+				s.logger.Error("request_panic", "operation", operation, "request_id", requestID.String())
+				if statusWriter.status == 0 {
+					writeProblem(statusWriter, domain.NewError(domain.InternalError))
+				} else {
+					// A partial response cannot be replaced safely. Mark the access outcome
+					// failed, then ask net/http to abort the stream without another stack log.
+					statusWriter.status = http.StatusInternalServerError
+					abortCommittedResponse = true
+				}
+			}
 			status := statusWriter.status
 			if status == 0 {
 				status = 200
 			}
 			s.logger.Info("request", "operation", operation, "status", status, "duration_ms", time.Since(started).Milliseconds(), "request_id", requestID.String())
+			if abortCommittedResponse {
+				panic(http.ErrAbortHandler)
+			}
 		}()
 		if operation == "unknown" {
 			writeProblem(statusWriter, domain.NewError(domain.NotFound))
@@ -75,9 +97,37 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 			writeProblem(statusWriter, domain.NewError(domain.InvalidRequest))
 			return
 		}
+		if operation == "liveness" {
+			next.ServeHTTP(statusWriter, r)
+			return
+		}
+		if operation == "readiness" {
+			select {
+			case s.readiness <- struct{}{}:
+				defer func() { <-s.readiness }()
+				next.ServeHTTP(statusWriter, r)
+			default:
+				writeProblem(statusWriter, domain.NewError(domain.DependencyUnavailable))
+			}
+			return
+		}
+		if s.configuration.HTTP.RequestTimeout > 0 {
+			requestCtx, cancel := context.WithTimeout(r.Context(), s.configuration.HTTP.RequestTimeout)
+			defer cancel()
+			r = r.WithContext(requestCtx)
+		}
 		if !s.global.allow(time.Now()) {
 			writeProblem(statusWriter, domain.ErrorWithRetry(domain.RateLimited, 1))
 			return
+		}
+		if operation == "get_changes" && s.configuration.HTTP.ResponseMemoryBudget > 0 {
+			reservation := int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
+			if s.responseBytes.Add(reservation) > s.configuration.HTTP.ResponseMemoryBudget {
+				s.responseBytes.Add(-reservation)
+				writeProblem(statusWriter, domain.ErrorWithRetry(domain.RateLimited, 1))
+				return
+			}
+			defer s.responseBytes.Add(-reservation)
 		}
 		select {
 		case s.concurrent <- struct{}{}:
@@ -92,7 +142,8 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicOperation(r.Method, r.URL.Path) {
+		policy := operationPolicyFrom(r.Context())
+		if policy.public {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -106,16 +157,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			writeProblem(w, domain.NewError(domain.AuthenticationRequired))
 			return
 		}
-		requirement := auth.Standard
-		if (r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/recovery-envelope")) || (r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/approval")) {
-			requirement = auth.RecentPhishingResistant
-		}
-		principal, err := s.validator.Validate(r.Context(), parts[1], requirement)
+		principal, err := s.validator.Validate(r.Context(), parts[1], policy.requirement)
 		if err != nil {
 			writeProblem(w, err)
 			return
 		}
-		if !s.allowPrincipal(principal.CredentialDigest) {
+		if !s.allowPrincipal(principal.IdentityDigest) {
 			writeProblem(w, domain.ErrorWithRetry(domain.RateLimited, 1))
 			return
 		}
@@ -134,7 +181,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !bodyOperation(r.Method, r.URL.Path) {
+		policy := operationPolicyFrom(r.Context())
+		if !policy.hasBody {
 			if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 				r.Close = true
 				writeProblem(w, domain.NewError(domain.InvalidRequest))
@@ -165,29 +213,19 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		defer s.bodyBytes.Add(-reservation)
-		bodyCtx, cancel := context.WithTimeout(r.Context(), s.configuration.HTTP.BodyTimeout)
-		defer cancel()
-		type readResult struct {
-			value []byte
-			err   error
-		}
-		result := make(chan readResult, 1)
-		go func() {
-			value, err := io.ReadAll(io.LimitReader(r.Body, domain.MaxRequestBytes+1))
-			result <- readResult{value, err}
-		}()
-		var body []byte
-		select {
-		case <-bodyCtx.Done():
+		controller := http.NewResponseController(w)
+		if err := controller.SetReadDeadline(time.Now().Add(s.configuration.HTTP.BodyTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 			r.Close = true
 			writeProblem(w, domain.NewError(domain.InvalidRequest))
 			return
-		case value := <-result:
-			if value.err != nil {
-				writeProblem(w, domain.NewError(domain.InvalidRequest))
-				return
-			}
-			body = value.value
+		}
+		defer func() { _ = controller.SetReadDeadline(time.Time{}) }()
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, domain.MaxRequestBytes+1))
+		if readErr != nil {
+			r.Close = true
+			_ = r.Body.Close()
+			writeProblem(w, domain.NewError(domain.InvalidRequest))
+			return
 		}
 		if len(body) == 0 {
 			writeProblem(w, domain.NewError(domain.InvalidRequest))
@@ -198,7 +236,7 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 			writeProblem(w, domain.ErrorWithLimit(domain.PayloadTooLarge, domain.MaxRequestBytes))
 			return
 		}
-		if err := validateStrictBody(r.Method, r.URL.Path, body); err != nil {
+		if err := validateStrictBody(policy.name, body); err != nil {
 			writeProblem(w, err)
 			return
 		}
@@ -207,45 +245,32 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) secondRevocationMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicOperation(r.Method, r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		principal, err := principalFrom(r.Context())
-		if err != nil {
-			writeProblem(w, err)
-			return
-		}
-		revoked, err := s.store.IsAccessTokenRevoked(r.Context(), principal)
-		if err != nil {
-			writeProblem(w, domain.NewError(domain.DependencyUnavailable))
-			return
-		}
-		if revoked {
-			writeProblem(w, domain.NewError(domain.AuthenticationRequired))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func (s *Server) allowPrincipal(digest [32]byte) bool {
 	s.principalMu.Lock()
 	defer s.principalMu.Unlock()
-	bucket := s.principals[digest]
-	if bucket == nil {
+	now := time.Now()
+	entry := s.principals[digest]
+	if entry == nil {
 		if len(s.principals) >= 4096 {
-			for key := range s.principals {
-				delete(s.principals, key)
-				break
+			var oldestKey [32]byte
+			var oldest time.Time
+			for key, candidate := range s.principals {
+				if oldest.IsZero() || candidate.lastSeen.Before(oldest) {
+					oldestKey, oldest = key, candidate.lastSeen
+				}
 			}
+			delete(s.principals, oldestKey)
 		}
-		bucket = newTokenBucket(float64(s.configuration.HTTP.PrincipalRate), s.configuration.HTTP.PrincipalBurst)
-		s.principals[digest] = bucket
+		entry = &principalBucket{bucket: newTokenBucket(float64(s.configuration.HTTP.PrincipalRate), s.configuration.HTTP.PrincipalBurst)}
+		s.principals[digest] = entry
 	}
-	return bucket.allow(time.Now())
+	entry.lastSeen = now
+	return entry.bucket.allow(now)
+}
+
+type principalBucket struct {
+	bucket   *tokenBucket
+	lastSeen time.Time
 }
 
 type tokenBucket struct {
@@ -274,13 +299,15 @@ func (b *tokenBucket) allow(now time.Time) bool {
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status    int
+	requestID uuid.UUID
 }
 
 func (w *statusRecorder) WriteHeader(status int) {
-	if w.status == 0 {
-		w.status = status
+	if w.status != 0 {
+		return
 	}
+	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }
 func (w *statusRecorder) Write(data []byte) (int, error) {
@@ -290,8 +317,14 @@ func (w *statusRecorder) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func writeProblem(w http.ResponseWriter, err error) {
-	problem := problemFrom(err)
+	ctx := context.Background()
+	if recorder, ok := w.(*statusRecorder); ok && recorder.requestID != uuid.Nil {
+		ctx = withRequestID(ctx, recorder.requestID)
+	}
+	problem := problemFrom(ctx, err)
 	w.Header().Set("Content-Type", "application/problem+json")
 	if problem.RetryAfterSeconds != nil {
 		w.Header().Set("Retry-After", intString(*problem.RetryAfterSeconds))
@@ -300,19 +333,19 @@ func writeProblem(w http.ResponseWriter, err error) {
 	_ = json.NewEncoder(w).Encode(problem)
 }
 
-func validateStrictBody(method, path string, body []byte) error {
+func validateStrictBody(operation string, body []byte) error {
 	if err := rejectDuplicateJSONKeys(body); err != nil {
 		return domain.NewError(domain.InvalidRequest)
 	}
 	var target any
-	switch {
-	case method == http.MethodPost && strings.HasSuffix(path, "/records/batch"):
+	switch operation {
+	case "submit_records":
 		target = &api.BatchRequest{}
-	case method == http.MethodPut && strings.HasSuffix(path, "/recovery-envelope"):
+	case "put_recovery_envelope":
 		target = &api.PutRecoveryEnvelopeRequest{}
-	case method == http.MethodPost && strings.HasSuffix(path, "/pairings"):
+	case "create_pairing":
 		target = &api.CreatePairingRequest{}
-	case method == http.MethodPut && strings.HasSuffix(path, "/approval"):
+	case "approve_pairing":
 		target = &api.ApprovePairingRequest{}
 	default:
 		return domain.NewError(domain.InvalidRequest)
@@ -331,7 +364,7 @@ func validateStrictBody(method, path string, body []byte) error {
 	if err := decoder.Decode(&raw); err != nil {
 		return domain.NewError(domain.InvalidRequest)
 	}
-	if err := validateRequiredShape(method, path, raw); err != nil {
+	if err := validateRequiredShape(operation, raw); err != nil {
 		return err
 	}
 	if err := validateCanonicalBase64(raw); err != nil {
@@ -368,26 +401,18 @@ func validateCanonicalBase64(value any) error {
 	return nil
 }
 
-func validateRequiredShape(method, path string, raw any) error {
+func validateRequiredShape(operation string, raw any) error {
 	object, ok := raw.(map[string]any)
 	if !ok {
 		return domain.NewError(domain.InvalidRequest)
 	}
-	require := func(value map[string]any, keys ...string) bool {
-		for _, key := range keys {
-			if _, exists := value[key]; !exists {
-				return false
-			}
-		}
-		return true
-	}
-	switch {
-	case method == http.MethodPost && strings.HasSuffix(path, "/records/batch"):
-		if !require(object, "expectedScope", "items") {
+	switch operation {
+	case "submit_records":
+		if !hasExactObjectShape(object, []string{"expectedScope", "items"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
 		}
 		scope, ok := object["expectedScope"].(map[string]any)
-		if !ok || !require(scope, "serverInstanceId", "spaceId", "scopeBinding", "datasetGeneration", "feedEpoch") {
+		if !ok || !hasExactObjectShape(scope, []string{"serverInstanceId", "spaceId", "scopeBinding", "datasetGeneration", "feedEpoch"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
 		}
 		items, ok := object["items"].([]any)
@@ -396,28 +421,49 @@ func validateRequiredShape(method, path string, raw any) error {
 		}
 		for _, item := range items {
 			current, ok := item.(map[string]any)
-			if !ok || !require(current, "record", "expectedRecordVersion") {
+			if !ok || !hasExactObjectShape(current, []string{"record", "expectedRecordVersion"}, nil) {
 				return domain.NewError(domain.InvalidRequest)
 			}
 			record, ok := current["record"].(map[string]any)
-			if !ok || !require(record, "id", "rev", "deleted", "blob") {
+			if !ok || !hasExactObjectShape(record, []string{"id", "rev", "deleted", "blob"}, nil) {
 				return domain.NewError(domain.InvalidRequest)
 			}
 		}
-	case method == http.MethodPut && strings.HasSuffix(path, "/recovery-envelope"):
-		if !require(object, "expectedVersion", "keyEpoch", "algorithm", "ciphertext") {
+	case "put_recovery_envelope":
+		if !hasExactObjectShape(object, []string{"expectedVersion", "keyEpoch", "algorithm", "ciphertext"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
 		}
-	case method == http.MethodPost && strings.HasSuffix(path, "/pairings"):
-		if !require(object, "recipientPublicKey", "nonce", "expiresInSeconds") {
+	case "create_pairing":
+		if !hasExactObjectShape(object, []string{"recipientPublicKey", "nonce", "expiresInSeconds"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
 		}
-	case method == http.MethodPut && strings.HasSuffix(path, "/approval"):
-		if !require(object, "recipientKeyHash", "algorithm", "ciphertext") {
+	case "approve_pairing":
+		if !hasExactObjectShape(object, []string{"recipientKeyHash", "algorithm", "ciphertext"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
 		}
+	default:
+		return domain.NewError(domain.InvalidRequest)
 	}
 	return nil
+}
+
+func hasExactObjectShape(value map[string]any, required, optional []string) bool {
+	allowed := make(map[string]struct{}, len(required)+len(optional))
+	for _, key := range required {
+		allowed[key] = struct{}{}
+		if _, exists := value[key]; !exists {
+			return false
+		}
+	}
+	for _, key := range optional {
+		allowed[key] = struct{}{}
+	}
+	for key := range value {
+		if _, exists := allowed[key]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func rejectDuplicateJSONKeys(data []byte) error {
@@ -480,69 +526,83 @@ func ensureEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func publicOperation(method, path string) bool {
-	return (method == http.MethodGet && path == "/.well-known/snippets-sync") || (method == http.MethodGet && (path == "/health/live" || path == "/health/ready"))
-}
-func bodyOperation(method, path string) bool {
-	return (method == http.MethodPost && strings.HasSuffix(path, "/records/batch")) || (method == http.MethodPut && strings.HasSuffix(path, "/recovery-envelope")) || (method == http.MethodPost && strings.HasSuffix(path, "/pairings")) || (method == http.MethodPut && strings.HasSuffix(path, "/approval"))
+type operationPolicy struct {
+	name        string
+	public      bool
+	hasBody     bool
+	requirement auth.Requirement
 }
 
-func operationName(method, path string) string {
-	if publicOperation(method, path) {
+type operationPolicyContextKey struct{}
+
+func withOperationPolicy(ctx context.Context, policy operationPolicy) context.Context {
+	return context.WithValue(ctx, operationPolicyContextKey{}, policy)
+}
+
+func operationPolicyFrom(ctx context.Context) operationPolicy {
+	if policy, ok := ctx.Value(operationPolicyContextKey{}).(operationPolicy); ok {
+		return policy
+	}
+	return operationPolicy{name: "unknown", requirement: auth.Standard}
+}
+
+func policyForRequest(method, path string) operationPolicy {
+	standard := func(name string) operationPolicy { return operationPolicy{name: name, requirement: auth.Standard} }
+	if method == http.MethodGet && (path == "/.well-known/snippets-sync" || path == "/health/live" || path == "/health/ready") {
 		if path == "/.well-known/snippets-sync" {
-			return "discovery"
+			return operationPolicy{name: "discovery", public: true, requirement: auth.Standard}
 		}
 		if path == "/health/live" {
-			return "liveness"
+			return operationPolicy{name: "liveness", public: true, requirement: auth.Standard}
 		}
-		return "readiness"
+		return operationPolicy{name: "readiness", public: true, requirement: auth.Standard}
 	}
 	if path == "/v2/session" && method == http.MethodDelete {
-		return "revoke_session"
+		return standard("revoke_session")
 	}
 	if path == "/v2/spaces" && method == http.MethodGet {
-		return "list_spaces"
+		return standard("list_spaces")
 	}
 	if path == "/v2/spaces" && method == http.MethodPost {
-		return "create_space"
+		return standard("create_space")
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 3 || parts[0] != "v2" || parts[1] != "spaces" || !validUUID(parts[2]) {
-		return "unknown"
+		return standard("unknown")
 	}
 	if len(parts) == 3 && method == http.MethodGet {
-		return "get_space"
+		return standard("get_space")
 	}
 	if len(parts) == 4 && parts[3] == "changes" && method == http.MethodGet {
-		return "get_changes"
+		return standard("get_changes")
 	}
 	if len(parts) == 5 && parts[3] == "records" && parts[4] == "batch" && method == http.MethodPost {
-		return "submit_records"
+		return operationPolicy{name: "submit_records", hasBody: true, requirement: auth.Standard}
 	}
 	if len(parts) == 4 && parts[3] == "recovery-envelope" && (method == http.MethodGet || method == http.MethodPut) {
 		if method == http.MethodGet {
-			return "get_recovery_envelope"
+			return standard("get_recovery_envelope")
 		}
-		return "put_recovery_envelope"
+		return operationPolicy{name: "put_recovery_envelope", hasBody: true, requirement: auth.RecentPhishingResistant}
 	}
 	if len(parts) == 4 && parts[3] == "pairings" && method == http.MethodPost {
-		return "create_pairing"
+		return operationPolicy{name: "create_pairing", hasBody: true, requirement: auth.Standard}
 	}
 	if len(parts) >= 5 && parts[3] == "pairings" && validUUID(parts[4]) {
 		if len(parts) == 5 && method == http.MethodGet {
-			return "get_pairing"
+			return standard("get_pairing")
 		}
 		if len(parts) == 5 && method == http.MethodDelete {
-			return "cancel_pairing"
+			return standard("cancel_pairing")
 		}
 		if len(parts) == 6 && parts[5] == "approval" && method == http.MethodPut {
-			return "approve_pairing"
+			return operationPolicy{name: "approve_pairing", hasBody: true, requirement: auth.RecentPhishingResistant}
 		}
 		if len(parts) == 6 && parts[5] == "claim" && method == http.MethodPost {
-			return "claim_pairing"
+			return standard("claim_pairing")
 		}
 	}
-	return "unknown"
+	return standard("unknown")
 }
 
 func validUUID(value string) bool {

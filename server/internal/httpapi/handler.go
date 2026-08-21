@@ -12,6 +12,7 @@ import (
 )
 
 type principalContextKey struct{}
+type requestIDContextKey struct{}
 
 func withPrincipal(ctx context.Context, principal domain.Principal) context.Context {
 	return context.WithValue(ctx, principalContextKey{}, principal)
@@ -23,6 +24,17 @@ func principalFrom(ctx context.Context) (domain.Principal, error) {
 		return domain.Principal{}, domain.NewError(domain.AuthenticationRequired)
 	}
 	return principal, nil
+}
+
+func withRequestID(ctx context.Context, requestID uuid.UUID) context.Context {
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+func requestIDFrom(ctx context.Context) uuid.UUID {
+	if requestID, ok := ctx.Value(requestIDContextKey{}).(uuid.UUID); ok && requestID != uuid.Nil {
+		return requestID
+	}
+	return newRequestID()
 }
 
 type Handler struct {
@@ -55,7 +67,7 @@ func (h *Handler) GetReadiness(ctx context.Context, _ api.GetReadinessRequestObj
 	readyCtx, cancel := context.WithTimeout(ctx, h.configuration.HTTP.ReadinessTimeout)
 	defer cancel()
 	if err := h.store.Readiness(readyCtx); err != nil {
-		problem := problemFrom(domain.NewError(domain.DependencyUnavailable))
+		problem := problemFrom(ctx, domain.NewError(domain.DependencyUnavailable))
 		return api.GetReadiness503ApplicationProblemPlusJSONResponse{ServiceUnavailableApplicationProblemPlusJSONResponse: api.ServiceUnavailableApplicationProblemPlusJSONResponse(problem)}, nil
 	}
 	return api.GetReadiness200JSONResponse{Status: api.Ok}, nil
@@ -64,10 +76,10 @@ func (h *Handler) GetReadiness(ctx context.Context, _ api.GetReadinessRequestObj
 func (h *Handler) RevokeCurrentSession(ctx context.Context, _ api.RevokeCurrentSessionRequestObject) (api.RevokeCurrentSessionResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return revokeError(err), nil
+		return revokeError(ctx, err), nil
 	}
 	if err := h.store.RevokeAccessToken(ctx, principal); err != nil {
-		return revokeError(err), nil
+		return revokeError(ctx, err), nil
 	}
 	return api.RevokeCurrentSession204Response{}, nil
 }
@@ -75,11 +87,11 @@ func (h *Handler) RevokeCurrentSession(ctx context.Context, _ api.RevokeCurrentS
 func (h *Handler) ListSpaces(ctx context.Context, _ api.ListSpacesRequestObject) (api.ListSpacesResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return listError(err), nil
+		return listError(ctx, err), nil
 	}
 	spaces, err := h.store.ListSpaces(ctx, principal)
 	if err != nil {
-		return listError(err), nil
+		return listError(ctx, err), nil
 	}
 	result := make([]api.Space, len(spaces))
 	for i, value := range spaces {
@@ -91,11 +103,11 @@ func (h *Handler) ListSpaces(ctx context.Context, _ api.ListSpacesRequestObject)
 func (h *Handler) CreateSpace(ctx context.Context, request api.CreateSpaceRequestObject) (api.CreateSpaceResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return createSpaceError(err), nil
+		return createSpaceError(ctx, err), nil
 	}
 	space, err := h.store.CreateSpace(ctx, principal, request.Params.IdempotencyKey)
 	if err != nil {
-		return createSpaceError(err), nil
+		return createSpaceError(ctx, err), nil
 	}
 	return api.CreateSpace201JSONResponse(mapSpace(space, h.configuration.ServerInstanceID)), nil
 }
@@ -103,11 +115,11 @@ func (h *Handler) CreateSpace(ctx context.Context, request api.CreateSpaceReques
 func (h *Handler) GetSpace(ctx context.Context, request api.GetSpaceRequestObject) (api.GetSpaceResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return getSpaceError(err), nil
+		return getSpaceError(ctx, err), nil
 	}
 	space, err := h.store.GetSpace(ctx, principal, request.Space)
 	if err != nil {
-		return getSpaceError(err), nil
+		return getSpaceError(ctx, err), nil
 	}
 	return api.GetSpace200JSONResponse(mapSpace(space, h.configuration.ServerInstanceID)), nil
 }
@@ -115,7 +127,7 @@ func (h *Handler) GetSpace(ctx context.Context, request api.GetSpaceRequestObjec
 func (h *Handler) GetChanges(ctx context.Context, request api.GetChangesRequestObject) (api.GetChangesResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return changesError(err), nil
+		return changesError(ctx, err), nil
 	}
 	limit := domain.MaxPageRecords
 	if request.Params.Limit != nil {
@@ -123,7 +135,7 @@ func (h *Handler) GetChanges(ctx context.Context, request api.GetChangesRequestO
 	}
 	page, err := h.store.FetchChanges(ctx, principal, request.Space, request.Params.Cursor, limit)
 	if err != nil {
-		return changesError(err), nil
+		return changesError(ctx, err), nil
 	}
 	records := make([]api.ServerRecord, len(page.Records))
 	for i, value := range page.Records {
@@ -135,13 +147,13 @@ func (h *Handler) GetChanges(ctx context.Context, request api.GetChangesRequestO
 func (h *Handler) SubmitRecords(ctx context.Context, request api.SubmitRecordsRequestObject) (api.SubmitRecordsResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return submitError(err), nil
+		return submitError(ctx, err), nil
 	}
 	if request.Body == nil {
-		return submitError(domain.NewError(domain.InvalidRequest)), nil
+		return submitError(ctx, domain.NewError(domain.InvalidRequest)), nil
 	}
 	if request.Body.ExpectedScope.ServerInstanceId != h.configuration.ServerInstanceID {
-		return submitError(domain.NewError(domain.Forbidden)), nil
+		return submitError(ctx, domain.NewError(domain.Forbidden)), nil
 	}
 	items := make([]domain.BatchItem, len(request.Body.Items))
 	for i, value := range request.Body.Items {
@@ -155,7 +167,7 @@ func (h *Handler) SubmitRecords(ctx context.Context, request api.SubmitRecordsRe
 	}
 	submission, err := h.store.Submit(ctx, principal, request.Space, expectedScope, items)
 	if err != nil {
-		return submitError(err), nil
+		return submitError(ctx, err), nil
 	}
 	outcomes := make([]api.BatchOutcome, len(submission.Outcomes))
 	for i, value := range submission.Outcomes {
@@ -167,11 +179,11 @@ func (h *Handler) SubmitRecords(ctx context.Context, request api.SubmitRecordsRe
 func (h *Handler) GetRecoveryEnvelope(ctx context.Context, request api.GetRecoveryEnvelopeRequestObject) (api.GetRecoveryEnvelopeResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return getRecoveryError(err), nil
+		return getRecoveryError(ctx, err), nil
 	}
 	space, envelope, err := h.store.GetRecoveryEnvelope(ctx, principal, request.Space)
 	if err != nil {
-		return getRecoveryError(err), nil
+		return getRecoveryError(ctx, err), nil
 	}
 	return api.GetRecoveryEnvelope200JSONResponse(mapRecoveryResponse(space, envelope, h.configuration.ServerInstanceID)), nil
 }
@@ -179,14 +191,14 @@ func (h *Handler) GetRecoveryEnvelope(ctx context.Context, request api.GetRecove
 func (h *Handler) PutRecoveryEnvelope(ctx context.Context, request api.PutRecoveryEnvelopeRequestObject) (api.PutRecoveryEnvelopeResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return putRecoveryError(err), nil
+		return putRecoveryError(ctx, err), nil
 	}
 	if request.Body == nil {
-		return putRecoveryError(domain.NewError(domain.InvalidRequest)), nil
+		return putRecoveryError(ctx, domain.NewError(domain.InvalidRequest)), nil
 	}
 	space, envelope, err := h.store.PutRecoveryEnvelope(ctx, principal, request.Space, domain.PutRecoveryEnvelope{ExpectedVersion: request.Body.ExpectedVersion, KeyEpoch: request.Body.KeyEpoch, Algorithm: string(request.Body.Algorithm), Ciphertext: append([]byte(nil), request.Body.Ciphertext...)})
 	if err != nil {
-		return putRecoveryError(err), nil
+		return putRecoveryError(ctx, err), nil
 	}
 	return api.PutRecoveryEnvelope200JSONResponse(mapRecoveryResponse(space, &envelope, h.configuration.ServerInstanceID)), nil
 }
@@ -194,14 +206,14 @@ func (h *Handler) PutRecoveryEnvelope(ctx context.Context, request api.PutRecove
 func (h *Handler) CreatePairing(ctx context.Context, request api.CreatePairingRequestObject) (api.CreatePairingResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return createPairingError(err), nil
+		return createPairingError(ctx, err), nil
 	}
 	if request.Body == nil {
-		return createPairingError(domain.NewError(domain.InvalidRequest)), nil
+		return createPairingError(ctx, domain.NewError(domain.InvalidRequest)), nil
 	}
 	space, pairing, err := h.store.CreatePairing(ctx, principal, request.Space, domain.CreatePairing{RecipientPublicKey: append([]byte(nil), request.Body.RecipientPublicKey...), Nonce: append([]byte(nil), request.Body.Nonce...), ExpiresInSeconds: request.Body.ExpiresInSeconds})
 	if err != nil {
-		return createPairingError(err), nil
+		return createPairingError(ctx, err), nil
 	}
 	return api.CreatePairing201JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), Pairing: mapPairing(pairing)}, nil
 }
@@ -209,11 +221,11 @@ func (h *Handler) CreatePairing(ctx context.Context, request api.CreatePairingRe
 func (h *Handler) GetPairing(ctx context.Context, request api.GetPairingRequestObject) (api.GetPairingResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return getPairingError(err), nil
+		return getPairingError(ctx, err), nil
 	}
 	space, pairing, err := h.store.GetPairing(ctx, principal, request.Space, request.Pairing)
 	if err != nil {
-		return getPairingError(err), nil
+		return getPairingError(ctx, err), nil
 	}
 	return api.GetPairing200JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), Pairing: mapPairing(pairing)}, nil
 }
@@ -221,10 +233,10 @@ func (h *Handler) GetPairing(ctx context.Context, request api.GetPairingRequestO
 func (h *Handler) CancelPairing(ctx context.Context, request api.CancelPairingRequestObject) (api.CancelPairingResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return cancelPairingError(err), nil
+		return cancelPairingError(ctx, err), nil
 	}
 	if err := h.store.CancelPairing(ctx, principal, request.Space, request.Pairing); err != nil {
-		return cancelPairingError(err), nil
+		return cancelPairingError(ctx, err), nil
 	}
 	return api.CancelPairing204Response{}, nil
 }
@@ -232,14 +244,14 @@ func (h *Handler) CancelPairing(ctx context.Context, request api.CancelPairingRe
 func (h *Handler) ApprovePairing(ctx context.Context, request api.ApprovePairingRequestObject) (api.ApprovePairingResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return approvePairingError(err), nil
+		return approvePairingError(ctx, err), nil
 	}
 	if request.Body == nil {
-		return approvePairingError(domain.NewError(domain.InvalidRequest)), nil
+		return approvePairingError(ctx, domain.NewError(domain.InvalidRequest)), nil
 	}
 	space, pairing, err := h.store.ApprovePairing(ctx, principal, request.Space, request.Pairing, domain.ApprovePairing{RecipientKeyHash: append([]byte(nil), request.Body.RecipientKeyHash...), Algorithm: string(request.Body.Algorithm), Ciphertext: append([]byte(nil), request.Body.Ciphertext...)})
 	if err != nil {
-		return approvePairingError(err), nil
+		return approvePairingError(ctx, err), nil
 	}
 	return api.ApprovePairing200JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), Pairing: mapPairing(pairing)}, nil
 }
@@ -247,14 +259,14 @@ func (h *Handler) ApprovePairing(ctx context.Context, request api.ApprovePairing
 func (h *Handler) ClaimPairing(ctx context.Context, request api.ClaimPairingRequestObject) (api.ClaimPairingResponseObject, error) {
 	principal, err := principalFrom(ctx)
 	if err != nil {
-		return claimPairingError(err), nil
+		return claimPairingError(ctx, err), nil
 	}
 	space, pairing, err := h.store.ClaimPairing(ctx, principal, request.Space, request.Pairing)
 	if err != nil {
-		return claimPairingError(err), nil
+		return claimPairingError(ctx, err), nil
 	}
 	if pairing.Algorithm == nil {
-		return claimPairingError(domain.NewError(domain.InternalError)), nil
+		return claimPairingError(ctx, domain.NewError(domain.InternalError)), nil
 	}
 	return api.ClaimPairing200JSONResponse{Scope: mapScope(space.Scope, h.configuration.ServerInstanceID), PairingId: pairing.ID, Algorithm: api.ClaimPairingResponseAlgorithm(*pairing.Algorithm), Ciphertext: append([]byte(nil), pairing.Ciphertext...)}, nil
 }
@@ -266,7 +278,7 @@ func mapSpace(value domain.Space, serverInstanceID uuid.UUID) api.Space {
 	return api.Space{Scope: mapScope(value.Scope, serverInstanceID), Role: api.SpaceRole(value.Role), KeyEpoch: value.KeyEpoch}
 }
 func mapServerRecord(value domain.ServerRecord) api.ServerRecord {
-	return api.ServerRecord{Id: value.Record.ID, Rev: value.Record.Rev, Deleted: value.Record.Deleted, Blob: append([]byte(nil), value.Record.Blob...), RecordVersion: value.RecordVersion}
+	return api.ServerRecord{Id: value.Record.ID, Rev: value.Record.Rev, Deleted: value.Record.Deleted, Blob: value.Record.Blob, RecordVersion: value.RecordVersion}
 }
 func mapOutcome(value domain.BatchOutcome) api.BatchOutcome {
 	result := api.BatchOutcome{Kind: api.BatchOutcomeKind(value.Kind), RecordVersion: value.RecordVersion, Revision: value.Revision, RetryAfterSeconds: value.RetryAfterSeconds}
@@ -293,10 +305,10 @@ func mapPairing(value domain.Pairing) api.Pairing {
 	return api.Pairing{PairingId: value.ID, RecipientPublicKey: append([]byte(nil), value.RecipientPublicKey...), Nonce: append([]byte(nil), value.Nonce...), AuthenticationTag: value.AuthenticationTag, State: api.PairingState(value.State), ExpiresAt: value.ExpiresAt}
 }
 
-func problemFrom(err error) api.Problem {
+func problemFrom(ctx context.Context, err error) api.Problem {
 	value := domain.AsServiceError(err)
 	status := domain.Status(value.Code)
-	return api.Problem{Type: "urn:snippets:error:" + string(value.Code), Status: status, Code: api.ErrorCode(value.Code), RequestId: newRequestID(), RetryAfterSeconds: value.RetryAfterSeconds, Limit: value.Limit}
+	return api.Problem{Type: "urn:snippets:error:" + string(value.Code), Status: status, Code: api.ErrorCode(value.Code), RequestId: requestIDFrom(ctx), RetryAfterSeconds: value.RetryAfterSeconds, Limit: value.Limit}
 }
 func setValues(values map[string]struct{}) []string {
 	result := make([]string, 0, len(values))

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wowlocal/snippets/server/internal/api"
 	"github.com/wowlocal/snippets/server/internal/auth"
 	"github.com/wowlocal/snippets/server/internal/config"
 	"github.com/wowlocal/snippets/server/internal/domain"
@@ -25,6 +26,12 @@ import (
 type fakeValidator struct {
 	principal    domain.Principal
 	requirements []auth.Requirement
+}
+
+type panicValidator struct{}
+
+func (panicValidator) Validate(context.Context, string, auth.Requirement) (domain.Principal, error) {
+	panic("test panic")
 }
 
 func (v *fakeValidator) Validate(_ context.Context, token string, requirement auth.Requirement) (domain.Principal, error) {
@@ -153,6 +160,9 @@ func TestStrictJSONRejectsDuplicateUnknownMissingAndNoncanonicalBase64(t *testin
 		`{"items":[],"unexpected":true}`,
 		`{"expectedScope":` + string(expectedScope) + `,"items":[{"record":{"id":"00000000-0000-4000-8000-000000000001","rev":"r","deleted":false,"blob":""}}]}`,
 		`{"expectedScope":` + string(expectedScope) + `,"items":[{"record":{"id":"00000000-0000-4000-8000-000000000001","rev":"r","deleted":false,"blob":"YQ==\n"},"expectedRecordVersion":null}]}`,
+		`{"expectedScope":` + string(expectedScope) + `,"items":[{"record":{"id":"00000000-0000-4000-8000-000000000001","rev":"r","deleted":false,"blob":"YQ==","Blob":"Yg=="},"expectedRecordVersion":null}]}`,
+		`{"expectedScope":` + string(expectedScope) + `,"items":[],"Items":[]}`,
+		`{"expectedScope":` + string(expectedScope) + `,"ExpectedScope":` + string(expectedScope) + `,"items":[]}`,
 	}
 	for _, body := range cases {
 		response := perform(t, server, http.MethodPost, path, body, "valid-token")
@@ -166,6 +176,86 @@ func TestBodylessOperationsRejectBodiesAndUnknownRoutesAreClosedProblems(t *test
 	assertProblem(t, withBody, 400, domain.InvalidRequest)
 	unknown := perform(t, server, http.MethodGet, "/v1/spaces", "", "")
 	assertProblem(t, unknown, 404, domain.NotFound)
+}
+
+func TestHealthChecksBypassUserConcurrencyAdmission(t *testing.T) {
+	service, _, _, _ := testServer(t)
+	for index := 0; index < cap(service.concurrent); index++ {
+		service.concurrent <- struct{}{}
+	}
+	defer func() {
+		for index := 0; index < cap(service.concurrent); index++ {
+			<-service.concurrent
+		}
+	}()
+	for _, path := range []string{"/health/live", "/health/ready"} {
+		response := perform(t, service.Handler(), http.MethodGet, path, "", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s was rejected by user admission: %d %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestChangesResponseMemoryHasIndependentAdmissionBudget(t *testing.T) {
+	service, _, _, _ := testServer(t)
+	reservation := int64(domain.MaxResponseBytes + domain.MaxPageRecords*domain.MaxBlobBytes)
+	service.configuration.HTTP.ResponseMemoryBudget = reservation
+	service.responseBytes.Store(reservation)
+	path := "/v2/spaces/00000000-0000-4000-8000-000000000001/changes"
+	response := perform(t, service.Handler(), http.MethodGet, path, "", "valid-token")
+	assertProblem(t, response, http.StatusTooManyRequests, domain.RateLimited)
+}
+
+func TestPanicRecoveryUsesCorrelatedRequestID(t *testing.T) {
+	service, _, _, _ := testServer(t)
+	service.validator = panicValidator{}
+	response := perform(t, service.Handler(), http.MethodGet, "/v2/spaces", "", "valid-token")
+	assertProblem(t, response, http.StatusInternalServerError, domain.InternalError)
+}
+
+func TestOperationPoliciesMatchOpenAPIContract(t *testing.T) {
+	document, err := api.GetSwagger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{
+		"getDiscovery": "discovery", "getLiveness": "liveness", "getReadiness": "readiness",
+		"revokeCurrentSession": "revoke_session", "listSpaces": "list_spaces", "createSpace": "create_space",
+		"getSpace": "get_space", "getChanges": "get_changes", "submitRecords": "submit_records",
+		"getRecoveryEnvelope": "get_recovery_envelope", "putRecoveryEnvelope": "put_recovery_envelope",
+		"createPairing": "create_pairing", "getPairing": "get_pairing", "cancelPairing": "cancel_pairing",
+		"approvePairing": "approve_pairing", "claimPairing": "claim_pairing",
+	}
+	seen := 0
+	for path, pathItem := range document.Paths.Map() {
+		concretePath := strings.ReplaceAll(strings.ReplaceAll(path, "{space}", "00000000-0000-4000-8000-000000000001"), "{pairing}", "00000000-0000-4000-8000-000000000002")
+		for method, operation := range pathItem.Operations() {
+			policy := policyForRequest(method, concretePath)
+			operationID := operation.OperationID
+			if operationID != "" {
+				operationID = strings.ToLower(operationID[:1]) + operationID[1:]
+			}
+			expectedName, exists := names[operationID]
+			if !exists || policy.name != expectedName {
+				t.Errorf("%s %s policy name %q does not match operationId %q", method, path, policy.name, operation.OperationID)
+			}
+			public := operation.Security != nil && len(*operation.Security) == 0
+			if policy.public != public || policy.hasBody != (operation.RequestBody != nil) {
+				t.Errorf("%s %s policy metadata drifted: %#v", method, path, policy)
+			}
+			requirement := auth.Standard
+			if operation.Extensions["x-snippets-auth-requirement"] == "recent-phishing-resistant" {
+				requirement = auth.RecentPhishingResistant
+			}
+			if policy.requirement != requirement {
+				t.Errorf("%s %s authentication requirement drifted", method, path)
+			}
+			seen++
+		}
+	}
+	if seen != len(names) {
+		t.Fatalf("checked %d operations, expected %d", seen, len(names))
+	}
 }
 
 func TestStepUpIsRequiredForRecoveryWrites(t *testing.T) {
@@ -257,6 +347,11 @@ func TestPairingEnvelopeIsReleasedOnlyByAtomicClaim(t *testing.T) {
 }
 
 func testHTTPServer(t *testing.T) (http.Handler, *domain.MemoryStore, domain.Principal, *fakeValidator) {
+	service, store, principal, validator := testServer(t)
+	return service.Handler(), store, principal, validator
+}
+
+func testServer(t *testing.T) (*Server, *domain.MemoryStore, domain.Principal, *fakeValidator) {
 	t.Helper()
 	base, _ := url.Parse("https://sync.example.test")
 	issuer, _ := url.Parse("https://identity.example.test/")
@@ -272,7 +367,7 @@ func testHTTPServer(t *testing.T) (http.Handler, *domain.MemoryStore, domain.Pri
 	principal := domain.Principal{IdentityDigest: identity, CredentialDigest: credential, ExpiresAt: time.Now().Add(time.Hour)}
 	validator := &fakeValidator{principal: principal}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return NewServer(configuration, store, validator, logger).Handler(), store, principal, validator
+	return NewServer(configuration, store, validator, logger), store, principal, validator
 }
 
 func perform(t *testing.T, handler http.Handler, method, path, body, token string) *httptest.ResponseRecorder {
@@ -315,5 +410,8 @@ func assertProblem(t *testing.T, response *httptest.ResponseRecorder, status int
 	}
 	if value["code"] != string(code) || value["status"] != float64(status) || value["type"] != "urn:snippets:error:"+string(code) || value["requestId"] == nil || value["detail"] != nil {
 		t.Fatalf("problem shape: %#v", value)
+	}
+	if requestID, ok := value["requestId"].(string); !ok || requestID == "" || response.Header().Get("X-Request-ID") != requestID {
+		t.Fatalf("uncorrelated request ID: header=%q body=%#v", response.Header().Get("X-Request-ID"), value["requestId"])
 	}
 }

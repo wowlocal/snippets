@@ -44,9 +44,6 @@ type accessClaims struct {
 	ACR                string           `json:"acr,omitempty"`
 }
 
-type jwksDocument struct {
-	Keys []jwk `json:"keys"`
-}
 type jwk struct {
 	KTY    string   `json:"kty"`
 	KID    string   `json:"kid"`
@@ -301,24 +298,52 @@ func (v *OIDCValidator) fetch(ctx context.Context) (map[string]any, error) {
 	if err != nil || len(data) == 0 || len(data) > 524288 || rejectDuplicateKeys(data) != nil {
 		return nil, errors.New("invalid JWKS")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var document jwksDocument
-	if err := decoder.Decode(&document); err != nil || len(document.Keys) == 0 || len(document.Keys) > 64 {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
 		return nil, errors.New("invalid JWKS")
 	}
-	keys := make(map[string]any, len(document.Keys))
-	for _, value := range document.Keys {
-		if value.KID == "" || len(value.KID) > 256 || keys[value.KID] != nil || (value.Use != "" && value.Use != "sig") || !allowsVerification(value.KeyOps) {
+	var entries []json.RawMessage
+	if raw, exists := document["keys"]; !exists || json.Unmarshal(raw, &entries) != nil || len(entries) == 0 || len(entries) > 64 {
+		return nil, errors.New("invalid JWKS")
+	}
+	keys := make(map[string]any, len(entries))
+	seenKeyIDs := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		var value jwk
+		if json.Unmarshal(entry, &value) != nil {
+			continue
+		}
+		if value.KID == "" || len(value.KID) > 256 {
+			continue
+		}
+		if _, duplicate := seenKeyIDs[value.KID]; duplicate {
 			return nil, errors.New("invalid JWK")
+		}
+		seenKeyIDs[value.KID] = struct{}{}
+		if (value.Use != "" && value.Use != "sig") || !allowsVerification(value.KeyOps) || !jwkAlgorithmAllowed(value, v.configuration.AllowedAlgorithms) {
+			continue
 		}
 		key, err := parseJWK(value)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		keys[value.KID] = key
 	}
+	if len(keys) == 0 {
+		return nil, errors.New("JWKS contains no usable verification keys")
+	}
 	return keys, nil
+}
+
+func jwkAlgorithmAllowed(value jwk, allowed []string) bool {
+	switch value.KTY {
+	case "RSA":
+		return (value.ALG == "" || value.ALG == "RS256") && contains(allowed, "RS256")
+	case "EC":
+		return value.CRV == "P-256" && (value.ALG == "" || value.ALG == "ES256") && contains(allowed, "ES256")
+	default:
+		return false
+	}
 }
 
 func parseJWK(value jwk) (any, error) {

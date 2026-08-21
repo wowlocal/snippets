@@ -100,6 +100,28 @@ func TestJWKKeyOperationsMustAllowVerification(t *testing.T) {
 	}
 }
 
+func TestOIDCValidatorIgnoresUnknownJWKSFieldsAndUnusableKeys(t *testing.T) {
+	fixture := newOIDCFixtureWithJWKS(t, func(entry map[string]any) map[string]any {
+		entry["x5t#S256"] = "metadata-is-ignored"
+		return map[string]any{
+			"keys": []any{
+				map[string]any{"kid": "damaged", "kty": "RSA", "alg": 42},
+				map[string]any{"kid": "future-key", "kty": "OKP", "alg": "EdDSA", "crv": "Ed25519", "x": "AA"},
+				entry,
+			},
+			"issuer_metadata": map[string]any{"version": 2},
+		}
+	})
+	defer fixture.server.Close()
+	validator, err := NewOIDCValidator(context.Background(), fixture.configuration, fixture.server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validator.Validate(context.Background(), fixture.token(t, "resource", "client", true), Standard); err != nil {
+		t.Fatalf("valid verification key was discarded with unrelated JWKS entries: %v", err)
+	}
+}
+
 type oidcFixture struct {
 	key           *rsa.PrivateKey
 	server        *httptest.Server
@@ -107,6 +129,16 @@ type oidcFixture struct {
 }
 
 func newOIDCFixture(t *testing.T, duplicate bool) oidcFixture {
+	return newOIDCFixtureWithJWKS(t, func(entry map[string]any) map[string]any {
+		keys := []any{entry}
+		if duplicate {
+			keys = append(keys, entry)
+		}
+		return map[string]any{"keys": keys}
+	})
+}
+
+func newOIDCFixtureWithJWKS(t *testing.T, documentBuilder func(map[string]any) map[string]any) oidcFixture {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -115,11 +147,7 @@ func newOIDCFixture(t *testing.T, duplicate bool) oidcFixture {
 	encodedN := base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes())
 	encodedE := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes())
 	entry := map[string]any{"kty": "RSA", "kid": "test-key", "alg": "RS256", "use": "sig", "n": encodedN, "e": encodedE}
-	keys := []any{entry}
-	if duplicate {
-		keys = append(keys, entry)
-	}
-	document, _ := json.Marshal(map[string]any{"keys": keys})
+	document, _ := json.Marshal(documentBuilder(entry))
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(document)

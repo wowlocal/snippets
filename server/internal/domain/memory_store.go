@@ -231,6 +231,15 @@ func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uui
 	if !membership.role.CanWrite() {
 		return BatchSubmission{}, NewError(Forbidden)
 	}
+	var incomingChangeBytes int64
+	for _, item := range items {
+		incomingChangeBytes += int64(len(item.Record.Blob) + len([]byte(item.Record.Rev)))
+	}
+	if s.changeHistoryNeedsCompaction(state, incomingChangeBytes, int64(len(items))) && s.canRebuildSnapshotBaseline(state, incomingChangeBytes, int64(len(items))) {
+		state.feedEpoch = uuid.New()
+		s.rebuildSnapshotBaseline(state, false)
+		return BatchSubmission{}, NewError(CursorInvalid)
+	}
 	if err := expectedScope.RequireCurrentMutationScope(
 		descriptor(spaceID, state, membership).Scope); err != nil {
 		return BatchSubmission{}, err
@@ -303,6 +312,20 @@ func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uui
 		}
 	}
 	return BatchSubmission{Scope: descriptor(spaceID, state, membership).Scope, Outcomes: outcomes, Partial: partial}, nil
+}
+
+func (s *MemoryStore) changeHistoryNeedsCompaction(state *memorySpace, incomingBytes, incomingCount int64) bool {
+	return int64(len(state.changes))+incomingCount > s.quota.MaxChangesPerSpace*4/5 ||
+		s.spaceBytes(state)+incomingBytes > s.quota.MaxBytesPerSpace*15/16
+}
+
+func (s *MemoryStore) canRebuildSnapshotBaseline(state *memorySpace, incomingBytes, incomingCount int64) bool {
+	var currentBytes int64
+	for _, stored := range state.records {
+		currentBytes += recordBytes(stored)
+	}
+	return currentBytes*2+incomingBytes <= s.quota.MaxBytesPerSpace &&
+		int64(len(state.records))+incomingCount <= s.quota.MaxChangesPerSpace
 }
 
 func (s *MemoryStore) GetRecoveryEnvelope(_ context.Context, principal Principal, spaceID uuid.UUID) (Space, *RecoveryEnvelope, error) {
@@ -449,9 +472,12 @@ func (s *MemoryStore) ClaimPairing(_ context.Context, principal Principal, space
 func (s *MemoryStore) CancelPairing(_ context.Context, principal Principal, spaceID, pairingID uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state, _, err := s.authorized(principal, spaceID)
+	state, membership, err := s.authorized(principal, spaceID)
 	if err != nil {
 		return err
+	}
+	if !membership.role.CanWrite() {
+		return NewError(Forbidden)
 	}
 	delete(state.pairings, pairingID)
 	return nil
@@ -464,7 +490,8 @@ func (s *MemoryStore) RotateDataset(spaceID uuid.UUID) error {
 	if !ok {
 		return NewError(NotFound)
 	}
-	state.datasetGeneration, state.feedEpoch, state.nextSequence, state.changes = uuid.New(), uuid.New(), 0, nil
+	state.datasetGeneration, state.feedEpoch = uuid.New(), uuid.New()
+	s.rebuildSnapshotBaseline(state, true)
 	return nil
 }
 
@@ -475,13 +502,27 @@ func (s *MemoryStore) RotateFeedEpoch(spaceID uuid.UUID) error {
 	if !ok {
 		return NewError(NotFound)
 	}
-	state.feedEpoch, state.nextSequence, state.changes = uuid.New(), 0, nil
+	state.feedEpoch = uuid.New()
+	s.rebuildSnapshotBaseline(state, false)
 	return nil
 }
 
 func (s *MemoryStore) snapshotPage(state *memorySpace, scope Scope, after *uuid.UUID, highWater int64, limit int) (ChangesPage, error) {
-	stored := make([]memoryRecord, 0, len(state.records))
-	for _, value := range state.records {
+	// Changes are immutable temporal versions. Reconstruct the record set at the
+	// first page's watermark instead of reading mutable current records on every
+	// HTTP request.
+	atWatermark := make(map[uuid.UUID]memoryRecord)
+	for _, change := range state.changes {
+		if change.sequence > highWater {
+			break
+		}
+		atWatermark[change.record.ID] = memoryRecord{
+			record:     cloneWireRecord(change.record),
+			generation: change.generation,
+		}
+	}
+	stored := make([]memoryRecord, 0, len(atWatermark))
+	for _, value := range atWatermark {
 		if after == nil || value.record.ID.String() > after.String() {
 			stored = append(stored, value)
 		}
@@ -510,6 +551,32 @@ func (s *MemoryStore) snapshotPage(state *memorySpace, scope Scope, after *uuid.
 		return ChangesPage{}, err
 	}
 	return ChangesPage{Scope: scope, Records: records, Cursor: cursor, HasMore: hasMore, FullSnapshot: true}, nil
+}
+
+// rebuildSnapshotBaseline rotates the feed onto one immutable version per
+// current record. It is used by restore/feed-maintenance paths after old change
+// history is discarded so a fresh paginated snapshot remains reconstructable.
+func (s *MemoryStore) rebuildSnapshotBaseline(state *memorySpace, incrementGeneration bool) {
+	ids := make([]uuid.UUID, 0, len(state.records))
+	for id := range state.records {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
+	state.nextSequence = 0
+	state.changes = make([]memoryChange, 0, len(ids))
+	for _, id := range ids {
+		stored := state.records[id]
+		if incrementGeneration {
+			stored.generation++
+			state.records[id] = stored
+		}
+		state.nextSequence++
+		state.changes = append(state.changes, memoryChange{
+			sequence:   state.nextSequence,
+			record:     cloneWireRecord(stored.record),
+			generation: stored.generation,
+		})
+	}
 }
 
 func (s *MemoryStore) serverRecord(spaceID uuid.UUID, state *memorySpace, stored memoryRecord) (ServerRecord, error) {
@@ -586,7 +653,9 @@ func boolInt(value bool) int64 {
 }
 func digestKey(value [32]byte) string { return hex.EncodeToString(value[:]) }
 func cloneWireRecord(value WireRecord) WireRecord {
-	value.Blob = append([]byte(nil), value.Blob...)
+	cloned := make([]byte, len(value.Blob))
+	copy(cloned, value.Blob)
+	value.Blob = cloned
 	return value
 }
 
