@@ -453,7 +453,6 @@ final class SnippetsCloudAccountBootstrap {
             guard case .ready = try stateIgnoringRecoveryPresentation() else {
                 throw Failure.invalidState
             }
-            selection.activateSnippetsCloud()
         }
         try secrets.storeItem(Data("verified".utf8), account: Self.recoveryVerifiedAccount)
         try secrets.deleteItem(account: Self.pendingRecoveryAccount)
@@ -505,7 +504,6 @@ final class SnippetsCloudAccountBootstrap {
                 // Poll responses are redacted; the recipient still owns the only
                 // operation that can atomically take the stored envelope.
                 try secrets.deleteItem(account: Self.approvalAccount)
-                selection.activateSnippetsCloud()
                 return .ready
             }
             guard serverPairing.state == "pending" else { throw Failure.invalidInvitation }
@@ -522,7 +520,6 @@ final class SnippetsCloudAccountBootstrap {
             guard approved.pairingID == invitation.pairingID,
                   approved.state == "approved" else { throw Failure.invalidInvitation }
             try secrets.deleteItem(account: Self.approvalAccount)
-            selection.activateSnippetsCloud()
             return .ready
         }
 
@@ -531,7 +528,6 @@ final class SnippetsCloudAccountBootstrap {
         }
 
         if try installedMaterial(for: coordinates) != nil {
-            selection.activateSnippetsCloud()
             return .ready
         }
 
@@ -539,7 +535,6 @@ final class SnippetsCloudAccountBootstrap {
         async let containsRecords = mapService { try await client.hasRemoteRecords() }
         let hasRemoteRecords = try await containsRecords
         if remote.recovery != nil || hasRemoteRecords {
-            selection.parkSnippetsCloudUntilKeyReady()
             return .needsTrustedDeviceOrRecovery
         }
 
@@ -561,11 +556,9 @@ final class SnippetsCloudAccountBootstrap {
         do {
             return try await uploadPendingRecovery(pending, coordinates: coordinates, client: client)
         } catch Failure.service(let code) where code == "reauthentication_required" {
-            selection.parkSnippetsCloudUntilKeyReady()
             return .strongAuthenticationRequired(.createInitialRecovery)
         } catch Failure.service(let code) where code == "conflict" {
             try secrets.deleteItem(account: Self.pendingRecoveryAccount)
-            selection.parkSnippetsCloudUntilKeyReady()
             return .needsTrustedDeviceOrRecovery
         }
     }
@@ -606,9 +599,8 @@ final class SnippetsCloudAccountBootstrap {
         try secrets.storeItem(
             Data(pending.kitPayload.utf8),
             account: Self.recoveryPresentationAccount)
-        selection.activateSnippetsCloud()
-        // Last write: until activation is durable this journal makes restart/ack retry
-        // the exact committed envelope and installed root rather than losing the handoff.
+        // Last write: until key installation and presentation are durable this journal
+        // makes restart/ack retry the exact committed envelope instead of losing it.
         try secrets.deleteItem(account: Self.pendingRecoveryAccount)
         return .recoveryKitReady(
             qrPayload: pending.kitPayload,
@@ -625,7 +617,6 @@ final class SnippetsCloudAccountBootstrap {
             spaceID: coordinates.spaceID,
             serverInstanceID: try requiredServerInstanceID(in: coordinates),
             protocolMajor: try requiredProtocolMajor(in: coordinates))
-        selection.activateSnippetsCloud()
     }
 
     private func installedMaterial(
@@ -714,7 +705,8 @@ final class SnippetsCloudAccountBootstrap {
     /// root, while existing remote data still requires pairing or recovery. Record sync
     /// independently retains its explicit account/dataset review before uploading data.
     private func syncCheckpointRequiresReviewBeforeBootstrap() async throws -> Bool {
-        let journalOutcome = SyncJournalFile.load()
+        let locations = try selection.protocolLocations(for: .snippetsCloud)
+        let journalOutcome = SyncJournalFile.load(from: locations.journalURL)
         let stateFileExists = FileManager.default.fileExists(
             atPath: SnippetStorageLocations.syncStateFileURL.path)
         switch SyncStateFile.load() {
@@ -729,7 +721,7 @@ final class SnippetsCloudAccountBootstrap {
         }
 
         let base: SyncBase
-        switch SyncBaseFile.load() {
+        switch SyncBaseFile.load(from: locations.baseURL) {
         case .missing:
             if case .missing = journalOutcome { return false }
             return true

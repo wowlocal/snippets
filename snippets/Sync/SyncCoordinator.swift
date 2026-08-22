@@ -207,7 +207,7 @@ final class SyncCoordinator {
     /// Off unless the user has said otherwise. `UserDefaults.bool(forKey:)` returns
     /// `false` for an absent key, so the default needs no registration — and an absent
     /// key and an explicit "off" behave identically, which is what we want.
-    static let enabledDefaultsKey = "SnippetsICloudSyncEnabled"
+    static let enabledDefaultsKey = SyncBackendSelectionStore.syncEnabledDefaultsKey
 
     /// Long enough to collapse a CLI loop or a run of editor keystrokes, while still
     /// making a completed local change visible to another device almost immediately.
@@ -344,6 +344,7 @@ final class SyncCoordinator {
         case cloudKeyRequired
         case syncKeyUnreadable
         case cloudCredentialsUnreadable
+        case providerSwitchUnreadable
         case retryablePrerequisite
 
         var description: String {
@@ -360,6 +361,8 @@ final class SyncCoordinator {
                 "The stored sync encryption key could not be verified. Repair or restore the library key, then choose Check Again."
             case .cloudCredentialsUnreadable:
                 "The saved cloud sign-in history cannot be verified. Reset it from Snippets Cloud settings."
+            case .providerSwitchUnreadable:
+                "The interrupted cloud-provider switch could not be verified. Update Snippets or restore the local sync state."
             case .retryablePrerequisite:
                 "A local sync prerequisite is temporarily unavailable. Try again."
             }
@@ -383,6 +386,8 @@ final class SyncCoordinator {
                 .needsAttention("sync_key_unreadable")
             case .cloudCredentialsUnreadable:
                 .needsAttention("cloud_credentials_unreadable")
+            case .providerSwitchUnreadable:
+                .needsAttention("provider_switch_unreadable")
             case .retryablePrerequisite:
                 .needsAttention("startup_prerequisite_unavailable")
             }
@@ -394,7 +399,7 @@ final class SyncCoordinator {
             case .syncKeyUnreadable: .checkAgain
             case .retryablePrerequisite: .retrySync
             case .schemaTooNew, .authenticationRequired, .cloudKeyRequired,
-                 .cloudCredentialsUnreadable: nil
+                 .cloudCredentialsUnreadable, .providerSwitchUnreadable: nil
             }
         }
 
@@ -403,7 +408,7 @@ final class SyncCoordinator {
             case .retryablePrerequisite: true
             case .schemaTooNew, .checkpointUnreadable, .authenticationRequired,
                  .cloudKeyRequired, .syncKeyUnreadable,
-                 .cloudCredentialsUnreadable: false
+                 .cloudCredentialsUnreadable, .providerSwitchUnreadable: false
             }
         }
     }
@@ -430,6 +435,10 @@ final class SyncCoordinator {
         self.backendSelection = selection
         self.transportFactory = transportFactory ?? { try selection.makeTransport() }
         self.offlineRetryScheduler = offlineRetryScheduler ?? SyncOfflineRetryScheduler()
+        if let locations = try? selection.protocolLocations() {
+            try? locations.createDirectories()
+            library.activateProtocolLocations(locations)
+        }
         restoreLocalLibraryRecoveryIfNeeded()
     }
 
@@ -439,7 +448,11 @@ final class SyncCoordinator {
         #if DEBUG
         if let runtimeEnabledOverride { return runtimeEnabledOverride }
         #endif
-        return UserDefaults.standard.bool(forKey: enabledDefaultsKey)
+        let defaults = UserDefaults.standard
+        if let value = defaults.object(forKey: enabledDefaultsKey) as? NSNumber {
+            return value.boolValue
+        }
+        return defaults.bool(forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey)
     }
 
     private static func storeEnabledPreference(_ enabled: Bool) {
@@ -449,7 +462,17 @@ final class SyncCoordinator {
             return
         }
         #endif
-        UserDefaults.standard.set(enabled, forKey: enabledDefaultsKey)
+        let defaults = UserDefaults.standard
+        if !enabled {
+            defaults.set(false, forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey)
+        }
+        defaults.set(enabled, forKey: enabledDefaultsKey)
+        let rawSelection = defaults.string(forKey: SyncBackendSelectionStore.providerDefaultsKey)
+        let selected = rawSelection.flatMap(SyncBackendSelectionStore.Provider.init(rawValue:))
+        if enabled, rawSelection == nil || selected == .iCloud {
+            defaults.set(true, forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey)
+        }
+        _ = defaults.synchronize()
     }
 
     var readiness: Readiness {
@@ -505,7 +528,15 @@ final class SyncCoordinator {
     /// Writing the preference and starting are one call on purpose: two calls is how a
     /// checkbox ends up out of step with what is actually running.
     func setEnabled(_ enabled: Bool) {
-        Self.storeEnabledPreference(enabled)
+        #if DEBUG
+        if Self.runtimeEnabledOverride != nil {
+            Self.storeEnabledPreference(enabled)
+        } else {
+            backendSelection.setSyncEnabled(enabled)
+        }
+        #else
+        backendSelection.setSyncEnabled(enabled)
+        #endif
         if enabled {
             start()
         } else {
@@ -542,12 +573,16 @@ final class SyncCoordinator {
         let material: Data
         let sealer: SnippetCryptoSealer
         let transport: any SyncTransport
+        let locations: SyncProtocolLocations
         do {
-            try validateProtocolFilesForStartup()
+            locations = try backendSelection.protocolLocations()
+            try locations.createDirectories()
+            library.activateProtocolLocations(locations)
+            try validateProtocolFilesForStartup(at: locations)
             material = try keys.materialMintingIfNeeded()
             sealer = SnippetCryptoSealer(
                 keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
-            try discardAgreedBaseIfWireKeyChanged(material)
+            try discardAgreedBaseIfWireKeyChanged(material, at: locations)
             transport = try transportFactory()
         } catch {
             // Startup has not touched either the primary library or the backend. Keep
@@ -556,7 +591,7 @@ final class SyncCoordinator {
             // whether retrying, signing in, repairing, or updating is the safe action.
             let issue = Self.startIssue(for: error)
             let diagnosticArea: DiagnosticStorageArea = switch issue {
-            case .schemaTooNew, .checkpointUnreadable: .syncState
+            case .schemaTooNew, .checkpointUnreadable, .providerSwitchUnreadable: .syncState
             case .authenticationRequired, .cloudKeyRequired, .syncKeyUnreadable,
                  .cloudCredentialsUnreadable, .retryablePrerequisite: .syncKey
             }
@@ -583,7 +618,15 @@ final class SyncCoordinator {
         activeKeyMaterial = material
 
         let engine = SyncEngine(
-            transport: transport, library: library, sealer: sealer, device: device)
+            transport: transport,
+            library: library,
+            sealer: sealer,
+            device: device,
+            baseURL: locations.baseURL,
+            journalURL: locations.journalURL,
+            stateURL: SnippetStorageLocations.syncStateFileURL,
+            libraryQuarantineMarkerURL: SnippetStorageLocations.libraryQuarantineMarkerURL,
+            quarantineFolderURL: locations.quarantineFolderURL)
         engine.noteUserInitiatedDeletions(pendingUserDeletionIDs)
         engine.onSafetyHaltPersistenceFailure = {
             // Independent fail-closed channel: if state.json or its lock is unavailable,
@@ -734,6 +777,53 @@ final class SyncCoordinator {
     func reloadProviderSelection() {
         stop()
         if Self.isEnabled, shutdownTask == nil { start() }
+    }
+
+    /// Moves the one active writer through a durable local selection transaction. The
+    /// target owns a different base/journal, so its ordinary first round performs the
+    /// loss-preserving merge. The source transport is fully shut down first and its
+    /// remote state is never deleted.
+    func switchProvider(
+        to target: SyncBackendSelectionStore.Provider
+    ) async -> RequestResult {
+        guard target != backendSelection.provider else {
+            return await requestSync(trigger: .manual)
+        }
+        guard !cloudMutationInProgress else {
+            return .notStarted(.cannotStart("Cloud account maintenance is in progress."))
+        }
+
+        let prepared: SyncBackendSelectionStore.ProviderSwitchReceipt
+        do {
+            prepared = try backendSelection.prepareProviderSwitch(to: target)
+        } catch {
+            return .notStarted(.cannotStart("The target cloud provider could not be prepared."))
+        }
+
+        cloudMutationInProgress = true
+        stop()
+        if let shutdownTask { await shutdownTask.value }
+        do {
+            try backendSelection.commitPreparedProviderSwitch(prepared)
+            let locations = try backendSelection.protocolLocations()
+            try locations.createDirectories()
+            library.activateProtocolLocations(locations)
+            // This API is reached only from the explicit “Switch and Sync” action. A
+            // provider may be chosen while the old sync toggle is off; turning the new
+            // provider on here makes the promised verification round real and lets the
+            // durable switch receipt retire instead of leaving a half-finished choice.
+            if !backendSelection.syncEnabled {
+                backendSelection.setSyncEnabled(true)
+            }
+        } catch {
+            cloudMutationInProgress = false
+            if Self.isEnabled { start() }
+            return .notStarted(.cannotStart("The provider switch could not be committed."))
+        }
+        cloudMutationInProgress = false
+        guard Self.isEnabled else { return .notStarted(.off) }
+        start()
+        return await requestSync(trigger: .manual)
     }
 
     /// Re-evaluates after the shape of the library changed underneath — most usefully,
@@ -1008,11 +1098,17 @@ final class SyncCoordinator {
         }
         guard hasIndependentMarker || hasTypedStateMarker else { return }
 
+        guard let locations = try? backendSelection.protocolLocations() else { return }
         let candidate = SyncEngine(
             transport: LocalRecoveryOnlyTransport(),
             library: library,
             sealer: LocalRecoveryOnlySealer(),
-            device: device)
+            device: device,
+            baseURL: locations.baseURL,
+            journalURL: locations.journalURL,
+            stateURL: SnippetStorageLocations.syncStateFileURL,
+            libraryQuarantineMarkerURL: SnippetStorageLocations.libraryQuarantineMarkerURL,
+            quarantineFolderURL: locations.quarantineFolderURL)
         if hasIndependentMarker {
             candidate.reassertPrimaryLibraryQuarantine()
         }
@@ -1069,6 +1165,8 @@ final class SyncCoordinator {
             return switch failure {
             case .missingCredential, .invalidCredential: .authenticationRequired
             case .credentialResetRequired: .cloudCredentialsUnreadable
+            case .invalidProviderSelection, .switchStateUnreadable:
+                .providerSwitchUnreadable
             case .featureDisabled, .missingConfiguration,
                  .credentialCleanupRequired, .credentialStoreUnavailable:
                 .retryablePrerequisite
@@ -1088,9 +1186,9 @@ final class SyncCoordinator {
     /// engine also validates these files, but doing it here is what lets Settings offer
     /// an actual Repair action instead of constructing an inert engine whose generic
     /// resume can only rediscover the same malformed bytes.
-    private func validateProtocolFilesForStartup() throws {
-        let baseOutcome = SyncBaseFile.load()
-        let journalOutcome = SyncJournalFile.load()
+    private func validateProtocolFilesForStartup(at locations: SyncProtocolLocations) throws {
+        let baseOutcome = SyncBaseFile.load(from: locations.baseURL)
+        let journalOutcome = SyncJournalFile.load(from: locations.journalURL)
         let stateOutcome = SyncStateFile.load()
 
         var futureVersions: [Int] = []
@@ -1128,8 +1226,11 @@ final class SyncCoordinator {
     /// or deletion made after Repair remains authoritative while the first full fetch is
     /// pending. Older journal-only intent is retained independently.
     private func repairUnreadableProtocolCheckpoint() throws {
-        let baseOutcome = SyncBaseFile.load()
-        let journalOutcome = SyncJournalFile.load()
+        let locations = try backendSelection.protocolLocations()
+        try locations.createDirectories()
+        library.activateProtocolLocations(locations)
+        let baseOutcome = SyncBaseFile.load(from: locations.baseURL)
+        let journalOutcome = SyncJournalFile.load(from: locations.journalURL)
         let stateOutcome = SyncStateFile.load()
 
         if case .tooNew(let version) = baseOutcome {
@@ -1195,11 +1296,17 @@ final class SyncCoordinator {
         // startup stopped. Writing the journal first would be unsafe when the old base
         // was readable: a crash could pair that deletion-capable ancestor with the new
         // empty-ancestor journal before the marker existed.
-        try SyncBaseFile.write(recoveryBase)
+        try SyncBaseFile.write(
+            recoveryBase,
+            to: locations.baseURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
         #if DEBUG
         try protocolRepairBoundaryHook?(.baseCommitted)
         #endif
-        try SyncJournalFile.write(repairedJournal)
+        try SyncJournalFile.write(
+            repairedJournal,
+            to: locations.journalURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
         #if DEBUG
         try protocolRepairBoundaryHook?(.journalCommitted)
         #endif
@@ -1226,18 +1333,24 @@ final class SyncCoordinator {
     /// A fingerprint, not the key: this value sits in `UserDefaults`, which is neither
     /// encrypted nor access-controlled, and the only question it has to answer is "same
     /// as last time".
-    private func discardAgreedBaseIfWireKeyChanged(_ material: Data) throws {
+    private func discardAgreedBaseIfWireKeyChanged(
+        _ material: Data,
+        at locations: SyncProtocolLocations
+    ) throws {
         let fingerprint = SHA256.hash(data: material)
             .prefix(8).map { String(format: "%02x", $0) }.joined()
         let defaults = UserDefaults.standard
-        let previous = defaults.string(forKey: Self.wireKeyFingerprintDefaultsKey)
+        let fingerprintDefaultsKey = locations.identifier == "icloud"
+            ? Self.wireKeyFingerprintDefaultsKey
+            : "\(Self.wireKeyFingerprintDefaultsKey).\(locations.identifier)"
+        let previous = defaults.string(forKey: fingerprintDefaultsKey)
         guard previous != fingerprint else { return }
 
         // Absent means either a first run, which has no base to discard and costs
         // nothing, or an install from before the fingerprint existed — which is exactly
         // the vault-key era whose base must be discarded. Both want the same action.
         if previous != nil || FileManager.default.fileExists(
-            atPath: SnippetStorageLocations.syncBaseFileURL.path) {
+            atPath: locations.baseURL.path) {
             Diagnostics.record(.syncTriggered(.keyChanged))
         }
         // Journal offers are plaintext application envelopes, not the ciphertext handed
@@ -1246,7 +1359,7 @@ final class SyncCoordinator {
         // a delete/newer edit that followed a lost acknowledgement.
         let confirmed: SyncBase
         let baseWasMissing: Bool
-        switch SyncBaseFile.load(from: SnippetStorageLocations.syncBaseFileURL) {
+        switch SyncBaseFile.load(from: locations.baseURL) {
         case .loaded(let loaded):
             confirmed = loaded
             baseWasMissing = false
@@ -1261,7 +1374,7 @@ final class SyncCoordinator {
 
         var journal: SyncJournal
         let journalWasMissing: Bool
-        switch SyncJournalFile.load(from: SnippetStorageLocations.syncJournalFileURL) {
+        switch SyncJournalFile.load(from: locations.journalURL) {
         case .missing(let empty):
             journal = empty
             journalWasMissing = true
@@ -1284,7 +1397,7 @@ final class SyncCoordinator {
         // Truly fresh sync has nothing to reseal. Do not manufacture journal.json here:
         // the engine establishes base.json before journal.json on its first round.
         if baseWasMissing, journalWasMissing {
-            defaults.set(fingerprint, forKey: Self.wireKeyFingerprintDefaultsKey)
+            defaults.set(fingerprint, forKey: fingerprintDefaultsKey)
             return
         }
 
@@ -1305,7 +1418,10 @@ final class SyncCoordinator {
                 now: Date())
         }
         // Publish later C1/T intent before any frozen C0 recovery can touch primary.
-        try SyncJournalFile.write(journal)
+        try SyncJournalFile.write(
+            journal,
+            to: locations.journalURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
         // The scheduler reset below can discard an old inbox. Carrier-only dependency
         // snapshots must first become deterministic primary vault copies, exactly like
         // reviewed account/checkpoint resets. This maintenance path runs before a
@@ -1321,7 +1437,10 @@ final class SyncCoordinator {
             try journal.recordConflictCopyEvidence(freshlyPrepared)
             // Publish exact random-nonce C0 before primary mutation. A crash here is
             // repaired by SyncEngine before its next push/reset attempt.
-            try SyncJournalFile.write(journal)
+            try SyncJournalFile.write(
+                journal,
+                to: locations.journalURL,
+                temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
         }
         if journal.hasFrozenConflictPrerequisitesAwaitingPrimaryCheck {
             let primary = try library.currentSnapshot(
@@ -1333,7 +1452,10 @@ final class SyncCoordinator {
                 deviceID: device,
                 now: Date())
             // Publish a receipt-proven deletion before replaying any frozen C0/C1.
-            try SyncJournalFile.write(journal)
+            try SyncJournalFile.write(
+                journal,
+                to: locations.journalURL,
+                temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
             let batch = journal.conflictPrerequisiteRecovery(
                 primaryStates: primary.primaryStates,
                 installedHashes: primary.installedConflictPrerequisiteHashes)
@@ -1380,7 +1502,10 @@ final class SyncCoordinator {
                 confirmed: confirmed,
                 now: Date())
         }
-        try SyncJournalFile.write(journal)
+        try SyncJournalFile.write(
+            journal,
+            to: locations.journalURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
         try library.retainConflictPrerequisiteInstallReceipts(
             for: journal.activeConflictPrerequisiteCopyIDs)
 
@@ -1404,11 +1529,13 @@ final class SyncCoordinator {
             nonDestructiveMergeMode: confirmed.nonDestructiveMergeMode,
             preRecoveryConfirmedEnvelopes:
                 confirmed.preRecoveryConfirmedEnvelopes,
-            nonDestructiveReviewID: confirmed.nonDestructiveReviewID))
+            nonDestructiveReviewID: confirmed.nonDestructiveReviewID),
+            to: locations.baseURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
 
         // The projection sidecar remains untouched: it contains forward-compatible `x`
         // fields and local HLC/origin metadata independent of the transport key.
-        defaults.set(fingerprint, forKey: Self.wireKeyFingerprintDefaultsKey)
+        defaults.set(fingerprint, forKey: fingerprintDefaultsKey)
     }
 
     /// Adopts a wire key that arrived from another Mac after this engine was built.
@@ -1463,6 +1590,16 @@ final class SyncCoordinator {
     ) {
         roundTask = nil
         roundGeneration = nil
+
+        if generation == lifecycleGeneration,
+           case .idle(let lastSync) = finalState,
+           lastSync != nil,
+           backendSelection.interruptedProviderSwitch?.target == backendSelection.provider {
+            // The target merge, pending journal and returned cursor are durable before
+            // SyncEngine reports idle. Removing the marker last makes a crash on every
+            // earlier boundary resume the target instead of guessing or dual-writing.
+            try? backendSelection.completeProviderSwitch()
+        }
 
         let completedRequests = currentRoundCompletions
         currentRoundCompletions.removeAll(keepingCapacity: true)

@@ -116,6 +116,9 @@ protocol SyncLibraryAccess: AnyObject {
     /// sealed deterministic vault record. Value-only Core fakes cannot do that safely;
     /// the production bridge can and opts in explicitly.
     var supportsSecureConflictMaterialization: Bool { get }
+    /// Selects the provider-owned base/journal used by local vault transactions. Core
+    /// value fakes have no sidecar files and therefore use the no-op default.
+    func activateProtocolLocations(_ locations: SyncProtocolLocations)
     /// Everything syncable, plaintext and secure, as envelopes ready to seal.
     ///
     /// The engine passes its live ancestor rather than asking the library to re-read
@@ -183,6 +186,7 @@ protocol SyncLibraryAccess: AnyObject {
 
 @MainActor extension SyncLibraryAccess {
     var supportsSecureConflictMaterialization: Bool { false }
+    func activateProtocolLocations(_ locations: SyncProtocolLocations) { _ = locations }
     func prepareRemote(_ envelopes: [SyncEnvelope]) throws -> RemoteClassification {
         classifyRemote(envelopes)
     }
@@ -324,6 +328,7 @@ final class SyncEngine {
     private let journalURL: URL
     private let stateURL: URL
     private let libraryQuarantineMarkerURL: URL
+    private let quarantineFolderURL: URL
     private let lockURL: URL
     private let temporaryDirectory: URL
     private let stateLockTimeout: TimeInterval
@@ -411,6 +416,7 @@ final class SyncEngine {
         journalURL: URL? = nil,
         stateURL: URL = SnippetStorageLocations.syncStateFileURL,
         libraryQuarantineMarkerURL: URL? = nil,
+        quarantineFolderURL: URL = SnippetStorageLocations.syncQuarantineFolderURL,
         lockURL: URL = SnippetStorageLocations.libraryLockFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
         stateLockTimeout: TimeInterval = 2.0
@@ -425,6 +431,7 @@ final class SyncEngine {
         self.stateURL = stateURL
         self.libraryQuarantineMarkerURL = libraryQuarantineMarkerURL
             ?? LibraryQuarantineMarker.url(beside: stateURL)
+        self.quarantineFolderURL = quarantineFolderURL
         self.lockURL = lockURL
         self.temporaryDirectory = temporaryDirectory
         self.stateLockTimeout = stateLockTimeout
@@ -2899,7 +2906,7 @@ final class SyncEngine {
     }
 
     private func quarantine(_ record: WireRecord) {
-        let folder = SnippetStorageLocations.syncQuarantineFolderURL
+        let folder = quarantineFolderURL
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("\(record.id.uuidString).blob", isDirectory: false)
         do {

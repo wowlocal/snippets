@@ -67,6 +67,116 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertNil(environment.syncCoordinator.engine)
     }
 
+    func testProviderSwitchReceiptResumesCommittedTargetAndRetiresOnlyAfterVerification() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let defaultsName = "SyncLifecycleTests.provider-switch.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        defaults.set(true, forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey)
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.provider-switch-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            serverInstanceID: UUID(uuidString: "00000000-0000-4000-8000-000000000010")!,
+            accessToken: "test-access-token")
+        let http = try selection.protocolLocations()
+        selection.selectICloud()
+
+        let prepared = try selection.prepareProviderSwitch(to: .snippetsCloud)
+        XCTAssertEqual(prepared.phase, .prepared)
+        XCTAssertEqual(selection.provider, .iCloud)
+        try selection.commitPreparedProviderSwitch(prepared)
+
+        XCTAssertEqual(selection.provider, .snippetsCloud)
+        XCTAssertFalse(defaults.bool(
+            forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncProviderSwitchFileURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: http.switchReceiptURL.path))
+
+        let resumed = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        XCTAssertEqual(resumed.provider, .snippetsCloud)
+        XCTAssertEqual(resumed.interruptedProviderSwitch?.phase, .targetSelected)
+        try resumed.completeProviderSwitch()
+        XCTAssertNil(resumed.interruptedProviderSwitch)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: http.switchReceiptURL.path))
+    }
+
+    func testCrashBeforeProviderCommitKeepsSourceAndDiscardsPreparedReceipt() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let defaultsName = "SyncLifecycleTests.provider-switch-prepared.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.provider-switch-prepared-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "test-access-token")
+        selection.selectICloud()
+        _ = try selection.prepareProviderSwitch(to: .snippetsCloud)
+
+        let resumed = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        XCTAssertEqual(resumed.provider, .iCloud)
+        XCTAssertNil(resumed.interruptedProviderSwitch)
+        XCTAssertTrue(defaults.bool(
+            forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey) == resumed.syncEnabled)
+    }
+
+    func testUnreadableSwitchReceiptDisablesLegacyICloudDowngradePath() throws {
+        SnippetStorageLocations.createAllDirectories()
+        let defaultsName = "SyncLifecycleTests.provider-switch-unreadable.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        defaults.set(true, forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey)
+        try Data("{not-a-switch-receipt".utf8).write(
+            to: SnippetStorageLocations.syncProviderSwitchFileURL,
+            options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(
+                at: SnippetStorageLocations.syncProviderSwitchFileURL)
+        }
+
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: KeychainSecretStore(
+                tier: .deviceOnly,
+                service: "com.khm.snippets.provider-switch-unreadable-tests",
+                itemAccessibility: .afterFirstUnlock,
+                inMemory: true),
+            snippetsCloudEnabled: true)
+
+        guard case .some(.switchStateUnreadable) = selection.providerSelectionFailure else {
+            return XCTFail("Expected unreadable switch state to fail closed")
+        }
+        XCTAssertFalse(defaults.bool(
+            forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey),
+            "an older build must stay local-only when the active switch cannot be proven")
+        XCTAssertThrowsError(try selection.makeTransport())
+    }
+
     func testLocalLibraryReviewWorksWhileSyncIsOffWithoutInitializingSync() throws {
         SnippetStorageLocations.createAllDirectories()
         try Data("{not-a-library".utf8).write(

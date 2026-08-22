@@ -957,6 +957,9 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
 
     private static func makeAppContext() -> DiagnosticAppContext {
         let info = Bundle.main.infoDictionary ?? [:]
+        let defaults = UserDefaults.standard
+        let syncEnabled = (defaults.object(forKey: "SnippetsSyncEnabled") as? NSNumber)?.boolValue
+            ?? defaults.bool(forKey: "SnippetsICloudSyncEnabled")
         return DiagnosticAppContext(
             version: info["CFBundleShortVersionString"] as? String ?? "unknown",
             build: info["CFBundleVersion"] as? String ?? "unknown",
@@ -965,7 +968,9 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
             architecture: architectureName,
             cloudEnvironment: cloudEnvironment,
-            syncEnabled: UserDefaults.standard.bool(forKey: "SnippetsICloudSyncEnabled"))
+            // This is provider-independent. The fallback preserves truthful manifests
+            // before the selection store has migrated an existing iCloud-only install.
+            syncEnabled: syncEnabled)
     }
 
     private static var platformName: String {

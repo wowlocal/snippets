@@ -187,7 +187,7 @@ final class SnippetsCloudCredentialMutationGate {
 /// provider's data.
 @MainActor
 final class SyncBackendSelectionStore {
-    enum Provider: String, CaseIterable {
+    enum Provider: String, CaseIterable, Codable, Sendable {
         case iCloud = "icloud"
         case snippetsCloud = "snippets-cloud"
 
@@ -215,6 +215,8 @@ final class SyncBackendSelectionStore {
         case credentialCleanupRequired
         case credentialResetRequired
         case credentialStoreUnavailable
+        case invalidProviderSelection
+        case switchStateUnreadable
 
         var description: String {
             switch self {
@@ -227,6 +229,10 @@ final class SyncBackendSelectionStore {
             case .credentialResetRequired:
                 "the saved Snippets Cloud credential history cannot be verified"
             case .credentialStoreUnavailable: "the credential store is temporarily unavailable"
+            case .invalidProviderSelection:
+                "the saved sync provider was written by an unsupported version"
+            case .switchStateUnreadable:
+                "the interrupted provider switch could not be verified"
             }
         }
 
@@ -234,6 +240,10 @@ final class SyncBackendSelectionStore {
     }
 
     static let providerDefaultsKey = "SnippetsSyncProvider"
+    /// New builds use this for the provider-independent on/off choice. The old key is
+    /// mirrored only for downgrade compatibility and therefore means iCloud specifically.
+    static let syncEnabledDefaultsKey = "SnippetsSyncEnabled"
+    static let legacyICloudEnabledDefaultsKey = "SnippetsICloudSyncEnabled"
     /// Removed one-bit provider-switch authority. Older builds could leave this true
     /// across an offline attempt and accidentally authorize a later unrelated account.
     private static let legacyPendingSwitchDefaultsKey = "SnippetsSyncProviderSwitchPending"
@@ -249,11 +259,25 @@ final class SyncBackendSelectionStore {
     static let pendingLocalEraseAccount = "cloud-local-erase-v1"
     fileprivate static let credentialService = "com.khm.snippets.sync-http"
 
+    struct ProviderSwitchReceipt: Codable, Equatable {
+        enum Phase: String, Codable { case prepared, targetSelected }
+
+        static let currentSchemaVersion = 1
+        var schemaVersion = currentSchemaVersion
+        var id: UUID
+        var source: Provider
+        var target: Provider
+        var sourceLocationID: String
+        var targetLocationID: String
+        var phase: Phase
+    }
+
     private let defaults: UserDefaults
     private let keychain: KeychainSecretStore
     private let bootstrapSecretsForRecovery: KeychainSecretStore
     let snippetsCloudEnabled: Bool
     let cloudKeys: SnippetsCloudKeyStore
+    private(set) var providerSelectionFailure: Failure?
 
     init(
         defaults: UserDefaults = .standard,
@@ -279,6 +303,9 @@ final class SyncBackendSelectionStore {
         // the legacy Boolean on every launch; an account/dataset change now always uses
         // the explicit reason-specific confirmation shown by Sync settings.
         defaults.removeObject(forKey: Self.legacyPendingSwitchDefaultsKey)
+        migrateSyncPreferenceIfNeeded()
+        recoverInterruptedProviderSwitch()
+        mirrorLegacyICloudPreference()
         // A successful remote logout writes this journal before deleting any local
         // secret. Finishing it during normal app construction makes process death at
         // every subsequent deletion boundary recoverable and fail-closed.
@@ -319,11 +346,33 @@ final class SyncBackendSelectionStore {
 
     var provider: Provider {
         get {
-            let stored = Provider(
-                rawValue: defaults.string(forKey: Self.providerDefaultsKey) ?? "") ?? .iCloud
-            return stored == .snippetsCloud && !snippetsCloudEnabled ? .iCloud : stored
+            guard let raw = defaults.string(forKey: Self.providerDefaultsKey) else {
+                return .iCloud
+            }
+            return Provider(rawValue: raw) ?? .iCloud
         }
-        set { defaults.set(newValue.rawValue, forKey: Self.providerDefaultsKey) }
+        set { commitProvider(newValue) }
+    }
+
+    var syncEnabled: Bool {
+        if let stored = defaults.object(forKey: Self.syncEnabledDefaultsKey) as? NSNumber {
+            return stored.boolValue
+        }
+        return defaults.bool(forKey: Self.legacyICloudEnabledDefaultsKey)
+    }
+
+    func setSyncEnabled(_ enabled: Bool) {
+        // When stopping, retire the downgrade capability before changing new state. When
+        // starting iCloud, publish the new state first so no crash can leave an older
+        // build enabled while this build still considers sync off.
+        if !enabled || provider != .iCloud {
+            defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+        }
+        defaults.set(enabled, forKey: Self.syncEnabledDefaultsKey)
+        if enabled, provider == .iCloud, providerSelectionFailure == nil {
+            defaults.set(true, forKey: Self.legacyICloudEnabledDefaultsKey)
+        }
+        _ = defaults.synchronize()
     }
 
     var availableProviders: [Provider] {
@@ -567,6 +616,8 @@ final class SyncBackendSelectionStore {
             return
         }
 
+        let cloudLocations = try? protocolLocations(for: .snippetsCloud)
+
         // K_sync is the capability that opens the remote library and must disappear
         // before any UI/account state can make this device look signed out.
         try cloudKeys.forget()
@@ -589,6 +640,16 @@ final class SyncBackendSelectionStore {
             catch { if firstFailure == nil { firstFailure = error } }
         }
         if let firstFailure { throw firstFailure }
+
+        if let cloudLocations, FileManager.default.fileExists(
+            atPath: cloudLocations.switchReceiptURL.path) {
+            try AtomicFileWriter.removeDurablyIfPresent(cloudLocations.switchReceiptURL)
+        }
+        if FileManager.default.fileExists(
+            atPath: SnippetStorageLocations.syncProviderSwitchFileURL.path) {
+            try AtomicFileWriter.removeDurablyIfPresent(
+                SnippetStorageLocations.syncProviderSwitchFileURL)
+        }
 
         defaults.removeObject(forKey: Self.serverDefaultsKey)
         defaults.removeObject(forKey: Self.apiBaseDefaultsKey)
@@ -630,17 +691,6 @@ final class SyncBackendSelectionStore {
             expectedServerInstanceID: serverInstanceID,
             expectedProtocolMajor: protocolMajor,
             forceRefresh: forceRefresh)
-    }
-
-    func activateSnippetsCloud() {
-        guard snippetsCloudEnabled else { return }
-        guard !hasPendingLocalErase, !hasPendingRemoteRevocation,
-              !hasPendingCredentialCleanup else { return }
-        provider = .snippetsCloud
-    }
-
-    func parkSnippetsCloudUntilKeyReady() {
-        if provider == .snippetsCloud { provider = .iCloud }
     }
 
     var hasCloudSession: Bool {
@@ -694,6 +744,7 @@ final class SyncBackendSelectionStore {
     }
 
     func makeTransport() throws -> any SyncTransport {
+        if let providerSelectionFailure { throw providerSelectionFailure }
         switch provider {
         case .iCloud:
             // Snippets Cloud journals authorize and fence only that provider's local
@@ -703,6 +754,7 @@ final class SyncBackendSelectionStore {
             // iCloud/CloudKit data plane.
             return CloudKitTransport()
         case .snippetsCloud:
+            guard snippetsCloudEnabled else { throw Failure.featureDisabled }
             do {
                 guard try !pendingLocalEraseExists() else {
                     throw Failure.missingCredential
@@ -793,6 +845,196 @@ final class SyncBackendSelectionStore {
                 protocolMajor: protocolMajor,
                 accessToken: token))
         }
+    }
+
+    func protocolLocations(
+        for requestedProvider: Provider? = nil
+    ) throws -> SyncProtocolLocations {
+        if let providerSelectionFailure { throw providerSelectionFailure }
+        let requestedProvider = requestedProvider ?? provider
+        switch requestedProvider {
+        case .iCloud:
+            return .legacyICloud
+        case .snippetsCloud:
+            guard let coordinates = Self.cloudCoordinates(in: defaults),
+                  let serverInstanceID = coordinates.serverInstanceID,
+                  let protocolMajor = coordinates.protocolMajor,
+                  protocolMajor == 2 else { throw Failure.missingConfiguration }
+            let canonicalOrigin = coordinates.serverURL.absoluteString.lowercased()
+            let material = [
+                "snippets.sync.provider.v1", "http", canonicalOrigin,
+                serverInstanceID.uuidString.lowercased(),
+                coordinates.spaceID.uuidString.lowercased(), String(protocolMajor),
+            ].joined(separator: "\u{0}")
+            let opaqueKey = SHA256.hash(data: Data(material.utf8)).prefix(16)
+                .map { String(format: "%02x", $0) }.joined()
+            guard let locations = SyncProtocolLocations.http(opaqueProviderKey: opaqueKey) else {
+                throw Failure.missingConfiguration
+            }
+            return locations
+        }
+    }
+
+    var interruptedProviderSwitch: ProviderSwitchReceipt? {
+        guard case .loaded(let receipt) = loadProviderSwitchReceipt() else { return nil }
+        return receipt
+    }
+
+    func prepareProviderSwitch(to target: Provider) throws -> ProviderSwitchReceipt {
+        guard providerSelectionFailure == nil else {
+            throw providerSelectionFailure ?? Failure.invalidProviderSelection
+        }
+        let source = provider
+        guard source != target else { throw Failure.invalidProviderSelection }
+        let sourceLocations = try protocolLocations(for: source)
+        let targetLocations = try protocolLocations(for: target)
+        try targetLocations.createDirectories()
+        let receipt = ProviderSwitchReceipt(
+            id: UUID(),
+            source: source,
+            target: target,
+            sourceLocationID: sourceLocations.identifier,
+            targetLocationID: targetLocations.identifier,
+            phase: .prepared)
+        try writeProviderSwitchReceipt(receipt)
+        return receipt
+    }
+
+    func commitPreparedProviderSwitch(_ prepared: ProviderSwitchReceipt) throws {
+        guard case .loaded(let current) = loadProviderSwitchReceipt(),
+              current == prepared,
+              current.phase == .prepared,
+              provider == current.source else { throw Failure.switchStateUnreadable }
+        var selected = current
+        selected.phase = .targetSelected
+        // The intent becomes durable before provider selection. Startup can therefore
+        // finish this exact transition if the process dies at either following write.
+        try writeProviderSwitchReceipt(selected)
+        let targetLocations = try protocolLocations(for: selected.target)
+        try AtomicFileWriter.write(
+            try encodeProviderSwitchReceipt(selected),
+            to: targetLocations.switchReceiptURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
+        commitProvider(selected.target)
+    }
+
+    func completeProviderSwitch() throws {
+        guard case .loaded(let receipt) = loadProviderSwitchReceipt(),
+              receipt.phase == .targetSelected,
+              provider == receipt.target else { return }
+        if let locations = try? protocolLocations(for: receipt.target) {
+            try AtomicFileWriter.removeDurablyIfPresent(locations.switchReceiptURL)
+        }
+        try AtomicFileWriter.removeDurablyIfPresent(
+            SnippetStorageLocations.syncProviderSwitchFileURL)
+    }
+
+    private enum SwitchReceiptLoad {
+        case missing, loaded(ProviderSwitchReceipt), unreadable
+    }
+
+    private func migrateSyncPreferenceIfNeeded() {
+        guard defaults.object(forKey: Self.syncEnabledDefaultsKey) == nil else { return }
+        defaults.set(
+            defaults.bool(forKey: Self.legacyICloudEnabledDefaultsKey),
+            forKey: Self.syncEnabledDefaultsKey)
+    }
+
+    private func commitProvider(_ newValue: Provider) {
+        // HTTP must disable the legacy CloudKit capability before it can become active.
+        // The inverse transition selects iCloud before enabling the legacy capability.
+        if newValue != .iCloud {
+            defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+        }
+        defaults.set(newValue.rawValue, forKey: Self.providerDefaultsKey)
+        providerSelectionFailure = nil
+        if newValue == .iCloud, syncEnabled {
+            defaults.set(true, forKey: Self.legacyICloudEnabledDefaultsKey)
+        }
+        _ = defaults.synchronize()
+    }
+
+    private func mirrorLegacyICloudPreference() {
+        let raw = defaults.string(forKey: Self.providerDefaultsKey)
+        let recognized = raw == nil || Provider(rawValue: raw ?? "") != nil
+        if providerSelectionFailure != nil || !recognized || provider != .iCloud || !syncEnabled {
+            defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+        } else {
+            defaults.set(true, forKey: Self.legacyICloudEnabledDefaultsKey)
+        }
+        _ = defaults.synchronize()
+    }
+
+    private func recoverInterruptedProviderSwitch() {
+        let rawProvider = defaults.string(forKey: Self.providerDefaultsKey)
+        if let rawProvider, Provider(rawValue: rawProvider) == nil {
+            providerSelectionFailure = .invalidProviderSelection
+            defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+            return
+        }
+        switch loadProviderSwitchReceipt() {
+        case .missing:
+            break
+        case .unreadable:
+            providerSelectionFailure = .switchStateUnreadable
+            defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+        case .loaded(let receipt):
+            guard let source = try? protocolLocations(for: receipt.source),
+                  let target = try? protocolLocations(for: receipt.target),
+                  source.identifier == receipt.sourceLocationID,
+                  target.identifier == receipt.targetLocationID else {
+                providerSelectionFailure = .switchStateUnreadable
+                defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+                return
+            }
+            switch receipt.phase {
+            case .prepared:
+                if provider == receipt.source {
+                    try? AtomicFileWriter.removeDurablyIfPresent(
+                        SnippetStorageLocations.syncProviderSwitchFileURL)
+                } else if provider == receipt.target {
+                    var selected = receipt
+                    selected.phase = .targetSelected
+                    try? writeProviderSwitchReceipt(selected)
+                } else {
+                    providerSelectionFailure = .switchStateUnreadable
+                }
+            case .targetSelected:
+                commitProvider(receipt.target)
+            }
+        }
+    }
+
+    private func loadProviderSwitchReceipt() -> SwitchReceiptLoad {
+        let url = SnippetStorageLocations.syncProviderSwitchFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+        guard let data = try? Data(contentsOf: url) else { return .unreadable }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == [
+                  "schemaVersion", "id", "source", "target", "sourceLocationID",
+                  "targetLocationID", "phase",
+              ],
+              let receipt = try? JSONDecoder().decode(ProviderSwitchReceipt.self, from: data),
+              receipt.schemaVersion == ProviderSwitchReceipt.currentSchemaVersion,
+              receipt.source != receipt.target,
+              !receipt.sourceLocationID.isEmpty,
+              !receipt.targetLocationID.isEmpty else { return .unreadable }
+        return .loaded(receipt)
+    }
+
+    private func writeProviderSwitchReceipt(_ receipt: ProviderSwitchReceipt) throws {
+        try FileManager.default.createDirectory(
+            at: SnippetStorageLocations.syncFolderURL, withIntermediateDirectories: true)
+        try AtomicFileWriter.write(
+            try encodeProviderSwitchReceipt(receipt),
+            to: SnippetStorageLocations.syncProviderSwitchFileURL,
+            temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
+    }
+
+    private func encodeProviderSwitchReceipt(_ receipt: ProviderSwitchReceipt) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(receipt)
     }
 
 }

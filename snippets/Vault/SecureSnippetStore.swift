@@ -202,8 +202,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
     private let libraryURL: URL
     private let lockURL: URL
     private let temporaryDirectory: URL
-    private let syncBaseURL: URL
-    private let syncJournalURL: URL
+    private var syncBaseURL: URL
+    private var syncJournalURL: URL
     private let syncMetadataURL: URL
     private let lockTimeout: TimeInterval
     /// Injected durability operations let transaction tests fail after a rename/unlink
@@ -265,6 +265,13 @@ final class SecureSnippetStore: SecureSnippetProviding {
         }
         self.clock = HLCGenerator(device: deviceID)
         reload()
+    }
+
+    /// Secure promote/demote and local vault removal participate in the active
+    /// provider's durable journal. The projection metadata remains provider-neutral.
+    func activateProtocolLocations(_ locations: SyncProtocolLocations) {
+        syncBaseURL = locations.baseURL
+        syncJournalURL = locations.journalURL
     }
 
     // MARK: - Loading

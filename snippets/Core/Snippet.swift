@@ -109,6 +109,66 @@ nonisolated enum SnippetStorageSync {
     static let distributedChangeNotification = Notification.Name("com.khm.snippets.storageDidChange")
 }
 
+/// Every durable file owned by one sync provider.
+///
+/// iCloud deliberately keeps the paths shipped before provider selection existed. HTTP
+/// providers live below an opaque directory so their cursor, CAS generations, pending
+/// journal and rejected ciphertext can never be interpreted as CloudKit state (or as
+/// another Snippets Cloud library). `Sync/state.json` is not included: it owns the
+/// device-local HLC and primary-library generation shared by every provider.
+nonisolated struct SyncProtocolLocations: Equatable, Sendable {
+    let identifier: String
+    let folderURL: URL
+    let baseURL: URL
+    let journalURL: URL
+    let quarantineFolderURL: URL
+    let switchReceiptURL: URL
+
+    static var legacyICloud: SyncProtocolLocations {
+        let folder = SnippetStorageLocations.syncFolderURL
+        return SyncProtocolLocations(
+            identifier: "icloud",
+            folderURL: folder,
+            baseURL: SnippetStorageLocations.syncBaseFileURL,
+            journalURL: SnippetStorageLocations.syncJournalFileURL,
+            quarantineFolderURL: SnippetStorageLocations.syncQuarantineFolderURL,
+            switchReceiptURL: folder.appendingPathComponent(
+                "icloud-switch-receipt.json", isDirectory: false))
+    }
+
+    static func http(opaqueProviderKey: String) -> SyncProtocolLocations? {
+        let key = opaqueProviderKey.lowercased()
+        guard key.count == 32,
+              key.unicodeScalars.allSatisfy({
+                  CharacterSet(charactersIn: "0123456789abcdef").contains($0)
+              }) else { return nil }
+        let folder = SnippetStorageLocations.syncFolderURL
+            .appendingPathComponent("Providers", isDirectory: true)
+            .appendingPathComponent(key, isDirectory: true)
+        return SyncProtocolLocations(
+            identifier: "http-\(key)",
+            folderURL: folder,
+            baseURL: folder.appendingPathComponent("base.json", isDirectory: false),
+            journalURL: folder.appendingPathComponent("journal.json", isDirectory: false),
+            quarantineFolderURL: folder.appendingPathComponent("Quarantine", isDirectory: true),
+            switchReceiptURL: folder.appendingPathComponent(
+                "switch-receipt.json", isDirectory: false))
+    }
+
+    func createDirectories(fileManager: FileManager = .default) throws {
+        for folder in [folderURL, quarantineFolderURL] {
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? fileManager.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: folder.path)
+            #if os(iOS)
+            try? fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: folder.path)
+            #endif
+        }
+    }
+}
+
 nonisolated enum SnippetStorageLocations {
 
     /// Redirects every path below to a different root.
@@ -203,6 +263,12 @@ nonisolated enum SnippetStorageLocations {
         syncFolderURL.appendingPathComponent("journal.json", isDirectory: false)
     }
 
+    /// Provider selection is a local transaction. Keeping its phase outside either
+    /// provider directory lets startup find it before deciding which directory is active.
+    static var syncProviderSwitchFileURL: URL {
+        syncFolderURL.appendingPathComponent("provider-switch.json", isDirectory: false)
+    }
+
     /// Encrypted CKSyncEngine scheduler state and the inbound generations it already
     /// advanced past. Unlike `base.json`, this is transport-private and may contain
     /// CloudKit account coordinates, so its complete envelope is device-key encrypted.
@@ -293,6 +359,7 @@ nonisolated enum SnippetStorageLocations {
             root.appendingPathComponent("Usage", isDirectory: true),
             sync,
             sync.appendingPathComponent("Quarantine", isDirectory: true),
+            sync.appendingPathComponent("Providers", isDirectory: true),
             root.appendingPathComponent("Vault", isDirectory: true),
             diagnostics,
             diagnostics.appendingPathComponent("Logs", isDirectory: true),

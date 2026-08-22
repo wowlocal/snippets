@@ -57,6 +57,10 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         self.temporaryDirectory = temporaryDirectory
     }
 
+    func activateProtocolLocations(_ locations: SyncProtocolLocations) {
+        secureStore.activateProtocolLocations(locations)
+    }
+
     // MARK: - Reading
 
     func currentEnvelopes(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {

@@ -343,7 +343,15 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             snippetsCloudEnabled: false)
 
         XCTAssertEqual(selection.availableProviders, [.iCloud])
-        XCTAssertEqual(selection.provider, .iCloud)
+        XCTAssertEqual(selection.provider, .snippetsCloud)
+        XCTAssertFalse(defaults.bool(
+            forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey))
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .featureDisabled = failure else {
+                return XCTFail("Expected the disabled HTTP selection to fail closed")
+            }
+        }
         XCTAssertNil(defaults.object(forKey: "SnippetsSyncProviderSwitchPending"))
         XCTAssertThrowsError(try selection.selectSnippetsCloud(
             serverURL: XCTUnwrap(URL(string: "https://sync.example")),
@@ -355,6 +363,73 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
                 return XCTFail("Expected the dark-launch gate, got \(type(of: error))")
             }
         }
+    }
+
+    func testProviderSelectionMirrorsLegacyICloudFlagWithoutDisablingNewSync() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.provider-compat.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        defaults.set(true, forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey)
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.provider-compat-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+
+        XCTAssertTrue(selection.syncEnabled)
+        XCTAssertTrue(defaults.bool(
+            forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey))
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            serverInstanceID: UUID(uuidString: "00000000-0000-4000-8000-000000000010")!,
+            accessToken: "test-access-token")
+
+        XCTAssertEqual(selection.provider, .snippetsCloud)
+        XCTAssertTrue(selection.syncEnabled, "the new provider-independent opt-in remains on")
+        XCTAssertFalse(defaults.bool(
+            forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey),
+            "a downgraded build must not start CloudKit while HTTP owns the library")
+
+        selection.selectICloud()
+        XCTAssertTrue(defaults.bool(
+            forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey))
+    }
+
+    func testHTTPProtocolLocationIsOpaqueDeterministicAndSpaceScoped() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.provider-location.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.provider-location-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            snippetsCloudEnabled: true)
+        let server = UUID(uuidString: "00000000-0000-4000-8000-000000000010")!
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            serverInstanceID: server,
+            accessToken: "first-access-token")
+        let first = try selection.protocolLocations()
+        XCTAssertEqual(first, try selection.protocolLocations())
+        XCTAssertFalse(first.folderURL.path.contains(server.uuidString.lowercased()))
+        XCTAssertFalse(first.folderURL.path.contains("00000000-0000-4000-8000-000000000001"))
+
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
+            serverInstanceID: server,
+            accessToken: "second-access-token")
+        XCTAssertNotEqual(first.folderURL, try selection.protocolLocations().folderURL)
     }
 
     func testDarkLaunchGateSkipsUnrelatedCredentialLineageQueries() throws {

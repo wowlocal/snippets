@@ -69,9 +69,9 @@ final class PhoneLibraryViewController: UIViewController {
 
     init(environment: AppEnvironment) {
         self.environment = environment
-        hasCompletedSync = FileManager.default.fileExists(
-            atPath: SnippetStorageLocations.syncBaseFileURL.path
-        )
+        let activeBase = (try? environment.backendSelection.protocolLocations().baseURL)
+            ?? SnippetStorageLocations.syncBaseFileURL
+        hasCompletedSync = FileManager.default.fileExists(atPath: activeBase.path)
         super.init(nibName: nil, bundle: nil)
     }
 

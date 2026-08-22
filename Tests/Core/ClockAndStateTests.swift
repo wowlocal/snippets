@@ -925,6 +925,7 @@ struct ClockAndStateTests {
             ("Sync/library-quarantine", SnippetStorageLocations.libraryQuarantineMarkerURL),
             ("Sync/base.json", SnippetStorageLocations.syncBaseFileURL),
             ("Sync/journal.json", SnippetStorageLocations.syncJournalFileURL),
+            ("Sync/provider-switch.json", SnippetStorageLocations.syncProviderSwitchFileURL),
             ("Sync/library-metadata.json", SnippetStorageLocations.syncLibraryMetadataFileURL),
             ("Sync/tombstones.json", SnippetStorageLocations.tombstonesFileURL),
             ("Sync/library.lock", SnippetStorageLocations.libraryLockFileURL),
@@ -937,6 +938,8 @@ struct ClockAndStateTests {
             ("Usage", SnippetStorageLocations.usageFolderURL),
             ("Sync", SnippetStorageLocations.syncFolderURL),
             ("Sync/Quarantine", SnippetStorageLocations.syncQuarantineFolderURL),
+            ("Sync/Providers", SnippetStorageLocations.syncFolderURL
+                .appendingPathComponent("Providers", isDirectory: true)),
             ("Vault", SnippetStorageLocations.vaultFolderURL),
             ("Diagnostics", SnippetStorageLocations.diagnosticsFolderURL),
             ("Diagnostics/Logs", SnippetStorageLocations.diagnosticsLogsFolderURL),
@@ -1017,6 +1020,23 @@ struct ClockAndStateTests {
             }
             #expect(created.contains(
                 normalizedPath(SnippetStorageLocations.snippetsFileURL.deletingLastPathComponent())))
+        }
+
+        @Test func providerLocationsKeepICloudLegacyPathsAndIsolateHTTPState() throws {
+            let iCloud = SyncProtocolLocations.legacyICloud
+            #expect(iCloud.baseURL == SnippetStorageLocations.syncBaseFileURL)
+            #expect(iCloud.journalURL == SnippetStorageLocations.syncJournalFileURL)
+            #expect(iCloud.quarantineFolderURL == SnippetStorageLocations.syncQuarantineFolderURL)
+
+            let first = try #require(SyncProtocolLocations.http(
+                opaqueProviderKey: String(repeating: "a", count: 32)))
+            let second = try #require(SyncProtocolLocations.http(
+                opaqueProviderKey: String(repeating: "b", count: 32)))
+            #expect(first.baseURL != iCloud.baseURL)
+            #expect(first.baseURL != second.baseURL)
+            #expect(first.journalURL.deletingLastPathComponent() == first.folderURL)
+            #expect(first.quarantineFolderURL.deletingLastPathComponent() == first.folderURL)
+            #expect(SyncProtocolLocations.http(opaqueProviderKey: "../icloud") == nil)
         }
 
         /// `createAllDirectories(fileManager:)` injects a `FileManager` but not a

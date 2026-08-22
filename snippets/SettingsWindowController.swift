@@ -2274,12 +2274,6 @@ private final class SyncSettingsViewController: NSViewController {
             reloadFromStorage()
             return
         }
-        switch provider {
-        case .iCloud: backendSelection.selectICloud()
-        case .snippetsCloud: backendSelection.activateSnippetsCloud()
-        }
-        Self.coordinator?.reloadProviderSelection()
-        reloadFromStorage()
         syncSelectedProviderAfterSwitch(provider)
     }
 
@@ -2295,7 +2289,7 @@ private final class SyncSettingsViewController: NSViewController {
         progress.beginSheetModal(for: parent)
         Task { @MainActor [weak self, weak progressWindow = progress.window] in
             guard let self else { return }
-            let result = await coordinator.requestSync()
+            let result = await coordinator.switchProvider(to: provider)
             if let progressWindow, let sheetParent = progressWindow.sheetParent {
                 sheetParent.endSheet(progressWindow)
             }
@@ -2448,9 +2442,7 @@ private final class SyncSettingsViewController: NSViewController {
         case .signedOut:
             configureSnippetsCloud()
         case .ready:
-            Self.coordinator?.reloadProviderSelection()
-            reloadFromStorage()
-            syncSnippetsCloudBeforeShowingReady()
+            continueAfterCloudBecameReady()
         case .needsTrustedDeviceOrRecovery:
             presentCloudUnlockMenu()
         case .waitingForApproval(let payload, let code, let expiresAt):
@@ -2566,9 +2558,7 @@ private final class SyncSettingsViewController: NSViewController {
                 guard let self else { return }
                 do {
                     try cloudBootstrap.acknowledgeRecoveryKitSaved()
-                    Self.coordinator?.reloadProviderSelection()
-                    reloadFromStorage()
-                    syncSnippetsCloudBeforeShowingReady()
+                    continueAfterCloudBecameReady()
                 } catch {
                     showCloudError("Couldn’t Finish Setup", error: error)
                 }
@@ -2582,6 +2572,16 @@ private final class SyncSettingsViewController: NSViewController {
             parent.endSheet(sheet)
         }
         parent.beginSheet(sheet)
+    }
+
+    private func continueAfterCloudBecameReady() {
+        reloadFromStorage()
+        if backendSelection.provider == .snippetsCloud {
+            Self.coordinator?.reloadProviderSelection()
+            syncSnippetsCloudBeforeShowingReady()
+        } else {
+            confirmProviderSwitch(to: .snippetsCloud)
+        }
     }
 
     private func promptForPairingInvitation() {

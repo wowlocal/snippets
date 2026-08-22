@@ -81,17 +81,17 @@ HTTP providers use:
 ```text
 Sync/Providers/<opaque-provider-key>/
   base.json
-  journal...
-  quarantine/
-  transport.json
-  switch-receipts.json
+  journal.json
+  Quarantine/
+  switch-receipt.json
 ```
 
-Introduce a `SyncProtocolLocations` value and inject it into the core components that
-currently use global URLs. No core algorithm reconstructs paths from a transport name.
-The opaque key is derived from a canonical provider instance, authenticated account
-scope, space, and protocol family, then domain-separated and hashed. The derivation is
-centralized and its input is never persisted beside diagnostics.
+`SyncProtocolLocations` is injected into the core components that own provider state.
+No core algorithm reconstructs paths from a transport name.
+The opaque key is derived from the canonical HTTP origin, authenticated server instance,
+space, and protocol family, then domain-separated and hashed. Account identity remains
+inside the provider base's authenticated binding instead of becoming a filesystem name.
+The derivation is centralized and its input is never persisted beside diagnostics.
 
 Returning to a previously used provider may reuse its base/cursor only after the current
 account binding is revalidated. A binding mismatch or unreadable meaningful state enters
@@ -187,9 +187,26 @@ remote state.
 
 ## Switch transaction
 
-The transaction is crash-recoverable and moves through durable named phases. The app is
-read-only only for the short commit window. Preparation is invalidated if `librarySeq`
-or either provider generation changes.
+The public-launch target transaction is crash-recoverable and moves through durable named
+phases. The app is read-only only for the short commit window. Preparation is invalidated
+if `librarySeq` or either provider generation changes.
+
+### Current Apple implementation
+
+Apple clients now implement the one-writer round trip used by the dark-launch provider
+selector: they preserve iCloud's legacy files, isolate each HTTP library, write a durable
+`prepared`/`targetSelected` receipt, await the source transport's shutdown barrier, select
+the target with downgrade-safe preference ordering, and clear the receipt only after the
+target's ordinary journal-first sync reaches a verified idle state. The source remote and
+its checkpoint are never deleted. Core coverage exercises iCloud -> HTTP -> iCloud with
+independent keys, ciphertext resealing, an edit made while HTTP is active, and unchanged
+inactive-provider checkpoints.
+
+This composes the existing crash-safe library transaction, target journal, account/reset
+review, deletion guard, and CAS retry machinery. The additional scratch preflight and
+retained encrypted rollback backup described below remain public-launch hardening; the
+Snippets Cloud selector stays feature-gated until those stages and their full crash matrix
+are implemented.
 
 ### 1. Resolve target before data-plane access
 

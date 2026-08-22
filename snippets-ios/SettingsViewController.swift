@@ -811,12 +811,6 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         alert.addAction(UIAlertAction(title: "Switch and Sync", style: .default) {
             [weak self] _ in
             guard let self else { return }
-            switch provider {
-            case .iCloud: environment.backendSelection.selectICloud()
-            case .snippetsCloud: environment.backendSelection.activateSnippetsCloud()
-            }
-            environment.syncCoordinator.reloadProviderSelection()
-            tableView.reloadData()
             syncSelectedProviderAfterSwitch(provider)
         })
         present(alert, animated: true)
@@ -830,7 +824,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         present(progress, animated: true)
         Task { @MainActor [weak self, weak progress] in
             guard let self else { return }
-            let result = await environment.syncCoordinator.requestSync()
+            let result = await environment.syncCoordinator.switchProvider(to: provider)
             progress?.dismiss(animated: true) { [weak self] in
                 guard let self else { return }
                 tableView.reloadData()
@@ -985,9 +979,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         case .signedOut:
             configureSnippetsCloud()
         case .ready:
-            environment.syncCoordinator.reloadProviderSelection()
-            tableView.reloadData()
-            syncSnippetsCloudBeforeShowingReady()
+            continueAfterCloudBecameReady()
         case .needsTrustedDeviceOrRecovery:
             presentCloudUnlockMenu()
         case .waitingForApproval(let payload, let code, let expiresAt):
@@ -1096,14 +1088,22 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                 guard let self else { return }
                 do {
                     try cloudBootstrap.acknowledgeRecoveryKitSaved()
-                    environment.syncCoordinator.reloadProviderSelection()
-                    tableView.reloadData()
-                    syncSnippetsCloudBeforeShowingReady()
+                    continueAfterCloudBecameReady()
                 } catch {
                     showError(title: "Couldn’t Finish Setup", error: error)
                 }
             })
         present(UINavigationController(rootViewController: controller), animated: true)
+    }
+
+    private func continueAfterCloudBecameReady() {
+        tableView.reloadData()
+        if environment.backendSelection.provider == .snippetsCloud {
+            environment.syncCoordinator.reloadProviderSelection()
+            syncSnippetsCloudBeforeShowingReady()
+        } else {
+            confirmProviderSwitch(to: .snippetsCloud)
+        }
     }
 
     private func presentCloudScanner(mode: CloudQRScannerViewController.Mode) {

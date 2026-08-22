@@ -138,6 +138,94 @@ struct SyncEngineTests {
                 "projection must receive the engine's live ancestor, not re-read a stale file")
     }
 
+    @Test func providerRoundTripKeepsIndependentStateAndResealsForEachBackend() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("provider-round-trip-\(UUID().uuidString)", isDirectory: true)
+        let iCloudDir = dir.appendingPathComponent("icloud", isDirectory: true)
+        let cloudDir = dir.appendingPathComponent("http", isDirectory: true)
+        try FileManager.default.createDirectory(at: iCloudDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cloudDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let library = FakeLibrary()
+        let iCloudTransport = InMemoryTransport(identifier: "icloud-test")
+        let cloudTransport = InMemoryTransport(identifier: "http-test")
+        let iCloudSealer = SnippetCryptoSealer(
+            keyring: SnippetCrypto.Keyring.generate(), scopeID: "sync-v1")
+        let cloudSealer = SnippetCryptoSealer(
+            keyring: SnippetCrypto.Keyring.generate(), scopeID: "sync-v1")
+        let stateURL = dir.appendingPathComponent("state.json")
+        let lockURL = dir.appendingPathComponent("library.lock")
+
+        func engine(
+            transport: InMemoryTransport,
+            sealer: SnippetCryptoSealer,
+            providerDirectory: URL
+        ) -> SyncEngine {
+            SyncEngine(
+                transport: transport,
+                library: library,
+                sealer: sealer,
+                device: "aaaaaaa1",
+                baseURL: providerDirectory.appendingPathComponent("base.json"),
+                journalURL: providerDirectory.appendingPathComponent("journal.json"),
+                stateURL: stateURL,
+                quarantineFolderURL: providerDirectory.appendingPathComponent(
+                    "Quarantine", isDirectory: true),
+                lockURL: lockURL,
+                temporaryDirectory: dir)
+        }
+
+        let id = UUID()
+        library.envelopes[id] = envelope(id, name: "on iCloud", ms: 1_000)
+        _ = await engine(
+            transport: iCloudTransport,
+            sealer: iCloudSealer,
+            providerDirectory: iCloudDir).sync()
+        let iCloudBaseBeforeSwitch = try Data(
+            contentsOf: iCloudDir.appendingPathComponent("base.json"))
+
+        library.envelopes[id] = envelope(id, name: "moved to cloud", ms: 2_000)
+        let cloudEngine = engine(
+            transport: cloudTransport,
+            sealer: cloudSealer,
+            providerDirectory: cloudDir)
+        _ = await cloudEngine.sync()
+
+        #expect(try Data(contentsOf: iCloudDir.appendingPathComponent("base.json"))
+                == iCloudBaseBeforeSwitch,
+                "the inactive iCloud checkpoint must not be overwritten by HTTP")
+        let cloudWire = try #require(cloudTransport.snapshot.first)
+        #expect(try WireCodec.open(cloudWire, using: cloudSealer).fields?.name
+                == "moved to cloud")
+        #expect((try? WireCodec.open(cloudWire, using: iCloudSealer)) == nil,
+                "HTTP must receive ciphertext sealed with its own provider key")
+
+        cloudTransport.seed([
+            try WireCodec.seal(
+                envelope(id, name: "edited on cloud", ms: 3_000),
+                using: cloudSealer),
+        ])
+        _ = await cloudEngine.sync()
+        #expect(library.envelopes[id]?.fields?.name == "edited on cloud")
+        let cloudBaseBeforeReturn = try Data(
+            contentsOf: cloudDir.appendingPathComponent("base.json"))
+
+        _ = await engine(
+            transport: iCloudTransport,
+            sealer: iCloudSealer,
+            providerDirectory: iCloudDir).sync()
+
+        let iCloudWire = try #require(iCloudTransport.snapshot.first)
+        #expect(try WireCodec.open(iCloudWire, using: iCloudSealer).fields?.name
+                == "edited on cloud")
+        #expect((try? WireCodec.open(iCloudWire, using: cloudSealer)) == nil,
+                "returning to iCloud must reseal with the retained iCloud key")
+        #expect(try Data(contentsOf: cloudDir.appendingPathComponent("base.json"))
+                == cloudBaseBeforeReturn,
+                "the inactive HTTP checkpoint must remain available for the next switch")
+    }
+
     @Test func cancellationAfterBackendAcceptanceDoesNotBlessTheWriteLocally() async throws {
         let entered = AsyncStream<Void>.makeStream()
         let released = AsyncStream<Void>.makeStream()
