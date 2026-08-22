@@ -84,6 +84,14 @@ struct SnippetsCloudStepUpBinding: Equatable {
     }
 }
 
+struct SnippetsCloudPostAuthorizationTarget: Equatable {
+    let serverURL: URL
+    let serverInstanceID: UUID
+    let protocolMajor: Int
+    let spaceID: UUID
+    let scopeBinding: String
+}
+
 private struct SnippetsCloudStepUpTarget: Equatable {
     let serverURL: URL
     let serverInstanceID: UUID
@@ -255,6 +263,7 @@ final class SyncBackendSelectionStore {
         case credentialCleanupRequired
         case credentialResetRequired
         case credentialStoreUnavailable
+        case postAuthorizationMembershipMismatch
         case preferenceStoreUnavailable
         case invalidProviderSelection
         case switchStateUnreadable
@@ -270,6 +279,8 @@ final class SyncBackendSelectionStore {
             case .credentialResetRequired:
                 "the saved Snippets Cloud credential history cannot be verified"
             case .credentialStoreUnavailable: "the credential store is temporarily unavailable"
+            case .postAuthorizationMembershipMismatch:
+                "the committed cloud credential does not match the pending library setup"
             case .preferenceStoreUnavailable: "the sync preference store is unavailable"
             case .invalidProviderSelection:
                 "the saved sync provider was written by an unsupported version"
@@ -550,7 +561,10 @@ final class SyncBackendSelectionStore {
         requiresStrongAuthentication: Bool = false,
         chooseAccount: Bool = false,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding
+        presentationContext: any ASWebAuthenticationPresentationContextProviding,
+        preparePostAuthorization: @escaping (
+            SnippetsCloudPostAuthorizationTarget
+        ) throws -> Void = { _ in }
     ) async throws {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
         try resumePendingLocalErase()
@@ -605,6 +619,14 @@ final class SyncBackendSelectionStore {
                     throw Failure.missingCredential
                 }
             },
+            prepareCoordinatesCommit: { result in
+                try preparePostAuthorization(.init(
+                    serverURL: result.serverURL,
+                    serverInstanceID: result.serverInstanceID,
+                    protocolMajor: result.protocolMajor,
+                    spaceID: result.spaceID,
+                    scopeBinding: result.scopeBinding))
+            },
             commitCoordinates: { [defaults, keychain] result in
                 defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
                 defaults.set(result.apiBaseURL.absoluteString, forKey: Self.apiBaseDefaultsKey)
@@ -620,7 +642,10 @@ final class SyncBackendSelectionStore {
     }
 
     func changeSnippetsCloudLibrary(
-        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
+        preparePostAuthorization: @escaping (
+            SnippetsCloudPostAuthorizationTarget
+        ) throws -> Void = { _ in }
     ) async throws {
         guard snippetsCloudEnabled,
               let coordinates = cloudCoordinates,
@@ -635,6 +660,17 @@ final class SyncBackendSelectionStore {
             serverInstanceID: serverInstanceID,
             protocolMajor: 2,
             chooseLibrary: chooseLibrary,
+            prepareSelectionCommit: { selected in
+                guard let scopeBinding = selected.scopeBinding else {
+                    throw Failure.postAuthorizationMembershipMismatch
+                }
+                try preparePostAuthorization(.init(
+                    serverURL: coordinates.serverURL,
+                    serverInstanceID: serverInstanceID,
+                    protocolMajor: 2,
+                    spaceID: selected.spaceID,
+                    scopeBinding: scopeBinding))
+            },
             commitSelection: { [defaults, keychain] selected in
                 defaults.set(
                     coordinates.serverURL.absoluteString,
@@ -643,7 +679,7 @@ final class SyncBackendSelectionStore {
                     coordinates.serverURL.appending(path: "v2").absoluteString,
                     forKey: Self.apiBaseDefaultsKey)
                 defaults.set(
-                    selected.uuidString.lowercased(),
+                    selected.spaceID.uuidString.lowercased(),
                     forKey: Self.spaceDefaultsKey)
                 defaults.set(
                     serverInstanceID.uuidString.lowercased(),
@@ -651,6 +687,33 @@ final class SyncBackendSelectionStore {
                 defaults.set(2, forKey: Self.protocolMajorDefaultsKey)
                 try? keychain.deleteItem(account: Self.tokenAccount)
             })
+    }
+
+    func resumeSnippetsCloudPostAuthorization(
+        _ target: SnippetsCloudPostAuthorizationTarget
+    ) async throws {
+        guard snippetsCloudEnabled,
+              target.protocolMajor == 2,
+              let redirectURL = Self.bundledOAuthRedirectURL else {
+            throw Failure.missingCredential
+        }
+        let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+        do {
+            try await oauth.validateExistingMembership(target) { [defaults, keychain] in
+                defaults.set(target.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
+                defaults.set(
+                    target.serverURL.appending(path: "v2").absoluteString,
+                    forKey: Self.apiBaseDefaultsKey)
+                defaults.set(target.spaceID.uuidString.lowercased(), forKey: Self.spaceDefaultsKey)
+                defaults.set(
+                    target.serverInstanceID.uuidString.lowercased(),
+                    forKey: Self.serverInstanceDefaultsKey)
+                defaults.set(target.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
+                try? keychain.deleteItem(account: Self.tokenAccount)
+            }
+        } catch SnippetsCloudOAuthClient.Failure.stepUpAccountMismatch {
+            throw Failure.postAuthorizationMembershipMismatch
+        }
     }
 
     func signOutSnippetsCloud() async throws {
@@ -1173,6 +1236,7 @@ private final class SnippetsCloudOAuthClient {
         let spaceID: UUID
         let serverInstanceID: UUID
         let protocolMajor: Int
+        let scopeBinding: String
     }
 
     struct TransportCredential {
@@ -1343,6 +1407,7 @@ private final class SnippetsCloudOAuthClient {
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding,
         validateStepUpTarget: @escaping () throws -> Void,
+        prepareCoordinatesCommit: @escaping (SignInResult) throws -> Void,
         commitCoordinates: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
         guard requiresStrongAuthentication == (expectedStepUpTarget != nil),
@@ -1392,7 +1457,8 @@ private final class SnippetsCloudOAuthClient {
                     chooseAccount: chooseAccount,
                     expectedStepUpBinding: expectedStepUpBinding,
                     chooseLibrary: chooseLibrary,
-                    presentationContext: presentationContext)
+                    presentationContext: presentationContext,
+                    prepareCoordinatesCommit: prepareCoordinatesCommit)
                 try commitCoordinates(result)
                 return result
             } catch {
@@ -1415,7 +1481,8 @@ private final class SnippetsCloudOAuthClient {
         chooseAccount: Bool,
         expectedStepUpBinding: SnippetsCloudStepUpBinding?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding
+        presentationContext: any ASWebAuthenticationPresentationContextProviding,
+        prepareCoordinatesCommit: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
         guard !(requiresStrongAuthentication && chooseAccount) else {
             throw Failure.invalidStoredSession
@@ -1622,7 +1689,7 @@ private final class SnippetsCloudOAuthClient {
         try storeSessionReplacementJournal(
             sessions: [sessionAtStart, stored].compactMap { $0 },
             kind: .interactiveReplacement)
-        let spaceID: UUID
+        let selectedMembership: SnippetsCloudLibraryChoice
         if let expectedStepUpBinding {
             let candidate: Space
             do {
@@ -1644,9 +1711,13 @@ private final class SnippetsCloudOAuthClient {
                 role: candidate.role) else {
                 throw Failure.stepUpAccountMismatch
             }
-            spaceID = expectedStepUpBinding.spaceID
+            selectedMembership = SnippetsCloudLibraryChoice(
+                spaceID: candidate.scope.spaceId,
+                serverInstanceID: candidate.scope.serverInstanceId,
+                role: candidate.role,
+                scopeBinding: candidate.scope.scopeBinding)
         } else {
-            spaceID = try await resolvePersonalSpace(
+            selectedMembership = try await resolvePersonalSpace(
                 serverURL: serverURL,
                 serverInstanceID: discovery.serverInstanceId,
                 accessToken: token.accessToken,
@@ -1664,16 +1735,25 @@ private final class SnippetsCloudOAuthClient {
               try keychain.loadItem(
                 account: SyncBackendSelectionStore.pendingLocalEraseAccount) == nil
         else { throw Failure.invalidStoredSession }
+        let result = SignInResult(
+            serverURL: serverURL,
+            apiBaseURL: discovery.apiBase,
+            spaceID: selectedMembership.spaceID,
+            serverInstanceID: discovery.serverInstanceId,
+            protocolMajor: discovery.protocolMajor,
+            scopeBinding: selectedMembership.scopeBinding ?? "")
+        guard (32...256).contains(result.scopeBinding.utf8.count) else {
+            throw Failure.spaceSelectionRequired
+        }
+        // Bootstrap intent precedes publication of the candidate credential. On a
+        // restart it can complete or reject the exact membership without guessing
+        // whether the selected library is new.
+        try prepareCoordinatesCommit(result)
         try keychain.storeItem(
             try JSONEncoder().encode(stored),
             account: SyncBackendSelectionStore.oauthSessionAccount)
         try await retireSupersededInteractiveSessionsWithoutGate()
-        return SignInResult(
-            serverURL: serverURL,
-            apiBaseURL: discovery.apiBase,
-            spaceID: spaceID,
-            serverInstanceID: discovery.serverInstanceId,
-            protocolMajor: discovery.protocolMajor)
+        return result
     }
 
     func selectExistingLibrary(
@@ -1681,7 +1761,8 @@ private final class SnippetsCloudOAuthClient {
         serverInstanceID: UUID,
         protocolMajor: Int,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        commitSelection: @escaping (UUID) throws -> Void
+        prepareSelectionCommit: @escaping (SnippetsCloudLibraryChoice) throws -> Void,
+        commitSelection: @escaping (SnippetsCloudLibraryChoice) throws -> Void
     ) async throws -> UUID {
         return try await Self.credentialMutationGate.run { [self] in
             try await retireSupersededInteractiveSessionsWithoutGate()
@@ -1696,8 +1777,36 @@ private final class SnippetsCloudOAuthClient {
                 serverInstanceID: serverInstanceID,
                 accessToken: accessToken,
                 chooseLibrary: chooseLibrary)
+            try prepareSelectionCommit(selected)
             try commitSelection(selected)
-            return selected
+            return selected.spaceID
+        }
+    }
+
+    func validateExistingMembership(
+        _ target: SnippetsCloudPostAuthorizationTarget,
+        commitCoordinates: @escaping () throws -> Void
+    ) async throws {
+        try await Self.credentialMutationGate.run { [self] in
+            try await retireSupersededInteractiveSessionsWithoutGate()
+            let serverURL = try validatedBaseURL(target.serverURL)
+            let accessToken = try await freshAccessTokenWithoutGate(
+                expectedServerURL: serverURL,
+                expectedServerInstanceID: target.serverInstanceID,
+                expectedProtocolMajor: target.protocolMajor,
+                forceRefresh: false)
+            let current: Space = try await authorizedJSON(
+                url: serverURL.appending(
+                    path: "v2/spaces/\(target.spaceID.uuidString.lowercased())"),
+                method: "GET",
+                accessToken: accessToken)
+            guard current.scope.serverInstanceId == target.serverInstanceID,
+                  current.scope.spaceId == target.spaceID,
+                  current.scope.scopeBinding == target.scopeBinding,
+                  ["owner", "writer"].contains(current.role) else {
+                throw Failure.stepUpAccountMismatch
+            }
+            try commitCoordinates()
         }
     }
 
@@ -1706,7 +1815,7 @@ private final class SnippetsCloudOAuthClient {
         serverInstanceID: UUID,
         accessToken: String,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID
-    ) async throws -> UUID {
+    ) async throws -> SnippetsCloudLibraryChoice {
         let response: SpacesResponse = try await authorizedJSON(
             url: serverURL.appending(path: "v2/spaces"),
             method: "GET",
@@ -1740,7 +1849,11 @@ private final class SnippetsCloudOAuthClient {
               ["owner", "writer"].contains(current.role) else {
             throw Failure.spaceSelectionRequired
         }
-        return selectedID
+        return SnippetsCloudLibraryChoice(
+            spaceID: current.scope.spaceId,
+            serverInstanceID: current.scope.serverInstanceId,
+            role: current.role,
+            scopeBinding: current.scope.scopeBinding)
     }
 
     func currentTransportCredential(
@@ -2382,7 +2495,7 @@ private final class SnippetsCloudOAuthClient {
         existingSpaceID: UUID?,
         confirmAccountChange: Bool,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID
-    ) async throws -> UUID {
+    ) async throws -> SnippetsCloudLibraryChoice {
         let response: SpacesResponse = try await authorizedJSON(
             url: serverURL.appending(path: "v2/spaces"),
             method: "GET",
@@ -2406,7 +2519,7 @@ private final class SnippetsCloudOAuthClient {
         }
         func validateCurrentMembership(
             _ choice: SnippetsCloudLibraryChoice
-        ) async throws -> UUID {
+        ) async throws -> SnippetsCloudLibraryChoice {
             guard let expectedBinding = choice.scopeBinding else {
                 throw Failure.spaceSelectionRequired
             }
@@ -2423,7 +2536,11 @@ private final class SnippetsCloudOAuthClient {
             guard ["owner", "writer"].contains(current.role) else {
                 throw Failure.readOnlyLibraryUnavailable
             }
-            return choice.spaceID
+            return SnippetsCloudLibraryChoice(
+                spaceID: current.scope.spaceId,
+                serverInstanceID: current.scope.serverInstanceId,
+                role: current.role,
+                scopeBinding: current.scope.scopeBinding)
         }
         if let automatic = automaticSnippetsCloudLibraryChoice(
             choices,

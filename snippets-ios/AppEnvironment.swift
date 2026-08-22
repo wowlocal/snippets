@@ -12,6 +12,7 @@ final class AppEnvironment {
     let store: SnippetStore
     let keychain: KeychainSecretStore
     let backendSelection: SyncBackendSelectionStore
+    let cloudBootstrap: SnippetsCloudAccountBootstrap
     let vaultSession: VaultSession
     let secureStore: SecureSnippetStore
     let syncLibrary: SnippetLibraryBridge
@@ -60,6 +61,7 @@ final class AppEnvironment {
         store = SnippetStore(configuration: .iOS)
         keychain = KeychainSecretStore()
         backendSelection = SyncBackendSelectionStore()
+        cloudBootstrap = SnippetsCloudAccountBootstrap(selection: backendSelection)
         #if DEBUG
         let usesDeterministicUITestAuthentication =
             isUITestReset
@@ -116,7 +118,21 @@ final class AppEnvironment {
         guard !hasStarted else { return }
         hasStarted = true
         store.onChange?(.init(source: .external))
-        syncCoordinator.startIfEnabled()
+        if (try? cloudBootstrap.state()) == .setupInterrupted {
+            Task { @MainActor [cloudBootstrap, syncCoordinator] in
+                do {
+                    let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
+                    if resumed == .ready {
+                        syncCoordinator.startIfEnabled()
+                    }
+                } catch {
+                    // The durable bootstrap marker keeps the cloud data plane paused.
+                    // Settings exposes the same idempotent resume action.
+                }
+            }
+        } else {
+            syncCoordinator.startIfEnabled()
+        }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
             TemporaryExportFiles.removeStale()
         }

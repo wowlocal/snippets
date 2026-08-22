@@ -43,6 +43,7 @@ class SnippetRepository(
     private var pairingExpiresAtEpochSeconds: Long? = null
     private var recoveryVerificationState = RecoveryKitVerificationState.neverVerified
     private var pendingLibrarySelection: PendingLibrarySelection? = null
+    private var pendingPostAuthorization: PendingPostAuthorizationBootstrap? = null
 
     private val mutableState = MutableStateFlow(LibraryState(isBusy = true))
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
@@ -80,6 +81,22 @@ class SnippetRepository(
                         .onFailure { store.delete(PENDING_SPACE_SELECTION) }
                         .getOrNull()
                 }
+                pendingPostAuthorization = store.read(PENDING_POST_AUTHORIZATION)?.let { raw ->
+                    PendingPostAuthorizationBootstrap.fromJSON(raw)
+                }
+                pendingPostAuthorization?.let { pending ->
+                    val requiresCandidateCommit =
+                        pending.operation != CloudPostAuthorizationOperation.CHANGE_LIBRARY
+                    if (!pending.matches(configuration) ||
+                        (requiresCandidateCommit &&
+                            authenticator.hasPendingAuthorization(pending.serverURL) &&
+                            !configuration.pendingAuthorizationCommit)) {
+                        stagePendingPostAuthorizationCoordinates(
+                            pending,
+                            pendingAuthorizationCommit = requiresCandidateCommit,
+                        )
+                    }
+                }
                 if (configuration.pendingAuthorizationCommit) {
                     // The selected library and its key state were committed before a
                     // crash, so finish the staged credential handoff instead of
@@ -90,8 +107,9 @@ class SnippetRepository(
                     store.delete(PENDING_SPACE_SELECTION)
                     pendingLibrarySelection = null
                     authenticator.finalizePendingAuthorization()
-                    shouldResumePostAuthorization = true
+                    shouldResumePostAuthorization = pendingPostAuthorization != null
                 } else if (pendingLibrarySelection == null &&
+                    pendingPostAuthorization == null &&
                     authenticator.hasPendingAuthorization()) {
                     // No durable chooser or selected-library commit refers to this
                     // candidate. It was abandoned before the account boundary moved.
@@ -100,18 +118,12 @@ class SnippetRepository(
                     authenticator.hasPendingCredentialCleanup()) {
                     // Covers a crash after journal-first token exchange but before the
                     // candidate file was published, and after commit before cleanup.
+                    // A post-authorization marker may already exist in the latter case;
+                    // keep it while retiring the superseded grant, then resume bootstrap.
                     authenticator.discardPendingAuthorization()
                 }
-                if (shouldResumePostAuthorization) {
-                    // Coordinates and credentials crossed their durable commit point,
-                    // but the process died before bootstrap completed. Retry the
-                    // idempotent envelope/pairing checks before deriving UI state.
-                    runCatching {
-                        val token = authenticator.freshAccessToken(configuration.serverURL)
-                        finishPostAuthorization(token)
-                        persistSyncState()
-                    }
-                }
+                shouldResumePostAuthorization = shouldResumePostAuthorization ||
+                    pendingPostAuthorization != null
                 recoveryVerificationState = store.read(RECOVERY_VERIFICATION_FILE)
                     ?.let(RecoveryKitVerificationState::fromJSON)
                     ?.loadedForDisplay()
@@ -145,6 +157,7 @@ class SnippetRepository(
                 }
                 cloudKeyStatus = when {
                     !cloudSessionAvailable -> CloudKeyStatus.SIGNED_OUT
+                    pendingPostAuthorization != null -> CloudKeyStatus.SETUP_INTERRUPTED
                     hasBoundKey() -> CloudKeyStatus.READY
                     else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
                 }
@@ -201,14 +214,29 @@ class SnippetRepository(
                 shouldRefreshRecoveryVerification = recoveryVerificationState.status ==
                     RecoveryKitStatus.STATUS_UNCONFIRMED && cloudSessionAvailable &&
                     pendingLibrarySelection == null && !remoteLogoutPending
+                if (shouldResumePostAuthorization && cloudSessionAvailable) {
+                    try {
+                        resumePostAuthorizationBootstrap()
+                    } catch (error: CloudAuthFailure) {
+                        cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                        didInitialize = true
+                        publish(errorCode = error.code)
+                        return@launch
+                    } catch (_: Exception) {
+                        cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                        didInitialize = true
+                        publish(errorCode = "post_authorization_incomplete")
+                        return@launch
+                    }
+                }
                 didInitialize = true
                 publish()
             } catch (error: CloudAuthFailure) {
                 didInitialize = true
-                mutableState.value = LibraryState(errorCode = error.code)
+                publishStartupFailure(error.code)
             } catch (_: Exception) {
                 didInitialize = true
-                mutableState.value = LibraryState(errorCode = "local_store_unreadable")
+                publishStartupFailure("local_store_unreadable")
             } finally {
                 initialization.complete(Unit)
             }
@@ -259,6 +287,8 @@ class SnippetRepository(
         if (changedScope) {
             remoteRecordsJSON = "[]"
             clearBootstrapState()
+            store.delete(PENDING_POST_AUTHORIZATION)
+            pendingPostAuthorization = null
             resetRecoveryVerification()
         }
         if (keys == null) keys = freshKeyBundle().also { store.write(KEYS, it.toJSON()) }
@@ -338,6 +368,7 @@ class SnippetRepository(
                             authorization.serverURL,
                             authorization.accessToken,
                             resolution,
+                            operation = CloudPostAuthorizationOperation.STEP_UP,
                         )
                         return@withContext PostAuthorizationCompletion(
                             recoveryKit = recoveryKit,
@@ -376,6 +407,11 @@ class SnippetRepository(
                                     null
                                 },
                                 usesPendingAuthorization = true,
+                                operation = if (authorization.accountChange) {
+                                    CloudPostAuthorizationOperation.CHANGE_ACCOUNT
+                                } else {
+                                    CloudPostAuthorizationOperation.SIGN_IN
+                                },
                             )
                             store.write(PENDING_SPACE_SELECTION, pending.toJSON())
                             pendingLibrarySelection = pending
@@ -412,6 +448,7 @@ class SnippetRepository(
                             choices = listOf(choice),
                             previousLibraryID = libraryID(),
                             usesPendingAuthorization = true,
+                            operation = CloudPostAuthorizationOperation.CHANGE_ACCOUNT,
                         )
                         store.write(PENDING_SPACE_SELECTION, pending.toJSON())
                         pendingLibrarySelection = pending
@@ -424,6 +461,11 @@ class SnippetRepository(
                             authorization.serverURL,
                             authorization.accessToken,
                             resolution,
+                            operation = if (authorization.accountChange) {
+                                CloudPostAuthorizationOperation.CHANGE_ACCOUNT
+                            } else {
+                                CloudPostAuthorizationOperation.SIGN_IN
+                            },
                         )
                     PostAuthorizationCompletion(
                         recoveryKit = recoveryKit,
@@ -442,15 +484,15 @@ class SnippetRepository(
                 }
             } catch (error: CloudAuthFailure) {
                 val cleanupFailure = discardCandidateAfterAuthorizationFailure()
-                publish(errorCode = cleanupFailure ?: error.code)
+                publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
                 CloudSignInCompletion(succeeded = false)
             } catch (error: SyncFailure) {
                 val cleanupFailure = discardCandidateAfterAuthorizationFailure()
-                publish(errorCode = cleanupFailure ?: error.code)
+                publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
                 CloudSignInCompletion(succeeded = false)
             } catch (_: Exception) {
                 val cleanupFailure = discardCandidateAfterAuthorizationFailure()
-                publish(errorCode = cleanupFailure ?: "sign_in_failed")
+                publish(errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"))
                 CloudSignInCompletion(succeeded = false)
             }
         }
@@ -490,19 +532,20 @@ class SnippetRepository(
                         token,
                         verified,
                         pending.usesPendingAuthorization,
+                        pending.operation,
                     )
                     presentation
                 }
                 publish(label = "Account connected")
                 CloudSignInCompletion(succeeded = true, recoveryKit = recoveryKit)
             } catch (error: CloudAuthFailure) {
-                publish(errorCode = error.code)
+                publish(errorCode = postAuthorizationError(error.code))
                 CloudSignInCompletion(succeeded = false)
             } catch (error: SyncFailure) {
-                publish(errorCode = error.code)
+                publish(errorCode = postAuthorizationError(error.code))
                 CloudSignInCompletion(succeeded = false)
             } catch (_: Exception) {
-                publish(errorCode = "sign_in_failed")
+                publish(errorCode = postAuthorizationError("sign_in_failed"))
                 CloudSignInCompletion(succeeded = false)
             }
         }
@@ -569,9 +612,47 @@ class SnippetRepository(
             },
             previousLibraryID = libraryID(),
             usesPendingAuthorization = false,
+            operation = CloudPostAuthorizationOperation.CHANGE_LIBRARY,
         )
         store.write(PENDING_SPACE_SELECTION, pending.toJSON())
         pendingLibrarySelection = pending
+    }
+
+    private fun stagePendingPostAuthorizationCoordinates(
+        pending: PendingPostAuthorizationBootstrap,
+        pendingAuthorizationCommit: Boolean,
+    ) {
+        if (pendingAuthorizationCommit) {
+            require(authenticator.hasPendingAuthorization(pending.serverURL))
+        } else {
+            require(authenticator.hasSession(configuration.serverURL))
+        }
+        val changedScope = !pending.matches(configuration)
+        configuration = configuration.copy(
+            provider = if (changedScope) SyncProvider.DEVICE else configuration.provider,
+            serverURL = pending.serverURL,
+            apiBaseURL = pending.serverURL + "/v2",
+            protocolMajor = 2,
+            accessToken = "",
+            spaceID = pending.spaceID,
+            serverInstanceID = pending.serverInstanceID,
+            cursor = if (changedScope) null else configuration.cursor,
+            scopeBinding = if (changedScope) null else configuration.scopeBinding,
+            datasetGeneration = if (changedScope) null else configuration.datasetGeneration,
+            feedEpoch = if (changedScope) null else configuration.feedEpoch,
+            lastSuccessfulSyncEpochSeconds = if (changedScope) null
+                else configuration.lastSuccessfulSyncEpochSeconds,
+            pendingAuthorizationCommit = pendingAuthorizationCommit,
+        )
+        if (changedScope) {
+            remoteRecordsJSON = "[]"
+            clearBootstrapState()
+            resetRecoveryVerification()
+            cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+        }
+        store.delete(PENDING_SPACE_SELECTION)
+        pendingLibrarySelection = null
+        persistSyncState()
     }
 
     private suspend fun completeResolvedAuthorization(
@@ -579,8 +660,23 @@ class SnippetRepository(
         accessToken: String,
         resolution: HttpSyncClient.SpaceResolution,
         pendingAuthorizationCommit: Boolean = true,
+        operation: CloudPostAuthorizationOperation,
     ): RecoveryKitPresentation? {
         if (!resolution.canWrite) throw SyncFailure("read_only_library")
+        if (operation != CloudPostAuthorizationOperation.STEP_UP) {
+            val bootstrap = PendingPostAuthorizationBootstrap(
+                serverURL = serverURL,
+                serverInstanceID = resolution.serverInstanceID,
+                spaceID = resolution.spaceID,
+                scopeBinding = resolution.scopeBinding,
+                operation = operation,
+            )
+            // This marker precedes both the credential and coordinate commit. A
+            // restart can distinguish interrupted inspection from a library positively
+            // found to contain encrypted data.
+            store.write(PENDING_POST_AUTHORIZATION, bootstrap.toJSON())
+            pendingPostAuthorization = bootstrap
+        }
         val changedScope = configuration.serverURL != serverURL ||
             !configuration.spaceID.equals(resolution.spaceID, ignoreCase = true) ||
             !configuration.serverInstanceID.equals(
@@ -630,6 +726,8 @@ class SnippetRepository(
 
         val presentation = finishPostAuthorization(accessToken)
         persistSyncState()
+        store.delete(PENDING_POST_AUTHORIZATION)
+        pendingPostAuthorization = null
         return presentation
     }
 
@@ -644,8 +742,87 @@ class SnippetRepository(
         authenticator.finalizePendingAuthorization()
     }
 
+    private suspend fun resumePostAuthorizationBootstrap(): RecoveryKitPresentation? {
+        val pending = pendingPostAuthorization
+            ?: throw SyncFailure("post_authorization_incomplete")
+        if (!pending.matches(configuration)) {
+            throw SyncFailure("scope_review_required")
+        }
+        val token = authenticator.freshAccessToken(configuration.serverURL)
+        val current = client.resolveSpace(
+            configuration.serverURL,
+            configuration.spaceID,
+            token,
+        )
+        if (!pending.matches(current)) throw SyncFailure("scope_review_required")
+        val presentation = finishPostAuthorization(token)
+        persistSyncState()
+        store.delete(PENDING_POST_AUTHORIZATION)
+        pendingPostAuthorization = null
+        return presentation
+    }
+
+    internal suspend fun resumeCloudSetup(): RecoveryKitPresentation? {
+        initialization.await()
+        return mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    cloudSessionAvailable = authenticator.hasSession(configuration.serverURL)
+                    if (!cloudSessionAvailable) throw CloudAuthFailure("sign_in_required")
+                    resumePostAuthorizationBootstrap()
+                }
+                publish(label = "Library setup resumed")
+                result
+            } catch (error: CloudAuthFailure) {
+                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                publish(errorCode = error.code)
+                null
+            } catch (error: SyncFailure) {
+                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                publish(errorCode = error.code)
+                null
+            } catch (_: Exception) {
+                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                publish(errorCode = "post_authorization_incomplete")
+                null
+            }
+        }
+    }
+
+    suspend fun retryCloudAccountCleanup() {
+        initialization.await()
+        if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation()) {
+            disconnectCloudAccount()
+            return
+        }
+        mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                withContext(Dispatchers.IO) {
+                    authenticator.discardPendingAuthorization()
+                    cloudSessionAvailable = authenticator.hasSession(
+                        configuration.serverURL.takeIf(String::isNotBlank),
+                    )
+                    cloudKeyStatus = when {
+                        !cloudSessionAvailable -> CloudKeyStatus.SIGNED_OUT
+                        pendingPostAuthorization != null -> CloudKeyStatus.SETUP_INTERRUPTED
+                        hasBoundKey() -> CloudKeyStatus.READY
+                        else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+                    }
+                }
+                publish()
+            } catch (error: CloudAuthFailure) {
+                publish(errorCode = error.code)
+            } catch (_: Exception) {
+                publish(errorCode = "credential_cleanup_required")
+            }
+        }
+    }
+
     private suspend fun discardCandidateAfterAuthorizationFailure(): String? {
-        if (pendingLibrarySelection != null || configuration.pendingAuthorizationCommit) return null
+        if (pendingLibrarySelection != null || pendingPostAuthorization != null ||
+            configuration.pendingAuthorizationCommit) return null
         val cleanupFailure = try {
             authenticator.discardPendingAuthorization()
             null
@@ -658,6 +835,12 @@ class SnippetRepository(
             configuration.serverURL.takeIf(String::isNotBlank),
         )
         return cleanupFailure
+    }
+
+    private fun postAuthorizationError(fallback: String): String {
+        if (pendingPostAuthorization == null) return fallback
+        cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+        return "post_authorization_incomplete"
     }
 
     suspend fun disconnectCloudAccount() = mutate {
@@ -717,6 +900,7 @@ class SnippetRepository(
         requireCloudFeature()
         if (store.read(PENDING_LOCAL_ERASE) != null || authenticator.hasPendingRevocation() ||
             authenticator.hasPendingCredentialCleanup() ||
+            pendingPostAuthorization != null ||
             pendingLibrarySelection != null ||
             configuration.serverURL.isBlank() || configuration.spaceID.isBlank() ||
             (configuration.accessToken.isBlank() && !authenticator.hasSession(configuration.serverURL))) {
@@ -1046,6 +1230,7 @@ class SnippetRepository(
             if (!snippetsCloudEnabled || store.read(PENDING_LOCAL_ERASE) != null ||
                 authenticator.hasPendingRevocation() ||
                 authenticator.hasPendingCredentialCleanup() ||
+                pendingPostAuthorization != null ||
                 pendingLibrarySelection != null ||
                 configuration.provider != SyncProvider.SNIPPETS_CLOUD) return@withLock false
             if (!hasBoundKey()) {
@@ -1199,6 +1384,11 @@ class SnippetRepository(
                 }
                 return null
             }
+        }
+
+        if (store.read(RECOVERY_PRESENTATION) != null) {
+            cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
+            return null
         }
 
         if (hasBoundKey()) {
@@ -1566,6 +1756,8 @@ class SnippetRepository(
         recoveryVerificationState = RecoveryKitVerificationState.neverVerified
 
         clearBootstrapState()
+        store.delete(PENDING_POST_AUTHORIZATION)
+        pendingPostAuthorization = null
         store.delete(PENDING_SPACE_SELECTION)
         pendingLibrarySelection = null
 
@@ -1614,6 +1806,8 @@ class SnippetRepository(
         val stage = when {
             effectiveError != null -> CloudSetupStage.NEEDS_ATTENTION
             !signedIn -> CloudSetupStage.SIGNED_OUT
+            cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED ->
+                CloudSetupStage.NEEDS_ATTENTION
             cloudKeyStatus == CloudKeyStatus.WAITING_FOR_APPROVAL ->
                 CloudSetupStage.WAITING_FOR_APPROVAL
             cloudKeyStatus == CloudKeyStatus.RECOVERY_KIT_LOCKED ||
@@ -1649,6 +1843,16 @@ class SnippetRepository(
             librarySwitchFromID = pendingLibrarySelection?.previousLibraryID,
             recoveryKitStatus = recoveryVerificationState.status,
             setupStage = stage)
+    }
+
+    private fun publishStartupFailure(errorCode: String) {
+        val loadedSnippets = runCatching { parseLibrary(libraryJSON) }.getOrDefault(emptyList())
+        publish(errorCode = errorCode)
+        mutableState.value = cloudStartupFailureState(
+            mutableState.value,
+            loadedSnippets,
+            errorCode,
+        )
     }
 
     private fun libraryID(): String? {
@@ -1713,12 +1917,14 @@ class SnippetRepository(
         val choices: List<CloudLibraryChoice>,
         val previousLibraryID: String?,
         val usesPendingAuthorization: Boolean,
+        val operation: CloudPostAuthorizationOperation,
     ) {
         fun toJSON(): String = JSONObject()
-            .put("schemaVersion", 3)
+            .put("schemaVersion", 4)
             .put("serverURL", serverURL)
             .put("previousLibraryID", previousLibraryID ?: JSONObject.NULL)
             .put("usesPendingAuthorization", usesPendingAuthorization)
+            .put("operation", operation.name)
             .put("choices", org.json.JSONArray().also { array ->
                 choices.forEach { choice ->
                     array.put(JSONObject()
@@ -1733,7 +1939,8 @@ class SnippetRepository(
         companion object {
             fun fromJSON(raw: String): PendingLibrarySelection {
                 val value = JSONObject(raw)
-                require(value.getInt("schemaVersion") == 3)
+                val schemaVersion = value.getInt("schemaVersion")
+                require(schemaVersion in 3..4)
                 val serverURL = value.getString("serverURL").trim().trimEnd('/')
                 require(serverURL.startsWith("https://"))
                 val array = value.getJSONArray("choices")
@@ -1758,11 +1965,21 @@ class SnippetRepository(
                 else value.getString("previousLibraryID").also {
                     require(it.matches(Regex("^[0-9A-F]{8}$")))
                 }
+                val usesPendingAuthorization = value.getBoolean("usesPendingAuthorization")
                 return PendingLibrarySelection(
                     serverURL,
                     choices,
                     previousLibraryID,
-                    value.getBoolean("usesPendingAuthorization"),
+                    usesPendingAuthorization,
+                    if (schemaVersion == 4) {
+                        CloudPostAuthorizationOperation.valueOf(value.getString("operation"))
+                    } else if (!usesPendingAuthorization) {
+                        CloudPostAuthorizationOperation.CHANGE_LIBRARY
+                    } else if (previousLibraryID != null) {
+                        CloudPostAuthorizationOperation.CHANGE_ACCOUNT
+                    } else {
+                        CloudPostAuthorizationOperation.SIGN_IN
+                    },
                 )
             }
         }
@@ -1793,6 +2010,7 @@ class SnippetRepository(
         private const val PENDING_RECOVERY = "pending-recovery.enc"
         private const val RECOVERY_PRESENTATION = "recovery-presentation.enc"
         private const val PENDING_SPACE_SELECTION = "pending-space-selection.enc"
+        private const val PENDING_POST_AUTHORIZATION = "pending-post-authorization.enc"
         private const val PENDING_LOCAL_ERASE = "cloud-local-erase.enc"
     }
 }

@@ -19,6 +19,7 @@ enum class SyncProvider { DEVICE, SNIPPETS_CLOUD }
 enum class CloudKeyStatus {
     SIGNED_OUT,
     READY,
+    SETUP_INTERRUPTED,
     NEEDS_TRUSTED_DEVICE_OR_RECOVERY,
     WAITING_FOR_APPROVAL,
     APPROVAL_READY,
@@ -91,6 +92,18 @@ data class LibraryState(
     val setupStage: CloudSetupStage = CloudSetupStage.SIGNED_OUT,
 )
 
+internal fun cloudStartupFailureState(
+    base: LibraryState,
+    loadedSnippets: List<SnippetItem>,
+    errorCode: String,
+): LibraryState = base.copy(
+    snippets = loadedSnippets,
+    isBusy = false,
+    errorCode = errorCode,
+    syncLabel = "Sync needs attention",
+    setupStage = CloudSetupStage.NEEDS_ATTENTION,
+)
+
 enum class RecoveryKitStatus {
     NEVER_VERIFIED,
     VERIFIED_CURRENT,
@@ -119,6 +132,71 @@ data class CloudStepUpBinding(
             serverInstanceID.equals(resolution.serverInstanceID, ignoreCase = true) &&
             spaceID.equals(resolution.spaceID, ignoreCase = true) &&
             scopeBinding == resolution.scopeBinding && resolution.canWrite
+}
+
+enum class CloudPostAuthorizationOperation {
+    SIGN_IN,
+    CHANGE_ACCOUNT,
+    CHANGE_LIBRARY,
+    STEP_UP,
+}
+
+internal data class PendingPostAuthorizationBootstrap(
+    val serverURL: String,
+    val serverInstanceID: String,
+    val spaceID: String,
+    val scopeBinding: String,
+    val operation: CloudPostAuthorizationOperation,
+) {
+    fun matches(configuration: CloudConfiguration): Boolean =
+        serverURL == configuration.serverURL.trim().trimEnd('/') &&
+            serverInstanceID.equals(configuration.serverInstanceID, ignoreCase = true) &&
+            spaceID.equals(configuration.spaceID, ignoreCase = true)
+
+    fun matches(resolution: HttpSyncClient.SpaceResolution): Boolean =
+        serverInstanceID.equals(resolution.serverInstanceID, ignoreCase = true) &&
+            spaceID.equals(resolution.spaceID, ignoreCase = true) &&
+            scopeBinding == resolution.scopeBinding && resolution.canWrite
+
+    fun toJSON(): String = JSONObject()
+        .put("schemaVersion", 1)
+        .put("phase", "bootstrapPending")
+        .put("serverURL", serverURL)
+        .put("serverInstanceID", serverInstanceID)
+        .put("spaceID", spaceID)
+        .put("scopeBinding", scopeBinding)
+        .put("operation", operation.name)
+        .toString()
+
+    companion object {
+        fun fromJSON(raw: String): PendingPostAuthorizationBootstrap {
+            val value = JSONObject(raw)
+            require(value.keys().asSequence().toSet() == setOf(
+                "schemaVersion", "phase", "serverURL", "serverInstanceID",
+                "spaceID", "scopeBinding", "operation",
+            ))
+            require(value.getInt("schemaVersion") == 1)
+            require(value.getString("phase") == "bootstrapPending")
+            val serverURL = value.getString("serverURL").trim().trimEnd('/')
+            require(serverURL.startsWith("https://"))
+            val serverInstanceID = java.util.UUID.fromString(
+                value.getString("serverInstanceID"),
+            ).toString()
+            val spaceID = java.util.UUID.fromString(value.getString("spaceID")).toString()
+            val scopeBinding = value.getString("scopeBinding").also {
+                require(it.toByteArray().size in 32..256)
+            }
+            return PendingPostAuthorizationBootstrap(
+                serverURL = serverURL,
+                serverInstanceID = serverInstanceID,
+                spaceID = spaceID,
+                scopeBinding = scopeBinding,
+                operation = CloudPostAuthorizationOperation.valueOf(
+                    value.getString("operation"),
+                ),
+            )
+        }
+    }
 }
 
 internal fun cloudLibraryID(serverInstanceID: String, spaceID: String): String {
@@ -268,7 +346,8 @@ internal data class RecoveryKitVerificationState(
 
 internal fun disconnectBlockedForRecovery(status: CloudKeyStatus): Boolean =
     status == CloudKeyStatus.RECOVERY_AUTH_REQUIRED ||
-        status == CloudKeyStatus.RECOVERY_KIT_LOCKED
+        status == CloudKeyStatus.RECOVERY_KIT_LOCKED ||
+        status == CloudKeyStatus.SETUP_INTERRUPTED
 
 internal fun disconnectBlockedForRecovery(status: RecoveryKitStatus): Boolean =
     status == RecoveryKitStatus.KNOWN_REPLACED ||

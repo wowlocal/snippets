@@ -115,4 +115,56 @@ final class SnippetsCloudSafetyTests: XCTestCase {
                     ciphertext: Data([4, 5, 6])),
                 scope: scope)))
     }
+
+    func testInterruptedPostAuthorizationBootstrapSurvivesRestartWithoutClaimingLock() throws {
+        let serverURL = try XCTUnwrap(URL(string: "https://cloud.example"))
+        let server = UUID(uuidString: "00000000-0000-4000-8000-000000000010")!
+        let space = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
+        let pending = SnippetsCloudAccountBootstrap.PendingPostAuthorization(
+            schemaVersion: 1,
+            phase: "bootstrapPending",
+            serverURL: serverURL,
+            serverInstanceID: server,
+            protocolMajor: 2,
+            spaceID: space,
+            scopeBinding: "membership-a-000000000000000000000",
+            operation: .changeLibrary)
+        let decoded = try JSONDecoder().decode(
+            SnippetsCloudAccountBootstrap.PendingPostAuthorization.self,
+            from: JSONEncoder().encode(pending))
+        XCTAssertEqual(decoded, pending)
+        XCTAssertTrue(decoded.matches(.init(
+            serverURL: serverURL,
+            apiBaseURL: serverURL.appending(path: "v2"),
+            spaceID: space,
+            serverInstanceID: server,
+            protocolMajor: 2)))
+
+        let defaultsName = "SnippetsCloudSafetyTests.pending-bootstrap.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.pending-bootstrap-credentials",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let secrets = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.pending-bootstrap-state",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        try secrets.storeItem(
+            JSONEncoder().encode(pending),
+            account: SnippetsCloudAccountBootstrap.pendingPostAuthorizationAccount)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            bootstrapSecrets: secrets,
+            snippetsCloudEnabled: true)
+        let bootstrap = SnippetsCloudAccountBootstrap(
+            selection: selection,
+            secrets: secrets)
+
+        XCTAssertEqual(try bootstrap.state(), .setupInterrupted)
+    }
 }

@@ -236,4 +236,53 @@ class CloudAccountUxTest {
             sameMembership.copy(role = "reader"),
         ))
     }
+
+    @Test
+    fun interruptedPostAuthorizationBootstrapIsDurableAndExact() {
+        val pending = PendingPostAuthorizationBootstrap(
+            serverURL = "https://cloud.example",
+            serverInstanceID = "00000000-0000-4000-8000-000000000010",
+            spaceID = "00000000-0000-4000-8000-000000000001",
+            scopeBinding = "membership-a-000000000000000000000",
+            operation = CloudPostAuthorizationOperation.CHANGE_LIBRARY,
+        )
+
+        assertEquals(pending, PendingPostAuthorizationBootstrap.fromJSON(pending.toJSON()))
+        assertTrue(pending.matches(CloudConfiguration(
+            serverURL = pending.serverURL,
+            serverInstanceID = pending.serverInstanceID,
+            spaceID = pending.spaceID,
+        )))
+        assertFalse(pending.matches(HttpSyncClient.SpaceResolution(
+            spaceID = pending.spaceID,
+            serverInstanceID = pending.serverInstanceID,
+            role = "writer",
+            scopeBinding = "membership-b-000000000000000000000",
+        )))
+    }
+
+    @Test
+    fun cloudCleanupFailureKeepsLocalSnippetsVisibleAndOffersRetry() {
+        val snippet = SnippetItem(
+            id = "00000000-0000-4000-8000-000000000099",
+            name = "Local",
+            keyword = "local",
+            content = "kept on device",
+            tags = emptyList(),
+            isEnabled = true,
+            isPinned = false,
+        )
+        val state = cloudStartupFailureState(
+            LibraryState(isBusy = true),
+            listOf(snippet),
+            "credential_revocation_failed",
+        )
+        val error = cloudErrorPresentation(requireNotNull(state.errorCode))
+
+        assertEquals(listOf(snippet), state.snippets)
+        assertEquals(CloudSetupStage.NEEDS_ATTENTION, state.setupStage)
+        assertEquals(CloudErrorAction.RETRY_CLEANUP, error.action)
+        assertEquals("Retry cleanup", error.actionTitle)
+        assertTrue(disconnectBlockedForRecovery(CloudKeyStatus.SETUP_INTERRUPTED))
+    }
 }

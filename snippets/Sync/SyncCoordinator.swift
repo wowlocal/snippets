@@ -1163,7 +1163,8 @@ final class SyncCoordinator {
         }
         if let failure = error as? SyncBackendSelectionStore.Failure {
             return switch failure {
-            case .missingCredential, .invalidCredential: .authenticationRequired
+            case .missingCredential, .invalidCredential,
+                 .postAuthorizationMembershipMismatch: .authenticationRequired
             case .credentialResetRequired: .cloudCredentialsUnreadable
             case .invalidProviderSelection, .switchStateUnreadable:
                 .providerSwitchUnreadable

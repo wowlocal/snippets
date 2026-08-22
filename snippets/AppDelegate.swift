@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// exercised by the app's own object graph rather than only by tests.
     lazy var syncLibrary = SnippetLibraryBridge(store: store, secureStore: secureStore)
     lazy var backendSelection = SyncBackendSelectionStore()
+    lazy var cloudBootstrap = SnippetsCloudAccountBootstrap(selection: backendSelection)
 
     /// Owns whether sync runs, and runs it. Opt-in: constructing this costs nothing and
     /// starts nothing.
@@ -367,7 +368,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // outbound-sync debounce. No editing is possible before the first frame.
         store.syncDelegate = syncCoordinator
         controlServer.start()
-        syncCoordinator.startIfEnabled()
+        if (try? cloudBootstrap.state()) == .setupInterrupted {
+            Task { @MainActor [cloudBootstrap, syncCoordinator] in
+                do {
+                    let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
+                    if resumed == .ready {
+                        syncCoordinator.startIfEnabled()
+                    }
+                } catch {
+                    // The durable bootstrap marker keeps the cloud data plane paused.
+                    // Settings exposes the same idempotent resume action.
+                }
+            }
+        } else {
+            syncCoordinator.startIfEnabled()
+        }
         expansionEngine.startIfNeeded()
         configureAppMenuItems()
         configureFileMenuItems()

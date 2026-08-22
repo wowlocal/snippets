@@ -62,6 +62,7 @@ final class SnippetsCloudAccountBootstrap {
     enum State: Equatable {
         case signedOut
         case ready
+        case setupInterrupted
         case needsTrustedDeviceOrRecovery
         case waitingForApproval(
             qrPayload: String,
@@ -147,6 +148,40 @@ final class SnippetsCloudAccountBootstrap {
         let newLibraryMaterial: Data?
     }
 
+    struct PendingPostAuthorization: Codable, Equatable {
+        enum Operation: String, Codable {
+            case signIn
+            case changeAccount
+            case changeLibrary
+            case stepUp
+        }
+
+        let schemaVersion: Int
+        let phase: String
+        let serverURL: URL
+        let serverInstanceID: UUID
+        let protocolMajor: Int
+        let spaceID: UUID
+        let scopeBinding: String
+        let operation: Operation
+
+        var target: SnippetsCloudPostAuthorizationTarget {
+            .init(
+                serverURL: serverURL,
+                serverInstanceID: serverInstanceID,
+                protocolMajor: protocolMajor,
+                spaceID: spaceID,
+                scopeBinding: scopeBinding)
+        }
+
+        func matches(_ coordinates: SyncBackendSelectionStore.CloudCoordinates) -> Bool {
+            serverURL == coordinates.serverURL
+                && serverInstanceID == coordinates.serverInstanceID
+                && protocolMajor == coordinates.protocolMajor
+                && spaceID == coordinates.spaceID
+        }
+    }
+
     struct RecoveryVerificationRecord: Codable, Equatable {
         let serverURL: URL
         let serverInstanceID: UUID
@@ -200,6 +235,7 @@ final class SnippetsCloudAccountBootstrap {
     static let pendingRecoveryAccount = "recovery-upload-v1"
     static let recoveryPresentationAccount = "recovery-display-v1"
     static let recoveryVerifiedAccount = "recovery-verified-v1"
+    static let pendingPostAuthorizationAccount = "post-authorization-bootstrap-v1"
     static let bootstrapService = "com.khm.snippets.cloud-bootstrap"
     static let bootstrapSecretAccounts = [
         pairingAccount,
@@ -207,6 +243,7 @@ final class SnippetsCloudAccountBootstrap {
         pendingRecoveryAccount,
         recoveryPresentationAccount,
         recoveryVerifiedAccount,
+        pendingPostAuthorizationAccount,
     ]
 
     let selection: SyncBackendSelectionStore
@@ -258,6 +295,9 @@ final class SnippetsCloudAccountBootstrap {
     }
 
     func state() throws -> State {
+        if try pendingPostAuthorization() != nil {
+            return .setupInterrupted
+        }
         guard selection.hasCloudSession, let coordinates = selection.cloudCoordinates else {
             return .signedOut
         }
@@ -333,24 +373,38 @@ final class SnippetsCloudAccountBootstrap {
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> State {
         let previousCoordinates = selection.cloudCoordinates
+        let operation: PendingPostAuthorization.Operation = if strong {
+            .stepUp
+        } else if changeAccount {
+            .changeAccount
+        } else {
+            .signIn
+        }
         try await selection.signIn(
             serverURL: serverURL,
             requiresStrongAuthentication: strong,
             chooseAccount: changeAccount,
             chooseLibrary: chooseLibrary,
-            presentationContext: presentationContext)
+            presentationContext: presentationContext,
+            preparePostAuthorization: { [weak self] target in
+                guard operation != .stepUp else { return }
+                guard let self else { throw Failure.invalidState }
+                try self.storePendingPostAuthorization(target, operation: operation)
+            })
         if let previousCoordinates,
            let currentCoordinates = selection.cloudCoordinates,
            currentCoordinates != previousCoordinates {
             // Pending approvals and recovery replacements were prepared for the old
             // deployment/account. Never replay them merely because OAuth succeeded at
             // the same URL; ordinary sync now owns the explicit account review.
-            try discardBootstrapIntentAfterScopeChange()
+            try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
         }
         if try await syncCheckpointRequiresReviewBeforeBootstrap() {
-            try discardBootstrapIntentAfterScopeChange()
+            try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
         }
-        return try await finishPostAuthorization()
+        let state = try await finishPostAuthorization()
+        if operation != .stepUp { try clearPendingPostAuthorization() }
+        return state
     }
 
     @discardableResult
@@ -360,17 +414,40 @@ final class SnippetsCloudAccountBootstrap {
         guard let previousCoordinates = selection.cloudCoordinates else {
             throw Failure.invalidState
         }
-        try await selection.changeSnippetsCloudLibrary(chooseLibrary: chooseLibrary)
+        try await selection.changeSnippetsCloudLibrary(
+            chooseLibrary: chooseLibrary,
+            preparePostAuthorization: { [weak self] target in
+                guard let self else { throw Failure.invalidState }
+                try self.storePendingPostAuthorization(
+                    target,
+                    operation: .changeLibrary)
+            })
         guard let currentCoordinates = selection.cloudCoordinates else {
             throw Failure.invalidState
         }
         if currentCoordinates != previousCoordinates {
-            try discardBootstrapIntentAfterScopeChange()
+            try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
         }
         if try await syncCheckpointRequiresReviewBeforeBootstrap() {
-            try discardBootstrapIntentAfterScopeChange()
+            try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
         }
-        return try await finishPostAuthorization()
+        let state = try await finishPostAuthorization()
+        try clearPendingPostAuthorization()
+        return state
+    }
+
+    @discardableResult
+    func resumePostAuthorizationSetup() async throws -> State {
+        guard let pending = try pendingPostAuthorization() else {
+            return try state()
+        }
+        try await selection.resumeSnippetsCloudPostAuthorization(pending.target)
+        if try await syncCheckpointRequiresReviewBeforeBootstrap() {
+            try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
+        }
+        let state = try await finishPostAuthorization()
+        try clearPendingPostAuthorization()
+        return state
     }
 
     @discardableResult
@@ -723,6 +800,10 @@ final class SnippetsCloudAccountBootstrap {
             return try await uploadPendingRecovery(pending, coordinates: coordinates, client: client)
         }
 
+        if try secrets.loadItem(account: Self.recoveryPresentationAccount) != nil {
+            return .recoveryKitAuthenticationRequired
+        }
+
         if try installedMaterial(for: coordinates) != nil {
             return .ready
         }
@@ -880,6 +961,61 @@ final class SnippetsCloudAccountBootstrap {
         return value
     }
 
+    private func pendingPostAuthorization() throws -> PendingPostAuthorization? {
+        guard let data = try secrets.loadItem(
+            account: Self.pendingPostAuthorizationAccount
+        ) else { return nil }
+        guard data.count <= 16 * 1_024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == [
+                "schemaVersion", "phase", "serverURL", "serverInstanceID",
+                "protocolMajor", "spaceID", "scopeBinding", "operation",
+              ],
+              let pending = try? JSONDecoder().decode(
+                PendingPostAuthorization.self,
+                from: data),
+              pending.schemaVersion == 1,
+              pending.phase == "bootstrapPending",
+              pending.serverURL.scheme == "https",
+              pending.serverURL.user == nil,
+              pending.serverURL.password == nil,
+              pending.serverURL.query == nil,
+              pending.serverURL.fragment == nil,
+              !pending.serverURL.absoluteString.hasSuffix("/"),
+              pending.protocolMajor == 2,
+              (32...256).contains(pending.scopeBinding.utf8.count) else {
+            throw Failure.invalidState
+        }
+        return pending
+    }
+
+    private func storePendingPostAuthorization(
+        _ target: SnippetsCloudPostAuthorizationTarget,
+        operation: PendingPostAuthorization.Operation
+    ) throws {
+        let pending = PendingPostAuthorization(
+            schemaVersion: 1,
+            phase: "bootstrapPending",
+            serverURL: target.serverURL,
+            serverInstanceID: target.serverInstanceID,
+            protocolMajor: target.protocolMajor,
+            spaceID: target.spaceID,
+            scopeBinding: target.scopeBinding,
+            operation: operation)
+        guard target.protocolMajor == 2,
+              target.serverURL.scheme == "https",
+              (32...256).contains(target.scopeBinding.utf8.count) else {
+            throw Failure.invalidState
+        }
+        let data = try JSONEncoder().encode(pending)
+        guard data.count <= 16 * 1_024 else { throw Failure.invalidState }
+        try secrets.storeItem(data, account: Self.pendingPostAuthorizationAccount)
+    }
+
+    private func clearPendingPostAuthorization() throws {
+        try secrets.deleteItem(account: Self.pendingPostAuthorizationAccount)
+    }
+
     private func storedRecoveryVerification() throws -> StoredRecoveryVerification? {
         guard let data = try secrets.loadItem(account: Self.recoveryVerifiedAccount) else {
             return nil
@@ -944,10 +1080,14 @@ final class SnippetsCloudAccountBootstrap {
         return .ready
     }
 
-    private func discardBootstrapIntentAfterScopeChange() throws {
+    private func discardBootstrapIntentAfterScopeChange(
+        preservingPostAuthorization: Bool = false
+    ) throws {
         recoveryPresentationGate.reset()
         processConfirmedRecovery = nil
         for account in Self.bootstrapSecretAccounts {
+            if preservingPostAuthorization,
+               account == Self.pendingPostAuthorizationAccount { continue }
             try secrets.deleteItem(account: account)
         }
     }

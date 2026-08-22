@@ -2007,8 +2007,10 @@ private final class SyncSettingsViewController: NSViewController {
     private var backendSelection: SyncBackendSelectionStore {
         (NSApp.delegate as? AppDelegate)?.backendSelection ?? SyncBackendSelectionStore()
     }
-    private lazy var cloudBootstrap = SnippetsCloudAccountBootstrap(
-        selection: backendSelection)
+    private var cloudBootstrap: SnippetsCloudAccountBootstrap {
+        (NSApp.delegate as? AppDelegate)?.cloudBootstrap
+            ?? SnippetsCloudAccountBootstrap(selection: backendSelection)
+    }
 
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
@@ -2455,6 +2457,8 @@ private final class SyncSettingsViewController: NSViewController {
             configureSnippetsCloud()
         case .ready:
             continueAfterCloudBecameReady()
+        case .setupInterrupted:
+            presentInterruptedCloudSetup()
         case .needsTrustedDeviceOrRecovery:
             presentCloudUnlockMenu()
         case .waitingForApproval(let payload, let code, let expiresAt):
@@ -2470,6 +2474,20 @@ private final class SyncSettingsViewController: NSViewController {
             authenticateRecoveryKitPresentation()
         case .recoveryKitReady(let payload, let code):
             presentRecoveryKit(payload: payload, longCode: code)
+        }
+    }
+
+    private func presentInterruptedCloudSetup() {
+        let alert = NSAlert()
+        alert.messageText = "Library Setup Was Interrupted"
+        alert.informativeText = "Your account is connected, but Snippets could not determine whether this library is new or already contains encrypted data. Local snippets remain available while cloud setup is paused."
+        alert.addButton(withTitle: "Resume Setup")
+        alert.addButton(withTitle: "Not Now")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        runCloudTask("Couldn’t Resume Library Setup") { [weak self] in
+            guard let self else { return }
+            try self.presentCloudState(
+                try await self.cloudBootstrap.resumePostAuthorizationSetup())
         }
     }
 
@@ -2940,6 +2958,13 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         super.viewDidAppear()
         Task { @MainActor [weak self] in
             guard let self else { return }
+            if case .setupInterrupted = state {
+                let resumed = try? await bootstrap.resumePostAuthorizationSetup()
+                if resumed == .ready,
+                   selection.provider == .snippetsCloud {
+                    coordinator?.reloadProviderSelection()
+                }
+            }
             _ = try? await bootstrap.refreshRecoveryKitStatus()
             guard isViewLoaded else { return }
             let frame = view.frame
@@ -3062,6 +3087,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             case .continueSetup:
                 switch state {
                 case .signedOut: "Sign In to Snippets Cloud…"
+                case .setupInterrupted: "Resume Library Setup…"
                 case .waitingForApproval: "Return to Device Approval…"
                 case .recoveryKitAuthenticationRequired, .recoveryKitReady:
                     "Save and Check Recovery Kit…"
@@ -3089,6 +3115,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         case .ready:
             (selection.provider == .snippetsCloud ? [.syncNow] : [.switchToCloud])
                 + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
+        case .setupInterrupted:
+            [.continueSetup, .changeAccount]
         case .strongAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
@@ -3102,6 +3130,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         switch state {
         case .signedOut: "Not Connected"
         case .ready: "Account Connected"
+        case .setupInterrupted: "Library Setup Interrupted"
         case .needsTrustedDeviceOrRecovery: "Library Locked"
         case .waitingForApproval: "Waiting for Device Approval"
         case .approvalReady, .strongAuthenticationRequired(.approveDevice):
@@ -3132,6 +3161,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             "unlocked on this Mac"
         case .needsTrustedDeviceOrRecovery, .waitingForApproval:
             "waiting for an approved device or recovery kit"
+        case .setupInterrupted:
+            "could not determine whether this library is new or already encrypted"
         case .strongAuthenticationRequired(.createInitialRecovery):
             "preparing library access"
         case .signedOut:

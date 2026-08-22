@@ -1593,6 +1593,23 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                         }
                     }
                 } else when (state.cloudKeyStatus) {
+                    CloudKeyStatus.SETUP_INTERRUPTED -> {
+                        Text(
+                            "Snippets could not determine whether this library is new or already contains encrypted data. Local snippets remain available while cloud setup is paused.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            enabled = !state.isBusy,
+                            onClick = {
+                                scope.launch {
+                                    repository.resumeCloudSetup()?.let {
+                                        recoveryPresentation = it
+                                    }
+                                }
+                            },
+                        ) { Text("Resume setup") }
+                    }
+
                     CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY -> {
                         Text(
                             "This account has encrypted data. Use a device that already opens it, or your offline recovery kit.",
@@ -1773,6 +1790,16 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                         CloudErrorAction.SYNC_NOW -> Button(onClick = {
                             scope.launch { repository.syncNow() }
                         }) { Text(error.actionTitle) }
+                        CloudErrorAction.RETRY_CLEANUP -> Button(onClick = {
+                            scope.launch { repository.retryCloudAccountCleanup() }
+                        }) { Text(error.actionTitle) }
+                        CloudErrorAction.RESUME_SETUP -> Button(onClick = {
+                            scope.launch {
+                                repository.resumeCloudSetup()?.let {
+                                    recoveryPresentation = it
+                                }
+                            }
+                        }) { Text(error.actionTitle) }
                         CloudErrorAction.NONE -> Unit
                     }
                 }
@@ -1830,18 +1857,19 @@ private fun SettingsCard(
     }
 }
 
-private enum class CloudErrorAction {
+internal enum class CloudErrorAction {
     NONE, SIGN_IN, RECOVER_LIBRARY, CHECK_PAIRING, NEW_PAIRING, SYNC_NOW,
+    RETRY_CLEANUP, RESUME_SETUP,
 }
 
-private data class CloudErrorPresentation(
+internal data class CloudErrorPresentation(
     val title: String,
     val message: String,
     val action: CloudErrorAction = CloudErrorAction.NONE,
     val actionTitle: String = "",
 )
 
-private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when (code) {
+internal fun cloudErrorPresentation(code: String): CloudErrorPresentation = when (code) {
     "cloud_feature_disabled" -> CloudErrorPresentation(
         "Snippets Cloud is unavailable",
         "This build does not include Snippets Cloud. Your snippets remain on this device.",
@@ -1869,11 +1897,20 @@ private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when 
         "Use the same cloud account",
         "Sign in with the account that owns the currently connected library. The active account, library, and pending security change were not changed.",
     )
-    "credential_cleanup_required", "credential_revocation_incomplete" ->
+    "credential_cleanup_required", "credential_revocation_incomplete",
+    "credential_revocation_failed" ->
         CloudErrorPresentation(
-            "Finishing secure account cleanup",
-            "Snippets has kept cloud sync paused until an abandoned or superseded sign-in grant can be revoked. Try again when the service is reachable.",
+            "Cloud account cleanup could not be completed",
+            "Your local snippets are safe and remain available on this device. Cloud sync stays paused until the abandoned or superseded sign-in grant can be revoked.",
+            CloudErrorAction.RETRY_CLEANUP,
+            "Retry cleanup",
         )
+    "post_authorization_incomplete" -> CloudErrorPresentation(
+        "Library setup was interrupted",
+        "Your account is connected, but Snippets could not finish checking the library. Local snippets remain available and cloud sync is paused.",
+        CloudErrorAction.RESUME_SETUP,
+        "Resume setup",
+    )
     "library_key_required" -> CloudErrorPresentation(
         "Unlock this library",
         "The account is connected, but this device cannot decrypt the library yet. Choose an approved device, scan a QR, or enter a recovery code in Security.",
