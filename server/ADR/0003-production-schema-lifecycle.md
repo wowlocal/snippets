@@ -14,6 +14,9 @@ representation of the latest schema while every upgrade is a forward-only number
 migration, beginning with version 2, under `Container/postgres-migrations/`. Migrations
 are applied by `Scripts/migrate.sh` with the offline database-owner credential. The
 runtime container does not contain that credential and retains no DDL privilege.
+Migration bodies contain no ledger writes or transaction control; the runner alone
+publishes the expected version and checksum after proving the body left both ledgers
+unchanged.
 
 Every server release declares the inclusive schema-version range it can run against and
 fails startup outside that range. A rolling change uses expand/migrate/contract:
@@ -33,8 +36,10 @@ block the data-plane lock order.
 The runner requires the applied ledger to be the exact contiguous sequence from version
 1 through the database maximum, refuses versions newer than the checkout, and records a
 SHA-256 checksum for every post-baseline migration file. It validates every already
-applied checksum before starting any pending migration. A checksum mismatch is repaired
-with a new forward migration, never by editing published history.
+applied checksum before starting any pending migration. Source migrations are copied to
+a private immutable execution snapshot before PostgreSQL is contacted, and SQL generation
+must complete before `psql` starts. A checksum mismatch is repaired with a new forward
+migration, never by editing published history.
 
 ## Rollback policy
 
@@ -49,3 +54,10 @@ The pre-launch squash is a one-time boundary and must not be repeated after the 
 deployment. Owner credentials remain operational tooling only. Release automation must
 run compatibility, fresh-bootstrap, upgrade, mixed-version, and rollback-candidate tests
 before publication.
+
+Any database reporting a version other than the squashed baseline at the first rollout
+halts both the migration runner and runtime startup. Automation must never delete such a
+database or volume. Operators first inventory development, staging, dark-launch, backup,
+and manually provisioned databases; a database with valuable data requires a reviewed
+bridge/export, while a proven-disposable database may be recreated with an explicitly
+rotated server identity.

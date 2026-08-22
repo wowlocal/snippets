@@ -200,6 +200,13 @@ The server refuses startup when the database schema falls outside the binary's d
 compatibility range. The expand/migrate/contract, rollback, and backfill policy is in
 ADR 0003.
 
+The first rollout is deliberately fail-closed for any pre-squash candidate history
+(versions 2–4): `migrate.sh` rejects it and this binary refuses to start. Do not automate
+volume deletion. Inventory development, staging, dark-launch, manual, and restorable
+backup databases first. Recreate only a proven-disposable database and rotate
+`SERVER_INSTANCE_ID`; preserve any valuable database for a reviewed bridge/export so
+clients cannot mistake a reset remote dataset for the old deployment.
+
 The normal integration lane covers fresh bootstrap, migration-ledger validation, RLS,
 quota accounting, feed rotation, and the high-water compaction gate. It materializes
 100,000 current records and 200,001 history rows and requires the rebuild to finish

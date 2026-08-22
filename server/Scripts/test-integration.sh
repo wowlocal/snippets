@@ -8,7 +8,11 @@ test_port="${SNIPPETS_TEST_DATABASE_PORT:-55432}"
 owner_password="integration-owner-only"
 runtime_password="integration-runtime-only"
 schema_password="integration-schema-only"
-migration_fixture_dir="$(mktemp -d "$server_dir/.migration-fixture.XXXXXX")"
+migration_fixture_root="$(mktemp -d "$server_dir/.migration-fixture.XXXXXX")"
+migration_fixture_dir="$migration_fixture_root/valid"
+invalid_migration_fixture_dir="$migration_fixture_root/invalid-ledger"
+transaction_fixture_dir="$migration_fixture_root/invalid-transaction"
+mkdir "$migration_fixture_dir" "$invalid_migration_fixture_dir" "$transaction_fixture_dir"
 
 compose() {
     POSTGRES_DB=snippets_sync_test \
@@ -49,7 +53,7 @@ cleanup() {
     local status=$?
     trap - EXIT
     compose down --volumes --remove-orphans || true
-    rm -rf -- "$migration_fixture_dir"
+    rm -rf -- "$migration_fixture_root"
     exit "$status"
 }
 trap cleanup EXIT
@@ -82,12 +86,31 @@ for _ in 1 2; do
     run_migrations snippets_sync_test
 done
 
+# Any pre-squash candidate database must stop deployment. The runner never deletes or
+# rewrites it automatically because a valuable database requires an explicit bridge.
+compose exec --no-TTY postgres psql --username snippets_owner --dbname postgres \
+    --set ON_ERROR_STOP=1 --command "CREATE DATABASE snippets_presquash_guard"
+compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_presquash_guard --set ON_ERROR_STOP=1 \
+    --file /docker-entrypoint-initdb.d/10-schema.sql
+compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_presquash_guard --set ON_ERROR_STOP=1 \
+    --command "INSERT INTO snippets_private.schema_migrations(version) VALUES (2), (3), (4)"
+if run_migrations snippets_presquash_guard; then
+    echo "migration runner accepted a pre-squash schema history" >&2
+    exit 1
+fi
+
 # Exercise the future v2/v3 lifecycle without publishing pre-launch migrations. The
 # fixture proves that a corrupt applied v2 blocks pending v3 before either its DDL or
 # its version can commit.
 cat > "$migration_fixture_dir/0002_integration_fixture.sql" <<'SQL'
 CREATE TABLE snippets_private.integration_migration_v2(value integer NOT NULL);
-INSERT INTO snippets_private.schema_migrations(version) VALUES (2);
+DO $$
+BEGIN
+    PERFORM 1;
+END;
+$$;
 SQL
 compose exec --no-TTY postgres psql --username snippets_owner --dbname postgres \
     --set ON_ERROR_STOP=1 --command "CREATE DATABASE snippets_migration_validation"
@@ -101,7 +124,6 @@ v2_checksum=$(compose exec --no-TTY postgres psql --username snippets_owner \
 v2_checksum="${v2_checksum//$'\r'/}"
 cat > "$migration_fixture_dir/0003_integration_fixture.sql" <<'SQL'
 CREATE TABLE snippets_private.integration_migration_v3(value integer NOT NULL);
-INSERT INTO snippets_private.schema_migrations(version) VALUES (3);
 SQL
 compose exec --no-TTY postgres psql --username snippets_owner \
     --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
@@ -150,6 +172,51 @@ compose exec --no-TTY postgres psql --username snippets_owner \
     --command "INSERT INTO snippets_private.schema_migrations(version) VALUES (4)"
 if run_migrations snippets_migration_validation "$migration_fixture_dir"; then
     echo "migration runner accepted an unknown newer version" >&2
+    exit 1
+fi
+
+# A migration body cannot publish ledger rows on the runner's behalf. An accidental
+# v2 body that claims both v2 and v3 must roll its own DDL back, and v3 must not run.
+cat > "$invalid_migration_fixture_dir/0002_invalid_ledger.sql" <<'SQL'
+CREATE TABLE snippets_private.invalid_ledger_migration_v2(value integer NOT NULL);
+INSERT INTO snippets_private.schema_migrations(version) VALUES (2), (3);
+SQL
+cat > "$invalid_migration_fixture_dir/0003_must_not_run.sql" <<'SQL'
+CREATE TABLE snippets_private.invalid_ledger_migration_v3(value integer NOT NULL);
+SQL
+compose exec --no-TTY postgres psql --username snippets_owner --dbname postgres \
+    --set ON_ERROR_STOP=1 --command "CREATE DATABASE snippets_migration_ledger_ownership"
+compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_migration_ledger_ownership --set ON_ERROR_STOP=1 \
+    --file /docker-entrypoint-initdb.d/10-schema.sql
+if run_migrations snippets_migration_ledger_ownership "$invalid_migration_fixture_dir"; then
+    echo "migration runner accepted ledger publication from a migration body" >&2
+    exit 1
+fi
+invalid_ledger_state=$(compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_migration_ledger_ownership --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command "SELECT EXISTS (SELECT 1 FROM snippets_private.schema_migrations WHERE version > 1), to_regclass('snippets_private.invalid_ledger_migration_v2') IS NOT NULL, to_regclass('snippets_private.invalid_ledger_migration_v3') IS NOT NULL")
+if [[ "${invalid_ledger_state//$'\r'/}" != "f|f|f" ]]; then
+    echo "invalid ledger publication left migration side effects: $invalid_ledger_state" >&2
+    exit 1
+fi
+
+# Generation failures must be visible even before psql starts. Explicit transaction
+# control is rejected from the immutable snapshot rather than allowed to commit DDL
+# outside the runner-owned transaction.
+cat > "$transaction_fixture_dir/0002_invalid_transaction.sql" <<'SQL'
+CREATE TABLE snippets_private.invalid_transaction_migration(value integer NOT NULL);
+COMMIT;
+SQL
+if run_migrations snippets_migration_ledger_ownership "$transaction_fixture_dir"; then
+    echo "migration runner accepted transaction control in a migration body" >&2
+    exit 1
+fi
+invalid_transaction_state=$(compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_migration_ledger_ownership --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command "SELECT EXISTS (SELECT 1 FROM snippets_private.schema_migrations WHERE version > 1), to_regclass('snippets_private.invalid_transaction_migration') IS NOT NULL")
+if [[ "${invalid_transaction_state//$'\r'/}" != "f|f" ]]; then
+    echo "rejected transaction-control migration left side effects: $invalid_transaction_state" >&2
     exit 1
 fi
 
