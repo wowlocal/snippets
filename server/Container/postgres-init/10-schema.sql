@@ -21,7 +21,7 @@ CREATE TABLE snippets_private.schema_migrations (
     version bigint PRIMARY KEY CHECK (version > 0),
     applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-INSERT INTO snippets_private.schema_migrations(version) VALUES (2);
+INSERT INTO snippets_private.schema_migrations(version) VALUES (3);
 
 CREATE TABLE users (
     id uuid PRIMARY KEY,
@@ -200,36 +200,49 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE FUNCTION snippets_private.record_write_within_quota(
-    target_space uuid, current_byte_delta bigint, new_change_bytes bigint, record_count_delta bigint
+CREATE OR REPLACE FUNCTION snippets_private.batch_write_within_quota(
+    target_space uuid, current_byte_delta bigint, new_change_bytes bigint,
+    record_count_delta bigint, change_count_delta bigint, after_compaction boolean
 ) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE owner_id uuid; current_bytes bigint; history_bytes bigint; records_count bigint; changes_count bigint; owner_bytes bigint;
 BEGIN
-    IF current_byte_delta NOT BETWEEN -900256 AND 900256 OR new_change_bytes NOT BETWEEN 1 AND 900256
-       OR record_count_delta NOT IN (0, 1) OR NOT snippets_private.can_write_space(target_space) THEN RETURN false; END IF;
+    IF current_byte_delta NOT BETWEEN -45012800 AND 45012800
+       OR new_change_bytes NOT BETWEEN 0 AND 45012800
+       OR record_count_delta NOT BETWEEN 0 AND 50 OR change_count_delta NOT BETWEEN 0 AND 50
+       OR NOT snippets_private.can_write_space(target_space) THEN RETURN false; END IF;
     SELECT owner_user_id, current_record_bytes, change_history_bytes, record_count, change_count
       INTO owner_id, current_bytes, history_bytes, records_count, changes_count
-      FROM public.spaces WHERE id = target_space FOR UPDATE;
-    SELECT storage_bytes INTO owner_bytes FROM public.users WHERE id = owner_id FOR UPDATE;
+      FROM public.spaces WHERE id = target_space;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT storage_bytes INTO owner_bytes FROM public.users WHERE id = owner_id;
+    IF NOT FOUND THEN RETURN false; END IF;
+    IF after_compaction THEN
+        IF history_bytes <= current_bytes AND changes_count <= records_count THEN RETURN false; END IF;
+        owner_bytes := owner_bytes - history_bytes + current_bytes;
+        history_bytes := current_bytes;
+        changes_count := records_count;
+    END IF;
     RETURN current_bytes + current_byte_delta >= 0
        AND current_bytes + current_byte_delta + history_bytes + new_change_bytes <= 536870912
-       AND records_count + record_count_delta <= 100000 AND changes_count + 1 <= 250000
+       AND records_count + record_count_delta <= 100000
+       AND changes_count + change_count_delta <= 250000
        AND owner_bytes + current_byte_delta + new_change_bytes BETWEEN 0 AND 2147483648;
 END
 $$;
 
 CREATE OR REPLACE FUNCTION snippets_private.compact_change_history_if_needed(
     target_space uuid, current_byte_delta bigint, new_change_bytes bigint,
-    record_count_delta bigint, force_for_capacity boolean
+    record_count_delta bigint, change_count_delta bigint, force_for_capacity boolean
 ) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
     owner_id uuid; current_bytes bigint; history_bytes bigint; records_count bigint;
     changes_count bigint; owner_bytes bigint; write_fits boolean;
 BEGIN
-    IF current_byte_delta NOT BETWEEN -900256 AND 900256
-       OR new_change_bytes NOT BETWEEN 0 AND 900256 OR record_count_delta NOT IN (0, 1)
+    IF current_byte_delta NOT BETWEEN -45012800 AND 45012800
+       OR new_change_bytes NOT BETWEEN 0 AND 45012800
+       OR record_count_delta NOT BETWEEN 0 AND 50 OR change_count_delta NOT BETWEEN 0 AND 50
        OR NOT snippets_private.can_write_space(target_space) THEN RETURN false; END IF;
     SELECT owner_user_id, current_record_bytes, change_history_bytes, record_count, change_count
       INTO owner_id, current_bytes, history_bytes, records_count, changes_count
@@ -238,24 +251,23 @@ BEGIN
     SELECT storage_bytes INTO owner_bytes FROM public.users WHERE id = owner_id FOR UPDATE;
     IF NOT FOUND THEN RETURN false; END IF;
 
-    write_fits := current_bytes + current_byte_delta >= 0
-      AND current_bytes + current_byte_delta + history_bytes + new_change_bytes <= 536870912
-      AND records_count + record_count_delta <= 100000 AND changes_count + 1 <= 250000
-      AND owner_bytes + current_byte_delta + new_change_bytes BETWEEN 0 AND 2147483648;
-
     IF force_for_capacity THEN
-        -- The caller already established payload validity and CAS success. Rotate
-        -- only when reclaiming history makes this exact write fit every hard quota.
-        IF write_fits OR (history_bytes <= current_bytes AND changes_count <= records_count)
-           OR current_bytes * 2 + current_byte_delta + new_change_bytes > 536870912
+        -- Preflight selected the complete deterministic subset. Rebuild at most
+        -- once, and only when the whole subset fits after reclaiming history.
+        write_fits := current_bytes + current_byte_delta >= 0
+          AND current_bytes * 2 + current_byte_delta + new_change_bytes <= 536870912
+          AND records_count + record_count_delta <= 100000
+          AND records_count + change_count_delta <= 250000
+          AND owner_bytes - history_bytes + current_bytes + current_byte_delta + new_change_bytes
+                BETWEEN 0 AND 2147483648;
+        IF NOT write_fits OR (history_bytes <= current_bytes AND changes_count <= records_count)
            OR records_count + record_count_delta > 100000
-           OR records_count + 1 > 250000
-           OR owner_bytes - history_bytes + current_bytes + current_byte_delta + new_change_bytes
-                NOT BETWEEN 0 AND 2147483648 THEN
+           OR records_count + change_count_delta > 250000 THEN
             RETURN false;
         END IF;
     ELSE
-        IF current_byte_delta <> 0 OR new_change_bytes <> 0 OR record_count_delta <> 0 THEN RETURN false; END IF;
+        IF current_byte_delta <> 0 OR new_change_bytes <> 0 OR record_count_delta <> 0
+           OR change_count_delta <> 0 THEN RETURN false; END IF;
         -- High-water plus a minimum reclaimable delta provides hysteresis. A
         -- baseline by itself can never trigger another identical compaction.
         IF (changes_count <= 200000 AND current_bytes + history_bytes <= 503316480)
@@ -281,32 +293,103 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE FUNCTION snippets_private.account_record_storage() RETURNS trigger
+CREATE OR REPLACE FUNCTION snippets_private.account_record_storage_inserted() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
-DECLARE byte_delta bigint; count_delta bigint; owner_id uuid;
 BEGIN
-    IF TG_OP = 'INSERT' THEN byte_delta := octet_length(NEW.blob) + octet_length(NEW.rev); count_delta := 1;
-    ELSIF TG_OP = 'UPDATE' THEN byte_delta := octet_length(NEW.blob) + octet_length(NEW.rev) - octet_length(OLD.blob) - octet_length(OLD.rev); count_delta := 0;
-    ELSE byte_delta := -octet_length(OLD.blob) - octet_length(OLD.rev); count_delta := -1; END IF;
-    UPDATE public.spaces SET current_record_bytes = current_record_bytes + byte_delta,
-      record_count = record_count + count_delta WHERE id = coalesce(NEW.space_id, OLD.space_id)
-      RETURNING owner_user_id INTO owner_id;
-    IF FOUND THEN UPDATE public.users SET storage_bytes = storage_bytes + byte_delta WHERE id = owner_id; END IF;
-    RETURN coalesce(NEW, OLD);
+    WITH deltas AS (
+        SELECT space_id, sum(octet_length(blob) + octet_length(rev))::bigint AS byte_delta,
+          count(*)::bigint AS count_delta FROM new_records GROUP BY space_id
+    ), updated_spaces AS (
+        UPDATE public.spaces AS spaces SET
+          current_record_bytes = spaces.current_record_bytes + deltas.byte_delta,
+          record_count = spaces.record_count + deltas.count_delta
+        FROM deltas WHERE spaces.id = deltas.space_id
+        RETURNING spaces.owner_user_id, deltas.byte_delta
+    ), owner_deltas AS (
+        SELECT owner_user_id, sum(byte_delta)::bigint AS byte_delta FROM updated_spaces GROUP BY owner_user_id
+    )
+    UPDATE public.users AS users SET storage_bytes = users.storage_bytes + owner_deltas.byte_delta
+      FROM owner_deltas WHERE users.id = owner_deltas.owner_user_id;
+    RETURN NULL;
 END
 $$;
 
-CREATE OR REPLACE FUNCTION snippets_private.account_change_storage() RETURNS trigger
+CREATE OR REPLACE FUNCTION snippets_private.account_record_storage_deleted() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
-DECLARE byte_delta bigint; count_delta bigint; owner_id uuid;
 BEGIN
-    IF TG_OP = 'INSERT' THEN byte_delta := octet_length(NEW.blob) + octet_length(NEW.rev); count_delta := 1;
-    ELSE byte_delta := -octet_length(OLD.blob) - octet_length(OLD.rev); count_delta := -1; END IF;
-    UPDATE public.spaces SET change_history_bytes = change_history_bytes + byte_delta,
-      change_count = change_count + count_delta WHERE id = coalesce(NEW.space_id, OLD.space_id)
-      RETURNING owner_user_id INTO owner_id;
-    IF FOUND THEN UPDATE public.users SET storage_bytes = storage_bytes + byte_delta WHERE id = owner_id; END IF;
-    RETURN coalesce(NEW, OLD);
+    WITH deltas AS (
+        SELECT space_id, -sum(octet_length(blob) + octet_length(rev))::bigint AS byte_delta,
+          -count(*)::bigint AS count_delta FROM old_records GROUP BY space_id
+    ), updated_spaces AS (
+        UPDATE public.spaces AS spaces SET
+          current_record_bytes = spaces.current_record_bytes + deltas.byte_delta,
+          record_count = spaces.record_count + deltas.count_delta
+        FROM deltas WHERE spaces.id = deltas.space_id
+        RETURNING spaces.owner_user_id, deltas.byte_delta
+    ), owner_deltas AS (
+        SELECT owner_user_id, sum(byte_delta)::bigint AS byte_delta FROM updated_spaces GROUP BY owner_user_id
+    )
+    UPDATE public.users AS users SET storage_bytes = users.storage_bytes + owner_deltas.byte_delta
+      FROM owner_deltas WHERE users.id = owner_deltas.owner_user_id;
+    RETURN NULL;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION snippets_private.account_record_storage_updated() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE byte_delta bigint; owner_id uuid;
+BEGIN
+    byte_delta := octet_length(NEW.blob) + octet_length(NEW.rev)
+      - octet_length(OLD.blob) - octet_length(OLD.rev);
+    IF byte_delta = 0 THEN RETURN NEW; END IF;
+    UPDATE public.spaces SET current_record_bytes = current_record_bytes + byte_delta
+      WHERE id = NEW.space_id RETURNING owner_user_id INTO owner_id;
+    IF FOUND THEN
+        UPDATE public.users SET storage_bytes = storage_bytes + byte_delta WHERE id = owner_id;
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION snippets_private.account_change_storage_inserted() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+    WITH deltas AS (
+        SELECT space_id, sum(octet_length(blob) + octet_length(rev))::bigint AS byte_delta,
+          count(*)::bigint AS count_delta FROM new_changes GROUP BY space_id
+    ), updated_spaces AS (
+        UPDATE public.spaces AS spaces SET
+          change_history_bytes = spaces.change_history_bytes + deltas.byte_delta,
+          change_count = spaces.change_count + deltas.count_delta
+        FROM deltas WHERE spaces.id = deltas.space_id
+        RETURNING spaces.owner_user_id, deltas.byte_delta
+    ), owner_deltas AS (
+        SELECT owner_user_id, sum(byte_delta)::bigint AS byte_delta FROM updated_spaces GROUP BY owner_user_id
+    )
+    UPDATE public.users AS users SET storage_bytes = users.storage_bytes + owner_deltas.byte_delta
+      FROM owner_deltas WHERE users.id = owner_deltas.owner_user_id;
+    RETURN NULL;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION snippets_private.account_change_storage_deleted() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+    WITH deltas AS (
+        SELECT space_id, -sum(octet_length(blob) + octet_length(rev))::bigint AS byte_delta,
+          -count(*)::bigint AS count_delta FROM old_changes GROUP BY space_id
+    ), updated_spaces AS (
+        UPDATE public.spaces AS spaces SET
+          change_history_bytes = spaces.change_history_bytes + deltas.byte_delta,
+          change_count = spaces.change_count + deltas.count_delta
+        FROM deltas WHERE spaces.id = deltas.space_id
+        RETURNING spaces.owner_user_id, deltas.byte_delta
+    ), owner_deltas AS (
+        SELECT owner_user_id, sum(byte_delta)::bigint AS byte_delta FROM updated_spaces GROUP BY owner_user_id
+    )
+    UPDATE public.users AS users SET storage_bytes = users.storage_bytes + owner_deltas.byte_delta
+      FROM owner_deltas WHERE users.id = owner_deltas.owner_user_id;
+    RETURN NULL;
 END
 $$;
 
@@ -362,10 +445,37 @@ BEGIN
 END
 $$;
 
-CREATE TRIGGER records_storage_accounting AFTER INSERT OR UPDATE OR DELETE ON records
-FOR EACH ROW EXECUTE FUNCTION snippets_private.account_record_storage();
-CREATE TRIGGER changes_storage_accounting AFTER INSERT OR DELETE ON changes
-FOR EACH ROW EXECUTE FUNCTION snippets_private.account_change_storage();
+CREATE OR REPLACE FUNCTION snippets_private.claim_pairing_for_current_user(
+    target_space uuid, target_pairing uuid
+) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE claimant uuid;
+BEGIN
+    claimant := snippets_private.current_user_id();
+    IF claimant IS NULL OR NOT snippets_private.is_space_member(target_space) THEN RETURN false; END IF;
+    UPDATE public.pairings SET claimed_by_user_id = claimant, claimed_at = clock_timestamp()
+      WHERE space_id = target_space AND pairing_id = target_pairing
+        AND approved_at IS NOT NULL AND expires_at > clock_timestamp()
+        AND (claimed_by_user_id IS NULL OR claimed_by_user_id = claimant);
+    RETURN FOUND;
+END
+$$;
+
+CREATE TRIGGER records_storage_accounting_insert AFTER INSERT ON records
+REFERENCING NEW TABLE AS new_records FOR EACH STATEMENT
+EXECUTE FUNCTION snippets_private.account_record_storage_inserted();
+CREATE TRIGGER records_storage_accounting_update AFTER UPDATE OF rev, blob ON records
+FOR EACH ROW
+EXECUTE FUNCTION snippets_private.account_record_storage_updated();
+CREATE TRIGGER records_storage_accounting_delete AFTER DELETE ON records
+REFERENCING OLD TABLE AS old_records FOR EACH STATEMENT
+EXECUTE FUNCTION snippets_private.account_record_storage_deleted();
+CREATE TRIGGER changes_storage_accounting_insert AFTER INSERT ON changes
+REFERENCING NEW TABLE AS new_changes FOR EACH STATEMENT
+EXECUTE FUNCTION snippets_private.account_change_storage_inserted();
+CREATE TRIGGER changes_storage_accounting_delete AFTER DELETE ON changes
+REFERENCING OLD TABLE AS old_changes FOR EACH STATEMENT
+EXECUTE FUNCTION snippets_private.account_change_storage_deleted();
 CREATE TRIGGER spaces_storage_accounting BEFORE DELETE ON spaces
 FOR EACH ROW EXECUTE FUNCTION snippets_private.account_deleted_space_storage();
 
@@ -411,14 +521,18 @@ ALTER FUNCTION snippets_private.can_write_space(uuid) OWNER TO snippets_function
 ALTER FUNCTION snippets_private.owns_space(uuid) OWNER TO snippets_function_owner;
 ALTER FUNCTION snippets_private.resolve_identity(bytea, uuid) OWNER TO snippets_function_owner;
 ALTER FUNCTION snippets_private.lock_storage_quota(uuid) OWNER TO snippets_function_owner;
-ALTER FUNCTION snippets_private.record_write_within_quota(uuid, bigint, bigint, bigint) OWNER TO snippets_function_owner;
-ALTER FUNCTION snippets_private.compact_change_history_if_needed(uuid, bigint, bigint, bigint, boolean) OWNER TO snippets_function_owner;
-ALTER FUNCTION snippets_private.account_record_storage() OWNER TO snippets_function_owner;
-ALTER FUNCTION snippets_private.account_change_storage() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.batch_write_within_quota(uuid, bigint, bigint, bigint, bigint, boolean) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.compact_change_history_if_needed(uuid, bigint, bigint, bigint, bigint, boolean) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_record_storage_inserted() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_record_storage_deleted() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_record_storage_updated() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_change_storage_inserted() OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.account_change_storage_deleted() OWNER TO snippets_function_owner;
 ALTER FUNCTION snippets_private.account_deleted_space_storage() OWNER TO snippets_function_owner;
 ALTER FUNCTION snippets_private.rotate_dataset_after_restore(uuid) OWNER TO snippets_function_owner;
 ALTER FUNCTION snippets_private.is_access_token_revoked(bytea) OWNER TO snippets_function_owner;
 ALTER FUNCTION snippets_private.revoke_access_token(bytea, timestamptz) OWNER TO snippets_function_owner;
+ALTER FUNCTION snippets_private.claim_pairing_for_current_user(uuid, uuid) OWNER TO snippets_function_owner;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA snippets_private FROM PUBLIC;
@@ -427,9 +541,10 @@ GRANT USAGE ON SCHEMA public, snippets_private TO snippets_runtime;
 GRANT EXECUTE ON FUNCTION snippets_private.current_user_id(), snippets_private.is_space_member(uuid),
   snippets_private.is_personal_space_owner(uuid), snippets_private.can_write_space(uuid), snippets_private.owns_space(uuid),
   snippets_private.resolve_identity(bytea, uuid), snippets_private.lock_storage_quota(uuid),
-  snippets_private.record_write_within_quota(uuid, bigint, bigint, bigint),
-  snippets_private.compact_change_history_if_needed(uuid, bigint, bigint, bigint, boolean), snippets_private.is_access_token_revoked(bytea),
-  snippets_private.revoke_access_token(bytea, timestamptz) TO snippets_runtime;
+  snippets_private.batch_write_within_quota(uuid, bigint, bigint, bigint, bigint, boolean),
+  snippets_private.compact_change_history_if_needed(uuid, bigint, bigint, bigint, bigint, boolean), snippets_private.is_access_token_revoked(bytea),
+  snippets_private.revoke_access_token(bytea, timestamptz),
+  snippets_private.claim_pairing_for_current_user(uuid, uuid) TO snippets_runtime;
 GRANT SELECT ON users TO snippets_runtime;
 GRANT SELECT ON snippets_private.schema_migrations TO snippets_runtime;
 GRANT SELECT ON spaces, space_memberships, space_creation_requests, records, changes, recovery_envelopes, pairings TO snippets_runtime;
@@ -438,7 +553,7 @@ GRANT INSERT ON space_memberships, space_creation_requests, records, changes, re
 GRANT UPDATE (next_sequence) ON spaces TO snippets_runtime;
 GRANT UPDATE (rev, deleted, blob, record_generation, last_sequence, updated_at) ON records TO snippets_runtime;
 GRANT UPDATE (version, key_epoch, algorithm, ciphertext, created_at, updated_at) ON recovery_envelopes TO snippets_runtime;
-GRANT UPDATE (algorithm, ciphertext, approved_at, claimed_by_user_id, claimed_at) ON pairings TO snippets_runtime;
+GRANT UPDATE (algorithm, ciphertext, approved_at) ON pairings TO snippets_runtime;
 GRANT DELETE ON pairings TO snippets_runtime;
 
 -- Deliberately not granted to snippets_runtime: only the database owner

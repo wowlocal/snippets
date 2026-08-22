@@ -215,7 +215,7 @@ paths:
         - { $ref: '#/components/parameters/PairingID' }
       responses:
         '200':
-          description: Atomically binds the first claimant and idempotently returns the approved encrypted key envelope to that account until expiry or cancellation.
+          description: Any current space member may atomically bind the first claim; the approved encrypted key envelope remains idempotently available to that account until expiry or cancellation.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ClaimPairingResponse' }

@@ -99,7 +99,10 @@ signature so signature malleability cannot evade logout.
 Recovery-envelope replacement and pairing approval require recent provider-asserted
 phishing-resistant authentication. The first successful pairing claim is bound to the
 claiming account and remains idempotently retrievable until invitation expiry or
-cancellation, so a lost HTTP response does not consume the encrypted envelope. Logout
+cancellation, so a lost HTTP response does not consume the encrypted envelope. Any
+current member, including a reader, may claim an approved envelope needed to exercise
+their read access; creating, approving, and cancelling pairings still require a writable
+role. Logout
 stores only a keyed credential digest.
 Data-plane transactions take the shared form of the credential advisory lock; logout
 takes its exclusive form. Both recheck the denylist inside the transaction, so a
@@ -107,9 +110,9 @@ returned `204` is a strict boundary across server instances without serializing 
 ordinary requests from one credential.
 
 Liveness bypasses user admission; readiness has two reserved slots. User admission is
-ordered: global rate/concurrency limits, response-memory reservation where applicable,
-authentication, a bounded revocation preflight, synchronous deadline-bounded strict
-body decoding, then the handler transaction and its definitive denylist check. The
+ordered: global rate/concurrency limits, authentication, a bounded revocation preflight,
+synchronous deadline-bounded strict body decoding, proportional response-memory
+reservation where applicable, then the handler transaction and its definitive denylist check. The
 server has connection, request, pool-connect, SQL-statement, lock, body-memory,
 response-memory, global-rate, and identity-rate limits. Production output is sanitized
 JSON logging containing only operation, status, duration, random request ID, and closed
@@ -128,12 +131,14 @@ create `BYPASSRLS` roles itself.
 Write
 locking is credential, quota owner/space, then sorted per-record advisory locks; absent
 record CAS is serialized too. Quotas are 512 MiB/100,000 records/250,000 changes per
-space and 2 GiB per owner. After a successful mutation accumulates meaningful
-reclaimable history near the byte/count high-water mark, the same transaction compacts
-history to one immutable version per current record, rotates the feed epoch, and returns
-the new scope to the writer. Invalid, stale, conflicting, and quota-rejected batches do
-not perform maintenance. This bounds repeated-update history without a long-lived
-database snapshot or repeated baseline rotation. Tombstones remain current records;
+space and 2 GiB per owner. After successful mutations accumulate meaningful reclaimable
+history near the byte/count high-water mark, batch preflight selects a deterministic
+quota-fitting subset and the same transaction performs at most one compaction to one
+immutable version per current record. Accounting for each bulk baseline statement is
+set-based, the feed epoch rotates once, and the new scope is returned to the writer.
+Invalid, stale, conflicting, and wholly quota-rejected batches do not perform
+maintenance. This bounds repeated-update history without a long-lived database snapshot
+or repeated baseline rotation. Tombstones remain current records;
 safe physical tombstone reclamation still requires the client-checkpoint lifecycle
 listed under future work.
 
@@ -176,7 +181,7 @@ are independent Base64/Base64url values decoding to 32–64 bytes. Keep
 than five minutes, `openid offline_access`, and an explicitly configured step-up AMR
 and/or ACR allow-list.
 
-`10-schema.sql` bootstraps an empty database at schema version 2 and is executed once by
+`10-schema.sql` bootstraps an empty database at schema version 3 and is executed once by
 PostgreSQL's standard first-boot initializer. Outside Compose,
 provision `snippets_runtime` plus the dedicated function owner with
 `00-runtime-role.sh`, then apply the schema as a migration role that is a member of
@@ -193,6 +198,16 @@ PGHOST=database.example PGDATABASE=snippets PGUSER=snippets_owner \
 The server refuses startup when the database schema falls outside the binary's declared
 compatibility range. The expand/migrate/contract, rollback, and backfill policy is in
 ADR 0003.
+
+The normal integration lane covers fresh bootstrap, RLS, quota accounting, and feed
+rotation. Before a production database or PostgreSQL major-version rollout, also run the
+opt-in high-water compaction gate; it materializes 100,000 current records and 200,001
+history rows and requires the rebuild to finish inside the configured 20-second SQL
+deadline:
+
+```sh
+SNIPPETS_COMPACTION_SCALE_TESTS=1 ./Scripts/test-integration.sh
+```
 
 ## Deliberately future work
 

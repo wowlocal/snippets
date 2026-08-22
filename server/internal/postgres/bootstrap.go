@@ -187,7 +187,13 @@ func (s *Store) ClaimPairing(ctx context.Context, principal domain.Principal, sp
 		if err != nil {
 			return err
 		}
-		pairing, _, err = scanPairing(tx.QueryRow(ctx, `SELECT pairing_id,space_id,recipient_public_key,recipient_key_hash,nonce,authentication_tag,algorithm,ciphertext,approved_at,expires_at FROM pairings WHERE space_id=$1 AND pairing_id=$2 FOR UPDATE`, spaceID, pairingID))
+		// Claim is intentionally available to every member, including readers: it
+		// grants the key needed to consume read access. Serialize claimants without
+		// relying on the writer-only pairings UPDATE policy.
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 43))", spaceID.String()+":"+pairingID.String()); err != nil {
+			return err
+		}
+		pairing, _, err = scanPairing(tx.QueryRow(ctx, `SELECT pairing_id,space_id,recipient_public_key,recipient_key_hash,nonce,authentication_tag,algorithm,ciphertext,approved_at,expires_at FROM pairings WHERE space_id=$1 AND pairing_id=$2`, spaceID, pairingID))
 		if err != nil {
 			return err
 		}
@@ -210,7 +216,10 @@ func (s *Store) ClaimPairing(ctx context.Context, principal domain.Principal, sp
 			return domain.NewError(domain.Conflict)
 		}
 		if !alreadyClaimed {
-			_, err = tx.Exec(ctx, "UPDATE pairings SET claimed_by_user_id=$3,claimed_at=clock_timestamp() WHERE space_id=$1 AND pairing_id=$2", spaceID, pairingID, userID)
+			var claimed bool
+			if err = tx.QueryRow(ctx, "SELECT snippets_private.claim_pairing_for_current_user($1,$2)", spaceID, pairingID).Scan(&claimed); err == nil && !claimed {
+				err = domain.NewError(domain.Conflict)
+			}
 		}
 		return err
 	})

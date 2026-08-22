@@ -137,7 +137,7 @@ func TestBatchRejectsDuplicatesAndInvalidRecords(t *testing.T) {
 	}
 }
 
-func TestReaderCannotSubmitOrCancelPairing(t *testing.T) {
+func TestReaderCannotWriteButCanClaimPairing(t *testing.T) {
 	store := newTestStore(t, ProductionQuota)
 	owner, reader := principal(1), principal(2)
 	space, err := store.CreateSpace(context.Background(), owner, nil)
@@ -157,6 +157,18 @@ func TestReaderCannotSubmitOrCancelPairing(t *testing.T) {
 	}
 	if err := store.CancelPairing(context.Background(), reader, space.Scope.SpaceID, uuid.New()); AsServiceError(err).Code != Forbidden {
 		t.Fatalf("reader pairing cancellation returned %v", err)
+	}
+	algorithm := PairingAlgorithm
+	pairingID := uuid.New()
+	store.mu.Lock()
+	store.spaces[space.Scope.SpaceID].pairings[pairingID] = memoryPairing{value: Pairing{
+		ID: pairingID, SpaceID: space.Scope.SpaceID, State: PairingApproved,
+		Algorithm: &algorithm, Ciphertext: []byte("reader envelope"), ExpiresAt: time.Now().Add(time.Minute),
+	}}
+	store.mu.Unlock()
+	_, claimed, err := store.ClaimPairing(context.Background(), reader, space.Scope.SpaceID, pairingID)
+	if err != nil || string(claimed.Ciphertext) != "reader envelope" {
+		t.Fatalf("reader could not claim approved pairing: %v %#v", err, claimed)
 	}
 }
 
@@ -320,6 +332,68 @@ func TestCompactedBaselineDoesNotRotateAgainWithoutReclaimableHistory(t *testing
 		if err != nil || result.Outcomes[0].Kind != "accepted" || result.Scope.FeedEpoch != space.Scope.FeedEpoch {
 			t.Fatalf("small write %d looped baseline compaction: %v %#v", attempt, err, result)
 		}
+	}
+}
+
+func TestSubmitPerformsAtMostOneCapacityCompaction(t *testing.T) {
+	quota := StorageQuota{MaxBytesPerSpace: 100, MaxBytesPerUser: 1_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 100}
+	store := newTestStore(t, quota)
+	owner := principal(1)
+	space, err := store.CreateSpace(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	createdItems := make([]BatchItem, len(ids))
+	for index, id := range ids {
+		createdItems[index] = BatchItem{Record: WireRecord{ID: id, Rev: "r", Blob: bytesOf(byte(index), 9)}}
+	}
+	created, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, createdItems)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.mu.Lock()
+	state := store.spaces[space.Scope.SpaceID]
+	for index := 0; index < 2; index++ {
+		state.nextSequence++
+		change := state.changes[index]
+		change.sequence = state.nextSequence
+		state.changes = append(state.changes, change)
+	}
+	store.mu.Unlock()
+
+	updates := make([]BatchItem, len(ids))
+	for index, id := range ids {
+		version := *created.Outcomes[index].RecordVersion
+		updates[index] = BatchItem{
+			Record:                WireRecord{ID: id, Rev: "s", Blob: bytesOf(byte(index+10), 9)},
+			ExpectedRecordVersion: &version,
+		}
+	}
+	result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, rejected := 0, 0
+	for _, outcome := range result.Outcomes {
+		switch outcome.Kind {
+		case "accepted":
+			accepted++
+		case "rejected":
+			if outcome.ErrorCode == nil || *outcome.ErrorCode != QuotaExceeded {
+				t.Fatalf("unexpected rejection: %#v", outcome)
+			}
+			rejected++
+		default:
+			t.Fatalf("unexpected outcome: %#v", outcome)
+		}
+	}
+	store.mu.Lock()
+	rotations := state.compactionCount
+	store.mu.Unlock()
+	if rotations != 1 || accepted != 2 || rejected != 2 {
+		t.Fatalf("batch compaction was not bounded: rotations=%d accepted=%d rejected=%d outcomes=%#v", rotations, accepted, rejected, result.Outcomes)
 	}
 }
 

@@ -7,7 +7,7 @@
 ## Decision
 
 Before the first production deployment, the empty-database bootstrap tracks the latest
-schema (currently version 2) and every change also includes the forward migration from
+schema (currently version 3) and every change also includes the forward migration from
 the preceding candidate. After the first production deployment, the bootstrap remains
 an equivalent fresh-install representation of the latest schema while every upgrade is
 a forward-only numbered migration under `Container/postgres-migrations/`, applied by

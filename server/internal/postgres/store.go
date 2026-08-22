@@ -26,8 +26,8 @@ type Store struct {
 	codec            *domain.TokenCodec
 }
 
-const minimumSchemaVersion int64 = 2
-const maximumSchemaVersion int64 = 2
+const minimumSchemaVersion int64 = 3
+const maximumSchemaVersion int64 = 3
 
 func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool, error) {
 	poolConfig, err := newPoolConfig(configuration)
@@ -403,7 +403,16 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 			}
 		}
 		outcomes := make([]domain.BatchOutcome, len(items))
-		accepted := false
+		type preparedMutation struct {
+			indexed
+			blob             []byte
+			generation       int64
+			currentByteDelta int64
+			changeBytes      int64
+			recordCountDelta int64
+			accepted         bool
+		}
+		prepared := make([]preparedMutation, 0, len(items))
 		for _, value := range ordered {
 			item := value.item
 			if err := item.Record.Validate(); err != nil {
@@ -452,64 +461,94 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 			if !exists {
 				countDelta = 1
 			}
+			prepared = append(prepared, preparedMutation{
+				indexed: value, blob: blob, generation: generation + 1,
+				currentByteDelta: int64(newBytes - oldBytes), changeBytes: int64(newBytes),
+				recordCountDelta: countDelta,
+			})
+		}
+
+		var currentByteDelta, changeBytes, recordCountDelta, changeCountDelta int64
+		needsCompaction := false
+		for index := range prepared {
+			candidate := &prepared[index]
+			nextCurrentDelta := currentByteDelta + candidate.currentByteDelta
+			nextChangeBytes := changeBytes + candidate.changeBytes
+			nextRecordDelta := recordCountDelta + candidate.recordCountDelta
+			nextChangeCount := changeCountDelta + 1
 			var within bool
-			if err := tx.QueryRow(ctx, "SELECT snippets_private.record_write_within_quota($1,$2,$3,$4)", spaceID, newBytes-oldBytes, newBytes, countDelta).Scan(&within); err != nil {
+			if err := tx.QueryRow(ctx, "SELECT snippets_private.batch_write_within_quota($1,$2,$3,$4,$5,$6)",
+				spaceID, nextCurrentDelta, nextChangeBytes, nextRecordDelta, nextChangeCount, needsCompaction).Scan(&within); err != nil {
 				return err
 			}
-			if !within {
-				// A capacity-saving rotation is allowed only after scope, payload,
-				// and CAS validation established that this exact mutation can succeed
-				// once reclaimable history is removed. It remains in this transaction.
-				var compacted bool
-				if err := tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,$2,$3,$4,true)", spaceID, newBytes-oldBytes, newBytes, countDelta).Scan(&compacted); err != nil {
+			if !within && !needsCompaction {
+				if err := tx.QueryRow(ctx, "SELECT snippets_private.batch_write_within_quota($1,$2,$3,$4,$5,true)",
+					spaceID, nextCurrentDelta, nextChangeBytes, nextRecordDelta, nextChangeCount).Scan(&within); err != nil {
 					return err
 				}
-				if compacted {
-					if err := tx.QueryRow(ctx, "SELECT snippets_private.record_write_within_quota($1,$2,$3,$4)", spaceID, newBytes-oldBytes, newBytes, countDelta).Scan(&within); err != nil {
-						return err
-					}
-					if !within {
-						// A maintenance predicate and the definitive quota check must
-						// agree. Roll back the rotation on any invariant failure.
-						return domain.NewError(domain.InternalError)
-					}
+				if within {
+					needsCompaction = true
 				}
 			}
 			if !within {
 				code := domain.QuotaExceeded
-				outcomes[value.index] = domain.BatchOutcome{Kind: "rejected", ErrorCode: &code}
+				outcomes[candidate.index] = domain.BatchOutcome{Kind: "rejected", ErrorCode: &code}
 				continue
 			}
-			generation++
+			candidate.accepted = true
+			currentByteDelta, changeBytes = nextCurrentDelta, nextChangeBytes
+			recordCountDelta, changeCountDelta = nextRecordDelta, nextChangeCount
+		}
+		if needsCompaction {
+			var compacted bool
+			if err := tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,$2,$3,$4,$5,true)",
+				spaceID, currentByteDelta, changeBytes, recordCountDelta, changeCountDelta).Scan(&compacted); err != nil {
+				return err
+			}
+			if !compacted {
+				// Batch preflight and the definitive maintenance predicate execute
+				// under the same quota locks and must agree.
+				return domain.NewError(domain.InternalError)
+			}
+		}
+
+		accepted := false
+		for _, candidate := range prepared {
+			if !candidate.accepted {
+				continue
+			}
+			item := candidate.item
 			var sequence int64
 			if err := tx.QueryRow(ctx, "UPDATE spaces SET next_sequence=next_sequence+1 WHERE id=$1 RETURNING next_sequence", spaceID).Scan(&sequence); err != nil {
 				return err
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO records(space_id,record_id,rev,deleted,blob,record_generation,last_sequence) VALUES($1,$2,$3,$4,$5,$6,$7)
-				    ON CONFLICT(space_id,record_id) DO UPDATE SET rev=EXCLUDED.rev,deleted=EXCLUDED.deleted,blob=EXCLUDED.blob,record_generation=EXCLUDED.record_generation,last_sequence=EXCLUDED.last_sequence,updated_at=clock_timestamp()`, spaceID, item.Record.ID, item.Record.Rev, item.Record.Deleted, blob, generation, sequence)
+			    ON CONFLICT(space_id,record_id) DO UPDATE SET rev=EXCLUDED.rev,deleted=EXCLUDED.deleted,blob=EXCLUDED.blob,record_generation=EXCLUDED.record_generation,last_sequence=EXCLUDED.last_sequence,updated_at=clock_timestamp()`, spaceID, item.Record.ID, item.Record.Rev, item.Record.Deleted, candidate.blob, candidate.generation, sequence)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, sequence, item.Record.ID, item.Record.Rev, item.Record.Deleted, blob, generation); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, sequence, item.Record.ID, item.Record.Rev, item.Record.Deleted, candidate.blob, candidate.generation); err != nil {
 				return err
 			}
 			accepted = true
 			storedRecord := item.Record
-			storedRecord.Blob = blob
-			serverRecord, err := s.makeServerRecord(space, storedRecord, generation)
+			storedRecord.Blob = candidate.blob
+			serverRecord, err := s.makeServerRecord(space, storedRecord, candidate.generation)
 			if err != nil {
 				return err
 			}
 			version, revision := serverRecord.RecordVersion, item.Record.Rev
-			outcomes[value.index] = domain.BatchOutcome{Kind: "accepted", RecordVersion: &version, Revision: &revision}
+			outcomes[candidate.index] = domain.BatchOutcome{Kind: "accepted", RecordVersion: &version, Revision: &revision}
 		}
-		if accepted {
+		if accepted && !needsCompaction {
 			var compacted bool
-			if err := tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,0,0,0,false)", spaceID).Scan(&compacted); err != nil {
+			if err := tx.QueryRow(ctx, "SELECT snippets_private.compact_change_history_if_needed($1,0,0,0,0,false)", spaceID).Scan(&compacted); err != nil {
 				return err
 			}
-			// Return the committed scope even when this write performed feed
-			// maintenance. The writer does not need a failing retry round trip.
+		}
+		if accepted {
+			// Return the committed scope even when this write performed the single
+			// allowed feed rotation. The writer does not need a failed retry.
 			space, err = getSpace(ctx, tx, spaceID)
 			if err != nil {
 				return err

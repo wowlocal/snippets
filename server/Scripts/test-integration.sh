@@ -45,10 +45,6 @@ SQL
 compose exec --no-TTY --env PGPASSWORD="$schema_password" postgres \
     psql --host 127.0.0.1 --username snippets_schema_installer --dbname snippets_non_super \
     --set ON_ERROR_STOP=1 --file /docker-entrypoint-initdb.d/10-schema.sql
-compose exec --no-TTY --env PGPASSWORD="$schema_password" postgres \
-    psql --host 127.0.0.1 --username snippets_schema_installer --dbname snippets_non_super \
-    --set ON_ERROR_STOP=1 --single-transaction \
-    < "$server_dir/Container/postgres-migrations/0002_atomic_compaction.sql"
 function_owners=$(compose exec --no-TTY postgres psql --username snippets_owner --dbname snippets_non_super \
     --tuples-only --no-align --set ON_ERROR_STOP=1 --command \
     "SELECT bool_and(owner.rolbypassrls AND NOT owner.rolcanlogin) FROM pg_proc candidate JOIN pg_roles owner ON owner.oid=candidate.proowner WHERE candidate.pronamespace='snippets_private'::regnamespace AND candidate.prosecdef;")
@@ -57,11 +53,26 @@ if [[ "${function_owners//$'\r'/}" != "t" ]]; then
     exit 1
 fi
 
+# A current database must make the pending-only runner a no-op. Replaying the
+# historical v2 DDL against schema v3 would fail and is therefore caught here.
+for _ in 1 2; do
+    docker run --rm \
+        --network "${compose_project}_default" \
+        --volume "$server_dir:/source:ro" \
+        --env PGHOST=postgres \
+        --env PGDATABASE=snippets_sync_test \
+        --env PGUSER=snippets_owner \
+        --env PGPASSWORD="$owner_password" \
+        postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382 \
+        /source/Scripts/migrate.sh
+done
+
 docker run --rm \
     --network "${compose_project}_default" \
     --volume "$server_dir:/source" \
     --workdir /source \
     --env SNIPPETS_INTEGRATION_TESTS=1 \
+    --env SNIPPETS_COMPACTION_SCALE_TESTS="${SNIPPETS_COMPACTION_SCALE_TESTS:-0}" \
     --env DATABASE_HOST=postgres \
     --env DATABASE_PORT=5432 \
     --env DATABASE_NAME=snippets_sync_test \

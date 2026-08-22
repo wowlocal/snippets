@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"crypto/elliptic"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -93,6 +95,24 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	}
 	if err := store.CancelPairing(ctx, second, space.Scope.SpaceID, uuid.New()); domain.AsServiceError(err).Code != domain.Forbidden {
 		t.Fatalf("reader pairing cancellation returned %v", err)
+	}
+	x, y := elliptic.P256().ScalarBaseMult([]byte{1})
+	publicKey := elliptic.Marshal(elliptic.P256(), x, y)
+	_, pairing, err := store.CreatePairing(ctx, first, space.Scope.SpaceID, domain.CreatePairing{
+		RecipientPublicKey: publicKey, Nonce: make([]byte, 32), ExpiresInSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyHash := sha256.Sum256(publicKey)
+	if _, _, err := store.ApprovePairing(ctx, first, space.Scope.SpaceID, pairing.ID, domain.ApprovePairing{
+		RecipientKeyHash: keyHash[:], Algorithm: domain.PairingAlgorithm, Ciphertext: []byte("reader envelope"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, readerClaim, err := store.ClaimPairing(ctx, second, space.Scope.SpaceID, pairing.ID)
+	if err != nil || string(readerClaim.Ciphertext) != "reader envelope" {
+		t.Fatalf("reader claim contract diverged: %v %#v", err, readerClaim)
 	}
 	wrong := "v2.invalid.invalid.invalid.invalid"
 	conflict, err := store.Submit(ctx, first, space.Scope.SpaceID, space.Scope, []domain.BatchItem{{Record: domain.WireRecord{ID: id, Rev: "2", Blob: []byte("other")}, ExpectedRecordVersion: &wrong}})
@@ -244,6 +264,82 @@ func TestPostgresSnapshotPaginationIsStableAcrossInterleavedWrites(t *testing.T)
 	if err != nil || delta.FullSnapshot || len(delta.Records) != 3 {
 		t.Fatalf("delta after snapshot: %v %#v", err, delta)
 	}
+}
+
+func TestPostgresCompactionAtProductionRowScale(t *testing.T) {
+	if os.Getenv("SNIPPETS_INTEGRATION_TESTS") != "1" || os.Getenv("SNIPPETS_COMPACTION_SCALE_TESTS") != "1" {
+		t.Skip("set SNIPPETS_COMPACTION_SCALE_TESTS=1 with the PostgreSQL integration lane")
+	}
+	port, _ := strconv.Atoi(os.Getenv("DATABASE_PORT"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool, err := NewPool(ctx, config.Database{
+		Host: os.Getenv("DATABASE_HOST"), Port: port, Name: os.Getenv("DATABASE_NAME"),
+		RuntimeUser: os.Getenv("DATABASE_RUNTIME_USER"), RuntimePassword: os.Getenv("DATABASE_RUNTIME_PASSWORD"),
+		TLSMode: os.Getenv("DATABASE_TLS_MODE"), StatementTimeout: 20 * time.Second,
+		LockTimeout: 5 * time.Second, MaxConnections: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ownerPool, err := NewPool(ctx, config.Database{
+		Host: os.Getenv("DATABASE_HOST"), Port: port, Name: os.Getenv("DATABASE_NAME"),
+		RuntimeUser: os.Getenv("DATABASE_OWNER_USER"), RuntimePassword: os.Getenv("DATABASE_OWNER_PASSWORD"),
+		TLSMode: os.Getenv("DATABASE_TLS_MODE"), MaxConnections: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownerPool.Close()
+	store, err := NewStore(pool, uuid.MustParse("00000000-0000-0000-0000-000000000001"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := integrationPrincipal(71)
+	space, err := store.CreateSpace(ctx, principal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownerPool.Exec(ctx, `INSERT INTO records(space_id,record_id,rev,deleted,blob,record_generation,last_sequence)
+		SELECT $1,md5(value::text)::uuid,'r',false,convert_to(repeat('x',1024),'UTF8'),1,value
+		FROM generate_series(1,100000) AS value`, space.Scope.SpaceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownerPool.Exec(ctx, `INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation)
+		SELECT $1,value,md5((((value-1)%100000)+1)::text)::uuid,'r',false,
+		  convert_to(repeat('x',1024),'UTF8'),1
+		FROM generate_series(1,200001) AS value`, space.Scope.SpaceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET next_sequence=200001 WHERE id=$1", space.Scope.SpaceID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.FetchChanges(ctx, principal, space.Scope.SpaceID, nil, 1)
+	if err != nil || len(page.Records) != 1 {
+		t.Fatalf("scale fixture snapshot: %v %#v", err, page)
+	}
+	record := page.Records[0]
+	started := time.Now()
+	result, err := store.Submit(ctx, principal, space.Scope.SpaceID, space.Scope, []domain.BatchItem{{
+		Record:                domain.WireRecord{ID: record.Record.ID, Rev: "s", Blob: make([]byte, 1024)},
+		ExpectedRecordVersion: &record.RecordVersion,
+	}})
+	duration := time.Since(started)
+	if err != nil || result.Outcomes[0].Kind != "accepted" || result.Scope.FeedEpoch == space.Scope.FeedEpoch {
+		t.Fatalf("scale compaction did not complete within the SQL deadline after %s: %v %#v", duration, err, result)
+	}
+	var currentBytes, historyBytes, recordCount, changeCount, ownerBytes int64
+	if err := ownerPool.QueryRow(ctx, `SELECT spaces.current_record_bytes,spaces.change_history_bytes,
+		spaces.record_count,spaces.change_count,users.storage_bytes FROM spaces
+		JOIN users ON users.id=spaces.owner_user_id WHERE spaces.id=$1`, space.Scope.SpaceID).
+		Scan(&currentBytes, &historyBytes, &recordCount, &changeCount, &ownerBytes); err != nil {
+		t.Fatal(err)
+	}
+	if currentBytes != historyBytes || recordCount != 100000 || changeCount != recordCount || ownerBytes != currentBytes+historyBytes {
+		t.Fatalf("set-based accounting drifted: current=%d history=%d records=%d changes=%d owner=%d", currentBytes, historyBytes, recordCount, changeCount, ownerBytes)
+	}
+	t.Logf("100k-record/200k-change compaction completed in %s", duration)
 }
 
 func integrationPrincipal(seed byte) domain.Principal {

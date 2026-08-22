@@ -140,6 +140,35 @@ func TestAuthenticationRunsBeforeBodyParsing(t *testing.T) {
 	assertProblem(t, response, 401, domain.AuthenticationRequired)
 }
 
+func TestAuthenticationRunsBeforeResponseMemoryAdmission(t *testing.T) {
+	service, _, _, _ := testServer(t)
+	service.configuration.HTTP.ResponseMemoryBudget = 1
+	service.responseBytes.Store(1)
+	path := "/v2/spaces/00000000-0000-4000-8000-000000000001/changes?limit=1"
+	response := perform(t, service.Handler(), http.MethodGet, path, "", "")
+	assertProblem(t, response, http.StatusUnauthorized, domain.AuthenticationRequired)
+}
+
+func TestResponseMemoryReservationUsesActualPageAndBatchCardinality(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "https://local/v2/spaces/00000000-0000-4000-8000-000000000001/changes?limit=1", nil)
+	request = request.WithContext(withOperationPolicy(request.Context(), policyForRequest(request.Method, request.URL.Path)))
+	oneRecord := responseMemoryReservation(request)
+
+	request = httptest.NewRequest(http.MethodGet, "https://local/v2/spaces/00000000-0000-4000-8000-000000000001/changes", nil)
+	request = request.WithContext(withOperationPolicy(request.Context(), policyForRequest(request.Method, request.URL.Path)))
+	fullPage := responseMemoryReservation(request)
+
+	request = httptest.NewRequest(http.MethodPost, "https://local/v2/spaces/00000000-0000-4000-8000-000000000001/records/batch", nil)
+	request = request.WithContext(withOperationPolicy(request.Context(), policyForRequest(request.Method, request.URL.Path)))
+	request = request.WithContext(withResponseRecordCount(request.Context(), 2))
+	twoConflicts := responseMemoryReservation(request)
+
+	if oneRecord <= 0 || twoConflicts <= oneRecord || twoConflicts > oneRecord*2 ||
+		fullPage != maximumRecordResponseReservation || twoConflicts >= fullPage {
+		t.Fatalf("non-proportional reservations: one=%d two=%d full=%d", oneRecord, twoConflicts, fullPage)
+	}
+}
+
 func TestStrictJSONRejectsDuplicateUnknownMissingAndNoncanonicalBase64(t *testing.T) {
 	server, store, principal, _ := testHTTPServer(t)
 	space, err := store.CreateSpace(context.Background(), principal, nil)
@@ -197,19 +226,37 @@ func TestHealthChecksBypassUserConcurrencyAdmission(t *testing.T) {
 }
 
 func TestRecordResponsesShareIndependentMemoryAdmissionBudget(t *testing.T) {
-	tests := []struct {
-		method string
-		path   string
-		body   string
-	}{
-		{method: http.MethodGet, path: "/v2/spaces/00000000-0000-4000-8000-000000000001/changes"},
-		{method: http.MethodPost, path: "/v2/spaces/00000000-0000-4000-8000-000000000001/records/batch", body: `{}`},
-	}
-	for _, test := range tests {
-		service, _, _, _ := testServer(t)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		service, store, principal, _ := testServer(t)
+		space, err := store.CreateSpace(context.Background(), principal, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := "/v2/spaces/" + space.Scope.SpaceID.String() + "/changes"
+		body := ""
+		if method == http.MethodPost {
+			path = "/v2/spaces/" + space.Scope.SpaceID.String() + "/records/batch"
+			encoded, err := json.Marshal(map[string]any{
+				"expectedScope": map[string]any{
+					"serverInstanceId":  service.configuration.ServerInstanceID,
+					"spaceId":           space.Scope.SpaceID,
+					"scopeBinding":      space.Scope.ScopeBinding,
+					"datasetGeneration": space.Scope.DatasetGeneration,
+					"feedEpoch":         space.Scope.FeedEpoch,
+				},
+				"items": []any{map[string]any{
+					"record":                map[string]any{"id": uuid.New(), "rev": "r", "deleted": false, "blob": ""},
+					"expectedRecordVersion": nil,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = string(encoded)
+		}
 		service.configuration.HTTP.ResponseMemoryBudget = maximumRecordResponseReservation
 		service.responseBytes.Store(maximumRecordResponseReservation)
-		response := perform(t, service.Handler(), test.method, test.path, test.body, "valid-token")
+		response := perform(t, service.Handler(), method, path, body, "valid-token")
 		assertProblem(t, response, http.StatusTooManyRequests, domain.RateLimited)
 	}
 }

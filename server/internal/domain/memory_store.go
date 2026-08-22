@@ -46,6 +46,7 @@ type memorySpace struct {
 	changes           []memoryChange
 	recovery          *RecoveryEnvelope
 	pairings          map[uuid.UUID]memoryPairing
+	compactionCount   int64
 }
 
 type MemoryStore struct {
@@ -246,7 +247,15 @@ func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uui
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].item.Record.ID.String() < ordered[j].item.Record.ID.String() })
 	outcomes := make([]BatchOutcome, len(items))
-	accepted := false
+	type preparedMutation struct {
+		indexed
+		stored           memoryRecord
+		currentByteDelta int64
+		changeBytes      int64
+		recordCountDelta int64
+		accepted         bool
+	}
+	prepared := make([]preparedMutation, 0, len(items))
 	for _, value := range ordered {
 		item := value.item
 		if err := item.Record.Validate(); err != nil {
@@ -282,29 +291,68 @@ func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uui
 		}
 		generation := current.generation + 1
 		newStored := memoryRecord{record: cloneWireRecord(item.Record), generation: generation}
-		if !s.withinQuota(spaceID, state, item.Record.ID, newStored) {
-			// Capacity compaction is part of the same successful mutation. A stale,
-			// conflicting, invalid, or genuinely over-quota request never rotates the
-			// feed as a side effect.
-			if !s.compactChangeHistoryForWriteIfNeeded(spaceID, state, item.Record.ID, newStored) {
-				code := QuotaExceeded
-				outcomes[value.index] = BatchOutcome{Kind: "rejected", ErrorCode: &code}
-				continue
+		currentDelta := recordBytes(newStored)
+		recordDelta := int64(1)
+		if exists {
+			currentDelta -= recordBytes(current)
+			recordDelta = 0
+		}
+		prepared = append(prepared, preparedMutation{
+			indexed: value, stored: newStored, currentByteDelta: currentDelta,
+			changeBytes: recordBytes(newStored), recordCountDelta: recordDelta,
+		})
+	}
+
+	var currentByteDelta, changeBytes, recordCountDelta, changeCountDelta int64
+	needsCompaction := false
+	for index := range prepared {
+		candidate := &prepared[index]
+		nextCurrentDelta := currentByteDelta + candidate.currentByteDelta
+		nextChangeBytes := changeBytes + candidate.changeBytes
+		nextRecordDelta := recordCountDelta + candidate.recordCountDelta
+		nextChangeCount := changeCountDelta + 1
+		fits := s.batchWithinQuota(spaceID, state, nextCurrentDelta, nextChangeBytes, nextRecordDelta, nextChangeCount, needsCompaction)
+		if !fits && !needsCompaction && s.changeHistoryIsReclaimable(state) {
+			fits = s.batchWithinQuota(spaceID, state, nextCurrentDelta, nextChangeBytes, nextRecordDelta, nextChangeCount, true)
+			if fits {
+				needsCompaction = true
 			}
 		}
+		if !fits {
+			code := QuotaExceeded
+			outcomes[candidate.index] = BatchOutcome{Kind: "rejected", ErrorCode: &code}
+			continue
+		}
+		candidate.accepted = true
+		currentByteDelta, changeBytes = nextCurrentDelta, nextChangeBytes
+		recordCountDelta, changeCountDelta = nextRecordDelta, nextChangeCount
+	}
+	if needsCompaction {
+		state.feedEpoch = uuid.New()
+		state.compactionCount++
+		s.rebuildSnapshotBaseline(state, false)
+	}
+
+	accepted := false
+	for _, candidate := range prepared {
+		if !candidate.accepted {
+			continue
+		}
+		item := candidate.item
 		state.nextSequence++
-		state.records[item.Record.ID] = newStored
-		state.changes = append(state.changes, memoryChange{sequence: state.nextSequence, record: cloneWireRecord(item.Record), generation: generation})
+		state.records[item.Record.ID] = candidate.stored
+		state.changes = append(state.changes, memoryChange{sequence: state.nextSequence, record: cloneWireRecord(item.Record), generation: candidate.stored.generation})
 		accepted = true
-		serverRecord, encodeErr := s.serverRecord(spaceID, state, newStored)
+		serverRecord, encodeErr := s.serverRecord(spaceID, state, candidate.stored)
 		if encodeErr != nil {
 			return BatchSubmission{}, encodeErr
 		}
 		version, revision := serverRecord.RecordVersion, item.Record.Rev
-		outcomes[value.index] = BatchOutcome{Kind: "accepted", RecordVersion: &version, Revision: &revision}
+		outcomes[candidate.index] = BatchOutcome{Kind: "accepted", RecordVersion: &version, Revision: &revision}
 	}
-	if accepted && s.changeHistoryNeedsCompaction(state) && s.canRebuildSnapshotBaseline(spaceID, state) {
+	if accepted && !needsCompaction && s.changeHistoryNeedsCompaction(state) && s.canRebuildSnapshotBaseline(spaceID, state) {
 		state.feedEpoch = uuid.New()
+		state.compactionCount++
 		s.rebuildSnapshotBaseline(state, false)
 	}
 	partial := false
@@ -315,6 +363,33 @@ func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uui
 		}
 	}
 	return BatchSubmission{Scope: descriptor(spaceID, state, membership).Scope, Outcomes: outcomes, Partial: partial}, nil
+}
+
+func (s *MemoryStore) changeHistoryIsReclaimable(state *memorySpace) bool {
+	currentBytes, historyBytes := memorySpaceByteCounts(state)
+	return historyBytes > currentBytes || len(state.changes) > len(state.records)
+}
+
+func (s *MemoryStore) batchWithinQuota(
+	spaceID uuid.UUID,
+	state *memorySpace,
+	currentByteDelta, changeBytes, recordCountDelta, changeCountDelta int64,
+	afterCompaction bool,
+) bool {
+	currentBytes, historyBytes := memorySpaceByteCounts(state)
+	changeCount := int64(len(state.changes))
+	ownerBytes := s.ownerBytesReplacing(spaceID, state, currentBytes+historyBytes)
+	if afterCompaction {
+		ownerBytes += currentBytes - historyBytes
+		historyBytes = currentBytes
+		changeCount = int64(len(state.records))
+	}
+	currentAfter := currentBytes + currentByteDelta
+	return currentAfter >= 0 && currentAfter+historyBytes+changeBytes <= s.quota.MaxBytesPerSpace &&
+		int64(len(state.records))+recordCountDelta <= s.quota.MaxRecordsPerSpace &&
+		changeCount+changeCountDelta <= s.quota.MaxChangesPerSpace &&
+		ownerBytes+currentByteDelta+changeBytes >= 0 &&
+		ownerBytes+currentByteDelta+changeBytes <= s.quota.MaxBytesPerUser
 }
 
 func (s *MemoryStore) changeHistoryNeedsCompaction(state *memorySpace) bool {
@@ -335,35 +410,6 @@ func (s *MemoryStore) canRebuildSnapshotBaseline(spaceID uuid.UUID, state *memor
 	return baselineBytes <= s.quota.MaxBytesPerSpace &&
 		int64(len(state.records)) <= s.quota.MaxChangesPerSpace &&
 		s.ownerBytesReplacing(spaceID, state, baselineBytes) <= s.quota.MaxBytesPerUser
-}
-
-func (s *MemoryStore) compactChangeHistoryForWriteIfNeeded(spaceID uuid.UUID, state *memorySpace, recordID uuid.UUID, replacement memoryRecord) bool {
-	if s.withinQuota(spaceID, state, recordID, replacement) {
-		return false
-	}
-	currentBytes, historyBytes := memorySpaceByteCounts(state)
-	if historyBytes <= currentBytes && len(state.changes) <= len(state.records) {
-		return false
-	}
-	old, existed := state.records[recordID]
-	currentAfter := currentBytes + recordBytes(replacement)
-	recordCountAfter := int64(len(state.records)) + 1
-	if existed {
-		currentAfter -= recordBytes(old)
-		recordCountAfter--
-	}
-	// Compaction first creates a baseline of the current records. The accepted
-	// mutation then changes current storage and appends exactly one new change.
-	spaceBytesAfter := currentBytes + currentAfter + recordBytes(replacement)
-	changeCountAfter := int64(len(state.records)) + 1
-	if spaceBytesAfter > s.quota.MaxBytesPerSpace || recordCountAfter > s.quota.MaxRecordsPerSpace ||
-		changeCountAfter > s.quota.MaxChangesPerSpace ||
-		s.ownerBytesReplacing(spaceID, state, spaceBytesAfter) > s.quota.MaxBytesPerUser {
-		return false
-	}
-	state.feedEpoch = uuid.New()
-	s.rebuildSnapshotBaseline(state, false)
-	return true
 }
 
 func (s *MemoryStore) GetRecoveryEnvelope(_ context.Context, principal Principal, spaceID uuid.UUID) (Space, *RecoveryEnvelope, error) {
@@ -652,18 +698,6 @@ func (s *MemoryStore) requireCredentialActive(principal Principal) error {
 	return nil
 }
 
-func (s *MemoryStore) withinQuota(spaceID uuid.UUID, state *memorySpace, recordID uuid.UUID, replacement memoryRecord) bool {
-	old, existed := state.records[recordID]
-	spaceBytes := s.spaceBytes(state) - recordBytes(old) + recordBytes(replacement)*2
-	if !existed {
-		spaceBytes = s.spaceBytes(state) + recordBytes(replacement)*2
-	}
-	if spaceBytes > s.quota.MaxBytesPerSpace || int64(len(state.records))+boolInt(!existed) > s.quota.MaxRecordsPerSpace || int64(len(state.changes))+1 > s.quota.MaxChangesPerSpace {
-		return false
-	}
-	return s.ownerBytesReplacing(spaceID, state, spaceBytes) <= s.quota.MaxBytesPerUser
-}
-
 func (s *MemoryStore) ownerBytesReplacing(spaceID uuid.UUID, state *memorySpace, replacementBytes int64) int64 {
 	var total int64
 	for id, candidate := range s.spaces {
@@ -696,12 +730,6 @@ func (s *MemoryStore) spaceBytes(state *memorySpace) int64 {
 
 func recordBytes(record memoryRecord) int64 {
 	return int64(len(record.record.Blob) + len([]byte(record.record.Rev)))
-}
-func boolInt(value bool) int64 {
-	if value {
-		return 1
-	}
-	return 0
 }
 func digestKey(value [32]byte) string { return hex.EncodeToString(value[:]) }
 func cloneWireRecord(value WireRecord) WireRecord {

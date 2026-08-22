@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,7 +54,7 @@ func NewServer(configuration config.Server, store domain.Store, validator auth.V
 		},
 	})
 	generated := api.HandlerFromMux(strict, http.NewServeMux())
-	server.handler = server.limitMiddleware(server.authMiddleware(server.bodyMiddleware(generated)))
+	server.handler = server.limitMiddleware(server.authMiddleware(server.bodyMiddleware(server.responseMemoryMiddleware(generated))))
 	return server
 }
 
@@ -122,14 +123,6 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 			writeProblem(statusWriter, domain.ErrorWithRetry(domain.RateLimited, 1))
 			return
 		}
-		if reservation := responseMemoryReservation(operation); reservation > 0 && s.configuration.HTTP.ResponseMemoryBudget > 0 {
-			if s.responseBytes.Add(reservation) > s.configuration.HTTP.ResponseMemoryBudget {
-				s.responseBytes.Add(-reservation)
-				writeProblem(statusWriter, domain.ErrorWithRetry(domain.RateLimited, 1))
-				return
-			}
-			defer s.responseBytes.Add(-reservation)
-		}
 		select {
 		case s.concurrent <- struct{}{}:
 			defer func() { <-s.concurrent }()
@@ -139,18 +132,6 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(statusWriter, r)
 	})
-}
-
-func responseMemoryReservation(operation string) int64 {
-	switch operation {
-	case "get_changes", "submit_records":
-		// Both operations can materialize a full page of ciphertext and then a
-		// Base64-expanded JSON response. Submit needs this reservation for the
-		// authoritative records returned by a worst-case all-conflict batch.
-		return maximumRecordResponseReservation
-	default:
-		return 0
-	}
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -249,13 +230,59 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 			writeProblem(w, domain.ErrorWithLimit(domain.PayloadTooLarge, domain.MaxRequestBytes))
 			return
 		}
-		if err := validateStrictBody(policy.name, body); err != nil {
+		responseRecords, err := validateStrictBody(policy.name, body)
+		if err != nil {
 			writeProblem(w, err)
 			return
 		}
 		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
+		if policy.name == "submit_records" {
+			r = r.WithContext(withResponseRecordCount(r.Context(), responseRecords))
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) responseMemoryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reservation := responseMemoryReservation(r)
+		if reservation <= 0 || s.configuration.HTTP.ResponseMemoryBudget <= 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.responseBytes.Add(reservation) > s.configuration.HTTP.ResponseMemoryBudget {
+			s.responseBytes.Add(-reservation)
+			writeProblem(w, domain.ErrorWithRetry(domain.RateLimited, 1))
+			return
+		}
+		defer s.responseBytes.Add(-reservation)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func responseMemoryReservation(r *http.Request) int64 {
+	operation := operationPolicyFrom(r.Context()).name
+	records := 0
+	switch operation {
+	case "get_changes":
+		records = domain.MaxPageRecords
+		if values, exists := r.URL.Query()["limit"]; exists && len(values) == 1 {
+			if parsed, err := strconv.Atoi(values[0]); err == nil && parsed >= 1 && parsed <= domain.MaxPageRecords {
+				records = parsed
+			}
+		}
+	case "submit_records":
+		var found bool
+		records, found = responseRecordCountFrom(r.Context())
+		if !found || records < 0 || records > domain.MaxBatchRecords {
+			records = domain.MaxBatchRecords
+		}
+	default:
+		return 0
+	}
+	// Store materialization retains raw ciphertext while JSON encoding expands it.
+	// Scale the conservative protocol maximum by the actual page/batch cardinality.
+	return (maximumRecordResponseReservation*int64(records) + int64(domain.MaxPageRecords-1)) / int64(domain.MaxPageRecords)
 }
 
 func (s *Server) allowPrincipal(digest [32]byte) bool {
@@ -346,23 +373,34 @@ func writeProblem(w http.ResponseWriter, err error) {
 	_ = json.NewEncoder(w).Encode(problem)
 }
 
-func validateStrictBody(operation string, body []byte) error {
+func validateStrictBody(operation string, body []byte) (int, error) {
 	if err := rejectDuplicateJSONKeys(body); err != nil {
-		return domain.NewError(domain.InvalidRequest)
+		return 0, domain.NewError(domain.InvalidRequest)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var raw any
 	if err := decoder.Decode(&raw); err != nil {
-		return domain.NewError(domain.InvalidRequest)
+		return 0, domain.NewError(domain.InvalidRequest)
 	}
 	if err := validateRequiredShape(operation, raw); err != nil {
-		return err
+		return 0, err
 	}
 	if err := validateCanonicalBase64(raw); err != nil {
-		return err
+		return 0, err
 	}
-	return nil
+	if operation == "submit_records" {
+		object, ok := raw.(map[string]any)
+		if !ok {
+			return 0, domain.NewError(domain.InvalidRequest)
+		}
+		items, ok := object["items"].([]any)
+		if !ok {
+			return 0, domain.NewError(domain.InvalidRequest)
+		}
+		return len(items), nil
+	}
+	return 0, nil
 }
 
 func validateCanonicalBase64(value any) error {
@@ -526,6 +564,7 @@ type operationPolicy struct {
 }
 
 type operationPolicyContextKey struct{}
+type responseRecordCountContextKey struct{}
 
 func withOperationPolicy(ctx context.Context, policy operationPolicy) context.Context {
 	return context.WithValue(ctx, operationPolicyContextKey{}, policy)
@@ -536,6 +575,15 @@ func operationPolicyFrom(ctx context.Context) operationPolicy {
 		return policy
 	}
 	return operationPolicy{name: "unknown", requirement: auth.Standard}
+}
+
+func withResponseRecordCount(ctx context.Context, count int) context.Context {
+	return context.WithValue(ctx, responseRecordCountContextKey{}, count)
+}
+
+func responseRecordCountFrom(ctx context.Context) (int, bool) {
+	count, ok := ctx.Value(responseRecordCountContextKey{}).(int)
+	return count, ok
 }
 
 func policyForRequest(method, path string) operationPolicy {
