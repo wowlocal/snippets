@@ -92,10 +92,57 @@ class CloudAccountUxTest {
     }
 
     @Test
+    fun legacyPositiveRecoveryVerificationMigratesToUnconfirmed() {
+        val kit = LibraryKeyBootstrap.RecoveryKit(
+            serverURL = "https://cloud.example",
+            spaceID = "00000000-0000-4000-8000-000000000001",
+            keyEpoch = 7,
+            secret = ByteArray(32) { it.toByte() },
+        )
+        val envelope = HttpSyncClient.RecoveryEnvelopeRecord(
+            version = 3,
+            keyEpoch = 7,
+            algorithm = LibraryKeyBootstrap.RECOVERY_ALGORITHM,
+            ciphertext = byteArrayOf(1, 2, 3),
+        )
+        val oldRecord = RecoveryKitVerification.fromRecoveryKit(kit, envelope).toJSON()
+        val migrated = RecoveryKitVerificationState.fromJSON(oldRecord)
+
+        assertEquals(RecoveryKitStatus.STATUS_UNCONFIRMED, migrated?.status)
+        assertEquals(
+            RecoveryKitStatus.STATUS_UNCONFIRMED,
+            RecoveryKitVerificationState(
+                RecoveryKitStatus.VERIFIED_CURRENT,
+                migrated?.verification,
+            ).loadedForDisplay().status,
+        )
+    }
+
+    @Test
+    fun knownReplacementSurvivesSerialization() {
+        val migrated = requireNotNull(RecoveryKitVerificationState.fromJSON(
+            RecoveryKitVerification(
+                serverURL = "https://cloud.example",
+                spaceID = "00000000-0000-4000-8000-000000000001",
+                keyEpoch = 7,
+                envelopeVersion = 3,
+                envelopeFingerprint = "a".repeat(64),
+                kitFingerprint = "b".repeat(64),
+            ).toJSON(),
+        ))
+        val replaced = migrated.copy(status = RecoveryKitStatus.KNOWN_REPLACED)
+
+        assertEquals(replaced, RecoveryKitVerificationState.fromJSON(replaced.toJSON()))
+    }
+
+    @Test
     fun unfinishedRecoveryReplacementBlocksDisconnectAcrossBothDurableStages() {
         assertTrue(disconnectBlockedForRecovery(CloudKeyStatus.RECOVERY_AUTH_REQUIRED))
         assertTrue(disconnectBlockedForRecovery(CloudKeyStatus.RECOVERY_KIT_LOCKED))
         assertFalse(disconnectBlockedForRecovery(CloudKeyStatus.READY))
+        assertTrue(disconnectBlockedForRecovery(RecoveryKitStatus.REPLACEMENT_IN_PROGRESS))
+        assertTrue(disconnectBlockedForRecovery(RecoveryKitStatus.KNOWN_REPLACED))
+        assertFalse(disconnectBlockedForRecovery(RecoveryKitStatus.STATUS_UNCONFIRMED))
     }
 
     @Test
@@ -104,6 +151,7 @@ class CloudAccountUxTest {
             "00000000-0000-4000-8000-000000000001",
             "00000000-0000-4000-8000-000000000010",
             "owner",
+            "membership-a-000000000000000000000",
         )
         val second = first.copy(
             spaceID = "00000000-0000-4000-8000-000000000002",
@@ -122,6 +170,7 @@ class CloudAccountUxTest {
             "00000000-0000-4000-8000-000000000001",
             "00000000-0000-4000-8000-000000000010",
             "reader",
+            "membership-a-000000000000000000000",
         )
         val writer = reader.copy(
             spaceID = "00000000-0000-4000-8000-000000000002",
@@ -143,5 +192,48 @@ class CloudAccountUxTest {
         )
         assertEquals("1A60C0E7", identifier)
         assertTrue(identifier.matches(Regex("^[0-9A-F]{8}$")))
+    }
+
+    @Test
+    fun ownerAndWriterRequireAnExplicitInitialLibraryChoice() {
+        val owner = HttpSyncClient.SpaceCandidate(
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000010",
+            "owner",
+            "membership-a-000000000000000000000",
+        )
+        val writer = owner.copy(
+            spaceID = "00000000-0000-4000-8000-000000000002",
+            role = "writer",
+            scopeBinding = "membership-b-000000000000000000000",
+        )
+
+        assertEquals(null, automaticPersonalSpace(listOf(owner, writer), null))
+    }
+
+    @Test
+    fun stepUpRequiresTheExactExistingMembership() {
+        val expected = CloudStepUpBinding(
+            serverURL = "https://cloud.example",
+            serverInstanceID = "00000000-0000-4000-8000-000000000010",
+            spaceID = "00000000-0000-4000-8000-000000000001",
+            scopeBinding = "membership-a-000000000000000000000",
+        )
+        val sameMembership = HttpSyncClient.SpaceResolution(
+            spaceID = expected.spaceID,
+            serverInstanceID = expected.serverInstanceID,
+            role = "owner",
+            scopeBinding = expected.scopeBinding,
+        )
+
+        assertTrue(expected.matches("https://cloud.example", sameMembership))
+        assertFalse(expected.matches(
+            "https://cloud.example",
+            sameMembership.copy(scopeBinding = "membership-b-000000000000000000000"),
+        ))
+        assertFalse(expected.matches(
+            "https://cloud.example",
+            sameMembership.copy(role = "reader"),
+        ))
     }
 }

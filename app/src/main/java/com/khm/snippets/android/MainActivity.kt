@@ -1326,7 +1326,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     onClick = {
                         scope.launch { repository.cancelCloudLibrarySelection() }
                     },
-                ) { Text(if (state.librarySwitchFromID == null) "Cancel" else "Keep current account") }
+                ) { Text(if (state.librarySwitchFromID == null) "Cancel" else "Keep current library") }
             },
         )
     }
@@ -1370,17 +1370,19 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     "This removes this device’s Snippets Cloud connection and its access " +
                         "to open the library. Your cloud library is not deleted. To reconnect, " +
                         "you will need an approved device or your recovery kit.\n\n" +
-                        if (disconnectBlockedForRecovery(state.cloudKeyStatus)) {
+                        if (disconnectBlockedForRecovery(state.cloudKeyStatus) ||
+                            state.recoveryKitStatus == RecoveryKitStatus.REPLACEMENT_IN_PROGRESS) {
                             "A new recovery kit has replaced the previous one, but has not " +
                                 "been saved yet. Finish saving it before disconnecting this device."
                         } else {
-                            "Recovery check: ${if (state.recoveryKitVerified) "completed on this device" else "not completed on this device"}."
+                            recoveryDisconnectCopy(state.recoveryKitStatus)
                         },
                 )
             },
             confirmButton = {
                 Button(
-                    enabled = !disconnectBlockedForRecovery(state.cloudKeyStatus),
+                    enabled = !disconnectBlockedForRecovery(state.cloudKeyStatus) &&
+                        !disconnectBlockedForRecovery(state.recoveryKitStatus),
                     onClick = {
                     showDisconnectConfirmation = false
                     scope.launch { repository.disconnectCloudAccount() }
@@ -1493,6 +1495,10 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     },
                 ) { Text(if (signedIn) "Change account" else "Sign in to Snippets Cloud") }
                 if (signedIn) {
+                    OutlinedButton(
+                        enabled = !state.isBusy && state.cloudKeyStatus == CloudKeyStatus.READY,
+                        onClick = { scope.launch { repository.beginCloudLibraryChange() } },
+                    ) { Text("Change library") }
                     OutlinedButton(
                         enabled = !state.isBusy &&
                             !disconnectBlockedForRecovery(state.cloudKeyStatus),
@@ -1719,11 +1725,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     CloudKeyStatus.READY -> {
                         Text(
                             "Library access: unlocked\nRecovery kit: " +
-                                if (state.recoveryKitVerified) {
-                                    "recovery check completed on this device"
-                                } else {
-                                    "not verified on this device"
-                                },
+                                recoveryStatusCopy(state.recoveryKitStatus),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Button(
@@ -1863,6 +1865,15 @@ private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when 
         CloudErrorAction.SIGN_IN,
         "Re-authenticate",
     )
+    "step_up_account_mismatch" -> CloudErrorPresentation(
+        "Use the same cloud account",
+        "Sign in with the account that owns the currently connected library. The active account, library, and pending security change were not changed.",
+    )
+    "credential_cleanup_required", "credential_revocation_incomplete" ->
+        CloudErrorPresentation(
+            "Finishing secure account cleanup",
+            "Snippets has kept cloud sync paused until an abandoned or superseded sign-in grant can be revoked. Try again when the service is reachable.",
+        )
     "library_key_required" -> CloudErrorPresentation(
         "Unlock this library",
         "The account is connected, but this device cannot decrypt the library yet. Choose an approved device, scan a QR, or enter a recovery code in Security.",
@@ -1920,6 +1931,30 @@ private fun cloudErrorPresentation(code: String): CloudErrorPresentation = when 
         "Snippets Cloud needs attention",
         "The request could not be completed. Your local snippets are unchanged. Return to the action that failed and retry it there.",
     )
+}
+
+private fun recoveryStatusCopy(status: RecoveryKitStatus): String = when (status) {
+    RecoveryKitStatus.NEVER_VERIFIED -> "not verified on this device"
+    RecoveryKitStatus.VERIFIED_CURRENT -> "verified against the current cloud envelope"
+    RecoveryKitStatus.KNOWN_REPLACED ->
+        "your previously saved kit was replaced and no longer unlocks this library"
+    RecoveryKitStatus.STATUS_UNCONFIRMED ->
+        "saved verification has not yet been confirmed against the current cloud envelope"
+    RecoveryKitStatus.REPLACEMENT_IN_PROGRESS ->
+        "replacement is in progress; finish saving the new kit"
+}
+
+private fun recoveryDisconnectCopy(status: RecoveryKitStatus): String = when (status) {
+    RecoveryKitStatus.NEVER_VERIFIED ->
+        "Recovery check: not completed on this device."
+    RecoveryKitStatus.VERIFIED_CURRENT ->
+        "Recovery check: verified against the current cloud envelope."
+    RecoveryKitStatus.KNOWN_REPLACED ->
+        "Your previously saved recovery kit was replaced and can no longer unlock this library."
+    RecoveryKitStatus.STATUS_UNCONFIRMED ->
+        "Recovery check: the saved verification will be checked against the server before disconnecting."
+    RecoveryKitStatus.REPLACEMENT_IN_PROGRESS ->
+        "A recovery kit replacement is in progress. Finish saving the new kit first."
 }
 
 internal fun normalizedRecoveryCode(value: String): String =

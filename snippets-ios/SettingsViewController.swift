@@ -790,6 +790,21 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             changeAccount: { [weak self] in
                 self?.confirmCloudAccountChange()
             },
+            changeLibrary: { [weak self] in
+                guard let self else { return }
+                navigationController?.popViewController(animated: true)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    do {
+                        try presentCloudState(try await cloudBootstrap.changeLibrary(
+                            chooseLibrary: chooseCloudLibrary))
+                    } catch is CancellationError {
+                        // Explicit chooser cancellation leaves the current library intact.
+                    } catch {
+                        showError(title: "Couldn’t Change Library", error: error)
+                    }
+                }
+            },
             disconnect: { [weak self] in self?.confirmCloudSignOut() })
         navigationController?.pushViewController(controller, animated: true)
     }
@@ -1086,11 +1101,14 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             longCode: longCode,
             verified: { [weak self] in
                 guard let self else { return }
-                do {
-                    try cloudBootstrap.acknowledgeRecoveryKitSaved()
-                    continueAfterCloudBecameReady()
-                } catch {
-                    showError(title: "Couldn’t Finish Setup", error: error)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    do {
+                        try await cloudBootstrap.acknowledgeRecoveryKitSaved()
+                        continueAfterCloudBecameReady()
+                    } catch {
+                        showError(title: "Couldn’t Finish Setup", error: error)
+                    }
                 }
             })
         present(UINavigationController(rootViewController: controller), animated: true)
@@ -1219,11 +1237,26 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     }
 
     private func confirmCloudSignOut() {
+        let recoveryStatus = cloudBootstrap.recoveryKitStatus
+        let recoveryMessage = switch recoveryStatus {
+        case .verifiedCurrent: "Verified against the current cloud recovery envelope."
+        case .knownReplaced:
+            "Your previously saved recovery kit was replaced and can no longer unlock this library."
+        case .statusUnconfirmed:
+            "The saved verification will be checked against the server before disconnecting."
+        case .neverVerified: "Not verified on this device."
+        case .replacementInProgress: "Finish saving and checking the replacement recovery kit first."
+        }
         let alert = UIAlertController(
             title: "Disconnect Snippets Cloud from This Device?",
-            message: "This removes this device’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(cloudBootstrap.recoveryKitStatus == .verified ? "completed on this device" : "not completed on this device").",
+            message: "This removes this device’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(recoveryMessage)",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        guard recoveryStatus != .knownReplaced,
+              recoveryStatus != .replacementInProgress else {
+            present(alert, animated: true)
+            return
+        }
         alert.addAction(UIAlertAction(title: "Disconnect This Device", style: .destructive) { [weak self] _ in
             self?.runCloudTask(title: "Couldn’t Sign Out") {
                 guard let self else { return }
@@ -1483,7 +1516,8 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
 private final class SnippetsCloudAccountViewController: UITableViewController {
     private enum Section: Int, CaseIterable { case account, sync, security, actions }
     private enum Action: CaseIterable {
-        case continueSetup, switchToCloud, syncNow, addDevice, replaceRecovery, changeAccount, disconnect
+        case continueSetup, switchToCloud, syncNow, addDevice, replaceRecovery
+        case changeAccount, changeLibrary, disconnect
     }
 
     private let environment: AppEnvironment
@@ -1494,6 +1528,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     private let addDevice: () -> Void
     private let replaceRecoveryKit: () -> Void
     private let changeAccount: () -> Void
+    private let changeLibrary: () -> Void
     private let disconnect: () -> Void
     private var syncObservation: UUID?
 
@@ -1506,6 +1541,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         addDevice: @escaping () -> Void,
         replaceRecoveryKit: @escaping () -> Void,
         changeAccount: @escaping () -> Void,
+        changeLibrary: @escaping () -> Void,
         disconnect: @escaping () -> Void
     ) {
         self.environment = environment
@@ -1516,6 +1552,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         self.addDevice = addDevice
         self.replaceRecoveryKit = replaceRecoveryKit
         self.changeAccount = changeAccount
+        self.changeLibrary = changeLibrary
         self.disconnect = disconnect
         super.init(style: .insetGrouped)
     }
@@ -1534,6 +1571,11 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         tableView.reloadData()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = try? await bootstrap.refreshRecoveryKitStatus()
+            tableView.reloadData()
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -1630,6 +1672,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .addDevice: addDevice()
         case .replaceRecovery: replaceRecoveryKit()
         case .changeAccount: changeAccount()
+        case .changeLibrary: changeLibrary()
         case .disconnect: disconnect()
         }
     }
@@ -1646,7 +1689,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
             (environment.backendSelection.provider == .snippetsCloud
                 ? [.syncNow]
                 : [.switchToCloud])
-                + [.addDevice, .replaceRecovery, .changeAccount, .disconnect]
+                + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
         case .strongAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
@@ -1700,9 +1743,13 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
 
     private var recoveryKitDescription: String {
         switch bootstrap.recoveryKitStatus {
-        case .needsVerification: "Still needs to be saved and checked"
-        case .verified: "Recovery check completed on this device"
-        case .notVerifiedOnThisDevice: "Not verified on this device"
+        case .verifiedCurrent: "Verified against the current cloud recovery envelope"
+        case .knownReplaced:
+            "The previously saved recovery kit was replaced and no longer works"
+        case .statusUnconfirmed:
+            "Saved verification has not yet been confirmed against the current cloud envelope"
+        case .neverVerified: "Not verified on this device"
+        case .replacementInProgress: "Replacement still needs to be saved and checked"
         }
     }
 
@@ -1721,6 +1768,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .addDevice: "Scan a new device invitation"
         case .replaceRecovery: "Replace recovery kit"
         case .changeAccount: "Change account"
+        case .changeLibrary: "Change library"
         case .disconnect: "Disconnect this device"
         }
     }

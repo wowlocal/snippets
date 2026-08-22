@@ -87,16 +87,38 @@ data class LibraryState(
     val libraryID: String? = null,
     val libraryChoices: List<CloudLibraryChoice> = emptyList(),
     val librarySwitchFromID: String? = null,
-    val recoveryKitVerified: Boolean = false,
+    val recoveryKitStatus: RecoveryKitStatus = RecoveryKitStatus.NEVER_VERIFIED,
     val setupStage: CloudSetupStage = CloudSetupStage.SIGNED_OUT,
 )
+
+enum class RecoveryKitStatus {
+    NEVER_VERIFIED,
+    VERIFIED_CURRENT,
+    KNOWN_REPLACED,
+    STATUS_UNCONFIRMED,
+    REPLACEMENT_IN_PROGRESS,
+}
 
 data class CloudLibraryChoice(
     val spaceID: String,
     val serverInstanceID: String,
     val role: String,
+    val scopeBinding: String,
 ) {
     val libraryID: String get() = cloudLibraryID(serverInstanceID, spaceID)
+}
+
+data class CloudStepUpBinding(
+    val serverURL: String,
+    val serverInstanceID: String,
+    val spaceID: String,
+    val scopeBinding: String,
+) {
+    fun matches(serverURL: String, resolution: HttpSyncClient.SpaceResolution): Boolean =
+        this.serverURL == serverURL.trim().trimEnd('/') &&
+            serverInstanceID.equals(resolution.serverInstanceID, ignoreCase = true) &&
+            spaceID.equals(resolution.spaceID, ignoreCase = true) &&
+            scopeBinding == resolution.scopeBinding && resolution.canWrite
 }
 
 internal fun cloudLibraryID(serverInstanceID: String, spaceID: String): String {
@@ -183,14 +205,86 @@ internal data class RecoveryKitVerification(
     }
 }
 
+internal data class RecoveryKitVerificationState(
+    val status: RecoveryKitStatus,
+    val verification: RecoveryKitVerification? = null,
+) {
+    init {
+        require(
+            when (status) {
+                RecoveryKitStatus.VERIFIED_CURRENT,
+                RecoveryKitStatus.KNOWN_REPLACED,
+                RecoveryKitStatus.STATUS_UNCONFIRMED -> verification != null
+                RecoveryKitStatus.NEVER_VERIFIED,
+                RecoveryKitStatus.REPLACEMENT_IN_PROGRESS -> verification == null
+            },
+        )
+    }
+
+    fun toJSON(): String = JSONObject()
+        .put("schemaVersion", 3)
+        .put("status", status.name)
+        .put(
+            "verification",
+            verification?.let { JSONObject(it.toJSON()) } ?: JSONObject.NULL,
+        )
+        .toString()
+
+    /** Never trust a prior-process positive result before a fresh server check. */
+    fun loadedForDisplay(): RecoveryKitVerificationState =
+        if (status == RecoveryKitStatus.VERIFIED_CURRENT) {
+            copy(status = RecoveryKitStatus.STATUS_UNCONFIRMED)
+        } else {
+            this
+        }
+
+    companion object {
+        val neverVerified = RecoveryKitVerificationState(RecoveryKitStatus.NEVER_VERIFIED)
+        val replacementInProgress = RecoveryKitVerificationState(
+            RecoveryKitStatus.REPLACEMENT_IN_PROGRESS,
+        )
+
+        fun fromJSON(raw: String): RecoveryKitVerificationState? = runCatching {
+            val value = JSONObject(raw)
+            when (value.getInt("schemaVersion")) {
+                2 -> RecoveryKitVerificationState(
+                    RecoveryKitStatus.STATUS_UNCONFIRMED,
+                    requireNotNull(RecoveryKitVerification.fromJSON(raw)),
+                )
+                3 -> {
+                    val status = RecoveryKitStatus.valueOf(value.getString("status"))
+                    val verification = if (value.isNull("verification")) null else {
+                        RecoveryKitVerification.fromJSON(
+                            value.getJSONObject("verification").toString(),
+                        )
+                    }
+                    RecoveryKitVerificationState(status, verification)
+                }
+                else -> error("unsupported recovery verification schema")
+            }
+        }.getOrNull()
+    }
+}
+
 internal fun disconnectBlockedForRecovery(status: CloudKeyStatus): Boolean =
     status == CloudKeyStatus.RECOVERY_AUTH_REQUIRED ||
         status == CloudKeyStatus.RECOVERY_KIT_LOCKED
+
+internal fun disconnectBlockedForRecovery(status: RecoveryKitStatus): Boolean =
+    status == RecoveryKitStatus.KNOWN_REPLACED ||
+        status == RecoveryKitStatus.REPLACEMENT_IN_PROGRESS
 
 internal const val RECOVERY_VERIFICATION_FILE = "recovery-verified.enc"
 
 internal fun invalidateRecoveryVerification(store: EncryptedStore) {
     store.delete(RECOVERY_VERIFICATION_FILE)
+}
+
+internal fun storeRecoveryVerificationState(
+    store: EncryptedStore,
+    state: RecoveryKitVerificationState,
+) {
+    store.write(RECOVERY_VERIFICATION_FILE, state.toJSON())
 }
 
 /** A one-screen value. It must never be placed in LibraryState or saved by Compose. */

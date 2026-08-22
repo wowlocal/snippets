@@ -42,6 +42,30 @@ internal fun cloudCredentialRevocationPlan(
     refreshTokens = (journalRefreshTokens + listOfNotNull(sessionRefreshToken)).distinct(),
 )
 
+internal data class CloudCredentialReplacementCleanupPlan(
+    val accessTokensToRetire: List<String>,
+    val refreshTokensToRetire: List<String>,
+)
+
+/** The primary generation decides which side of an interactive replacement survived. */
+internal fun cloudCredentialReplacementCleanupPlan(
+    currentAccessToken: String?,
+    currentRefreshToken: String?,
+    journalAccessTokens: List<String>,
+    journalRefreshTokens: List<String>,
+): CloudCredentialReplacementCleanupPlan? {
+    if (journalAccessTokens.isEmpty() || journalRefreshTokens.isEmpty() ||
+        (currentAccessToken == null) != (currentRefreshToken == null)) return null
+    if (currentAccessToken != null && (
+            currentAccessToken !in journalAccessTokens ||
+                currentRefreshToken !in journalRefreshTokens
+            )) return null
+    return CloudCredentialReplacementCleanupPlan(
+        accessTokensToRetire = journalAccessTokens.filter { it != currentAccessToken },
+        refreshTokensToRetire = journalRefreshTokens.filter { it != currentRefreshToken },
+    )
+}
+
 /**
  * Browser-based OIDC for the native app. Passkeys, Apple and Google stay in the
  * system browser; Snippets has no password and does not require or consume email.
@@ -56,6 +80,7 @@ class CloudAuthenticator(
         val serverURL: String,
         val accessToken: String,
         val accountChange: Boolean,
+        val stepUpBinding: CloudStepUpBinding?,
     )
 
     private data class ServiceDiscovery(
@@ -101,8 +126,11 @@ class CloudAuthenticator(
         rawServerURL: String,
         stepUp: Boolean = false,
         chooseAccount: Boolean = false,
+        stepUpBinding: CloudStepUpBinding? = null,
     ): Intent = withContext(Dispatchers.IO) {
         guard(!(stepUp && chooseAccount), "authorization_session_invalid")
+        guard(stepUp == (stepUpBinding != null), "authorization_session_invalid")
+        retireSupersededInteractiveSessions()
         guard(store.read(AUTH_REVOCATION) == null, "credential_revocation_incomplete")
         val pinnedServerURL = configuredServerURL()
         guard(normalizedBaseURL(rawServerURL) == pinnedServerURL, "server_identity_mismatch")
@@ -110,6 +138,26 @@ class CloudAuthenticator(
         val discovery = fetchServiceDiscovery(pinnedServerURL)
         val oidcConfiguration = fetchOIDCConfiguration(discovery.issuer)
         validateOIDCConfiguration(oidcConfiguration)
+        val revocationEndpoint = secureEndpoint(
+            oidcConfiguration.discoveryDoc?.docJson?.getString("revocation_endpoint")
+                ?: throw CloudAuthFailure("identity_provider_configuration_invalid"),
+        )
+        // Do not mint a new grant under an authority that cannot later revoke the
+        // active generation. This check happens before the browser is opened.
+        loadSession()?.let { current ->
+            guard(
+                current.serverURL == discovery.serverURL &&
+                    current.issuer == discovery.issuer &&
+                    current.resource == discovery.resource &&
+                    current.authorizationEndpoint == secureEndpoint(
+                        oidcConfiguration.authorizationEndpoint.toString(),
+                    ) && current.tokenEndpoint == secureEndpoint(
+                        oidcConfiguration.tokenEndpoint.toString(),
+                    ) && current.revocationEndpoint == revocationEndpoint &&
+                    current.clientID == discovery.clientID,
+                "authorization_state_invalid",
+            )
+        }
 
         val builder = AuthorizationRequest.Builder(
             oidcConfiguration,
@@ -137,7 +185,7 @@ class CloudAuthenticator(
             "authorization_session_invalid",
         )
         store.write(PENDING, JSONObject()
-            .put("schemaVersion", 3)
+            .put("schemaVersion", 4)
             .put("serverURL", discovery.serverURL)
             .put("issuer", discovery.issuer)
             .put("resource", discovery.resource)
@@ -145,6 +193,14 @@ class CloudAuthenticator(
             .put("redirectURI", redirectURI.toString())
             .put("maximumAccessTokenAgeSeconds", discovery.maximumAccessTokenAgeSeconds)
             .put("accountChange", chooseAccount)
+            .put("stepUp", stepUp)
+            .also { value ->
+                stepUpBinding?.let { binding ->
+                    value.put("expectedServerInstanceID", binding.serverInstanceID)
+                        .put("expectedSpaceID", binding.spaceID)
+                        .put("expectedScopeBinding", binding.scopeBinding)
+                }
+            }
             .put("state", request.state)
             .toString())
 
@@ -161,7 +217,7 @@ class CloudAuthenticator(
             val pending = store.read(PENDING)?.let(::JSONObject)
                 ?: throw CloudAuthFailure("authorization_session_missing")
             try {
-                guard(pending.optInt("schemaVersion") in 2..3, "authorization_session_missing")
+                guard(pending.optInt("schemaVersion") in 2..4, "authorization_session_missing")
                 val exception = intent?.let(AuthorizationException::fromIntent)
                 val response = intent?.let(AuthorizationResponse::fromIntent)
                 if (exception != null || response == null) {
@@ -202,6 +258,12 @@ class CloudAuthenticator(
                     maximumAccessTokenAgeSeconds = pending.getInt("maximumAccessTokenAgeSeconds"),
                     response = tokenResponse,
                 )
+                // Journal old and candidate generations before publishing the staged
+                // session. A crash, chooser cancellation, or scope mismatch can then
+                // remotely retire the generation that did not become primary.
+                storeReplacementJournal(makeRevocationJournal(
+                    listOfNotNull(loadSession(), stored),
+                ))
                 // Keep an existing account usable until the repository has resolved
                 // and the user has confirmed the target library. The staged session
                 // is device-bound and survives process death with the chooser.
@@ -212,6 +274,21 @@ class CloudAuthenticator(
                     serverURL = stored.serverURL,
                     accessToken = stored.accessToken,
                     accountChange = pending.optBoolean("accountChange", false),
+                    stepUpBinding = if (pending.optBoolean("stepUp", false)) {
+                        CloudStepUpBinding(
+                            serverURL = stored.serverURL,
+                            serverInstanceID = pending.getString("expectedServerInstanceID"),
+                            spaceID = pending.getString("expectedSpaceID"),
+                            scopeBinding = pending.getString("expectedScopeBinding"),
+                        ).also { binding ->
+                            guard(
+                                binding.scopeBinding.toByteArray().size in 32..256,
+                                "authorization_session_invalid",
+                            )
+                        }
+                    } else {
+                        null
+                    },
                 )
             } finally {
                 store.delete(PENDING)
@@ -233,6 +310,9 @@ class CloudAuthenticator(
         expectedServerURL: String,
         forceRefresh: Boolean,
     ): String = withContext(Dispatchers.IO) {
+        if (sessionFile == AUTH_SESSION) {
+            guard(store.read(AUTH_REPLACEMENT) == null, "credential_cleanup_required")
+        }
         val stored = loadSession(sessionFile) ?: throw CloudAuthFailure("sign_in_required")
         val pinnedServerURL = configuredServerURL()
         guard(
@@ -244,6 +324,16 @@ class CloudAuthenticator(
         if (!forceRefresh &&
             stored.expiresAtMillis - System.currentTimeMillis() > REFRESH_EARLY_MILLIS) {
             return@withContext stored.accessToken
+        }
+        if (sessionFile == PENDING_AUTH_SESSION) {
+            val replacement = loadReplacementJournal(stored)
+                ?: throw CloudAuthFailure("authorization_state_invalid")
+            // Reserve room before asking the provider to mint a rotated generation;
+            // otherwise a full journal could strand the just-issued token.
+            guard(
+                replacement.accessTokens.size < 16 && replacement.refreshTokens.size < 16,
+                "authorization_state_invalid",
+            )
         }
 
         val configuration = AuthorizationServiceConfiguration(
@@ -276,6 +366,8 @@ class CloudAuthenticator(
         // token at a provider that does not invalidate it during rotation.
         if (sessionFile == AUTH_SESSION) {
             extendRevocationJournalIfPresent(listOf(stored, updated))
+        } else if (sessionFile == PENDING_AUTH_SESSION) {
+            extendReplacementJournalIfPresent(listOf(stored, updated))
         }
         store.write(sessionFile, updated.toJSON())
         updated.accessToken
@@ -283,6 +375,7 @@ class CloudAuthenticator(
 
     fun hasSession(serverURL: String? = null): Boolean {
         return try {
+            if (store.read(AUTH_REPLACEMENT) != null) return false
             val stored = loadSession() ?: return false
             val pinnedServerURL = configuredServerURL()
             stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
@@ -313,24 +406,33 @@ class CloudAuthenticator(
             candidate.serverURL == normalizedBaseURL(expectedServerURL),
             "authorization_state_invalid",
         )
+        guard(store.read(AUTH_REPLACEMENT) != null, "authorization_state_invalid")
         store.write(AUTH_SESSION, candidate.toJSON())
     }
 
-    /** Removes the staged copy only after the repository cleared its commit marker. */
-    fun finalizePendingAuthorization() {
-        store.delete(PENDING_AUTH_SESSION)
+    /** Retires the superseded grant after the repository cleared its commit marker. */
+    suspend fun finalizePendingAuthorization() {
+        retireSupersededInteractiveSessions()
     }
 
-    /** Cancels only the uncommitted browser result; the active account is untouched. */
-    fun discardPendingAuthorization() {
+    /** Cancels and remotely retires the uncommitted browser grant. */
+    suspend fun discardPendingAuthorization() {
         store.delete(PENDING)
-        store.delete(PENDING_AUTH_SESSION)
+        val candidate = loadSession(PENDING_AUTH_SESSION)
+        if (store.read(AUTH_REPLACEMENT) == null && candidate != null) {
+            storeReplacementJournal(makeRevocationJournal(listOf(candidate)))
+        }
+        retireSupersededInteractiveSessions()
     }
 
     fun hasPendingRevocation(): Boolean =
         runCatching { store.read(AUTH_REVOCATION) != null }.getOrDefault(true)
 
+    fun hasPendingCredentialCleanup(): Boolean =
+        runCatching { store.read(AUTH_REPLACEMENT) != null }.getOrDefault(true)
+
     suspend fun revokeCurrentSession() = withContext(Dispatchers.IO) {
+        retireSupersededInteractiveSessions()
         val initialSession = loadSession()
         if (initialSession == null) {
             guard(store.read(AUTH_REVOCATION) == null, "authorization_state_invalid")
@@ -368,6 +470,7 @@ class CloudAuthenticator(
         store.delete(LEGACY_AUTH_STATE)
         store.delete(LEGACY_AUTH_SERVER)
         store.delete(AUTH_REVOCATION)
+        store.delete(AUTH_REPLACEMENT)
     }
 
     private suspend fun performTokenRequest(request: TokenRequest): TokenResponse {
@@ -655,11 +758,21 @@ class CloudAuthenticator(
     private fun revokeProviderCredentials(
         session: StoredSession,
         plan: CloudCredentialRevocationPlan,
+    ) = revokeProviderCredentials(
+        revocationEndpoint = session.revocationEndpoint,
+        clientID = session.clientID,
+        plan = plan,
+    )
+
+    private fun revokeProviderCredentials(
+        revocationEndpoint: String,
+        clientID: String,
+        plan: CloudCredentialRevocationPlan,
     ) {
         try {
             fun revoke(token: String, hint: String) {
                 val values = linkedMapOf(
-                    "client_id" to session.clientID,
+                    "client_id" to clientID,
                     "token" to token,
                     "token_type_hint" to hint,
                 )
@@ -667,7 +780,7 @@ class CloudAuthenticator(
                     "${URLEncoder.encode(key, Charsets.UTF_8.name())}=" +
                         URLEncoder.encode(value, Charsets.UTF_8.name())
                 }.toByteArray(Charsets.UTF_8)
-                val connection = URI(session.revocationEndpoint).toURL()
+                val connection = URI(revocationEndpoint).toURL()
                     .openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15_000
@@ -703,6 +816,12 @@ class CloudAuthenticator(
 
     private fun makeRevocationJournal(sessions: List<StoredSession>): RevocationJournal {
         val first = sessions.first()
+        guard(sessions.all { session ->
+            session.serverURL == first.serverURL && session.issuer == first.issuer &&
+                session.resource == first.resource &&
+                session.revocationEndpoint == first.revocationEndpoint &&
+                session.clientID == first.clientID
+        }, "authorization_state_invalid")
         return RevocationJournal(
             serverURL = first.serverURL,
             issuer = first.issuer,
@@ -723,7 +842,27 @@ class CloudAuthenticator(
         ))
     }
 
+    private fun extendReplacementJournalIfPresent(sessions: List<StoredSession>) {
+        val first = sessions.first()
+        val existing = loadReplacementJournal(first)
+            ?: throw CloudAuthFailure("authorization_state_invalid")
+        storeReplacementJournal(existing.copy(
+            accessTokens = (existing.accessTokens +
+                sessions.map(StoredSession::accessToken)).distinct(),
+            refreshTokens = (existing.refreshTokens +
+                sessions.map(StoredSession::refreshToken)).distinct(),
+        ))
+    }
+
     private fun storeRevocationJournal(journal: RevocationJournal) {
+        storeCredentialJournal(AUTH_REVOCATION, journal)
+    }
+
+    private fun storeReplacementJournal(journal: RevocationJournal) {
+        storeCredentialJournal(AUTH_REPLACEMENT, journal)
+    }
+
+    private fun storeCredentialJournal(file: String, journal: RevocationJournal) {
         guard(
             journal.accessTokens.size in 1..16 && journal.refreshTokens.size in 1..16,
             "authorization_state_invalid",
@@ -739,11 +878,22 @@ class CloudAuthenticator(
             .put("refreshTokens", JSONArray(journal.refreshTokens))
             .toString()
         guard(value.toByteArray().size <= REVOCATION_MAX_BYTES, "authorization_state_invalid")
-        store.write(AUTH_REVOCATION, value)
+        store.write(file, value)
     }
 
     private fun loadRevocationJournal(session: StoredSession): RevocationJournal? {
-        val raw = store.read(AUTH_REVOCATION) ?: return null
+        return loadCredentialJournal(AUTH_REVOCATION, session)
+    }
+
+    private fun loadReplacementJournal(session: StoredSession): RevocationJournal? {
+        return loadCredentialJournal(AUTH_REPLACEMENT, session)
+    }
+
+    private fun loadCredentialJournal(
+        file: String,
+        session: StoredSession? = null,
+    ): RevocationJournal? {
+        val raw = store.read(file) ?: return null
         try {
             guard(raw.toByteArray().size <= REVOCATION_MAX_BYTES, "authorization_state_invalid")
             val value = JSONObject(raw)
@@ -764,13 +914,15 @@ class CloudAuthenticator(
                 accessTokens = accessTokens,
                 refreshTokens = refreshTokens,
             )
-            guard(
-                journal.serverURL == session.serverURL && journal.issuer == session.issuer &&
-                    journal.resource == session.resource &&
-                    journal.revocationEndpoint == session.revocationEndpoint &&
-                    journal.clientID == session.clientID,
-                "authorization_state_invalid",
-            )
+            if (session != null) {
+                guard(
+                    journal.serverURL == session.serverURL && journal.issuer == session.issuer &&
+                        journal.resource == session.resource &&
+                        journal.revocationEndpoint == session.revocationEndpoint &&
+                        journal.clientID == session.clientID,
+                    "authorization_state_invalid",
+                )
+            }
             return journal
         } catch (failure: CloudAuthFailure) {
             throw failure
@@ -778,6 +930,42 @@ class CloudAuthenticator(
             throw CloudAuthFailure("authorization_state_invalid")
         }
     }
+
+    private suspend fun retireSupersededInteractiveSessions() =
+        withContext(Dispatchers.IO) {
+            val current = loadSession()
+            val pending = loadSession(PENDING_AUTH_SESSION)
+            val authority = current ?: pending
+            // The replacement journal is self-contained so it can retire a first-ever
+            // grant after a crash between journaling it and publishing the staged session.
+            val journal = if (authority == null) {
+                loadCredentialJournal(AUTH_REPLACEMENT)
+            } else {
+                loadReplacementJournal(authority)
+            } ?: return@withContext
+            val plan = cloudCredentialReplacementCleanupPlan(
+                currentAccessToken = current?.accessToken,
+                currentRefreshToken = current?.refreshToken,
+                journalAccessTokens = journal.accessTokens,
+                journalRefreshTokens = journal.refreshTokens,
+            ) ?: throw CloudAuthFailure("authorization_state_invalid")
+            plan.accessTokensToRetire.forEach { token ->
+                val status = revokeResourceAccessToken(journal.serverURL, token)
+                guard(status == 204 || status == 401, "credential_revocation_failed")
+            }
+            revokeProviderCredentials(
+                revocationEndpoint = journal.revocationEndpoint,
+                clientID = journal.clientID,
+                plan = CloudCredentialRevocationPlan(
+                    accessTokens = plan.accessTokensToRetire,
+                    refreshTokens = plan.refreshTokensToRetire,
+                ),
+            )
+            // Delete the staged duplicate first. The journal remains the fail-closed
+            // boundary until every remote retirement has succeeded.
+            store.delete(PENDING_AUTH_SESSION)
+            store.delete(AUTH_REPLACEMENT)
+        }
 
     private fun tokenArray(value: JSONArray): List<String> {
         guard(value.length() in 1..16, "authorization_state_invalid")
@@ -921,6 +1109,7 @@ class CloudAuthenticator(
         const val MAX_TOKEN_LIFETIME_MILLIS = 86_460_000L
         const val AUTH_SESSION = "oidc-session.enc"
         const val PENDING_AUTH_SESSION = "oidc-pending-session.enc"
+        const val AUTH_REPLACEMENT = "oidc-replacement-journal.enc"
         const val AUTH_REVOCATION = "oidc-revocation-journal.enc"
         const val LEGACY_AUTH_STATE = "oidc-auth-state.enc"
         const val LEGACY_AUTH_SERVER = "oidc-auth-server.enc"

@@ -28,6 +28,19 @@ struct SnippetsCloudLibraryChoice: Equatable {
     let spaceID: UUID
     let serverInstanceID: UUID
     let role: String
+    let scopeBinding: String?
+
+    init(
+        spaceID: UUID,
+        serverInstanceID: UUID,
+        role: String,
+        scopeBinding: String? = nil
+    ) {
+        self.spaceID = spaceID
+        self.serverInstanceID = serverInstanceID
+        self.role = role
+        self.scopeBinding = scopeBinding
+    }
 
     var canWrite: Bool { role == "owner" || role == "writer" }
 
@@ -47,8 +60,35 @@ func automaticSnippetsCloudLibraryChoice(
         return existingSpaceID
     }
     if writable.count == 1 { return writable[0].spaceID }
-    let owned = writable.filter { $0.role == "owner" }
-    return owned.count == 1 ? owned[0].spaceID : nil
+    return nil
+}
+
+struct SnippetsCloudStepUpBinding: Equatable {
+    let serverURL: URL
+    let serverInstanceID: UUID
+    let spaceID: UUID
+    let scopeBinding: String
+
+    func matches(
+        serverURL: URL,
+        serverInstanceID: UUID,
+        spaceID: UUID,
+        scopeBinding: String,
+        role: String
+    ) -> Bool {
+        self.serverURL == serverURL
+            && self.serverInstanceID == serverInstanceID
+            && self.spaceID == spaceID
+            && self.scopeBinding == scopeBinding
+            && ["owner", "writer"].contains(role)
+    }
+}
+
+private struct SnippetsCloudStepUpTarget: Equatable {
+    let serverURL: URL
+    let serverInstanceID: UUID
+    let protocolMajor: Int
+    let spaceID: UUID
 }
 
 /// The durable revocation journal is authoritative when a refresh rotated credentials
@@ -529,23 +569,88 @@ final class SyncBackendSelectionStore {
             throw Failure.missingConfiguration
         }
         let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
-        let result = try await oauth.signIn(
+        let expectedStepUpTarget: SnippetsCloudStepUpTarget?
+        if requiresStrongAuthentication {
+            guard let coordinates = cloudCoordinates,
+                  coordinates.serverURL == serverURL,
+                  let serverInstanceID = coordinates.serverInstanceID,
+                  coordinates.protocolMajor == 2 else {
+                throw Failure.missingCredential
+            }
+            expectedStepUpTarget = SnippetsCloudStepUpTarget(
+                serverURL: coordinates.serverURL,
+                serverInstanceID: serverInstanceID,
+                protocolMajor: 2,
+                spaceID: coordinates.spaceID)
+        } else {
+            expectedStepUpTarget = nil
+        }
+        _ = try await oauth.signIn(
             serverURL: pinnedServerURL,
             existingSpaceID: cloudCoordinates?.serverURL == serverURL
                 ? cloudCoordinates?.spaceID
                 : nil,
             requiresStrongAuthentication: requiresStrongAuthentication,
             chooseAccount: chooseAccount,
+            expectedStepUpTarget: expectedStepUpTarget,
             chooseLibrary: chooseLibrary,
-            presentationContext: presentationContext)
-        defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
-        defaults.set(result.apiBaseURL.absoluteString, forKey: Self.apiBaseDefaultsKey)
-        defaults.set(result.spaceID.uuidString.lowercased(), forKey: Self.spaceDefaultsKey)
-        defaults.set(
-            result.serverInstanceID.uuidString.lowercased(),
-            forKey: Self.serverInstanceDefaultsKey)
-        defaults.set(result.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
-        try? keychain.deleteItem(account: Self.tokenAccount)
+            presentationContext: presentationContext,
+            validateStepUpTarget: { [weak self] in
+                guard let expectedStepUpTarget else { return }
+                guard let current = self?.cloudCoordinates,
+                      current.serverURL == expectedStepUpTarget.serverURL,
+                      current.serverInstanceID == expectedStepUpTarget.serverInstanceID,
+                      current.protocolMajor == expectedStepUpTarget.protocolMajor,
+                      current.spaceID == expectedStepUpTarget.spaceID else {
+                    throw Failure.missingCredential
+                }
+            },
+            commitCoordinates: { [defaults, keychain] result in
+                defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
+                defaults.set(result.apiBaseURL.absoluteString, forKey: Self.apiBaseDefaultsKey)
+                defaults.set(
+                    result.spaceID.uuidString.lowercased(),
+                    forKey: Self.spaceDefaultsKey)
+                defaults.set(
+                    result.serverInstanceID.uuidString.lowercased(),
+                    forKey: Self.serverInstanceDefaultsKey)
+                defaults.set(result.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
+                try? keychain.deleteItem(account: Self.tokenAccount)
+            })
+    }
+
+    func changeSnippetsCloudLibrary(
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID
+    ) async throws {
+        guard snippetsCloudEnabled,
+              let coordinates = cloudCoordinates,
+              let serverInstanceID = coordinates.serverInstanceID,
+              coordinates.protocolMajor == 2,
+              let redirectURL = Self.bundledOAuthRedirectURL else {
+            throw Failure.missingCredential
+        }
+        let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+        _ = try await oauth.selectExistingLibrary(
+            serverURL: coordinates.serverURL,
+            serverInstanceID: serverInstanceID,
+            protocolMajor: 2,
+            chooseLibrary: chooseLibrary,
+            commitSelection: { [defaults, keychain] selected in
+                defaults.set(
+                    coordinates.serverURL.absoluteString,
+                    forKey: Self.serverDefaultsKey)
+                defaults.set(
+                    coordinates.serverURL.appending(path: "v2").absoluteString,
+                    forKey: Self.apiBaseDefaultsKey)
+                defaults.set(
+                    selected.uuidString.lowercased(),
+                    forKey: Self.spaceDefaultsKey)
+                defaults.set(
+                    serverInstanceID.uuidString.lowercased(),
+                    forKey: Self.serverInstanceDefaultsKey)
+                defaults.set(2, forKey: Self.protocolMajorDefaultsKey)
+                try? keychain.deleteItem(account: Self.tokenAccount)
+            })
     }
 
     func signOutSnippetsCloud() async throws {
@@ -1076,7 +1181,7 @@ private final class SnippetsCloudOAuthClient {
         let protocolMajor: Int
     }
 
-    enum Failure: Error, CustomStringConvertible {
+    enum Failure: Error, LocalizedError, CustomStringConvertible {
         case invalidServerURL
         case insecureServerProfile
         case discoveryUnavailable
@@ -1087,6 +1192,7 @@ private final class SnippetsCloudOAuthClient {
         case backgroundAccessMissing
         case spaceSelectionRequired
         case readOnlyLibraryUnavailable
+        case stepUpAccountMismatch
         case invalidStoredSession
 
         var description: String {
@@ -1101,9 +1207,12 @@ private final class SnippetsCloudOAuthClient {
             case .backgroundAccessMissing: "The identity provider did not grant background access."
             case .spaceSelectionRequired: "This account has multiple libraries; explicit selection is required."
             case .readOnlyLibraryUnavailable: "This account has no writable Snippets library. Reader access cannot be used as active sync storage."
+            case .stepUpAccountMismatch: "Sign in with the same account that owns the currently connected Snippets library. Nothing changed."
             case .invalidStoredSession: "The saved Snippets Cloud session is invalid. Sign in again."
             }
         }
+
+        var errorDescription: String? { description }
     }
 
     struct Discovery: Decodable {
@@ -1230,18 +1339,72 @@ private final class SnippetsCloudOAuthClient {
         existingSpaceID: UUID?,
         requiresStrongAuthentication: Bool,
         chooseAccount: Bool,
+        expectedStepUpTarget: SnippetsCloudStepUpTarget?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding
+        presentationContext: any ASWebAuthenticationPresentationContextProviding,
+        validateStepUpTarget: @escaping () throws -> Void,
+        commitCoordinates: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
-        try await Self.credentialMutationGate.run { [self] in
+        guard requiresStrongAuthentication == (expectedStepUpTarget != nil),
+              !(requiresStrongAuthentication && chooseAccount) else {
+            throw Failure.invalidStoredSession
+        }
+        return try await Self.credentialMutationGate.run { [self] in
             try await retireSupersededInteractiveSessionsWithoutGate()
-            return try await performSignIn(
-                serverURL: serverURL,
-                existingSpaceID: existingSpaceID,
-                requiresStrongAuthentication: requiresStrongAuthentication,
-                chooseAccount: chooseAccount,
-                chooseLibrary: chooseLibrary,
-                presentationContext: presentationContext)
+            if expectedStepUpTarget != nil {
+                try validateStepUpTarget()
+            }
+            let expectedStepUpBinding: SnippetsCloudStepUpBinding?
+            if let expectedStepUpTarget {
+                guard expectedStepUpTarget.serverURL == serverURL,
+                      expectedStepUpTarget.protocolMajor == 2 else {
+                    throw Failure.invalidStoredSession
+                }
+                let currentToken = try await freshAccessTokenWithoutGate(
+                    expectedServerURL: expectedStepUpTarget.serverURL,
+                    expectedServerInstanceID: expectedStepUpTarget.serverInstanceID,
+                    expectedProtocolMajor: expectedStepUpTarget.protocolMajor,
+                    forceRefresh: false)
+                let current: Space = try await authorizedJSON(
+                    url: serverURL.appending(
+                        path: "v2/spaces/\(expectedStepUpTarget.spaceID.uuidString.lowercased())"),
+                    method: "GET",
+                    accessToken: currentToken)
+                guard current.scope.serverInstanceId == expectedStepUpTarget.serverInstanceID,
+                      current.scope.spaceId == expectedStepUpTarget.spaceID,
+                      (32...256).contains(current.scope.scopeBinding.utf8.count),
+                      ["owner", "writer"].contains(current.role) else {
+                    throw Failure.invalidStoredSession
+                }
+                expectedStepUpBinding = SnippetsCloudStepUpBinding(
+                    serverURL: serverURL,
+                    serverInstanceID: current.scope.serverInstanceId,
+                    spaceID: current.scope.spaceId,
+                    scopeBinding: current.scope.scopeBinding)
+            } else {
+                expectedStepUpBinding = nil
+            }
+            do {
+                let result = try await performSignIn(
+                    serverURL: serverURL,
+                    existingSpaceID: existingSpaceID,
+                    requiresStrongAuthentication: requiresStrongAuthentication,
+                    chooseAccount: chooseAccount,
+                    expectedStepUpBinding: expectedStepUpBinding,
+                    chooseLibrary: chooseLibrary,
+                    presentationContext: presentationContext)
+                try commitCoordinates(result)
+                return result
+            } catch {
+                // If token exchange already journaled a candidate, revoke it before
+                // returning. Failure leaves the journal as a fail-closed retry boundary.
+                do {
+                    try await retireSupersededInteractiveSessionsWithoutGate()
+                } catch {
+                    throw Failure.invalidStoredSession
+                }
+                throw error
+            }
         }
     }
 
@@ -1250,9 +1413,13 @@ private final class SnippetsCloudOAuthClient {
         existingSpaceID: UUID?,
         requiresStrongAuthentication: Bool,
         chooseAccount: Bool,
+        expectedStepUpBinding: SnippetsCloudStepUpBinding?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> SignInResult {
+        guard !(requiresStrongAuthentication && chooseAccount) else {
+            throw Failure.invalidStoredSession
+        }
         guard try keychain.loadItem(
             account: SyncBackendSelectionStore.oauthRevocationAccount) == nil
         else { throw Failure.invalidStoredSession }
@@ -1455,13 +1622,38 @@ private final class SnippetsCloudOAuthClient {
         try storeSessionReplacementJournal(
             sessions: [sessionAtStart, stored].compactMap { $0 },
             kind: .interactiveReplacement)
-        let spaceID = try await resolvePersonalSpace(
-            serverURL: serverURL,
-            serverInstanceID: discovery.serverInstanceId,
-            accessToken: token.accessToken,
-            existingSpaceID: existingSpaceID,
-            confirmAccountChange: chooseAccount,
-            chooseLibrary: chooseLibrary)
+        let spaceID: UUID
+        if let expectedStepUpBinding {
+            let candidate: Space
+            do {
+                candidate = try await authorizedJSON(
+                    url: serverURL.appending(
+                        path: "v2/spaces/\(expectedStepUpBinding.spaceID.uuidString.lowercased())"),
+                    method: "GET",
+                    accessToken: token.accessToken)
+            } catch let failure as HTTPFailure where [
+                "not_found", "forbidden", "authentication_required"
+            ].contains(failure.code) {
+                throw Failure.stepUpAccountMismatch
+            }
+            guard expectedStepUpBinding.matches(
+                serverURL: serverURL,
+                serverInstanceID: candidate.scope.serverInstanceId,
+                spaceID: candidate.scope.spaceId,
+                scopeBinding: candidate.scope.scopeBinding,
+                role: candidate.role) else {
+                throw Failure.stepUpAccountMismatch
+            }
+            spaceID = expectedStepUpBinding.spaceID
+        } else {
+            spaceID = try await resolvePersonalSpace(
+                serverURL: serverURL,
+                serverInstanceID: discovery.serverInstanceId,
+                accessToken: token.accessToken,
+                existingSpaceID: existingSpaceID,
+                confirmAccountChange: chooseAccount,
+                chooseLibrary: chooseLibrary)
+        }
         let sessionAtCommit = try loadSession()
         try storeSessionReplacementJournal(
             sessions: [sessionAtStart, sessionAtCommit, stored].compactMap { $0 },
@@ -1482,6 +1674,73 @@ private final class SnippetsCloudOAuthClient {
             spaceID: spaceID,
             serverInstanceID: discovery.serverInstanceId,
             protocolMajor: discovery.protocolMajor)
+    }
+
+    func selectExistingLibrary(
+        serverURL: URL,
+        serverInstanceID: UUID,
+        protocolMajor: Int,
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
+        commitSelection: @escaping (UUID) throws -> Void
+    ) async throws -> UUID {
+        return try await Self.credentialMutationGate.run { [self] in
+            try await retireSupersededInteractiveSessionsWithoutGate()
+            let serverURL = try validatedBaseURL(serverURL)
+            let accessToken = try await freshAccessTokenWithoutGate(
+                expectedServerURL: serverURL,
+                expectedServerInstanceID: serverInstanceID,
+                expectedProtocolMajor: protocolMajor,
+                forceRefresh: false)
+            let selected = try await selectExistingLibraryWithoutGate(
+                serverURL: serverURL,
+                serverInstanceID: serverInstanceID,
+                accessToken: accessToken,
+                chooseLibrary: chooseLibrary)
+            try commitSelection(selected)
+            return selected
+        }
+    }
+
+    private func selectExistingLibraryWithoutGate(
+        serverURL: URL,
+        serverInstanceID: UUID,
+        accessToken: String,
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID
+    ) async throws -> UUID {
+        let response: SpacesResponse = try await authorizedJSON(
+            url: serverURL.appending(path: "v2/spaces"),
+            method: "GET",
+            accessToken: accessToken)
+        guard response.spaces.allSatisfy({ space in
+            space.scope.serverInstanceId == serverInstanceID
+                && (32...256).contains(space.scope.scopeBinding.utf8.count)
+                && ["owner", "writer", "reader"].contains(space.role)
+        }) else { throw Failure.insecureServerProfile }
+        let choices = response.spaces.map { space in
+            SnippetsCloudLibraryChoice(
+                spaceID: space.spaceId,
+                serverInstanceID: space.scope.serverInstanceId,
+                role: space.role,
+                scopeBinding: space.scope.scopeBinding)
+        }.filter(\.canWrite)
+        guard !choices.isEmpty else { throw Failure.readOnlyLibraryUnavailable }
+        let selectedID = try await chooseLibrary(choices)
+        guard let selected = choices.first(where: { $0.spaceID == selectedID }),
+              let expectedBinding = selected.scopeBinding else {
+            throw Failure.spaceSelectionRequired
+        }
+        let current: Space = try await authorizedJSON(
+            url: serverURL.appending(
+                path: "v2/spaces/\(selectedID.uuidString.lowercased())"),
+            method: "GET",
+            accessToken: accessToken)
+        guard current.scope.serverInstanceId == serverInstanceID,
+              current.scope.spaceId == selectedID,
+              current.scope.scopeBinding == expectedBinding,
+              ["owner", "writer"].contains(current.role) else {
+            throw Failure.spaceSelectionRequired
+        }
+        return selectedID
     }
 
     func currentTransportCredential(
@@ -2138,29 +2397,53 @@ private final class SnippetsCloudOAuthClient {
             SnippetsCloudLibraryChoice(
                 spaceID: $0.spaceId,
                 serverInstanceID: $0.scope.serverInstanceId,
-                role: $0.role)
+                role: $0.role,
+                scopeBinding: $0.scope.scopeBinding)
         }
         let choices = discoveredChoices.filter(\.canWrite)
         if choices.isEmpty && !discoveredChoices.isEmpty {
             throw Failure.readOnlyLibraryUnavailable
         }
+        func validateCurrentMembership(
+            _ choice: SnippetsCloudLibraryChoice
+        ) async throws -> UUID {
+            guard let expectedBinding = choice.scopeBinding else {
+                throw Failure.spaceSelectionRequired
+            }
+            let current: Space = try await authorizedJSON(
+                url: serverURL.appending(
+                    path: "v2/spaces/\(choice.spaceID.uuidString.lowercased())"),
+                method: "GET",
+                accessToken: accessToken)
+            guard current.scope.serverInstanceId == choice.serverInstanceID,
+                  current.scope.spaceId == choice.spaceID,
+                  current.scope.scopeBinding == expectedBinding else {
+                throw Failure.spaceSelectionRequired
+            }
+            guard ["owner", "writer"].contains(current.role) else {
+                throw Failure.readOnlyLibraryUnavailable
+            }
+            return choice.spaceID
+        }
         if let automatic = automaticSnippetsCloudLibraryChoice(
             choices,
             existingSpaceID: existingSpaceID
         ) {
-            if confirmAccountChange, existingSpaceID != automatic,
-               let choice = choices.first(where: { $0.spaceID == automatic }) {
+            guard let choice = choices.first(where: { $0.spaceID == automatic }) else {
+                throw Failure.spaceSelectionRequired
+            }
+            if confirmAccountChange, existingSpaceID != automatic {
                 let selected = try await chooseLibrary([choice])
                 guard selected == automatic else { throw Failure.spaceSelectionRequired }
             }
-            return automatic
+            return try await validateCurrentMembership(choice)
         }
         if !choices.isEmpty {
             let selected = try await chooseLibrary(choices)
-            guard choices.contains(where: { $0.spaceID == selected }) else {
+            guard let choice = choices.first(where: { $0.spaceID == selected }) else {
                 throw Failure.spaceSelectionRequired
             }
-            return selected
+            return try await validateCurrentMembership(choice)
         }
         let idempotencyKey = UUID(uuidString: "7b28d156-77fd-4f7f-bdf3-234f7d97ac91")!
         let created: Space = try await authorizedJSON(
@@ -2176,13 +2459,20 @@ private final class SnippetsCloudOAuthClient {
             throw Failure.insecureServerProfile
         }
         if confirmAccountChange, existingSpaceID != nil {
-            let selected = try await chooseLibrary([.init(
+            let choice = SnippetsCloudLibraryChoice(
                 spaceID: created.spaceId,
                 serverInstanceID: created.scope.serverInstanceId,
-                role: created.role)])
+                role: created.role,
+                scopeBinding: created.scope.scopeBinding)
+            let selected = try await chooseLibrary([choice])
             guard selected == created.spaceId else { throw Failure.spaceSelectionRequired }
+            return try await validateCurrentMembership(choice)
         }
-        return created.spaceId
+        return try await validateCurrentMembership(.init(
+            spaceID: created.spaceId,
+            serverInstanceID: created.scope.serverInstanceId,
+            role: created.role,
+            scopeBinding: created.scope.scopeBinding))
     }
 
     private func tokenRequest(endpoint: URL, values: [String: String]) async throws -> TokenResponse {

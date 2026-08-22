@@ -30,6 +30,7 @@ class HttpSyncClient {
         val spaceID: String,
         val serverInstanceID: String,
         val role: String,
+        val scopeBinding: String,
     ) {
         val canWrite: Boolean get() = role == "owner" || role == "writer"
     }
@@ -38,6 +39,7 @@ class HttpSyncClient {
         val spaceID: String,
         val serverInstanceID: String,
         val role: String,
+        val scopeBinding: String,
     ) {
         val canWrite: Boolean get() = role == "owner" || role == "writer"
     }
@@ -257,6 +259,7 @@ class HttpSyncClient {
                 role = value.getString("role").also {
                     require(it == "owner" || it == "writer" || it == "reader")
                 },
+                scopeBinding = resolution.scopeBinding,
             )
         }
     }
@@ -562,6 +565,7 @@ class HttpSyncClient {
             spaceID = validatedUUID(spaceID),
             serverInstanceID = validatedUUID(scope.getString("serverInstanceId")),
             role = role,
+            scopeBinding = scope.getString("scopeBinding"),
         )
     }
 
@@ -688,18 +692,16 @@ internal fun automaticPersonalSpace(
     val writable = candidates.filter(HttpSyncClient.SpaceCandidate::canWrite)
     existingSpaceID?.let { existing ->
         writable.firstOrNull { it.spaceID.equals(existing, ignoreCase = true) }?.let {
-            return HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID, it.role)
+            return HttpSyncClient.SpaceResolution(
+                it.spaceID, it.serverInstanceID, it.role, it.scopeBinding,
+            )
         }
     }
     if (writable.size == 1) {
         return writable.single().let {
-            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID, it.role)
-        }
-    }
-    val owned = writable.filter { it.role == "owner" }
-    if (owned.size == 1) {
-        return owned.single().let {
-            HttpSyncClient.SpaceResolution(it.spaceID, it.serverInstanceID, it.role)
+            HttpSyncClient.SpaceResolution(
+                it.spaceID, it.serverInstanceID, it.role, it.scopeBinding,
+            )
         }
     }
     return null

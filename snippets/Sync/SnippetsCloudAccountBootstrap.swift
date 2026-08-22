@@ -46,9 +46,11 @@ enum SnippetsCloudRecoveryVerification {
 @MainActor
 final class SnippetsCloudAccountBootstrap {
     enum RecoveryKitStatus: Equatable {
-        case needsVerification
-        case verified
-        case notVerifiedOnThisDevice
+        case verifiedCurrent
+        case knownReplaced
+        case statusUnconfirmed
+        case neverVerified
+        case replacementInProgress
     }
 
     enum StrongAction: String, Equatable {
@@ -76,6 +78,8 @@ final class SnippetsCloudAccountBootstrap {
         case invalidInvitation
         case pairingExpired
         case recoveryUnavailable
+        case recoveryKitReplaced
+        case recoveryStatusUnconfirmed
         case accountMismatch
         case service(String)
 
@@ -85,6 +89,8 @@ final class SnippetsCloudAccountBootstrap {
             case .invalidInvitation: "this device invitation is invalid"
             case .pairingExpired: "this device invitation expired"
             case .recoveryUnavailable: "this library has no usable recovery envelope"
+            case .recoveryKitReplaced: "the previously verified recovery kit was replaced"
+            case .recoveryStatusUnconfirmed: "the current recovery envelope could not be confirmed"
             case .accountMismatch: "this code belongs to a different Snippets Cloud library"
             case .service(let code): code
             }
@@ -100,6 +106,10 @@ final class SnippetsCloudAccountBootstrap {
                 "This device invitation expired. Nothing changed; create a new invitation to continue."
             case .recoveryUnavailable:
                 "This library has no usable recovery kit. Use a device that already opens the library."
+            case .recoveryKitReplaced:
+                "Your previously saved recovery kit was replaced and can no longer unlock this library. Verify the current kit before disconnecting this device."
+            case .recoveryStatusUnconfirmed:
+                "Snippets Cloud could not confirm the current recovery envelope. This device was not disconnected; try again when the service is reachable."
             case .accountMismatch:
                 "This code belongs to a different Snippets Cloud account or library. Your existing data is unchanged."
             case .service(let code):
@@ -137,6 +147,54 @@ final class SnippetsCloudAccountBootstrap {
         let newLibraryMaterial: Data?
     }
 
+    struct RecoveryVerificationRecord: Codable, Equatable {
+        let serverURL: URL
+        let serverInstanceID: UUID
+        let protocolMajor: Int
+        let spaceID: UUID
+        let scopeBinding: String
+        let keyEpoch: Int
+        let envelopeVersion: Int
+        let envelopeCiphertextFingerprint: String
+        let kitFingerprint: String
+
+        func matches(
+            coordinates: SyncBackendSelectionStore.CloudCoordinates,
+            remote: SnippetsCloudBootstrapClient.RecoveryState
+        ) -> Bool {
+            guard let envelope = remote.recovery else { return false }
+            return serverURL == coordinates.serverURL
+                && serverInstanceID == coordinates.serverInstanceID
+                && protocolMajor == coordinates.protocolMajor
+                && spaceID == coordinates.spaceID
+                && serverInstanceID == remote.scope.serverInstanceID
+                && spaceID == remote.scope.spaceID
+                && scopeBinding == remote.scope.scopeBinding
+                && keyEpoch == remote.keyEpoch
+                && keyEpoch == envelope.keyEpoch
+                && envelopeVersion == envelope.version
+                && envelopeCiphertextFingerprint == Self.fingerprint(envelope.ciphertext)
+        }
+
+        static func fingerprint(_ data: Data) -> String {
+            SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+    }
+
+    private struct StoredRecoveryVerification: Codable {
+        enum Status: String, Codable {
+            case verifiedCurrent
+            case knownReplaced
+            case statusUnconfirmed
+            case neverVerified
+            case replacementInProgress
+        }
+
+        let schemaVersion: Int
+        let status: Status
+        let record: RecoveryVerificationRecord?
+    }
+
     static let pairingAccount = "pairing-recipient-v2"
     static let approvalAccount = "pairing-approval-v2"
     static let pendingRecoveryAccount = "recovery-upload-v1"
@@ -154,6 +212,7 @@ final class SnippetsCloudAccountBootstrap {
     let selection: SyncBackendSelectionStore
     private let secrets: KeychainSecretStore
     private var recoveryPresentationGate = SnippetsCloudRecoveryPresentationGate()
+    private var processConfirmedRecovery: RecoveryVerificationRecord?
 
     init(
         selection: SyncBackendSelectionStore? = nil,
@@ -178,12 +237,24 @@ final class SnippetsCloudAccountBootstrap {
     var recoveryKitStatus: RecoveryKitStatus {
         if (try? secrets.loadItem(account: Self.recoveryPresentationAccount)) != nil
             || (try? secrets.loadItem(account: Self.pendingRecoveryAccount)) != nil {
-            return .needsVerification
+            return .replacementInProgress
         }
-        if (try? secrets.loadItem(account: Self.recoveryVerifiedAccount)) != nil {
-            return .verified
+        let stored: StoredRecoveryVerification?
+        do {
+            stored = try storedRecoveryVerification()
+        } catch {
+            return .statusUnconfirmed
         }
-        return .notVerifiedOnThisDevice
+        guard let stored else { return .neverVerified }
+        switch stored.status {
+        case .verifiedCurrent:
+            return stored.record == processConfirmedRecovery
+                ? .verifiedCurrent : .statusUnconfirmed
+        case .knownReplaced: return .knownReplaced
+        case .statusUnconfirmed: return .statusUnconfirmed
+        case .neverVerified: return .neverVerified
+        case .replacementInProgress: return .replacementInProgress
+        }
     }
 
     func state() throws -> State {
@@ -274,6 +345,26 @@ final class SnippetsCloudAccountBootstrap {
             // Pending approvals and recovery replacements were prepared for the old
             // deployment/account. Never replay them merely because OAuth succeeded at
             // the same URL; ordinary sync now owns the explicit account review.
+            try discardBootstrapIntentAfterScopeChange()
+        }
+        if try await syncCheckpointRequiresReviewBeforeBootstrap() {
+            try discardBootstrapIntentAfterScopeChange()
+        }
+        return try await finishPostAuthorization()
+    }
+
+    @discardableResult
+    func changeLibrary(
+        chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID
+    ) async throws -> State {
+        guard let previousCoordinates = selection.cloudCoordinates else {
+            throw Failure.invalidState
+        }
+        try await selection.changeSnippetsCloudLibrary(chooseLibrary: chooseLibrary)
+        guard let currentCoordinates = selection.cloudCoordinates else {
+            throw Failure.invalidState
+        }
+        if currentCoordinates != previousCoordinates {
             try discardBootstrapIntentAfterScopeChange()
         }
         if try await syncCheckpointRequiresReviewBeforeBootstrap() {
@@ -440,11 +531,15 @@ final class SnippetsCloudAccountBootstrap {
             ciphertext: recovery.ciphertext,
             expectedVersion: remote.recovery?.version,
             newLibraryMaterial: nil))
-        try secrets.deleteItem(account: Self.recoveryVerifiedAccount)
+        try storeRecoveryVerification(.init(
+            schemaVersion: 2,
+            status: .replacementInProgress,
+            record: nil))
+        processConfirmedRecovery = nil
         return .strongAuthenticationRequired(.replaceRecovery)
     }
 
-    func acknowledgeRecoveryKitSaved() throws {
+    func acknowledgeRecoveryKitSaved() async throws {
         recoveryPresentationGate.reset()
         // If the app was interrupted between persisting the presentation and removing
         // the upload journal, finish durable provider activation before consuming the
@@ -454,9 +549,97 @@ final class SnippetsCloudAccountBootstrap {
                 throw Failure.invalidState
             }
         }
-        try secrets.storeItem(Data("verified".utf8), account: Self.recoveryVerifiedAccount)
+        guard let payloadData = try secrets.loadItem(
+            account: Self.recoveryPresentationAccount),
+              let payload = String(data: payloadData, encoding: .utf8) else {
+            throw Failure.invalidState
+        }
+        let kit = try LibraryKeyBootstrap.RecoveryKit(qrPayload: payload)
+        let (coordinates, client) = try client()
+        guard kit.serverURL == coordinates.serverURL,
+              kit.spaceID == coordinates.spaceID,
+              let installed = try installedMaterial(for: coordinates) else {
+            throw Failure.accountMismatch
+        }
+        let remote = try await mapService { try await client.recoveryState() }
+        guard let envelope = remote.recovery,
+              remote.keyEpoch == kit.keyEpoch,
+              envelope.keyEpoch == kit.keyEpoch else {
+            throw Failure.recoveryKitReplaced
+        }
+        let opened = try LibraryKeyBootstrap.openRecoveryEnvelope(
+            envelope.ciphertext,
+            kit: kit)
+        guard opened.material == installed else { throw Failure.recoveryKitReplaced }
+        let record = RecoveryVerificationRecord(
+            serverURL: coordinates.serverURL,
+            serverInstanceID: try requiredServerInstanceID(in: coordinates),
+            protocolMajor: try requiredProtocolMajor(in: coordinates),
+            spaceID: coordinates.spaceID,
+            scopeBinding: remote.scope.scopeBinding,
+            keyEpoch: remote.keyEpoch,
+            envelopeVersion: envelope.version,
+            envelopeCiphertextFingerprint: RecoveryVerificationRecord.fingerprint(
+                envelope.ciphertext),
+            kitFingerprint: RecoveryVerificationRecord.fingerprint(payloadData))
+        try storeRecoveryVerification(.init(
+            schemaVersion: 2,
+            status: .verifiedCurrent,
+            record: record))
+        processConfirmedRecovery = record
         try secrets.deleteItem(account: Self.pendingRecoveryAccount)
         try secrets.deleteItem(account: Self.recoveryPresentationAccount)
+    }
+
+    @discardableResult
+    func refreshRecoveryKitStatus() async throws -> RecoveryKitStatus {
+        if (try? secrets.loadItem(account: Self.recoveryPresentationAccount)) != nil
+            || (try? secrets.loadItem(account: Self.pendingRecoveryAccount)) != nil {
+            processConfirmedRecovery = nil
+            return .replacementInProgress
+        }
+        guard let stored = try storedRecoveryVerification() else {
+            processConfirmedRecovery = nil
+            return .neverVerified
+        }
+        guard let record = stored.record else {
+            processConfirmedRecovery = nil
+            return stored.status == .replacementInProgress
+                ? .replacementInProgress : .statusUnconfirmed
+        }
+        let (coordinates, client) = try client()
+        guard record.serverURL == coordinates.serverURL,
+              record.serverInstanceID == coordinates.serverInstanceID,
+              record.protocolMajor == coordinates.protocolMajor,
+              record.spaceID == coordinates.spaceID else {
+            processConfirmedRecovery = nil
+            try secrets.deleteItem(account: Self.recoveryVerifiedAccount)
+            return .neverVerified
+        }
+        do {
+            let remote = try await mapService { try await client.recoveryState() }
+            if record.matches(coordinates: coordinates, remote: remote) {
+                try storeRecoveryVerification(.init(
+                    schemaVersion: 2,
+                    status: .verifiedCurrent,
+                    record: record))
+                processConfirmedRecovery = record
+                return .verifiedCurrent
+            }
+            try storeRecoveryVerification(.init(
+                schemaVersion: 2,
+                status: .knownReplaced,
+                record: record))
+            processConfirmedRecovery = nil
+            return .knownReplaced
+        } catch {
+            try? storeRecoveryVerification(.init(
+                schemaVersion: 2,
+                status: .statusUnconfirmed,
+                record: record))
+            processConfirmedRecovery = nil
+            throw error
+        }
     }
 
     func signOutThisDevice() async throws {
@@ -464,7 +647,20 @@ final class SnippetsCloudAccountBootstrap {
             try selection.resumePendingLocalErase(bootstrapSecrets: secrets)
             return
         }
-        guard recoveryKitStatus != .needsVerification else {
+        let recoveryStatus: RecoveryKitStatus
+        do {
+            recoveryStatus = try await refreshRecoveryKitStatus()
+        } catch {
+            throw Failure.recoveryStatusUnconfirmed
+        }
+        switch recoveryStatus {
+        case .verifiedCurrent, .neverVerified:
+            break
+        case .knownReplaced:
+            throw Failure.recoveryKitReplaced
+        case .statusUnconfirmed:
+            throw Failure.recoveryStatusUnconfirmed
+        case .replacementInProgress:
             throw Failure.invalidState
         }
         // Do not destroy retry state until both the resource server and identity
@@ -684,6 +880,62 @@ final class SnippetsCloudAccountBootstrap {
         return value
     }
 
+    private func storedRecoveryVerification() throws -> StoredRecoveryVerification? {
+        guard let data = try secrets.loadItem(account: Self.recoveryVerifiedAccount) else {
+            return nil
+        }
+        // The pre-versioned literal cannot prove anything about the current server
+        // envelope. Preserve only the fact that a check once happened and require the
+        // user to verify a current kit before a positive status can be restored.
+        if data == Data("verified".utf8) {
+            return StoredRecoveryVerification(
+                schemaVersion: 2,
+                status: .statusUnconfirmed,
+                record: nil)
+        }
+        guard data.count <= 16 * 1_024,
+              let stored = try? JSONDecoder().decode(
+                StoredRecoveryVerification.self,
+                from: data),
+              stored.schemaVersion == 2 else {
+            throw Failure.invalidState
+        }
+        switch stored.status {
+        case .verifiedCurrent, .knownReplaced:
+            guard stored.record != nil else { throw Failure.invalidState }
+        case .statusUnconfirmed:
+            break
+        case .neverVerified, .replacementInProgress:
+            guard stored.record == nil else { throw Failure.invalidState }
+        }
+        if let record = stored.record {
+            guard record.serverURL.scheme == "https",
+                  record.serverURL.user == nil,
+                  record.serverURL.password == nil,
+                  record.serverURL.query == nil,
+                  record.serverURL.fragment == nil,
+                  !record.serverURL.absoluteString.hasSuffix("/"),
+                  record.protocolMajor == 2,
+                  (32...256).contains(record.scopeBinding.utf8.count),
+                  record.keyEpoch > 0,
+                  record.envelopeVersion > 0,
+                  record.envelopeCiphertextFingerprint.wholeMatch(
+                    of: /^[0-9a-f]{64}$/) != nil,
+                  record.kitFingerprint.wholeMatch(of: /^[0-9a-f]{64}$/) != nil else {
+                throw Failure.invalidState
+            }
+        }
+        return stored
+    }
+
+    private func storeRecoveryVerification(
+        _ stored: StoredRecoveryVerification
+    ) throws {
+        let data = try JSONEncoder().encode(stored)
+        guard data.count <= 16 * 1_024 else { throw Failure.invalidState }
+        try secrets.storeItem(data, account: Self.recoveryVerifiedAccount)
+    }
+
     private func stateIgnoringRecoveryPresentation() throws -> State {
         guard selection.hasCloudSession, let coordinates = selection.cloudCoordinates,
               try installedMaterial(for: coordinates) != nil else {
@@ -694,6 +946,7 @@ final class SnippetsCloudAccountBootstrap {
 
     private func discardBootstrapIntentAfterScopeChange() throws {
         recoveryPresentationGate.reset()
+        processConfirmedRecovery = nil
         for account in Self.bootstrapSecretAccounts {
             try secrets.deleteItem(account: account)
         }

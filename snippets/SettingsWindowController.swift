@@ -2240,6 +2240,18 @@ private final class SyncSettingsViewController: NSViewController {
                 self?.closeCloudAccountSheet()
                 self?.confirmCloudAccountChange()
             },
+            changeLibrary: { [weak self] in
+                self?.closeCloudAccountSheet()
+                self?.runCloudTask("Couldn’t Change Library") {
+                    guard let self else { return }
+                    do {
+                        try self.presentCloudState(try await self.cloudBootstrap.changeLibrary(
+                            chooseLibrary: self.chooseCloudLibrary))
+                    } catch is CancellationError {
+                        // Explicit chooser cancellation leaves the current library intact.
+                    }
+                }
+            },
             disconnect: { [weak self] in
                 self?.closeCloudAccountSheet()
                 self?.confirmCloudSignOut()
@@ -2556,11 +2568,14 @@ private final class SyncSettingsViewController: NSViewController {
             longCode: longCode,
             verified: { [weak self] in
                 guard let self else { return }
-                do {
-                    try cloudBootstrap.acknowledgeRecoveryKitSaved()
-                    continueAfterCloudBecameReady()
-                } catch {
-                    showCloudError("Couldn’t Finish Setup", error: error)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    do {
+                        try await cloudBootstrap.acknowledgeRecoveryKitSaved()
+                        continueAfterCloudBecameReady()
+                    } catch {
+                        showCloudError("Couldn’t Finish Setup", error: error)
+                    }
                 }
             })
         let sheet = NSWindow(contentViewController: controller)
@@ -2759,11 +2774,26 @@ private final class SyncSettingsViewController: NSViewController {
     }
 
     private func confirmCloudSignOut() {
+        let recoveryStatus = cloudBootstrap.recoveryKitStatus
+        let recoveryMessage = switch recoveryStatus {
+        case .verifiedCurrent: "verified against the current cloud recovery envelope."
+        case .knownReplaced:
+            "your previously saved recovery kit was replaced and can no longer unlock this library."
+        case .statusUnconfirmed:
+            "the saved verification will be checked against the server before disconnecting."
+        case .neverVerified: "not verified on this Mac."
+        case .replacementInProgress: "finish saving and checking the replacement recovery kit first."
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Disconnect Snippets Cloud from This Mac?"
-        alert.informativeText = "This removes this Mac’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(cloudBootstrap.recoveryKitStatus == .verified ? "completed on this Mac" : "not completed on this Mac")."
+        alert.informativeText = "This removes this Mac’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(recoveryMessage)"
         alert.addButton(withTitle: "Cancel")
+        guard recoveryStatus != .knownReplaced,
+              recoveryStatus != .replacementInProgress else {
+            alert.runModal()
+            return
+        }
         alert.addButton(withTitle: "Disconnect This Mac")
         alert.buttons[1].hasDestructiveAction = true
         alert.buttons[1].keyEquivalent = ""
@@ -2870,6 +2900,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     private let addDevice: () -> Void
     private let replaceRecoveryKit: () -> Void
     private let changeAccount: () -> Void
+    private let changeLibrary: () -> Void
     private let disconnect: () -> Void
     private var syncObservation: UUID?
     var close: (() -> Void)?
@@ -2885,6 +2916,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         addDevice: @escaping () -> Void,
         replaceRecoveryKit: @escaping () -> Void,
         changeAccount: @escaping () -> Void,
+        changeLibrary: @escaping () -> Void,
         disconnect: @escaping () -> Void
     ) {
         self.bootstrap = bootstrap
@@ -2897,6 +2929,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         self.addDevice = addDevice
         self.replaceRecoveryKit = replaceRecoveryKit
         self.changeAccount = changeAccount
+        self.changeLibrary = changeLibrary
         self.disconnect = disconnect
         super.init(nibName: nil, bundle: nil)
     }
@@ -2905,6 +2938,14 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = try? await bootstrap.refreshRecoveryKitStatus()
+            guard isViewLoaded else { return }
+            let frame = view.frame
+            loadView()
+            view.frame = frame
+        }
         guard syncObservation == nil else { return }
         syncObservation = coordinator?.addStateObserver { [weak self] _ in
             guard let self, self.isViewLoaded else { return }
@@ -2994,7 +3035,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     }
 
     private enum Action: Equatable {
-        case continueSetup, switchToCloud, syncNow, addDevice, replaceRecovery, changeAccount, disconnect
+        case continueSetup, switchToCloud, syncNow, addDevice, replaceRecovery
+        case changeAccount, changeLibrary, disconnect
 
         var selector: Selector {
             switch self {
@@ -3008,6 +3050,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
                 #selector(MacSnippetsCloudAccountViewController.replaceRecoveryPressed)
             case .changeAccount:
                 #selector(MacSnippetsCloudAccountViewController.changeAccountPressed)
+            case .changeLibrary:
+                #selector(MacSnippetsCloudAccountViewController.changeLibraryPressed)
             case .disconnect:
                 #selector(MacSnippetsCloudAccountViewController.disconnectPressed)
             }
@@ -3028,6 +3072,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             case .addDevice: "Scan a New Device Invitation…"
             case .replaceRecovery: "Replace Recovery Kit…"
             case .changeAccount: "Change Account…"
+            case .changeLibrary: "Change Library…"
             case .disconnect: "Disconnect This Mac…"
             }
         }
@@ -3043,7 +3088,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             [.continueSetup]
         case .ready:
             (selection.provider == .snippetsCloud ? [.syncNow] : [.switchToCloud])
-                + [.addDevice, .replaceRecovery, .changeAccount, .disconnect]
+                + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
         case .strongAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
@@ -3096,9 +3141,13 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
 
     private var recoveryKitStatus: String {
         switch bootstrap.recoveryKitStatus {
-        case .needsVerification: "still needs to be saved and checked"
-        case .verified: "recovery check completed on this Mac"
-        case .notVerifiedOnThisDevice: "not verified on this Mac"
+        case .verifiedCurrent: "verified against the current cloud recovery envelope"
+        case .knownReplaced:
+            "the previously saved recovery kit was replaced and no longer works"
+        case .statusUnconfirmed:
+            "saved verification has not yet been confirmed against the current cloud envelope"
+        case .neverVerified: "not verified on this Mac"
+        case .replacementInProgress: "replacement still needs to be saved and checked"
         }
     }
 
@@ -3124,6 +3173,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     @objc private func addDevicePressed() { addDevice() }
     @objc private func replaceRecoveryPressed() { replaceRecoveryKit() }
     @objc private func changeAccountPressed() { changeAccount() }
+    @objc private func changeLibraryPressed() { changeLibrary() }
     @objc private func disconnectPressed() { disconnect() }
     @objc private func closeSheet() { close?() }
 }
