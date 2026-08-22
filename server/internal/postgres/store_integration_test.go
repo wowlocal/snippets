@@ -157,6 +157,45 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	if _, err := ownerPool.Exec(ctx, "UPDATE spaces SET current_record_bytes=$2 WHERE id=$1", space.Scope.SpaceID, currentBytes); err != nil {
 		t.Fatal(err)
 	}
+	quotaOrderSpace, err := store.CreateSpace(ctx, first, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existingID := uuid.MustParse("ffffffff-ffff-4fff-8fff-fffffffffff1")
+	fixture, err := store.Submit(ctx, first, quotaOrderSpace.Scope.SpaceID, quotaOrderSpace.Scope, []domain.BatchItem{{
+		Record: domain.WireRecord{ID: existingID, Rev: "r", Blob: make([]byte, 300)},
+	}})
+	if err != nil || fixture.Outcomes[0].Kind != "accepted" {
+		t.Fatalf("quota ordering fixture failed: %v %#v", err, fixture)
+	}
+	var quotaOwner uuid.UUID
+	var actualCurrent, actualHistory int64
+	if err := ownerPool.QueryRow(ctx,
+		"SELECT owner_user_id,current_record_bytes,change_history_bytes FROM spaces WHERE id=$1",
+		quotaOrderSpace.Scope.SpaceID).Scan(&quotaOwner, &actualCurrent, &actualHistory); err != nil {
+		t.Fatal(err)
+	}
+	const quotaHeadroom = int64(150)
+	artificialCurrent := (domain.MaxStorageBytesPerSpace - quotaHeadroom) / 2
+	artificialHistory := domain.MaxStorageBytesPerSpace - quotaHeadroom - artificialCurrent
+	if _, err := ownerPool.Exec(ctx, `UPDATE spaces
+		SET current_record_bytes=$2,change_history_bytes=$3 WHERE id=$1`,
+		quotaOrderSpace.Scope.SpaceID, artificialCurrent, artificialHistory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownerPool.Exec(ctx, "UPDATE users SET storage_bytes=storage_bytes+$2 WHERE id=$1",
+		quotaOwner, artificialCurrent+artificialHistory-actualCurrent-actualHistory); err != nil {
+		t.Fatal(err)
+	}
+	version := *fixture.Outcomes[0].RecordVersion
+	growingID := uuid.MustParse("00000000-0000-4000-8000-000000000002")
+	orderedQuota, err := store.Submit(ctx, first, quotaOrderSpace.Scope.SpaceID, quotaOrderSpace.Scope, []domain.BatchItem{
+		{Record: domain.WireRecord{ID: growingID, Rev: "g", Blob: make([]byte, 99)}},
+		{Record: domain.WireRecord{ID: existingID, Rev: "s"}, ExpectedRecordVersion: &version},
+	})
+	if err != nil || orderedQuota.Partial || orderedQuota.Outcomes[0].Kind != "accepted" || orderedQuota.Outcomes[1].Kind != "accepted" {
+		t.Fatalf("shrinking mutation did not release PostgreSQL capacity for the batch: %v %#v", err, orderedQuota)
+	}
 	nearBaseline, err := store.CreateSpace(ctx, first, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -320,6 +359,10 @@ func TestPostgresCompactionAtProductionRowScale(t *testing.T) {
 		t.Fatalf("scale fixture snapshot: %v %#v", err, page)
 	}
 	record := page.Records[0]
+	var walBefore string
+	if err := ownerPool.QueryRow(ctx, "SELECT pg_current_wal_lsn()::text").Scan(&walBefore); err != nil {
+		t.Fatal(err)
+	}
 	started := time.Now()
 	result, err := store.Submit(ctx, principal, space.Scope.SpaceID, space.Scope, []domain.BatchItem{{
 		Record:                domain.WireRecord{ID: record.Record.ID, Rev: "s", Blob: make([]byte, 1024)},
@@ -339,7 +382,13 @@ func TestPostgresCompactionAtProductionRowScale(t *testing.T) {
 	if currentBytes != historyBytes || recordCount != 100000 || changeCount != recordCount || ownerBytes != currentBytes+historyBytes {
 		t.Fatalf("set-based accounting drifted: current=%d history=%d records=%d changes=%d owner=%d", currentBytes, historyBytes, recordCount, changeCount, ownerBytes)
 	}
-	t.Logf("100k-record/200k-change compaction completed in %s", duration)
+	var walBytes int64
+	if err := ownerPool.QueryRow(ctx,
+		"SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),$1::pg_lsn)::bigint", walBefore).
+		Scan(&walBytes); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("100k-record/200k-change compaction completed in %s with %d WAL bytes", duration, walBytes)
 }
 
 func integrationPrincipal(seed byte) domain.Principal {

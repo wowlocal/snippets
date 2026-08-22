@@ -88,7 +88,7 @@ final class SyncLifecycleTests: XCTestCase {
             serverInstanceID: UUID(uuidString: "00000000-0000-4000-8000-000000000010")!,
             accessToken: "test-access-token")
         let http = try selection.protocolLocations()
-        selection.selectICloud()
+        try selection.selectICloud()
 
         let prepared = try selection.prepareProviderSwitch(to: .snippetsCloud)
         XCTAssertEqual(prepared.phase, .prepared)
@@ -132,7 +132,7 @@ final class SyncLifecycleTests: XCTestCase {
             spaceID: UUID(),
             serverInstanceID: UUID(),
             accessToken: "test-access-token")
-        selection.selectICloud()
+        try selection.selectICloud()
         _ = try selection.prepareProviderSwitch(to: .snippetsCloud)
 
         let resumed = SyncBackendSelectionStore(

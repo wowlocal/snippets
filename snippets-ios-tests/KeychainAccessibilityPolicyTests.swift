@@ -395,9 +395,39 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey),
             "a downgraded build must not start CloudKit while HTTP owns the library")
 
-        selection.selectICloud()
+        try selection.selectICloud()
         XCTAssertTrue(defaults.bool(
             forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey))
+    }
+
+    func testHTTPSelectionPersistsLegacyDowngradeFenceBeforeProviderPreference() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.provider-durability.\(UUID())"
+        let defaults = try XCTUnwrap(ProviderPreferenceDefaultsProbe(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        defaults.set(true, forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: KeychainSecretStore(
+                tier: .deviceOnly,
+                service: "com.khm.snippets.provider-durability-tests",
+                itemAccessibility: .afterFirstUnlock,
+                inMemory: true),
+            snippetsCloudEnabled: true)
+        defaults.synchronizations.removeAll()
+
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            serverInstanceID: UUID(uuidString: "00000000-0000-4000-8000-000000000010")!,
+            accessToken: "test-access-token")
+
+        XCTAssertEqual(defaults.synchronizations.count, 2)
+        XCTAssertFalse(defaults.synchronizations[0].legacyICloudEnabled)
+        XCTAssertNil(defaults.synchronizations[0].provider,
+                     "a crash at the first durable boundary must leave the old provider selected")
+        XCTAssertEqual(
+            defaults.synchronizations[1].provider,
+            SyncBackendSelectionStore.Provider.snippetsCloud.rawValue)
     }
 
     func testHTTPProtocolLocationIsOpaqueDeterministicAndSpaceScoped() throws {
@@ -851,6 +881,23 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             update: { query, values in probe.update(query, values) },
             add: { attributes, result in probe.add(attributes, result) },
             delete: { query in probe.delete(query) })
+    }
+}
+
+private final class ProviderPreferenceDefaultsProbe: UserDefaults {
+    struct Synchronization {
+        var legacyICloudEnabled: Bool
+        var provider: String?
+    }
+
+    var synchronizations: [Synchronization] = []
+
+    override func synchronize() -> Bool {
+        synchronizations.append(Synchronization(
+            legacyICloudEnabled: bool(
+                forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey),
+            provider: string(forKey: SyncBackendSelectionStore.providerDefaultsKey)))
+        return true
     }
 }
 

@@ -27,7 +27,7 @@ type Store struct {
 }
 
 const minimumSchemaVersion int64 = 3
-const maximumSchemaVersion int64 = 3
+const maximumSchemaVersion int64 = 4
 
 func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool, error) {
 	poolConfig, err := newPoolConfig(configuration)
@@ -50,12 +50,20 @@ func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool,
 }
 
 func validateSchemaCompatibility(ctx context.Context, pool *pgxpool.Pool) error {
-	var version int64
-	if err := pool.QueryRow(ctx, "SELECT coalesce(max(version),0) FROM snippets_private.schema_migrations").Scan(&version); err != nil {
+	var version, appliedCount int64
+	if err := pool.QueryRow(ctx, "SELECT coalesce(max(version),0),count(*) FROM snippets_private.schema_migrations").Scan(&version, &appliedCount); err != nil {
 		return fmt.Errorf("database schema version unavailable: %w", err)
 	}
 	if version < minimumSchemaVersion || version > maximumSchemaVersion {
 		return fmt.Errorf("database schema version %d is outside supported range %d..%d", version, minimumSchemaVersion, maximumSchemaVersion)
+	}
+	// Versions are positive and unique, so count == max proves the applied history is
+	// exactly 1...max. The sole exception is the historical fresh-v3 bootstrap marker;
+	// the migration runner structurally validates and expands that exact shape. Keeping
+	// it readable here lets the 3...4 expand binary deploy before migration 4.
+	legacyFreshV3 := version == 3 && appliedCount == 1
+	if appliedCount != version && !legacyFreshV3 {
+		return fmt.Errorf("database schema migration history is not contiguous through version %d", version)
 	}
 	return nil
 }
@@ -411,6 +419,7 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 			changeBytes      int64
 			recordCountDelta int64
 			accepted         bool
+			sequence         int64
 		}
 		prepared := make([]preparedMutation, 0, len(items))
 		for _, value := range ordered {
@@ -470,7 +479,19 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 
 		var currentByteDelta, changeBytes, recordCountDelta, changeCountDelta int64
 		needsCompaction := false
+		admissionOrder := make([]int, len(prepared))
 		for index := range prepared {
+			admissionOrder[index] = index
+		}
+		// Record locks stay UUID ordered, but capacity is reclaimed before growing
+		// mutations are admitted. Applying in this same order also prevents transient
+		// quota violations in the statement-level accounting triggers.
+		sort.SliceStable(admissionOrder, func(i, j int) bool {
+			leftShrinks := prepared[admissionOrder[i]].currentByteDelta <= 0
+			rightShrinks := prepared[admissionOrder[j]].currentByteDelta <= 0
+			return leftShrinks && !rightShrinks
+		})
+		for _, index := range admissionOrder {
 			candidate := &prepared[index]
 			nextCurrentDelta := currentByteDelta + candidate.currentByteDelta
 			nextChangeBytes := changeBytes + candidate.changeBytes
@@ -512,25 +533,44 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 			}
 		}
 
-		accepted := false
-		for _, candidate := range prepared {
+		acceptedCount := int64(0)
+		for index := range prepared {
+			if prepared[index].accepted {
+				acceptedCount++
+			}
+		}
+		if acceptedCount > 0 {
+			var finalSequence int64
+			if err := tx.QueryRow(ctx,
+				"UPDATE spaces SET next_sequence=next_sequence+$2 WHERE id=$1 RETURNING next_sequence",
+				spaceID, acceptedCount).Scan(&finalSequence); err != nil {
+				return err
+			}
+			nextSequence := finalSequence - acceptedCount
+			// Preserve the established UUID-ordered feed even though physical writes run
+			// in admission order to keep every accounting-trigger boundary within quota.
+			for index := range prepared {
+				if prepared[index].accepted {
+					nextSequence++
+					prepared[index].sequence = nextSequence
+				}
+			}
+		}
+		accepted := acceptedCount > 0
+		for _, index := range admissionOrder {
+			candidate := prepared[index]
 			if !candidate.accepted {
 				continue
 			}
 			item := candidate.item
-			var sequence int64
-			if err := tx.QueryRow(ctx, "UPDATE spaces SET next_sequence=next_sequence+1 WHERE id=$1 RETURNING next_sequence", spaceID).Scan(&sequence); err != nil {
-				return err
-			}
 			_, err = tx.Exec(ctx, `INSERT INTO records(space_id,record_id,rev,deleted,blob,record_generation,last_sequence) VALUES($1,$2,$3,$4,$5,$6,$7)
-			    ON CONFLICT(space_id,record_id) DO UPDATE SET rev=EXCLUDED.rev,deleted=EXCLUDED.deleted,blob=EXCLUDED.blob,record_generation=EXCLUDED.record_generation,last_sequence=EXCLUDED.last_sequence,updated_at=clock_timestamp()`, spaceID, item.Record.ID, item.Record.Rev, item.Record.Deleted, candidate.blob, candidate.generation, sequence)
+			    ON CONFLICT(space_id,record_id) DO UPDATE SET rev=EXCLUDED.rev,deleted=EXCLUDED.deleted,blob=EXCLUDED.blob,record_generation=EXCLUDED.record_generation,last_sequence=EXCLUDED.last_sequence,updated_at=clock_timestamp()`, spaceID, item.Record.ID, item.Record.Rev, item.Record.Deleted, candidate.blob, candidate.generation, candidate.sequence)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, sequence, item.Record.ID, item.Record.Rev, item.Record.Deleted, candidate.blob, candidate.generation); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO changes(space_id,sequence,record_id,rev,deleted,blob,record_generation) VALUES($1,$2,$3,$4,$5,$6,$7)", spaceID, candidate.sequence, item.Record.ID, item.Record.Rev, item.Record.Deleted, candidate.blob, candidate.generation); err != nil {
 				return err
 			}
-			accepted = true
 			storedRecord := item.Record
 			storedRecord.Blob = candidate.blob
 			serverRecord, err := s.makeServerRecord(space, storedRecord, candidate.generation)

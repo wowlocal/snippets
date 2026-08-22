@@ -181,7 +181,7 @@ are independent Base64/Base64url values decoding to 32–64 bytes. Keep
 than five minutes, `openid offline_access`, and an explicitly configured step-up AMR
 and/or ACR allow-list.
 
-`10-schema.sql` bootstraps an empty database at schema version 3 and is executed once by
+`10-schema.sql` bootstraps an empty database at schema version 4 and is executed once by
 PostgreSQL's standard first-boot initializer. Outside Compose,
 provision `snippets_runtime` plus the dedicated function owner with
 `00-runtime-role.sh`, then apply the schema as a migration role that is a member of
@@ -199,15 +199,18 @@ The server refuses startup when the database schema falls outside the binary's d
 compatibility range. The expand/migrate/contract, rollback, and backfill policy is in
 ADR 0003.
 
-The normal integration lane covers fresh bootstrap, RLS, quota accounting, and feed
-rotation. Before a production database or PostgreSQL major-version rollout, also run the
-opt-in high-water compaction gate; it materializes 100,000 current records and 200,001
-history rows and requires the rebuild to finish inside the configured 20-second SQL
-deadline:
+The normal integration lane covers fresh bootstrap, migration-ledger validation, RLS,
+quota accounting, feed rotation, and the high-water compaction gate. It materializes
+100,000 current records and 200,001 history rows and requires the rebuild to finish
+inside the configured 20-second SQL deadline:
 
 ```sh
-SNIPPETS_COMPACTION_SCALE_TESTS=1 ./Scripts/test-integration.sh
+./Scripts/test-integration.sh
 ```
+
+The integration lane includes the 100k-record/200k-change compaction benchmark by
+default. A local developer may explicitly set `SNIPPETS_COMPACTION_SCALE_TESTS=0` for a
+short diagnostic run, but release and nightly invocations must keep the default gate.
 
 ## Deliberately future work
 

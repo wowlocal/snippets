@@ -1168,7 +1168,8 @@ final class SyncCoordinator {
             case .invalidProviderSelection, .switchStateUnreadable:
                 .providerSwitchUnreadable
             case .featureDisabled, .missingConfiguration,
-                 .credentialCleanupRequired, .credentialStoreUnavailable:
+                 .credentialCleanupRequired, .credentialStoreUnavailable,
+                 .preferenceStoreUnavailable:
                 .retryablePrerequisite
             }
         }

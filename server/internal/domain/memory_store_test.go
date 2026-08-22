@@ -335,6 +335,34 @@ func TestCompactedBaselineDoesNotRotateAgainWithoutReclaimableHistory(t *testing
 	}
 }
 
+func TestSubmitAdmitsShrinkingMutationsBeforeGrowingMutations(t *testing.T) {
+	quota := StorageQuota{MaxBytesPerSpace: 200, MaxBytesPerUser: 1_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 100}
+	store := newTestStore(t, quota)
+	owner := principal(1)
+	space, err := store.CreateSpace(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existingID := uuid.MustParse("ffffffff-ffff-4fff-8fff-fffffffffff1")
+	created, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{{
+		Record: WireRecord{ID: existingID, Rev: "r", Blob: bytesOf(1, 49)},
+	}})
+	if err != nil || created.Outcomes[0].Kind != "accepted" {
+		t.Fatalf("fixture create failed: %v %#v", err, created)
+	}
+	store.quota.MaxBytesPerSpace = 100
+	version := *created.Outcomes[0].RecordVersion
+	growingID := uuid.MustParse("00000000-0000-4000-8000-000000000002")
+
+	result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{
+		{Record: WireRecord{ID: growingID, Rev: "g", Blob: bytesOf(2, 19)}},
+		{Record: WireRecord{ID: existingID, Rev: "s"}, ExpectedRecordVersion: &version},
+	})
+	if err != nil || result.Partial || result.Outcomes[0].Kind != "accepted" || result.Outcomes[1].Kind != "accepted" {
+		t.Fatalf("shrinking mutation did not release capacity for the batch: %v %#v", err, result)
+	}
+}
+
 func TestSubmitPerformsAtMostOneCapacityCompaction(t *testing.T) {
 	quota := StorageQuota{MaxBytesPerSpace: 100, MaxBytesPerUser: 1_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 100}
 	store := newTestStore(t, quota)

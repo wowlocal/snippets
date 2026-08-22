@@ -7,7 +7,7 @@
 ## Decision
 
 Before the first production deployment, the empty-database bootstrap tracks the latest
-schema (currently version 3) and every change also includes the forward migration from
+schema (currently version 4) and every change also includes the forward migration from
 the preceding candidate. After the first production deployment, the bootstrap remains
 an equivalent fresh-install representation of the latest schema while every upgrade is
 a forward-only numbered migration under `Container/postgres-migrations/`, applied by
@@ -28,6 +28,14 @@ cannot fit one short transaction must add its schema transactionally, perform a 
 idempotent and observable backfill in bounded batches, and only then publish the version
 required by the next server release. Backfills must not hold long-lived snapshots or
 block the data-plane lock order.
+
+The runner requires the applied ledger to be the exact contiguous sequence from version
+1 through the database maximum, refuses versions newer than the checkout, and records a
+SHA-256 checksum for every forward-migration file. Existing version-3 databases created
+by the historical fresh bootstrap may contain the single equivalent marker `{3}`; the
+runner recognizes and expands only that exact legacy shape before enforcing continuity.
+A checksum mismatch is repaired with a new forward migration, never by editing published
+history.
 
 ## Rollback policy
 

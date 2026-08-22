@@ -215,6 +215,7 @@ final class SyncBackendSelectionStore {
         case credentialCleanupRequired
         case credentialResetRequired
         case credentialStoreUnavailable
+        case preferenceStoreUnavailable
         case invalidProviderSelection
         case switchStateUnreadable
 
@@ -229,6 +230,7 @@ final class SyncBackendSelectionStore {
             case .credentialResetRequired:
                 "the saved Snippets Cloud credential history cannot be verified"
             case .credentialStoreUnavailable: "the credential store is temporarily unavailable"
+            case .preferenceStoreUnavailable: "the sync preference store is unavailable"
             case .invalidProviderSelection:
                 "the saved sync provider was written by an unsupported version"
             case .switchStateUnreadable:
@@ -345,13 +347,10 @@ final class SyncBackendSelectionStore {
     }
 
     var provider: Provider {
-        get {
-            guard let raw = defaults.string(forKey: Self.providerDefaultsKey) else {
-                return .iCloud
-            }
-            return Provider(rawValue: raw) ?? .iCloud
+        guard let raw = defaults.string(forKey: Self.providerDefaultsKey) else {
+            return .iCloud
         }
-        set { commitProvider(newValue) }
+        return Provider(rawValue: raw) ?? .iCloud
     }
 
     var syncEnabled: Bool {
@@ -462,8 +461,8 @@ final class SyncBackendSelectionStore {
             protocolMajor: storedProtocol?.intValue)
     }
 
-    func selectICloud() {
-        provider = .iCloud
+    func selectICloud() throws {
+        try commitProvider(.iCloud)
     }
 
     func selectSnippetsCloud(
@@ -503,7 +502,7 @@ final class SyncBackendSelectionStore {
             configuration.serverInstanceID.uuidString.lowercased(),
             forKey: Self.serverInstanceDefaultsKey)
         defaults.set(configuration.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
-        provider = .snippetsCloud
+        try commitProvider(.snippetsCloud)
     }
 
     func signIn(
@@ -656,7 +655,7 @@ final class SyncBackendSelectionStore {
         defaults.removeObject(forKey: Self.spaceDefaultsKey)
         defaults.removeObject(forKey: Self.serverInstanceDefaultsKey)
         defaults.removeObject(forKey: Self.protocolMajorDefaultsKey)
-        provider = .iCloud
+        try commitProvider(.iCloud)
         try keychain.deleteItem(account: Self.pendingLocalEraseAccount)
     }
 
@@ -915,7 +914,7 @@ final class SyncBackendSelectionStore {
             try encodeProviderSwitchReceipt(selected),
             to: targetLocations.switchReceiptURL,
             temporaryDirectory: SnippetStorageLocations.tmpFolderURL)
-        commitProvider(selected.target)
+        try commitProvider(selected.target)
     }
 
     func completeProviderSwitch() throws {
@@ -940,18 +939,30 @@ final class SyncBackendSelectionStore {
             forKey: Self.syncEnabledDefaultsKey)
     }
 
-    private func commitProvider(_ newValue: Provider) {
+    private func commitProvider(_ newValue: Provider) throws {
         // HTTP must disable the legacy CloudKit capability before it can become active.
-        // The inverse transition selects iCloud before enabling the legacy capability.
+        // Persist that downgrade fence as its own boundary: if the process dies after
+        // this synchronize but before the provider preference is committed, an older
+        // build still sees CloudKit disabled. The inverse transition selects iCloud
+        // before enabling the legacy capability.
         if newValue != .iCloud {
             defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+            guard defaults.synchronize() else {
+                providerSelectionFailure = .preferenceStoreUnavailable
+                throw Failure.preferenceStoreUnavailable
+            }
         }
         defaults.set(newValue.rawValue, forKey: Self.providerDefaultsKey)
-        providerSelectionFailure = nil
         if newValue == .iCloud, syncEnabled {
             defaults.set(true, forKey: Self.legacyICloudEnabledDefaultsKey)
         }
-        _ = defaults.synchronize()
+        guard defaults.synchronize() else {
+            providerSelectionFailure = .preferenceStoreUnavailable
+            defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+            _ = defaults.synchronize()
+            throw Failure.preferenceStoreUnavailable
+        }
+        providerSelectionFailure = nil
     }
 
     private func mirrorLegacyICloudPreference() {
@@ -1000,7 +1011,13 @@ final class SyncBackendSelectionStore {
                     providerSelectionFailure = .switchStateUnreadable
                 }
             case .targetSelected:
-                commitProvider(receipt.target)
+                do {
+                    try commitProvider(receipt.target)
+                } catch {
+                    providerSelectionFailure = .preferenceStoreUnavailable
+                    defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
+                    _ = defaults.synchronize()
+                }
             }
         }
     }
