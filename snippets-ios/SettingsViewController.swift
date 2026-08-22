@@ -814,7 +814,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         let current = environment.backendSelection.provider
         guard current != provider else { return }
         if provider == .snippetsCloud {
-            guard (try? cloudBootstrap.state()) == .ready else {
+            guard cloudBootstrap.stateForDisplay() == .ready else {
                 configureSnippetsCloud()
                 return
             }
@@ -865,6 +865,11 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     private func configureSnippetsCloud() {
         let selection = environment.backendSelection
         guard selection.snippetsCloudEnabled else { return }
+        let bootstrapState = cloudBootstrap.stateForDisplay()
+        if bootstrapState == .setupInterrupted || bootstrapState == .setupStateUnverified {
+            try? presentCloudState(bootstrapState)
+            return
+        }
         if selection.cloudCredentialResetRequired {
             confirmUnreadableCloudCredentialReset()
             return
@@ -998,6 +1003,8 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             continueAfterCloudBecameReady()
         case .setupInterrupted:
             presentInterruptedCloudSetup()
+        case .setupStateUnverified:
+            presentUnverifiedCloudSetupState()
         case .needsTrustedDeviceOrRecovery:
             presentCloudUnlockMenu()
         case .waitingForApproval(let payload, let code, let expiresAt):
@@ -1019,7 +1026,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     private func presentInterruptedCloudSetup() {
         let alert = UIAlertController(
             title: "Library Setup Was Interrupted",
-            message: "Your account is connected, but Snippets could not determine whether this library is new or already contains encrypted data. Local snippets remain available while cloud setup is paused.",
+            message: "Snippets was preparing this cloud library but could not determine whether it is new or already contains encrypted data. Local snippets remain available while cloud setup is paused.",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Not Now", style: .cancel))
         alert.addAction(UIAlertAction(title: "Resume Setup", style: .default) {
@@ -1027,7 +1034,23 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             self?.runCloudTask(title: "Couldn’t Resume Library Setup") {
                 guard let self else { return }
                 try self.presentCloudState(
-                    try await self.cloudBootstrap.resumePostAuthorizationSetup())
+                    try await self.cloudBootstrap.resumePostAuthorizationSetup(
+                        reauthenticatingIfNeededWith: self))
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    private func presentUnverifiedCloudSetupState() {
+        let alert = UIAlertController(
+            title: "Cloud Setup State Could Not Be Verified",
+            message: "Snippets could not read the saved cloud setup transaction. Local snippets remain available and cloud sync is paused.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Not Now", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
+            guard let self else { return }
+            runCloudTask(title: "Couldn’t Verify Cloud Setup") {
+                try self.presentCloudState(self.cloudBootstrap.state())
             }
         })
         present(alert, animated: true)
@@ -1705,7 +1728,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     }
 
     private var state: SnippetsCloudAccountBootstrap.State {
-        (try? bootstrap.state()) ?? .signedOut
+        bootstrap.stateForDisplay()
     }
 
     private var visibleActions: [Action] {
@@ -1719,6 +1742,8 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
                 + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
         case .setupInterrupted:
             [.continueSetup, .changeAccount]
+        case .setupStateUnverified:
+            [.continueSetup]
         case .strongAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
@@ -1733,6 +1758,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .signedOut: "Not connected"
         case .ready: "Account connected"
         case .setupInterrupted: "Library setup interrupted"
+        case .setupStateUnverified: "Cloud setup state could not be verified"
         case .needsTrustedDeviceOrRecovery: "Library locked"
         case .waitingForApproval: "Waiting for device approval"
         case .approvalReady, .strongAuthenticationRequired(.approveDevice):
@@ -1764,6 +1790,8 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
             "Waiting for an approved device or recovery kit"
         case .setupInterrupted:
             "Could not determine whether this library is new or already encrypted"
+        case .setupStateUnverified:
+            "Cloud access is paused until the saved setup state can be read"
         case .strongAuthenticationRequired(.createInitialRecovery):
             "Preparing library access"
         case .signedOut:
@@ -1791,6 +1819,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
             switch state {
             case .signedOut: "Sign in to Snippets Cloud"
             case .setupInterrupted: "Resume library setup"
+            case .setupStateUnverified: "Retry setup verification"
             case .waitingForApproval: "Return to device approval"
             case .recoveryKitAuthenticationRequired, .recoveryKitReady:
                 "Save and check recovery kit"

@@ -259,6 +259,34 @@ class CloudAccountUxTest {
             role = "writer",
             scopeBinding = "membership-b-000000000000000000000",
         )))
+        assertTrue(pending.matches(CloudStepUpBinding(
+            serverURL = pending.serverURL,
+            serverInstanceID = pending.serverInstanceID,
+            spaceID = pending.spaceID,
+            scopeBinding = pending.scopeBinding,
+        )))
+        assertFalse(pending.matches(CloudStepUpBinding(
+            serverURL = pending.serverURL,
+            serverInstanceID = pending.serverInstanceID,
+            spaceID = "00000000-0000-4000-8000-000000000002",
+            scopeBinding = pending.scopeBinding,
+        )))
+        assertEquals(
+            "Sign in for this library",
+            cloudErrorPresentation("resume_account_mismatch").actionTitle,
+        )
+        assertTrue(
+            cloudErrorPresentation("resume_account_mismatch", "1A60C0E7")
+                .message.contains("Library ID 1A60C0E7"),
+        )
+        assertEquals(
+            CloudKeyStatus.SETUP_INTERRUPTED,
+            startupCloudKeyStatus(
+                hasPendingPostAuthorization = true,
+                cloudSessionAvailable = false,
+                hasBoundKey = false,
+            ),
+        )
     }
 
     @Test

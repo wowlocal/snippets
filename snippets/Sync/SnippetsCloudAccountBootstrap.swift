@@ -63,6 +63,7 @@ final class SnippetsCloudAccountBootstrap {
         case signedOut
         case ready
         case setupInterrupted
+        case setupStateUnverified
         case needsTrustedDeviceOrRecovery
         case waitingForApproval(
             qrPayload: String,
@@ -343,6 +344,11 @@ final class SnippetsCloudAccountBootstrap {
         return .needsTrustedDeviceOrRecovery
     }
 
+    func stateForDisplay() -> State {
+        do { return try state() }
+        catch { return .setupStateUnverified }
+    }
+
     /// The UI calls this only after a zero-reuse device-owner authentication. The
     /// authority is consumed by this call, so every later presentation (including in
     /// the same process) requires fresh local user presence.
@@ -448,6 +454,31 @@ final class SnippetsCloudAccountBootstrap {
         let state = try await finishPostAuthorization()
         try clearPendingPostAuthorization()
         return state
+    }
+
+    @discardableResult
+    func resumePostAuthorizationSetup(
+        reauthenticatingIfNeededWith presentationContext:
+            any ASWebAuthenticationPresentationContextProviding
+    ) async throws -> State {
+        do {
+            return try await resumePostAuthorizationSetup()
+        } catch let failure as SyncBackendSelectionStore.Failure {
+            guard failure.requiresTargetBoundPostAuthorizationReauthentication else {
+                throw failure
+            }
+            guard let pending = try pendingPostAuthorization() else { throw failure }
+            try await selection.reauthenticateSnippetsCloudPostAuthorization(
+                pending.target,
+                presentationContext: presentationContext)
+            if try await syncCheckpointRequiresReviewBeforeBootstrap() {
+                try discardBootstrapIntentAfterScopeChange(
+                    preservingPostAuthorization: true)
+            }
+            let state = try await finishPostAuthorization()
+            try clearPendingPostAuthorization()
+            return state
+        }
     }
 
     @discardableResult
@@ -935,7 +966,7 @@ final class SnippetsCloudAccountBootstrap {
             serverInstanceID: serverInstanceID,
             protocolMajor: protocolMajor,
             accessToken: { [selection] in
-                try await selection.freshCloudAccessToken()
+                try await selection.freshCloudControlPlaneAccessToken()
             })
         return (coordinates, client)
     }

@@ -1170,6 +1170,7 @@ final class SyncCoordinator {
                 .providerSwitchUnreadable
             case .featureDisabled, .missingConfiguration,
                  .credentialCleanupRequired, .credentialStoreUnavailable,
+                 .postAuthorizationSetupRequired, .postAuthorizationStateUnavailable,
                  .preferenceStoreUnavailable:
                 .retryablePrerequisite
             }

@@ -1194,6 +1194,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
     val signedIn = remember(state.provider, state.syncLabel, state.errorCode, state.cloudKeyStatus) {
         repository.isCloudSignedIn()
     }
+    val setupInterrupted = state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED
     val loginLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -1468,7 +1469,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         if (BuildConfig.SNIPPETS_CLOUD_ENABLED) item {
             SettingsCard(title = "Account") {
                 Text(
-                    if (signedIn) {
+                    if (signedIn || setupInterrupted) {
                         "Snippets Cloud\nLibrary ID ${state.libraryID ?: "—"}"
                     }
                     else "Continue in your browser with a passkey, Apple, or Google. Snippets has no password and does not require your email.",
@@ -1484,7 +1485,18 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                 Button(
                     enabled = !state.isBusy && cloudConfigured,
                     onClick = {
-                        if (signedIn) {
+                        if (setupInterrupted) {
+                            scope.launch {
+                                if (signedIn) {
+                                    repository.resumeCloudSetup()?.let {
+                                        recoveryPresentation = it
+                                    }
+                                } else {
+                                    repository.beginResumeCloudSetupSignIn()
+                                        ?.let(loginLauncher::launch)
+                                }
+                            }
+                        } else if (signedIn) {
                             showChangeAccountConfirmation = true
                         } else {
                             scope.launch {
@@ -1493,7 +1505,13 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                             }
                         }
                     },
-                ) { Text(if (signedIn) "Change account" else "Sign in to Snippets Cloud") }
+                ) {
+                    Text(when {
+                        setupInterrupted -> "Resume setup"
+                        signedIn -> "Change account"
+                        else -> "Sign in to Snippets Cloud"
+                    })
+                }
                 if (signedIn) {
                     OutlinedButton(
                         enabled = !state.isBusy && state.cloudKeyStatus == CloudKeyStatus.READY,
@@ -1768,13 +1786,22 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         }
         state.errorCode?.let { code ->
             item {
-                val error = cloudErrorPresentation(code)
+                val error = cloudErrorPresentation(code, state.libraryID)
                 SettingsCard(title = error.title) {
                     Text(error.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     when (error.action) {
                         CloudErrorAction.SIGN_IN -> Button(onClick = {
                             scope.launch {
-                                repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL)
+                                val intent = if (
+                                    state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED
+                                ) {
+                                    repository.beginResumeCloudSetupSignIn()
+                                } else {
+                                    repository.beginCloudSignIn(
+                                        BuildConfig.SNIPPETS_CLOUD_URL,
+                                    )
+                                }
+                                intent
                                     ?.let(loginLauncher::launch)
                             }
                         }) { Text(error.actionTitle) }
@@ -1869,7 +1896,10 @@ internal data class CloudErrorPresentation(
     val actionTitle: String = "",
 )
 
-internal fun cloudErrorPresentation(code: String): CloudErrorPresentation = when (code) {
+internal fun cloudErrorPresentation(
+    code: String,
+    libraryID: String? = null,
+): CloudErrorPresentation = when (code) {
     "cloud_feature_disabled" -> CloudErrorPresentation(
         "Snippets Cloud is unavailable",
         "This build does not include Snippets Cloud. Your snippets remain on this device.",
@@ -1910,6 +1940,12 @@ internal fun cloudErrorPresentation(code: String): CloudErrorPresentation = when
         "Your account is connected, but Snippets could not finish checking the library. Local snippets remain available and cloud sync is paused.",
         CloudErrorAction.RESUME_SETUP,
         "Resume setup",
+    )
+    "resume_account_mismatch" -> CloudErrorPresentation(
+        "Use the account for this library",
+        "Sign in with an account that has writable access to Library ID ${libraryID ?: "shown above"}. The original library setup and local snippets were not changed.",
+        CloudErrorAction.SIGN_IN,
+        "Sign in for this library",
     )
     "library_key_required" -> CloudErrorPresentation(
         "Unlock this library",

@@ -264,6 +264,8 @@ final class SyncBackendSelectionStore {
         case credentialResetRequired
         case credentialStoreUnavailable
         case postAuthorizationMembershipMismatch
+        case postAuthorizationSetupRequired
+        case postAuthorizationStateUnavailable
         case preferenceStoreUnavailable
         case invalidProviderSelection
         case switchStateUnreadable
@@ -281,6 +283,10 @@ final class SyncBackendSelectionStore {
             case .credentialStoreUnavailable: "the credential store is temporarily unavailable"
             case .postAuthorizationMembershipMismatch:
                 "the committed cloud credential does not match the pending library setup"
+            case .postAuthorizationSetupRequired:
+                "the interrupted cloud library setup must finish before sync starts"
+            case .postAuthorizationStateUnavailable:
+                "the interrupted cloud library setup state could not be verified"
             case .preferenceStoreUnavailable: "the sync preference store is unavailable"
             case .invalidProviderSelection:
                 "the saved sync provider was written by an unsupported version"
@@ -290,6 +296,13 @@ final class SyncBackendSelectionStore {
         }
 
         var errorDescription: String? { description }
+
+        var requiresTargetBoundPostAuthorizationReauthentication: Bool {
+            switch self {
+            case .missingCredential, .postAuthorizationMembershipMismatch: true
+            default: false
+            }
+        }
     }
 
     static let providerDefaultsKey = "SnippetsSyncProvider"
@@ -446,6 +459,11 @@ final class SyncBackendSelectionStore {
         keychain.hasItem(account: Self.oauthSessionReplacementAccount)
     }
 
+    var hasPendingPostAuthorization: Bool {
+        bootstrapSecretsForRecovery.hasItem(
+            account: SnippetsCloudAccountBootstrap.pendingPostAuthorizationAccount)
+    }
+
     func pendingLocalEraseExists() throws -> Bool {
         try keychain.loadItem(account: Self.pendingLocalEraseAccount) != nil
     }
@@ -567,6 +585,7 @@ final class SyncBackendSelectionStore {
         ) throws -> Void = { _ in }
     ) async throws {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
+        try requireNoPendingPostAuthorization()
         try resumePendingLocalErase()
         if let failure = credentialLineageFailure() {
             switch failure {
@@ -607,6 +626,7 @@ final class SyncBackendSelectionStore {
             requiresStrongAuthentication: requiresStrongAuthentication,
             chooseAccount: chooseAccount,
             expectedStepUpTarget: expectedStepUpTarget,
+            expectedPostAuthorizationTarget: nil,
             chooseLibrary: chooseLibrary,
             presentationContext: presentationContext,
             validateStepUpTarget: { [weak self] in
@@ -654,6 +674,7 @@ final class SyncBackendSelectionStore {
               let redirectURL = Self.bundledOAuthRedirectURL else {
             throw Failure.missingCredential
         }
+        try requireNoPendingPostAuthorization()
         let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
         _ = try await oauth.selectExistingLibrary(
             serverURL: coordinates.serverURL,
@@ -711,6 +732,49 @@ final class SyncBackendSelectionStore {
                 defaults.set(target.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
                 try? keychain.deleteItem(account: Self.tokenAccount)
             }
+        } catch SnippetsCloudOAuthClient.Failure.stepUpAccountMismatch {
+            throw Failure.postAuthorizationMembershipMismatch
+        } catch SnippetsCloudOAuthClient.Failure.invalidStoredSession,
+                SnippetsCloudOAuthClient.Failure.tokenExchangeFailed {
+            throw Failure.missingCredential
+        }
+    }
+
+    func reauthenticateSnippetsCloudPostAuthorization(
+        _ target: SnippetsCloudPostAuthorizationTarget,
+        presentationContext: any ASWebAuthenticationPresentationContextProviding
+    ) async throws {
+        guard snippetsCloudEnabled,
+              target.serverURL == Self.bundledServerURL,
+              target.protocolMajor == 2,
+              let redirectURL = Self.bundledOAuthRedirectURL else {
+            throw Failure.missingConfiguration
+        }
+        let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+        do {
+            _ = try await oauth.signIn(
+                serverURL: target.serverURL,
+                existingSpaceID: target.spaceID,
+                requiresStrongAuthentication: false,
+                chooseAccount: true,
+                expectedStepUpTarget: nil,
+                expectedPostAuthorizationTarget: target,
+                chooseLibrary: { _ in throw Failure.postAuthorizationMembershipMismatch },
+                presentationContext: presentationContext,
+                validateStepUpTarget: {},
+                prepareCoordinatesCommit: { _ in },
+                commitCoordinates: { [defaults, keychain] result in
+                    defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
+                    defaults.set(result.apiBaseURL.absoluteString, forKey: Self.apiBaseDefaultsKey)
+                    defaults.set(
+                        result.spaceID.uuidString.lowercased(),
+                        forKey: Self.spaceDefaultsKey)
+                    defaults.set(
+                        result.serverInstanceID.uuidString.lowercased(),
+                        forKey: Self.serverInstanceDefaultsKey)
+                    defaults.set(result.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
+                    try? keychain.deleteItem(account: Self.tokenAccount)
+                })
         } catch SnippetsCloudOAuthClient.Failure.stepUpAccountMismatch {
             throw Failure.postAuthorizationMembershipMismatch
         }
@@ -829,6 +893,15 @@ final class SyncBackendSelectionStore {
 
     func freshCloudAccessToken(forceRefresh: Bool = false) async throws -> String {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
+        try requireNoPendingPostAuthorization()
+        return try await freshCloudControlPlaneAccessToken(forceRefresh: forceRefresh)
+    }
+
+    /// Bootstrap and recovery calls are part of the account control plane. They must
+    /// be able to finish the durable post-authorization transaction that intentionally
+    /// fences the record-sync data plane.
+    func freshCloudControlPlaneAccessToken(forceRefresh: Bool = false) async throws -> String {
+        guard snippetsCloudEnabled else { throw Failure.featureDisabled }
         if let failure = credentialLineageFailure() {
             switch failure {
             case .credentialCleanupRequired:
@@ -922,6 +995,7 @@ final class SyncBackendSelectionStore {
             return CloudKitTransport()
         case .snippetsCloud:
             guard snippetsCloudEnabled else { throw Failure.featureDisabled }
+            try requireNoPendingPostAuthorization()
             do {
                 guard try !pendingLocalEraseExists() else {
                     throw Failure.missingCredential
@@ -1011,6 +1085,20 @@ final class SyncBackendSelectionStore {
                 serverInstanceID: serverInstanceID,
                 protocolMajor: protocolMajor,
                 accessToken: token))
+        }
+    }
+
+    private func requireNoPendingPostAuthorization() throws {
+        do {
+            guard try bootstrapSecretsForRecovery.loadItem(
+                account: SnippetsCloudAccountBootstrap.pendingPostAuthorizationAccount
+            ) == nil else {
+                throw Failure.postAuthorizationSetupRequired
+            }
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            throw Failure.postAuthorizationStateUnavailable
         }
     }
 
@@ -1404,6 +1492,7 @@ private final class SnippetsCloudOAuthClient {
         requiresStrongAuthentication: Bool,
         chooseAccount: Bool,
         expectedStepUpTarget: SnippetsCloudStepUpTarget?,
+        expectedPostAuthorizationTarget: SnippetsCloudPostAuthorizationTarget?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding,
         validateStepUpTarget: @escaping () throws -> Void,
@@ -1411,6 +1500,9 @@ private final class SnippetsCloudOAuthClient {
         commitCoordinates: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
         guard requiresStrongAuthentication == (expectedStepUpTarget != nil),
+              expectedStepUpTarget == nil || expectedPostAuthorizationTarget == nil,
+              expectedPostAuthorizationTarget == nil ||
+                (!requiresStrongAuthentication && chooseAccount),
               !(requiresStrongAuthentication && chooseAccount) else {
             throw Failure.invalidStoredSession
         }
@@ -1456,6 +1548,7 @@ private final class SnippetsCloudOAuthClient {
                     requiresStrongAuthentication: requiresStrongAuthentication,
                     chooseAccount: chooseAccount,
                     expectedStepUpBinding: expectedStepUpBinding,
+                    expectedPostAuthorizationTarget: expectedPostAuthorizationTarget,
                     chooseLibrary: chooseLibrary,
                     presentationContext: presentationContext,
                     prepareCoordinatesCommit: prepareCoordinatesCommit)
@@ -1480,6 +1573,7 @@ private final class SnippetsCloudOAuthClient {
         requiresStrongAuthentication: Bool,
         chooseAccount: Bool,
         expectedStepUpBinding: SnippetsCloudStepUpBinding?,
+        expectedPostAuthorizationTarget: SnippetsCloudPostAuthorizationTarget?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding,
         prepareCoordinatesCommit: @escaping (SignInResult) throws -> Void
@@ -1709,6 +1803,34 @@ private final class SnippetsCloudOAuthClient {
                 spaceID: candidate.scope.spaceId,
                 scopeBinding: candidate.scope.scopeBinding,
                 role: candidate.role) else {
+                throw Failure.stepUpAccountMismatch
+            }
+            selectedMembership = SnippetsCloudLibraryChoice(
+                spaceID: candidate.scope.spaceId,
+                serverInstanceID: candidate.scope.serverInstanceId,
+                role: candidate.role,
+                scopeBinding: candidate.scope.scopeBinding)
+        } else if let expectedPostAuthorizationTarget {
+            let candidate: Space
+            do {
+                candidate = try await authorizedJSON(
+                    url: serverURL.appending(
+                        path: "v2/spaces/\(expectedPostAuthorizationTarget.spaceID.uuidString.lowercased())"),
+                    method: "GET",
+                    accessToken: token.accessToken)
+            } catch let failure as HTTPFailure where [
+                "not_found", "forbidden", "authentication_required"
+            ].contains(failure.code) {
+                throw Failure.stepUpAccountMismatch
+            }
+            guard expectedPostAuthorizationTarget.serverURL == serverURL,
+                  expectedPostAuthorizationTarget.serverInstanceID
+                    == candidate.scope.serverInstanceId,
+                  expectedPostAuthorizationTarget.protocolMajor == 2,
+                  expectedPostAuthorizationTarget.spaceID == candidate.scope.spaceId,
+                  expectedPostAuthorizationTarget.scopeBinding
+                    == candidate.scope.scopeBinding,
+                  ["owner", "writer"].contains(candidate.role) else {
                 throw Failure.stepUpAccountMismatch
             }
             selectedMembership = SnippetsCloudLibraryChoice(

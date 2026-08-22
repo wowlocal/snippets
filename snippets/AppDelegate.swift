@@ -368,20 +368,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // outbound-sync debounce. No editing is possible before the first frame.
         store.syncDelegate = syncCoordinator
         controlServer.start()
-        if (try? cloudBootstrap.state()) == .setupInterrupted {
-            Task { @MainActor [cloudBootstrap, syncCoordinator] in
-                do {
-                    let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
-                    if resumed == .ready {
-                        syncCoordinator.startIfEnabled()
+        do {
+            if try cloudBootstrap.state() == .setupInterrupted {
+                Task { @MainActor [cloudBootstrap, syncCoordinator] in
+                    do {
+                        let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
+                        if resumed == .ready {
+                            syncCoordinator.startIfEnabled()
+                        }
+                    } catch {
+                        // The durable bootstrap marker keeps the cloud data plane paused.
+                        // Settings exposes the same idempotent resume action.
                     }
-                } catch {
-                    // The durable bootstrap marker keeps the cloud data plane paused.
-                    // Settings exposes the same idempotent resume action.
                 }
+            } else {
+                syncCoordinator.startIfEnabled()
             }
-        } else {
-            syncCoordinator.startIfEnabled()
+        } catch {
+            // An unavailable or malformed bootstrap marker is a data-plane boundary.
+            // Settings exposes retry without interpreting uncertainty as absence.
         }
         expansionEngine.startIfNeeded()
         configureAppMenuItems()

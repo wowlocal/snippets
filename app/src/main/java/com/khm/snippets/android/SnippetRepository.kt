@@ -155,12 +155,11 @@ class SnippetRepository(
                         authenticator.discardPendingAuthorization()
                     }
                 }
-                cloudKeyStatus = when {
-                    !cloudSessionAvailable -> CloudKeyStatus.SIGNED_OUT
-                    pendingPostAuthorization != null -> CloudKeyStatus.SETUP_INTERRUPTED
-                    hasBoundKey() -> CloudKeyStatus.READY
-                    else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
-                }
+                cloudKeyStatus = startupCloudKeyStatus(
+                    hasPendingPostAuthorization = pendingPostAuthorization != null,
+                    cloudSessionAvailable = cloudSessionAvailable,
+                    hasBoundKey = hasBoundKey(),
+                )
                 store.read(PENDING_PAIRING)?.let { raw ->
                     runCatching { LibraryKeyBootstrap.PendingPairing.fromJSON(raw) }
                         .onSuccess { pending ->
@@ -202,6 +201,12 @@ class SnippetRepository(
                     setRecoveryVerificationState(
                         RecoveryKitVerificationState.replacementInProgress,
                     )
+                }
+                if (pendingPostAuthorization != null) {
+                    // The transaction boundary outranks partially durable bootstrap UI
+                    // such as a recovery presentation. Without a usable session the only
+                    // valid next action is target-bound Resume, never generic sign-in.
+                    cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
                 }
                 remoteLogoutPending = authenticator.hasPendingRevocation()
                 if (remoteLogoutPending) {
@@ -311,6 +316,9 @@ class SnippetRepository(
                     if (store.read(PENDING_LOCAL_ERASE) != null) {
                         completePendingLocalErase()
                     }
+                    if (!stepUp && pendingPostAuthorization != null) {
+                        throw CloudAuthFailure("post_authorization_incomplete")
+                    }
                     val stepUpBinding = if (stepUp) currentStepUpBinding() else null
                     authenticator.authorizationIntent(
                         serverURL, stepUp, chooseAccount, stepUpBinding,
@@ -328,15 +336,92 @@ class SnippetRepository(
         }
     }
 
+    internal suspend fun beginResumeCloudSetupSignIn(): Intent? {
+        initialization.await()
+        if (!snippetsCloudEnabled) return null
+        return mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                val intent = withContext(Dispatchers.IO) {
+                    val pending = pendingPostAuthorization
+                        ?: throw SyncFailure("post_authorization_incomplete")
+                    if (!pending.matches(configuration)) {
+                        throw SyncFailure("scope_review_required")
+                    }
+                    authenticator.authorizationIntent(
+                        rawServerURL = pending.serverURL,
+                        chooseAccount = true,
+                        resumeBinding = CloudStepUpBinding(
+                            serverURL = pending.serverURL,
+                            serverInstanceID = pending.serverInstanceID,
+                            spaceID = pending.spaceID,
+                            scopeBinding = pending.scopeBinding,
+                        ),
+                    )
+                }
+                publish()
+                intent
+            } catch (error: CloudAuthFailure) {
+                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                publish(errorCode = error.code)
+                null
+            } catch (error: SyncFailure) {
+                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                publish(errorCode = error.code)
+                null
+            } catch (_: Exception) {
+                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+                publish(errorCode = "post_authorization_incomplete")
+                null
+            }
+        }
+    }
+
     internal suspend fun completeCloudSignIn(result: Intent?): CloudSignInCompletion {
         initialization.await()
         if (!snippetsCloudEnabled) return CloudSignInCompletion(succeeded = false)
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            var rejectResumeCandidate = false
             try {
                 val completion = withContext(Dispatchers.IO) {
                     val authorization = authenticator.completeAuthorization(result)
                     cloudSessionAvailable = true
+                    authorization.resumeBinding?.let { expected ->
+                        rejectResumeCandidate = true
+                        val pending = pendingPostAuthorization
+                            ?: throw CloudAuthFailure("resume_account_mismatch")
+                        if (!pending.matches(configuration) || !pending.matches(expected)) {
+                            throw CloudAuthFailure("resume_account_mismatch")
+                        }
+                        val resolution = try {
+                            client.resolveSpace(
+                                authorization.serverURL,
+                                expected.spaceID,
+                                authorization.accessToken,
+                            )
+                        } catch (error: SyncFailure) {
+                            if (error.code == "not_found" || error.code == "forbidden" ||
+                                error.code == "authentication_required") {
+                                throw CloudAuthFailure("resume_account_mismatch")
+                            }
+                            throw error
+                        }
+                        if (!expected.matches(authorization.serverURL, resolution)) {
+                            throw CloudAuthFailure("resume_account_mismatch")
+                        }
+                        rejectResumeCandidate = false
+                        val recoveryKit = completeResolvedAuthorization(
+                            authorization.serverURL,
+                            authorization.accessToken,
+                            resolution,
+                            operation = pending.operation,
+                        )
+                        return@withContext PostAuthorizationCompletion(
+                            recoveryKit = recoveryKit,
+                            needsLibrarySelection = false,
+                        )
+                    }
                     authorization.stepUpBinding?.let { expected ->
                         if (configuration.serverURL != expected.serverURL ||
                             !configuration.serverInstanceID.equals(
@@ -483,15 +568,27 @@ class SnippetRepository(
                     )
                 }
             } catch (error: CloudAuthFailure) {
-                val cleanupFailure = discardCandidateAfterAuthorizationFailure()
+                val cleanupFailure = if (rejectResumeCandidate) {
+                    discardRejectedResumeCandidate()
+                } else {
+                    discardCandidateAfterAuthorizationFailure()
+                }
                 publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
                 CloudSignInCompletion(succeeded = false)
             } catch (error: SyncFailure) {
-                val cleanupFailure = discardCandidateAfterAuthorizationFailure()
+                val cleanupFailure = if (rejectResumeCandidate) {
+                    discardRejectedResumeCandidate()
+                } else {
+                    discardCandidateAfterAuthorizationFailure()
+                }
                 publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
                 CloudSignInCompletion(succeeded = false)
             } catch (_: Exception) {
-                val cleanupFailure = discardCandidateAfterAuthorizationFailure()
+                val cleanupFailure = if (rejectResumeCandidate) {
+                    discardRejectedResumeCandidate()
+                } else {
+                    discardCandidateAfterAuthorizationFailure()
+                }
                 publish(errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"))
                 CloudSignInCompletion(succeeded = false)
             }
@@ -780,7 +877,7 @@ class SnippetRepository(
                 null
             } catch (error: SyncFailure) {
                 cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
-                publish(errorCode = error.code)
+                publish(errorCode = resumeCloudSetupError(error.code))
                 null
             } catch (_: Exception) {
                 cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
@@ -837,10 +934,31 @@ class SnippetRepository(
         return cleanupFailure
     }
 
+    private suspend fun discardRejectedResumeCandidate(): String? {
+        val cleanupFailure = try {
+            authenticator.discardPendingAuthorization()
+            null
+        } catch (error: CloudAuthFailure) {
+            error.code
+        } catch (_: Exception) {
+            "credential_cleanup_required"
+        }
+        cloudSessionAvailable = authenticator.hasSession(
+            configuration.serverURL.takeIf(String::isNotBlank),
+        )
+        return cleanupFailure
+    }
+
     private fun postAuthorizationError(fallback: String): String {
         if (pendingPostAuthorization == null) return fallback
         cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+        if (fallback == "resume_account_mismatch") return fallback
         return "post_authorization_incomplete"
+    }
+
+    private fun resumeCloudSetupError(code: String): String = when (code) {
+        "not_found", "forbidden", "scope_review_required" -> "resume_account_mismatch"
+        else -> code
     }
 
     suspend fun disconnectCloudAccount() = mutate {
@@ -1387,6 +1505,7 @@ class SnippetRepository(
         }
 
         if (store.read(RECOVERY_PRESENTATION) != null) {
+            configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
             cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
             return null
         }

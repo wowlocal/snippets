@@ -167,4 +167,58 @@ final class SnippetsCloudSafetyTests: XCTestCase {
 
         XCTAssertEqual(try bootstrap.state(), .setupInterrupted)
     }
+
+    func testMalformedPostAuthorizationBootstrapNeverLooksSignedOut() throws {
+        let defaultsName = "SnippetsCloudSafetyTests.malformed-bootstrap.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.malformed-bootstrap-credentials",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let secrets = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.malformed-bootstrap-state",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            bootstrapSecrets: secrets,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "test-access-token")
+        try secrets.storeItem(
+            Data("not a bootstrap transaction".utf8),
+            account: SnippetsCloudAccountBootstrap.pendingPostAuthorizationAccount)
+        let bootstrap = SnippetsCloudAccountBootstrap(
+            selection: selection,
+            secrets: secrets)
+
+        XCTAssertThrowsError(try bootstrap.state())
+        XCTAssertEqual(bootstrap.stateForDisplay(), .setupStateUnverified)
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .postAuthorizationSetupRequired = failure else {
+                return XCTFail("Expected malformed marker to keep sync fenced, got \(error)")
+            }
+        }
+    }
+
+    func testPostAuthorizationCrashUsesTargetBoundReauthentication() {
+        XCTAssertTrue(
+            SyncBackendSelectionStore.Failure.missingCredential
+                .requiresTargetBoundPostAuthorizationReauthentication)
+        XCTAssertTrue(
+            SyncBackendSelectionStore.Failure.postAuthorizationMembershipMismatch
+                .requiresTargetBoundPostAuthorizationReauthentication,
+            "an old session left active before candidate publication must reauthenticate the marker target")
+        XCTAssertFalse(
+            SyncBackendSelectionStore.Failure.postAuthorizationStateUnavailable
+                .requiresTargetBoundPostAuthorizationReauthentication)
+    }
 }

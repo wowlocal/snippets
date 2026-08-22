@@ -118,20 +118,25 @@ final class AppEnvironment {
         guard !hasStarted else { return }
         hasStarted = true
         store.onChange?(.init(source: .external))
-        if (try? cloudBootstrap.state()) == .setupInterrupted {
-            Task { @MainActor [cloudBootstrap, syncCoordinator] in
-                do {
-                    let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
-                    if resumed == .ready {
-                        syncCoordinator.startIfEnabled()
+        do {
+            if try cloudBootstrap.state() == .setupInterrupted {
+                Task { @MainActor [cloudBootstrap, syncCoordinator] in
+                    do {
+                        let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
+                        if resumed == .ready {
+                            syncCoordinator.startIfEnabled()
+                        }
+                    } catch {
+                        // The durable bootstrap marker keeps the cloud data plane paused.
+                        // Settings exposes the same idempotent resume action.
                     }
-                } catch {
-                    // The durable bootstrap marker keeps the cloud data plane paused.
-                    // Settings exposes the same idempotent resume action.
                 }
+            } else {
+                syncCoordinator.startIfEnabled()
             }
-        } else {
-            syncCoordinator.startIfEnabled()
+        } catch {
+            // An unavailable or malformed bootstrap marker is a data-plane boundary.
+            // Settings exposes retry without interpreting uncertainty as absence.
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
             TemporaryExportFiles.removeStale()

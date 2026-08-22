@@ -520,6 +520,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         let selection = SyncBackendSelectionStore(
             defaults: defaults,
             keychain: credentials,
+            bootstrapSecrets: makeInMemoryBootstrapStore("marker-query"),
             snippetsCloudEnabled: true)
         try selection.selectSnippetsCloud(
             serverURL: XCTUnwrap(URL(string: "https://sync.example")),
@@ -540,6 +541,95 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
                 return XCTFail("Expected unavailable credential store, got \(error)")
             }
         }
+    }
+
+    func testPendingPostAuthorizationBootstrapClosesCloudDataPlane() async throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.bootstrap-fence.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.bootstrap-fence-credentials",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let bootstrap = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.bootstrap-fence-state",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            bootstrapSecrets: bootstrap,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "test-access-token")
+        try bootstrap.storeItem(
+            Data("durable bootstrap marker".utf8),
+            account: SnippetsCloudAccountBootstrap.pendingPostAuthorizationAccount)
+
+        XCTAssertTrue(selection.hasPendingPostAuthorization)
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .postAuthorizationSetupRequired = failure else {
+                return XCTFail("Expected bootstrap fence, got \(error)")
+            }
+        }
+        do {
+            _ = try await selection.freshCloudAccessToken()
+            XCTFail("Expected record-sync token access to remain fenced")
+        } catch let failure as SyncBackendSelectionStore.Failure {
+            guard case .postAuthorizationSetupRequired = failure else {
+                return XCTFail("Expected bootstrap token fence, got \(failure)")
+            }
+        }
+    }
+
+    func testUnavailablePostAuthorizationMarkerClosesCloudDataPlane() throws {
+        let defaultsName = "KeychainAccessibilityPolicyTests.bootstrap-unavailable.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let credentials = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.bootstrap-unavailable-credentials",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
+        let bootstrapProbe = KeychainOperationsProbe()
+        let bootstrap = KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.bootstrap-unavailable-state",
+            itemAccessibility: .afterFirstUnlock,
+            keychainOperations: makeOperations(bootstrapProbe))
+        let selection = SyncBackendSelectionStore(
+            defaults: defaults,
+            keychain: credentials,
+            bootstrapSecrets: bootstrap,
+            snippetsCloudEnabled: true)
+        try selection.selectSnippetsCloud(
+            serverURL: XCTUnwrap(URL(string: "https://sync.example")),
+            spaceID: UUID(),
+            serverInstanceID: UUID(),
+            accessToken: "test-access-token")
+        bootstrapProbe.failCopies(
+            account: SnippetsCloudAccountBootstrap.pendingPostAuthorizationAccount,
+            status: errSecNotAvailable)
+
+        XCTAssertTrue(
+            selection.hasPendingPostAuthorization,
+            "an unavailable bootstrap marker must look present to non-throwing callers")
+        XCTAssertThrowsError(try selection.makeTransport()) { error in
+            guard let failure = error as? SyncBackendSelectionStore.Failure,
+                  case .postAuthorizationStateUnavailable = failure else {
+                return XCTFail("Expected unavailable bootstrap state, got \(error)")
+            }
+        }
+        let accountBootstrap = SnippetsCloudAccountBootstrap(
+            selection: selection,
+            secrets: bootstrap)
+        XCTAssertEqual(accountBootstrap.stateForDisplay(), .setupStateUnverified)
     }
 
     func testLogoutJournalWinsAfterRefreshCrashBeforeSessionReplacement() {
@@ -690,6 +780,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         let selection = SyncBackendSelectionStore(
             defaults: defaults,
             keychain: credentials,
+            bootstrapSecrets: makeInMemoryBootstrapStore("readable-replacement"),
             snippetsCloudEnabled: true)
         try selection.selectSnippetsCloud(
             serverURL: XCTUnwrap(URL(string: "https://sync.example")),
@@ -732,6 +823,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         let selection = SyncBackendSelectionStore(
             defaults: defaults,
             keychain: credentials,
+            bootstrapSecrets: makeInMemoryBootstrapStore("primary-session-reset"),
             snippetsCloudEnabled: true)
         try selection.selectSnippetsCloud(
             serverURL: XCTUnwrap(URL(string: "https://sync.example")),
@@ -763,6 +855,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
         let selection = SyncBackendSelectionStore(
             defaults: defaults,
             keychain: credentials,
+            bootstrapSecrets: makeInMemoryBootstrapStore("revocation-reset"),
             snippetsCloudEnabled: true)
         try selection.selectSnippetsCloud(
             serverURL: XCTUnwrap(URL(string: "https://sync.example")),
@@ -873,6 +966,14 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             tier: .synchronizable(accessGroup: accessGroup),
             service: service,
             keychainOperations: makeOperations(probe))
+    }
+
+    private func makeInMemoryBootstrapStore(_ name: String) -> KeychainSecretStore {
+        KeychainSecretStore(
+            tier: .deviceOnly,
+            service: "com.khm.snippets.\(name)-bootstrap-tests",
+            itemAccessibility: .afterFirstUnlock,
+            inMemory: true)
     }
 
     private func makeOperations(_ probe: KeychainOperationsProbe) -> KeychainItemOperations {

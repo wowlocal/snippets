@@ -81,6 +81,7 @@ class CloudAuthenticator(
         val accessToken: String,
         val accountChange: Boolean,
         val stepUpBinding: CloudStepUpBinding?,
+        val resumeBinding: CloudStepUpBinding?,
     )
 
     private data class ServiceDiscovery(
@@ -127,13 +128,19 @@ class CloudAuthenticator(
         stepUp: Boolean = false,
         chooseAccount: Boolean = false,
         stepUpBinding: CloudStepUpBinding? = null,
+        resumeBinding: CloudStepUpBinding? = null,
     ): Intent = withContext(Dispatchers.IO) {
         guard(!(stepUp && chooseAccount), "authorization_session_invalid")
         guard(stepUp == (stepUpBinding != null), "authorization_session_invalid")
+        guard(stepUpBinding == null || resumeBinding == null, "authorization_session_invalid")
+        guard(!stepUp || resumeBinding == null, "authorization_session_invalid")
         retireSupersededInteractiveSessions()
         guard(store.read(AUTH_REVOCATION) == null, "credential_revocation_incomplete")
         val pinnedServerURL = configuredServerURL()
         guard(normalizedBaseURL(rawServerURL) == pinnedServerURL, "server_identity_mismatch")
+        resumeBinding?.let {
+            guard(it.serverURL == pinnedServerURL, "authorization_session_invalid")
+        }
         val redirectURI = configuredRedirectURI()
         val discovery = fetchServiceDiscovery(pinnedServerURL)
         val oidcConfiguration = fetchOIDCConfiguration(discovery.issuer)
@@ -185,20 +192,28 @@ class CloudAuthenticator(
             "authorization_session_invalid",
         )
         store.write(PENDING, JSONObject()
-            .put("schemaVersion", 4)
+            .put("schemaVersion", 5)
             .put("serverURL", discovery.serverURL)
             .put("issuer", discovery.issuer)
             .put("resource", discovery.resource)
             .put("clientID", discovery.clientID)
             .put("redirectURI", redirectURI.toString())
             .put("maximumAccessTokenAgeSeconds", discovery.maximumAccessTokenAgeSeconds)
-            .put("accountChange", chooseAccount)
+            .put("accountChange", chooseAccount && resumeBinding == null)
             .put("stepUp", stepUp)
             .also { value ->
                 stepUpBinding?.let { binding ->
                     value.put("expectedServerInstanceID", binding.serverInstanceID)
                         .put("expectedSpaceID", binding.spaceID)
                         .put("expectedScopeBinding", binding.scopeBinding)
+                }
+            }
+            .put("resumeBootstrap", resumeBinding != null)
+            .also { value ->
+                resumeBinding?.let { binding ->
+                    value.put("resumeServerInstanceID", binding.serverInstanceID)
+                        .put("resumeSpaceID", binding.spaceID)
+                        .put("resumeScopeBinding", binding.scopeBinding)
                 }
             }
             .put("state", request.state)
@@ -217,7 +232,7 @@ class CloudAuthenticator(
             val pending = store.read(PENDING)?.let(::JSONObject)
                 ?: throw CloudAuthFailure("authorization_session_missing")
             try {
-                guard(pending.optInt("schemaVersion") in 2..4, "authorization_session_missing")
+                guard(pending.optInt("schemaVersion") in 2..5, "authorization_session_missing")
                 val exception = intent?.let(AuthorizationException::fromIntent)
                 val response = intent?.let(AuthorizationResponse::fromIntent)
                 if (exception != null || response == null) {
@@ -280,6 +295,21 @@ class CloudAuthenticator(
                             serverInstanceID = pending.getString("expectedServerInstanceID"),
                             spaceID = pending.getString("expectedSpaceID"),
                             scopeBinding = pending.getString("expectedScopeBinding"),
+                        ).also { binding ->
+                            guard(
+                                binding.scopeBinding.toByteArray().size in 32..256,
+                                "authorization_session_invalid",
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    resumeBinding = if (pending.optBoolean("resumeBootstrap", false)) {
+                        CloudStepUpBinding(
+                            serverURL = stored.serverURL,
+                            serverInstanceID = pending.getString("resumeServerInstanceID"),
+                            spaceID = pending.getString("resumeSpaceID"),
+                            scopeBinding = pending.getString("resumeScopeBinding"),
                         ).also { binding ->
                             guard(
                                 binding.scopeBinding.toByteArray().size in 32..256,

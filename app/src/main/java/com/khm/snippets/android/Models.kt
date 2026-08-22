@@ -141,6 +141,17 @@ enum class CloudPostAuthorizationOperation {
     STEP_UP,
 }
 
+internal fun startupCloudKeyStatus(
+    hasPendingPostAuthorization: Boolean,
+    cloudSessionAvailable: Boolean,
+    hasBoundKey: Boolean,
+): CloudKeyStatus = when {
+    hasPendingPostAuthorization -> CloudKeyStatus.SETUP_INTERRUPTED
+    !cloudSessionAvailable -> CloudKeyStatus.SIGNED_OUT
+    hasBoundKey -> CloudKeyStatus.READY
+    else -> CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+}
+
 internal data class PendingPostAuthorizationBootstrap(
     val serverURL: String,
     val serverInstanceID: String,
@@ -157,6 +168,12 @@ internal data class PendingPostAuthorizationBootstrap(
         serverInstanceID.equals(resolution.serverInstanceID, ignoreCase = true) &&
             spaceID.equals(resolution.spaceID, ignoreCase = true) &&
             scopeBinding == resolution.scopeBinding && resolution.canWrite
+
+    fun matches(binding: CloudStepUpBinding): Boolean =
+        serverURL == binding.serverURL.trim().trimEnd('/') &&
+            serverInstanceID.equals(binding.serverInstanceID, ignoreCase = true) &&
+            spaceID.equals(binding.spaceID, ignoreCase = true) &&
+            scopeBinding == binding.scopeBinding
 
     fun toJSON(): String = JSONObject()
         .put("schemaVersion", 1)
