@@ -196,6 +196,46 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	if err != nil || orderedQuota.Partial || orderedQuota.Outcomes[0].Kind != "accepted" || orderedQuota.Outcomes[1].Kind != "accepted" {
 		t.Fatalf("shrinking mutation did not release PostgreSQL capacity for the batch: %v %#v", err, orderedQuota)
 	}
+	netOrderSpace, err := store.CreateSpace(ctx, first, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	netGrowingID := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	netReleasingID := uuid.MustParse("ffffffff-ffff-4fff-8fff-fffffffffff1")
+	netFixture, err := store.Submit(ctx, first, netOrderSpace.Scope.SpaceID, netOrderSpace.Scope, []domain.BatchItem{
+		{Record: domain.WireRecord{ID: netGrowingID, Rev: "r", Blob: make([]byte, 59)}},
+		{Record: domain.WireRecord{ID: netReleasingID, Rev: "r", Blob: make([]byte, 39)}},
+	})
+	if err != nil || netFixture.Partial {
+		t.Fatalf("net quota ordering fixture failed: %v %#v", err, netFixture)
+	}
+	var netOwner uuid.UUID
+	var netActualCurrent, netActualHistory int64
+	if err := ownerPool.QueryRow(ctx,
+		"SELECT owner_user_id,current_record_bytes,change_history_bytes FROM spaces WHERE id=$1",
+		netOrderSpace.Scope.SpaceID).Scan(&netOwner, &netActualCurrent, &netActualHistory); err != nil {
+		t.Fatal(err)
+	}
+	netArtificialCurrent := (domain.MaxStorageBytesPerSpace - 2) / 2
+	netArtificialHistory := domain.MaxStorageBytesPerSpace - 2 - netArtificialCurrent
+	if _, err := ownerPool.Exec(ctx, `UPDATE spaces
+		SET current_record_bytes=$2,change_history_bytes=$3 WHERE id=$1`,
+		netOrderSpace.Scope.SpaceID, netArtificialCurrent, netArtificialHistory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownerPool.Exec(ctx, "UPDATE users SET storage_bytes=storage_bytes+$2 WHERE id=$1",
+		netOwner, netArtificialCurrent+netArtificialHistory-netActualCurrent-netActualHistory); err != nil {
+		t.Fatal(err)
+	}
+	netOrderedQuota, err := store.Submit(ctx, first, netOrderSpace.Scope.SpaceID, netOrderSpace.Scope, []domain.BatchItem{
+		// Both current records shrink. This first UUID still grows total storage by 40.
+		{Record: domain.WireRecord{ID: netGrowingID, Rev: "r", Blob: make([]byte, 49)}, ExpectedRecordVersion: netFixture.Outcomes[0].RecordVersion},
+		// This later UUID releases 38 total bytes and must be admitted first.
+		{Record: domain.WireRecord{ID: netReleasingID, Rev: "r"}, ExpectedRecordVersion: netFixture.Outcomes[1].RecordVersion},
+	})
+	if err != nil || netOrderedQuota.Partial || netOrderedQuota.Outcomes[0].Kind != "accepted" || netOrderedQuota.Outcomes[1].Kind != "accepted" {
+		t.Fatalf("net storage admission order rejected a fitting PostgreSQL batch: %v %#v", err, netOrderedQuota)
+	}
 	nearBaseline, err := store.CreateSpace(ctx, first, nil)
 	if err != nil {
 		t.Fatal(err)

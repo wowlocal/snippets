@@ -21,16 +21,14 @@ CREATE TABLE snippets_private.schema_migrations (
     version bigint PRIMARY KEY CHECK (version > 0),
     applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-INSERT INTO snippets_private.schema_migrations(version) SELECT generate_series(1, 4);
+-- This is the first deployable Snippets Cloud schema. Pre-launch candidate
+-- histories were squashed, so production migration numbering starts here.
+INSERT INTO snippets_private.schema_migrations(version) VALUES (1);
 
 CREATE TABLE snippets_private.schema_migration_checksums (
     version bigint PRIMARY KEY REFERENCES snippets_private.schema_migrations(version),
     checksum text NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$')
 );
-INSERT INTO snippets_private.schema_migration_checksums(version, checksum) VALUES
-  (2, '77883c46eac62ae3f13a05ea45d9632e7a92963994712575495d0425fcfbe12c'),
-  (3, '5cc7bffd681878e20fef9387fb384e0a382ee5319798e375abbbaa5ec9aca2a6'),
-  (4, 'b024c152b7c40c8a13000733634833cc300630218fb0b0a8fbecb0cdb4e477a7');
 
 CREATE TABLE users (
     id uuid PRIMARY KEY,

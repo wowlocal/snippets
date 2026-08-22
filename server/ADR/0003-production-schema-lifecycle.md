@@ -6,13 +6,14 @@
 
 ## Decision
 
-Before the first production deployment, the empty-database bootstrap tracks the latest
-schema (currently version 4) and every change also includes the forward migration from
-the preceding candidate. After the first production deployment, the bootstrap remains
-an equivalent fresh-install representation of the latest schema while every upgrade is
-a forward-only numbered migration under `Container/postgres-migrations/`, applied by
-`Scripts/migrate.sh` with the offline database-owner credential. The runtime container
-does not contain that credential and retains no DDL privilege.
+Snippets Cloud has not had a production deployment. All pre-launch schema candidates are
+therefore squashed into the empty-database baseline, version 1; local and integration
+databases created from earlier candidates are disposable and are not upgrade targets.
+After the first production deployment, the bootstrap remains an equivalent fresh-install
+representation of the latest schema while every upgrade is a forward-only numbered
+migration, beginning with version 2, under `Container/postgres-migrations/`. Migrations
+are applied by `Scripts/migrate.sh` with the offline database-owner credential. The
+runtime container does not contain that credential and retains no DDL privilege.
 
 Every server release declares the inclusive schema-version range it can run against and
 fails startup outside that range. A rolling change uses expand/migrate/contract:
@@ -31,11 +32,9 @@ block the data-plane lock order.
 
 The runner requires the applied ledger to be the exact contiguous sequence from version
 1 through the database maximum, refuses versions newer than the checkout, and records a
-SHA-256 checksum for every forward-migration file. Existing version-3 databases created
-by the historical fresh bootstrap may contain the single equivalent marker `{3}`; the
-runner recognizes and expands only that exact legacy shape before enforcing continuity.
-A checksum mismatch is repaired with a new forward migration, never by editing published
-history.
+SHA-256 checksum for every post-baseline migration file. It validates every already
+applied checksum before starting any pending migration. A checksum mismatch is repaired
+with a new forward migration, never by editing published history.
 
 ## Rollback policy
 
@@ -46,6 +45,7 @@ a separately reviewed restore procedure that rotates the affected dataset genera
 
 ## Consequences
 
-The former no-migration exception in ADR 0002 ends before the first deployment. Owner
-credentials remain operational tooling only. Release automation must run compatibility,
-fresh-bootstrap, upgrade, mixed-version, and rollback-candidate tests before publication.
+The pre-launch squash is a one-time boundary and must not be repeated after the first
+deployment. Owner credentials remain operational tooling only. Release automation must
+run compatibility, fresh-bootstrap, upgrade, mixed-version, and rollback-candidate tests
+before publication.

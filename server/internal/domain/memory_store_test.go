@@ -363,6 +363,37 @@ func TestSubmitAdmitsShrinkingMutationsBeforeGrowingMutations(t *testing.T) {
 	}
 }
 
+func TestSubmitOrdersAdmissionByNetStorageDelta(t *testing.T) {
+	quota := StorageQuota{MaxBytesPerSpace: 1_000, MaxBytesPerUser: 10_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 100}
+	store := newTestStore(t, quota)
+	owner := principal(1)
+	space, err := store.CreateSpace(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	netGrowingID := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	netReleasingID := uuid.MustParse("ffffffff-ffff-4fff-8fff-fffffffffff1")
+	created, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{
+		{Record: WireRecord{ID: netGrowingID, Rev: "r", Blob: bytesOf(1, 59)}},
+		{Record: WireRecord{ID: netReleasingID, Rev: "r", Blob: bytesOf(2, 39)}},
+	})
+	if err != nil || created.Partial {
+		t.Fatalf("fixture create failed: %v %#v", err, created)
+	}
+	store.quota.MaxBytesPerSpace = 202
+
+	result, err := store.Submit(context.Background(), owner, space.Scope.SpaceID, space.Scope, []BatchItem{
+		// The record shrinks by 10 bytes but its new immutable change is 50 bytes,
+		// so this mutation grows total storage by 40 bytes.
+		{Record: WireRecord{ID: netGrowingID, Rev: "r", Blob: bytesOf(3, 49)}, ExpectedRecordVersion: created.Outcomes[0].RecordVersion},
+		// This record shrinks by 39 bytes and adds a 1-byte change, releasing 38.
+		{Record: WireRecord{ID: netReleasingID, Rev: "r"}, ExpectedRecordVersion: created.Outcomes[1].RecordVersion},
+	})
+	if err != nil || result.Partial || result.Outcomes[0].Kind != "accepted" || result.Outcomes[1].Kind != "accepted" {
+		t.Fatalf("net-releasing mutation did not fund the complete batch: %v %#v", err, result)
+	}
+}
+
 func TestSubmitPerformsAtMostOneCapacityCompaction(t *testing.T) {
 	quota := StorageQuota{MaxBytesPerSpace: 100, MaxBytesPerUser: 1_000, MaxRecordsPerSpace: 100, MaxChangesPerSpace: 100}
 	store := newTestStore(t, quota)

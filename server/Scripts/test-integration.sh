@@ -8,6 +8,7 @@ test_port="${SNIPPETS_TEST_DATABASE_PORT:-55432}"
 owner_password="integration-owner-only"
 runtime_password="integration-runtime-only"
 schema_password="integration-schema-only"
+migration_fixture_dir="$(mktemp -d "$server_dir/.migration-fixture.XXXXXX")"
 
 compose() {
     POSTGRES_DB=snippets_sync_test \
@@ -30,9 +31,12 @@ compose() {
 
 run_migrations() {
     local database="$1"
+    local migration_directory="${2:-$server_dir/Container/postgres-migrations}"
     docker run --rm \
         --network "${compose_project}_default" \
         --volume "$server_dir:/source:ro" \
+        --volume "$migration_directory:/migrations:ro" \
+        --env SNIPPETS_MIGRATION_DIR=/migrations \
         --env PGHOST=postgres \
         --env PGDATABASE="$database" \
         --env PGUSER=snippets_owner \
@@ -41,7 +45,13 @@ run_migrations() {
         /source/Scripts/migrate.sh
 }
 
-cleanup() { compose down --volumes --remove-orphans; }
+cleanup() {
+    local status=$?
+    trap - EXIT
+    compose down --volumes --remove-orphans || true
+    rm -rf -- "$migration_fixture_dir"
+    exit "$status"
+}
 trap cleanup EXIT
 
 compose up --detach --wait postgres
@@ -66,50 +76,79 @@ if [[ "${function_owners//$'\r'/}" != "t" ]]; then
     exit 1
 fi
 
-# A current database must make the pending-only runner a no-op. Replaying the
-# historical v2 DDL against schema v3 would fail and is therefore caught here.
+# The squashed production baseline has no migrations to replay, so the runner is a
+# no-op until the first post-launch schema change.
 for _ in 1 2; do
     run_migrations snippets_sync_test
 done
 
-# The ledger must reject a modified historical file, an applied-version gap, and a
-# database newer than this checkout. Use a disposable database so the service test
-# keeps running against an intact current schema.
+# Exercise the future v2/v3 lifecycle without publishing pre-launch migrations. The
+# fixture proves that a corrupt applied v2 blocks pending v3 before either its DDL or
+# its version can commit.
+cat > "$migration_fixture_dir/0002_integration_fixture.sql" <<'SQL'
+CREATE TABLE snippets_private.integration_migration_v2(value integer NOT NULL);
+INSERT INTO snippets_private.schema_migrations(version) VALUES (2);
+SQL
 compose exec --no-TTY postgres psql --username snippets_owner --dbname postgres \
     --set ON_ERROR_STOP=1 --command "CREATE DATABASE snippets_migration_validation"
 compose exec --no-TTY postgres psql --username snippets_owner \
     --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
     --file /docker-entrypoint-initdb.d/10-schema.sql
-compose exec --no-TTY postgres psql --username snippets_owner \
-    --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
-    --command "DROP TABLE snippets_private.schema_migration_checksums; DELETE FROM snippets_private.schema_migrations WHERE version != 3"
-run_migrations snippets_migration_validation
+run_migrations snippets_migration_validation "$migration_fixture_dir"
+v2_checksum=$(compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_migration_validation --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command "SELECT checksum FROM snippets_private.schema_migration_checksums WHERE version=2")
+v2_checksum="${v2_checksum//$'\r'/}"
+cat > "$migration_fixture_dir/0003_integration_fixture.sql" <<'SQL'
+CREATE TABLE snippets_private.integration_migration_v3(value integer NOT NULL);
+INSERT INTO snippets_private.schema_migrations(version) VALUES (3);
+SQL
 compose exec --no-TTY postgres psql --username snippets_owner \
     --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
     --command "UPDATE snippets_private.schema_migration_checksums SET checksum=repeat('0',64) WHERE version=2"
-if run_migrations snippets_migration_validation; then
-    echo "migration runner accepted a checksum mismatch" >&2
+if run_migrations snippets_migration_validation "$migration_fixture_dir"; then
+    echo "migration runner applied v3 after a historical checksum mismatch" >&2
+    exit 1
+fi
+pending_state=$(compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_migration_validation --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command "SELECT EXISTS (SELECT 1 FROM snippets_private.schema_migrations WHERE version=3), to_regclass('snippets_private.integration_migration_v3') IS NOT NULL")
+if [[ "${pending_state//$'\r'/}" != "f|f" ]]; then
+    echo "checksum preflight allowed pending v3 side effects: $pending_state" >&2
     exit 1
 fi
 compose exec --no-TTY postgres psql --username snippets_owner \
     --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
-    --command "UPDATE snippets_private.schema_migration_checksums SET checksum='77883c46eac62ae3f13a05ea45d9632e7a92963994712575495d0425fcfbe12c' WHERE version=2"
-run_migrations snippets_migration_validation
+    --command "UPDATE snippets_private.schema_migration_checksums SET checksum='$v2_checksum' WHERE version=2"
+run_migrations snippets_migration_validation "$migration_fixture_dir"
+
+# Missing checksums, applied-version gaps, and versions newer than the migration
+# checkout must all fail closed.
+compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
+    --command "DELETE FROM snippets_private.schema_migration_checksums WHERE version=2"
+if run_migrations snippets_migration_validation "$migration_fixture_dir"; then
+    echo "migration runner accepted a missing checksum" >&2
+    exit 1
+fi
+compose exec --no-TTY postgres psql --username snippets_owner \
+    --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
+    --command "INSERT INTO snippets_private.schema_migration_checksums(version,checksum) VALUES (2,'$v2_checksum')"
 compose exec --no-TTY postgres psql --username snippets_owner \
     --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
     --command "DELETE FROM snippets_private.schema_migration_checksums WHERE version=2; DELETE FROM snippets_private.schema_migrations WHERE version=2"
-if run_migrations snippets_migration_validation; then
+if run_migrations snippets_migration_validation "$migration_fixture_dir"; then
     echo "migration runner accepted a gap in applied history" >&2
     exit 1
 fi
 compose exec --no-TTY postgres psql --username snippets_owner \
     --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
-    --command "INSERT INTO snippets_private.schema_migrations(version) VALUES (2); INSERT INTO snippets_private.schema_migration_checksums(version,checksum) VALUES (2,'77883c46eac62ae3f13a05ea45d9632e7a92963994712575495d0425fcfbe12c')"
-run_migrations snippets_migration_validation
+    --command "INSERT INTO snippets_private.schema_migrations(version) VALUES (2); INSERT INTO snippets_private.schema_migration_checksums(version,checksum) VALUES (2,'$v2_checksum')"
+run_migrations snippets_migration_validation "$migration_fixture_dir"
 compose exec --no-TTY postgres psql --username snippets_owner \
     --dbname snippets_migration_validation --set ON_ERROR_STOP=1 \
-    --command "INSERT INTO snippets_private.schema_migrations(version) VALUES (5)"
-if run_migrations snippets_migration_validation; then
+    --command "INSERT INTO snippets_private.schema_migrations(version) VALUES (4)"
+if run_migrations snippets_migration_validation "$migration_fixture_dir"; then
     echo "migration runner accepted an unknown newer version" >&2
     exit 1
 fi

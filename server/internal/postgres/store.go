@@ -26,8 +26,8 @@ type Store struct {
 	codec            *domain.TokenCodec
 }
 
-const minimumSchemaVersion int64 = 3
-const maximumSchemaVersion int64 = 4
+const minimumSchemaVersion int64 = 1
+const maximumSchemaVersion int64 = 1
 
 func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool, error) {
 	poolConfig, err := newPoolConfig(configuration)
@@ -57,12 +57,10 @@ func validateSchemaCompatibility(ctx context.Context, pool *pgxpool.Pool) error 
 	if version < minimumSchemaVersion || version > maximumSchemaVersion {
 		return fmt.Errorf("database schema version %d is outside supported range %d..%d", version, minimumSchemaVersion, maximumSchemaVersion)
 	}
-	// Versions are positive and unique, so count == max proves the applied history is
-	// exactly 1...max. The sole exception is the historical fresh-v3 bootstrap marker;
-	// the migration runner structurally validates and expands that exact shape. Keeping
-	// it readable here lets the 3...4 expand binary deploy before migration 4.
-	legacyFreshV3 := version == 3 && appliedCount == 1
-	if appliedCount != version && !legacyFreshV3 {
+	// Versions are positive and unique, so count == max proves that the applied
+	// production history is exactly 1...max. Pre-launch candidate histories were
+	// deliberately squashed and receive no runtime compatibility exception.
+	if appliedCount != version {
 		return fmt.Errorf("database schema migration history is not contiguous through version %d", version)
 	}
 	return nil
@@ -483,13 +481,13 @@ func (s *Store) Submit(ctx context.Context, principal domain.Principal, spaceID 
 		for index := range prepared {
 			admissionOrder[index] = index
 		}
-		// Record locks stay UUID ordered, but capacity is reclaimed before growing
-		// mutations are admitted. Applying in this same order also prevents transient
-		// quota violations in the statement-level accounting triggers.
+		// Record locks stay UUID ordered, but total-storage-releasing mutations are
+		// admitted first. Applying in this same order also prevents transient quota
+		// violations in the statement-level accounting triggers.
 		sort.SliceStable(admissionOrder, func(i, j int) bool {
-			leftShrinks := prepared[admissionOrder[i]].currentByteDelta <= 0
-			rightShrinks := prepared[admissionOrder[j]].currentByteDelta <= 0
-			return leftShrinks && !rightShrinks
+			left := &prepared[admissionOrder[i]]
+			right := &prepared[admissionOrder[j]]
+			return left.currentByteDelta+left.changeBytes < right.currentByteDelta+right.changeBytes
 		})
 		for _, index := range admissionOrder {
 			candidate := &prepared[index]

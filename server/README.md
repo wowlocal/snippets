@@ -181,8 +181,9 @@ are independent Base64/Base64url values decoding to 32–64 bytes. Keep
 than five minutes, `openid offline_access`, and an explicitly configured step-up AMR
 and/or ACR allow-list.
 
-`10-schema.sql` bootstraps an empty database at schema version 4 and is executed once by
-PostgreSQL's standard first-boot initializer. Outside Compose,
+`10-schema.sql` bootstraps an empty database at the squashed pre-production baseline,
+schema version 1, and is executed once by PostgreSQL's standard first-boot initializer.
+There are no supported pre-v1 Snippets Cloud databases. Outside Compose,
 provision `snippets_runtime` plus the dedicated function owner with
 `00-runtime-role.sh`, then apply the schema as a migration role that is a member of
 `snippets_function_owner` with

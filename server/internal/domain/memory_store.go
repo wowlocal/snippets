@@ -309,14 +309,14 @@ func (s *MemoryStore) Submit(_ context.Context, principal Principal, spaceID uui
 	for index := range prepared {
 		admissionOrder[index] = index
 	}
-	// Reclaim current-state capacity before considering records that grow it. Record
-	// validation and locking remain UUID ordered, while outcomes retain request indexes.
-	// Without this stable partition an earlier create could be rejected even though a
-	// later shrinking update made the complete deterministic subset fit.
+	// Reclaim total storage before considering mutations that grow it. A smaller
+	// current record can still consume more total space once its immutable change is
+	// included, so order by current delta plus change bytes. Validation remains UUID
+	// ordered and outcomes retain request indexes.
 	sort.SliceStable(admissionOrder, func(i, j int) bool {
-		leftShrinks := prepared[admissionOrder[i]].currentByteDelta <= 0
-		rightShrinks := prepared[admissionOrder[j]].currentByteDelta <= 0
-		return leftShrinks && !rightShrinks
+		left := &prepared[admissionOrder[i]]
+		right := &prepared[admissionOrder[j]]
+		return left.currentByteDelta+left.changeBytes < right.currentByteDelta+right.changeBytes
 	})
 	for _, index := range admissionOrder {
 		candidate := &prepared[index]
