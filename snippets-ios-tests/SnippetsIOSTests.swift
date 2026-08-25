@@ -42,6 +42,13 @@ final class SnippetsIOSTests: XCTestCase {
         )
     }
 
+    func testSceneDelegateOnlyPresentsInteractiveApplicationWindows() {
+        XCTAssertTrue(SceneDelegate.presentsInteractiveWindow(for: .windowApplication))
+        XCTAssertFalse(
+            SceneDelegate.presentsInteractiveWindow(for: .windowExternalDisplayNonInteractive)
+        )
+    }
+
     func testPairingApprovalPromptBindsTheExactConfirmationCode() {
         let code = "Q7Z2M9KP"
         XCTAssertTrue(SnippetsCloudPairingApprovalCopy.message(

@@ -1678,14 +1678,21 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     @objc private func keyboardFrameChanged(_ notification: Notification) {
         guard let window = view.window,
+              let windowScreen = window.windowScene?.screen,
+              let keyboardScreen = notification.object as? UIScreen,
+              keyboardScreen === windowScreen,
               let screenFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
         else { return }
-        let windowFrame = window.convert(screenFrame, from: window.screen.coordinateSpace)
-        let viewFrame = view.convert(windowFrame, from: window)
-        updateKeyboardInset(max(0, view.bounds.maxY - viewFrame.minY), notification: notification)
+        let viewFrame = keyboardScreen.coordinateSpace.convert(screenFrame, to: view)
+        updateKeyboardInset(
+            KeyboardInsetGeometry.bottomOverlap(of: viewFrame, in: view.bounds),
+            notification: notification)
     }
 
     @objc private func keyboardWillHide(_ notification: Notification) {
+        guard let windowScreen = view.window?.windowScene?.screen,
+              let keyboardScreen = notification.object as? UIScreen,
+              keyboardScreen === windowScreen else { return }
         updateKeyboardInset(0, notification: notification)
     }
 

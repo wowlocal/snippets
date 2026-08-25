@@ -67,6 +67,28 @@ final class SnippetEditorScrollTests: XCTestCase {
         XCTAssertGreaterThan(verticalScrollRange(of: hosted.scrollView), 0.5)
     }
 
+    func testKeyboardInsetRequiresTheKeyboardToIntersectTheEditor() {
+        let bounds = CGRect(x: 0, y: 0, width: 800, height: 600)
+
+        XCTAssertEqual(
+            KeyboardInsetGeometry.bottomOverlap(
+                of: CGRect(x: 0, y: 440, width: 800, height: 160),
+                in: bounds),
+            160)
+        XCTAssertEqual(
+            KeyboardInsetGeometry.bottomOverlap(
+                of: CGRect(x: 900, y: 440, width: 800, height: 160),
+                in: bounds),
+            0,
+            "A keyboard on another display or beside this window must not create a scroll inset"
+        )
+        XCTAssertEqual(
+            KeyboardInsetGeometry.bottomOverlap(
+                of: CGRect(x: 0, y: 700, width: 800, height: 160),
+                in: bounds),
+            0)
+    }
+
     private func hostEditor(
         environment: AppEnvironment,
         snippetID: UUID

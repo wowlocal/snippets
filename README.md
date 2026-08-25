@@ -228,6 +228,23 @@ Use `--device <name>` when more than one device is paired, `--no-build` to reuse
 current device artifact, or `--no-launch` to stop after installation. Run
 `./scripts/install-ios.sh --help` for all options.
 
+To install remotely from Safari on a registered iPhone or iPad, build and expose a
+short-lived, tokenized OTA link through ngrok:
+
+```sh
+./scripts/share-ios.sh
+```
+
+The default link lifetime is two hours. Use `--ttl 30m` or `--ttl 4h` to change it,
+`--status` to print the current link, and `--stop` to revoke it immediately and restore
+the previous ngrok backend. `--reuse-ipa <path>` skips the build but still validates the
+signature, Production CloudKit entitlements, and provisioning profile. Run
+`./scripts/share-ios.sh --help` for all options.
+
+The Mac and ngrok must remain online until the device finishes downloading. Installation
+works only on devices included in the embedded development provisioning profile; use
+TestFlight for a durable distribution link or unregistered devices.
+
 ## First launch on macOS
 
 Global expansion uses Accessibility APIs:

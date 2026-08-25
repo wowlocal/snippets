@@ -119,12 +119,21 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
     private var rootController: (UIViewController & SnippetsRootController)?
 
+    static func presentsInteractiveWindow(for role: UISceneSession.Role) -> Bool {
+        role == .windowApplication
+    }
+
     func scene(
         _ scene: UIScene,
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-        guard let windowScene = scene as? UIWindowScene,
+        // Before iPadOS 27, UIKit may offer an external-display scene without the
+        // app requesting one. Attaching our normal window to that noninteractive
+        // role makes it fill the entire display and suppresses normal Stage Manager
+        // behavior. Snippets has no presentation-only external-display interface.
+        guard Self.presentsInteractiveWindow(for: session.role),
+              let windowScene = scene as? UIWindowScene,
               let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
 
         let root: UIViewController & SnippetsRootController
