@@ -86,57 +86,68 @@ struct TextReplacementTests {
             )
         }
 
-        @Test func ghosttyCanUseLocalTrackingOnlyForAnUnchangedCleanTerminalSession() {
-            #expect(CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-                bundleIdentifier: "com.mitchellh.ghostty",
+        @Test func anyUnconfirmedTextAreaCanUseAnUnchangedLocalSession() {
+            #expect(UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .localDisplayOnly,
                 hasAXConfirmedContext: false,
-                isSecureSnippet: false,
                 targetStillMatches: true))
 
-            #expect(!CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-                bundleIdentifier: "com.google.Chrome",
-                focusedRole: "AXTextArea",
-                contextState: .localDisplayOnly,
-                hasAXConfirmedContext: false,
-                isSecureSnippet: false,
-                targetStillMatches: true), "the browser autocomplete path never gets the terminal exception")
-            #expect(!CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-                bundleIdentifier: "com.mitchellh.ghostty",
+            #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextField",
                 contextState: .localDisplayOnly,
                 hasAXConfirmedContext: false,
-                isSecureSnippet: false,
-                targetStillMatches: true), "Ghostty UI fields are not terminal surfaces")
-            #expect(!CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-                bundleIdentifier: "com.mitchellh.ghostty",
+                targetStillMatches: true), "ordinary fields continue to require their readable caret")
+            #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .uncertainAfterHostEdit,
                 hasAXConfirmedContext: false,
-                isSecureSnippet: false,
                 targetStillMatches: true), "Backspace and other host edits revoke local authority")
-            #expect(!CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-                bundleIdentifier: "com.mitchellh.ghostty",
+            #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .localDisplayOnly,
                 hasAXConfirmedContext: true,
-                isSecureSnippet: false,
                 targetStillMatches: true), "a host that once supplied AX context may not fall back")
-            #expect(!CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-                bundleIdentifier: "com.mitchellh.ghostty",
+            #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .localDisplayOnly,
                 hasAXConfirmedContext: false,
-                isSecureSnippet: true,
-                targetStillMatches: true), "secure snippets still require confirmed host context")
-            #expect(!CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-                bundleIdentifier: "com.mitchellh.ghostty",
-                focusedRole: "AXTextArea",
-                contextState: .localDisplayOnly,
-                hasAXConfirmedContext: false,
-                isSecureSnippet: false,
                 targetStillMatches: false), "moving to another pane or tab revokes local authority")
+        }
+
+        @Test func secureLocalTrackingRequiresRepeatedPostAuthenticationEvidence() {
+            let localDeletion = TriggerDeletion.localTracking(query: "token")
+
+            #expect(SecureLocalTriggerRevalidationPolicy.canAuthorize(
+                deletion: localDeletion,
+                query: "token",
+                consecutiveUnconfirmedReads: 2,
+                secureEventInputEnabled: false,
+                targetStillMatches: true))
+            #expect(!SecureLocalTriggerRevalidationPolicy.canAuthorize(
+                deletion: localDeletion,
+                query: "token",
+                consecutiveUnconfirmedReads: 1,
+                secureEventInputEnabled: false,
+                targetStillMatches: true), "one unreadable AX result may still be authentication handoff")
+            #expect(!SecureLocalTriggerRevalidationPolicy.canAuthorize(
+                deletion: localDeletion,
+                query: "token",
+                consecutiveUnconfirmedReads: 2,
+                secureEventInputEnabled: true,
+                targetStillMatches: true), "Local Authentication must release Secure Event Input")
+            #expect(!SecureLocalTriggerRevalidationPolicy.canAuthorize(
+                deletion: localDeletion,
+                query: "token",
+                consecutiveUnconfirmedReads: 2,
+                secureEventInputEnabled: false,
+                targetStillMatches: false), "the exact captured control must still own focus")
+            #expect(!SecureLocalTriggerRevalidationPolicy.canAuthorize(
+                deletion: .pendingLastCharacter(query: "token"),
+                query: "token",
+                consecutiveUnconfirmedReads: 2,
+                secureEventInputEnabled: false,
+                targetStillMatches: true), "secure expansion cannot reuse an automatic partial trigger")
         }
     }
 

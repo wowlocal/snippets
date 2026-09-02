@@ -90,37 +90,50 @@ nonisolated enum SuggestionContextState: String, Codable, Equatable, Sendable {
     }
 }
 
-/// The narrow exception for terminal surfaces whose Accessibility model exposes
-/// selection, but not the insertion caret.
+/// Capability-based fallback for text areas that expose a focused Accessibility
+/// object but no usable insertion-caret range.
 ///
-/// Ghostty's `AXSelectedTextRange` describes a mouse selection in the rendered
-/// terminal buffer. It therefore cannot confirm the command-line text immediately
-/// before the shell cursor. Local tracking is allowed only while every other signal
-/// still proves that this is the same uninterrupted suggestion session. In
-/// particular, a Backspace or other host-owned edit moves the state to
-/// `uncertainAfterHostEdit`, and a host that has ever supplied a real AX context is
-/// never allowed to fall back to this exception.
-nonisolated enum CaretlessTerminalSuggestionPolicy {
-    private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
+/// Local tracking is allowed only while every other signal still proves that this
+/// is the same uninterrupted suggestion session. In particular, a Backspace or
+/// other host-owned edit moves the state to `uncertainAfterHostEdit`, and a control
+/// that has ever supplied a real AX context is never allowed to fall back. The
+/// decision deliberately takes no bundle identifier: terminal emulators and other
+/// custom text surfaces qualify (or fail) by their observable capabilities.
+nonisolated enum UnconfirmedTextAreaSuggestionPolicy {
     private static let textAreaRole = "AXTextArea"
 
-    static func isSupportedHost(bundleIdentifier: String?) -> Bool {
-        bundleIdentifier?.lowercased() == ghosttyBundleIdentifier
-    }
-
     static func canAuthorizeLocalTracking(
-        bundleIdentifier: String?,
         focusedRole: String?,
         contextState: SuggestionContextState,
         hasAXConfirmedContext: Bool,
-        isSecureSnippet: Bool,
         targetStillMatches: Bool
     ) -> Bool {
-        isSupportedHost(bundleIdentifier: bundleIdentifier)
-            && focusedRole == textAreaRole
+        focusedRole == textAreaRole
             && contextState == .localDisplayOnly
             && !hasAXConfirmedContext
-            && !isSecureSnippet
+            && targetStillMatches
+    }
+}
+
+/// A secure suggestion may cross Local Authentication with a locally tracked
+/// trigger only when repeated post-authentication reads still cannot provide a
+/// caret, the exact original control remains focused, and Secure Event Input has
+/// settled. A readable mismatch is handled by the caller and never reaches this
+/// policy.
+nonisolated enum SecureLocalTriggerRevalidationPolicy {
+    private static let requiredUnconfirmedReadCount = 2
+
+    static func canAuthorize(
+        deletion: TriggerDeletion?,
+        query: String,
+        consecutiveUnconfirmedReads: Int,
+        secureEventInputEnabled: Bool,
+        targetStillMatches: Bool
+    ) -> Bool {
+        guard let deletion else { return false }
+        return deletion == .localTracking(query: query)
+            && consecutiveUnconfirmedReads >= requiredUnconfirmedReadCount
+            && !secureEventInputEnabled
             && targetStillMatches
     }
 }

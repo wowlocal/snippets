@@ -50,8 +50,8 @@ Per-keystroke expansion Accessibility diagnostics are opt-in on macOS under
 When enabled, `expansion_accessibility` records only closed operation/outcome values,
 the `ax_confirmed` / `local_display_only` / `uncertain_after_host_edit` transition,
 the failing AX stage and classified failure when applicable, a numeric AX error code,
-and the query length. The closed `local_tracking` outcome identifies the narrowly
-authorized caretless-Ghostty path without recording the host application. It never
+and the query length. The closed `local_tracking` outcome identifies a narrowly
+authorized session in a text area without a readable insertion caret. It never
 records the query, surrounding field text, app identity,
 snippet identity, or snippet content. These events are asynchronous debug records; the
 setting can be switched off immediately after reproducing a problem to limit volume.

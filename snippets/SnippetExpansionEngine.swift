@@ -76,11 +76,10 @@ final class SnippetExpansionEngine {
     /// focus after key-up instead of assigning meaning to Command/Control/Option.
     private var suggestionTargetPID: pid_t?
     /// The exact focused object and its role are retained only for the live session.
-    /// Ghostty has no insertion-caret AX range, so its narrowly scoped local-tracking
-    /// exception must still prove that keyboard focus never moved to another surface.
+    /// A text surface with no usable insertion-caret AX range may use local tracking
+    /// only while keyboard focus remains on this same object.
     private var suggestionTargetElement: AXUIElement?
     private var suggestionTargetRole: String?
-    private var suggestionTargetBundleIdentifier: String?
     private var suggestionHasAXConfirmedContext = false
     private var pendingSpaceShortcutFocusValidation = false
     private var pendingSpaceShortcutInputSourceID: String?
@@ -1092,9 +1091,6 @@ final class SnippetExpansionEngine {
             of: anchorFocusedElement,
             attribute: kAXRoleAttribute as CFString,
             axBudget: axBudget)
-        suggestionTargetBundleIdentifier = suggestionTargetPID.flatMap {
-            NSRunningApplication(processIdentifier: $0)?.bundleIdentifier
-        }
         suggestionHasAXConfirmedContext = false
         pendingSpaceShortcutFocusValidation = false
         pendingSpaceShortcutInputSourceID = nil
@@ -1377,9 +1373,8 @@ final class SnippetExpansionEngine {
     /// refresh so that re-ranking can never change what the user picked.
     ///
     /// The delete count is normally taken from one fresh exact AX read. There
-    /// is no retry delay. The only local fallback is the separately guarded
-    /// caretless-Ghostty policy; every other unconfirmed panel remains
-    /// display-only and cannot authorize edits in another app.
+    /// is no retry delay. A never-confirmed AXTextArea may instead use the
+    /// separately guarded local session while its exact target still matches.
     private func acceptSelectedSuggestion(_ snippet: Snippet) {
         let localQuery = suggestionQuery
         let stateBefore = suggestionContextState
@@ -1424,10 +1419,7 @@ final class SnippetExpansionEngine {
             dismissSuggestions()
             return
         case .missingTrigger:
-            if canUseCaretlessTerminalLocalTracking(
-                state: stateBefore,
-                isSecureSnippet: store.isSecure(snippet.id)
-            ) {
+            if canUseUnconfirmedTextAreaLocalTracking(state: stateBefore) {
                 deletion = .localTracking(query: localQuery)
                 recordExpansionAccessibility(
                     operation: .acceptance,
@@ -1445,10 +1437,7 @@ final class SnippetExpansionEngine {
                 return
             }
         case .unavailable(let unavailable):
-            if canUseCaretlessTerminalLocalTracking(
-                state: stateBefore,
-                isSecureSnippet: store.isSecure(snippet.id)
-            ) {
+            if canUseUnconfirmedTextAreaLocalTracking(state: stateBefore) {
                 deletion = .localTracking(query: localQuery)
                 recordExpansionAccessibility(
                     operation: .acceptance,
@@ -1503,6 +1492,7 @@ final class SnippetExpansionEngine {
                 await self.authenticateAndPerformSecureExpansion(
                     shell: snippet,
                     query: localQuery,
+                    acceptedDeletion: deletion,
                     acceptedGeneration: acceptedGeneration,
                     acceptedTargetPID: acceptedTargetPID,
                     acceptedFocusTarget: acceptedFocusTarget)
@@ -1513,12 +1503,14 @@ final class SnippetExpansionEngine {
     }
 
     /// Turns a content-free secure shell into a one-use expansion only after the user
-    /// authenticates. The prompt can remain open for seconds, so the pre-prompt delete
-    /// count is never reused: the original app, focused control, generation, and exact
-    /// trigger are all checked again before plaintext is converted to a String or inserted.
+    /// authenticates. The prompt can remain open for seconds, so the original app,
+    /// focused control, and generation are checked again before plaintext is converted
+    /// to a String or inserted. Controls with a readable caret must also prove the exact
+    /// trigger again; never-readable text areas retain only their uninterrupted local proof.
     private func authenticateAndPerformSecureExpansion(
         shell: Snippet,
         query: String,
+        acceptedDeletion: TriggerDeletion,
         acceptedGeneration: UInt,
         acceptedTargetPID: pid_t?,
         acceptedFocusTarget: SecureExpansionFocusTarget?
@@ -1577,6 +1569,9 @@ final class SnippetExpansionEngine {
 
         let revalidation = await confirmedSecureDeletionAfterAuthentication(
             query: query,
+            locallyTrackedDeletion: acceptedDeletion.provenance == .localTracking
+                ? acceptedDeletion
+                : nil,
             acceptedGeneration: acceptedGeneration,
             targetPID: targetPID,
             focusTarget: focusTarget)
@@ -1687,10 +1682,14 @@ final class SnippetExpansionEngine {
 
     private func confirmedSecureDeletionAfterAuthentication(
         query: String,
+        locallyTrackedDeletion: TriggerDeletion?,
         acceptedGeneration: UInt,
         targetPID: pid_t,
         focusTarget: SecureExpansionFocusTarget
     ) async -> SecureDeletionRevalidation {
+        var consecutiveUnconfirmedReads = 0
+        var localFallbackRemainsEligible = locallyTrackedDeletion != nil
+
         for delay in secureSuggestionRevalidationDelays {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled,
@@ -1703,8 +1702,12 @@ final class SnippetExpansionEngine {
             // Input and the focused AX element settle. During this bounded handoff even
             // a readable mismatch can belong to the disappearing system UI. Nothing is
             // authorized until a later read proves the exact original trigger again.
-            if secureEventInputEnabled { continue }
+            if secureEventInputEnabled {
+                consecutiveUnconfirmedReads = 0
+                continue
+            }
             guard restoreKeyboardFocus(to: focusTarget, targetPID: targetPID) else {
+                consecutiveUnconfirmedReads = 0
                 continue
             }
             switch readAcceptContext(
@@ -1719,14 +1722,18 @@ final class SnippetExpansionEngine {
                     stateAfter: .axConfirmed)
                 return .confirmed(.confirmed(context))
             case .unavailable(let unavailable):
+                consecutiveUnconfirmedReads += 1
                 recordExpansionAccessibility(
                     operation: .secureRevalidation,
                     outcome: .unavailable,
-                    stateBefore: .axConfirmed,
-                    stateAfter: .uncertainAfterHostEdit,
+                    stateBefore: locallyTrackedDeletion == nil ? .axConfirmed : .localDisplayOnly,
+                    stateAfter: locallyTrackedDeletion == nil ? .uncertainAfterHostEdit : .localDisplayOnly,
                     unavailable: unavailable)
-                continue
             case .mismatch:
+                // Once the exact control exposes readable text that disagrees with
+                // the accepted query, an unreadable read may not revive local trust.
+                localFallbackRemainsEligible = false
+                consecutiveUnconfirmedReads = 0
                 recordExpansionAccessibility(
                     operation: .secureRevalidation,
                     outcome: .stale,
@@ -1734,12 +1741,12 @@ final class SnippetExpansionEngine {
                     stateAfter: .uncertainAfterHostEdit)
                 continue
             case .missingTrigger:
+                consecutiveUnconfirmedReads += 1
                 recordExpansionAccessibility(
                     operation: .secureRevalidation,
                     outcome: .missingTrigger,
-                    stateBefore: .axConfirmed,
-                    stateAfter: .uncertainAfterHostEdit)
-                continue
+                    stateBefore: locallyTrackedDeletion == nil ? .axConfirmed : .localDisplayOnly,
+                    stateAfter: locallyTrackedDeletion == nil ? .uncertainAfterHostEdit : .localDisplayOnly)
             case .unsafe:
                 recordExpansionAccessibility(
                     operation: .secureRevalidation,
@@ -1747,6 +1754,26 @@ final class SnippetExpansionEngine {
                     stateBefore: .axConfirmed,
                     stateAfter: .uncertainAfterHostEdit)
                 return .triggerNotConfirmed
+            }
+
+            let targetStillMatches =
+                acceptedGeneration == injectionContextGeneration
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID
+                && currentFocusMatches(focusTarget.element)
+            if localFallbackRemainsEligible,
+               SecureLocalTriggerRevalidationPolicy.canAuthorize(
+                   deletion: locallyTrackedDeletion,
+                   query: query,
+                   consecutiveUnconfirmedReads: consecutiveUnconfirmedReads,
+                   secureEventInputEnabled: secureEventInputEnabled,
+                   targetStillMatches: targetStillMatches),
+               let locallyTrackedDeletion {
+                recordExpansionAccessibility(
+                    operation: .secureRevalidation,
+                    outcome: .localTracking,
+                    stateBefore: .localDisplayOnly,
+                    stateAfter: .localDisplayOnly)
+                return .confirmed(locallyTrackedDeletion)
             }
         }
         return secureEventInputEnabled ? .secureInputDidNotSettle : .triggerNotConfirmed
@@ -1761,7 +1788,6 @@ final class SnippetExpansionEngine {
         suggestionTargetPID = nil
         suggestionTargetElement = nil
         suggestionTargetRole = nil
-        suggestionTargetBundleIdentifier = nil
         suggestionHasAXConfirmedContext = false
         pendingSpaceShortcutFocusValidation = false
         pendingSpaceShortcutInputSourceID = nil
@@ -1908,16 +1934,13 @@ final class SnippetExpansionEngine {
         if isValidKeywordCharacter(character) {
             appendLocalSuggestionCharacter(character)
 
-            // Ghostty exposes its rendered screen and mouse selection through AX,
-            // but no insertion caret. For a clean, unchanged terminal session we
-            // can therefore use the same suppressed-final-key strategy as the
-            // panel-less typed-buffer fallback. Prefix collisions still keep the
-            // panel open for an explicit Tab/Return choice.
+            // A text area with no usable insertion caret may use the same
+            // suppressed-final-key strategy as the panel-less typed-buffer fallback,
+            // but only for ordinary snippets. Secure snippets always require an
+            // explicit Tab/Return choice and Local Authentication.
             if let snippet = unambiguousExactMatch(for: suggestionQuery),
-               canUseCaretlessTerminalLocalTracking(
-                   state: suggestionContextState,
-                   isSecureSnippet: store.isSecure(snippet.id)
-               ) {
+               !store.isSecure(snippet.id),
+               canUseUnconfirmedTextAreaLocalTracking(state: suggestionContextState) {
                 recordExpansionAccessibility(
                     operation: .printableEdit,
                     outcome: .localTracking,
@@ -2131,19 +2154,12 @@ final class SnippetExpansionEngine {
         return true
     }
 
-    /// Ghostty deliberately models `AXSelectedTextRange` as the rendered terminal's
-    /// mouse selection, not the command-line insertion point. Keep its compatibility
-    /// path much narrower than the ordinary AX-confirmed path: known bundle, terminal
-    /// text-area role, no ambiguous edit, no earlier AX confirmation, same process,
-    /// and the exact same focused AX object.
-    private func canUseCaretlessTerminalLocalTracking(
-        state: SuggestionContextState,
-        isSecureSnippet: Bool
+    /// Capability-based fallback for an AXTextArea that never supplied a usable
+    /// insertion caret: no ambiguous edit, no earlier AX confirmation, same process,
+    /// and the exact same focused AX object. No application identity is consulted.
+    private func canUseUnconfirmedTextAreaLocalTracking(
+        state: SuggestionContextState
     ) -> Bool {
-        guard CaretlessTerminalSuggestionPolicy.isSupportedHost(
-            bundleIdentifier: suggestionTargetBundleIdentifier
-        ) else { return false }
-
         let targetStillMatches: Bool
         if let targetPID = suggestionTargetPID,
            let targetElement = suggestionTargetElement,
@@ -2153,12 +2169,10 @@ final class SnippetExpansionEngine {
             targetStillMatches = false
         }
 
-        return CaretlessTerminalSuggestionPolicy.canAuthorizeLocalTracking(
-            bundleIdentifier: suggestionTargetBundleIdentifier,
+        return UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
             focusedRole: suggestionTargetRole,
             contextState: state,
             hasAXConfirmedContext: suggestionHasAXConfirmedContext,
-            isSecureSnippet: isSecureSnippet,
             targetStillMatches: targetStillMatches)
     }
 
