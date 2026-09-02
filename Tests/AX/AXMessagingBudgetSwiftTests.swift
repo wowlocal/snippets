@@ -214,6 +214,9 @@ struct AXMessagingBudgetSwiftTests {
             after: .failedBeforeAttempt
         ) == .restoreOriginalFocus)
         #expect(SecurePasteCompletionPolicy.reaction(
+            after: .blockedUnsafeControlCharacters
+        ) == .warnAfterRestoringFocus)
+        #expect(SecurePasteCompletionPolicy.reaction(
             after: .attemptedAmbiguous
         ) == .warnWithoutRestoringFocus)
     }

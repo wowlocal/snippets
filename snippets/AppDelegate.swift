@@ -1065,6 +1065,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 case .restoreOriginalFocus where !Task.isCancelled:
                     await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
                     NSSound.beep()
+                case .warnAfterRestoringFocus where !Task.isCancelled:
+                    await self.expansionEngine.returnFocusAfterCancellingSecurePaste(target)
+                    NSSound.beep()
+                    self.transientScreenMessageController.show(
+                        SecurePasteFeedback.blockedUnsafeControlCharacters,
+                        kind: .failure
+                    )
                 case .warnWithoutRestoringFocus:
                     NSSound.beep()
                     self.transientScreenMessageController.show(
@@ -1072,6 +1079,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                         kind: .failure
                     )
                 case .restoreOriginalFocus:
+                    break
+                case .warnAfterRestoringFocus:
                     break
                 }
                 self.securePasteTask = nil

@@ -61,6 +61,11 @@ enum ClipboardCopyFeedback {
 enum SecurePasteFeedback {
     static let attemptedAmbiguous =
         "Secure Paste may have inserted the snippet. Check the original field before trying again."
+
+    static let blockedUnsafeControlCharacters = TransientScreenMessage(
+        title: "Secure Paste blocked this snippet.",
+        detail: "Line breaks and control characters are blocked\nbecause they can trigger terminal actions."
+    )
 }
 
 /// Covers the HUD surface so its first click is consumed locally and dismisses it.
@@ -121,7 +126,7 @@ final class TransientScreenMessageController {
 
     private let panel: NSPanel
     private let label = NSTextField(wrappingLabelWithString: "")
-    private let detailLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(wrappingLabelWithString: "")
     private var dismissWorkItem: DispatchWorkItem?
     private var presentationGeneration = 0
 
@@ -155,8 +160,8 @@ final class TransientScreenMessageController {
         detailLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.alignment = .center
-        detailLabel.lineBreakMode = .byTruncatingMiddle
-        detailLabel.maximumNumberOfLines = 1
+        detailLabel.lineBreakMode = .byWordWrapping
+        detailLabel.maximumNumberOfLines = 2
         detailLabel.isSelectable = false
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -246,7 +251,7 @@ final class TransientScreenMessageController {
         label.maximumNumberOfLines = message.keepsTitleOnSingleLine ? 1 : 0
         detailLabel.stringValue = message.detail ?? ""
         detailLabel.isHidden = message.detail == nil
-        detailLabel.setAccessibilityLabel(message.detail.map { "Keyword \($0)" })
+        detailLabel.setAccessibilityLabel(message.detail)
 
         let availablePanelWidth = max(
             Self.minimumPanelWidth,

@@ -240,6 +240,7 @@ nonisolated enum SecurePasteDeliveryPolicy {
 nonisolated enum SecurePasteResult: Equatable {
     case inserted
     case failedBeforeAttempt
+    case blockedUnsafeControlCharacters
     case attemptedAmbiguous
 }
 
@@ -249,6 +250,7 @@ nonisolated enum SecurePasteCompletionPolicy {
     enum Reaction: Equatable {
         case none
         case restoreOriginalFocus
+        case warnAfterRestoringFocus
         case warnWithoutRestoringFocus
     }
 
@@ -258,6 +260,8 @@ nonisolated enum SecurePasteCompletionPolicy {
             return .none
         case .failedBeforeAttempt:
             return .restoreOriginalFocus
+        case .blockedUnsafeControlCharacters:
+            return .warnAfterRestoringFocus
         case .attemptedAmbiguous:
             return .warnWithoutRestoringFocus
         }

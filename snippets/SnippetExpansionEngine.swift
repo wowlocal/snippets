@@ -787,12 +787,12 @@ final class SnippetExpansionEngine {
             return .failedBeforeAttempt
         }
         if case .typeUnicode = preparation,
-           let validationFailure = directInputValidationFailureMessage(
+           let validationFailure = directInputValidationFailure(
             for: resolvedText,
             displayName: snippet.displayName
            ) {
-            statusText = validationFailure
-            return .failedBeforeAttempt
+            statusText = validationFailure.message
+            return validationFailure.result
         }
 
         let result = deliverSecurePasteText(resolvedText, to: target, using: preparation)
@@ -803,6 +803,8 @@ final class SnippetExpansionEngine {
             statusText = "Pasted \(snippet.displayName)."
         case .failedBeforeAttempt:
             statusText = "The target field did not accept Secure Paste."
+        case .blockedUnsafeControlCharacters:
+            break
         case .attemptedAmbiguous:
             statusText = "Secure Paste may have inserted \(snippet.displayName). Check the field before trying again."
         }
@@ -895,12 +897,12 @@ final class SnippetExpansionEngine {
             return .failedBeforeAttempt
         }
         if case .typeUnicode = preparation,
-           let validationFailure = directInputValidationFailureMessage(
+           let validationFailure = directInputValidationFailure(
             for: resolvedText,
             displayName: shell.displayName
            ) {
-            statusText = validationFailure
-            return .failedBeforeAttempt
+            statusText = validationFailure.message
+            return validationFailure.result
         }
 
         let result = deliverSecurePasteText(
@@ -915,6 +917,8 @@ final class SnippetExpansionEngine {
             statusText = "Pasted \(shell.displayName) securely."
         case .failedBeforeAttempt:
             statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
+        case .blockedUnsafeControlCharacters:
+            break
         case .attemptedAmbiguous:
             statusText = "Secure Paste may have inserted \(shell.displayName). Check the field before trying again."
         }
@@ -4102,19 +4106,28 @@ final class SnippetExpansionEngine {
         return .attemptedAmbiguous
     }
 
-    private func directInputValidationFailureMessage(
+    private func directInputValidationFailure(
         for text: String,
         displayName: String
-    ) -> String? {
+    ) -> (message: String, result: SecurePasteResult)? {
         switch SecurePasteDirectInputPolicy.validation(of: text) {
         case .allowed:
             return nil
         case .empty:
-            return "\(displayName) is empty — nothing to paste."
+            return (
+                "\(displayName) is empty — nothing to paste.",
+                .failedBeforeAttempt
+            )
         case .tooLong:
-            return "Secure Paste direct input is limited to \(SecurePasteDirectInputPolicy.maximumUTF16Count) UTF-16 units."
+            return (
+                "Secure Paste direct input is limited to \(SecurePasteDirectInputPolicy.maximumUTF16Count) UTF-16 units.",
+                .failedBeforeAttempt
+            )
         case .containsControlCharacter:
-            return "Secure Paste direct input refused control characters, including Return, newline, and Tab."
+            return (
+                "Secure Paste direct input refused control characters, including Return, newline, and Tab.",
+                .blockedUnsafeControlCharacters
+            )
         }
     }
 

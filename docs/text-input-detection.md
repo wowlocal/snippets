@@ -192,7 +192,9 @@ characters, including Return, newline, Tab, Escape, and NUL, and never adds Retu
 also refuses payloads above 16,384 UTF-16 units. There is one attempt with no AX,
 pasteboard, or event retry: Core Graphics acknowledges neither host consumption nor PTY
 delivery, so the result remains `attemptedAmbiguous`, is not recorded as usage, and is
-never presented as a confirmed paste.
+never presented as a confirmed paste. A control-character refusal returns focus to the
+captured field and displays a failure HUD explaining that no text was inserted because
+line breaks and other controls can execute commands in a terminal.
 
 When a secure snippet requires Local Authentication, a non-password destination that
 did not already own Secure Event Input at capture waits for authentication's temporary
