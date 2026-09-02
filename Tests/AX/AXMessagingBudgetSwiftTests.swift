@@ -57,112 +57,154 @@ struct AXMessagingBudgetSwiftTests {
 
     @Test("Secure Paste replaces a positively identified password field")
     func securePastePrefersWholeSecureValue() {
-        #expect(SecurePasteAccessibilityPolicy.strategy(
+        #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: true,
             valueIsSettable: true,
             targetIsInsideWebArea: true,
             targetHasEligibleWebTextRole: true,
-            webRangeReplacementIsAvailable: true,
-            selectedTextIsSettable: true
+            webRangeReplacementIsAvailable: true
         ) == .replaceSecureValue)
     }
 
     @Test("Secure Paste fails closed for a password field without a writable value")
     func securePasteRequiresWritableSecureValue() {
-        #expect(SecurePasteAccessibilityPolicy.strategy(
+        #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: true,
             valueIsSettable: false,
             targetIsInsideWebArea: true,
             targetHasEligibleWebTextRole: true,
-            webRangeReplacementIsAvailable: true,
-            selectedTextIsSettable: true
+            webRangeReplacementIsAvailable: true
         ) == .unavailable)
     }
 
     @Test("Secure Paste prefers the advertised browser range operation in web text fields")
     func securePasteUsesWebRangeReplacement() {
-        #expect(SecurePasteAccessibilityPolicy.strategy(
+        #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: false,
             valueIsSettable: true,
             targetIsInsideWebArea: true,
             targetHasEligibleWebTextRole: true,
-            webRangeReplacementIsAvailable: true,
-            selectedTextIsSettable: true
+            webRangeReplacementIsAvailable: true
         ) == .replaceWebRange)
     }
 
-    @Test("Secure Paste uses selection insertion for an ordinary text field")
-    func securePasteUsesSelectionOutsidePasswordFields() {
-        #expect(SecurePasteAccessibilityPolicy.strategy(
+    @Test("ordinary picker content uses the same direct input as secure content")
+    func ordinaryPickerContentUsesDirectInput() {
+        #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: false,
             valueIsSettable: true,
             targetIsInsideWebArea: false,
             targetHasEligibleWebTextRole: false,
-            webRangeReplacementIsAvailable: false,
-            selectedTextIsSettable: true
-        ) == .replaceSelection)
+            webRangeReplacementIsAvailable: false
+        ) == .typeUnicode)
     }
 
     @Test("Secure Paste fails closed when a web operation is not advertised")
     func securePasteRequiresAdvertisedWebCapability() {
-        #expect(SecurePasteAccessibilityPolicy.strategy(
+        #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: false,
             valueIsSettable: true,
             targetIsInsideWebArea: true,
             targetHasEligibleWebTextRole: true,
-            webRangeReplacementIsAvailable: false,
-            selectedTextIsSettable: true
+            webRangeReplacementIsAvailable: false
         ) == .unavailable)
     }
 
     @Test("Secure Paste refuses the native route for generic web controls")
     func securePasteRefusesNoneligibleWebControls() {
-        #expect(SecurePasteAccessibilityPolicy.strategy(
+        #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: false,
             valueIsSettable: true,
             targetIsInsideWebArea: true,
             targetHasEligibleWebTextRole: false,
-            webRangeReplacementIsAvailable: true,
-            selectedTextIsSettable: true
+            webRangeReplacementIsAvailable: true
         ) == .unavailable)
     }
 
     @Test("web eligibility includes standard single-line and multiline text roles")
     func securePasteRecognizesStandardWebTextRoles() {
-        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXTextField"))
-        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXComboBox"))
-        #expect(SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXTextArea"))
-        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole("AXGroup"))
-        #expect(!SecurePasteAccessibilityPolicy.isEligibleWebTextRole(nil))
+        #expect(SecurePasteDeliveryPolicy.isEligibleWebTextRole("AXTextField"))
+        #expect(SecurePasteDeliveryPolicy.isEligibleWebTextRole("AXComboBox"))
+        #expect(SecurePasteDeliveryPolicy.isEligibleWebTextRole("AXTextArea"))
+        #expect(!SecurePasteDeliveryPolicy.isEligibleWebTextRole("AXGroup"))
+        #expect(!SecurePasteDeliveryPolicy.isEligibleWebTextRole(nil))
     }
 
     @Test("web range delivery requires both replacement and readback capabilities")
     func securePasteRequiresCompleteWebRangeCapabilities() {
-        #expect(SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+        #expect(SecurePasteDeliveryPolicy.supportsWebRangeReplacement(
             advertisedParameterizedAttributes: [
                 "AXReplaceRangeWithText",
                 "AXStringForRange",
                 "AXBoundsForRange",
             ]
         ))
-        #expect(!SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+        #expect(!SecurePasteDeliveryPolicy.supportsWebRangeReplacement(
             advertisedParameterizedAttributes: ["AXReplaceRangeWithText"]
         ))
-        #expect(!SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+        #expect(!SecurePasteDeliveryPolicy.supportsWebRangeReplacement(
             advertisedParameterizedAttributes: ["AXStringForRange"]
         ))
     }
 
-    @Test("Secure Paste never overwrites an ordinary unreadable field wholesale")
-    func securePasteRefusesUnsafeWholeValueFallback() {
-        #expect(SecurePasteAccessibilityPolicy.strategy(
+    @Test("native delivery does not depend on writable AX selected text")
+    func nativeDeliveryDoesNotDependOnAXSelectedText() {
+        #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: false,
             valueIsSettable: true,
             targetIsInsideWebArea: false,
             targetHasEligibleWebTextRole: false,
-            webRangeReplacementIsAvailable: false,
-            selectedTextIsSettable: false
-        ) == .unavailable)
+            webRangeReplacementIsAvailable: false
+        ) == .typeUnicode)
+    }
+
+    @Test("native direct input selection requires no host identity")
+    func securePasteUsesDirectUnicodeForNativeAndCustomTextSurfaces() {
+        #expect(SecurePasteDeliveryPolicy.strategy(
+            targetIsSecureTextField: false,
+            valueIsSettable: false,
+            targetIsInsideWebArea: false,
+            targetHasEligibleWebTextRole: false,
+            webRangeReplacementIsAvailable: false
+        ) == .typeUnicode)
+    }
+
+    @Test("direct input accepts printable Unicode and reconstructs one tagged key event")
+    func securePasteDirectInputBuildsUnicodeEvent() throws {
+        let text = "токен-😀"
+        let tag: Int64 = 0x5A17
+        let events = try #require(SecurePasteDirectInputPolicy.makeEvents(
+            text: text,
+            eventTag: tag
+        ))
+
+        var actualLength = 0
+        var utf16 = [UniChar](repeating: 0, count: text.utf16.count)
+        events.keyDown.keyboardGetUnicodeString(
+            maxStringLength: utf16.count,
+            actualStringLength: &actualLength,
+            unicodeString: &utf16
+        )
+
+        #expect(String(decoding: utf16.prefix(actualLength), as: UTF16.self) == text)
+        #expect(events.keyDown.getIntegerValueField(.keyboardEventKeycode)
+            == Int64(SecurePasteDirectInputPolicy.unicodeOnlyVirtualKey))
+        #expect(events.keyDown.getIntegerValueField(.eventSourceUserData) == tag)
+        #expect(events.keyUp.getIntegerValueField(.eventSourceUserData) == tag)
+    }
+
+    @Test("direct input rejects controls, empty content, and oversized content")
+    func securePasteDirectInputValidationFailsClosed() {
+        #expect(SecurePasteDirectInputPolicy.validation(of: "token-😀") == .allowed)
+        #expect(SecurePasteDirectInputPolicy.validation(of: "") == .empty)
+        #expect(SecurePasteDirectInputPolicy.validation(of: "a\nb") == .containsControlCharacter)
+        #expect(SecurePasteDirectInputPolicy.validation(of: "a\rb") == .containsControlCharacter)
+        #expect(SecurePasteDirectInputPolicy.validation(of: "a\tb") == .containsControlCharacter)
+        #expect(SecurePasteDirectInputPolicy.validation(of: "a\0b") == .containsControlCharacter)
+        #expect(SecurePasteDirectInputPolicy.validation(of: "a\u{0085}b") == .containsControlCharacter)
+        #expect(SecurePasteDirectInputPolicy.validation(
+            of: String(repeating: "x", count: SecurePasteDirectInputPolicy.maximumUTF16Count + 1)
+        ) == .tooLong)
     }
 
     @Test("an ambiguous Secure Paste attempt is not treated as a retryable failure")
@@ -174,6 +216,77 @@ struct AXMessagingBudgetSwiftTests {
         #expect(SecurePasteCompletionPolicy.reaction(
             after: .attemptedAmbiguous
         ) == .warnWithoutRestoringFocus)
+    }
+
+    @Test("Secure Paste waits for authentication secure input before restoring an ordinary field")
+    func securePasteWaitsForAuthenticationSecureInput() {
+        #expect(SecurePasteAuthenticationHandoffPolicy.shouldWaitForSecureInputToClear(
+            targetIsSecureTextField: false,
+            secureInputWasEnabledAtCapture: false
+        ))
+        #expect(SecurePasteAuthenticationHandoffPolicy.secureInputBlocksRestore(
+            waitForAuthenticationSecureInputToClear: true,
+            secureEventInputEnabled: true
+        ))
+        #expect(!SecurePasteAuthenticationHandoffPolicy.secureInputBlocksRestore(
+            waitForAuthenticationSecureInputToClear: true,
+            secureEventInputEnabled: false
+        ))
+    }
+
+    @Test("Secure Paste preserves password fields and pre-existing secure terminal input")
+    func securePastePreservesLegitimateSecureInput() {
+        #expect(!SecurePasteAuthenticationHandoffPolicy.shouldWaitForSecureInputToClear(
+            targetIsSecureTextField: true,
+            secureInputWasEnabledAtCapture: false
+        ))
+        #expect(!SecurePasteAuthenticationHandoffPolicy.shouldWaitForSecureInputToClear(
+            targetIsSecureTextField: false,
+            secureInputWasEnabledAtCapture: true
+        ))
+        #expect(!SecurePasteAuthenticationHandoffPolicy.secureInputBlocksRestore(
+            waitForAuthenticationSecureInputToClear: false,
+            secureEventInputEnabled: true
+        ))
+    }
+
+    @Test("Secure Paste focus confirmations must be consecutive")
+    func securePasteFocusConfirmationsResetAfterInterruption() {
+        var confirmations = SecurePasteAuthenticationHandoffPolicy
+            .updatedConsecutiveFocusConfirmations(
+                current: 0,
+                targetIsFrontmost: true,
+                focusWasReasserted: true
+            )
+        #expect(confirmations == 1)
+        #expect(!SecurePasteAuthenticationHandoffPolicy.focusIsStable(
+            consecutiveConfirmations: confirmations
+        ))
+
+        confirmations = SecurePasteAuthenticationHandoffPolicy
+            .updatedConsecutiveFocusConfirmations(
+                current: confirmations,
+                targetIsFrontmost: false,
+                focusWasReasserted: false
+            )
+        #expect(confirmations == 0)
+
+        confirmations = SecurePasteAuthenticationHandoffPolicy
+            .updatedConsecutiveFocusConfirmations(
+                current: confirmations,
+                targetIsFrontmost: true,
+                focusWasReasserted: true
+            )
+        #expect(confirmations == 1)
+        confirmations = SecurePasteAuthenticationHandoffPolicy
+            .updatedConsecutiveFocusConfirmations(
+                current: confirmations,
+                targetIsFrontmost: true,
+                focusWasReasserted: true
+            )
+        #expect(SecurePasteAuthenticationHandoffPolicy.focusIsStable(
+            consecutiveConfirmations: confirmations
+        ))
     }
 
     @Test("web replacement planning uses UTF-16 offsets")

@@ -171,12 +171,35 @@ Handled intentionally:
 - Cmd+Shift+3/4/5/6 are ignored (do not dismiss) to avoid interfering with screenshots.
 - Modifier+Space is classified after key-up by comparing the actual keyboard input-source identifier and reading the system-wide AX focused application. An input-source change preserves the panel even if the system switcher briefly owns focus; otherwise Spotlight, Raycast, or any custom launcher that takes keyboard focus dismisses it. The shortcut modifiers are not hardcoded.
 
-## Secure Paste delivery in browser fields
+## Secure Paste delivery transports
 
-`⌘\` remains Accessibility-only: it never moves a selected snippet through the
-pasteboard or a synthetic keyboard event. Password fields keep the established
-password-manager-style `AXValue` write, and native ordinary fields keep the narrow
-`AXSelectedText` write.
+`⌘\` never moves secure content through the pasteboard. It chooses exactly one
+plaintext-bearing transport while the captured PID and AX focus are freshly confirmed:
+
+- A positively identified `AXSecureTextField` uses the established password-manager-style
+  `AXValue` replacement without reading the existing password.
+- An eligible browser field uses the capability-gated, readback-verified range operation
+  described below.
+- Any content selected from Secure Paste for another native or custom text surface uses
+  one Unicode-bearing `CGEvent` key-down, plus a non-text-bearing key-up, posted directly
+  to the captured PID. The decision takes no application bundle ID and therefore has no
+  terminal-emulator allow-list.
+
+The direct-input route revalidates the frontmost PID, both captured AX element PIDs, and
+the exact focused AX object immediately before posting. It refuses C0/C1 control
+characters, including Return, newline, Tab, Escape, and NUL, and never adds Return. It
+also refuses payloads above 16,384 UTF-16 units. There is one attempt with no AX,
+pasteboard, or event retry: Core Graphics acknowledges neither host consumption nor PTY
+delivery, so the result remains `attemptedAmbiguous`, is not recorded as usage, and is
+never presented as a confirmed paste.
+
+When a secure snippet requires Local Authentication, a non-password destination that
+did not already own Secure Event Input at capture waits for authentication's temporary
+secure-input ownership to clear. Focus restoration then requires two genuinely
+consecutive confirmations of the original PID and AX control; losing frontmost status
+or focus resets the count. A real `AXSecureTextField`, and a terminal that already had
+Secure Keyboard Entry enabled before the picker opened, retain their pre-existing
+secure-input behavior. Ordinary snippets do not enter this authentication handoff.
 
 Safari and Chromium can report success for `AXSelectedText` without updating the web
 page's real editing model. Inside a positively identified `AXWebArea`, an ordinary
@@ -320,6 +343,9 @@ password prompt with no event left to dismiss it.
 ## Known limits
 
 - Secure/password fields may block AX details or synthetic events by design.
+- A framework may ignore the Unicode string attached to a direct keyboard event. Since
+  macOS provides no consumption acknowledgement, direct secure input is deliberately
+  reported as unconfirmed even after the event is posted.
 - Some custom-rendered editors may expose partial/atypical AX semantics.
 - Accessibility state can vary per app process/lifecycle; restarting target app can help.
 - Chromium may still require explicit runtime forcing in certain environments.

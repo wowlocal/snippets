@@ -83,14 +83,18 @@ date placeholders. Offsets can contain several terms, for example
   and show a lock marker wherever their searchable metadata appears.
 - On macOS, press `⌘\` in a text or password field to open Secure Paste. It searches
   the whole library, ranks secure snippets ahead of equally relevant ordinary snippets,
-  restores the exact original field, and writes through Accessibility without exposing
-  the body to the clipboard. Secure snippets authenticate on every use; ordinary
-  snippets do not. A password field is replaced; an ordinary text field uses its
-  selection or caret. Browser text fields use a capability-gated range operation and
-  bounded readback so Safari and Chromium update their real editing model. With no text
-  field focused, the same picker copies an ordinary snippet to the clipboard instead and
-  shows a transient confirmation at the bottom of the screen. Secure snippets remain
-  visible in the search but refuse Copy without changing the clipboard.
+  restores the exact original field, and never exposes a secure body to the clipboard.
+  Secure snippets authenticate on every use; ordinary snippets do not. Password fields
+  use password-manager-style Accessibility replacement, and browser text fields use a
+  capability-gated range operation with bounded readback. Other native or custom text
+  surfaces receive either kind of selected content in one Unicode-bearing keyboard
+  event posted only to the captured process after its AX focus is revalidated. Control
+  characters (including Return, newline, and Tab) are refused, no retry is attempted,
+  and this direct-input route is reported as unconfirmed because macOS supplies no
+  delivery acknowledgement. With no text field focused, the same picker copies an
+  ordinary snippet to the clipboard instead and shows a transient confirmation at the
+  bottom of the screen. Secure snippets remain visible in the search but refuse Copy
+  without changing the clipboard.
 - macOS Secure Event Input can suppress third-party global shortcuts while a real
   password field is focused. Snippets keeps its Carbon registrations live and provides
   matching frontmost-app Services fallbacks: `⌘\` opens Secure Paste and `⌥⌘\` opens

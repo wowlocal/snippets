@@ -173,17 +173,19 @@ final class AXMessagingBudget {
     }
 }
 
-/// Chooses the one plaintext-bearing Accessibility operation a Secure Paste attempt
-/// is allowed to make.
+/// Chooses the one plaintext-bearing transport a Secure Paste attempt is allowed to
+/// make before any secret text is materialized.
 ///
 /// A password field's current value is intentionally never read. That rules out the
 /// ordinary read/modify/write insertion path and also means a failed write must not be
 /// followed by a second strategy: the first call may have landed even if its reply was
 /// lost. For a positively identified secure field, replacing `AXValue` matches password
 /// manager fill semantics. Ordinary web text fields may use an explicitly advertised,
-/// range-scoped browser operation; native fields keep `AXSelectedText`. Neither route
-/// overwrites an unreadable ordinary field wholesale.
-nonisolated enum SecurePasteAccessibilityPolicy {
+/// range-scoped browser operation. Content going to any other captured text surface
+/// uses one PID-bound Unicode keyboard event instead of trusting an unverifiable
+/// `AXSelectedText` success. This is based only on target capabilities; secure and
+/// ordinary snippets use the same transport and no host identity enters the decision.
+nonisolated enum SecurePasteDeliveryPolicy {
     private static let requiredWebRangeParameterizedAttributes: Set<String> = [
         "AXReplaceRangeWithText",
         kAXStringForRangeParameterizedAttribute as String,
@@ -192,7 +194,7 @@ nonisolated enum SecurePasteAccessibilityPolicy {
     enum Strategy: Equatable {
         case replaceSecureValue
         case replaceWebRange
-        case replaceSelection
+        case typeUnicode
         case unavailable
     }
 
@@ -201,8 +203,7 @@ nonisolated enum SecurePasteAccessibilityPolicy {
         valueIsSettable: Bool,
         targetIsInsideWebArea: Bool,
         targetHasEligibleWebTextRole: Bool,
-        webRangeReplacementIsAvailable: Bool,
-        selectedTextIsSettable: Bool
+        webRangeReplacementIsAvailable: Bool
     ) -> Strategy {
         if targetIsSecureTextField {
             return valueIsSettable ? .replaceSecureValue : .unavailable
@@ -212,10 +213,7 @@ nonisolated enum SecurePasteAccessibilityPolicy {
                 ? .replaceWebRange
                 : .unavailable
         }
-        if selectedTextIsSettable {
-            return .replaceSelection
-        }
-        return .unavailable
+        return .typeUnicode
     }
 
     static func isEligibleWebTextRole(_ role: String?) -> Bool {
@@ -263,6 +261,114 @@ nonisolated enum SecurePasteCompletionPolicy {
         case .attemptedAmbiguous:
             return .warnWithoutRestoringFocus
         }
+    }
+}
+
+/// Keeps the LocalAuthentication keyboard handoff separate from Secure Paste's
+/// plaintext-bearing AX write. A real password field, or a destination that already
+/// owned Secure Event Input when it was captured, may legitimately keep secure input
+/// enabled. Every other destination must wait for authentication's temporary ownership
+/// to clear before focus confirmations can accumulate.
+nonisolated enum SecurePasteAuthenticationHandoffPolicy {
+    static let requiredConsecutiveFocusConfirmations = 2
+
+    static func shouldWaitForSecureInputToClear(
+        targetIsSecureTextField: Bool,
+        secureInputWasEnabledAtCapture: Bool
+    ) -> Bool {
+        !targetIsSecureTextField && !secureInputWasEnabledAtCapture
+    }
+
+    static func secureInputBlocksRestore(
+        waitForAuthenticationSecureInputToClear: Bool,
+        secureEventInputEnabled: Bool
+    ) -> Bool {
+        waitForAuthenticationSecureInputToClear && secureEventInputEnabled
+    }
+
+    static func updatedConsecutiveFocusConfirmations(
+        current: Int,
+        targetIsFrontmost: Bool,
+        focusWasReasserted: Bool
+    ) -> Int {
+        guard targetIsFrontmost, focusWasReasserted else { return 0 }
+        return min(current + 1, requiredConsecutiveFocusConfirmations)
+    }
+
+    static func focusIsStable(consecutiveConfirmations: Int) -> Bool {
+        consecutiveConfirmations >= requiredConsecutiveFocusConfirmations
+    }
+}
+
+/// Safety and event construction for direct input from the Secure Paste picker.
+///
+/// A single event avoids partial multi-event delivery and gives hosts one Unicode text
+/// payload to commit. Control characters are refused because Return/newline in a shell
+/// is execution, not insertion. The event is still inherently unconfirmable: Core
+/// Graphics has no acknowledgement that a target framework consumed its Unicode text.
+nonisolated enum SecurePasteDirectInputPolicy {
+    static let maximumUTF16Count = 16_384
+    /// No physical key maps to this value. A host that ignores the Unicode payload
+    /// therefore cannot reinterpret the event as a printable hardware keystroke.
+    static let unicodeOnlyVirtualKey = CGKeyCode.max
+
+    enum Validation: Equatable {
+        case allowed
+        case empty
+        case tooLong
+        case containsControlCharacter
+    }
+
+    struct Events {
+        let keyDown: CGEvent
+        let keyUp: CGEvent
+    }
+
+    static func validation(of text: String) -> Validation {
+        guard !text.isEmpty else { return .empty }
+        guard text.utf16.count <= maximumUTF16Count else { return .tooLong }
+        guard !text.unicodeScalars.contains(where: { scalar in
+            scalar.value <= 0x1F || (0x7F...0x9F).contains(scalar.value)
+        }) else {
+            return .containsControlCharacter
+        }
+        return .allowed
+    }
+
+    static func makeEvents(text: String, eventTag: Int64) -> Events? {
+        guard validation(of: text) == .allowed,
+              let source = CGEventSource(stateID: .privateState),
+              let keyDown = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: unicodeOnlyVirtualKey,
+                keyDown: true
+              ),
+              let keyUp = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: unicodeOnlyVirtualKey,
+                keyDown: false
+              )
+        else { return nil }
+
+        var utf16 = Array(text.utf16)
+        defer {
+            utf16.withUnsafeMutableBytes { bytes in
+                guard let baseAddress = bytes.baseAddress else { return }
+                _ = memset_s(baseAddress, bytes.count, 0, bytes.count)
+            }
+            utf16.removeAll(keepingCapacity: false)
+        }
+        utf16.withUnsafeBufferPointer { buffer in
+            keyDown.keyboardSetUnicodeString(
+                stringLength: buffer.count,
+                unicodeString: buffer.baseAddress
+            )
+        }
+        keyDown.flags = []
+        keyUp.flags = []
+        keyDown.setIntegerValueField(.eventSourceUserData, value: eventTag)
+        keyUp.setIntegerValueField(.eventSourceUserData, value: eventTag)
+        return Events(keyDown: keyDown, keyUp: keyUp)
     }
 }
 

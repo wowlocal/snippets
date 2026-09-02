@@ -218,10 +218,10 @@ final class SnippetExpansionEngine {
         let selection: CFRange
     }
 
-    private enum SecurePasteAccessibilityPreparation {
+    private enum SecurePasteDeliveryPreparation {
         case replaceSecureValue
         case replaceWebRange(SecurePasteWebPreparation)
-        case replaceSelection
+        case typeUnicode
     }
 
     /// Opaque handle to the exact control that was focused when Secure Paste began.
@@ -231,6 +231,8 @@ final class SnippetExpansionEngine {
         fileprivate let focusedElement: AXUIElement
         fileprivate let textElement: AXUIElement
         fileprivate let window: AXUIElement?
+        fileprivate let isSecureTextField: Bool
+        fileprivate let secureInputWasEnabledAtCapture: Bool
         let applicationName: String
     }
 
@@ -629,6 +631,13 @@ final class SnippetExpansionEngine {
             return .unavailable
         }
 
+        let isSecureTextField = stringAttribute(
+            of: textElement,
+            attribute: kAXSubroleAttribute as CFString,
+            axBudget: budget
+        ) == (kAXSecureTextFieldSubrole as String)
+        let secureInputWasEnabledAtCapture = secureEventInputEnabled
+
         resetTypingContext()
         return .target(
             SecurePasteTarget(
@@ -640,6 +649,8 @@ final class SnippetExpansionEngine {
                     attribute: kAXWindowAttribute as CFString,
                     axBudget: budget
                 ),
+                isSecureTextField: isSecureTextField,
+                secureInputWasEnabledAtCapture: secureInputWasEnabledAtCapture,
                 applicationName: app.localizedName ?? "the target app"
             )
         )
@@ -716,10 +727,11 @@ final class SnippetExpansionEngine {
         _ = await restoreSecurePasteTarget(target)
     }
 
-    /// Delivers either kind of snippet through the explicit AX-only route. Secure
-    /// records authenticate and decrypt one body; ordinary records resolve their
-    /// existing content directly. Browser delivery reads only bounded text state needed
-    /// to prove that its one request landed. Neither path borrows the pasteboard.
+    /// Delivers either kind of snippet through one transport chosen before its body is
+    /// materialized. Secure records authenticate and decrypt one body; ordinary records
+    /// resolve their existing content directly. Browser delivery reads only bounded text
+    /// state needed to prove that its one request landed. Neither path borrows the
+    /// pasteboard.
     @discardableResult
     func pasteSnippetUsingSecurePaste(
         _ snippet: Snippet,
@@ -771,8 +783,16 @@ final class SnippetExpansionEngine {
             statusText = "\(snippet.displayName) is empty — nothing to paste."
             return .failedBeforeAttempt
         }
-        guard let preparation = prepareSecurePasteAccessibilityTarget(target) else {
+        guard let preparation = prepareSecurePasteDeliveryTarget(target) else {
             statusText = "The target field did not accept Secure Paste."
+            return .failedBeforeAttempt
+        }
+        if case .typeUnicode = preparation,
+           let validationFailure = directInputValidationFailureMessage(
+            for: resolvedText,
+            displayName: snippet.displayName
+           ) {
+            statusText = validationFailure
             return .failedBeforeAttempt
         }
 
@@ -839,20 +859,29 @@ final class SnippetExpansionEngine {
         defer { plaintext.wipe() }
 
         guard !Task.isCancelled else { return .failedBeforeAttempt }
-        guard await restoreSecurePasteTarget(target) else {
+        let shouldWaitForAuthenticationSecureInputToClear =
+            SecurePasteAuthenticationHandoffPolicy.shouldWaitForSecureInputToClear(
+                targetIsSecureTextField: target.isSecureTextField,
+                secureInputWasEnabledAtCapture: target.secureInputWasEnabledAtCapture
+            )
+        guard await restoreSecurePasteTarget(
+            target,
+            waitForAuthenticationSecureInputToClear:
+                shouldWaitForAuthenticationSecureInputToClear
+        ) else {
             statusText = "Skipped \(shell.displayName): Snippets could not restore the original field after authentication."
             return .failedBeforeAttempt
         }
 
-        // Authentication is over. The Accessibility write below is synchronous, so there
-        // is no queued delete count or later paste event for a real keystroke to race with.
+        // Authentication is over. Delivery below is synchronous, so there is no queued
+        // delete count or later paste event for a real keystroke to race with.
         if secureSuggestionAuthenticationTargetPID == target.targetPID {
             secureSuggestionAuthenticationTargetPID = nil
         }
 
-        // Establish the exact AX transport and capture only non-secret range metadata
+        // Establish the exact transport and capture only non-secret range metadata
         // before materializing the authenticated bytes as a Swift String.
-        guard let preparation = prepareSecurePasteAccessibilityTarget(target) else {
+        guard let preparation = prepareSecurePasteDeliveryTarget(target) else {
             statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
             return .failedBeforeAttempt
         }
@@ -864,6 +893,14 @@ final class SnippetExpansionEngine {
         defer { resolvedText.removeAll(keepingCapacity: false) }
         guard !resolvedText.isEmpty else {
             statusText = "\(shell.displayName) is empty — nothing to paste."
+            return .failedBeforeAttempt
+        }
+        if case .typeUnicode = preparation,
+           let validationFailure = directInputValidationFailureMessage(
+            for: resolvedText,
+            displayName: shell.displayName
+           ) {
+            statusText = validationFailure
             return .failedBeforeAttempt
         }
 
@@ -3784,10 +3821,14 @@ final class SnippetExpansionEngine {
         )
     }
 
-    /// Secure Paste intentionally restores a password field while Secure Event Input is
-    /// enabled. Unlike trigger expansion, it posts no key events and performs no blind
-    /// deletion, so the global secure-input flag is not a reason to reject this AX-only path.
-    private func restoreSecurePasteTarget(_ focusTarget: SecurePasteTarget) async -> Bool {
+    /// Secure Paste may restore a password field while Secure Event Input is enabled.
+    /// Other fields wait for authentication's temporary secure-input ownership to clear
+    /// before delivery, while preserving destinations that already had secure
+    /// input enabled when they were captured.
+    private func restoreSecurePasteTarget(
+        _ focusTarget: SecurePasteTarget,
+        waitForAuthenticationSecureInputToClear: Bool = false
+    ) async -> Bool {
         guard let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
               !target.isTerminated
         else { return false }
@@ -3805,22 +3846,50 @@ final class SnippetExpansionEngine {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, !target.isTerminated else { return false }
 
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier
-                    == focusTarget.targetPID
-            else {
+            if SecurePasteAuthenticationHandoffPolicy.secureInputBlocksRestore(
+                waitForAuthenticationSecureInputToClear:
+                    waitForAuthenticationSecureInputToClear,
+                secureEventInputEnabled: secureEventInputEnabled
+            ) {
+                consecutiveFocusConfirmations = 0
+                continue
+            }
+
+            let targetIsFrontmost = NSWorkspace.shared.frontmostApplication?
+                .processIdentifier == focusTarget.targetPID
+            guard targetIsFrontmost else {
+                consecutiveFocusConfirmations =
+                    SecurePasteAuthenticationHandoffPolicy
+                        .updatedConsecutiveFocusConfirmations(
+                            current: consecutiveFocusConfirmations,
+                            targetIsFrontmost: false,
+                            focusWasReasserted: false
+                        )
                 _ = target.activate()
                 continue
             }
 
-            if reassertKeyboardFocus(
+            // Match the secure trigger-expansion handoff: the authentication sheet can
+            // disappear from NSWorkspace before keyboard ownership has fully returned.
+            _ = target.activate()
+            let focusWasReasserted = reassertKeyboardFocus(
                 element: focusTarget.focusedElement,
                 window: focusTarget.window,
                 targetPID: focusTarget.targetPID
+            )
+            consecutiveFocusConfirmations =
+                SecurePasteAuthenticationHandoffPolicy
+                    .updatedConsecutiveFocusConfirmations(
+                        current: consecutiveFocusConfirmations,
+                        targetIsFrontmost: true,
+                        focusWasReasserted: focusWasReasserted
+                    )
+            if SecurePasteAuthenticationHandoffPolicy.focusIsStable(
+                consecutiveConfirmations: consecutiveFocusConfirmations
             ) {
-                consecutiveFocusConfirmations += 1
-                if consecutiveFocusConfirmations >= 2 { return true }
-            } else {
-                consecutiveFocusConfirmations = 0
+                return true
+            }
+            if !focusWasReasserted {
                 _ = target.activate()
             }
         }
@@ -3853,12 +3922,13 @@ final class SnippetExpansionEngine {
         return currentFocusMatches(element)
     }
 
-    /// Chooses an AX transport while the original field is freshly focused. No secure
+    /// Chooses one transport while the original field is freshly focused. No secure
     /// snippet body has been materialized as a `String` when the secure call site enters
-    /// this method, and password values are never read.
-    private func prepareSecurePasteAccessibilityTarget(
+    /// this method, password values are never read, and the selected transport is final:
+    /// delivery never falls through to a second plaintext-bearing strategy.
+    private func prepareSecurePasteDeliveryTarget(
         _ target: SecurePasteTarget
-    ) -> SecurePasteAccessibilityPreparation? {
+    ) -> SecurePasteDeliveryPreparation? {
         guard accessibilityGranted,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
               processIdentifier(of: target.textElement) == target.targetPID,
@@ -3895,29 +3965,21 @@ final class SnippetExpansionEngine {
             axBudget: budget
         )
         let targetHasEligibleWebTextRole = targetIsInsideWebArea
-            && SecurePasteAccessibilityPolicy.isEligibleWebTextRole(role)
+            && SecurePasteDeliveryPolicy.isEligibleWebTextRole(role)
         let advertisedParameterizedAttributes = targetHasEligibleWebTextRole
             ? parameterizedAttributes(on: target.textElement, axBudget: budget)
             : nil
         let webRangeReplacementIsAvailable = advertisedParameterizedAttributes.map {
-            SecurePasteAccessibilityPolicy.supportsWebRangeReplacement(
+            SecurePasteDeliveryPolicy.supportsWebRangeReplacement(
                 advertisedParameterizedAttributes: $0
             )
         } ?? false
-        let selectedTextIsSettable = !targetIsInsideWebArea
-            && attributeIsSettable(
-                kAXSelectedTextAttribute as CFString,
-                on: target.textElement,
-                axBudget: budget
-            )
-
-        switch SecurePasteAccessibilityPolicy.strategy(
+        switch SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: targetIsSecureTextField,
             valueIsSettable: valueIsSettable,
             targetIsInsideWebArea: targetIsInsideWebArea,
             targetHasEligibleWebTextRole: targetHasEligibleWebTextRole,
-            webRangeReplacementIsAvailable: webRangeReplacementIsAvailable,
-            selectedTextIsSettable: selectedTextIsSettable
+            webRangeReplacementIsAvailable: webRangeReplacementIsAvailable
         ) {
         case .replaceSecureValue:
             return .replaceSecureValue
@@ -3944,20 +4006,22 @@ final class SnippetExpansionEngine {
                 fieldUTF16Count: fieldUTF16Count,
                 selection: selection
             ))
-        case .replaceSelection:
-            return .replaceSelection
+        case .typeUnicode:
+            return .typeUnicode
         case .unavailable:
             return nil
         }
     }
 
-    /// Sends at most one plaintext-bearing AX request. A browser request is considered
-    /// delivered only after bounded range/count readback; an ambiguous reply is terminal
-    /// and never falls through to AXSelectedText, key events, or the pasteboard.
+    /// Sends exactly the transport selected before plaintext materialization. A browser
+    /// request is considered delivered only after bounded range/count readback. Direct
+    /// input is one PID-bound Unicode key event and is always ambiguous because a hidden
+    /// terminal read has no observable delivery acknowledgement. No outcome falls through
+    /// to another AX operation, key event, or the pasteboard.
     private func deliverSecurePasteText(
         _ text: String,
         to target: SecurePasteTarget,
-        using preparation: SecurePasteAccessibilityPreparation
+        using preparation: SecurePasteDeliveryPreparation
     ) -> SecurePasteResult {
         guard accessibilityGranted,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
@@ -3978,13 +4042,8 @@ final class SnippetExpansionEngine {
             )
             return result == .success ? .inserted : .attemptedAmbiguous
 
-        case .replaceSelection:
-            let result = budget.setAttributeValue(
-                of: target.textElement,
-                attribute: kAXSelectedTextAttribute as CFString,
-                value: text as CFString
-            )
-            return result == .success ? .inserted : .attemptedAmbiguous
+        case .typeUnicode:
+            return deliverDirectUnicodePasteText(text, to: target)
 
         case .replaceWebRange(let preparation):
             return deliverWebSecurePasteText(
@@ -3993,6 +4052,55 @@ final class SnippetExpansionEngine {
                 preparation: preparation,
                 axBudget: budget
             )
+        }
+    }
+
+    /// Direct input is used for selected text on native/custom surfaces whose AX
+    /// selected-text write cannot prove that the host's actual input model changed. Both
+    /// events are created before the final focus check and then posted as one uninterrupted
+    /// PID-bound burst. `postToPid` has no delivery acknowledgement, so success here means
+    /// only that the one allowed attempt was posted.
+    private func deliverDirectUnicodePasteText(
+        _ text: String,
+        to target: SecurePasteTarget
+    ) -> SecurePasteResult {
+        guard CGPreflightPostEventAccess(),
+              let targetApplication = NSRunningApplication(
+                processIdentifier: target.targetPID
+              ),
+              !targetApplication.isTerminated,
+              let events = SecurePasteDirectInputPolicy.makeEvents(
+                text: text,
+                eventTag: SnippetSyntheticEvent.tag
+              )
+        else { return .failedBeforeAttempt }
+
+        let budget = AXMessagingBudget()
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+                == target.targetPID,
+              processIdentifier(of: target.focusedElement) == target.targetPID,
+              processIdentifier(of: target.textElement) == target.targetPID,
+              currentFocusMatches(target.focusedElement, axBudget: budget)
+        else { return .failedBeforeAttempt }
+
+        events.keyDown.postToPid(target.targetPID)
+        events.keyUp.postToPid(target.targetPID)
+        return .attemptedAmbiguous
+    }
+
+    private func directInputValidationFailureMessage(
+        for text: String,
+        displayName: String
+    ) -> String? {
+        switch SecurePasteDirectInputPolicy.validation(of: text) {
+        case .allowed:
+            return nil
+        case .empty:
+            return "\(displayName) is empty — nothing to paste."
+        case .tooLong:
+            return "Secure Paste direct input is limited to \(SecurePasteDirectInputPolicy.maximumUTF16Count) UTF-16 units."
+        case .containsControlCharacter:
+            return "Secure Paste direct input refused control characters, including Return, newline, and Tab."
         }
     }
 
