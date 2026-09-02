@@ -63,9 +63,30 @@ enum SecurePasteFeedback {
         "Secure Paste may have inserted the snippet. Check the original field before trying again."
 }
 
+/// Covers the HUD surface so its first click is consumed locally and dismisses it.
+/// Returning this view from `hitTest` keeps labels and glass decoration from swallowing
+/// the click. The containing panel remains nonactivating, so the original app keeps focus.
+@MainActor
+private final class TransientScreenMessageDismissView: NSView {
+    var onDismiss: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0, bounds.contains(point) else { return nil }
+        return self
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onDismiss?()
+    }
+}
+
 /// A short-lived, non-activating HUD for actions that begin outside the main app
-/// window. It never takes key status or intercepts a click, so the application the
-/// user was working in keeps its focus while the result is shown.
+/// window. It never takes key status; clicking the HUD consumes only that click and
+/// dismisses the message while the application underneath keeps focus.
 @MainActor
 final class TransientScreenMessageController {
     enum Kind {
@@ -117,7 +138,7 @@ final class TransientScreenMessageController {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.canHide = false
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = false
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
         panel.isExcludedFromWindowsMenu = true
@@ -164,6 +185,14 @@ final class TransientScreenMessageController {
         panelContent.layer?.masksToBounds = true
         panelContent.addSubview(surface)
 
+        let dismissView = TransientScreenMessageDismissView()
+        dismissView.translatesAutoresizingMaskIntoConstraints = false
+        dismissView.setAccessibilityElement(false)
+        dismissView.onDismiss = { [weak self] in
+            self?.dismiss()
+        }
+        panelContent.addSubview(dismissView)
+
         NSLayoutConstraint.activate([
             messageStack.leadingAnchor.constraint(
                 equalTo: messageContent.leadingAnchor,
@@ -187,6 +216,10 @@ final class TransientScreenMessageController {
             surface.trailingAnchor.constraint(equalTo: panelContent.trailingAnchor),
             surface.topAnchor.constraint(equalTo: panelContent.topAnchor),
             surface.bottomAnchor.constraint(equalTo: panelContent.bottomAnchor),
+            dismissView.leadingAnchor.constraint(equalTo: panelContent.leadingAnchor),
+            dismissView.trailingAnchor.constraint(equalTo: panelContent.trailingAnchor),
+            dismissView.topAnchor.constraint(equalTo: panelContent.topAnchor),
+            dismissView.bottomAnchor.constraint(equalTo: panelContent.bottomAnchor),
         ])
     }
 
