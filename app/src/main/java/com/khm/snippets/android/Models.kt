@@ -89,6 +89,10 @@ data class LibraryState(
     val libraryChoices: List<CloudLibraryChoice> = emptyList(),
     val librarySwitchFromID: String? = null,
     val recoveryKitStatus: RecoveryKitStatus = RecoveryKitStatus.NEVER_VERIFIED,
+    val hasPendingRecoveryKit: Boolean = false,
+    val accountDisplayName: String = "Snippets Cloud account",
+    val hasLibraryKey: Boolean = false,
+    val hasCloudSession: Boolean = false,
     val setupStage: CloudSetupStage = CloudSetupStage.SIGNED_OUT,
 )
 
@@ -500,3 +504,20 @@ private fun JSONObject.optNullableString(name: String): String? =
 
 private fun JSONObject.optNullableLong(name: String): Long? =
     if (!has(name) || isNull(name)) null else getLong(name)
+
+internal enum class CloudSessionState { SIGNED_OUT, CONNECTED, REVIEW_REQUIRED }
+internal enum class LibraryAccessState { LOCKED, UNLOCKED, SETUP_PENDING }
+internal enum class RecoverySetupState { NOT_SAVED, SAVED, NEEDS_REVIEW, REPLACING }
+internal val LibraryState.libraryAccessState: LibraryAccessState get() = when {
+    cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED -> LibraryAccessState.SETUP_PENDING
+    hasLibraryKey -> LibraryAccessState.UNLOCKED
+    else -> LibraryAccessState.LOCKED
+}
+internal val LibraryState.cloudSessionState: CloudSessionState get() = if (hasCloudSession)
+    CloudSessionState.CONNECTED else CloudSessionState.SIGNED_OUT
+internal val LibraryState.recoverySetupState: RecoverySetupState get() = when (recoveryKitStatus) {
+    RecoveryKitStatus.NEVER_VERIFIED -> RecoverySetupState.NOT_SAVED
+    RecoveryKitStatus.VERIFIED_CURRENT -> RecoverySetupState.SAVED
+    RecoveryKitStatus.REPLACEMENT_IN_PROGRESS -> RecoverySetupState.REPLACING
+    else -> RecoverySetupState.NEEDS_REVIEW
+}

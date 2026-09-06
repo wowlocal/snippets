@@ -47,15 +47,13 @@ func NewHandler(configuration config.Server, store domain.Store) *Handler {
 }
 
 func (h *Handler) GetDiscovery(context.Context, api.GetDiscoveryRequestObject) (api.GetDiscoveryResponseObject, error) {
-	amr := setValues(h.configuration.OIDC.StepUpAMR)
-	acr := setValues(h.configuration.OIDC.StepUpACR)
-	capabilities := []string{"account-without-required-email", "offline-recovery-v1", "oauth-refresh-token-rotation", "oauth-resource-indicators", "oauth-token-revocation", "oidc-pkce", "pairing-v2", "phishing-resistant-step-up", "resource-session-revocation"}
+	capabilities := []string{"account-without-required-email", "offline-recovery-v1", "oauth-refresh-token-rotation", "oauth-resource-indicators", "oauth-token-revocation", "oidc-pkce", "pairing-v2", domain.LibraryActionCapability, "resource-session-revocation"}
 	return api.GetDiscovery200JSONResponse{
-		ProtocolMajor: api.N2, ProtocolMinor: api.N0, ServerVersion: h.configuration.ServerVersion,
+		ProtocolMajor: api.N2, ProtocolMinor: api.N1, ServerVersion: h.configuration.ServerVersion,
 		ServerInstanceId: h.configuration.ServerInstanceID, ApiBase: h.configuration.PublicBaseURL.String() + "/v2",
 		RecordProfile: api.SnippetsWireV1, Capabilities: capabilities,
 		Limits: api.Limits{MaxBlobBytes: 900000, MaxRevisionBytes: 256, MaxBatchRecords: 50, MaxPageRecords: 50, MaxRequestBytes: 16777216, MaxResponseBytes: 67108864, MaxKeyEnvelopeBytes: 4096, MaxPairingSeconds: 600},
-		Oidc:   api.OIDCDiscovery{Issuer: h.configuration.OIDC.Issuer.String(), Resource: h.configuration.PublicBaseURL.String(), ClientId: h.configuration.OIDC.ClientID, Scopes: append([]string(nil), h.configuration.OIDC.Scopes...), AuthorizationFlow: api.AuthorizationCodePkce, MaxAccessTokenAgeSeconds: int(h.configuration.OIDC.MaximumTokenAge / time.Second), StepUpMaxAgeSeconds: int(h.configuration.OIDC.StepUpMaximumAge / time.Second), StepUpAMRValues: amr, StepUpACRValues: acr},
+		Oidc:   api.OIDCDiscovery{Issuer: h.configuration.OIDC.Issuer.String(), Resource: h.configuration.PublicBaseURL.String(), ClientId: h.configuration.OIDC.ClientID, Scopes: append([]string(nil), h.configuration.OIDC.Scopes...), AuthorizationFlow: api.AuthorizationCodePkce, MaxAccessTokenAgeSeconds: int(h.configuration.OIDC.MaximumTokenAge / time.Second)},
 	}, nil
 }
 
@@ -196,7 +194,7 @@ func (h *Handler) PutRecoveryEnvelope(ctx context.Context, request api.PutRecove
 	if request.Body == nil {
 		return putRecoveryError(ctx, domain.NewError(domain.InvalidRequest)), nil
 	}
-	space, envelope, err := h.store.PutRecoveryEnvelope(ctx, principal, request.Space, domain.PutRecoveryEnvelope{ExpectedVersion: request.Body.ExpectedVersion, KeyEpoch: request.Body.KeyEpoch, Algorithm: string(request.Body.Algorithm), Ciphertext: append([]byte(nil), request.Body.Ciphertext...)})
+	space, envelope, err := h.store.PutRecoveryEnvelope(ctx, principal, request.Space, domain.PutRecoveryEnvelope{Proof: mapProof(request.Body.Proof), ExpectedVersion: request.Body.ExpectedVersion, KeyEpoch: request.Body.KeyEpoch, Algorithm: string(request.Body.Algorithm), Ciphertext: append([]byte(nil), request.Body.Ciphertext...)})
 	if err != nil {
 		return putRecoveryError(ctx, err), nil
 	}
@@ -249,7 +247,7 @@ func (h *Handler) ApprovePairing(ctx context.Context, request api.ApprovePairing
 	if request.Body == nil {
 		return approvePairingError(ctx, domain.NewError(domain.InvalidRequest)), nil
 	}
-	space, pairing, err := h.store.ApprovePairing(ctx, principal, request.Space, request.Pairing, domain.ApprovePairing{RecipientKeyHash: append([]byte(nil), request.Body.RecipientKeyHash...), Algorithm: string(request.Body.Algorithm), Ciphertext: append([]byte(nil), request.Body.Ciphertext...)})
+	space, pairing, err := h.store.ApprovePairing(ctx, principal, request.Space, request.Pairing, domain.ApprovePairing{Proof: mapProof(request.Body.Proof), RecipientKeyHash: append([]byte(nil), request.Body.RecipientKeyHash...), Algorithm: string(request.Body.Algorithm), Ciphertext: append([]byte(nil), request.Body.Ciphertext...)})
 	if err != nil {
 		return approvePairingError(ctx, err), nil
 	}

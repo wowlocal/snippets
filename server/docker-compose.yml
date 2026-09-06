@@ -34,6 +34,28 @@ services:
       retries: 30
     restart: unless-stopped
 
+  migrate:
+    profiles: [tools]
+    image: postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382
+    entrypoint: [/bin/sh, /migration-runner.sh]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?set POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER:?set POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      SNIPPETS_MIGRATION_DIR: /migrations
+    volumes:
+      - ./Scripts/migrate.sh:/migration-runner.sh:ro
+      - ./Container/postgres-migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
   server:
     build:
       context: .
@@ -52,12 +74,9 @@ services:
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:?set OIDC_JWKS_URL}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:?set OIDC_AUDIENCE}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID}
-      OIDC_SCOPES: ${OIDC_SCOPES:-openid offline_access}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid profile email offline_access}
       OIDC_ALLOWED_ALGORITHMS: ${OIDC_ALLOWED_ALGORITHMS:-RS256}
       OIDC_MAX_TOKEN_AGE_SECONDS: ${OIDC_MAX_TOKEN_AGE_SECONDS:-300}
-      OIDC_STEP_UP_AMR_VALUES: ${OIDC_STEP_UP_AMR_VALUES-}
-      OIDC_STEP_UP_ACR_VALUES: ${OIDC_STEP_UP_ACR_VALUES:-}
-      OIDC_STEP_UP_MAX_AGE_SECONDS: ${OIDC_STEP_UP_MAX_AGE_SECONDS:-300}
       OIDC_JWKS_REFRESH_SECONDS: ${OIDC_JWKS_REFRESH_SECONDS:-900}
       OIDC_JWKS_MAX_STALENESS_SECONDS: ${OIDC_JWKS_MAX_STALENESS_SECONDS:-3600}
       OIDC_UNKNOWN_KID_REFRESH_SECONDS: ${OIDC_UNKNOWN_KID_REFRESH_SECONDS:-60}

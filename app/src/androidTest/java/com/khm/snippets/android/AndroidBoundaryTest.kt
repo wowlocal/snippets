@@ -49,6 +49,22 @@ class AndroidBoundaryTest {
     }
 
     @Test
+    fun libraryProofMatchesAppleAndServerThroughJni() {
+        fun base64(bytes: ByteArray) = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        val bundle = org.json.JSONObject().put("schemaVersion", 1).put("scopeID", "sync-v1")
+            .put("key", base64(ByteArray(32) { it.toByte() }))
+            .put("salt", base64(ByteArray(32) { (it + 32).toByte() })).toString()
+        val bridge = CoreBridge()
+        val server = "https://sync.example"
+        val instance = "10000000-0000-0000-0000-000000000001"
+        val space = "20000000-0000-0000-0000-000000000001"
+        assertEquals("BpJCgx4cUQSQFyZtp9NGBSH/vu8g+LUff0Gzc60K4kc=", bridge.libraryAuthority(bundle, server, instance, space))
+        val proof = bridge.signLibraryChallenge(bundle, server, instance, space,
+            "30000000-0000-0000-0000-000000000001", base64(ByteArray(32) { 7 }))
+        assertEquals("SpmC5BUDjmvaeUhXOjcTs6NtUfD+ncwuUbzstz3x7AqqSNwKasvgalPp0F0Ly8JKPW+qqzodsPyV8VuMniznCw==", proof.getString("signature"))
+    }
+
+    @Test
     fun manifestDeclaresNoKeyboardOrAccessibilityService() {
         val packageInfo = context.packageManager.getPackageInfo(
             context.packageName,

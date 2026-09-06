@@ -183,9 +183,8 @@ class SnippetRepository(
                         .onSuccess { kit ->
                             if (kit.serverURL == configuration.serverURL &&
                                 kit.spaceID.equals(configuration.spaceID, ignoreCase = true)) {
-                                // Validate the durable value, but do not publish either
-                                // secret until this new process gets local user presence.
-                                cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
+                                // Validate without overriding a pending approval or upload.
+                                // The kit is a reminder; disclosure still needs local presence.
                             } else {
                                 store.delete(RECOVERY_PRESENTATION)
                             }
@@ -1138,6 +1137,7 @@ class SnippetRepository(
         require(taken.algorithm == LibraryKeyBootstrap.PAIRING_ALGORITHM)
         val ciphertext = requireNotNull(taken.ciphertext)
         val bundle = LibraryKeyBootstrap.openPairedEnvelope(pending, ciphertext)
+        client.verifyAuthority(configuration.serverURL, configuration.spaceID, token, requireServerInstanceID(), bundle)
         installCloudKey(bundle)
         store.delete(PENDING_PAIRING)
         pairingQRCode = null
@@ -1238,11 +1238,12 @@ class SnippetRepository(
         require(kit.spaceID.equals(configuration.spaceID, ignoreCase = true))
         require(kit.keyEpoch == recovery.keyEpoch && kit.keyEpoch == state.keyEpoch)
         val bundle = LibraryKeyBootstrap.openRecoveryEnvelope(kit, recovery.ciphertext)
+        client.verifyAuthority(configuration.serverURL, configuration.spaceID, token, requireServerInstanceID(), bundle)
         installCloudKey(bundle)
         cloudKeyStatus = CloudKeyStatus.READY
     }
 
-    /** Prepares a replacement kit; UI must require local biometrics then OIDC step-up. */
+    /** Prepares a replacement kit; UI requires fresh local device-owner authentication. */
     suspend fun prepareRecoveryKitReplacement() = bootstrap {
         require(hasBoundKey())
         // Build the exact replacement before changing durable trust state. Once its
@@ -1482,13 +1483,22 @@ class SnippetRepository(
         if (!snippetsCloudEnabled) throw CloudAuthFailure("cloud_feature_disabled")
     }
 
-    private fun finishPostAuthorization(accessToken: String): RecoveryKitPresentation? {
+    internal suspend fun continueAfterLocalAuthentication() = bootstrap {
+        val token = freshPinnedAccessToken()
+        finishPostAuthorization(token, localAuthorized = true)
+    }
+
+    private fun finishPostAuthorization(accessToken: String, localAuthorized: Boolean = false): RecoveryKitPresentation? {
         store.read(PENDING_APPROVAL)?.let { raw ->
+            if (!localAuthorized) { cloudKeyStatus = CloudKeyStatus.APPROVAL_READY; return null }
             finishPendingApproval(raw, accessToken)
             return null
         }
         store.read(PENDING_RECOVERY)?.let { raw ->
             val pending = PendingRecoveryUpload.fromJSON(raw)
+            if (pending.newLibraryBundleJSON == null && !localAuthorized) {
+                cloudKeyStatus = CloudKeyStatus.RECOVERY_AUTH_REQUIRED; return null
+            }
             try {
                 return finishPendingRecovery(pending, accessToken)
             } catch (failure: SyncFailure) {
@@ -1502,12 +1512,6 @@ class SnippetRepository(
                 }
                 return null
             }
-        }
-
-        if (store.read(RECOVERY_PRESENTATION) != null) {
-            configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
-            cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
-            return null
         }
 
         if (hasBoundKey()) {
@@ -1609,6 +1613,7 @@ class SnippetRepository(
             ciphertext,
             accessToken,
             requireServerInstanceID(),
+            requireNotNull(keys).toJSON(),
         )
         validatePairing(
             approved,
@@ -1641,6 +1646,8 @@ class SnippetRepository(
                 pending.ciphertext,
                 accessToken,
                 requireServerInstanceID(),
+                pending.newLibraryBundleJSON ?: requireNotNull(keys).toJSON(),
+                initial = pending.newLibraryBundleJSON != null,
             )
         } catch (failure: SyncFailure) {
             if (failure.code != "conflict") throw failure
@@ -1662,13 +1669,17 @@ class SnippetRepository(
         }
         require(stored.algorithm == LibraryKeyBootstrap.RECOVERY_ALGORITHM)
         require(stored.keyEpoch == kit.keyEpoch)
-        pending.newLibraryBundleJSON?.let(::installCloudKey)
+        pending.newLibraryBundleJSON?.let { bundle ->
+            client.verifyAuthority(configuration.serverURL, configuration.spaceID, accessToken, requireServerInstanceID(), bundle)
+            installCloudKey(bundle)
+        }
         store.write(RECOVERY_PRESENTATION, pending.kitPayload)
         store.delete(PENDING_RECOVERY)
+        setRecoveryVerificationState(RecoveryKitVerificationState.neverVerified)
         configuration = configuration.copy(provider = SyncProvider.SNIPPETS_CLOUD)
         // Durable state is always locked. The freshly authenticated caller receives
         // the only transient copy and owns its current on-screen presentation.
-        cloudKeyStatus = CloudKeyStatus.RECOVERY_KIT_LOCKED
+        cloudKeyStatus = CloudKeyStatus.READY
         return RecoveryKitPresentation(pending.kitPayload, kit.longCode)
     }
 
@@ -1961,6 +1972,10 @@ class SnippetRepository(
             libraryChoices = pendingLibrarySelection?.choices.orEmpty(),
             librarySwitchFromID = pendingLibrarySelection?.previousLibraryID,
             recoveryKitStatus = recoveryVerificationState.status,
+            hasPendingRecoveryKit = store.read(RECOVERY_PRESENTATION) != null,
+            accountDisplayName = authenticator.accountDisplayName(),
+            hasLibraryKey = hasBoundKey(),
+            hasCloudSession = cloudSessionAvailable,
             setupStage = stage)
     }
 

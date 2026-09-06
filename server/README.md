@@ -96,8 +96,8 @@ stale-while-revalidate window and fail with dependency unavailability after the 
 JWKS staleness limit. ES256 credential identity uses a low-S canonical
 signature so signature malleability cannot evade logout.
 
-Recovery-envelope replacement and pairing approval require recent provider-asserted
-phishing-resistant authentication. The first successful pairing claim is bound to the
+Recovery-envelope replacement and pairing approval require a challenge signed by the
+library key after local device-owner authentication. The first successful pairing claim is bound to the
 claiming account and remains idempotently retrievable until invitation expiry or
 cancellation, so a lost HTTP response does not consume the encrypted envelope. Any
 current member, including a reader, may claim an approved envelope needed to exercise
@@ -168,7 +168,9 @@ at `/var/lib/postgresql`, and makes the application filesystem read-only.
 cd server
 cp .env.example .env
 # replace every placeholder and configure a real HTTPS OIDC issuer/JWKS
-docker compose up --build
+docker compose up --detach --wait postgres
+docker compose run --rm migrate
+docker compose up --detach --build server
 curl http://127.0.0.1:8080/.well-known/snippets-sync
 ```
 
@@ -178,8 +180,8 @@ are independent Base64/Base64url values decoding to 32–64 bytes. Keep
 `SERVER_INSTANCE_ID` stable for the deployment lifetime. Production requires PostgreSQL
 `verify-full` with `DATABASE_TLS_ROOT_CERT`, hostname verification,
 `channel_binding=require`, SCRAM authentication, an access-token lifetime no longer
-than five minutes, `openid offline_access`, and an explicitly configured step-up AMR
-and/or ACR allow-list.
+than five minutes and `openid offline_access`. Use `openid profile email offline_access`
+for the native account profile. Account login does not require passkey assurance.
 
 `10-schema.sql` bootstraps an empty database at the squashed pre-production baseline,
 schema version 1, and is executed once by PostgreSQL's standard first-boot initializer.
@@ -201,7 +203,7 @@ compatibility range. The expand/migrate/contract, rollback, and backfill policy 
 ADR 0003.
 
 The first rollout is deliberately fail-closed for any pre-squash candidate history
-(versions 2–4): `migrate.sh` rejects it and this binary refuses to start. Do not automate
+(versions 2–4 without the current migration checksums): `migrate.sh` rejects it and this binary refuses to start. Do not automate
 volume deletion. Inventory development, staging, dark-launch, manual, and restorable
 backup databases first. Recreate only a proven-disposable database and rotate
 `SERVER_INSTANCE_ID`; preserve any valuable database for a reviewed bridge/export so
@@ -227,3 +229,15 @@ and space deletion workflows, hosted billing, metrics/tracing, client checkpoint
 and tombstone reclamation, production infrastructure, image signing, and SBOM are not
 implemented here. CloudKit and the encrypted `snippets-wire-v1` payload remain
 unchanged.
+
+## Account login (protocol 2.1)
+
+New libraries support ordinary Apple/Google/email OTP login. Passkeys are optional.
+Sensitive library-key mutations use a signed challenge from an approved device. Recovery-kit deferral allows sync
+and leaves a Settings reminder. See [ADR 0004](ADR/0004-conventional-account-login.md)
+and the [Logto deployment and acceptance guide](Identity/README.md).
+
+The current binary requires schema **2**. After fresh PostgreSQL bootstrap (schema 1),
+run `Scripts/migrate.sh` with owner credentials before starting the server; run the same
+command for an existing supported v1 database. Migration 2 is additive and must not be
+replaced by deleting the database. The runtime container has no owner credential.

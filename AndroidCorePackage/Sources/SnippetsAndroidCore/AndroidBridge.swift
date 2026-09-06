@@ -477,3 +477,28 @@ private func makeSealer(
         keyring: SnippetCrypto.Keyring(libraryKey: SymmetricKey(data: key), salt: salt),
         scopeID: scopeID)
 }
+
+
+/// Uses the same implementation and canonical transcript as Apple, including on
+/// Android API 28 where platform Ed25519 providers are not consistently available.
+public func cloudLibraryAuthority(_ bundleJSON: String, _ server: String, _ instance: String, _ space: String) -> String {
+    bridgeResult {
+        let bundle = try LibraryKeyBootstrap.PortableKeyBundle(jsonData: Data(bundleJSON.utf8))
+        guard let url = URL(string: server), let instanceID = UUID(uuidString: instance),
+              let spaceID = UUID(uuidString: space) else { throw AndroidBridgeFailure.invalidIdentifier }
+        return try LibraryActionAuthorization.publicKey(material: bundle.material, serverURL: url,
+            serverInstanceID: instanceID, spaceID: spaceID).base64EncodedString()
+    }
+}
+
+public func signCloudLibraryChallenge(_ bundleJSON: String, _ server: String, _ instance: String, _ space: String, _ challenge: String, _ nonceBase64: String) -> String {
+    bridgeResult {
+        let bundle = try LibraryKeyBootstrap.PortableKeyBundle(jsonData: Data(bundleJSON.utf8))
+        guard let url = URL(string: server), let instanceID = UUID(uuidString: instance),
+              let spaceID = UUID(uuidString: space), let challengeID = UUID(uuidString: challenge),
+              let nonce = Data(base64Encoded: nonceBase64) else { throw AndroidBridgeFailure.invalidIdentifier }
+        let proof = try LibraryActionAuthorization.sign(nonce: nonce, challengeID: challengeID,
+            material: bundle.material, serverURL: url, serverInstanceID: instanceID, spaceID: spaceID)
+        return String(decoding: try JSONEncoder().encode(proof), as: UTF8.self)
+    }
+}

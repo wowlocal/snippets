@@ -1,9 +1,42 @@
 import XCTest
+import CryptoKit
 
 @testable import Snippets
 
 @MainActor
 final class SnippetsCloudSafetyTests: XCTestCase {
+    func testVerifiedProfileBindsSignatureNonceAudienceAndResourceSubject() throws {
+        let key = P256.Signing.PrivateKey()
+        func encode(_ data: Data) -> String {
+            data.base64EncodedString().replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let point = key.publicKey.x963Representation
+        let jwks = try JSONDecoder().decode(SnippetsCloudVerifiedProfile.Keys.self, from: JSONSerialization.data(withJSONObject: [
+            "keys": [["kid": "fixture", "kty": "EC", "crv": "P-256", "alg": "ES256",
+                      "x": encode(point.subdata(in: 1..<33)), "y": encode(point.subdata(in: 33..<65))]]]))
+        func token(_ audience: String, subject: String = "account-a", expires: Double = 300) throws -> String {
+            let now = Date().timeIntervalSince1970
+            let claims: [String: Any] = ["iss": "https://identity.example/oidc", "sub": subject,
+                "aud": audience, "nonce": "nonce-a", "iat": now, "exp": now + expires,
+                "name": "Test Account", "email": "fixture@example.test", "email_verified": true]
+            let header = try JSONSerialization.data(withJSONObject: ["alg": "ES256", "kid": "fixture"])
+            let message = encode(header) + "." + encode(try JSONSerialization.data(withJSONObject: claims))
+            return message + "." + encode(try key.signature(for: Data(message.utf8)).rawRepresentation)
+        }
+        let identity = try token("native-client"), access = try token("https://sync.example")
+        func verify(_ id: String, _ resource: String, nonce: String = "nonce-a") throws -> SnippetsCloudVerifiedProfile {
+            try .verify(idToken: id, accessToken: resource, keys: jwks,
+                issuer: "https://identity.example/oidc", clientID: "native-client",
+                resource: "https://sync.example", nonce: nonce)
+        }
+        XCTAssertEqual(try verify(identity, access).displayName, "Test Account")
+        XCTAssertThrowsError(try verify(identity, access, nonce: "nonce-b"))
+        XCTAssertThrowsError(try verify(identity, token("https://sync.example", subject: "account-b")))
+        XCTAssertThrowsError(try verify(token("other-client"), access))
+        XCTAssertThrowsError(try verify(token("native-client", expires: -10), access))
+    }
+
     func testOwnerAndWriterRequireExplicitInitialLibrarySelection() {
         let server = UUID(uuidString: "00000000-0000-4000-8000-000000000010")!
         let owner = SnippetsCloudLibraryChoice(

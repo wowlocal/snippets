@@ -521,3 +521,22 @@ private func bridgeValue(_ response: String) throws -> String {
     #expect(object["ok"] as? Bool == true)
     return try #require(object["value"] as? String)
 }
+
+@Test func libraryAuthorityAndProofMatchGoAndAppleVector() throws {
+    let bundle = try LibraryKeyBootstrap.PortableKeyBundle(material: Data((0..<64).map(UInt8.init)))
+    let json = String(data: try bundle.jsonData, encoding: .utf8)!
+    let instance = "10000000-0000-0000-0000-000000000001"
+    let space = "20000000-0000-0000-0000-000000000001"
+    let raw = cloudLibraryAuthority(json, "https://sync.example", instance, space)
+    let publicKey = try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+    #expect(publicKey["value"] as? String == "BpJCgx4cUQSQFyZtp9NGBSH/vu8g+LUff0Gzc60K4kc=")
+    let result = signCloudLibraryChallenge(json, "https://sync.example", instance, space,
+        "30000000-0000-0000-0000-000000000001", Data(repeating: 7, count: 32).base64EncodedString())
+    let outer = try #require(JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any])
+    let value = try #require(outer["value"] as? String)
+    let proof = try JSONDecoder().decode(LibraryActionAuthorization.Proof.self, from: Data(value.utf8))
+    let key = try Curve25519.Signing.PublicKey(rawRepresentation: Data(base64Encoded: "BpJCgx4cUQSQFyZtp9NGBSH/vu8g+LUff0Gzc60K4kc=")!)
+    let message = Data("snippets-library-action-proof-v1\n".utf8) + Data(repeating: 7, count: 32)
+    #expect(key.isValidSignature(proof.signature, for: message))
+    #expect(key.isValidSignature(Data(base64Encoded: "SpmC5BUDjmvaeUhXOjcTs6NtUfD+ncwuUbzstz3x7AqqSNwKasvgalPp0F0Ly8JKPW+qqzodsPyV8VuMniznCw==")!, for: message))
+}

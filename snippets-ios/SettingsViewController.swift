@@ -777,7 +777,11 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         let controller = SnippetsCloudAccountViewController(
             environment: environment,
             bootstrap: cloudBootstrap,
-            continueSetup: { [weak self] in self?.configureSnippetsCloud() },
+            continueSetup: { [weak self] in
+                guard let self else { return }
+                if cloudBootstrap.hasPendingRecoveryKit && cloudBootstrap.stateForDisplay() == .ready { authenticateRecoveryKitPresentation() }
+                else { configureSnippetsCloud() }
+            },
             switchToCloud: { [weak self] in self?.confirmProviderSwitch(to: .snippetsCloud) },
             syncNow: { [weak self] in self?.syncSnippetsCloudBeforeShowingReady() },
             addDevice: { [weak self] in self?.presentCloudScanner(mode: .pairing) },
@@ -1014,8 +1018,8 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                 expiresAt: expiresAt)
         case .approvalReady(let code):
             confirmPairingApproval(code: code)
-        case .strongAuthenticationRequired(let action):
-            requestStrongAuthentication(for: action)
+        case .localAuthenticationRequired(let action):
+            authenticateAndContinue(action: action)
         case .recoveryKitAuthenticationRequired:
             authenticateRecoveryKitPresentation()
         case .recoveryKitReady(let payload, let code):
@@ -1197,7 +1201,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
 
     private func confirmPairingApproval(code: String) {
         let alert = UIAlertController(
-            title: "Add This iPhone or Mac?",
+            title: "Approve This Device?",
             message: SnippetsCloudPairingApprovalCopy.message(
                 code: code,
                 localAuthentication: "Face ID or Touch ID"),
@@ -1214,45 +1218,13 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         present(alert, animated: true)
     }
 
-    private func requestStrongAuthentication(for action: SnippetsCloudAccountBootstrap.StrongAction) {
-        if action == .createInitialRecovery {
-            let alert = UIAlertController(
-                title: "Protect Your Recovery Kit",
-                message: "Finish with a fresh passkey check. Apple or Google may be used to identify the account, but they never become the key to your snippets.",
-                preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Continue", style: .default) { [weak self] _ in
-                self?.continueWithStrongCloudSignIn()
-            })
-            present(alert, animated: true)
-        } else {
-            authenticateAndContinue(action: action)
-        }
-    }
-
-    private func authenticateAndContinue(action: SnippetsCloudAccountBootstrap.StrongAction) {
+    private func authenticateAndContinue(action: SnippetsCloudAccountBootstrap.LocalAction) {
         runCloudTask(title: "Approval Failed") { [weak self] in
             guard let self else { return }
             try await requireDeviceOwnerAuthentication(reason: action == .approveDevice
                 ? "Approve a new device for your encrypted Snippets library"
                 : "Replace your Snippets Cloud recovery kit")
-            continueWithStrongCloudSignIn()
-        }
-    }
-
-    private func continueWithStrongCloudSignIn() {
-        guard let server = environment.backendSelection.cloudCoordinates?.serverURL else {
-            showError(title: "Couldn’t Continue", error: SnippetsCloudAccountBootstrap.Failure.invalidState)
-            return
-        }
-        runCloudTask(title: "Secure Approval Failed") { [weak self] in
-            guard let self else { return }
-            let state = try await cloudBootstrap.signIn(
-                serverURL: server,
-                strong: true,
-                chooseLibrary: chooseCloudLibrary,
-                presentationContext: self)
-            try presentCloudState(state)
+            try presentCloudState(try await cloudBootstrap.continueAfterLocalAuthentication())
         }
     }
 
@@ -1559,7 +1531,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
 private final class SnippetsCloudAccountViewController: UITableViewController {
     private enum Section: Int, CaseIterable { case account, sync, security, actions }
     private enum Action: CaseIterable {
-        case continueSetup, switchToCloud, syncNow, addDevice, replaceRecovery
+        case manageAccount, continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
         case changeAccount, changeLibrary, disconnect
     }
 
@@ -1674,12 +1646,10 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .account:
             if indexPath.row == 0 {
                 cell.textLabel?.text = accountStatusTitle
-                cell.detailTextLabel?.text = bootstrap.libraryID.map {
-                    "Snippets Cloud · Library ID \($0)"
-                } ?? "No Snippets Cloud account is connected."
+                cell.detailTextLabel?.text = environment.backendSelection.cloudAccountDisplayName
             } else {
                 cell.textLabel?.text = "Selected library"
-                cell.detailTextLabel?.text = "The encrypted library used on this device."
+                cell.detailTextLabel?.text = bootstrap.libraryID.map { "Library ID \($0) · Used for support" }
             }
             cell.selectionStyle = .none
         case .sync:
@@ -1716,7 +1686,9 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
         guard Section(rawValue: indexPath.section) == .actions else { return }
         switch visibleActions[indexPath.row] {
-        case .continueSetup: continueSetup()
+        case .manageAccount:
+            if let url = environment.backendSelection.cloudAccountCenterURL { UIApplication.shared.open(url) }
+        case .continueSetup, .saveRecovery: continueSetup()
         case .switchToCloud: switchToCloud()
         case .syncNow: syncNowAction()
         case .addDevice: addDevice()
@@ -1739,34 +1711,27 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
             (environment.backendSelection.provider == .snippetsCloud
                 ? [.syncNow]
                 : [.switchToCloud])
+                + (environment.backendSelection.cloudAccountCenterURL != nil ? [.manageAccount] : [])
+                + (bootstrap.hasPendingRecoveryKit ? [.saveRecovery] : [])
                 + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
         case .setupInterrupted:
             [.continueSetup, .changeAccount]
         case .setupStateUnverified:
             [.continueSetup]
-        case .strongAuthenticationRequired(.replaceRecovery),
+        case .localAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
         case .needsTrustedDeviceOrRecovery, .waitingForApproval,
-             .approvalReady, .strongAuthenticationRequired:
+             .approvalReady, .localAuthenticationRequired:
             [.continueSetup, .changeAccount, .disconnect]
         }
     }
 
     private var accountStatusTitle: String {
-        switch state {
+        switch bootstrap.cloudSessionState {
         case .signedOut: "Not connected"
-        case .ready: "Account connected"
-        case .setupInterrupted: "Library setup interrupted"
-        case .setupStateUnverified: "Cloud setup state could not be verified"
-        case .needsTrustedDeviceOrRecovery: "Library locked"
-        case .waitingForApproval: "Waiting for device approval"
-        case .approvalReady, .strongAuthenticationRequired(.approveDevice):
-            "Device approval required"
-        case .strongAuthenticationRequired(.createInitialRecovery),
-             .strongAuthenticationRequired(.replaceRecovery),
-             .recoveryKitAuthenticationRequired, .recoveryKitReady:
-            "Recovery kit needs to be saved"
+        case .connected: "Account connected"
+        case .reviewRequired: "Account needs review"
         }
     }
 
@@ -1782,22 +1747,10 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     }
 
     private var libraryAccessDescription: String {
-        switch state {
-        case .ready, .recoveryKitAuthenticationRequired, .recoveryKitReady,
-             .strongAuthenticationRequired(.replaceRecovery), .approvalReady:
-            "Unlocked on this device"
-        case .needsTrustedDeviceOrRecovery, .waitingForApproval:
-            "Waiting for an approved device or recovery kit"
-        case .setupInterrupted:
-            "Could not determine whether this library is new or already encrypted"
-        case .setupStateUnverified:
-            "Cloud access is paused until the saved setup state can be read"
-        case .strongAuthenticationRequired(.createInitialRecovery):
-            "Preparing library access"
-        case .signedOut:
-            "Sign in first"
-        case .strongAuthenticationRequired(.approveDevice):
-            "Unlocked on this device"
+        switch bootstrap.libraryAccessState {
+        case .unlocked: "Unlocked on this device"
+        case .locked: "Use an approved device or recovery kit"
+        case .setupPending: "Library setup needs to be completed"
         }
     }
 
@@ -1808,7 +1761,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
             "The previously saved recovery kit was replaced and no longer works"
         case .statusUnconfirmed:
             "Saved verification has not yet been confirmed against the current cloud envelope"
-        case .neverVerified: "Not verified on this device"
+        case .neverVerified: "Not saved on this device. Sync is available; save a kit before losing access to your devices."
         case .replacementInProgress: "Replacement still needs to be saved and checked"
         }
     }
@@ -1825,6 +1778,8 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
                 "Save and check recovery kit"
             default: "Continue setup"
             }
+        case .manageAccount: "Manage account and sign-in methods"
+        case .saveRecovery: "Save recovery kit — recommended"
         case .switchToCloud: "Use Snippets Cloud for sync"
         case .syncNow: "Sync now"
         case .addDevice: "Scan a new device invitation"

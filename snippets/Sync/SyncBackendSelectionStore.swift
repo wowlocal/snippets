@@ -591,6 +591,20 @@ final class SyncBackendSelectionStore {
         try commitProvider(.snippetsCloud)
     }
 
+    var cloudAccountDisplayName: String {
+        guard let redirectURL = Self.bundledOAuthRedirectURL else { return "Snippets Cloud account" }
+        return SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL).verifiedProfile()?.displayName
+            ?? "Snippets Cloud account"
+    }
+
+    var cloudAccountCenterURL: URL? {
+        guard hasCloudSession,
+              let raw = Bundle.main.object(forInfoDictionaryKey: "SnippetsCloudAccountCenterURL") as? String,
+              let url = URL(string: raw), url.scheme == "https", url.host != nil,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
+        return url
+    }
+
     func signIn(
         serverURL: URL,
         requiresStrongAuthentication: Bool = false,
@@ -1392,8 +1406,6 @@ private final class SnippetsCloudOAuthClient {
             let scopes: [String]
             let authorizationFlow: String
             let maxAccessTokenAgeSeconds: Int
-            let stepUpMaxAgeSeconds: Int
-            let stepUpACRValues: [String]
         }
         struct Limits: Decodable {
             let maxBlobBytes: Int
@@ -1420,9 +1432,11 @@ private final class SnippetsCloudOAuthClient {
         let tokenEndpoint: URL
         let revocationEndpoint: URL
         let codeChallengeMethodsSupported: [String]?
+        let jwksURI: URL
 
         private enum CodingKeys: String, CodingKey {
             case issuer
+            case jwksURI = "jwks_uri"
             case authorizationEndpoint = "authorization_endpoint"
             case tokenEndpoint = "token_endpoint"
             case revocationEndpoint = "revocation_endpoint"
@@ -1435,16 +1449,19 @@ private final class SnippetsCloudOAuthClient {
         let refreshToken: String?
         let expiresIn: Int
         let tokenType: String
+        let idToken: String?
 
         private enum CodingKeys: String, CodingKey {
             case accessToken = "access_token"
             case refreshToken = "refresh_token"
             case expiresIn = "expires_in"
             case tokenType = "token_type"
+            case idToken = "id_token"
         }
     }
 
     struct StoredSession: Codable {
+        var profile: SnippetsCloudVerifiedProfile? = nil
         let schemaVersion: Int
         let serverURL: URL
         let apiBase: URL?
@@ -1637,7 +1654,7 @@ private final class SnippetsCloudOAuthClient {
               discovery.capabilities.contains("oauth-refresh-token-rotation"),
               discovery.capabilities.contains("resource-session-revocation"),
               discovery.capabilities.contains("account-without-required-email"),
-              discovery.capabilities.contains("phishing-resistant-step-up"),
+              discovery.capabilities.contains("library-action-proof-v1"),
               discovery.capabilities.contains("pairing-v2"),
               discovery.capabilities.contains("offline-recovery-v1"),
               (1...16).contains(discovery.capabilities.count),
@@ -1646,15 +1663,9 @@ private final class SnippetsCloudOAuthClient {
               (1...16).contains(discovery.oidc.scopes.count),
               Set(discovery.oidc.scopes).count == discovery.oidc.scopes.count,
               discovery.oidc.scopes.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
-              discovery.oidc.stepUpACRValues.count <= 16,
-              Set(discovery.oidc.stepUpACRValues).count == discovery.oidc.stepUpACRValues.count,
-              discovery.oidc.stepUpACRValues.allSatisfy({
-                  !$0.isEmpty && $0.utf8.count <= 256
-              }),
               discovery.oidc.scopes.contains("openid"),
               discovery.oidc.scopes.contains("offline_access"),
               (60...86_400).contains(discovery.oidc.maxAccessTokenAgeSeconds),
-              (60...3_600).contains(discovery.oidc.stepUpMaxAgeSeconds),
               !discovery.oidc.clientId.isEmpty,
               discovery.oidc.clientId.utf8.count <= 256 else {
             throw Failure.insecureServerProfile
@@ -1688,6 +1699,11 @@ private final class SnippetsCloudOAuthClient {
             }
         }
 
+        guard provider.jwksURI.scheme == "https", provider.jwksURI.host == issuer.host,
+              provider.jwksURI.port == issuer.port, provider.jwksURI.user == nil,
+              provider.jwksURI.password == nil, provider.jwksURI.fragment == nil else { throw Failure.insecureServerProfile }
+        let identityKeys: SnippetsCloudVerifiedProfile.Keys = try await getJSON(
+            provider.jwksURI, maximumBytes: 256 * 1_024, failure: .identityProviderUnavailable)
         let state = try randomBase64URL(bytes: 32)
         let nonce = try randomBase64URL(bytes: 32)
         let verifier = try randomBase64URL(bytes: 64)
@@ -1711,11 +1727,6 @@ private final class SnippetsCloudOAuthClient {
         if requiresStrongAuthentication {
             requestItems.append(URLQueryItem(name: "prompt", value: "login"))
             requestItems.append(URLQueryItem(name: "max_age", value: "0"))
-            if !discovery.oidc.stepUpACRValues.isEmpty {
-                requestItems.append(URLQueryItem(
-                    name: "acr_values",
-                    value: discovery.oidc.stepUpACRValues.joined(separator: " ")))
-            }
         } else if chooseAccount {
             requestItems.append(URLQueryItem(name: "prompt", value: "select_account"))
         }
@@ -1776,7 +1787,7 @@ private final class SnippetsCloudOAuthClient {
             accessToken: token.accessToken,
             resource: discovery.oidc.resource)
 
-        let stored = StoredSession(
+        var stored = StoredSession(
             schemaVersion: 5,
             serverURL: serverURL,
             apiBase: discovery.apiBase,
@@ -1800,6 +1811,12 @@ private final class SnippetsCloudOAuthClient {
         try storeSessionReplacementJournal(
             sessions: [sessionAtStart, stored].compactMap { $0 },
             kind: .interactiveReplacement)
+        guard let idToken = token.idToken else { throw Failure.authorizationMismatch }
+        do {
+            stored.profile = try SnippetsCloudVerifiedProfile.verify(idToken: idToken,
+                accessToken: token.accessToken, keys: identityKeys, issuer: provider.issuer,
+                clientID: discovery.oidc.clientId, resource: discovery.oidc.resource.absoluteString, nonce: nonce)
+        } catch { throw Failure.authorizationMismatch }
         let selectedMembership: SnippetsCloudLibraryChoice
         if let expectedStepUpBinding {
             let candidate: Space
@@ -2085,6 +2102,7 @@ private final class SnippetsCloudOAuthClient {
         }
         try validateResourceAudience(accessToken: token.accessToken, resource: stored.resource)
         let updated = StoredSession(
+            profile: stored.profile,
             schemaVersion: 5,
             serverURL: stored.serverURL,
             apiBase: stored.apiBase,
@@ -2139,6 +2157,8 @@ private final class SnippetsCloudOAuthClient {
             throw Failure.invalidStoredSession
         }
     }
+
+    func verifiedProfile() -> SnippetsCloudVerifiedProfile? { try? loadSession()?.profile }
 
     private func loadSession() throws -> StoredSession? {
         guard let data = try keychain.loadItem(
@@ -2942,5 +2962,88 @@ private extension Data {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+/// Minimal display data from a verified ID token, bound to the resource token's
+/// issuer and subject. Stored only with device-only credentials, never diagnostics.
+nonisolated struct SnippetsCloudVerifiedProfile: Codable, Equatable, Sendable {
+    let issuer: String
+    let subject: String
+    let name: String?
+    let email: String?
+    var displayName: String { name ?? email ?? "Snippets Cloud account" }
+
+    struct Keys: Decodable {
+        struct Key: Decodable {
+            let kid: String?; let kty: String; let alg: String?; let use: String?
+            let n: String?; let e: String?; let crv: String?; let x: String?; let y: String?
+        }
+        let keys: [Key]
+    }
+    enum Failure: Error { case invalidIdentity }
+
+    static func verify(idToken: String, accessToken: String, keys: Keys, issuer: String,
+                       clientID: String, resource: String, nonce: String, now: Date = Date()) throws -> Self {
+        let identity = try claims(idToken, keys: keys, issuer: issuer, audience: clientID, now: now)
+        let access = try claims(accessToken, keys: keys, issuer: issuer, audience: resource, now: now)
+        guard identity["nonce"] as? String == nonce,
+              let subject = identity["sub"] as? String, !subject.isEmpty, subject.utf8.count <= 256,
+              access["sub"] as? String == subject else { throw Failure.invalidIdentity }
+        func display(_ key: String, limit: Int) -> String? {
+            guard let value = identity[key] as? String, !value.isEmpty, value.utf8.count <= limit,
+                  !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+            return value
+        }
+        return .init(issuer: issuer, subject: subject, name: display("name", limit: 256),
+                     email: identity["email_verified"] as? Bool == true ? display("email", limit: 320) : nil)
+    }
+
+    private static func claims(_ token: String, keys: Keys, issuer: String, audience: String,
+                               now: Date) throws -> [String: Any] {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard token.utf8.count <= 16_384, parts.count == 3, (1...16).contains(keys.keys.count),
+              let header = try JSONSerialization.jsonObject(with: decode(String(parts[0]))) as? [String: Any],
+              let alg = header["alg"] as? String, ["RS256", "ES256"].contains(alg),
+              header["crit"] == nil, header["b64"] == nil,
+              let kid = header["kid"] as? String else { throw Failure.invalidIdentity }
+        let candidates = keys.keys.filter { $0.kid == kid && ($0.use == nil || $0.use == "sig") && ($0.alg == nil || $0.alg == alg) }
+        guard candidates.count == 1 else { throw Failure.invalidIdentity }
+        let key = candidates[0]
+        let signature = try decode(String(parts[2]))
+        let message = Data("\(parts[0]).\(parts[1])".utf8)
+        if alg == "ES256" {
+            guard key.kty == "EC", key.crv == "P-256", let x = key.x, let y = key.y else { throw Failure.invalidIdentity }
+            let publicKey = try P256.Signing.PublicKey(x963Representation: Data([4]) + decode(x) + decode(y))
+            guard try publicKey.isValidSignature(P256.Signing.ECDSASignature(rawRepresentation: signature), for: message) else { throw Failure.invalidIdentity }
+        } else {
+            guard key.kty == "RSA", let n = key.n, let e = key.e else { throw Failure.invalidIdentity }
+            let modulus = try decode(n), exponent = try decode(e)
+            guard (256...512).contains(modulus.count), (1...4).contains(exponent.count) else { throw Failure.invalidIdentity }
+            let encoded = der(0x30, integer(modulus) + integer(exponent))
+            let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeyClass: kSecAttrKeyClassPublic]
+            guard let publicKey = SecKeyCreateWithData(encoded as CFData, attributes as CFDictionary, nil),
+                  SecKeyVerifySignature(publicKey, .rsaSignatureMessagePKCS1v15SHA256, message as CFData, signature as CFData, nil) else { throw Failure.invalidIdentity }
+        }
+        guard let value = try JSONSerialization.jsonObject(with: decode(String(parts[1]))) as? [String: Any],
+              value["iss"] as? String == issuer, let expiry = value["exp"] as? Double,
+              let issued = value["iat"] as? Double, expiry > now.timeIntervalSince1970,
+              issued <= now.timeIntervalSince1970 + 60,
+              (value["nbf"] as? Double ?? 0) <= now.timeIntervalSince1970 + 60 else { throw Failure.invalidIdentity }
+        let audiences = (value["aud"] as? [String]) ?? (value["aud"] as? String).map { [$0] } ?? []
+        guard audiences.contains(audience), audiences.count == 1 || value["azp"] as? String == audience else { throw Failure.invalidIdentity }
+        return value
+    }
+    private static func decode(_ value: String) throws -> Data {
+        guard !value.contains("="), value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }),
+              let data = Data(base64Encoded: value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + String(repeating: "=", count: (4 - value.count % 4) % 4)),
+              data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") == value else { throw Failure.invalidIdentity }
+        return data
+    }
+    private static func integer(_ value: Data) -> Data { der(2, (value.first! >= 128 ? Data([0]) : Data()) + value) }
+    private static func der(_ tag: UInt8, _ value: Data) -> Data {
+        let length = value.count
+        let encoded: [UInt8] = length < 128 ? [UInt8(length)] : length < 256 ? [0x81, UInt8(length)] : [0x82, UInt8(length >> 8), UInt8(length & 255)]
+        return Data([tag] + encoded) + value
     }
 }

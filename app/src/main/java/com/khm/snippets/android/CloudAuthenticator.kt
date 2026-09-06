@@ -91,11 +91,10 @@ class CloudAuthenticator(
         val clientID: String,
         val scopes: List<String>,
         val maximumAccessTokenAgeSeconds: Int,
-        val stepUpMaximumAgeSeconds: Int,
-        val stepUpACRValues: List<String>,
     )
 
     private data class StoredSession(
+        val profile: JSONObject? = null,
         val protocolMajor: Int,
         val apiBaseURL: String,
         val serverURL: String,
@@ -176,9 +175,6 @@ class CloudAuthenticator(
         if (stepUp) {
             builder.setPrompt("login")
             parameters["max_age"] = "0"
-            if (discovery.stepUpACRValues.isNotEmpty()) {
-                parameters["acr_values"] = discovery.stepUpACRValues.joinToString(" ")
-            }
         } else if (chooseAccount) {
             builder.setPrompt("select_account")
         }
@@ -217,6 +213,7 @@ class CloudAuthenticator(
                 }
             }
             .put("state", request.state)
+            .put("nonce", request.nonce)
             .toString())
 
         val service = AuthorizationService(applicationContext)
@@ -261,10 +258,12 @@ class CloudAuthenticator(
                     "authorization_response_mismatch",
                 )
 
+                guard(response.request.nonce == pending.getString("nonce"), "authorization_response_mismatch")
+                val jwks = fetchIdentityKeys(response.request.configuration, pending.getString("issuer"))
                 val tokenResponse = performTokenRequest(
                     response.createTokenExchangeRequest(mapOf("resource" to resource)),
                 )
-                val stored = sessionFromTokenResponse(
+                var stored = sessionFromTokenResponse(
                     serverURL = pending.getString("serverURL"),
                     issuer = pending.getString("issuer"),
                     resource = resource,
@@ -279,6 +278,11 @@ class CloudAuthenticator(
                 storeReplacementJournal(makeRevocationJournal(
                     listOfNotNull(loadSession(), stored),
                 ))
+                try {
+                    stored = stored.copy(profile = VerifiedCloudProfile.verify(
+                        tokenResponse.idToken ?: throw CloudAuthFailure("authorization_response_mismatch"),
+                        stored.accessToken, jwks, pending.getString("issuer"), clientID, resource, pending.getString("nonce")))
+                } catch (_: Exception) { throw CloudAuthFailure("authorization_response_mismatch") }
                 // Keep an existing account usable until the repository has resolved
                 // and the user has confirmed the target library. The staged session
                 // is device-bound and survives process death with the chooser.
@@ -390,7 +394,7 @@ class CloudAuthenticator(
             response = response,
             previousRefreshToken = stored.refreshToken,
             previousRevocationEndpoint = stored.revocationEndpoint,
-        )
+        ).copy(profile = stored.profile)
         // If logout forced this refresh, journal both generations before replacing
         // the stored session. Process death cannot otherwise strand the old refresh
         // token at a provider that does not invalidate it during rotation.
@@ -534,8 +538,8 @@ class CloudAuthenticator(
     ): StoredSession {
         guard(response.tokenType?.equals("Bearer", ignoreCase = true) == true, "token_exchange_failed")
         val accessToken = response.accessToken ?: throw CloudAuthFailure("access_token_missing")
-        val refreshToken = response.refreshToken ?: previousRefreshToken
-            ?: throw CloudAuthFailure("refresh_token_missing")
+        val refreshToken = response.refreshToken ?: throw CloudAuthFailure("refresh_token_missing")
+        guard(previousRefreshToken == null || refreshToken != previousRefreshToken, "refresh_token_not_rotated")
         validateToken(accessToken, "access_token_missing")
         validateToken(refreshToken, "refresh_token_missing")
         validateResourceAudience(accessToken, resource)
@@ -575,6 +579,7 @@ class CloudAuthenticator(
     }
 
     private fun StoredSession.toJSON(): String = JSONObject()
+        .put("profile", profile)
         .put("schemaVersion", 5)
         .put("protocolMajor", protocolMajor)
         .put("apiBaseURL", apiBaseURL)
@@ -630,6 +635,7 @@ class CloudAuthenticator(
             val resource = normalizedBaseURL(value.getString("resource"))
             guard(resource == serverURL, "authorization_state_invalid")
             return StoredSession(
+                profile = value.optJSONObject("profile"),
                 protocolMajor = protocolMajor,
                 apiBaseURL = apiBaseURL,
                 serverURL = serverURL,
@@ -649,6 +655,27 @@ class CloudAuthenticator(
         } catch (_: Exception) {
             throw CloudAuthFailure("authorization_state_invalid")
         }
+    }
+
+    fun accountDisplayName(): String = runCatching {
+        val profile = loadSession()?.profile
+        profile?.optString("name")?.takeIf { it.isNotBlank() }
+            ?: profile?.optString("email")?.takeIf { it.isNotBlank() } ?: "Snippets Cloud account"
+    }.getOrDefault("Snippets Cloud account")
+
+    private fun fetchIdentityKeys(configuration: AuthorizationServiceConfiguration, issuer: String): JSONObject {
+        val uri = URI(configuration.discoveryDoc?.docJson?.getString("jwks_uri")
+            ?: throw CloudAuthFailure("identity_provider_configuration_invalid"))
+        val authority = URI(issuer)
+        guard(uri.scheme == "https" && uri.host == authority.host && uri.port == authority.port &&
+            uri.userInfo == null && uri.fragment == null, "identity_provider_configuration_invalid")
+        val connection = uri.toURL().openConnection() as HttpURLConnection
+        try {
+            connection.connectTimeout = 15_000; connection.readTimeout = 15_000
+            connection.instanceFollowRedirects = false
+            guard(connection.responseCode == 200, "identity_provider_unavailable")
+            return JSONObject(readBounded(connection.inputStream, DISCOVERY_MAX_BYTES).toString(Charsets.UTF_8))
+        } finally { connection.disconnect() }
     }
 
     private fun fetchOIDCConfiguration(issuer: String): AuthorizationServiceConfiguration {
@@ -712,7 +739,7 @@ class CloudAuthenticator(
                 "oauth-token-revocation" in capabilities &&
                 "resource-session-revocation" in capabilities &&
                 "account-without-required-email" in capabilities &&
-                "phishing-resistant-step-up" in capabilities &&
+                "library-action-proof-v1" in capabilities &&
                 "pairing-v2" in capabilities && "offline-recovery-v1" in capabilities,
             "server_auth_insecure",
         )
@@ -723,10 +750,8 @@ class CloudAuthenticator(
         guard(resource == serverURL, "server_identity_mismatch")
         val clientID = oidc.getString("clientId")
         val maximumAccessTokenAgeSeconds = oidc.getInt("maxAccessTokenAgeSeconds")
-        val stepUpMaximumAgeSeconds = oidc.getInt("stepUpMaxAgeSeconds")
         guard(clientID.isNotBlank() && clientID.toByteArray().size <= 256, "server_discovery_invalid")
         guard(maximumAccessTokenAgeSeconds in 60..86_400, "server_discovery_invalid")
-        guard(stepUpMaximumAgeSeconds in 60..3_600, "server_discovery_invalid")
         return ServiceDiscovery(
             serverURL = serverURL,
             issuer = issuer,
@@ -734,11 +759,6 @@ class CloudAuthenticator(
             clientID = clientID,
             scopes = scopes,
             maximumAccessTokenAgeSeconds = maximumAccessTokenAgeSeconds,
-            stepUpMaximumAgeSeconds = stepUpMaximumAgeSeconds,
-            stepUpACRValues = oidc.getJSONArray("stepUpACRValues").strings(
-                allowEmpty = true,
-                maximumUTF8Bytes = 256,
-            ),
         )
     }
 

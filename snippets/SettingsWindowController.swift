@@ -2216,7 +2216,9 @@ private final class SyncSettingsViewController: NSViewController {
             },
             continueSetup: { [weak self] in
                 self?.closeCloudAccountSheet()
-                self?.configureSnippetsCloud()
+                guard let self else { return }
+                if cloudBootstrap.hasPendingRecoveryKit && cloudBootstrap.stateForDisplay() == .ready { authenticateRecoveryKitPresentation() }
+                else { configureSnippetsCloud() }
             },
             switchToCloud: { [weak self] in
                 self?.closeCloudAccountSheet()
@@ -2475,8 +2477,8 @@ private final class SyncSettingsViewController: NSViewController {
                 expiresAt: expiresAt)
         case .approvalReady(let code):
             confirmPairingApproval(code: code)
-        case .strongAuthenticationRequired(let action):
-            requestStrongAuthentication(for: action)
+        case .localAuthenticationRequired(let action):
+            authenticateAndContinue(action: action)
         case .recoveryKitAuthenticationRequired:
             authenticateRecoveryKitPresentation()
         case .recoveryKitReady(let payload, let code):
@@ -2760,7 +2762,7 @@ private final class SyncSettingsViewController: NSViewController {
 
     private func confirmPairingApproval(code: String) {
         let alert = NSAlert()
-        alert.messageText = "Add This iPhone or Mac?"
+        alert.messageText = "Approve This Device?"
         alert.informativeText = SnippetsCloudPairingApprovalCopy.message(
             code: code,
             localAuthentication: "Touch ID or the Mac password")
@@ -2774,41 +2776,13 @@ private final class SyncSettingsViewController: NSViewController {
         }
     }
 
-    private func requestStrongAuthentication(for action: SnippetsCloudAccountBootstrap.StrongAction) {
-        if action == .createInitialRecovery {
-            let alert = NSAlert()
-            alert.messageText = "Protect Your Recovery Kit"
-            alert.informativeText = "Finish with a fresh passkey check. Apple or Google may identify the account, but they never become the key to your snippets."
-            alert.addButton(withTitle: "Continue")
-            alert.addButton(withTitle: "Cancel")
-            if alert.runModal() == .alertFirstButtonReturn { continueWithStrongCloudSignIn() }
-        } else {
-            authenticateAndContinue(action: action)
-        }
-    }
-
-    private func authenticateAndContinue(action: SnippetsCloudAccountBootstrap.StrongAction) {
+    private func authenticateAndContinue(action: SnippetsCloudAccountBootstrap.LocalAction) {
         runCloudTask("Approval Failed") { [weak self] in
             guard let self else { return }
             try await requireMacOwnerAuthentication(reason: action == .approveDevice
                 ? "Approve a new device for your encrypted Snippets library"
                 : "Replace your Snippets Cloud recovery kit")
-            self.continueWithStrongCloudSignIn()
-        }
-    }
-
-    private func continueWithStrongCloudSignIn() {
-        guard let server = cloudBootstrap.selection.cloudCoordinates?.serverURL else {
-            showCloudError("Couldn’t Continue", error: SnippetsCloudAccountBootstrap.Failure.invalidState)
-            return
-        }
-        runCloudTask("Secure Approval Failed") { [weak self] in
-            guard let self else { return }
-            try self.presentCloudState(try await self.cloudBootstrap.signIn(
-                serverURL: server,
-                strong: true,
-                chooseLibrary: self.chooseCloudLibrary,
-                presentationContext: self))
+            try presentCloudState(try await cloudBootstrap.continueAfterLocalAuthentication())
         }
     }
 
@@ -3033,9 +3007,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         stack.addArrangedSubview(section(
             title: "Account",
             lines: [
-                bootstrap.libraryID.map { "Snippets Cloud · Library ID \($0)" }
-                    ?? "No Snippets Cloud account is connected.",
-                "Selected encrypted library",
+                selection.cloudAccountDisplayName,
+                bootstrap.libraryID.map { "Library ID \($0) · Used for support" } ?? "No library selected",
             ]))
         stack.addArrangedSubview(section(
             title: "Sync",
@@ -3081,12 +3054,13 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     }
 
     private enum Action: Equatable {
-        case continueSetup, switchToCloud, syncNow, addDevice, replaceRecovery
+        case manageAccount, continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
         case changeAccount, changeLibrary, disconnect
 
         var selector: Selector {
             switch self {
-            case .continueSetup:
+            case .manageAccount: #selector(MacSnippetsCloudAccountViewController.manageAccountPressed)
+            case .continueSetup, .saveRecovery:
                 #selector(MacSnippetsCloudAccountViewController.continueSetupPressed)
             case .switchToCloud:
                 #selector(MacSnippetsCloudAccountViewController.switchToCloudPressed)
@@ -3115,6 +3089,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
                     "Save and Check Recovery Kit…"
                 default: "Continue Setup…"
                 }
+            case .manageAccount: "Manage Account and Sign-In Methods…"
+            case .saveRecovery: "Save Recovery Kit — Recommended…"
             case .switchToCloud: "Use Snippets Cloud for Sync…"
             case .syncNow: "Sync Now"
             case .addDevice: "Scan a New Device Invitation…"
@@ -3136,34 +3112,27 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             [.continueSetup]
         case .ready:
             (selection.provider == .snippetsCloud ? [.syncNow] : [.switchToCloud])
+                + (selection.cloudAccountCenterURL != nil ? [.manageAccount] : [])
+                + (bootstrap.hasPendingRecoveryKit ? [.saveRecovery] : [])
                 + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
         case .setupInterrupted:
             [.continueSetup, .changeAccount]
         case .setupStateUnverified:
             [.continueSetup]
-        case .strongAuthenticationRequired(.replaceRecovery),
+        case .localAuthenticationRequired(.replaceRecovery),
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
         case .needsTrustedDeviceOrRecovery, .waitingForApproval,
-             .approvalReady, .strongAuthenticationRequired:
+             .approvalReady, .localAuthenticationRequired:
             [.continueSetup, .changeAccount, .disconnect]
         }
     }
 
     private var accountStatusTitle: String {
-        switch state {
-        case .signedOut: "Not Connected"
-        case .ready: "Account Connected"
-        case .setupInterrupted: "Library Setup Interrupted"
-        case .setupStateUnverified: "Cloud Setup State Could Not Be Verified"
-        case .needsTrustedDeviceOrRecovery: "Library Locked"
-        case .waitingForApproval: "Waiting for Device Approval"
-        case .approvalReady, .strongAuthenticationRequired(.approveDevice):
-            "Device Approval Required"
-        case .strongAuthenticationRequired(.createInitialRecovery),
-             .strongAuthenticationRequired(.replaceRecovery),
-             .recoveryKitAuthenticationRequired, .recoveryKitReady:
-            "Recovery Kit Needs to Be Saved"
+        switch bootstrap.cloudSessionState {
+        case .signedOut: "Not connected"
+        case .connected: "Account connected"
+        case .reviewRequired: "Account needs review"
         }
     }
 
@@ -3179,21 +3148,10 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     }
 
     private var libraryAccess: String {
-        switch state {
-        case .ready, .recoveryKitAuthenticationRequired, .recoveryKitReady,
-             .strongAuthenticationRequired(.replaceRecovery), .approvalReady,
-             .strongAuthenticationRequired(.approveDevice):
-            "unlocked on this Mac"
-        case .needsTrustedDeviceOrRecovery, .waitingForApproval:
-            "waiting for an approved device or recovery kit"
-        case .setupInterrupted:
-            "could not determine whether this library is new or already encrypted"
-        case .setupStateUnverified:
-            "cloud access is paused until the saved setup state can be read"
-        case .strongAuthenticationRequired(.createInitialRecovery):
-            "preparing library access"
-        case .signedOut:
-            "sign in first"
+        switch bootstrap.libraryAccessState {
+        case .unlocked: "Unlocked on this device"
+        case .locked: "Use an approved device or recovery kit"
+        case .setupPending: "Library setup needs to be completed"
         }
     }
 
@@ -3225,6 +3183,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         return stack
     }
 
+    @objc private func manageAccountPressed() { if let url = selection.cloudAccountCenterURL { NSWorkspace.shared.open(url) } }
     @objc private func continueSetupPressed() { continueSetup() }
     @objc private func switchToCloudPressed() { switchToCloud() }
     @objc private func syncNowPressed() { syncNowAction() }

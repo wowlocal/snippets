@@ -35,6 +35,13 @@ class CoreBridge {
             needsUserAttention = payload.getBoolean("needsUserAttention"))
     }
 
+    fun libraryAuthority(bundle: String, server: String, instance: String, space: String): String =
+        value(SnippetsAndroidCore.cloudLibraryAuthority(bundle, server, instance, space))
+
+    fun signLibraryChallenge(bundle: String, server: String, instance: String, space: String,
+                             challenge: String, nonce: String): JSONObject =
+        JSONObject(value(SnippetsAndroidCore.signCloudLibraryChallenge(bundle, server, instance, space, challenge, nonce)))
+
     private fun value(response: String): String {
         val objectValue = JSONObject(response)
         if (!objectValue.optBoolean("ok")) {

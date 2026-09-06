@@ -75,6 +75,24 @@ func (e ClaimPairingResponseAlgorithm) Valid() bool {
 	}
 }
 
+// Defines values for CreateLibraryChallengeRequestAction.
+const (
+	CreateLibraryChallengeRequestActionApprovePairing  CreateLibraryChallengeRequestAction = "approve_pairing"
+	CreateLibraryChallengeRequestActionReplaceRecovery CreateLibraryChallengeRequestAction = "replace_recovery"
+)
+
+// Valid indicates whether the value is a known member of the CreateLibraryChallengeRequestAction enum.
+func (e CreateLibraryChallengeRequestAction) Valid() bool {
+	switch e {
+	case CreateLibraryChallengeRequestActionApprovePairing:
+		return true
+	case CreateLibraryChallengeRequestActionReplaceRecovery:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DiscoveryProtocolMajor.
 const (
 	N2 DiscoveryProtocolMajor = 2
@@ -92,13 +110,13 @@ func (e DiscoveryProtocolMajor) Valid() bool {
 
 // Defines values for DiscoveryProtocolMinor.
 const (
-	N0 DiscoveryProtocolMinor = 0
+	N1 DiscoveryProtocolMinor = 1
 )
 
 // Valid indicates whether the value is a known member of the DiscoveryProtocolMinor enum.
 func (e DiscoveryProtocolMinor) Valid() bool {
 	switch e {
-	case N0:
+	case N1:
 		return true
 	default:
 		return false
@@ -186,6 +204,24 @@ const (
 func (e HealthStatus) Valid() bool {
 	switch e {
 	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryChallengeAction.
+const (
+	LibraryChallengeActionApprovePairing  LibraryChallengeAction = "approve_pairing"
+	LibraryChallengeActionReplaceRecovery LibraryChallengeAction = "replace_recovery"
+)
+
+// Valid indicates whether the value is a known member of the LibraryChallengeAction enum.
+func (e LibraryChallengeAction) Valid() bool {
+	switch e {
+	case LibraryChallengeActionApprovePairing:
+		return true
+	case LibraryChallengeActionReplaceRecovery:
 		return true
 	default:
 		return false
@@ -415,6 +451,7 @@ func (e SpaceRole) Valid() bool {
 type ApprovePairingRequest struct {
 	Algorithm        ApprovePairingRequestAlgorithm `json:"algorithm"`
 	Ciphertext       []byte                         `json:"ciphertext"`
+	Proof            *LibraryActionProof            `json:"proof,omitempty"`
 	RecipientKeyHash []byte                         `json:"recipientKeyHash"`
 }
 
@@ -473,6 +510,17 @@ type ClaimPairingResponse struct {
 // ClaimPairingResponseAlgorithm defines model for ClaimPairingResponse.Algorithm.
 type ClaimPairingResponseAlgorithm string
 
+// CreateLibraryChallengeRequest defines model for CreateLibraryChallengeRequest.
+type CreateLibraryChallengeRequest struct {
+	Action        CreateLibraryChallengeRequestAction `json:"action"`
+	ExpectedScope Scope                               `json:"expectedScope"`
+	KeyEpoch      int                                 `json:"keyEpoch"`
+	RequestHash   []byte                              `json:"requestHash"`
+}
+
+// CreateLibraryChallengeRequestAction defines model for CreateLibraryChallengeRequest.Action.
+type CreateLibraryChallengeRequestAction string
+
 // CreatePairingRequest defines model for CreatePairingRequest.
 type CreatePairingRequest struct {
 	ExpiresInSeconds   int    `json:"expiresInSeconds"`
@@ -512,6 +560,45 @@ type Health struct {
 
 // HealthStatus defines model for Health.Status.
 type HealthStatus string
+
+// KeyAuthorityResponse defines model for KeyAuthorityResponse.
+type KeyAuthorityResponse struct {
+	KeyEpoch  int     `json:"keyEpoch"`
+	PublicKey *[]byte `json:"publicKey"`
+	Scope     Scope   `json:"scope"`
+}
+
+// KeyBootstrapRequest defines model for KeyBootstrapRequest.
+type KeyBootstrapRequest struct {
+	ExpectedScope Scope                      `json:"expectedScope"`
+	PublicKey     []byte                     `json:"publicKey"`
+	Recovery      PutRecoveryEnvelopeRequest `json:"recovery"`
+}
+
+// LibraryActionProof defines model for LibraryActionProof.
+type LibraryActionProof struct {
+	ChallengeId openapi_types.UUID `json:"challengeId"`
+	Signature   []byte             `json:"signature"`
+}
+
+// LibraryChallenge defines model for LibraryChallenge.
+type LibraryChallenge struct {
+	Action      LibraryChallengeAction `json:"action"`
+	ChallengeId openapi_types.UUID     `json:"challengeId"`
+	ExpiresAt   time.Time              `json:"expiresAt"`
+	KeyEpoch    int                    `json:"keyEpoch"`
+	Nonce       []byte                 `json:"nonce"`
+	RequestHash []byte                 `json:"requestHash"`
+}
+
+// LibraryChallengeAction defines model for LibraryChallenge.Action.
+type LibraryChallengeAction string
+
+// LibraryChallengeResponse defines model for LibraryChallengeResponse.
+type LibraryChallengeResponse struct {
+	Challenge LibraryChallenge `json:"challenge"`
+	Scope     Scope            `json:"scope"`
+}
 
 // Limits defines model for Limits.
 type Limits struct {
@@ -557,9 +644,6 @@ type OIDCDiscovery struct {
 	MaxAccessTokenAgeSeconds int                            `json:"maxAccessTokenAgeSeconds"`
 	Resource                 string                         `json:"resource"`
 	Scopes                   []string                       `json:"scopes"`
-	StepUpACRValues          []string                       `json:"stepUpACRValues"`
-	StepUpAMRValues          []string                       `json:"stepUpAMRValues"`
-	StepUpMaxAgeSeconds      int                            `json:"stepUpMaxAgeSeconds"`
 }
 
 // OIDCDiscoveryAuthorizationFlow defines model for OIDCDiscovery.AuthorizationFlow.
@@ -601,6 +685,7 @@ type PutRecoveryEnvelopeRequest struct {
 	Ciphertext      []byte                              `json:"ciphertext"`
 	ExpectedVersion *int                                `json:"expectedVersion"`
 	KeyEpoch        int                                 `json:"keyEpoch"`
+	Proof           *LibraryActionProof                 `json:"proof,omitempty"`
 }
 
 // PutRecoveryEnvelopeRequestAlgorithm defines model for PutRecoveryEnvelopeRequest.Algorithm.
@@ -693,6 +778,12 @@ type GetChangesParams struct {
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// BootstrapLibraryKeyJSONRequestBody defines body for BootstrapLibraryKey for application/json ContentType.
+type BootstrapLibraryKeyJSONRequestBody = KeyBootstrapRequest
+
+// CreateLibraryChallengeJSONRequestBody defines body for CreateLibraryChallenge for application/json ContentType.
+type CreateLibraryChallengeJSONRequestBody = CreateLibraryChallengeRequest
+
 // CreatePairingJSONRequestBody defines body for CreatePairing for application/json ContentType.
 type CreatePairingJSONRequestBody = CreatePairingRequest
 
@@ -731,6 +822,15 @@ type ServerInterface interface {
 
 	// (GET /v2/spaces/{space}/changes)
 	GetChanges(w http.ResponseWriter, r *http.Request, space SpaceID, params GetChangesParams)
+
+	// (GET /v2/spaces/{space}/key-authority)
+	GetKeyAuthority(w http.ResponseWriter, r *http.Request, space SpaceID)
+
+	// (POST /v2/spaces/{space}/key-bootstrap)
+	BootstrapLibraryKey(w http.ResponseWriter, r *http.Request, space SpaceID)
+
+	// (POST /v2/spaces/{space}/key-challenges)
+	CreateLibraryChallenge(w http.ResponseWriter, r *http.Request, space SpaceID)
 
 	// (POST /v2/spaces/{space}/pairings)
 	CreatePairing(w http.ResponseWriter, r *http.Request, space SpaceID)
@@ -949,6 +1049,84 @@ func (siw *ServerInterfaceWrapper) GetChanges(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetChanges(w, r, space, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetKeyAuthority operation middleware
+func (siw *ServerInterfaceWrapper) GetKeyAuthority(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "space" -------------
+	var space SpaceID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "space", r.PathValue("space"), &space, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "space", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetKeyAuthority(w, r, space)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BootstrapLibraryKey operation middleware
+func (siw *ServerInterfaceWrapper) BootstrapLibraryKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "space" -------------
+	var space SpaceID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "space", r.PathValue("space"), &space, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "space", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BootstrapLibraryKey(w, r, space)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateLibraryChallenge operation middleware
+func (siw *ServerInterfaceWrapper) CreateLibraryChallenge(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "space" -------------
+	var space SpaceID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "space", r.PathValue("space"), &space, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "space", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateLibraryChallenge(w, r, space)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1329,6 +1507,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v2/spaces", wrapper.ListSpaces)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/spaces", wrapper.CreateSpace)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v2/spaces/{space}", wrapper.GetSpace)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v2/spaces/{space}/key-authority", wrapper.GetKeyAuthority)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/spaces/{space}/key-bootstrap", wrapper.BootstrapLibraryKey)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/spaces/{space}/key-challenges", wrapper.CreateLibraryChallenge)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v2/spaces/{space}/changes", wrapper.GetChanges)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/spaces/{space}/records/batch", wrapper.SubmitRecords)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v2/spaces/{space}/recovery-envelope", wrapper.GetRecoveryEnvelope)
@@ -1619,6 +1800,125 @@ type GetChangesdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response GetChangesdefaultApplicationProblemPlusJSONResponse) VisitGetChangesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetKeyAuthorityRequestObject struct {
+	Space SpaceID `json:"space"`
+}
+
+type GetKeyAuthorityResponseObject interface {
+	VisitGetKeyAuthorityResponse(w http.ResponseWriter) error
+}
+
+type GetKeyAuthority200JSONResponse KeyAuthorityResponse
+
+func (response GetKeyAuthority200JSONResponse) VisitGetKeyAuthorityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetKeyAuthoritydefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetKeyAuthoritydefaultApplicationProblemPlusJSONResponse) VisitGetKeyAuthorityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BootstrapLibraryKeyRequestObject struct {
+	Space SpaceID `json:"space"`
+	Body  *BootstrapLibraryKeyJSONRequestBody
+}
+
+type BootstrapLibraryKeyResponseObject interface {
+	VisitBootstrapLibraryKeyResponse(w http.ResponseWriter) error
+}
+
+type BootstrapLibraryKey200JSONResponse RecoveryEnvelopeResponse
+
+func (response BootstrapLibraryKey200JSONResponse) VisitBootstrapLibraryKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BootstrapLibraryKeydefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response BootstrapLibraryKeydefaultApplicationProblemPlusJSONResponse) VisitBootstrapLibraryKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateLibraryChallengeRequestObject struct {
+	Space SpaceID `json:"space"`
+	Body  *CreateLibraryChallengeJSONRequestBody
+}
+
+type CreateLibraryChallengeResponseObject interface {
+	VisitCreateLibraryChallengeResponse(w http.ResponseWriter) error
+}
+
+type CreateLibraryChallenge200JSONResponse LibraryChallengeResponse
+
+func (response CreateLibraryChallenge200JSONResponse) VisitCreateLibraryChallengeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateLibraryChallengedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateLibraryChallengedefaultApplicationProblemPlusJSONResponse) VisitCreateLibraryChallengeResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1971,6 +2271,15 @@ type StrictServerInterface interface {
 	// (GET /v2/spaces/{space}/changes)
 	GetChanges(ctx context.Context, request GetChangesRequestObject) (GetChangesResponseObject, error)
 
+	// (GET /v2/spaces/{space}/key-authority)
+	GetKeyAuthority(ctx context.Context, request GetKeyAuthorityRequestObject) (GetKeyAuthorityResponseObject, error)
+
+	// (POST /v2/spaces/{space}/key-bootstrap)
+	BootstrapLibraryKey(ctx context.Context, request BootstrapLibraryKeyRequestObject) (BootstrapLibraryKeyResponseObject, error)
+
+	// (POST /v2/spaces/{space}/key-challenges)
+	CreateLibraryChallenge(ctx context.Context, request CreateLibraryChallengeRequestObject) (CreateLibraryChallengeResponseObject, error)
+
 	// (POST /v2/spaces/{space}/pairings)
 	CreatePairing(ctx context.Context, request CreatePairingRequestObject) (CreatePairingResponseObject, error)
 
@@ -2234,6 +2543,98 @@ func (sh *strictHandler) GetChanges(w http.ResponseWriter, r *http.Request, spac
 	}
 }
 
+// GetKeyAuthority operation middleware
+func (sh *strictHandler) GetKeyAuthority(w http.ResponseWriter, r *http.Request, space SpaceID) {
+	var request GetKeyAuthorityRequestObject
+
+	request.Space = space
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetKeyAuthority(ctx, request.(GetKeyAuthorityRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetKeyAuthority")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetKeyAuthorityResponseObject); ok {
+		if err := validResponse.VisitGetKeyAuthorityResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BootstrapLibraryKey operation middleware
+func (sh *strictHandler) BootstrapLibraryKey(w http.ResponseWriter, r *http.Request, space SpaceID) {
+	var request BootstrapLibraryKeyRequestObject
+
+	request.Space = space
+
+	var body BootstrapLibraryKeyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BootstrapLibraryKey(ctx, request.(BootstrapLibraryKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BootstrapLibraryKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BootstrapLibraryKeyResponseObject); ok {
+		if err := validResponse.VisitBootstrapLibraryKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateLibraryChallenge operation middleware
+func (sh *strictHandler) CreateLibraryChallenge(w http.ResponseWriter, r *http.Request, space SpaceID) {
+	var request CreateLibraryChallengeRequestObject
+
+	request.Space = space
+
+	var body CreateLibraryChallengeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateLibraryChallenge(ctx, request.(CreateLibraryChallengeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateLibraryChallenge")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateLibraryChallengeResponseObject); ok {
+		if err := validResponse.VisitCreateLibraryChallengeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // CreatePairing operation middleware
 func (sh *strictHandler) CreatePairing(w http.ResponseWriter, r *http.Request, space SpaceID) {
 	var request CreatePairingRequestObject
@@ -2479,60 +2880,63 @@ func (sh *strictHandler) PutRecoveryEnvelope(w http.ResponseWriter, r *http.Requ
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"AP//",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

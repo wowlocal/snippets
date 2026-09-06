@@ -898,3 +898,9 @@ notarization does **not** check that.
 | First publisher wins the identity slot | Deterministic without a protocol, and it can never re-point an existing vault at a key its records were not sealed under | Last writer wins; merging two vaults automatically |
 | CLI reveal is app-brokered | A CLI that can decrypt unattended makes every `curl \| sh` an exfiltration primitive; routing through the app puts a human in the loop | Never revealing at all (simpler, ~900 lines lighter); giving the CLI the Keychain group unconditionally |
 | Peer check anchored to the team ID | The CLI is a bare Mach-O with its own signing identifier, so a bundle-id requirement would not match it | Checking the bundle id; trusting `LOCAL_PEERPID` alone (racy — pids are reused) |
+
+Snippets Cloud account login is now described by
+[`server/ADR/0004-conventional-account-login.md`](../server/ADR/0004-conventional-account-login.md).
+The unshipped older passkey-first API is replaced by ordinary OIDC login plus device
+proof of the library key for approval and recovery replacement. Recovery-kit deferral
+allows sync and leaves a Settings reminder. This does not change CloudKit authentication.

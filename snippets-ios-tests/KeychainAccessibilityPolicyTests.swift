@@ -69,7 +69,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             writer.spaceID)
     }
 
-    func testPendingRecoveryKitBlocksCloudDisconnectBeforeRevocation() async throws {
+    func testUnsavedRecoveryKitDoesNotBlockRemoteRevocation() async throws {
         let defaultsName = "KeychainAccessibilityPolicyTests.recovery-disconnect.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
         defer { defaults.removePersistentDomain(forName: defaultsName) }
@@ -97,10 +97,10 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
 
         do {
             try await bootstrap.signOutThisDevice()
-            XCTFail("Expected pending recovery setup to block disconnect")
-        } catch let failure as SnippetsCloudAccountBootstrap.Failure {
-            guard case .invalidState = failure else {
-                return XCTFail("Expected invalidState, got \(failure)")
+            XCTFail("The unconfigured test connection cannot revoke a remote session")
+        } catch let failure as SyncBackendSelectionStore.Failure {
+            guard case .missingConfiguration = failure else {
+                return XCTFail("Expected revocation configuration check, got \(failure)")
             }
         }
         XCTAssertNotNil(try bootstrapSecrets.loadItem(

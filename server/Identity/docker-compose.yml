@@ -1,0 +1,36 @@
+# Regional identity stack. Global deployments use a separate Logto Cloud tenant.
+# Terminate TLS on a regional ingress; keep admin port private. Credentials are
+# supplied by the operator's secret manager and never by a native client.
+name: snippets-identity
+services:
+  logto-db:
+    image: postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382
+    environment:
+      POSTGRES_DB: logto
+      POSTGRES_USER: logto
+      POSTGRES_PASSWORD: ${LOGTO_DB_PASSWORD:?provide a dedicated identity database password}
+    volumes:
+      - identity-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U logto -d logto']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  logto:
+    image: svhd/logto:1.43.0
+    depends_on:
+      logto-db:
+        condition: service_healthy
+    entrypoint: [sh, -c, 'npm run cli db seed -- --swe && npm start']
+    environment:
+      DB_URL: ${LOGTO_DB_URL:?postgres://logto:URL_ENCODED_PASSWORD@logto-db:5432/logto}
+      ENDPOINT: ${LOGTO_ENDPOINT:?https://identity endpoint in this region}
+      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:?private HTTPS administration endpoint}
+      TRUST_PROXY_HEADER: '1'
+    ports:
+      - '127.0.0.1:${LOGTO_PORT:-3001}:3001'
+      - '127.0.0.1:${LOGTO_ADMIN_PORT:-3002}:3002'
+    restart: unless-stopped
+volumes:
+  identity-data:

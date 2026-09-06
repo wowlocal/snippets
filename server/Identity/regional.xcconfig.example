@@ -1,0 +1,5 @@
+// Distinct server instance, issuer, users, database, callbacks and regional SMTP.
+SNIPPETS_CLOUD_ENABLED = NO
+SNIPPETS_CLOUD_BASE_URL = https:/$()/sync.regional.example.invalid
+SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST = callback.regional.example.invalid
+SNIPPETS_CLOUD_ACCOUNT_CENTER_URL = https:/$()/identity.regional.example.invalid/account/profile

@@ -80,8 +80,7 @@ if [[ "${function_owners//$'\r'/}" != "t" ]]; then
     exit 1
 fi
 
-# The squashed production baseline has no migrations to replay, so the runner is a
-# no-op until the first post-launch schema change.
+# Apply the additive authority migration and prove that replay is a no-op.
 for _ in 1 2; do
     run_migrations snippets_sync_test
 done

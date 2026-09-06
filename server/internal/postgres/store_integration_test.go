@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -37,8 +39,14 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	testLibraryActionTransactions(t, store)
 	first, second := integrationPrincipal(1), integrationPrincipal(2)
 	space, err := store.CreateSpace(ctx, first, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, signingKey, _ := ed25519.GenerateKey(rand.Reader)
+	_, _, err = store.BootstrapLibraryKey(ctx, first, space.Scope.SpaceID, domain.KeyBootstrap{ExpectedScope: space.Scope, PublicKey: authority, Recovery: domain.PutRecoveryEnvelope{KeyEpoch: 1, Algorithm: domain.RecoveryAlgorithm, Ciphertext: []byte("bootstrap")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,11 +113,16 @@ func TestPostgresTenantCASRestoreAndLogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	keyHash := sha256.Sum256(publicKey)
-	if _, _, err := store.ApprovePairing(ctx, first, space.Scope.SpaceID, pairing.ID, domain.ApprovePairing{
-		RecipientKeyHash: keyHash[:], Algorithm: domain.PairingAlgorithm, Ciphertext: []byte("reader envelope"),
-	}); err != nil {
+	approval := domain.ApprovePairing{RecipientKeyHash: keyHash[:], Algorithm: domain.PairingAlgorithm, Ciphertext: []byte("reader envelope")}
+	_, challenge, err := store.CreateLibraryChallenge(ctx, first, space.Scope.SpaceID, domain.CreateLibraryChallenge{ExpectedScope: space.Scope, Action: domain.ApproveDevice, KeyEpoch: 1, RequestHash: approval.ActionHash(pairing.ID)})
+	if err != nil {
 		t.Fatal(err)
 	}
+	approval.Proof = &domain.LibraryActionProof{ChallengeID: challenge.ID, Signature: ed25519.Sign(signingKey, append([]byte("snippets-library-action-proof-v1\n"), challenge.Nonce...))}
+	if _, _, err := store.ApprovePairing(ctx, first, space.Scope.SpaceID, pairing.ID, approval); err != nil {
+		t.Fatal(err)
+	}
+
 	_, readerClaim, err := store.ClaimPairing(ctx, second, space.Scope.SpaceID, pairing.ID)
 	if err != nil || string(readerClaim.Ciphertext) != "reader envelope" {
 		t.Fatalf("reader claim contract diverged: %v %#v", err, readerClaim)

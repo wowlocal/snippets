@@ -42,7 +42,7 @@ func (s *Store) PutRecoveryEnvelope(ctx context.Context, principal domain.Princi
 	var envelope domain.RecoveryEnvelope
 	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
 		var err error
-		space, err = getSpace(ctx, tx, spaceID)
+		space, err = lockKeySpace(ctx, tx, spaceID)
 		if err != nil {
 			return err
 		}
@@ -54,6 +54,14 @@ func (s *Store) PutRecoveryEnvelope(ctx context.Context, principal domain.Princi
 		}
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 37))", spaceID.String()+":recovery"); err != nil {
 			return err
+		}
+		receipt, err := checkLibraryAction(ctx, tx, principal, space, request.Proof, domain.ReplaceRecovery, request.ActionHash())
+		if err != nil {
+			return err
+		}
+		if receipt.Recovery != nil {
+			envelope = *receipt.Recovery
+			return nil
 		}
 		var current int
 		err = tx.QueryRow(ctx, "SELECT version FROM recovery_envelopes WHERE space_id=$1", spaceID).Scan(&current)
@@ -69,7 +77,10 @@ func (s *Store) PutRecoveryEnvelope(ctx context.Context, principal domain.Princi
 		err = tx.QueryRow(ctx, `INSERT INTO recovery_envelopes(space_id,version,key_epoch,algorithm,ciphertext) VALUES($1,$2,$3,$4,$5)
             ON CONFLICT(space_id) DO UPDATE SET version=EXCLUDED.version,key_epoch=EXCLUDED.key_epoch,algorithm=EXCLUDED.algorithm,ciphertext=EXCLUDED.ciphertext,created_at=clock_timestamp(),updated_at=clock_timestamp()
             RETURNING version,key_epoch,algorithm,ciphertext,created_at`, spaceID, next, request.KeyEpoch, request.Algorithm, request.Ciphertext).Scan(&envelope.Version, &envelope.KeyEpoch, &envelope.Algorithm, &envelope.Ciphertext, &envelope.CreatedAt)
-		return err
+		if err != nil {
+			return err
+		}
+		return storeLibraryReceipt(ctx, tx, space, request.Proof, domain.LibraryActionReceipt{Recovery: &envelope})
 	})
 	return space, envelope, err
 }
@@ -118,12 +129,20 @@ func (s *Store) ApprovePairing(ctx context.Context, principal domain.Principal, 
 	var pairing domain.Pairing
 	err := s.withPrincipal(ctx, principal, func(tx pgx.Tx, _ uuid.UUID) error {
 		var err error
-		space, err = getSpace(ctx, tx, spaceID)
+		space, err = lockKeySpace(ctx, tx, spaceID)
 		if err != nil {
 			return err
 		}
 		if !space.Role.CanWrite() {
 			return domain.NewError(domain.Forbidden)
+		}
+		receipt, err := checkLibraryAction(ctx, tx, principal, space, request.Proof, domain.ApproveDevice, request.ActionHash(pairingID))
+		if err != nil {
+			return err
+		}
+		if receipt.Pairing != nil {
+			pairing = *receipt.Pairing
+			return nil
 		}
 		var keyHash []byte
 		pairing, keyHash, err = scanPairing(tx.QueryRow(ctx, `SELECT pairing_id,space_id,recipient_public_key,recipient_key_hash,nonce,authentication_tag,algorithm,ciphertext,approved_at,expires_at FROM pairings WHERE space_id=$1 AND pairing_id=$2 FOR UPDATE`, spaceID, pairingID))
@@ -148,7 +167,7 @@ func (s *Store) ApprovePairing(ctx context.Context, principal domain.Principal, 
 		pairing.State = domain.PairingApproved
 		pairing.Algorithm = &algorithm
 		pairing.Ciphertext = append([]byte(nil), request.Ciphertext...)
-		return nil
+		return storeLibraryReceipt(ctx, tx, space, request.Proof, domain.LibraryActionReceipt{Pairing: &pairing})
 	})
 	return space, pairing, err
 }

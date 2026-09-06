@@ -63,7 +63,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         let recovery: RecoveryEnvelopeDTO?
     }
 
-    private struct ScopeDTO: Decodable {
+    private struct ScopeDTO: Codable {
         let serverInstanceId: UUID
         let spaceId: UUID
         let scopeBinding: String
@@ -108,19 +108,21 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     private struct ApprovePairingDTO: Encodable {
+        var proof: LibraryActionAuthorization.Proof? = nil
         let recipientKeyHash: Data
         let algorithm: String
         let ciphertext: Data
     }
 
     private struct PutRecoveryDTO: Encodable {
+        var proof: LibraryActionAuthorization.Proof? = nil
         let expectedVersion: Int?
         let keyEpoch: Int
         let algorithm: String
         let ciphertext: Data
 
         private enum CodingKeys: String, CodingKey {
-            case expectedVersion, keyEpoch, algorithm, ciphertext
+            case expectedVersion, keyEpoch, algorithm, ciphertext, proof
         }
 
         func encode(to encoder: Encoder) throws {
@@ -133,6 +135,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
             try values.encode(keyEpoch, forKey: .keyEpoch)
             try values.encode(algorithm, forKey: .algorithm)
             try values.encode(ciphertext, forKey: .ciphertext)
+            try values.encodeIfPresent(proof, forKey: .proof)
         }
     }
 
@@ -204,15 +207,20 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     func putRecoveryEnvelope(
         keyEpoch: Int,
         expectedVersion: Int?,
-        ciphertext: Data
+        ciphertext: Data,
+        material: Data
     ) async throws -> RecoveryState.Envelope {
         guard keyEpoch > 0, ciphertext.count <= Self.maximumEnvelopeBytes else {
             throw Failure.invalidConfiguration
         }
+        let proof = try await actionProof(action: "replace_recovery", keyEpoch: keyEpoch,
+            requestHash: LibraryActionAuthorization.recoveryHash(keyEpoch: keyEpoch,
+                expectedVersion: expectedVersion, ciphertext: ciphertext), material: material)
         let response: RecoveryStateDTO = try await request(
             method: "PUT",
             path: "recovery-envelope",
             body: PutRecoveryDTO(
+                proof: proof,
                 expectedVersion: expectedVersion,
                 keyEpoch: keyEpoch,
                 algorithm: LibraryKeyBootstrap.recoveryAlgorithm,
@@ -230,6 +238,78 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
             keyEpoch: value.keyEpoch,
             algorithm: value.algorithm,
             ciphertext: value.ciphertext)
+    }
+
+    private struct AuthorityDTO: Decodable {
+        let scope: ScopeDTO
+        let keyEpoch: Int
+        let publicKey: Data?
+    }
+
+    private func scopeDTO(_ scope: Scope) -> ScopeDTO {
+        .init(serverInstanceId: scope.serverInstanceID, spaceId: scope.spaceID,
+              scopeBinding: scope.scopeBinding, datasetGeneration: scope.datasetGeneration,
+              feedEpoch: scope.feedEpoch)
+    }
+
+    /// A recovered key must match the immutable server authority before activation.
+    func verifyAuthority(material: Data) async throws {
+        let value: AuthorityDTO = try await request(method: "GET", path: "key-authority")
+        try validate(value.scope)
+        guard value.keyEpoch > 0 else { throw Failure.invalidResponse }
+        guard value.publicKey == (try authorityKey(material)) else { throw Failure.invalidResponse }
+    }
+
+    private func authorityKey(_ material: Data) throws -> Data {
+        try LibraryActionAuthorization.publicKey(material: material, serverURL: baseURL,
+            serverInstanceID: serverInstanceID, spaceID: spaceID)
+    }
+
+    func bootstrapLibraryKey(keyEpoch: Int, ciphertext: Data, material: Data) async throws -> RecoveryState.Envelope {
+        struct Body: Encodable {
+            let expectedScope: ScopeDTO
+            let publicKey: Data
+            let recovery: PutRecoveryDTO
+        }
+        let current = try await recoveryState()
+        guard current.keyEpoch == keyEpoch else { throw Failure.invalidResponse }
+        let response: RecoveryStateDTO = try await request(method: "POST", path: "key-bootstrap",
+            body: Body(expectedScope: scopeDTO(current.scope), publicKey: try authorityKey(material),
+                recovery: .init(expectedVersion: nil, keyEpoch: keyEpoch,
+                    algorithm: LibraryKeyBootstrap.recoveryAlgorithm, ciphertext: ciphertext)))
+        guard try validatedScope(response.scope) == current.scope,
+              response.keyEpoch == keyEpoch, let envelope = response.recovery,
+              envelope.version == 1, envelope.keyEpoch == keyEpoch,
+              envelope.algorithm == LibraryKeyBootstrap.recoveryAlgorithm,
+              envelope.ciphertext == ciphertext else { throw Failure.invalidResponse }
+        return .init(version: envelope.version, keyEpoch: keyEpoch,
+                     algorithm: envelope.algorithm, ciphertext: envelope.ciphertext)
+    }
+
+    private func actionProof(action: String, keyEpoch: Int, requestHash: Data,
+                             material: Data) async throws -> LibraryActionAuthorization.Proof {
+        struct Body: Encodable {
+            let expectedScope: ScopeDTO; let action: String; let keyEpoch: Int; let requestHash: Data
+        }
+        struct Challenge: Decodable {
+            let challengeId: UUID; let action: String; let keyEpoch: Int
+            let requestHash: Data; let nonce: Data; let expiresAt: String
+        }
+        struct Response: Decodable { let scope: ScopeDTO; let challenge: Challenge }
+        let authority: AuthorityDTO = try await request(method: "GET", path: "key-authority")
+        let scope = try validatedScope(authority.scope)
+        let key = try authorityKey(material)
+        guard authority.keyEpoch == keyEpoch, authority.publicKey == key else { throw Failure.invalidResponse }
+        let response: Response = try await request(method: "POST", path: "key-challenges", body: Body(
+            expectedScope: scopeDTO(scope), action: action, keyEpoch: keyEpoch, requestHash: requestHash))
+        let challenge = response.challenge
+        guard try validatedScope(response.scope) == scope,
+              challenge.action == action, challenge.keyEpoch == keyEpoch,
+              challenge.requestHash == requestHash, challenge.nonce.count == 32,
+              let expiry = Self.parseServerDate(challenge.expiresAt),
+              expiry.timeIntervalSinceNow > 0, expiry.timeIntervalSinceNow <= 330 else { throw Failure.invalidResponse }
+        return try LibraryActionAuthorization.sign(nonce: challenge.nonce, challengeID: challenge.challengeId,
+            material: material, serverURL: baseURL, serverInstanceID: serverInstanceID, spaceID: spaceID)
     }
 
     func createPairing(_ draft: LibraryKeyBootstrap.PairingDraft) async throws -> Pairing {
@@ -264,12 +344,19 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
         _ pairingID: UUID,
         publicKey: Data,
         nonce: Data,
-        ciphertext: Data
+        ciphertext: Data,
+        material: Data
     ) async throws -> Pairing {
+        let remote = try await recoveryState()
+        let proof = try await actionProof(action: "approve_pairing", keyEpoch: remote.keyEpoch,
+            requestHash: LibraryActionAuthorization.pairingHash(pairingID: pairingID,
+                recipientKeyHash: LibraryKeyBootstrap.recipientKeyHash(publicKey),
+                ciphertext: ciphertext), material: material)
         let response: PairingResponseDTO = try await request(
             method: "PUT",
             path: "pairings/\(pairingID.uuidString.lowercased())/approval",
             body: ApprovePairingDTO(
+                proof: proof,
                 recipientKeyHash: LibraryKeyBootstrap.recipientKeyHash(publicKey),
                 algorithm: LibraryKeyBootstrap.pairingAlgorithm,
                 ciphertext: ciphertext))

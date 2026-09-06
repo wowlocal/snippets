@@ -1,0 +1,5 @@
+// Substitute owned global endpoints. Do not enable until the acceptance lane passes.
+SNIPPETS_CLOUD_ENABLED = NO
+SNIPPETS_CLOUD_BASE_URL = https:/$()/sync.global.example.invalid
+SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST = callback.global.example.invalid
+SNIPPETS_CLOUD_ACCOUNT_CENTER_URL = https:/$()/identity.global.example.invalid/account/profile

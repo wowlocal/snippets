@@ -1,8 +1,36 @@
 import Foundation
 @testable import SnippetsCore
 import XCTest
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 final class LibraryKeyBootstrapTests: XCTestCase {
+    func testLibraryActionKeysAreDeterministicAndBoundToDeploymentAndSpace() throws {
+        let material = Data((0..<64).map(UInt8.init))
+        let server = URL(string: "https://sync.example")!
+        let instance = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+        let space = UUID(uuidString: "20000000-0000-0000-0000-000000000001")!
+        let first = try LibraryActionAuthorization.publicKey(material: material, serverURL: server, serverInstanceID: instance, spaceID: space)
+        XCTAssertEqual(first.count, 32)
+        XCTAssertEqual(first.base64EncodedString(), "BpJCgx4cUQSQFyZtp9NGBSH/vu8g+LUff0Gzc60K4kc=")
+        XCTAssertEqual(first, try LibraryActionAuthorization.publicKey(material: material, serverURL: server, serverInstanceID: instance, spaceID: space))
+        XCTAssertNotEqual(first, try LibraryActionAuthorization.publicKey(material: material, serverURL: URL(string: "https://local.example")!, serverInstanceID: instance, spaceID: space))
+        XCTAssertNotEqual(first, try LibraryActionAuthorization.publicKey(material: material, serverURL: server, serverInstanceID: UUID(), spaceID: space))
+        XCTAssertNotEqual(first, try LibraryActionAuthorization.publicKey(material: material, serverURL: server, serverInstanceID: instance, spaceID: UUID()))
+        XCTAssertThrowsError(try LibraryActionAuthorization.publicKey(material: material, serverURL: URL(string: "http://sync.example")!, serverInstanceID: instance, spaceID: space))
+        let nonce = Data(repeating: 7, count: 32)
+        let proof = try LibraryActionAuthorization.sign(nonce: nonce, challengeID: UUID(), material: material, serverURL: server, serverInstanceID: instance, spaceID: space)
+        XCTAssertEqual(proof.signature.count, 64)
+        let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: first)
+        let message = Data("snippets-library-action-proof-v1\n".utf8) + nonce
+        XCTAssertTrue(publicKey.isValidSignature(proof.signature, for: message))
+        XCTAssertTrue(publicKey.isValidSignature(Data(base64Encoded: "SpmC5BUDjmvaeUhXOjcTs6NtUfD+ncwuUbzstz3x7AqqSNwKasvgalPp0F0Ly8JKPW+qqzodsPyV8VuMniznCw==")!, for: message))
+        XCTAssertNotEqual(LibraryActionAuthorization.recoveryHash(keyEpoch: 1, expectedVersion: nil, ciphertext: nonce), LibraryActionAuthorization.recoveryHash(keyEpoch: 1, expectedVersion: 1, ciphertext: nonce))
+    }
+
     func testPairingRoundTripBindsInvitationAndNeverPlacesRootKeyInQR() throws {
         let material = Data((0..<64).map(UInt8.init))
         let bundle = try LibraryKeyBootstrap.PortableKeyBundle(material: material)

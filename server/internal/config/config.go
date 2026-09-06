@@ -232,15 +232,12 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 		return Server{}, err
 	}
 	stepAMRRaw, hasAMR := lookup("OIDC_STEP_UP_AMR_VALUES")
-	stepACRRaw, hasACR := lookup("OIDC_STEP_UP_ACR_VALUES")
-	if environment == Production && !hasAMR && !hasACR {
-		return Server{}, errors.New("missing OIDC step-up assurance values")
-	}
+	stepACRRaw, _ := lookup("OIDC_STEP_UP_ACR_VALUES")
 	if !hasAMR && environment != Production {
 		stepAMRRaw = "webauthn"
 	}
 	stepAMR, stepACR := valueSet(strings.Fields(stepAMRRaw), true), valueSet(strings.Fields(stepACRRaw), false)
-	if len(stepAMR)+len(stepACR) == 0 || len(stepAMR) > 16 || len(stepACR) > 16 {
+	if len(stepAMR) > 16 || len(stepACR) > 16 {
 		return Server{}, errors.New("invalid OIDC step-up assurance values")
 	}
 	if maximumTokenAge < 60 || maximumTokenAge > 86400 || clockSkew > 300 || refresh < 60 || refresh > 3600 || maximumStaleness < refresh || maximumStaleness > 86400 || unknownRefresh < 60 || unknownRefresh > refresh || unknownTTL < unknownRefresh || unknownTTL > 3600 || stepUpAge < 60 || stepUpAge > 3600 {

@@ -1236,13 +1236,6 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         }
     }
 
-    fun launchStepUp() {
-        scope.launch {
-            repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL, stepUp = true)
-                ?.let(loginLauncher::launch)
-        }
-    }
-
     fun scan(onValue: suspend (String) -> Unit) {
         scannerFailed = false
         val scannerHost = activity
@@ -1470,9 +1463,9 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
             SettingsCard(title = "Account") {
                 Text(
                     if (signedIn || setupInterrupted) {
-                        "Snippets Cloud\nLibrary ID ${state.libraryID ?: "—"}"
+                        "${state.accountDisplayName}\nLibrary ID ${state.libraryID ?: "—"} · Used for support"
                     }
-                    else "Continue in your browser with a passkey, Apple, or Google. Snippets has no password and does not require your email.",
+                    else "Continue in your browser with Apple, Google, or an email code. You can add a passkey later.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (!cloudConfigured) {
@@ -1721,7 +1714,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                         Button(
                             enabled = !state.isBusy,
                             onClick = {
-                                authenticateThen(state.approvalConfirmationCode, ::launchStepUp)
+                                authenticateThen(state.approvalConfirmationCode) { scope.launch { repository.continueAfterLocalAuthentication() } }
                             },
                         ) { Text("Approve with biometrics") }
                         TextButton(
@@ -1736,7 +1729,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                         )
                         Button(
                             enabled = !state.isBusy,
-                            onClick = { authenticateThen(operation = ::launchStepUp) },
+                            onClick = { authenticateThen { scope.launch { repository.continueAfterLocalAuthentication() } } },
                         ) { Text("Finish secure setup") }
                     }
 
@@ -1758,6 +1751,17 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     }
 
                     CloudKeyStatus.READY -> {
+                        if (BuildConfig.SNIPPETS_CLOUD_ACCOUNT_CENTER_URL.isNotBlank()) {
+                            TextButton(onClick = { activity?.startActivity(android.content.Intent(
+                                android.content.Intent.ACTION_VIEW, android.net.Uri.parse(BuildConfig.SNIPPETS_CLOUD_ACCOUNT_CENTER_URL)))
+                            }) { Text("Manage account and sign-in methods") }
+                        }
+                        if (state.hasPendingRecoveryKit) {
+                            Text("Save your recovery kit. Sync is available; the kit restores access if you lose all approved devices.")
+                            OutlinedButton(enabled = !state.isBusy, onClick = {
+                                authenticateThen { scope.launch { recoveryPresentation = repository.revealPendingRecoveryKit() } }
+                            }) { Text("Save recovery kit") }
+                        }
                         Text(
                             "Library access: unlocked\nRecovery kit: " +
                                 recoveryStatusCopy(state.recoveryKitStatus),
@@ -1773,7 +1777,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                                 authenticateThen {
                                     scope.launch {
                                         repository.prepareRecoveryKitReplacement()
-                                        launchStepUp()
+                                        repository.continueAfterLocalAuthentication()
                                     }
                                 }
                             },
@@ -1919,7 +1923,7 @@ internal fun cloudErrorPresentation(
         )
     "reauthentication_required" -> CloudErrorPresentation(
         "Confirm this security change",
-        "Your snippets are safe. Continue sign-in to confirm with your passkey.",
+        "Your snippets are safe. Sign in again to continue.",
         CloudErrorAction.SIGN_IN,
         "Re-authenticate",
     )

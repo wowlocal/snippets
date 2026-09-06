@@ -14,6 +14,9 @@ func TestGeneratedContractHasOnlyVersionTwoDataPlane(t *testing.T) {
 		"/v2/spaces/{space}/recovery-envelope": true, "/v2/spaces/{space}/pairings": true,
 		"/v2/spaces/{space}/pairings/{pairing}": true, "/v2/spaces/{space}/pairings/{pairing}/approval": true,
 		"/v2/spaces/{space}/pairings/{pairing}/claim": true,
+		"/v2/spaces/{space}/key-authority":            true,
+		"/v2/spaces/{space}/key-bootstrap":            true,
+		"/v2/spaces/{space}/key-challenges":           true,
 	}
 	if document.Paths.Len() != len(expected) {
 		t.Fatalf("unexpected path count: %d", document.Paths.Len())

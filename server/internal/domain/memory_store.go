@@ -35,7 +35,16 @@ type memoryPairing struct {
 	claimedBy        string
 }
 
+type memoryLibraryChallenge struct {
+	value    LibraryChallenge
+	identity [32]byte
+	scope    Scope
+	receipt  LibraryActionReceipt
+}
+
 type memorySpace struct {
+	authority         []byte
+	challenges        map[uuid.UUID]*memoryLibraryChallenge
 	ownerIdentity     string
 	datasetGeneration uuid.UUID
 	feedEpoch         uuid.UUID
@@ -457,6 +466,13 @@ func (s *MemoryStore) PutRecoveryEnvelope(_ context.Context, principal Principal
 	if request.KeyEpoch != state.keyEpoch {
 		return Space{}, RecoveryEnvelope{}, NewError(Conflict)
 	}
+	challenge, err := s.checkLibraryAction(state, membership, principal, spaceID, request.Proof, ReplaceRecovery, request.ActionHash())
+	if err != nil {
+		return Space{}, RecoveryEnvelope{}, err
+	}
+	if challenge != nil && challenge.receipt.Recovery != nil {
+		return descriptor(spaceID, state, membership), *challenge.receipt.Recovery, nil
+	}
 	current := 0
 	if state.recovery != nil {
 		current = state.recovery.Version
@@ -466,6 +482,9 @@ func (s *MemoryStore) PutRecoveryEnvelope(_ context.Context, principal Principal
 	}
 	envelope := RecoveryEnvelope{Version: current + 1, KeyEpoch: request.KeyEpoch, Algorithm: request.Algorithm, Ciphertext: append([]byte(nil), request.Ciphertext...), CreatedAt: s.now().UTC()}
 	state.recovery = &envelope
+	if challenge != nil {
+		challenge.receipt.Recovery = &envelope
+	}
 	return descriptor(spaceID, state, membership), envelope, nil
 }
 
@@ -510,6 +529,13 @@ func (s *MemoryStore) ApprovePairing(_ context.Context, principal Principal, spa
 	if !membership.role.CanWrite() {
 		return Space{}, Pairing{}, NewError(Forbidden)
 	}
+	challenge, err := s.checkLibraryAction(state, membership, principal, spaceID, request.Proof, ApproveDevice, request.ActionHash(pairingID))
+	if err != nil {
+		return Space{}, Pairing{}, err
+	}
+	if challenge != nil && challenge.receipt.Pairing != nil {
+		return descriptor(spaceID, state, membership), *challenge.receipt.Pairing, nil
+	}
 	stored, ok := state.pairings[pairingID]
 	if !ok {
 		return Space{}, Pairing{}, NewError(NotFound)
@@ -522,6 +548,10 @@ func (s *MemoryStore) ApprovePairing(_ context.Context, principal Principal, spa
 	}
 	algorithm := request.Algorithm
 	stored.value.State, stored.value.Algorithm, stored.value.Ciphertext = PairingApproved, &algorithm, append([]byte(nil), request.Ciphertext...)
+	if challenge != nil {
+		copy := stored.value
+		challenge.receipt.Pairing = &copy
+	}
 	state.pairings[pairingID] = stored
 	return descriptor(spaceID, state, membership), stored.value, nil
 }

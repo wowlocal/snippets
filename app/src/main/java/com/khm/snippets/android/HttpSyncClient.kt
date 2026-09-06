@@ -330,7 +330,13 @@ class HttpSyncClient {
         ciphertext: ByteArray,
         accessToken: String,
         expectedServerInstanceID: String,
+        bundleJSON: String,
     ): PairingRecord {
+        val keyHash = LibraryKeyBootstrap.recipientKeyHash(recipientPublicKey)
+        val hash = actionHash(listOf("snippets-pairing-action-v1", validatedUUID(pairingID),
+            keyHash.standardBase64(), LibraryKeyBootstrap.PAIRING_ALGORITHM, ciphertext.standardBase64()))
+        val proof = actionProof(serverURL, spaceID, accessToken,
+            expectedServerInstanceID, bundleJSON, "approve_pairing", hash)
         val body = JSONObject()
             .put(
                 "recipientKeyHash",
@@ -338,6 +344,7 @@ class HttpSyncClient {
             )
             .put("algorithm", LibraryKeyBootstrap.PAIRING_ALGORITHM)
             .put("ciphertext", ciphertext.standardBase64())
+            .apply { proof?.let { put("proof", it) } }
             .toString()
         return pairingResponse(spaceID, expectedServerInstanceID, JSONObject(request(
             serverURL,
@@ -425,19 +432,33 @@ class HttpSyncClient {
         ciphertext: ByteArray,
         accessToken: String,
         expectedServerInstanceID: String,
+        bundleJSON: String,
+        initial: Boolean = false,
     ): RecoveryEnvelopeRecord {
-        val body = JSONObject()
+        val hash = actionHash(listOf("snippets-recovery-action-v1", keyEpoch.toString(),
+            expectedVersion?.toString() ?: "null", LibraryKeyBootstrap.RECOVERY_ALGORITHM, ciphertext.standardBase64()))
+        val proof = if (!initial) actionProof(serverURL, spaceID, accessToken,
+            expectedServerInstanceID, bundleJSON, "replace_recovery", hash) else null
+        val envelopeBody = JSONObject()
             .put("expectedVersion", expectedVersion ?: JSONObject.NULL)
             .put("keyEpoch", keyEpoch)
             .put("algorithm", LibraryKeyBootstrap.RECOVERY_ALGORITHM)
             .put("ciphertext", ciphertext.standardBase64())
-            .toString()
+            .apply { proof?.let { put("proof", it) } }
+        val body = if (initial) {
+            require(expectedVersion == null)
+            val authority = authority(serverURL, spaceID, accessToken, expectedServerInstanceID)
+            require(authority.getInt("keyEpoch") == keyEpoch)
+            JSONObject().put("expectedScope", authority.getJSONObject("scope"))
+                .put("publicKey", CoreBridge().libraryAuthority(bundleJSON, serverURL, expectedServerInstanceID, spaceID))
+                .put("recovery", envelopeBody)
+        } else envelopeBody
         val value = JSONObject(request(
             serverURL,
             accessToken,
-            "PUT",
-            "v2/spaces/${validatedUUID(spaceID)}/recovery-envelope",
-            body,
+            if (initial) "POST" else "PUT",
+            "v2/spaces/${validatedUUID(spaceID)}/" + if (initial) "key-bootstrap" else "recovery-envelope",
+            body.toString(),
         ))
         validateScopeID(spaceID, value.getJSONObject("scope"), expectedServerInstanceID)
         val envelope = value.getJSONObject("recovery")
@@ -447,6 +468,44 @@ class HttpSyncClient {
             algorithm = envelope.getString("algorithm"),
             ciphertext = envelope.getString("ciphertext").canonicalStandardBase64(4_096),
         )
+    }
+
+    private fun authority(server: String, space: String, token: String, instance: String): JSONObject {
+        val value = JSONObject(request(server, token, "GET", "v2/spaces/${validatedUUID(space)}/key-authority"))
+        validateScopeID(space, value.getJSONObject("scope"), instance)
+        require(value.getInt("keyEpoch") > 0)
+        return value
+    }
+
+    fun verifyAuthority(server: String, space: String, token: String, instance: String, bundle: String) {
+        val value = authority(server, space, token, instance)
+        require(value.getString("publicKey") == CoreBridge().libraryAuthority(bundle, server, instance, space))
+    }
+
+    private fun actionHash(parts: List<String>): ByteArray =
+        java.security.MessageDigest.getInstance("SHA-256").digest(parts.joinToString("\n").toByteArray(Charsets.UTF_8))
+
+    private fun actionProof(server: String, space: String, token: String, instance: String,
+                            bundle: String, action: String, hash: ByteArray): JSONObject {
+        val value = authority(server, space, token, instance)
+        val scope = value.getJSONObject("scope")
+        val epoch = value.getInt("keyEpoch")
+        val key = CoreBridge().libraryAuthority(bundle, server, instance, space)
+        fun sameScope(other: JSONObject): Boolean = listOf("serverInstanceId", "spaceId", "scopeBinding",
+            "datasetGeneration", "feedEpoch").all { scope.getString(it) == other.getString(it) }
+        require(sameScope(value.getJSONObject("scope")) && value.getInt("keyEpoch") == epoch && value.getString("publicKey") == key)
+        val result = JSONObject(request(server, token, "POST", "v2/spaces/${validatedUUID(space)}/key-challenges",
+            JSONObject().put("expectedScope", scope).put("action", action).put("keyEpoch", epoch)
+                .put("requestHash", hash.standardBase64()).toString()))
+        require(sameScope(result.getJSONObject("scope")))
+        val challenge = result.getJSONObject("challenge")
+        require(challenge.getString("action") == action && challenge.getInt("keyEpoch") == epoch)
+        require(challenge.getString("requestHash") == hash.standardBase64())
+        val remaining = Instant.parse(challenge.getString("expiresAt")).epochSecond - Instant.now().epochSecond
+        require(remaining in 1..330)
+        require(challenge.getString("nonce").canonicalStandardBase64(32).size == 32)
+        return CoreBridge().signLibraryChallenge(bundle, server, instance, space,
+            validatedUUID(challenge.getString("challengeId")), challenge.getString("nonce"))
     }
 
     fun hasRemoteRecords(

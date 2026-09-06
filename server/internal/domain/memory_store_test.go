@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -574,15 +575,18 @@ func TestRecoveryEnvelopeCAS(t *testing.T) {
 		t.Fatalf("initial envelope: %v %#v", err, current)
 	}
 	request := PutRecoveryEnvelope{KeyEpoch: 1, Algorithm: RecoveryAlgorithm, Ciphertext: []byte("opaque")}
-	_, saved, err := store.PutRecoveryEnvelope(context.Background(), owner, space.Scope.SpaceID, request)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	_, saved, err := store.BootstrapLibraryKey(context.Background(), owner, space.Scope.SpaceID, KeyBootstrap{ExpectedScope: space.Scope, PublicKey: pub, Recovery: request})
 	if err != nil || saved.Version != 1 {
 		t.Fatalf("save: %v %#v", err, saved)
 	}
+	request.Proof = proofForTest(t, store, owner, space, priv, ReplaceRecovery, request.ActionHash())
 	if _, _, err := store.PutRecoveryEnvelope(context.Background(), owner, space.Scope.SpaceID, request); AsServiceError(err).Code != Conflict {
 		t.Fatalf("missing CAS conflict: %v", err)
 	}
 	expected := 1
 	request.ExpectedVersion = &expected
+	request.Proof = proofForTest(t, store, owner, space, priv, ReplaceRecovery, request.ActionHash())
 	_, saved, err = store.PutRecoveryEnvelope(context.Background(), owner, space.Scope.SpaceID, request)
 	if err != nil || saved.Version != 2 {
 		t.Fatalf("update: %v %#v", err, saved)
@@ -593,6 +597,11 @@ func TestPairingApprovalClaimAndIdempotentCancellation(t *testing.T) {
 	store := newTestStore(t, ProductionQuota)
 	owner := principal(1)
 	space, _ := store.CreateSpace(context.Background(), owner, nil)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	_, _, err := store.BootstrapLibraryKey(context.Background(), owner, space.Scope.SpaceID, KeyBootstrap{ExpectedScope: space.Scope, PublicKey: pub, Recovery: PutRecoveryEnvelope{KeyEpoch: 1, Algorithm: RecoveryAlgorithm, Ciphertext: []byte("initial")}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, x, y, err := elliptic.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -607,11 +616,11 @@ func TestPairingApprovalClaimAndIdempotentCancellation(t *testing.T) {
 		t.Fatalf("bad pairing: %#v", pairing)
 	}
 	wrong := bytesOf(4, 32)
-	if _, _, err := store.ApprovePairing(context.Background(), owner, space.Scope.SpaceID, pairing.ID, ApprovePairing{RecipientKeyHash: wrong, Algorithm: PairingAlgorithm, Ciphertext: []byte("sealed")}); AsServiceError(err).Code != Conflict {
+	if _, _, err := store.ApprovePairing(context.Background(), owner, space.Scope.SpaceID, pairing.ID, signedPairingForTest(t, store, owner, space, priv, pairing.ID, ApprovePairing{RecipientKeyHash: wrong, Algorithm: PairingAlgorithm, Ciphertext: []byte("sealed")})); AsServiceError(err).Code != Conflict {
 		t.Fatalf("wrong key hash accepted: %v", err)
 	}
 	hash := sha256.Sum256(publicKey)
-	_, approved, err := store.ApprovePairing(context.Background(), owner, space.Scope.SpaceID, pairing.ID, ApprovePairing{RecipientKeyHash: hash[:], Algorithm: PairingAlgorithm, Ciphertext: []byte("sealed")})
+	_, approved, err := store.ApprovePairing(context.Background(), owner, space.Scope.SpaceID, pairing.ID, signedPairingForTest(t, store, owner, space, priv, pairing.ID, ApprovePairing{RecipientKeyHash: hash[:], Algorithm: PairingAlgorithm, Ciphertext: []byte("sealed")}))
 	if err != nil || approved.State != PairingApproved {
 		t.Fatalf("approval: %v %#v", err, approved)
 	}
@@ -684,4 +693,17 @@ func bytesOf(value byte, count int) []byte {
 		result[i] = value
 	}
 	return result
+}
+
+func proofForTest(t *testing.T, store Store, p Principal, space Space, key ed25519.PrivateKey, action LibraryAction, hash []byte) *LibraryActionProof {
+	t.Helper()
+	_, c, err := store.CreateLibraryChallenge(context.Background(), p, space.Scope.SpaceID, CreateLibraryChallenge{ExpectedScope: space.Scope, Action: action, KeyEpoch: space.KeyEpoch, RequestHash: hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &LibraryActionProof{ChallengeID: c.ID, Signature: ed25519.Sign(key, append([]byte("snippets-library-action-proof-v1\n"), c.Nonce...))}
+}
+func signedPairingForTest(t *testing.T, store Store, p Principal, space Space, key ed25519.PrivateKey, id uuid.UUID, r ApprovePairing) ApprovePairing {
+	r.Proof = proofForTest(t, store, p, space, key, ApproveDevice, r.ActionHash(id))
+	return r
 }

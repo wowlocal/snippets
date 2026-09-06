@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -280,6 +281,8 @@ func TestOperationPoliciesMatchOpenAPIContract(t *testing.T) {
 		"getRecoveryEnvelope": "get_recovery_envelope", "putRecoveryEnvelope": "put_recovery_envelope",
 		"createPairing": "create_pairing", "getPairing": "get_pairing", "cancelPairing": "cancel_pairing",
 		"approvePairing": "approve_pairing", "claimPairing": "claim_pairing",
+		"getKeyAuthority":     "get_key_authority",
+		"bootstrapLibraryKey": "bootstrap_library_key", "createLibraryChallenge": "create_library_challenge",
 	}
 	seen := 0
 	for path, pathItem := range document.Paths.Map() {
@@ -313,18 +316,14 @@ func TestOperationPoliciesMatchOpenAPIContract(t *testing.T) {
 	}
 }
 
-func TestStepUpIsRequiredForRecoveryWrites(t *testing.T) {
+func TestRecoveryCannotBeCreatedByUnsignedWrite(t *testing.T) {
 	server, store, principal, validator := testHTTPServer(t)
 	space, _ := store.CreateSpace(context.Background(), principal, nil)
 	path := "/v2/spaces/" + space.Scope.SpaceID.String() + "/recovery-envelope"
 	body := `{"expectedVersion":null,"keyEpoch":1,"algorithm":"snippets-recovery-hkdf-sha256-aes256gcm-v1","ciphertext":""}`
 	response := perform(t, server, http.MethodPut, path, body, "valid-token")
-	if response.Code != 200 {
-		t.Fatalf("put %d: %s", response.Code, response.Body.String())
-	}
-	if len(validator.requirements) != 1 || validator.requirements[0] != auth.RecentPhishingResistant {
-		t.Fatalf("authentication requirement: %#v", validator.requirements)
-	}
+	assertProblem(t, response, http.StatusUpgradeRequired, domain.IncompatibleVersion)
+	_ = validator
 }
 
 func TestResourceLogoutImmediatelyDeniesCredential(t *testing.T) {
@@ -370,8 +369,20 @@ func TestPairingEnvelopeIsReleasedOnlyByAtomicClaim(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &createResponse); err != nil || createResponse.Pairing.PairingID == uuid.Nil {
 		t.Fatalf("invalid create response: %v %s", err, created.Body.String())
 	}
+	authority, signingKey, _ := ed25519.GenerateKey(rand.Reader)
+	_, _, err = store.BootstrapLibraryKey(context.Background(), principal, space.Scope.SpaceID, domain.KeyBootstrap{ExpectedScope: space.Scope, PublicKey: authority, Recovery: domain.PutRecoveryEnvelope{KeyEpoch: 1, Algorithm: domain.RecoveryAlgorithm, Ciphertext: []byte("initial")}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	digest := sha256.Sum256(publicKey)
+	approvalRequest := domain.ApprovePairing{RecipientKeyHash: digest[:], Algorithm: domain.PairingAlgorithm, Ciphertext: []byte{1, 2, 3}}
+	_, challenge, err := store.CreateLibraryChallenge(context.Background(), principal, space.Scope.SpaceID, domain.CreateLibraryChallenge{ExpectedScope: space.Scope, Action: domain.ApproveDevice, KeyEpoch: 1, RequestHash: approvalRequest.ActionHash(createResponse.Pairing.PairingID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := domain.LibraryActionProof{ChallengeID: challenge.ID, Signature: ed25519.Sign(signingKey, append([]byte("snippets-library-action-proof-v1\n"), challenge.Nonce...))}
 	approveBody, _ := json.Marshal(map[string]any{
+		"proof":            proof,
 		"recipientKeyHash": digest[:],
 		"algorithm":        domain.PairingAlgorithm,
 		"ciphertext":       []byte{1, 2, 3},

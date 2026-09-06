@@ -552,3 +552,72 @@ private nonisolated extension String {
         return result
     }
 }
+
+
+/// Domain-separated authority for library control-plane actions. This private key
+/// is reproducible only from the cloud root, never from an OAuth credential. The
+/// existing portable/recovery wire formats need no additional secret fields.
+nonisolated enum LibraryActionAuthorization {
+    static let capability = "library-action-proof-v1"
+
+    struct Proof: Codable, Equatable, Sendable {
+        let challengeId: UUID
+        let signature: Data
+    }
+
+    private static func signingKey(
+        material: Data, serverURL: URL, serverInstanceID: UUID, spaceID: UUID
+    ) throws -> Curve25519.Signing.PrivateKey {
+        guard material.count == 64,
+              let host = serverURL.host, !host.isEmpty,
+              serverURL.scheme == "https",
+              serverURL.user == nil, serverURL.password == nil,
+              serverURL.query == nil, serverURL.fragment == nil,
+              serverURL.path.isEmpty || serverURL.path == "/",
+              !serverURL.absoluteString.hasSuffix("/") else {
+            throw LibraryKeyBootstrap.Failure.invalidFormat
+        }
+        let context = "snippets-library-action-signing-v1\n"
+            + serverURL.absoluteString + "\n"
+            + serverInstanceID.uuidString.lowercased() + "\n"
+            + spaceID.uuidString.lowercased()
+        let seed = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: material.prefix(32)),
+            salt: material.suffix(32), info: Data(context.utf8), outputByteCount: 32)
+        return try Curve25519.Signing.PrivateKey(
+            rawRepresentation: seed.withUnsafeBytes { Data($0) })
+    }
+
+    static func publicKey(
+        material: Data, serverURL: URL, serverInstanceID: UUID, spaceID: UUID
+    ) throws -> Data {
+        try signingKey(material: material, serverURL: serverURL,
+                       serverInstanceID: serverInstanceID, spaceID: spaceID)
+            .publicKey.rawRepresentation
+    }
+
+    static func sign(
+        nonce: Data, challengeID: UUID, material: Data,
+        serverURL: URL, serverInstanceID: UUID, spaceID: UUID
+    ) throws -> Proof {
+        guard nonce.count == 32 else { throw LibraryKeyBootstrap.Failure.invalidFormat }
+        let key = try signingKey(material: material, serverURL: serverURL,
+                                 serverInstanceID: serverInstanceID, spaceID: spaceID)
+        return Proof(challengeId: challengeID, signature: try key.signature(
+            for: Data("snippets-library-action-proof-v1\n".utf8) + nonce))
+    }
+
+    static func recoveryHash(keyEpoch: Int, expectedVersion: Int?, ciphertext: Data) -> Data {
+        let version = expectedVersion.map { String($0) } ?? "null"
+        let value = ["snippets-recovery-action-v1", String(keyEpoch), version,
+                     LibraryKeyBootstrap.recoveryAlgorithm, ciphertext.base64EncodedString()].joined(separator: "\n")
+        return Data(SHA256.hash(data: Data(value.utf8)))
+    }
+
+    static func pairingHash(pairingID: UUID, recipientKeyHash: Data, ciphertext: Data) -> Data {
+        let value = "snippets-pairing-action-v1\n" + pairingID.uuidString.lowercased() + "\n"
+            + recipientKeyHash.base64EncodedString() + "\n"
+            + LibraryKeyBootstrap.pairingAlgorithm + "\n" + ciphertext.base64EncodedString()
+        return Data(SHA256.hash(data: Data(value.utf8)))
+    }
+}

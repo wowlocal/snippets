@@ -159,6 +159,7 @@ type RecoveryEnvelope struct {
 }
 
 type PutRecoveryEnvelope struct {
+	Proof           *LibraryActionProof
 	ExpectedVersion *int
 	KeyEpoch        int
 	Algorithm       string
@@ -211,6 +212,7 @@ func (r CreatePairing) Validate() error {
 }
 
 type ApprovePairing struct {
+	Proof            *LibraryActionProof
 	RecipientKeyHash []byte
 	Algorithm        string
 	Ciphertext       []byte
@@ -248,6 +250,9 @@ func SortRecords(records []ServerRecord) {
 }
 
 type Store interface {
+	GetKeyAuthority(context.Context, Principal, uuid.UUID) (Space, []byte, error)
+	BootstrapLibraryKey(context.Context, Principal, uuid.UUID, KeyBootstrap) (Space, RecoveryEnvelope, error)
+	CreateLibraryChallenge(context.Context, Principal, uuid.UUID, CreateLibraryChallenge) (Space, LibraryChallenge, error)
 	Readiness(context.Context) error
 	IsAccessTokenRevoked(context.Context, Principal) (bool, error)
 	RevokeAccessToken(context.Context, Principal) error

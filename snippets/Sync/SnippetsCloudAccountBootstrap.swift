@@ -4,7 +4,7 @@ import Foundation
 
 enum SnippetsCloudPairingApprovalCopy {
     static func message(code: String, localAuthentication: String) -> String {
-        "Confirmation code: \(code)\n\nConfirm that the same code is shown on the new device. \(localAuthentication) and a fresh passkey check are required before this device releases the encrypted library key."
+        "Confirmation code: \(code)\n\nConfirm that the same code is shown on the new device. \(localAuthentication) is required before this device releases the encrypted library key."
     }
 
     static func approveButtonTitle(code: String) -> String { "Approve \(code)" }
@@ -40,7 +40,7 @@ enum SnippetsCloudRecoveryVerification {
     }
 }
 
-/// Coordinates passkey-first account sign-in with zero-knowledge key onboarding.
+/// Coordinates account sign-in with zero-knowledge key onboarding.
 /// Secret intermediate state lives only in this device's Keychain, so an app restart
 /// cannot turn a half-finished pairing or recovery replacement into a key-loss event.
 @MainActor
@@ -53,8 +53,7 @@ final class SnippetsCloudAccountBootstrap {
         case replacementInProgress
     }
 
-    enum StrongAction: String, Equatable {
-        case createInitialRecovery
+    enum LocalAction: String, Equatable {
         case approveDevice
         case replaceRecovery
     }
@@ -70,7 +69,7 @@ final class SnippetsCloudAccountBootstrap {
             confirmationCode: String,
             expiresAt: Date)
         case approvalReady(confirmationCode: String)
-        case strongAuthenticationRequired(StrongAction)
+        case localAuthenticationRequired(LocalAction)
         case recoveryKitAuthenticationRequired
         case recoveryKitReady(qrPayload: String, longCode: String)
     }
@@ -124,7 +123,7 @@ final class SnippetsCloudAccountBootstrap {
             case "sign_in_required", "authentication_required", "refresh_token_missing":
                 "Sign-in needs to be completed again. Your local snippets are safe; continue sign-in from Snippets Cloud settings."
             case "reauthentication_required":
-                "Confirm this security-sensitive change with a fresh passkey sign-in."
+                "Sign in again to continue this account operation."
             case "library_key_required":
                 "This account is connected, but the library is still locked. Use an approved device or your recovery kit."
             case "pairing_expired", "pairing_missing":
@@ -154,7 +153,6 @@ final class SnippetsCloudAccountBootstrap {
             case signIn
             case changeAccount
             case changeLibrary
-            case stepUp
         }
 
         let schemaVersion: Int
@@ -263,6 +261,31 @@ final class SnippetsCloudAccountBootstrap {
             itemAccessibility: .afterFirstUnlock)
     }
 
+    enum CloudSessionState: Equatable { case signedOut, connected, reviewRequired }
+    enum LibraryAccessState: Equatable { case locked, unlocked, setupPending }
+    enum RecoverySetupState: Equatable { case notSaved, saved, needsReview, replacing }
+
+    var cloudSessionState: CloudSessionState {
+        guard selection.hasCloudSession else { return .signedOut }
+        return selection.cloudCoordinates == nil ? .reviewRequired : .connected
+    }
+    var libraryAccessState: LibraryAccessState {
+        guard let coordinates = selection.cloudCoordinates else { return .locked }
+        if (try? pendingPostAuthorization()) != nil { return .setupPending }
+        return (try? installedMaterial(for: coordinates)) != nil ? .unlocked : .locked
+    }
+    var recoverySetupState: RecoverySetupState {
+        switch recoveryKitStatus {
+        case .verifiedCurrent: .saved
+        case .neverVerified: .notSaved
+        case .replacementInProgress: .replacing
+        case .knownReplaced, .statusUnconfirmed: .needsReview
+        }
+    }
+    var hasPendingRecoveryKit: Bool {
+        (try? secrets.loadItem(account: Self.recoveryPresentationAccount)) != nil
+    }
+
     var libraryID: String? {
         guard selection.hasCloudSession, let coordinates = selection.cloudCoordinates else {
             return nil
@@ -273,10 +296,10 @@ final class SnippetsCloudAccountBootstrap {
     }
 
     var recoveryKitStatus: RecoveryKitStatus {
-        if (try? secrets.loadItem(account: Self.recoveryPresentationAccount)) != nil
-            || (try? secrets.loadItem(account: Self.pendingRecoveryAccount)) != nil {
+        if (try? secrets.loadItem(account: Self.pendingRecoveryAccount)) != nil {
             return .replacementInProgress
         }
+        if hasPendingRecoveryKit { return .neverVerified }
         let stored: StoredRecoveryVerification?
         do {
             stored = try storedRecoveryVerification()
@@ -310,23 +333,9 @@ final class SnippetsCloudAccountBootstrap {
         guard selection.hasCloudSession, let coordinates = selection.cloudCoordinates else {
             return .signedOut
         }
-        if let raw = try secrets.loadItem(account: Self.recoveryPresentationAccount) {
-            guard let payload = String(data: raw, encoding: .utf8),
-                  let kit = try? LibraryKeyBootstrap.RecoveryKit(qrPayload: payload),
-                  kit.serverURL == coordinates.serverURL,
-                  kit.spaceID == coordinates.spaceID else {
-                recoveryPresentationGate.reset()
-                try secrets.deleteItem(account: Self.recoveryPresentationAccount)
-                throw Failure.invalidState
-            }
-            guard recoveryPresentationGate.consumeAuthorization() else {
-                return .recoveryKitAuthenticationRequired
-            }
-            return .recoveryKitReady(qrPayload: payload, longCode: kit.longCode)
-        }
+        // Saved action journals outrank an older, unsaved recovery presentation.
         if let pending = try pendingRecovery() {
-            return .strongAuthenticationRequired(
-                pending.newLibraryMaterial == nil ? .replaceRecovery : .createInitialRecovery)
+            return pending.newLibraryMaterial == nil ? .localAuthenticationRequired(.replaceRecovery) : .setupInterrupted
         }
         if let raw = try secrets.loadItem(account: Self.approvalAccount),
            let payload = String(data: raw, encoding: .utf8),
@@ -345,6 +354,20 @@ final class SnippetsCloudAccountBootstrap {
                 confirmationCode: invitation.confirmationCode,
                 expiresAt: Date(timeIntervalSince1970:
                     TimeInterval(invitation.expiresAtEpochSeconds)))
+        }
+        if let raw = try secrets.loadItem(account: Self.recoveryPresentationAccount) {
+            guard let payload = String(data: raw, encoding: .utf8),
+                  let kit = try? LibraryKeyBootstrap.RecoveryKit(qrPayload: payload),
+                  kit.serverURL == coordinates.serverURL,
+                  kit.spaceID == coordinates.spaceID else {
+                recoveryPresentationGate.reset()
+                try secrets.deleteItem(account: Self.recoveryPresentationAccount)
+                throw Failure.invalidState
+            }
+            guard recoveryPresentationGate.consumeAuthorization() else {
+                return try installedMaterial(for: coordinates) != nil ? .ready : .needsTrustedDeviceOrRecovery
+            }
+            return .recoveryKitReady(qrPayload: payload, longCode: kit.longCode)
         }
         if try installedMaterial(for: coordinates) != nil {
             return .ready
@@ -381,27 +404,23 @@ final class SnippetsCloudAccountBootstrap {
     @discardableResult
     func signIn(
         serverURL: URL,
-        strong: Bool = false,
         changeAccount: Bool = false,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
         presentationContext: any ASWebAuthenticationPresentationContextProviding
     ) async throws -> State {
         let previousCoordinates = selection.cloudCoordinates
-        let operation: PendingPostAuthorization.Operation = if strong {
-            .stepUp
-        } else if changeAccount {
+        let operation: PendingPostAuthorization.Operation = if changeAccount {
             .changeAccount
         } else {
             .signIn
         }
         try await selection.signIn(
             serverURL: serverURL,
-            requiresStrongAuthentication: strong,
+            requiresStrongAuthentication: false,
             chooseAccount: changeAccount,
             chooseLibrary: chooseLibrary,
             presentationContext: presentationContext,
             preparePostAuthorization: { [weak self] target in
-                guard operation != .stepUp else { return }
                 guard let self else { throw Failure.invalidState }
                 try self.storePendingPostAuthorization(target, operation: operation)
             })
@@ -417,7 +436,7 @@ final class SnippetsCloudAccountBootstrap {
             try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
         }
         let state = try await finishPostAuthorization()
-        if operation != .stepUp { try clearPendingPostAuthorization() }
+        try clearPendingPostAuthorization()
         return state
     }
 
@@ -453,7 +472,7 @@ final class SnippetsCloudAccountBootstrap {
     @discardableResult
     func resumePostAuthorizationSetup() async throws -> State {
         guard let pending = try pendingPostAuthorization() else {
-            return try state()
+            return try await finishPostAuthorization()
         }
         try await selection.resumeSnippetsCloudPostAuthorization(pending.target)
         if try await syncCheckpointRequiresReviewBeforeBootstrap() {
@@ -553,6 +572,7 @@ final class SnippetsCloudAccountBootstrap {
               taken.authenticationTag == invitation.confirmationCode,
               let ciphertext = taken.ciphertext else { throw Failure.invalidInvitation }
         let bundle = try LibraryKeyBootstrap.open(ciphertext, pending: pending)
+        try await client.verifyAuthority(material: bundle.material)
         try install(bundle, coordinates: coordinates)
         try secrets.deleteItem(account: Self.pairingAccount)
         return .ready
@@ -623,12 +643,13 @@ final class SnippetsCloudAccountBootstrap {
               kit.keyEpoch == remote.keyEpoch,
               kit.keyEpoch == envelope.keyEpoch else { throw Failure.accountMismatch }
         let bundle = try LibraryKeyBootstrap.openRecoveryEnvelope(envelope.ciphertext, kit: kit)
+        try await client.verifyAuthority(material: bundle.material)
         try install(bundle, coordinates: coordinates)
         return .ready
     }
 
     /// Prepares a replacement envelope but does not upload it. The caller must first
-    /// obtain local user presence, then call `signIn(strong: true, ...)`.
+    /// obtain local user presence, then call `continueAfterLocalAuthentication()`.
     @discardableResult
     func prepareRecoveryReplacement() async throws -> State {
         let (coordinates, client) = try client()
@@ -652,7 +673,7 @@ final class SnippetsCloudAccountBootstrap {
             status: .replacementInProgress,
             record: nil))
         processConfirmedRecovery = nil
-        return .strongAuthenticationRequired(.replaceRecovery)
+        return .localAuthenticationRequired(.replaceRecovery)
     }
 
     func acknowledgeRecoveryKitSaved() async throws {
@@ -709,11 +730,11 @@ final class SnippetsCloudAccountBootstrap {
 
     @discardableResult
     func refreshRecoveryKitStatus() async throws -> RecoveryKitStatus {
-        if (try? secrets.loadItem(account: Self.recoveryPresentationAccount)) != nil
-            || (try? secrets.loadItem(account: Self.pendingRecoveryAccount)) != nil {
+        if (try? secrets.loadItem(account: Self.pendingRecoveryAccount)) != nil {
             processConfirmedRecovery = nil
             return .replacementInProgress
         }
+        if hasPendingRecoveryKit { return .neverVerified }
         guard let stored = try storedRecoveryVerification() else {
             processConfirmedRecovery = nil
             return .neverVerified
@@ -791,11 +812,17 @@ final class SnippetsCloudAccountBootstrap {
             bootstrapSecrets: secrets)
     }
 
-    private func finishPostAuthorization() async throws -> State {
+    /// Called only after fresh native device-owner authentication.
+    func continueAfterLocalAuthentication() async throws -> State {
+        try await finishPostAuthorization(localAuthorized: true)
+    }
+
+    private func finishPostAuthorization(localAuthorized: Bool = false) async throws -> State {
         let (coordinates, client) = try client()
         if let raw = try secrets.loadItem(account: Self.approvalAccount),
            let payload = String(data: raw, encoding: .utf8) {
             let invitation = try LibraryKeyBootstrap.PairingInvitation(qrPayload: payload)
+            guard localAuthorized else { return .approvalReady(confirmationCode: invitation.confirmationCode) }
             guard invitation.serverURL == coordinates.serverURL,
                   invitation.spaceID == coordinates.spaceID,
                   let material = try installedMaterial(for: coordinates) else {
@@ -827,7 +854,7 @@ final class SnippetsCloudAccountBootstrap {
                     invitation.pairingID,
                     publicKey: invitation.recipientPublicKey,
                     nonce: invitation.nonce,
-                    ciphertext: ciphertext)
+                    ciphertext: ciphertext, material: material)
             }
             guard approved.pairingID == invitation.pairingID,
                   approved.state == "approved" else { throw Failure.invalidInvitation }
@@ -836,11 +863,10 @@ final class SnippetsCloudAccountBootstrap {
         }
 
         if let pending = try pendingRecovery() {
+            if pending.newLibraryMaterial == nil && !localAuthorized {
+                return .localAuthenticationRequired(.replaceRecovery)
+            }
             return try await uploadPendingRecovery(pending, coordinates: coordinates, client: client)
-        }
-
-        if try secrets.loadItem(account: Self.recoveryPresentationAccount) != nil {
-            return .recoveryKitAuthenticationRequired
         }
 
         if try installedMaterial(for: coordinates) != nil {
@@ -871,8 +897,7 @@ final class SnippetsCloudAccountBootstrap {
         try storePendingRecovery(pending)
         do {
             return try await uploadPendingRecovery(pending, coordinates: coordinates, client: client)
-        } catch Failure.service(let code) where code == "reauthentication_required" {
-            return .strongAuthenticationRequired(.createInitialRecovery)
+
         } catch Failure.service(let code) where code == "conflict" {
             try secrets.deleteItem(account: Self.pendingRecoveryAccount)
             return .needsTrustedDeviceOrRecovery
@@ -889,10 +914,13 @@ final class SnippetsCloudAccountBootstrap {
               kit.spaceID == coordinates.spaceID else { throw Failure.accountMismatch }
         do {
             _ = try await mapService {
-                try await client.putRecoveryEnvelope(
-                    keyEpoch: kit.keyEpoch,
-                    expectedVersion: pending.expectedVersion,
-                    ciphertext: pending.ciphertext)
+                if let material = pending.newLibraryMaterial {
+                    return try await client.bootstrapLibraryKey(keyEpoch: kit.keyEpoch,
+                        ciphertext: pending.ciphertext, material: material)
+                }
+                guard let material = try installedMaterial(for: coordinates) else { throw Failure.invalidState }
+                return try await client.putRecoveryEnvelope(keyEpoch: kit.keyEpoch,
+                    expectedVersion: pending.expectedVersion, ciphertext: pending.ciphertext, material: material)
             }
         } catch Failure.service(let code) where code == "conflict" {
             // The PUT may have committed while its response was lost. Only an exact
@@ -905,6 +933,7 @@ final class SnippetsCloudAccountBootstrap {
             }
         }
         if let material = pending.newLibraryMaterial {
+            try await client.verifyAuthority(material: material)
             try selection.cloudKeys.install(
                 material,
                 serverURL: coordinates.serverURL,
@@ -918,9 +947,7 @@ final class SnippetsCloudAccountBootstrap {
         // Last write: until key installation and presentation are durable this journal
         // makes restart/ack retry the exact committed envelope instead of losing it.
         try secrets.deleteItem(account: Self.pendingRecoveryAccount)
-        return .recoveryKitReady(
-            qrPayload: pending.kitPayload,
-            longCode: kit.longCode)
+        return .ready
     }
 
     private func install(

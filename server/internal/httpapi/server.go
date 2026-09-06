@@ -407,7 +407,7 @@ func validateCanonicalBase64(value any) error {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, child := range typed {
-			if key == "blob" || key == "ciphertext" || key == "nonce" || key == "recipientPublicKey" || key == "recipientKeyHash" {
+			if key == "blob" || key == "ciphertext" || key == "nonce" || key == "recipientPublicKey" || key == "recipientKeyHash" || key == "publicKey" || key == "requestHash" || key == "recoveryHash" || key == "signature" {
 				encoded, ok := child.(string)
 				if !ok {
 					return domain.NewError(domain.InvalidRequest)
@@ -436,7 +436,30 @@ func validateRequiredShape(operation string, raw any) error {
 	if !ok {
 		return domain.NewError(domain.InvalidRequest)
 	}
+	if proof, exists := object["proof"]; exists {
+		value, ok := proof.(map[string]any)
+		if !ok || !hasExactObjectShape(value, []string{"challengeId", "signature"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+	}
+	if scope, exists := object["expectedScope"]; exists {
+		value, ok := scope.(map[string]any)
+		if !ok || !hasExactObjectShape(value, []string{"serverInstanceId", "spaceId", "scopeBinding", "datasetGeneration", "feedEpoch"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+	}
 	switch operation {
+	case "bootstrap_library_key":
+		if !hasExactObjectShape(object, []string{"expectedScope", "publicKey", "recovery"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+		if err := validateRequiredShape("put_recovery_envelope", object["recovery"]); err != nil {
+			return err
+		}
+	case "create_library_challenge":
+		if !hasExactObjectShape(object, []string{"expectedScope", "action", "keyEpoch", "requestHash"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
 	case "submit_records":
 		if !hasExactObjectShape(object, []string{"expectedScope", "items"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
@@ -460,7 +483,7 @@ func validateRequiredShape(operation string, raw any) error {
 			}
 		}
 	case "put_recovery_envelope":
-		if !hasExactObjectShape(object, []string{"expectedVersion", "keyEpoch", "algorithm", "ciphertext"}, nil) {
+		if !hasExactObjectShape(object, []string{"expectedVersion", "keyEpoch", "algorithm", "ciphertext"}, []string{"proof"}) {
 			return domain.NewError(domain.InvalidRequest)
 		}
 	case "create_pairing":
@@ -468,7 +491,7 @@ func validateRequiredShape(operation string, raw any) error {
 			return domain.NewError(domain.InvalidRequest)
 		}
 	case "approve_pairing":
-		if !hasExactObjectShape(object, []string{"recipientKeyHash", "algorithm", "ciphertext"}, nil) {
+		if !hasExactObjectShape(object, []string{"recipientKeyHash", "algorithm", "ciphertext"}, []string{"proof"}) {
 			return domain.NewError(domain.InvalidRequest)
 		}
 	default:
@@ -613,6 +636,22 @@ func policyForRequest(method, path string) operationPolicy {
 	if len(parts) == 3 && method == http.MethodGet {
 		return standard("get_space")
 	}
+	if len(parts) == 4 {
+		switch parts[3] {
+		case "key-authority":
+			if method == http.MethodGet {
+				return standard("get_key_authority")
+			}
+		case "key-bootstrap":
+			if method == http.MethodPost {
+				return operationPolicy{name: "bootstrap_library_key", hasBody: true, requirement: auth.Standard}
+			}
+		case "key-challenges":
+			if method == http.MethodPost {
+				return operationPolicy{name: "create_library_challenge", hasBody: true, requirement: auth.Standard}
+			}
+		}
+	}
 	if len(parts) == 4 && parts[3] == "changes" && method == http.MethodGet {
 		return standard("get_changes")
 	}
@@ -623,7 +662,7 @@ func policyForRequest(method, path string) operationPolicy {
 		if method == http.MethodGet {
 			return standard("get_recovery_envelope")
 		}
-		return operationPolicy{name: "put_recovery_envelope", hasBody: true, requirement: auth.RecentPhishingResistant}
+		return operationPolicy{name: "put_recovery_envelope", hasBody: true, requirement: auth.Standard}
 	}
 	if len(parts) == 4 && parts[3] == "pairings" && method == http.MethodPost {
 		return operationPolicy{name: "create_pairing", hasBody: true, requirement: auth.Standard}
@@ -636,7 +675,7 @@ func policyForRequest(method, path string) operationPolicy {
 			return standard("cancel_pairing")
 		}
 		if len(parts) == 6 && parts[5] == "approval" && method == http.MethodPut {
-			return operationPolicy{name: "approve_pairing", hasBody: true, requirement: auth.RecentPhishingResistant}
+			return operationPolicy{name: "approve_pairing", hasBody: true, requirement: auth.Standard}
 		}
 		if len(parts) == 6 && parts[5] == "claim" && method == http.MethodPost {
 			return standard("claim_pairing")

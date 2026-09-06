@@ -45,6 +45,9 @@ android {
             .replace("\"", "\\\"")
         buildConfigField("String", "SNIPPETS_CLOUD_URL", "\"$snippetsCloudURL\"")
         buildConfigField("boolean", "SNIPPETS_CLOUD_ENABLED", snippetsCloudEnabled.toString())
+        val accountCenter = providers.gradleProperty("SNIPPETS_CLOUD_ACCOUNT_CENTER_URL").orElse("").get()
+        require(accountCenter.isEmpty() || accountCenter.matches(Regex("https://[A-Za-z0-9.-]+(?::[0-9]+)?/account/profile")))
+        buildConfigField("String", "SNIPPETS_CLOUD_ACCOUNT_CENTER_URL", "\"$accountCenter\"")
         buildConfigField(
             "String",
             "SNIPPETS_OAUTH_REDIRECT_URI",
