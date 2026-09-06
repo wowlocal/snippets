@@ -138,9 +138,55 @@ func (e DiscoveryRecordProfile) Valid() bool {
 	}
 }
 
+// Defines values for EmailChallengeCodeLength.
+const (
+	N6 EmailChallengeCodeLength = 6
+)
+
+// Valid indicates whether the value is a known member of the EmailChallengeCodeLength enum.
+func (e EmailChallengeCodeLength) Valid() bool {
+	switch e {
+	case N6:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EmailChallengeExpiresIn.
+const (
+	EmailChallengeExpiresInN600 EmailChallengeExpiresIn = 600
+)
+
+// Valid indicates whether the value is a known member of the EmailChallengeExpiresIn enum.
+func (e EmailChallengeExpiresIn) Valid() bool {
+	switch e {
+	case EmailChallengeExpiresInN600:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EmailChallengeResendAfter.
+const (
+	N60 EmailChallengeResendAfter = 60
+)
+
+// Valid indicates whether the value is a known member of the EmailChallengeResendAfter enum.
+func (e EmailChallengeResendAfter) Valid() bool {
+	switch e {
+	case N60:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorCode.
 const (
 	ErrorCodeAuthenticationRequired   ErrorCode = "authentication_required"
+	ErrorCodeCodeExpired              ErrorCode = "code_expired"
 	ErrorCodeConflict                 ErrorCode = "conflict"
 	ErrorCodeCursorInvalid            ErrorCode = "cursor_invalid"
 	ErrorCodeDatasetReset             ErrorCode = "dataset_reset"
@@ -148,6 +194,8 @@ const (
 	ErrorCodeForbidden                ErrorCode = "forbidden"
 	ErrorCodeIncompatibleVersion      ErrorCode = "incompatible_version"
 	ErrorCodeInternalError            ErrorCode = "internal_error"
+	ErrorCodeInvalidCode              ErrorCode = "invalid_code"
+	ErrorCodeInvalidEmail             ErrorCode = "invalid_email"
 	ErrorCodeInvalidRequest           ErrorCode = "invalid_request"
 	ErrorCodeNotFound                 ErrorCode = "not_found"
 	ErrorCodePairingExpired           ErrorCode = "pairing_expired"
@@ -155,12 +203,15 @@ const (
 	ErrorCodeQuotaExceeded            ErrorCode = "quota_exceeded"
 	ErrorCodeRateLimited              ErrorCode = "rate_limited"
 	ErrorCodeReauthenticationRequired ErrorCode = "reauthentication_required"
+	ErrorCodeTooManyAttempts          ErrorCode = "too_many_attempts"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
 func (e ErrorCode) Valid() bool {
 	switch e {
 	case ErrorCodeAuthenticationRequired:
+		return true
+	case ErrorCodeCodeExpired:
 		return true
 	case ErrorCodeConflict:
 		return true
@@ -176,6 +227,10 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case ErrorCodeInternalError:
 		return true
+	case ErrorCodeInvalidCode:
+		return true
+	case ErrorCodeInvalidEmail:
+		return true
 	case ErrorCodeInvalidRequest:
 		return true
 	case ErrorCodeNotFound:
@@ -189,6 +244,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeRateLimited:
 		return true
 	case ErrorCodeReauthenticationRequired:
+		return true
+	case ErrorCodeTooManyAttempts:
 		return true
 	default:
 		return false
@@ -290,13 +347,13 @@ func (e LimitsMaxPageRecords) Valid() bool {
 
 // Defines values for LimitsMaxPairingSeconds.
 const (
-	N600 LimitsMaxPairingSeconds = 600
+	LimitsMaxPairingSecondsN600 LimitsMaxPairingSeconds = 600
 )
 
 // Valid indicates whether the value is a known member of the LimitsMaxPairingSeconds enum.
 func (e LimitsMaxPairingSeconds) Valid() bool {
 	switch e {
-	case N600:
+	case LimitsMaxPairingSecondsN600:
 		return true
 	default:
 		return false
@@ -342,6 +399,54 @@ const (
 func (e LimitsMaxRevisionBytes) Valid() bool {
 	switch e {
 	case N256:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NativeAuthDiscoveryFlow.
+const (
+	EmailCode NativeAuthDiscoveryFlow = "email_code"
+)
+
+// Valid indicates whether the value is a known member of the NativeAuthDiscoveryFlow enum.
+func (e NativeAuthDiscoveryFlow) Valid() bool {
+	switch e {
+	case EmailCode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NativeRevokeRequestTokenTypeHint.
+const (
+	AccessToken  NativeRevokeRequestTokenTypeHint = "access_token"
+	RefreshToken NativeRevokeRequestTokenTypeHint = "refresh_token"
+)
+
+// Valid indicates whether the value is a known member of the NativeRevokeRequestTokenTypeHint enum.
+func (e NativeRevokeRequestTokenTypeHint) Valid() bool {
+	switch e {
+	case AccessToken:
+		return true
+	case RefreshToken:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NativeTokenResponseTokenType.
+const (
+	Bearer NativeTokenResponseTokenType = "Bearer"
+)
+
+// Valid indicates whether the value is a known member of the NativeTokenResponseTokenType enum.
+func (e NativeTokenResponseTokenType) Valid() bool {
+	switch e {
+	case Bearer:
 		return true
 	default:
 		return false
@@ -533,7 +638,8 @@ type Discovery struct {
 	ApiBase          string                 `json:"apiBase"`
 	Capabilities     []string               `json:"capabilities"`
 	Limits           Limits                 `json:"limits"`
-	Oidc             OIDCDiscovery          `json:"oidc"`
+	NativeAuth       *NativeAuthDiscovery   `json:"nativeAuth,omitempty"`
+	Oidc             *OIDCDiscovery         `json:"oidc,omitempty"`
 	ProtocolMajor    DiscoveryProtocolMajor `json:"protocolMajor"`
 	ProtocolMinor    DiscoveryProtocolMinor `json:"protocolMinor"`
 	RecordProfile    DiscoveryRecordProfile `json:"recordProfile"`
@@ -549,6 +655,34 @@ type DiscoveryProtocolMinor int
 
 // DiscoveryRecordProfile defines model for Discovery.RecordProfile.
 type DiscoveryRecordProfile string
+
+// EmailChallenge defines model for EmailChallenge.
+type EmailChallenge struct {
+	ChallengeId string                    `json:"challengeId"`
+	CodeLength  EmailChallengeCodeLength  `json:"codeLength"`
+	ExpiresIn   EmailChallengeExpiresIn   `json:"expiresIn"`
+	ResendAfter EmailChallengeResendAfter `json:"resendAfter"`
+}
+
+// EmailChallengeCodeLength defines model for EmailChallenge.CodeLength.
+type EmailChallengeCodeLength int
+
+// EmailChallengeExpiresIn defines model for EmailChallenge.ExpiresIn.
+type EmailChallengeExpiresIn int
+
+// EmailChallengeResendAfter defines model for EmailChallenge.ResendAfter.
+type EmailChallengeResendAfter int
+
+// EmailStartRequest defines model for EmailStartRequest.
+type EmailStartRequest struct {
+	Email string `json:"email"`
+}
+
+// EmailVerifyRequest defines model for EmailVerifyRequest.
+type EmailVerifyRequest struct {
+	ChallengeId string `json:"challengeId"`
+	Code        string `json:"code"`
+}
 
 // ErrorCode defines model for ErrorCode.
 type ErrorCode string
@@ -635,6 +769,50 @@ type LimitsMaxResponseBytes int
 
 // LimitsMaxRevisionBytes defines model for Limits.MaxRevisionBytes.
 type LimitsMaxRevisionBytes int
+
+// NativeAccount defines model for NativeAccount.
+type NativeAccount struct {
+	Email string `json:"email"`
+	Id    string `json:"id"`
+}
+
+// NativeAuthDiscovery defines model for NativeAuthDiscovery.
+type NativeAuthDiscovery struct {
+	Flow            NativeAuthDiscoveryFlow `json:"flow"`
+	RefreshEndpoint string                  `json:"refreshEndpoint"`
+	RevokeEndpoint  string                  `json:"revokeEndpoint"`
+	StartEndpoint   string                  `json:"startEndpoint"`
+	VerifyEndpoint  string                  `json:"verifyEndpoint"`
+}
+
+// NativeAuthDiscoveryFlow defines model for NativeAuthDiscovery.Flow.
+type NativeAuthDiscoveryFlow string
+
+// NativeRefreshRequest defines model for NativeRefreshRequest.
+type NativeRefreshRequest struct {
+	RefreshToken string `json:"refreshToken"`
+}
+
+// NativeRevokeRequest defines model for NativeRevokeRequest.
+type NativeRevokeRequest struct {
+	Token         string                           `json:"token"`
+	TokenTypeHint NativeRevokeRequestTokenTypeHint `json:"tokenTypeHint"`
+}
+
+// NativeRevokeRequestTokenTypeHint defines model for NativeRevokeRequest.TokenTypeHint.
+type NativeRevokeRequestTokenTypeHint string
+
+// NativeTokenResponse defines model for NativeTokenResponse.
+type NativeTokenResponse struct {
+	AccessToken  string                       `json:"access_token"`
+	Account      NativeAccount                `json:"account"`
+	ExpiresIn    int                          `json:"expires_in"`
+	RefreshToken string                       `json:"refresh_token"`
+	TokenType    NativeTokenResponseTokenType `json:"token_type"`
+}
+
+// NativeTokenResponseTokenType defines model for NativeTokenResponse.TokenType.
+type NativeTokenResponseTokenType string
 
 // OIDCDiscovery defines model for OIDCDiscovery.
 type OIDCDiscovery struct {
@@ -778,6 +956,18 @@ type GetChangesParams struct {
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// StartEmailAuthenticationJSONRequestBody defines body for StartEmailAuthentication for application/json ContentType.
+type StartEmailAuthenticationJSONRequestBody = EmailStartRequest
+
+// VerifyEmailAuthenticationJSONRequestBody defines body for VerifyEmailAuthentication for application/json ContentType.
+type VerifyEmailAuthenticationJSONRequestBody = EmailVerifyRequest
+
+// RefreshNativeSessionJSONRequestBody defines body for RefreshNativeSession for application/json ContentType.
+type RefreshNativeSessionJSONRequestBody = NativeRefreshRequest
+
+// RevokeNativeSessionJSONRequestBody defines body for RevokeNativeSession for application/json ContentType.
+type RevokeNativeSessionJSONRequestBody = NativeRevokeRequest
+
 // BootstrapLibraryKeyJSONRequestBody defines body for BootstrapLibraryKey for application/json ContentType.
 type BootstrapLibraryKeyJSONRequestBody = KeyBootstrapRequest
 
@@ -807,6 +997,18 @@ type ServerInterface interface {
 
 	// (GET /health/ready)
 	GetReadiness(w http.ResponseWriter, r *http.Request)
+
+	// (POST /v2/auth/email/start)
+	StartEmailAuthentication(w http.ResponseWriter, r *http.Request)
+
+	// (POST /v2/auth/email/verify)
+	VerifyEmailAuthentication(w http.ResponseWriter, r *http.Request)
+
+	// (POST /v2/auth/refresh)
+	RefreshNativeSession(w http.ResponseWriter, r *http.Request)
+
+	// (POST /v2/auth/revoke)
+	RevokeNativeSession(w http.ResponseWriter, r *http.Request)
 
 	// (DELETE /v2/session)
 	RevokeCurrentSession(w http.ResponseWriter, r *http.Request)
@@ -899,6 +1101,62 @@ func (siw *ServerInterfaceWrapper) GetReadiness(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetReadiness(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartEmailAuthentication operation middleware
+func (siw *ServerInterfaceWrapper) StartEmailAuthentication(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartEmailAuthentication(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// VerifyEmailAuthentication operation middleware
+func (siw *ServerInterfaceWrapper) VerifyEmailAuthentication(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.VerifyEmailAuthentication(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RefreshNativeSession operation middleware
+func (siw *ServerInterfaceWrapper) RefreshNativeSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RefreshNativeSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeNativeSession operation middleware
+func (siw *ServerInterfaceWrapper) RevokeNativeSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeNativeSession(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1503,6 +1761,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/.well-known/snippets-sync", wrapper.GetDiscovery)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/live", wrapper.GetLiveness)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/ready", wrapper.GetReadiness)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/email/start", wrapper.StartEmailAuthentication)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/email/verify", wrapper.VerifyEmailAuthentication)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/refresh", wrapper.RefreshNativeSession)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/revoke", wrapper.RevokeNativeSession)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v2/session", wrapper.RevokeCurrentSession)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v2/spaces", wrapper.ListSpaces)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/spaces", wrapper.CreateSpace)
@@ -1619,6 +1881,156 @@ func (response GetReadiness503ApplicationProblemPlusJSONResponse) VisitGetReadin
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartEmailAuthenticationRequestObject struct {
+	Body *StartEmailAuthenticationJSONRequestBody
+}
+
+type StartEmailAuthenticationResponseObject interface {
+	VisitStartEmailAuthenticationResponse(w http.ResponseWriter) error
+}
+
+type StartEmailAuthentication200JSONResponse EmailChallenge
+
+func (response StartEmailAuthentication200JSONResponse) VisitStartEmailAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartEmailAuthenticationdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response StartEmailAuthenticationdefaultApplicationProblemPlusJSONResponse) VisitStartEmailAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmailAuthenticationRequestObject struct {
+	Body *VerifyEmailAuthenticationJSONRequestBody
+}
+
+type VerifyEmailAuthenticationResponseObject interface {
+	VisitVerifyEmailAuthenticationResponse(w http.ResponseWriter) error
+}
+
+type VerifyEmailAuthentication200JSONResponse NativeTokenResponse
+
+func (response VerifyEmailAuthentication200JSONResponse) VisitVerifyEmailAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmailAuthenticationdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response VerifyEmailAuthenticationdefaultApplicationProblemPlusJSONResponse) VisitVerifyEmailAuthenticationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshNativeSessionRequestObject struct {
+	Body *RefreshNativeSessionJSONRequestBody
+}
+
+type RefreshNativeSessionResponseObject interface {
+	VisitRefreshNativeSessionResponse(w http.ResponseWriter) error
+}
+
+type RefreshNativeSession200JSONResponse NativeTokenResponse
+
+func (response RefreshNativeSession200JSONResponse) VisitRefreshNativeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshNativeSessiondefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RefreshNativeSessiondefaultApplicationProblemPlusJSONResponse) VisitRefreshNativeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeNativeSessionRequestObject struct {
+	Body *RevokeNativeSessionJSONRequestBody
+}
+
+type RevokeNativeSessionResponseObject interface {
+	VisitRevokeNativeSessionResponse(w http.ResponseWriter) error
+}
+
+type RevokeNativeSession204Response struct {
+}
+
+func (response RevokeNativeSession204Response) VisitRevokeNativeSessionResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RevokeNativeSessiondefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RevokeNativeSessiondefaultApplicationProblemPlusJSONResponse) VisitRevokeNativeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2256,6 +2668,18 @@ type StrictServerInterface interface {
 	// (GET /health/ready)
 	GetReadiness(ctx context.Context, request GetReadinessRequestObject) (GetReadinessResponseObject, error)
 
+	// (POST /v2/auth/email/start)
+	StartEmailAuthentication(ctx context.Context, request StartEmailAuthenticationRequestObject) (StartEmailAuthenticationResponseObject, error)
+
+	// (POST /v2/auth/email/verify)
+	VerifyEmailAuthentication(ctx context.Context, request VerifyEmailAuthenticationRequestObject) (VerifyEmailAuthenticationResponseObject, error)
+
+	// (POST /v2/auth/refresh)
+	RefreshNativeSession(ctx context.Context, request RefreshNativeSessionRequestObject) (RefreshNativeSessionResponseObject, error)
+
+	// (POST /v2/auth/revoke)
+	RevokeNativeSession(ctx context.Context, request RevokeNativeSessionRequestObject) (RevokeNativeSessionResponseObject, error)
+
 	// (DELETE /v2/session)
 	RevokeCurrentSession(ctx context.Context, request RevokeCurrentSessionRequestObject) (RevokeCurrentSessionResponseObject, error)
 
@@ -2409,6 +2833,130 @@ func (sh *strictHandler) GetReadiness(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetReadinessResponseObject); ok {
 		if err := validResponse.VisitGetReadinessResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartEmailAuthentication operation middleware
+func (sh *strictHandler) StartEmailAuthentication(w http.ResponseWriter, r *http.Request) {
+	var request StartEmailAuthenticationRequestObject
+
+	var body StartEmailAuthenticationJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartEmailAuthentication(ctx, request.(StartEmailAuthenticationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartEmailAuthentication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartEmailAuthenticationResponseObject); ok {
+		if err := validResponse.VisitStartEmailAuthenticationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// VerifyEmailAuthentication operation middleware
+func (sh *strictHandler) VerifyEmailAuthentication(w http.ResponseWriter, r *http.Request) {
+	var request VerifyEmailAuthenticationRequestObject
+
+	var body VerifyEmailAuthenticationJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.VerifyEmailAuthentication(ctx, request.(VerifyEmailAuthenticationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "VerifyEmailAuthentication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(VerifyEmailAuthenticationResponseObject); ok {
+		if err := validResponse.VisitVerifyEmailAuthenticationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RefreshNativeSession operation middleware
+func (sh *strictHandler) RefreshNativeSession(w http.ResponseWriter, r *http.Request) {
+	var request RefreshNativeSessionRequestObject
+
+	var body RefreshNativeSessionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RefreshNativeSession(ctx, request.(RefreshNativeSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RefreshNativeSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RefreshNativeSessionResponseObject); ok {
+		if err := validResponse.VisitRefreshNativeSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeNativeSession operation middleware
+func (sh *strictHandler) RevokeNativeSession(w http.ResponseWriter, r *http.Request) {
+	var request RevokeNativeSessionRequestObject
+
+	var body RevokeNativeSessionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeNativeSession(ctx, request.(RevokeNativeSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeNativeSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeNativeSessionResponseObject); ok {
+		if err := validResponse.VisitRevokeNativeSessionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2880,63 +3428,72 @@ func (sh *strictHandler) PutRecoveryEnvelope(w http.ResponseWriter, r *http.Requ
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

@@ -1,7 +1,6 @@
 package com.khm.snippets.android
 
 import android.content.Context
-import android.content.Intent
 import android.util.Base64
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -303,88 +302,76 @@ class SnippetRepository(
 
     suspend fun beginCloudSignIn(
         serverURL: String,
+        email: String,
         stepUp: Boolean = false,
         chooseAccount: Boolean = false,
-    ): Intent? {
+    ): CloudEmailChallenge {
         initialization.await()
-        if (!snippetsCloudEnabled) return null
+        if (!snippetsCloudEnabled) throw CloudAuthFailure("cloud_build_not_configured")
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
-                val intent = withContext(Dispatchers.IO) {
-                    if (store.read(PENDING_LOCAL_ERASE) != null) {
-                        completePendingLocalErase()
-                    }
+                val challenge = withContext(Dispatchers.IO) {
+                    if (store.read(PENDING_LOCAL_ERASE) != null) completePendingLocalErase()
                     if (!stepUp && pendingPostAuthorization != null) {
                         throw CloudAuthFailure("post_authorization_incomplete")
                     }
-                    val stepUpBinding = if (stepUp) currentStepUpBinding() else null
-                    authenticator.authorizationIntent(
-                        serverURL, stepUp, chooseAccount, stepUpBinding,
-                    )
+                    authenticator.startEmailSignIn(serverURL, email, stepUp, chooseAccount,
+                        if (stepUp) currentStepUpBinding() else null)
                 }
                 publish()
-                intent
+                challenge
             } catch (error: CloudAuthFailure) {
                 publish(errorCode = error.code)
-                null
+                throw error
             } catch (_: Exception) {
                 publish(errorCode = "sign_in_failed")
-                null
+                throw CloudAuthFailure("sign_in_failed")
             }
         }
     }
 
-    internal suspend fun beginResumeCloudSetupSignIn(): Intent? {
+    internal suspend fun beginResumeCloudSetupSignIn(email: String): CloudEmailChallenge {
         initialization.await()
-        if (!snippetsCloudEnabled) return null
+        if (!snippetsCloudEnabled) throw CloudAuthFailure("cloud_build_not_configured")
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             try {
-                val intent = withContext(Dispatchers.IO) {
+                val challenge = withContext(Dispatchers.IO) {
                     val pending = pendingPostAuthorization
-                        ?: throw SyncFailure("post_authorization_incomplete")
-                    if (!pending.matches(configuration)) {
-                        throw SyncFailure("scope_review_required")
-                    }
-                    authenticator.authorizationIntent(
-                        rawServerURL = pending.serverURL,
-                        chooseAccount = true,
-                        resumeBinding = CloudStepUpBinding(
-                            serverURL = pending.serverURL,
-                            serverInstanceID = pending.serverInstanceID,
-                            spaceID = pending.spaceID,
-                            scopeBinding = pending.scopeBinding,
-                        ),
-                    )
+                        ?: throw CloudAuthFailure("post_authorization_incomplete")
+                    if (!pending.matches(configuration)) throw CloudAuthFailure("scope_review_required")
+                    authenticator.startEmailSignIn(pending.serverURL, email, chooseAccount = true,
+                        resumeBinding = CloudStepUpBinding(pending.serverURL, pending.serverInstanceID,
+                            pending.spaceID, pending.scopeBinding))
                 }
                 publish()
-                intent
+                challenge
             } catch (error: CloudAuthFailure) {
                 cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
                 publish(errorCode = error.code)
-                null
-            } catch (error: SyncFailure) {
-                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
-                publish(errorCode = error.code)
-                null
+                throw error
             } catch (_: Exception) {
                 cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
                 publish(errorCode = "post_authorization_incomplete")
-                null
+                throw CloudAuthFailure("post_authorization_incomplete")
             }
         }
     }
 
-    internal suspend fun completeCloudSignIn(result: Intent?): CloudSignInCompletion {
+    internal fun cancelCloudEmailSignIn() { authenticator.cancelEmailSignIn() }
+
+    internal suspend fun completeCloudSignIn(challengeID: String, code: String): CloudSignInCompletion {
         initialization.await()
         if (!snippetsCloudEnabled) return CloudSignInCompletion(succeeded = false)
         return mutex.withLock {
             mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
             var rejectResumeCandidate = false
+            var receivedAuthorization = false
             try {
                 val completion = withContext(Dispatchers.IO) {
-                    val authorization = authenticator.completeAuthorization(result)
+                    val authorization = authenticator.completeEmailSignIn(challengeID, code)
+                    receivedAuthorization = true
                     cloudSessionAvailable = true
                     authorization.resumeBinding?.let { expected ->
                         rejectResumeCandidate = true
@@ -558,7 +545,7 @@ class SnippetRepository(
                 }
                 if (completion.needsLibrarySelection) {
                     publish(errorCode = "space_selection_required")
-                    CloudSignInCompletion(succeeded = false)
+                    CloudSignInCompletion(succeeded = false, needsLibrarySelection = true)
                 } else {
                     publish(label = "Account connected")
                     CloudSignInCompletion(
@@ -567,29 +554,40 @@ class SnippetRepository(
                     )
                 }
             } catch (error: CloudAuthFailure) {
-                val cleanupFailure = if (rejectResumeCandidate) {
+                val cleanupFailure = if (!receivedAuthorization &&
+                    !authenticator.hasPendingCredentialCleanup()) {
+                    null
+                } else if (rejectResumeCandidate) {
                     discardRejectedResumeCandidate()
                 } else {
                     discardCandidateAfterAuthorizationFailure()
                 }
-                publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
-                CloudSignInCompletion(succeeded = false)
+                val code = cleanupFailure ?: if (receivedAuthorization) postAuthorizationError(error.code) else error.code
+                publish(errorCode = code)
+                CloudSignInCompletion(succeeded = false, retryAfterSeconds = error.retryAfterSeconds,
+                    errorCode = code)
             } catch (error: SyncFailure) {
-                val cleanupFailure = if (rejectResumeCandidate) {
+                val cleanupFailure = if (!receivedAuthorization &&
+                    !authenticator.hasPendingCredentialCleanup()) {
+                    null
+                } else if (rejectResumeCandidate) {
                     discardRejectedResumeCandidate()
                 } else {
                     discardCandidateAfterAuthorizationFailure()
                 }
                 publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
-                CloudSignInCompletion(succeeded = false)
+                CloudSignInCompletion(succeeded = false, errorCode = cleanupFailure ?: postAuthorizationError(error.code))
             } catch (_: Exception) {
-                val cleanupFailure = if (rejectResumeCandidate) {
+                val cleanupFailure = if (!receivedAuthorization &&
+                    !authenticator.hasPendingCredentialCleanup()) {
+                    null
+                } else if (rejectResumeCandidate) {
                     discardRejectedResumeCandidate()
                 } else {
                     discardCandidateAfterAuthorizationFailure()
                 }
                 publish(errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"))
-                CloudSignInCompletion(succeeded = false)
+                CloudSignInCompletion(succeeded = false, errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"))
             }
         }
     }
@@ -1872,7 +1870,7 @@ class SnippetRepository(
 
     /**
      * Idempotent crash recovery for this-device logout. The remote library root is
-     * removed first, one-time bootstrap/recovery material second, OAuth credentials
+     * removed first, one-time bootstrap/recovery material second, Cloud credentials
      * third, and visible account state last. The marker is always the final delete.
      */
     private fun completePendingLocalErase() {

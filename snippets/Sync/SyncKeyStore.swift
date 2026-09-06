@@ -222,7 +222,7 @@ final class SyncKeyStore {
 /// pairing or decrypt it with the user's offline recovery kit.
 @MainActor
 final class SnippetsCloudKeyStore {
-    static let service = "com.khm.snippets.cloud-library-key"
+    static let service = SnippetsCloudKeychainScope.service(for: .libraryKey)
     static let account = "sync-v1"
 
     enum Failure: Error, CustomStringConvertible {

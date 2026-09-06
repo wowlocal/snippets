@@ -6,6 +6,11 @@ final class AppEnvironment {
     #if DEBUG
     static let emptyLibraryLaunchArgument = "--empty-library"
     static let launchPerformanceArgument = "--ui-testing-launch-performance"
+    private var isIsolatedCloudIntegrationHost: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["SNIPPETS_CLOUD_E2E"] == "1"
+            && !(environment[SnippetStorageLocations.rootOverrideEnvironmentKey] ?? "").isEmpty
+    }
     #endif
 
     let diagnostics: DiagnosticsService
@@ -128,6 +133,11 @@ final class AppEnvironment {
     }
 
     func start() {
+        #if DEBUG
+        // The integration test owns a separate isolated production stack. Its global
+        // sync override must not activate this application's automatic coordinator.
+        if isIsolatedCloudIntegrationHost { return }
+        #endif
         guard !hasStarted else { return }
         hasStarted = true
         store.onChange?(.init(source: .external))
@@ -152,6 +162,9 @@ final class AppEnvironment {
     }
 
     func becameActive() {
+        #if DEBUG
+        if isIsolatedCloudIntegrationHost { return }
+        #endif
         Diagnostics.record(.lifecycle(.becameActive))
         let previousDocument = secureStore.document
         let wasUnreadable = secureStore.isUnreadable

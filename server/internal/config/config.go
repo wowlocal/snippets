@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"errors"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -39,6 +40,18 @@ type OIDC struct {
 	StepUpAMR                 map[string]struct{}
 	StepUpACR                 map[string]struct{}
 	StepUpMaximumAge          time.Duration
+}
+
+type NativeAuth struct {
+	Secret            []byte
+	IdentityPepper    []byte
+	SMTPHost          string
+	SMTPPort          int
+	SMTPUsername      string
+	SMTPPassword      string
+	SMTPFrom          string
+	SMTPTLS           string
+	TrustedProxyCIDRs []netip.Prefix
 }
 
 type HTTP struct {
@@ -81,6 +94,8 @@ type Server struct {
 	ServerInstanceID uuid.UUID
 	ServerVersion    string
 	TokenSecret      []byte
+	AuthMode         string
+	NativeAuth       NativeAuth
 	OIDC             OIDC
 	HTTP             HTTP
 	Database         Database
@@ -161,91 +176,135 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	if err != nil || instanceID == uuid.Nil {
 		return Server{}, errors.New("invalid SERVER_INSTANCE_ID")
 	}
-	issuer, err := parseURL("OIDC_ISSUER")
-	if err != nil {
-		return Server{}, err
-	}
-	jwksURL, err := parseURL("OIDC_JWKS_URL")
-	if err != nil {
-		return Server{}, err
-	}
-	if err := validateHTTPSURL(issuer, false); err != nil {
-		return Server{}, errors.New("invalid OIDC_ISSUER")
-	}
-	if err := validateHTTPSURL(jwksURL, true); err != nil {
-		return Server{}, errors.New("invalid OIDC_JWKS_URL")
-	}
-	audience, err := required("OIDC_AUDIENCE")
-	if err != nil {
-		return Server{}, err
-	}
-	clientID, err := required("OIDC_CLIENT_ID")
-	if err != nil {
-		return Server{}, err
-	}
-	scopesRaw, err := required("OIDC_SCOPES")
-	if err != nil {
-		return Server{}, err
-	}
-	scopes := strings.Fields(scopesRaw)
-	algorithmsRaw, err := required("OIDC_ALLOWED_ALGORITHMS")
-	if err != nil {
-		return Server{}, err
-	}
-	algorithms := strings.Split(algorithmsRaw, ",")
-	if !uniqueAllowed(algorithms, map[string]bool{"RS256": true, "ES256": true}) {
-		return Server{}, errors.New("invalid OIDC_ALLOWED_ALGORITHMS")
-	}
-	if len(scopes) == 0 || len(scopes) > 16 || !uniqueBounded(scopes, 64) {
-		return Server{}, errors.New("invalid OIDC_SCOPES")
-	}
-	maximumTokenAge, err := positive("OIDC_MAX_TOKEN_AGE_SECONDS", 300)
-	if err != nil {
-		return Server{}, err
-	}
-	clockSkew, err := positive("OIDC_CLOCK_SKEW_SECONDS", 60)
-	if err != nil {
-		return Server{}, err
-	}
-	refresh, err := positive("OIDC_JWKS_REFRESH_SECONDS", 900)
-	if err != nil {
-		return Server{}, err
-	}
-	maximumStaleness, err := positive("OIDC_JWKS_MAX_STALENESS_SECONDS", 3600)
-	if err != nil {
-		return Server{}, err
-	}
-	unknownRefresh, err := positive("OIDC_UNKNOWN_KID_REFRESH_SECONDS", 60)
-	if err != nil {
-		return Server{}, err
-	}
-	unknownTTL, err := positive("OIDC_UNKNOWN_KID_TTL_SECONDS", 300)
-	if err != nil {
-		return Server{}, err
-	}
-	stepUpAge, err := positive("OIDC_STEP_UP_MAX_AGE_SECONDS", 300)
-	if err != nil {
-		return Server{}, err
-	}
 	pepper, err := secret("IDENTITY_PEPPER")
 	if err != nil {
 		return Server{}, err
 	}
-	stepAMRRaw, hasAMR := lookup("OIDC_STEP_UP_AMR_VALUES")
-	stepACRRaw, _ := lookup("OIDC_STEP_UP_ACR_VALUES")
-	if !hasAMR && environment != Production {
-		stepAMRRaw = "webauthn"
+	authMode := "oidc"
+	if value, ok := lookup("AUTH_MODE"); ok {
+		authMode = value
 	}
-	stepAMR, stepACR := valueSet(strings.Fields(stepAMRRaw), true), valueSet(strings.Fields(stepACRRaw), false)
-	if len(stepAMR) > 16 || len(stepACR) > 16 {
-		return Server{}, errors.New("invalid OIDC step-up assurance values")
+	if authMode != "native" && authMode != "oidc" {
+		return Server{}, errors.New("invalid AUTH_MODE")
 	}
-	if maximumTokenAge < 60 || maximumTokenAge > 86400 || clockSkew > 300 || refresh < 60 || refresh > 3600 || maximumStaleness < refresh || maximumStaleness > 86400 || unknownRefresh < 60 || unknownRefresh > refresh || unknownTTL < unknownRefresh || unknownTTL > 3600 || stepUpAge < 60 || stepUpAge > 3600 {
-		return Server{}, errors.New("invalid OIDC timing")
-	}
-	if environment == Production {
-		if audience != publicBase.String() || audience == clientID || maximumTokenAge > 300 || !contains(scopes, "openid") || !contains(scopes, "offline_access") {
-			return Server{}, errors.New("invalid production OIDC configuration")
+	var oidc OIDC
+	var native NativeAuth
+	if authMode == "oidc" {
+		issuer, err := parseURL("OIDC_ISSUER")
+		if err != nil {
+			return Server{}, err
+		}
+		jwksURL, err := parseURL("OIDC_JWKS_URL")
+		if err != nil {
+			return Server{}, err
+		}
+		if err := validateHTTPSURL(issuer, false); err != nil {
+			return Server{}, errors.New("invalid OIDC_ISSUER")
+		}
+		if err := validateHTTPSURL(jwksURL, true); err != nil {
+			return Server{}, errors.New("invalid OIDC_JWKS_URL")
+		}
+		audience, err := required("OIDC_AUDIENCE")
+		if err != nil {
+			return Server{}, err
+		}
+		clientID, err := required("OIDC_CLIENT_ID")
+		if err != nil {
+			return Server{}, err
+		}
+		scopesRaw, err := required("OIDC_SCOPES")
+		if err != nil {
+			return Server{}, err
+		}
+		scopes := strings.Fields(scopesRaw)
+		algorithmsRaw, err := required("OIDC_ALLOWED_ALGORITHMS")
+		if err != nil {
+			return Server{}, err
+		}
+		algorithms := strings.Split(algorithmsRaw, ",")
+		if !uniqueAllowed(algorithms, map[string]bool{"RS256": true, "ES256": true}) {
+			return Server{}, errors.New("invalid OIDC_ALLOWED_ALGORITHMS")
+		}
+		if len(scopes) == 0 || len(scopes) > 16 || !uniqueBounded(scopes, 64) {
+			return Server{}, errors.New("invalid OIDC_SCOPES")
+		}
+		maximumTokenAge, err := positive("OIDC_MAX_TOKEN_AGE_SECONDS", 300)
+		if err != nil {
+			return Server{}, err
+		}
+		clockSkew, err := positive("OIDC_CLOCK_SKEW_SECONDS", 60)
+		if err != nil {
+			return Server{}, err
+		}
+		refresh, err := positive("OIDC_JWKS_REFRESH_SECONDS", 900)
+		if err != nil {
+			return Server{}, err
+		}
+		maximumStaleness, err := positive("OIDC_JWKS_MAX_STALENESS_SECONDS", 3600)
+		if err != nil {
+			return Server{}, err
+		}
+		unknownRefresh, err := positive("OIDC_UNKNOWN_KID_REFRESH_SECONDS", 60)
+		if err != nil {
+			return Server{}, err
+		}
+		unknownTTL, err := positive("OIDC_UNKNOWN_KID_TTL_SECONDS", 300)
+		if err != nil {
+			return Server{}, err
+		}
+		stepUpAge, err := positive("OIDC_STEP_UP_MAX_AGE_SECONDS", 300)
+		if err != nil {
+			return Server{}, err
+		}
+		stepAMRRaw, hasAMR := lookup("OIDC_STEP_UP_AMR_VALUES")
+		stepACRRaw, _ := lookup("OIDC_STEP_UP_ACR_VALUES")
+		if !hasAMR && environment != Production {
+			stepAMRRaw = "webauthn"
+		}
+		stepAMR, stepACR := valueSet(strings.Fields(stepAMRRaw), true), valueSet(strings.Fields(stepACRRaw), false)
+		if len(stepAMR) > 16 || len(stepACR) > 16 {
+			return Server{}, errors.New("invalid OIDC step-up assurance values")
+		}
+		if maximumTokenAge < 60 || maximumTokenAge > 86400 || clockSkew > 300 || refresh < 60 || refresh > 3600 || maximumStaleness < refresh || maximumStaleness > 86400 || unknownRefresh < 60 || unknownRefresh > refresh || unknownTTL < unknownRefresh || unknownTTL > 3600 || stepUpAge < 60 || stepUpAge > 3600 {
+			return Server{}, errors.New("invalid OIDC timing")
+		}
+		if environment == Production {
+			if audience != publicBase.String() || audience == clientID || maximumTokenAge > 300 || !contains(scopes, "openid") || !contains(scopes, "offline_access") {
+				return Server{}, errors.New("invalid production OIDC configuration")
+			}
+		}
+		oidc = OIDC{Issuer: issuer, Audience: audience, ClientID: clientID, Scopes: scopes, JWKSURL: jwksURL, AllowedAlgorithms: algorithms, MaximumTokenAge: time.Duration(maximumTokenAge) * time.Second, ClockSkew: time.Duration(clockSkew) * time.Second, IdentityPepper: pepper, JWKSRefreshInterval: time.Duration(refresh) * time.Second, JWKSMaximumStaleness: time.Duration(maximumStaleness) * time.Second, UnknownKeyRefreshInterval: time.Duration(unknownRefresh) * time.Second, UnknownKeyCacheTTL: time.Duration(unknownTTL) * time.Second, StepUpAMR: stepAMR, StepUpACR: stepACR, StepUpMaximumAge: time.Duration(stepUpAge) * time.Second}
+	} else {
+		native.IdentityPepper = pepper
+		native.Secret, err = secret("NATIVE_AUTH_SECRET")
+		if err != nil {
+			return Server{}, err
+		}
+		native.SMTPHost, err = required("SMTP_HOST")
+		if err != nil {
+			return Server{}, err
+		}
+		native.SMTPPort, err = positive("SMTP_PORT", 587)
+		if err != nil || native.SMTPPort > 65535 {
+			return Server{}, errors.New("invalid SMTP_PORT")
+		}
+		native.SMTPFrom, err = required("SMTP_FROM")
+		if err != nil {
+			return Server{}, err
+		}
+		native.SMTPUsername, _ = lookup("SMTP_USERNAME")
+		native.SMTPPassword, _ = lookup("SMTP_PASSWORD")
+		native.SMTPTLS = "starttls"
+		if value, ok := lookup("SMTP_TLS"); ok {
+			native.SMTPTLS = value
+		}
+		if err := ValidateNativeSMTP(native, environment); err != nil {
+			return Server{}, err
+		}
+		trustedProxies, _ := lookup("AUTH_TRUSTED_PROXY_CIDRS")
+		native.TrustedProxyCIDRs, err = parseNativeTrustedProxyCIDRs(trustedProxies)
+		if err != nil {
+			return Server{}, err
 		}
 	}
 	tokenSecret, err := secret("TOKEN_HMAC_SECRET")
@@ -397,7 +456,7 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 	}
 	return Server{
 		Environment: environment, BindHost: bindHost, Port: port, PublicBaseURL: publicBase, ServerInstanceID: instanceID, ServerVersion: serverVersion, TokenSecret: tokenSecret,
-		OIDC:     OIDC{Issuer: issuer, Audience: audience, ClientID: clientID, Scopes: scopes, JWKSURL: jwksURL, AllowedAlgorithms: algorithms, MaximumTokenAge: time.Duration(maximumTokenAge) * time.Second, ClockSkew: time.Duration(clockSkew) * time.Second, IdentityPepper: pepper, JWKSRefreshInterval: time.Duration(refresh) * time.Second, JWKSMaximumStaleness: time.Duration(maximumStaleness) * time.Second, UnknownKeyRefreshInterval: time.Duration(unknownRefresh) * time.Second, UnknownKeyCacheTTL: time.Duration(unknownTTL) * time.Second, StepUpAMR: stepAMR, StepUpACR: stepACR, StepUpMaximumAge: time.Duration(stepUpAge) * time.Second},
+		AuthMode: authMode, NativeAuth: native, OIDC: oidc,
 		HTTP:     HTTP{IdleTimeout: time.Duration(idle) * time.Second, BodyTimeout: time.Duration(body) * time.Second, RequestTimeout: time.Duration(requestTimeout) * time.Second, ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second, ReadinessTimeout: time.Duration(ready) * time.Second, MaximumConnections: maxConnections, MaximumConcurrent: maxConcurrent, BodyMemoryBudget: int64(bodyBudget), ResponseMemoryBudget: int64(responseBudget), GlobalRate: globalRate, GlobalBurst: globalBurst, PrincipalRate: principalRate, PrincipalBurst: principalBurst},
 		Database: Database{Host: dbHost, Port: dbPort, Name: dbName, RuntimeUser: dbUser, RuntimePassword: dbPassword, TLSMode: tlsMode, TLSRootCert: tlsRootCert, ChannelBinding: channelBinding, RequireAuth: requireAuth, ConnectTimeout: time.Duration(dbConnectTimeout) * time.Second, StatementTimeout: time.Duration(dbStatementTimeout) * time.Second, LockTimeout: time.Duration(dbLockTimeout) * time.Second, MaxConnections: int32(dbMax)},
 	}, nil

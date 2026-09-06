@@ -1,6 +1,6 @@
 # ADR 0004: Account login and encrypted library access
 
-- Status: implemented behind the disabled Snippets Cloud feature flag; real provider acceptance pending
+- Status: library-access decisions implemented; browser account login superseded by ADR 0005
 - Date: 2026-09-06
 - Amends: ADR 0003 for the schema-2 additive rollout before public launch
 
@@ -15,6 +15,13 @@ on the device, and Settings reminds the user to save it. Revealing it requires l
 user presence each time. A completed-but-unsaved presentation is not a pending upload.
 Disconnect retains the remote-revoke-before-local-erase journal and warns about access
 loss; deferral alone does not block disconnect. Local snippets remain available.
+
+Apple OAuth credentials, pending bootstrap state and the device-only Cloud library key
+use Keychain services scoped by bundle identifier. Debug and Release have separate local
+connections and must not consume or erase each other's credentials through their shared
+Keychain access group. The unshipped API's unscoped entries are left intact and are not
+imported into a new connection. The synchronizable iCloud wire and vault keys keep their
+existing shared services.
 
 Protocol 2.1 adds `library-action-proof-v1`. An empty library atomically installs an
 Ed25519 public key and the first opaque recovery envelope. It must have no prior authority,

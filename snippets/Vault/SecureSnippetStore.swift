@@ -199,6 +199,13 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// makes a second Mac join this vault instead of minting a rival one.
     private let identityStore: VaultIdentityStore
     private let maintainsKeychainInBackground: Bool
+    private let selectedSyncProvider: @MainActor () -> SyncBackendSelectionStore.Provider?
+    private let syncIsEnabled: @MainActor () -> Bool
+
+    /// The shared identity belongs to the iCloud account, not to any authenticated
+    /// Snippets Cloud library. Missing legacy selection means iCloud; unknown values
+    /// must not acquire that authority by falling back to it.
+    private var usesICloudVaultIdentity: Bool { selectedSyncProvider() == .iCloud }
     private var keychainMaintenanceTask: Task<Void, Never>?
     private let vaultURL: URL
     private let libraryURL: URL
@@ -224,6 +231,13 @@ final class SecureSnippetStore: SecureSnippetProviding {
         session: VaultSession,
         keychain: KeychainSecretStore? = nil,
         maintainsKeychainInBackground: Bool = false,
+        selectedSyncProvider: @escaping @MainActor () -> SyncBackendSelectionStore.Provider? = {
+            guard let stored = UserDefaults.standard.object(
+                forKey: SyncBackendSelectionStore.providerDefaultsKey) else { return .iCloud }
+            guard let raw = stored as? String else { return nil }
+            return SyncBackendSelectionStore.Provider(rawValue: raw)
+        },
+        syncIsEnabled: @escaping @MainActor () -> Bool = { SyncCoordinator.isEnabled },
         deviceID: String,
         vaultURL: URL = SnippetStorageLocations.vaultFileURL,
         libraryURL: URL = SnippetStorageLocations.snippetsFileURL,
@@ -252,6 +266,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
         self.keychain = resolvedKeychain
         self.identityStore = VaultIdentityStore(keychain: resolvedKeychain)
         self.maintainsKeychainInBackground = maintainsKeychainInBackground
+        self.selectedSyncProvider = selectedSyncProvider
+        self.syncIsEnabled = syncIsEnabled
         self.vaultURL = vaultURL
         self.libraryURL = libraryURL
         self.lockURL = lockURL
@@ -289,7 +305,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
             if maintainsKeychainInBackground {
                 scheduleKeychainMaintenance()
             } else {
-                identityStore.publish(loaded)
+                publishSharedVaultIdentity(loaded)
             }
             healLegacyPlainSyncMetadata(for: loaded)
             Diagnostics.record(.vaultAction(.loaded, count: loaded.records.count))
@@ -325,13 +341,24 @@ final class SecureSnippetStore: SecureSnippetProviding {
         if notifyChange { onChange?() }
     }
 
+    private func publishSharedVaultIdentity(_ document: VaultDocument) {
+        guard usesICloudVaultIdentity else { return }
+        identityStore.publish(document)
+    }
+
     /// Local vault metadata is sufficient to render secure shells. Keychain identity
     /// sharing is opportunistic and must not block launch or scene activation.
     private func scheduleKeychainMaintenance() {
-        guard keychainMaintenanceTask == nil, !isUnreadable else { return }
+        guard keychainMaintenanceTask == nil, !isUnreadable, usesICloudVaultIdentity else { return }
         let candidate = document
-        guard candidate != nil || SyncCoordinator.isEnabled else { return }
+        guard candidate != nil || syncIsEnabled() else { return }
         keychainMaintenanceTask = Task { @MainActor [weak self, identityStore] in
+            // The task can start after a provider switch. Revalidate before handing
+            // an identity operation to the background Keychain worker.
+            guard self?.usesICloudVaultIdentity == true else {
+                self?.keychainMaintenanceTask = nil
+                return
+            }
             let shared = await Task.detached(priority: .utility) {
                 if let candidate {
                     identityStore.publish(candidate)
@@ -341,13 +368,14 @@ final class SecureSnippetStore: SecureSnippetProviding {
             }.value
             guard let self else { return }
             self.keychainMaintenanceTask = nil
+            guard self.usesICloudVaultIdentity else { return }
             guard self.document == candidate, !self.isUnreadable else {
                 // A newer local identity needs its own publication, never the stale
                 // result of a lookup started for an earlier document.
                 self.scheduleKeychainMaintenance()
                 return
             }
-            if let shared, SyncCoordinator.isEnabled,
+            if let shared, self.syncIsEnabled(),
                self.adoptSharedVault(shared) != nil {
                 self.onChange?()
             }
@@ -493,20 +521,21 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// `kid` is a second crypto scope, and the two Macs then cannot read a single one of
     /// each other's records.
     ///
-    /// Adoption writes a file, so `reload` only does it when sync is on — a Mac that
+    /// Adoption writes a file, so `reload` only does it for enabled iCloud sync — a Mac that
     /// merely shares an iCloud account should not spontaneously grow a vault. An
     /// explicit "make this secure" is a different matter: the user is asking for a
-    /// vault, and the right one to give them is the one they already have.
+    /// vault. This shared-identity authority applies only while iCloud is selected;
+    /// a Snippets Cloud account or wire record cannot authorize joining the iCloud vault.
     @discardableResult
     private func adoptSharedVaultIfAvailable(requireSyncEnabled: Bool = true) -> VaultDocument? {
-        guard document == nil, !isUnreadable else { return nil }
-        guard !requireSyncEnabled || SyncCoordinator.isEnabled else { return nil }
+        guard document == nil, !isUnreadable, usesICloudVaultIdentity else { return nil }
+        guard !requireSyncEnabled || syncIsEnabled() else { return nil }
         guard let identity = identityStore.published() else { return nil }
         return adoptSharedVault(identity)
     }
 
     private func adoptSharedVault(_ identity: VaultDocument) -> VaultDocument? {
-        guard document == nil, !isUnreadable else { return nil }
+        guard document == nil, !isUnreadable, usesICloudVaultIdentity else { return nil }
         let adopted: VaultDocument
         do {
             adopted = try VaultFile.update(
@@ -683,7 +712,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // Publish only after the vault exists on disk. The other order would advertise a
         // vault this Mac might then have failed to write, and a second Mac would adopt a
         // `kid` whose records live nowhere.
-        identityStore.publish(created)
+        publishSharedVaultIdentity(created)
         onChange?()
         return created
     }
@@ -749,7 +778,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // Mac needs when iCloud Keychain did not carry the key. Republish so that Mac can
         // use it without this one being present. `self.document`, not the local capture
         // above — that one predates the wrap this just added.
-        if let updated = self.document { identityStore.publish(updated) }
+        if let updated = self.document { publishSharedVaultIdentity(updated) }
         pending.cancel()
         return true
     }
@@ -1239,7 +1268,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // With sync running, removing the local file would be undone by the next fetch:
         // the bridge would immediately re-adopt the published identity and restore the
         // records. Require the user to stop that loop before making a local-only change.
-        guard !SyncCoordinator.isEnabled else {
+        guard !syncIsEnabled() else {
             throw Failure.forgetRequiresSyncOff
         }
         guard syncIsQuiescent, keychainMaintenanceTask == nil else {
@@ -1469,7 +1498,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         // The local-tier identity is as stale as its deleted key. The synchronizable
         // identity must remain: deleting it would propagate, and it is what lets this Mac
         // rejoin the same vault later instead of minting a rival one.
-        if !preserveSharedKey { identityStore.forget() }
+        if !preserveSharedKey, usesICloudVaultIdentity { identityStore.forget() }
 
         document = nil
         isUnreadable = false

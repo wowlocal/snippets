@@ -12,7 +12,7 @@ api/snippets-sync-v2.yaml       normative OpenAPI 3.1 contract
 server/cmd/                     server command
 server/internal/api/            generated strict net/http interface
 server/internal/domain/         reference behavior and opaque token codec
-server/internal/auth/           bounded OIDC/JWKS validation
+server/internal/auth/           native email-code sessions; optional legacy OIDC adapter
 server/internal/httpapi/        admission, strict JSON, DTO mapping
 server/internal/postgres/       explicit transactions and SQL
 server/Container/postgres-init/ first-boot role and schema initialization
@@ -25,11 +25,17 @@ before committing cursor, CAS, or ciphertext state.
 
 ## Discovery and routes
 
-`GET /.well-known/snippets-sync` returns protocol 2.0, a stable server instance UUID,
-`apiBase=<PUBLIC_BASE_URL>/v2`, OIDC resource `<PUBLIC_BASE_URL>`, current limits,
-capabilities, and `recordProfile=snippets-wire-v1`.
+`GET /.well-known/snippets-sync` returns protocol 2.1, a stable server instance UUID,
+`apiBase=<PUBLIC_BASE_URL>/v2`, current limits, capabilities, and
+`recordProfile=snippets-wire-v1`. Native mode advertises `native-email-code-v1` and
+`nativeAuth` with `flow=email_code` plus the start, verify, refresh and revoke endpoints
+on that same HTTPS origin. Native clients do not require OIDC discovery fields.
 
 ```text
+POST   /v2/auth/email/start
+POST   /v2/auth/email/verify
+POST   /v2/auth/refresh
+POST   /v2/auth/revoke
 DELETE /v2/session
 GET    /v2/spaces
 POST   /v2/spaces                         Idempotency-Key header
@@ -64,12 +70,25 @@ retry/limit values—never arbitrary exception text.
 
 ## Authentication and authorization
 
-The resource server accepts only bounded RS256/ES256 OIDC access tokens from the fixed
-HTTPS issuer/JWKS configuration. Tokens need one exact audience (the public origin),
-the official public-client `azp` and/or `client_id`, fresh timestamps, and a stable
-subject. Subjects and credentials are HMAC-pseudonymized before persistence; email is
-ignored. Recovery-envelope replacement and pairing approval additionally require a
-recent phishing-resistant `auth_time` plus approved `amr` or `acr`.
+In native mode the server normalizes an email address, sends a six-digit code through
+its configured SMTP service, and checks a bounded challenge with expiry, attempt limits
+and resend/rate controls. Verification creates or resolves an immutable account ID and
+returns the verified email plus opaque access and rotating refresh tokens. The account
+email is retained; challenge codes and session credentials use keyed digests in server
+storage. The email sender necessarily receives the address and code.
+
+Access tokens last up to five minutes. Refresh rotation requires a new credential;
+reuse revokes the family. `POST /v2/auth/revoke` with an access-token hint revokes that
+exact access token, while a refresh-token hint revokes its whole family. Email-code login
+does not claim passkey or multifactor assurance. The clients use native email/code forms
+and pin every authentication request to their configured HTTPS origin.
+
+Server account access remains separate from end-to-end library access. Pairing approval
+and recovery-envelope replacement verify a signed action proof derived from the existing
+library key. The server stores the public verifier and encrypted envelopes, not that key.
+A new device must receive an approved envelope or use the offline recovery kit; verifying
+an email address does not bypass this requirement. Optional legacy OIDC support remains
+a server integration seam and is not used by the current native clients.
 
 Logout writes a keyed token digest to a shared PostgreSQL denylist. Both logout and all
 data-plane transactions serialize on the credential digest and recheck revocation inside

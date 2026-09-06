@@ -21,36 +21,38 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
 - Snippets Cloud pull/push with paged cursors, per-record CAS generations, batch
   outcomes, response limits, TLS-only URLs, bearer authentication, and sticky scope
   coordinates. A binding/dataset/feed mismatch stops instead of applying data.
-- OIDC Authorization Code + PKCE in the system browser on Android, macOS, and iOS.
-  Discovery is HTTPS-only and bounded, state/nonce/claimed-HTTPS redirect are checked,
-  RFC 8707 binds each JWT to the one pinned API resource, and a minimal access/refresh-
-  token session stays in device-bound secret storage. ID tokens and profile claims are
-  discarded; the personal space is selected or created automatically. Every distribution,
-  including a self-hosted one, injects its canonical service URL and verified callback
-  host at build time; an unconfigured build keeps cloud sign-in disabled.
-- Passkey-first zero-knowledge onboarding on Android, iPhone/iPad and macOS. A new
-  device either displays a five-minute QR invitation for approval by a trusted device,
-  or restores from an offline recovery QR/52-character random code. Pairing uses
-  ephemeral P-256 ECDH, HKDF-SHA-256 and AES-256-GCM with an eight-character comparison
-  code; recovery uses a separate HKDF/AES-GCM domain. Neither QR contains the library
-  key. The server's approved envelope is redacted from polling and atomically taken once.
-- Device-owner authentication plus a fresh phishing-resistant OIDC step-up protects
-  pairing approval and recovery replacement. Every installation has a distinct
-  device-only refresh credential. Sign-out durably journals every refresh generation,
-  calls resource logout plus RFC 7009, then removes the local cloud root before OAuth
-  state; interrupted remote or local phases resume automatically on launch. Disconnect
-  always presents the key-removal consequence and the locally known recovery status.
-  Pending recovery kits are encrypted at rest and use a resumable save flow with QR,
-  clipboard expiry, Save/Share, and an eight-character saved-copy challenge. Backgrounding
-  relocks the presentation; every later reveal requires new device-owner authentication.
+- Native email and six-digit-code sign-in. The email screen opens before discovery;
+  resend cooldown, email editing, cancellation and errors stay in Compose. Discovery
+  requires `native-email-code-v1` and validates every authentication endpoint against
+  the build-pinned HTTPS origin. Redirects are disabled. The app stores opaque access
+  and rotating refresh tokens, the immutable account ID, verified email and expiry in
+  device-bound encrypted storage; refresh must preserve the account ID. Old browser
+  sessions are not imported. A self-hosted distribution pins its own service origin;
+  an unconfigured build keeps cloud sign-in disabled.
+- Approved-device or offline-recovery onboarding. A new device displays a five-minute
+  QR invitation for approval by a trusted device, or restores from an offline recovery
+  QR/52-character random code. Pairing uses ephemeral P-256 ECDH, HKDF-SHA-256 and
+  AES-256-GCM with an eight-character comparison code; recovery uses a separate
+  HKDF/AES-GCM domain. Invitations never contain the plaintext library key. The server's
+  approved envelope is redacted from polling and atomically taken once.
+- Device-owner authentication and a proof derived from the existing library key protect
+  pairing approval and recovery replacement. Email-code sign-in alone cannot unlock an
+  existing library or grant its key. Each installation has a distinct refresh family.
+  Sign-out and interactive replacement use encrypted credential journals; cleanup revokes
+  exact access tokens and superseded refresh families without revoking the committed
+  family's earlier rotated tokens. Local erase removes the cloud root before credentials;
+  interrupted cleanup resumes on launch. Disconnect explains the key-removal consequence
+  and locally known recovery status. Pending recovery kits are encrypted at rest and use
+  a resumable save flow with QR, clipboard expiry, Save/Share, and an eight-character
+  saved-copy challenge. Later disclosure requires device-owner authentication.
 - A dedicated Snippets Cloud account screen separates account identity, library-key
-  access, active storage, and sync status. It shows a cross-device account fingerprint,
+  access, active storage, and sync status. It shows the verified email and a cross-device Library ID,
   local snippet count, recovery status, and explicit account actions. Provider changes
   have a destination/account/library preflight instead of behaving like an immediate
   radio-button change.
 - Device pairing displays step-by-step instructions, a live five-minute countdown, and
   polls automatically with a manual **Check Again** fallback. Account onboarding does
-  not claim readiness when OAuth or key bootstrap finishes: **Up to date** is published
+  not claim readiness when sign-in or key bootstrap finishes: **Up to date** is published
   only after the first pull/merge/push verification round succeeds.
 - Single-writer provider selection. Switching to Snippets Cloud performs pull, shared
   three-way merge, encrypted offer generation, CAS push, pull-to-confirm, and only then
@@ -75,7 +77,7 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
 - Machine error codes stay out of the account UI. Every surfaced account/sync error says
   what happened, confirms the local-data outcome, and offers the relevant sign-in,
   recovery, pairing, or retry action. Codes remain available only to diagnostics.
-- The v2 service can revoke only the current credential and does not expose durable device
+- The v2 service can revoke exact access tokens and refresh families but does not expose durable device
   inventory or remote library/account deletion. The account screen does not fake those actions;
   they remain blocked on an additive, authorization-reviewed server contract shared by all clients.
 
@@ -90,22 +92,16 @@ r27d or newer, Android SDK 36, and JDK 25 for publishing swift-java's Java runti
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew :app:assembleDebug \
   -PSNIPPETS_CLOUD_ENABLED=true \
-  -PSNIPPETS_CLOUD_URL=https://sync.example.com \
-  -PSNIPPETS_OAUTH_CALLBACK_HOST=auth.example.com
+  -PSNIPPETS_CLOUD_URL=https://sync.example.com
 ```
 
-Apple builds use the equivalent public build settings
-`SNIPPETS_CLOUD_ENABLED=YES`,
-`SNIPPETS_CLOUD_BASE_URL=https://sync.example.com`, and
-`SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST=auth.example.com`. The OIDC public native client
-registers `https://auth.example.com/oauth2redirect/android` and
-`https://auth.example.com/oauth2redirect/apple`; neither platform embeds a client
-secret. The callback host must publish Android Digital Asset Links for the release
-package/certificate and Apple associated-web-credentials metadata for
-`H8QG3CBM96.com.khm.snippets` (plus the debug identifiers only on non-production hosts).
-The feature flag defaults to off on every platform. Omitting the flag or either pin
-disables sign-in; there is no runtime textbox that can redirect a bearer token to an
-arbitrary origin.
+Apple builds use the equivalent public build settings `SNIPPETS_CLOUD_ENABLED=YES` and
+`SNIPPETS_CLOUD_BASE_URL=https://sync.example.com`. The feature flag defaults to off on
+every platform. The native flow needs no OAuth client ID, client secret, callback host,
+App Links, associated-domain callback or Account Center. Omitting the flag or pinned
+origin disables sign-in; there is no runtime textbox that can redirect credentials to
+an arbitrary origin. The server must advertise the native flow and have email delivery
+configured before sign-in can succeed.
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. The Gradle module
 builds `arm64-v8a` and `x86_64`, generates the Java JNI wrapper, and packages the Swift,
@@ -129,6 +125,6 @@ swift test --package-path CorePackage
 
 Before production rollout, add WorkManager scheduling,
 run the existing instrumentation boundary suite on the supported phone/tablet matrix,
-complete size optimization and release signing, and provision the production OIDC tenant
-and canonical service URL. macOS and iOS keep unchanged CloudKit while sharing the same
-browser-based Snippets Cloud sign-in and automatic token refresh.
+complete size optimization and release signing, and configure the production email sender,
+native-auth secrets and canonical HTTPS service URL. macOS and iOS keep unchanged CloudKit
+while sharing the native Snippets Cloud email-code flow and automatic token refresh.

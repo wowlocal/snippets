@@ -67,7 +67,7 @@ surface, which Gradle packages into an AAR.
 
 The service stores opaque `WireRecord` values and server-owned concurrency metadata. It
 does not receive plaintext snippets, merge user content, or possess the library keys.
-It uses OIDC for account authentication, PostgreSQL transactions and compare-and-swap
+It uses native email-code sessions for account authentication, PostgreSQL transactions and compare-and-swap
 for consistency, and defense-in-depth row-level security for tenant separation.
 
 ## Planned repository layout

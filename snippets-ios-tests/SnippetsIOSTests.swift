@@ -33,6 +33,37 @@ final class SnippetsIOSTests: XCTestCase {
         rootURL = nil
     }
 
+    func testNativeCloudSignInUsesVisibleAccountPageWhenSyncPaneIsBehindIt() throws {
+        let oldKeyWindow = currentKeyWindow()
+        let window = testWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let syncPane = UIViewController()
+        let navigation = UINavigationController(rootViewController: syncPane)
+        window.rootViewController = navigation
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            oldKeyWindow?.makeKey()
+        }
+        window.layoutIfNeeded()
+        XCTAssertTrue(waitUntil { syncPane.viewIfLoaded?.window === window })
+        let accountPage = UIViewController()
+        navigation.pushViewController(accountPage, animated: false)
+        window.layoutIfNeeded()
+        XCTAssertTrue(waitUntil { syncPane.viewIfLoaded?.window == nil })
+        XCTAssertTrue(navigation.viewIfLoaded?.window === window)
+
+        XCTAssertTrue(try CloudEmailSignInViewController.visiblePresenter(for: syncPane) === accountPage)
+    }
+
+    func testNativeCloudSignInRejectsDetachedPresenterInsteadOfUsingAnotherScenesWindow() {
+        let detached = UIViewController()
+        XCTAssertThrowsError(try CloudEmailSignInViewController.visiblePresenter(for: detached)) { error in
+            XCTAssertTrue(error is CloudEmailSignInViewController.PresentationFailure)
+        }
+        XCTAssertFalse(detached.isViewLoaded, "Resolving a presenter must not load a detached view")
+    }
+
     func testBuiltAppAllowsProMotionFrameRatesOnIPhone() {
         XCTAssertEqual(
             Bundle.main.object(
@@ -1853,6 +1884,75 @@ final class SnippetsIOSTests: XCTestCase {
                 atPath: rootURL.appendingPathComponent("unsafe.jsonl").path))
         } catch {
             XCTFail("Expected corruptLog, got \(error)")
+        }
+    }
+
+    func testCloudSignInDiagnosticsExportAllStagesAndSanitizeUnderlyingError() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        let error = NSError(domain: NSURLErrorDomain, code: -1001,
+            userInfo: [NSLocalizedDescriptionKey: "PRIVATE-TOKEN email@example.test https://secret.example"])
+        let events: [DiagnosticEvent] = [
+            .cloudSignIn(stage: .preflight, outcome: .entered, durationMilliseconds: 0,
+                storedSessionPresent: nil, reason: nil, failure: nil),
+            .cloudSignIn(stage: .sessionBinding, outcome: .failed, durationMilliseconds: 120,
+                storedSessionPresent: true, reason: .storedIssuerMismatch, failure: DiagnosticFailure(error)),
+            .cloudSignInRequest(endpoint: .serverDiscovery, outcome: .succeeded,
+                durationMilliseconds: 40, httpStatus: 200, reason: nil, failure: nil),
+            .cloudSignInRequest(endpoint: .providerDiscovery, outcome: .failed,
+                durationMilliseconds: 80, httpStatus: nil, reason: .requestFailed, failure: DiagnosticFailure(error)),
+            .cloudSignIn(stage: .emailCodeSend, outcome: .entered, durationMilliseconds: 1,
+                storedSessionPresent: false, reason: nil, failure: nil),
+            .cloudSignIn(stage: .emailCodeVerify, outcome: .failed, durationMilliseconds: 20,
+                storedSessionPresent: false, reason: .invalidCode, failure: nil),
+            .cloudSignInRequest(endpoint: .emailCodeSend, outcome: .succeeded,
+                durationMilliseconds: 10, httpStatus: 200, reason: nil, failure: nil),
+            .cloudSignInRequest(endpoint: .emailCodeVerify, outcome: .failed,
+                durationMilliseconds: 10, httpStatus: 429, reason: .rateLimited, failure: nil),
+            .cloudSignInPresentationAnchor(available: false),
+        ]
+        for event in events { service.emit(event, level: event.defaultLevel, synchronous: event.requiresSynchronousWrite) }
+        let url = rootURL.appendingPathComponent("auth-export.jsonl")
+        _ = try await service.export(to: url)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let objects = try text.split(separator: "\n").map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+        let auth = objects.filter { ($0["event"] as? String)?.hasPrefix("cloud_sign_in") == true }
+        XCTAssertEqual(auth.count, events.count)
+        XCTAssertTrue(text.contains("stored_issuer_mismatch"))
+        XCTAssertTrue(text.contains("\"error_code\":-1001"))
+        for secret in ["PRIVATE-TOKEN", "email@example.test", "secret.example"] { XCTAssertFalse(text.contains(secret)) }
+    }
+
+    func testCloudSignInExportRejectsUnknownValuesAndIncorrectFieldTypes() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        let injectedURL = SnippetStorageLocations.diagnosticsLogsFolderURL.appendingPathComponent("snippets-auth-injected.jsonl")
+        let record = DiagnosticRecord(event: .cloudSignInRequest(endpoint: .token, outcome: .failed,
+            durationMilliseconds: 10, httpStatus: 503, reason: .httpStatus, failure: nil),
+            timestamp: "2026-09-06T10:00:00.000Z", elapsedMilliseconds: 10,
+            sessionIdentifier: "test-session", sequence: 1)
+        let valid = try XCTUnwrap(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        let mutations: [(String, Any)] = [
+            ("url", "https://secret.example"), ("reason", "PRIVATE-TOKEN"),
+            ("endpoint", "https://secret.example"), ("http_status", "503"),
+            ("http_status", true), ("http_status", 999), ("duration_ms", -1),
+            ("outcome", "PRIVATE-TOKEN"), ("error_family", "url"),
+        ]
+        for (key, value) in mutations {
+            var object = valid
+            var fields = try XCTUnwrap(object["fields"] as? [String: Any])
+            fields[key] = value
+            object["fields"] = fields
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            try data.write(to: injectedURL)
+            let destination = rootURL.appendingPathComponent("rejected-auth-export.jsonl")
+            do {
+                _ = try await service.export(to: destination)
+                XCTFail("Invalid auth field must fail export: \(key)")
+            } catch DiagnosticsExportError.corruptLog {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            }
         }
     }
 

@@ -130,7 +130,7 @@ Work:
 - clean-database SQL bootstrap, separate owner/runtime roles, `FORCE RLS`, transaction context;
 - spaces/memberships, record CAS, immutable change feed, cursor/full snapshot;
 - authoritative conflict records, partial batches, quota/rate limiting;
-- OIDC validation and native-app staging client configuration;
+- native email-code verification, session rotation/revocation and staging SMTP configuration;
 - dataset/feed generations and restore/reset runbook;
 - sanitized metrics/traces/logs with no body/resource/token leakage;
 - hosted staging deployment and clean Docker Compose self-host deployment;
@@ -152,7 +152,7 @@ the existing shared engine.
 Work:
 
 - implement `HTTPTransport: SyncTransport` and OpenAPI mapping in shared Swift;
-- implement Kotlin OkHttp executor, PKCE/OIDC token owner, offline/auth mapping;
+- implement Kotlin HTTP executor, native email-code/token owner, offline/auth mapping;
 - add Apple HTTP executor/token adapter without changing CloudKit transport;
 - implement HTTP account/scope/dataset binding and sticky review states;
 - provider-specific base/journal/quarantine paths;
@@ -323,7 +323,7 @@ Create short, reviewable ADRs as decisions become evidenced:
 4. Shared storage/POSIX and Android backup policy.
 5. Portable PBKDF2 dependency/implementation and crypto vector ownership.
 6. HTTP v1 OpenAPI, limits, cursor/CAS and compatibility policy.
-7. Hosted OIDC provider and self-host issuer configuration.
+7. Native email-code authentication, SMTP delivery and self-host configuration.
 8. `PortableLibraryKeyBundle`, HPKE suite, recovery format and key epochs.
 9. Provider state locations, full iCloud/HTTP compatibility, account binding, downgrade
    and Switch and Sync transaction.

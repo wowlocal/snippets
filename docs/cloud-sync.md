@@ -716,19 +716,15 @@ Two bugs the fake caught that a real backend would have taught us slowly and exp
 - **An expired token is not a halt.** Treating a non-retryable rejection uniformly put a sticky,
   scary error in front of someone who just needed to sign in again.
 
-Snippets Cloud treats both interactive OAuth sign-in and refresh rotation as journal-first
-credential replacement, not as an in-place overwrite. Before publishing the new active session,
-each observed old/new access and refresh generation plus the transaction kind is written to a
-device-only replacement journal. Superseded access tokens are closed at the resource server.
-After an interactive replacement, the old authorization grant's refresh token is also revoked at
-the provider. After refresh rotation, the old refresh token is instead covered by the server's
-required `oauth-refresh-token-rotation`/reuse-protection contract; proactively revoking it could
-invalidate the newly committed token family. If the process dies before the new session commit,
-the later, abandoned refresh token is revoked instead. Startup resumes this side-aware cleanup.
-Sign-in, refresh, cleanup, and sign-out share one mutation gate, so sign-out first merges the active
-session plus both replacement and prior logout journals into one durable revocation plan; a
-concurrent refresh or browser callback cannot strand a newer token.
-These credential journals contain no snippet data and never authorize a sync safety review.
+Snippets Cloud uses native email-code sign-in and opaque access/refresh tokens issued by
+the build-pinned HTTPS server. Credential replacement and sign-out use device-only encrypted
+journals so a pending or superseded interactive grant can be retired after interruption.
+Access-token revocation affects the exact credential; refresh-token revocation closes its
+entire grant family. Cleanup must therefore retain the committed family's refresh tokens,
+including an earlier token from before rotation, while retiring superseded interactive grants.
+Refresh reuse invalidates the family and requires fresh sign-in. The Apple mutation gate and
+Android repository mutex serialize sign-in, refresh, cleanup and sign-out. The journals contain
+no snippet data and never authorize a sync safety review.
 
 CloudKit/iCloud is the shipping, user-facing sync path. Snippets Cloud remains dark-launched and is
 integrated as an additional provider rather than as a replacement for iCloud.
@@ -772,14 +768,22 @@ binding; only **Use This Account** may repin that binding.
 ### Snippets Cloud account UX contract
 
 The account UI presents six distinct facts in order: account, selected library, library-key
-access, recovery status, active sync provider, and current sync result. OAuth completion or a
+access, recovery status, active sync provider, and current sync result. Email-code verification or a
 locally available key means **Account connected**, never **Ready**. **Up to date** is reserved for
 a completed sync round whose final engine state contains a successful timestamp.
 
-The macOS, iOS/iPadOS, and Android clients expose a dedicated Snippets Cloud account screen with a
-four-hex-character fingerprint derived from the pinned server instance and space. The fingerprint
-is stable across that library's devices without retaining email or OIDC profile claims. It is UI
-only and must not enter diagnostics.
+The macOS, iOS/iPadOS, and Android clients expose a dedicated Snippets Cloud account screen.
+Sign-in opens a native email form immediately, then a six-digit-code form with resend cooldown,
+email editing, cancellation and in-place errors. No browser, WebView or Account Center is needed.
+Discovery and authentication requests remain on the configured HTTPS origin; discovery cannot
+redirect email, codes or tokens to another host. Sessions retain the server-verified email and
+opaque immutable account ID in device-bound secret storage. The email is account display data;
+it never substitutes for the server's account ID or the selected library's verified scope.
+
+The account screen also shows a short Library ID derived from the pinned server instance and
+space. It is stable across that library's devices, independent of the account email, and stays
+out of diagnostics. Successful account sign-in does not provide an existing library's key:
+that still requires approved-device pairing or the offline recovery kit.
 
 A newly issued or replaced recovery kit remains a durable, encrypted pending setup step until the
 user saves it and proves possession by entering the final eight normalized characters. Apple
@@ -795,8 +799,9 @@ deleted, then expose the existing sync round as human phases: destination check,
 upload, and verification. A failed round leaves the selected account visible with an actionable
 attention state; it never reports completion.
 
-The protocol currently revokes only the credential presented to `DELETE /v2/session`; pairing
-resources are invitations, not a durable device registry. It also has no remote-space or account
+The protocol revokes the exact access credential through `DELETE /v2/session` or
+`POST /v2/auth/revoke`; the latter also accepts a refresh token to revoke its entire family.
+Pairing resources are invitations, not a durable device registry. It also has no remote-space or account
 deletion endpoint. Clients must therefore not synthesize a misleading Devices list, pretend that
 another installation was revoked, or offer destructive remote deletion that only signs out the
 current device. Device/session inventory and remote library/account deletion require an additive
@@ -899,8 +904,8 @@ notarization does **not** check that.
 | CLI reveal is app-brokered | A CLI that can decrypt unattended makes every `curl \| sh` an exfiltration primitive; routing through the app puts a human in the loop | Never revealing at all (simpler, ~900 lines lighter); giving the CLI the Keychain group unconditionally |
 | Peer check anchored to the team ID | The CLI is a bare Mach-O with its own signing identifier, so a bundle-id requirement would not match it | Checking the bundle id; trusting `LOCAL_PEERPID` alone (racy — pids are reused) |
 
-Snippets Cloud account login is now described by
+Snippets Cloud account login now uses native email and one-time-code screens backed by the
+server's `nativeAuth` API. This replaces the unshipped browser/OIDC login described in
 [`server/ADR/0004-conventional-account-login.md`](../server/ADR/0004-conventional-account-login.md).
-The unshipped older passkey-first API is replaced by ordinary OIDC login plus device
-proof of the library key for approval and recovery replacement. Recovery-kit deferral
-allows sync and leaves a Settings reminder. This does not change CloudKit authentication.
+Device proof of the library key still protects approval and recovery replacement. Recovery-kit
+deferral allows sync and leaves a Settings reminder. CloudKit authentication is unchanged.

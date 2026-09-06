@@ -25,14 +25,14 @@ was removed from those apps.
 | Layer | Language | Owns |
 | --- | --- | --- |
 | UI | Kotlin + Jetpack Compose | Screens, adaptive layout, navigation, accessibility semantics, state rendering |
-| Android platform | Kotlin | Activity lifecycle, `ACTION_PROCESS_TEXT`, clipboard/share sheet, WorkManager, FCM, notifications, document picker, Credential Manager/browser auth, Keystore, BiometricPrompt, OkHttp |
+| Android platform | Kotlin | Activity lifecycle, `ACTION_PROCESS_TEXT`, clipboard/share sheet, WorkManager, FCM, notifications, document picker, native email-code auth, Keystore, BiometricPrompt, OkHttp |
 | Bridge | Generated Java/JNI + small Kotlin wrapper | Versioned commands/results, cancellation, lifecycle barrier, conversion to Kotlin flows |
 | Product core | Swift | Model, validation, local files, mutation ordering, search, placeholders, crypto, vault projection, journal, merge, deletion guard, HTTP transport mapping, sync engine |
 | Service | Swift/PostgreSQL | Authentication enforcement, opaque record CAS/change feed, encrypted key envelopes, quota/push hints |
 
 Kotlin never writes `snippets.json`, `vault.json`, sync base, or journal. Swift never
 constructs Android UI, starts a Worker, owns a `Context`, retains an Activity, stores an
-OAuth refresh token, or calls Android authentication APIs without the injected adapter.
+Cloud refresh token, or calls Android authentication APIs without the injected adapter.
 
 ## Proposed Gradle modules
 
@@ -47,7 +47,7 @@ snippets-android/
 ```
 
 Debug uses `com.khm.snippets.debug`; Release uses `com.khm.snippets`. A debug build uses
-its own app data, OAuth redirect URI, FCM registration, and server client ID. Release and
+its own app data, FCM registration, and device-bound Cloud session. Release and
 Debug may have the same display name only if internal testing makes the active build
 visually unmistakable.
 
@@ -92,10 +92,10 @@ backup classes requires a separate privacy and restore-consistency design.
 ### Onboarding
 
 1. Choose Local Only or the HTTP service pinned into this app distribution. A self-hosted
-   operator ships a correspondingly pinned build; the app does not accept a runtime OAuth
+   operator ships a correspondingly pinned build; the app does not accept a runtime
    credential destination.
-2. For HTTP, authenticate with the provider using OIDC Authorization Code + PKCE in a
-   system browser/Credential Manager flow.
+2. For HTTP, open the native email form immediately. Send a one-time code through the
+   pinned service, then verify it on the native code screen with resend and edit-email controls.
 3. Choose an existing sync space or create one.
 4. Obtain its encryption bundle by scanning/approving a pairing code on a trusted
    device or entering the high-entropy recovery key.
@@ -133,31 +133,33 @@ Apple app's provider flow. Never accept iCloud credentials in Android.
 
 ## HTTP authentication and endpoint handling
 
-The app discovers OIDC and protocol capabilities from its build-pinned canonical HTTPS
-origin. It uses Authorization Code + PKCE and validates authorization responses against
-the initiated state/nonce and exact domain-claimed HTTPS redirect. RFC 8707 binds the
-token's sole audience to that origin before the token is disclosed. Passkeys can be
-offered first by the chosen identity provider, with Apple/Google as alternatives; they
-do not replace protocol encryption. Snippets has no account password, does not require
-email, and ignores email/profile claims. Key-granting actions require a fresh passkey
-step-up plus local device-owner authentication.
+The app discovers `nativeAuth` and protocol capabilities from its build-pinned canonical
+HTTPS origin. Email-code start, verification, refresh and revocation endpoints must match
+that origin and the expected paths. The email form opens without waiting for discovery;
+network requests begin only when the user sends the code. No browser, WebView, AppAuth
+session or Account Center participates in sign-in.
 
-Kotlin stores a separate per-installation refresh/access credential under an Android
-Keystore-backed credential store. Sign-out revokes both through the provider's RFC 7009
-endpoint before local deletion. Swift receives only HTTP
-status, allow-listed headers, and body bytes. It maps 401/403 to typed authentication or
-authorization state without seeing or logging token contents.
+Kotlin stores the opaque access/refresh credentials, immutable account ID, verified email
+and expiry in the Android Keystore-backed encrypted store. The email is used for display;
+refresh must preserve the account ID, and neither value can replace the resolved library
+scope. The server stores the verified account email and sends codes using its configured
+email provider. Sign-in proves access to the mailbox, not possession of library keys or
+phishing-resistant authentication. Key-granting actions require device-owner authentication
+and a proof made with an already-held library key; new devices need pairing or recovery.
+
+Sign-out revokes exact access tokens and the installation's refresh family through the
+pinned native API before local credential deletion. Durable cleanup distinguishes separate
+interactive grants from generations of the same refresh family. The transport exposes only
+HTTP status, allow-listed headers and body bytes to shared sync code; authentication errors
+become typed attention states, and credentials never enter diagnostics.
 
 Custom Server rules:
 
-- The API origin and callback host are pinned when that distribution is built. Dynamic
-  runtime server entry is excluded unless a future design adds equivalent origin and
-  sender binding.
-- Android Digital Asset Links and Apple associated-web-credentials metadata bind the
-  callback domain to the exact signed applications; custom URI schemes are not used.
+- The API origin is pinned when that distribution is built. Dynamic runtime server
+  entry is excluded. Authentication does not need callback domains or custom URI schemes.
 - HTTPS is mandatory outside explicitly marked local developer builds.
 - Canonical origin changes create a different provider identity and require review.
-- Redirects may not cross origins; credentials are never forwarded to a new host.
+- Authentication redirects are disabled; email, codes and credentials are never forwarded to a new host.
 - Discovery is size/time bounded and cannot override client wire/crypto safety limits.
 - Certificate errors fail closed. Certificate pinning is not enabled without a rotation
   and emergency-recovery design.
@@ -260,7 +262,7 @@ the same retention, permissions, export validation, and privacy tests. Until the
 shared diagnostics can remain a no-op or feed bounded, privacy-safe in-memory state.
 
 Never log or send analytics containing snippet bodies, names, tags, Process Text input,
-ciphertext, keys, OAuth tokens, recovery material, record/space/device IDs, server paths,
+ciphertext, keys, authentication tokens, recovery material, record/space/device IDs, server paths,
 document URIs, or arbitrary exceptions. User-visible errors use closed family/code
 mappings. Crash reporting must strip bridge payloads and attach no local files by
 default.
@@ -279,7 +281,7 @@ default.
 
 - Compose state and accessibility tests for phone, tablet, foldable, font scaling,
   screen reader, dark mode, rotation, and process recreation.
-- Provider onboarding, OAuth cancellation/expiry, pairing/recovery, offline edits,
+- Provider onboarding, email-code cancellation/expiry, pairing/recovery, offline edits,
   conflict/halt review, and account switch.
 - Keystore/BiometricPrompt success, timeout, lockout, invalidation, and no-auth paths.
 - WorkManager unique-work/coalescing, retry, provider cancellation, and reboot paths.

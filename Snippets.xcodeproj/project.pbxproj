@@ -79,6 +79,7 @@
 		28A200000000000000000032 /* LibraryKeyBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000032 /* LibraryKeyBootstrap.swift */; };
 		28A200000000000000000033 /* SnippetsCloudBootstrapClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000033 /* SnippetsCloudBootstrapClient.swift */; };
 		28A200000000000000000034 /* SnippetsCloudAccountBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000034 /* SnippetsCloudAccountBootstrap.swift */; };
+		28A200000000000000000099 /* SnippetsCloudEmailSignInFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A100000000000000000099 /* SnippetsCloudEmailSignInFlow.swift */; };
 		28D000000000000000000002 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000001 /* Diagnostics.swift */; };
 		28F000000000000000000002 /* SettingsCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F000000000000000000001 /* SettingsCatalog.swift */; };
 		28D000000000000000000004 /* DiagnosticsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000003 /* DiagnosticsService.swift */; };
@@ -204,6 +205,7 @@
 		28A100000000000000000032 /* LibraryKeyBootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryKeyBootstrap.swift; path = snippets/Core/LibraryKeyBootstrap.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000033 /* SnippetsCloudBootstrapClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetsCloudBootstrapClient.swift; path = snippets/Sync/SnippetsCloudBootstrapClient.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000034 /* SnippetsCloudAccountBootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetsCloudAccountBootstrap.swift; path = snippets/Sync/SnippetsCloudAccountBootstrap.swift; sourceTree = SOURCE_ROOT; };
+		28A100000000000000000099 /* SnippetsCloudEmailSignInFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetsCloudEmailSignInFlow.swift; path = snippets/Sync/SnippetsCloudEmailSignInFlow.swift; sourceTree = SOURCE_ROOT; };
 		28B000000000000000000001 /* Snippets iOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28C000000000000000000001 /* Snippets iOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets iOSUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		28E000000000000000000001 /* Snippets macOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Snippets macOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -389,6 +391,7 @@
 				28A100000000000000000032 /* LibraryKeyBootstrap.swift */,
 				28A100000000000000000033 /* SnippetsCloudBootstrapClient.swift */,
 				28A100000000000000000034 /* SnippetsCloudAccountBootstrap.swift */,
+		28A100000000000000000099 /* SnippetsCloudEmailSignInFlow.swift */,
 				28A100000000000000000031 /* SyncBackendSelectionStore.swift */,
 				28A100000000000000000017 /* SyncStateFile.swift */,
 				28A100000000000000000018 /* SyncTransport.swift */,
@@ -724,6 +727,7 @@
 				28A200000000000000000032 /* LibraryKeyBootstrap.swift in Sources */,
 				28A200000000000000000033 /* SnippetsCloudBootstrapClient.swift in Sources */,
 				28A200000000000000000034 /* SnippetsCloudAccountBootstrap.swift in Sources */,
+		28A200000000000000000099 /* SnippetsCloudEmailSignInFlow.swift in Sources */,
 				28A200000000000000000031 /* SyncBackendSelectionStore.swift in Sources */,
 				28A200000000000000000017 /* SyncStateFile.swift in Sources */,
 				28A200000000000000000018 /* SyncTransport.swift in Sources */,
@@ -945,9 +949,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME) Debug";
 				REGISTER_APP_GROUPS = YES;
 				SNIPPETS_CLOUD_BASE_URL = "";
-				SNIPPETS_CLOUD_ACCOUNT_CENTER_URL = "";
 				SNIPPETS_CLOUD_ENABLED = NO;
-				SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST = invalid.invalid;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -987,9 +989,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SNIPPETS_CLOUD_BASE_URL = "";
-				SNIPPETS_CLOUD_ACCOUNT_CENTER_URL = "";
 				SNIPPETS_CLOUD_ENABLED = NO;
-				SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST = invalid.invalid;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -1059,9 +1059,7 @@
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = iphoneos;
 				SNIPPETS_CLOUD_BASE_URL = "";
-				SNIPPETS_CLOUD_ACCOUNT_CENTER_URL = "";
 				SNIPPETS_CLOUD_ENABLED = NO;
-				SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST = invalid.invalid;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -1102,9 +1100,7 @@
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = iphoneos;
 				SNIPPETS_CLOUD_BASE_URL = "";
-				SNIPPETS_CLOUD_ACCOUNT_CENTER_URL = "";
 				SNIPPETS_CLOUD_ENABLED = NO;
-				SNIPPETS_CLOUD_OAUTH_CALLBACK_HOST = invalid.invalid;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;

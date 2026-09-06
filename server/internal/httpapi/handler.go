@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wowlocal/snippets/server/internal/api"
+	"github.com/wowlocal/snippets/server/internal/auth"
 	"github.com/wowlocal/snippets/server/internal/config"
 	"github.com/wowlocal/snippets/server/internal/domain"
 )
@@ -40,6 +41,7 @@ func requestIDFrom(ctx context.Context) uuid.UUID {
 type Handler struct {
 	configuration config.Server
 	store         domain.Store
+	native        auth.NativeService
 }
 
 func NewHandler(configuration config.Server, store domain.Store) *Handler {
@@ -47,14 +49,23 @@ func NewHandler(configuration config.Server, store domain.Store) *Handler {
 }
 
 func (h *Handler) GetDiscovery(context.Context, api.GetDiscoveryRequestObject) (api.GetDiscoveryResponseObject, error) {
-	capabilities := []string{"account-without-required-email", "offline-recovery-v1", "oauth-refresh-token-rotation", "oauth-resource-indicators", "oauth-token-revocation", "oidc-pkce", "pairing-v2", domain.LibraryActionCapability, "resource-session-revocation"}
-	return api.GetDiscovery200JSONResponse{
+	capabilities := []string{"offline-recovery-v1", "pairing-v2", domain.LibraryActionCapability, "resource-session-revocation"}
+	result := api.GetDiscovery200JSONResponse{
 		ProtocolMajor: api.N2, ProtocolMinor: api.N1, ServerVersion: h.configuration.ServerVersion,
 		ServerInstanceId: h.configuration.ServerInstanceID, ApiBase: h.configuration.PublicBaseURL.String() + "/v2",
-		RecordProfile: api.SnippetsWireV1, Capabilities: capabilities,
-		Limits: api.Limits{MaxBlobBytes: 900000, MaxRevisionBytes: 256, MaxBatchRecords: 50, MaxPageRecords: 50, MaxRequestBytes: 16777216, MaxResponseBytes: 67108864, MaxKeyEnvelopeBytes: 4096, MaxPairingSeconds: 600},
-		Oidc:   api.OIDCDiscovery{Issuer: h.configuration.OIDC.Issuer.String(), Resource: h.configuration.PublicBaseURL.String(), ClientId: h.configuration.OIDC.ClientID, Scopes: append([]string(nil), h.configuration.OIDC.Scopes...), AuthorizationFlow: api.AuthorizationCodePkce, MaxAccessTokenAgeSeconds: int(h.configuration.OIDC.MaximumTokenAge / time.Second)},
-	}, nil
+		RecordProfile: api.SnippetsWireV1,
+		Limits:        api.Limits{MaxBlobBytes: 900000, MaxRevisionBytes: 256, MaxBatchRecords: 50, MaxPageRecords: 50, MaxRequestBytes: 16777216, MaxResponseBytes: 67108864, MaxKeyEnvelopeBytes: 4096, MaxPairingSeconds: 600},
+	}
+	if h.configuration.AuthMode == "native" {
+		origin := h.configuration.PublicBaseURL.String() + "/v2/auth"
+		result.NativeAuth = &api.NativeAuthDiscovery{Flow: api.EmailCode, StartEndpoint: origin + "/email/start", VerifyEndpoint: origin + "/email/verify", RefreshEndpoint: origin + "/refresh", RevokeEndpoint: origin + "/revoke"}
+		capabilities = append(capabilities, "native-email-code-v1")
+	} else {
+		result.Oidc = &api.OIDCDiscovery{Issuer: h.configuration.OIDC.Issuer.String(), Resource: h.configuration.PublicBaseURL.String(), ClientId: h.configuration.OIDC.ClientID, Scopes: append([]string(nil), h.configuration.OIDC.Scopes...), AuthorizationFlow: api.AuthorizationCodePkce, MaxAccessTokenAgeSeconds: int(h.configuration.OIDC.MaximumTokenAge / time.Second)}
+		capabilities = append(capabilities, "account-without-required-email", "oauth-refresh-token-rotation", "oauth-resource-indicators", "oauth-token-revocation", "oidc-pkce")
+	}
+	result.Capabilities = capabilities
+	return result, nil
 }
 
 func (h *Handler) GetLiveness(context.Context, api.GetLivenessRequestObject) (api.GetLivenessResponseObject, error) {

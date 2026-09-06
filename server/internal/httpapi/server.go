@@ -45,6 +45,9 @@ func NewServer(configuration config.Server, store domain.Store, validator auth.V
 	}
 	server := &Server{configuration: configuration, store: store, validator: validator, logger: logger, concurrent: make(chan struct{}, configuration.HTTP.MaximumConcurrent), readiness: make(chan struct{}, 2), global: newTokenBucket(float64(configuration.HTTP.GlobalRate), configuration.HTTP.GlobalBurst), principals: make(map[[32]byte]*principalBucket)}
 	implementation := NewHandler(configuration, store)
+	if native, ok := validator.(auth.NativeService); ok && configuration.AuthMode == "native" {
+		implementation.native = native
+	}
 	strict := api.NewStrictHandlerWithOptions(implementation, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			writeProblem(w, domain.NewError(domain.InvalidRequest))
@@ -69,6 +72,10 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 		policy := policyForRequest(r.Method, r.URL.Path)
 		r = r.WithContext(withOperationPolicy(r.Context(), policy))
 		operation := policy.name
+		if strings.HasPrefix(operation, "native_") {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
+		}
 		statusWriter := &statusRecorder{ResponseWriter: w, requestID: requestID}
 		defer func() {
 			abortCommittedResponse := false
@@ -95,6 +102,14 @@ func (s *Server) limitMiddleware(next http.Handler) http.Handler {
 		if operation == "unknown" {
 			writeProblem(statusWriter, domain.NewError(domain.NotFound))
 			return
+		}
+		if s.configuration.AuthMode == "native" && nativeUsesClientIP(operation) {
+			ip, err := nativeClientIP(r, s.configuration.NativeAuth.TrustedProxyCIDRs)
+			if err != nil {
+				writeProblem(statusWriter, err)
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), nativeIPContextKey{}, ip))
 		}
 		if encoding := r.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(strings.TrimSpace(encoding), "identity") {
 			writeProblem(statusWriter, domain.NewError(domain.InvalidRequest))
@@ -189,6 +204,10 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 			writeProblem(w, domain.NewError(domain.InvalidRequest))
 			return
 		}
+		if strings.HasPrefix(policy.name, "native_") && r.ContentLength > 4096 {
+			writeProblem(w, domain.ErrorWithLimit(domain.PayloadTooLarge, 4096))
+			return
+		}
 		if r.ContentLength > domain.MaxRequestBytes {
 			r.Close = true
 			writeProblem(w, domain.ErrorWithLimit(domain.PayloadTooLarge, domain.MaxRequestBytes))
@@ -214,7 +233,11 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		defer func() { _ = controller.SetReadDeadline(time.Time{}) }()
-		body, readErr := io.ReadAll(io.LimitReader(r.Body, domain.MaxRequestBytes+1))
+		maximumBody := int64(domain.MaxRequestBytes)
+		if strings.HasPrefix(policy.name, "native_") {
+			maximumBody = 4096
+		}
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, maximumBody+1))
 		if readErr != nil {
 			r.Close = true
 			_ = r.Body.Close()
@@ -225,7 +248,7 @@ func (s *Server) bodyMiddleware(next http.Handler) http.Handler {
 			writeProblem(w, domain.NewError(domain.InvalidRequest))
 			return
 		}
-		if len(body) > domain.MaxRequestBytes {
+		if int64(len(body)) > maximumBody {
 			r.Close = true
 			writeProblem(w, domain.ErrorWithLimit(domain.PayloadTooLarge, domain.MaxRequestBytes))
 			return
@@ -449,6 +472,22 @@ func validateRequiredShape(operation string, raw any) error {
 		}
 	}
 	switch operation {
+	case "native_email_start":
+		if !hasExactObjectShape(object, []string{"email"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+	case "native_email_verify":
+		if !hasExactObjectShape(object, []string{"challengeId", "code"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+	case "native_refresh":
+		if !hasExactObjectShape(object, []string{"refreshToken"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+	case "native_revoke":
+		if !hasExactObjectShape(object, []string{"token", "tokenTypeHint"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
 	case "bootstrap_library_key":
 		if !hasExactObjectShape(object, []string{"expectedScope", "publicKey", "recovery"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
@@ -619,6 +658,12 @@ func policyForRequest(method, path string) operationPolicy {
 			return operationPolicy{name: "liveness", public: true, requirement: auth.Standard}
 		}
 		return operationPolicy{name: "readiness", public: true, requirement: auth.Standard}
+	}
+	if method == http.MethodPost {
+		names := map[string]string{"/v2/auth/email/start": "native_email_start", "/v2/auth/email/verify": "native_email_verify", "/v2/auth/refresh": "native_refresh", "/v2/auth/revoke": "native_revoke"}
+		if name, ok := names[path]; ok {
+			return operationPolicy{name: name, public: true, hasBody: true, requirement: auth.Standard}
+		}
 	}
 	if path == "/v2/session" && method == http.MethodDelete {
 		return standard("revoke_session")

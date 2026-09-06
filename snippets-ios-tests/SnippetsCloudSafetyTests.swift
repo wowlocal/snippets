@@ -5,6 +5,64 @@ import CryptoKit
 
 @MainActor
 final class SnippetsCloudSafetyTests: XCTestCase {
+    func testSignInDiagnosticsKeepOriginalFailureWhenCleanupMasksIt() async throws {
+        var events: [DiagnosticEvent] = []
+        let diagnostics = SnippetsCloudSignInDiagnostics { events.append($0) }
+        do {
+            try await diagnostics.run {
+                try await diagnostics.run {
+                    diagnostics.storedSessionPresent = true
+                    diagnostics.enter(.sessionBinding)
+                    diagnostics.reason = .storedIssuerMismatch
+                    diagnostics.capture(NSError(domain: NSCocoaErrorDomain, code: 4864))
+                    diagnostics.enter(.credentialCleanup)
+                    throw NSError(domain: NSURLErrorDomain, code: -1001,
+                        userInfo: [NSLocalizedDescriptionKey: "PRIVATE-TOKEN"])
+                }
+            }
+            XCTFail("Expected failure")
+        } catch {}
+        let terminal = events.filter {
+            if case .cloudSignIn(_, let outcome, _, _, _, _) = $0 { return outcome != .entered }
+            return false
+        }
+        XCTAssertEqual(terminal.count, 1)
+        guard case .cloudSignIn(let stage, let outcome, _, let present, let reason, _) = terminal.first else {
+            return XCTFail("Missing terminal sign-in diagnostic")
+        }
+        XCTAssertEqual(stage, .sessionBinding)
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(present, true)
+        XCTAssertEqual(reason, .storedIssuerMismatch)
+    }
+
+    func testSignInDiagnosticsSeparateCancellationFromFailureAndSuccess() async throws {
+        var events: [DiagnosticEvent] = []
+        let cancelled = SnippetsCloudSignInDiagnostics { events.append($0) }
+        do {
+            try await cancelled.run {
+                cancelled.enter(.browserWaiting)
+                throw CancellationError()
+            }
+        } catch {}
+        guard case .cloudSignIn(.browserWaiting, .cancelled, _, _, .authorizationCancelled, _) = events.last else {
+            return XCTFail("Cancellation must remain an informational outcome")
+        }
+        events.removeAll()
+        let succeeded = SnippetsCloudSignInDiagnostics { events.append($0) }
+        let result = try await succeeded.run {
+            try await succeeded.run {
+                succeeded.enter(.librarySetup)
+                return 42
+            }
+        }
+        XCTAssertEqual(result, 42)
+        XCTAssertEqual(events.filter {
+            if case .cloudSignIn(_, .succeeded, _, _, _, _) = $0 { return true }
+            return false
+        }.count, 1)
+    }
+
     func testVerifiedProfileBindsSignatureNonceAudienceAndResourceSubject() throws {
         let key = P256.Signing.PrivateKey()
         func encode(_ data: Data) -> String {

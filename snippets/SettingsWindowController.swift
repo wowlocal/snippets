@@ -1,5 +1,4 @@
 import AppKit
-import AuthenticationServices
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import LocalAuthentication
@@ -2007,6 +2006,7 @@ private final class SyncSettingsViewController: NSViewController {
     private var backendSelection: SyncBackendSelectionStore {
         (NSApp.delegate as? AppDelegate)?.backendSelection ?? SyncBackendSelectionStore()
     }
+    private var cloudSignInInProgress = false
     private var cloudBootstrap: SnippetsCloudAccountBootstrap {
         (NSApp.delegate as? AppDelegate)?.cloudBootstrap
             ?? SnippetsCloudAccountBootstrap(selection: backendSelection)
@@ -2159,8 +2159,8 @@ private final class SyncSettingsViewController: NSViewController {
         guard SyncCoordinator.isEnabled, let app = NSApp.delegate as? AppDelegate else { return "" }
         if backendSelection.provider == .snippetsCloud {
             return "Another device joins this library through approved pairing or recovery. "
-                + "The server never receives the portable sync-v1 key. Switching back to "
-                + "iCloud keeps using the existing CloudKit container and implementation."
+                + "The server never receives your library’s encryption key. Switching back to "
+                + "iCloud keeps your existing iCloud library."
         }
         let session = app.vaultSession
 
@@ -2353,11 +2353,10 @@ private final class SyncSettingsViewController: NSViewController {
             }
             return
         }
-        guard let bundled = SyncBackendSelectionStore.bundledServerURL,
-              SyncBackendSelectionStore.bundledOAuthRedirectURL != nil else {
+        guard let bundled = SyncBackendSelectionStore.bundledServerURL else {
             let unavailable = NSAlert()
             unavailable.messageText = "Snippets Cloud Isn’t Configured"
-            unavailable.informativeText = "This build has no verified cloud endpoint and HTTPS sign-in callback. A self-hosted build must pin both at build time."
+            unavailable.informativeText = "This build has no verified cloud endpoint. A self-hosted build must pin its server address at build time."
             unavailable.runModal()
             return
         }
@@ -2368,7 +2367,7 @@ private final class SyncSettingsViewController: NSViewController {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Reset Unreadable Cloud Sign-In?"
-        alert.informativeText = "Snippets cannot verify the saved sign-in history or confirm that every older sign-in was disconnected. First revoke Snippets in your identity provider’s connected-app settings. Reset removes this Mac’s cloud connection and its access to open the library; local snippets and the cloud library are not deleted."
+        alert.informativeText = "Snippets cannot verify the saved sign-in history or confirm that every older sign-in was disconnected. Unreadable sessions cannot be signed out remotely and may remain active until they expire. Reset removes this Mac’s cloud connection and its access to open the library; local snippets and the cloud library are not deleted."
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Reset This Mac")
         alert.buttons[1].hasDestructiveAction = true
@@ -2406,20 +2405,30 @@ private final class SyncSettingsViewController: NSViewController {
         selection: SyncBackendSelectionStore,
         changeAccount: Bool = false
     ) {
+        guard !cloudSignInInProgress else { return }
+        cloudSignInInProgress = true
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { cloudSignInInProgress = false }
             do {
                 let state = try await cloudBootstrap.signIn(
                     serverURL: serverURL,
                     changeAccount: changeAccount,
                     chooseLibrary: chooseCloudLibrary,
-                    presentationContext: self)
+                    authenticate: authenticateCloudAccount)
                 try presentCloudState(state)
+            } catch is CancellationError {
+                // The native sign-in sheet was cancelled.
+            } catch SnippetsCloudEmailSignInFailure.cancelled {
             } catch {
                 showCloudError("Couldn’t Sign In to Snippets Cloud", error: error)
             }
             reloadFromStorage()
         }
+    }
+
+    private func authenticateCloudAccount(_ flow: SnippetsCloudEmailSignInFlow) async throws {
+        try await CloudEmailSignInViewController.authenticate(flow: flow, presenting: self)
     }
 
     private func confirmCloudAccountChange() {
@@ -2497,7 +2506,7 @@ private final class SyncSettingsViewController: NSViewController {
             guard let self else { return }
             try self.presentCloudState(
                 try await self.cloudBootstrap.resumePostAuthorizationSetup(
-                    reauthenticatingIfNeededWith: self))
+                    reauthenticatingIfNeededWith: self.authenticateCloudAccount))
         }
     }
 
@@ -2830,6 +2839,8 @@ private final class SyncSettingsViewController: NSViewController {
     ) {
         Task { @MainActor [weak self] in
             do { try await operation() }
+            catch is CancellationError { }
+            catch SnippetsCloudEmailSignInFailure.cancelled { }
             catch { self?.showCloudError(title, error: error) }
         }
     }
@@ -2894,11 +2905,10 @@ private final class SyncSettingsViewController: NSViewController {
     }
 }
 
-extension SyncSettingsViewController: ASWebAuthenticationPresentationContextProviding {
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        _ = session
-        return view.window!
-    }
+/// Scrolling begins at the account heading even when actions exceed the sheet height.
+@MainActor
+private final class MacCloudAccountDocumentView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 @MainActor
@@ -2962,16 +2972,12 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             }
             _ = try? await bootstrap.refreshRecoveryKitStatus()
             guard isViewLoaded else { return }
-            let frame = view.frame
-            loadView()
-            view.frame = frame
+            reloadContent()
         }
         guard syncObservation == nil else { return }
         syncObservation = coordinator?.addStateObserver { [weak self] _ in
             guard let self, self.isViewLoaded else { return }
-            let frame = self.view.frame
-            self.loadView()
-            self.view.frame = frame
+            self.reloadContent()
         }
     }
 
@@ -2984,12 +2990,19 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     }
 
     override func loadView() {
-        view = NSView()
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 580, height: 610))
+        reloadContent()
+    }
+
+    private func reloadContent() {
+        // Keep the sheet's root view attached while asynchronous status updates
+        // rebuild its contents; replacing it makes NSWindow resize to zero.
+        view.subviews.forEach { $0.removeFromSuperview() }
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        let document = NSView()
+        let document = MacCloudAccountDocumentView()
         document.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = document
         view.addSubview(scroll)
@@ -3054,12 +3067,11 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     }
 
     private enum Action: Equatable {
-        case manageAccount, continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
+        case continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
         case changeAccount, changeLibrary, disconnect
 
         var selector: Selector {
             switch self {
-            case .manageAccount: #selector(MacSnippetsCloudAccountViewController.manageAccountPressed)
             case .continueSetup, .saveRecovery:
                 #selector(MacSnippetsCloudAccountViewController.continueSetupPressed)
             case .switchToCloud:
@@ -3089,7 +3101,6 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
                     "Save and Check Recovery Kit…"
                 default: "Continue Setup…"
                 }
-            case .manageAccount: "Manage Account and Sign-In Methods…"
             case .saveRecovery: "Save Recovery Kit — Recommended…"
             case .switchToCloud: "Use Snippets Cloud for Sync…"
             case .syncNow: "Sync Now"
@@ -3112,7 +3123,6 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             [.continueSetup]
         case .ready:
             (selection.provider == .snippetsCloud ? [.syncNow] : [.switchToCloud])
-                + (selection.cloudAccountCenterURL != nil ? [.manageAccount] : [])
                 + (bootstrap.hasPendingRecoveryKit ? [.saveRecovery] : [])
                 + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
         case .setupInterrupted:
@@ -3183,7 +3193,6 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         return stack
     }
 
-    @objc private func manageAccountPressed() { if let url = selection.cloudAccountCenterURL { NSWorkspace.shared.open(url) } }
     @objc private func continueSetupPressed() { continueSetup() }
     @objc private func switchToCloudPressed() { switchToCloud() }
     @objc private func syncNowPressed() { syncNowAction() }
@@ -3615,12 +3624,12 @@ private final class DiagnosticsSettingsViewController: NSViewController {
             + "whichever comes first, and use at most 24 MB on this device.")
         let privacy = makeTertiaryLabel(
             "Exports are plaintext JSON Lines. They can include app and OS versions, "
-            + "operation counts, CloudKit callback and scheduler states, error families and "
+            + "operation counts, CloudKit callback and scheduler states, sign-in stages and HTTP status codes, error families and "
             + "numeric codes, and secure-snippet keywords. When expansion verbose logging is "
             + "enabled, they can also include "
             + "content-free Accessibility stages, outcomes, state transitions, query lengths, "
             + "and numeric AX error codes. Snippet bodies, names, tags, paths, record IDs, keys and "
-            + "ciphertext are never accepted by the logging API.")
+            + "ciphertext, email addresses, sign-in codes and tokens are never accepted by the logging API.")
 
         let expansionVerboseTitle = NSTextField(labelWithString: "Expansion Accessibility logging")
         expansionVerboseTitle.font = .systemFont(ofSize: 13, weight: .medium)

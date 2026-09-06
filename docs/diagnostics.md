@@ -22,6 +22,38 @@ ciphertext, keys, arbitrary error descriptions, or `NSError.userInfo`. Errors ar
 to a known family and numeric code. Secure-snippet keywords are explicitly approved
 metadata; they are normalized and bounded to 256 UTF-8 bytes.
 
+Snippets Cloud native email login uses two events in the `sync` category:
+
+- `cloud_sign_in`: a closed stage and outcome, elapsed milliseconds (bounded to one
+  day), an optional saved-session-present boolean, and a classified failure reason
+  with the sanitized error family/code. Stages cover local preflight, credential
+  cleanup, discovery, saved-session checks, `email_code_send`, `email_code_verify`,
+  credential journaling, library selection, commit, and post-login library setup.
+  There is one terminal result per attempt. If cleanup masks the original error,
+  the terminal record retains the original failing stage and cause.
+- `cloud_sign_in_request`: one outcome per discovery, email-code start, or code
+  verification request, with a closed endpoint kind, duration, optional HTTP status
+  (100–599), and classified transport/response/JSON failure. Native reasons include
+  invalid email/code, expired code, exhausted attempts, and rate limiting. This
+  records the cause before user-facing error mapping; background refreshes do not
+  emit this trace. Email addresses, codes, challenge IDs, and tokens are never logged.
+
+The native email sheet opens before network work. To investigate a failure, find
+its terminal `cloud_sign_in` and preceding request records in the same process
+session. A saved-session authority mismatch identifies the failed comparison
+without recording either value. A missing terminal result alone does not prove a
+crash; correlate it with lifecycle/MetricKit diagnostics or the device crash report.
+
+Exports still accept historic browser stages and `cloud_sign_in_presentation_anchor`
+so retained logs remain readable. These are no longer emitted by native sign-in.
+Terminal failures request synchronous persistence; ordinary progress and request
+records remain asynchronous. Process-session sequence and timestamps supply
+ordering; there are no account, device, or authentication request IDs.
+
+No email addresses, authorization/verification codes, tokens, state, nonce, PKCE
+values, issuer/server/callback URLs, HTTP headers, or response bodies enter these
+events. Export privacy copy on both platforms describes the added fields.
+
 CloudKit ordering is recorded through `cloudkit_sync_event` and
 `cloudkit_scheduler_transition`. The former records only the closed callback kind, aggregate record
 count, fetch nesting depth, whether a submit overlapped, whether the scheduler epoch is a full

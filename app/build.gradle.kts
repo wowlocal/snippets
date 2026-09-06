@@ -17,15 +17,6 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
-        val oauthCallbackHost = providers.gradleProperty("SNIPPETS_OAUTH_CALLBACK_HOST")
-            .orElse("invalid.invalid")
-            .get()
-            .lowercase()
-        require(oauthCallbackHost.length <= 253 &&
-            Regex("^[a-z0-9.-]+$").matches(oauthCallbackHost)) {
-            "SNIPPETS_OAUTH_CALLBACK_HOST must be an ASCII DNS host"
-        }
-        manifestPlaceholders["snippetsOAuthCallbackHost"] = oauthCallbackHost
         val snippetsCloudEnabledValue = providers.gradleProperty("SNIPPETS_CLOUD_ENABLED")
             .orElse("false")
             .get()
@@ -34,10 +25,6 @@ android {
             "SNIPPETS_CLOUD_ENABLED must be true or false"
         }
         val snippetsCloudEnabled = snippetsCloudEnabledValue == "true"
-        manifestPlaceholders["snippetsCloudEnabled"] = snippetsCloudEnabled.toString()
-        // Satisfies AppAuth's lower-priority library manifest; the activity is
-        // replaced below with a verified HTTPS App Link, so this scheme is not exported.
-        manifestPlaceholders["appAuthRedirectScheme"] = "snippets-oauth-disabled"
         val snippetsCloudURL = providers.gradleProperty("SNIPPETS_CLOUD_URL")
             .orElse("")
             .get()
@@ -45,14 +32,6 @@ android {
             .replace("\"", "\\\"")
         buildConfigField("String", "SNIPPETS_CLOUD_URL", "\"$snippetsCloudURL\"")
         buildConfigField("boolean", "SNIPPETS_CLOUD_ENABLED", snippetsCloudEnabled.toString())
-        val accountCenter = providers.gradleProperty("SNIPPETS_CLOUD_ACCOUNT_CENTER_URL").orElse("").get()
-        require(accountCenter.isEmpty() || accountCenter.matches(Regex("https://[A-Za-z0-9.-]+(?::[0-9]+)?/account/profile")))
-        buildConfigField("String", "SNIPPETS_CLOUD_ACCOUNT_CENTER_URL", "\"$accountCenter\"")
-        buildConfigField(
-            "String",
-            "SNIPPETS_OAUTH_REDIRECT_URI",
-            "\"https://$oauthCallbackHost/oauth2redirect/android\"",
-        )
     }
 
     buildTypes {
@@ -86,7 +65,6 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.appauth)
     implementation(libs.google.code.scanner)
     implementation(libs.zxing.core)
     testImplementation(libs.junit)

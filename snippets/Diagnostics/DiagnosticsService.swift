@@ -469,6 +469,14 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "library_merge": ExportEventSchema(
             category: "persistence", required: ["conflict_copies", "keyword_collisions"]),
         "sync_triggered": ExportEventSchema(category: "sync", required: ["trigger"]),
+        "cloud_sign_in": ExportEventSchema(
+            category: "sync", required: ["stage", "outcome", "duration_ms"],
+            optional: ["stored_session_present", "reason", "error_family", "error_code"]),
+        "cloud_sign_in_request": ExportEventSchema(
+            category: "sync", required: ["endpoint", "outcome", "duration_ms"],
+            optional: ["http_status", "reason", "error_family", "error_code"]),
+        "cloud_sign_in_presentation_anchor": ExportEventSchema(
+            category: "sync", required: ["available"]),
         "sync_state": ExportEventSchema(
             category: "sync", required: ["state"], optional: ["halt_reason"]),
         "sync_round": ExportEventSchema(
@@ -535,11 +543,11 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "halt_reason", "action", "keyword", "outcome", "caller", "source", "reason",
         "kind", "surface", "from_state", "to_state", "vault_state",
         "state_before", "state_after", "stage", "failure", "exported_at",
-        "oldest_entry_at", "newest_entry_at",
+        "oldest_entry_at", "newest_entry_at", "endpoint",
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",
-        "submit_active", "generation_sealed",
+        "submit_active", "generation_sealed", "stored_session_present", "available",
     ]
     private static let exportNumericFields: Set<String> = [
         "error_code", "attempt", "value", "conflict_copies", "keyword_collisions",
@@ -547,7 +555,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "record_count", "count", "exception_type", "exception_code", "signal",
         "file_count", "byte_count", "skipped_trailing_lines", "query_length",
         "ax_error_code", "fetch_depth", "pending_generation_count",
-        "unready_generation_count",
+        "unready_generation_count", "http_status",
     ]
 
     private func makeExport(at destination: URL) throws -> DiagnosticsExportResult {
@@ -692,7 +700,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         let fieldNames = Set(fields.keys)
         guard schemaForEvent.requiredFields.isSubset(of: fieldNames),
               fieldNames.isSubset(of: schemaForEvent.requiredFields.union(schemaForEvent.optionalFields)),
-              fields.allSatisfy({ validateExportField(key: $0.key, value: $0.value) })
+              fields.allSatisfy({ validateExportField(key: $0.key, value: $0.value) }),
+              validateCloudSignInFields(event: event, fields: fields)
         else { return nil }
 
         return ExportLine(
@@ -700,6 +709,34 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             session: session,
             sequence: sequence.uint64Value,
             data: data)
+    }
+
+    private static func validateCloudSignInFields(event: String, fields: [String: Any]) -> Bool {
+        guard event == "cloud_sign_in" || event == "cloud_sign_in_request" else { return true }
+        guard let duration = fields["duration_ms"] as? NSNumber,
+              (0...86_400_000).contains(duration.doubleValue),
+              duration.doubleValue.rounded(.towardZero) == duration.doubleValue,
+              (fields["error_family"] == nil) == (fields["error_code"] == nil) else { return false }
+        if let reason = fields["reason"] as? String,
+           DiagnosticCloudSignInReason(rawValue: reason) == nil { return false }
+        if let family = fields["error_family"] as? String,
+           DiagnosticFailureFamily(rawValue: family) == nil { return false }
+        if event == "cloud_sign_in" {
+            guard let stage = fields["stage"] as? String,
+                  DiagnosticCloudSignInStage(rawValue: stage) != nil,
+                  let outcome = fields["outcome"] as? String,
+                  DiagnosticCloudSignInOutcome(rawValue: outcome) != nil else { return false }
+        } else {
+            guard let endpoint = fields["endpoint"] as? String,
+                  DiagnosticCloudSignInEndpoint(rawValue: endpoint) != nil,
+                  let outcome = fields["outcome"] as? String,
+                  DiagnosticCloudSignInRequestOutcome(rawValue: outcome) != nil else { return false }
+            if let status = fields["http_status"] as? NSNumber,
+               !(100...599).contains(status.doubleValue) || status.doubleValue.rounded(.towardZero) != status.doubleValue {
+                return false
+            }
+        }
+        return true
     }
 
     private static func validateExportField(key: String, value: Any) -> Bool {

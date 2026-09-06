@@ -61,7 +61,7 @@ class CloudEndToEndTest {
 
         when (phase) {
             "contribute" -> {
-                assertValues(client.state.value, mapOf(
+                assertValues(client, mapOf(
                     "mac-e2e" to MAC_INITIAL,
                     "ios-e2e" to IOS_INITIAL))
                 val uploaded = SnippetRepository.newSnippet().copy(
@@ -73,8 +73,8 @@ class CloudEndToEndTest {
                 client.save(uploaded)
                 assertNull(client.state.value.errorCode)
                 client.syncNow()
-                assertSynced(client.state.value)
-                assertValues(client.state.value, mapOf(
+                assertSynced(client)
+                assertValues(client, mapOf(
                     "mac-e2e" to MAC_INITIAL,
                     "ios-e2e" to IOS_INITIAL,
                     "android-e2e" to ANDROID_INITIAL))
@@ -84,13 +84,13 @@ class CloudEndToEndTest {
                 destroyLocalInstallationState()
                 val receiver = freshClient(
                     keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
-                assertValues(receiver.state.value, mapOf(
+                assertValues(receiver, mapOf(
                     "mac-e2e" to MAC_INITIAL,
                     "ios-e2e" to IOS_INITIAL,
                     "android-e2e" to ANDROID_INITIAL))
             }
             "verify" -> {
-                assertValues(client.state.value, mapOf(
+                assertValues(client, mapOf(
                     "mac-e2e" to MAC_FINAL,
                     "ios-e2e" to IOS_INITIAL,
                     "android-e2e" to ANDROID_FINAL))
@@ -100,11 +100,12 @@ class CloudEndToEndTest {
                     "mac-e2e" to MAC_FINAL,
                     "ios-e2e" to IOS_INITIAL,
                     "android-e2e" to ANDROID_FINAL)
-                assertValues(client.state.value, beforeDeletion)
+                assertValues(client, beforeDeletion)
 
                 client.useDeviceOnly()
                 assertEquals(SyncProvider.DEVICE, client.state.value.provider)
-                assertEquals("On device", client.state.value.syncLabel)
+                assertFalse(client.state.value.isBusy)
+                assertNull(client.state.value.errorCode)
                 val iosRecord = client.state.value.snippets.single { it.keyword == "ios-e2e" }
                 client.delete(iosRecord.id)
                 assertNull(client.state.value.errorCode)
@@ -120,25 +121,25 @@ class CloudEndToEndTest {
                     // The Nth-match rule is one-shot. Retry from the same repository that
                     // observed the ambiguous acknowledgement and confirm the server echo.
                     client.syncNow()
-                    assertValues(client.state.value, FINAL_WITHOUT_IOS)
+                    assertValues(client, FINAL_WITHOUT_IOS)
                     assertNotNull(client.configuration().cursor)
                 } else {
-                    assertValues(client.state.value, FINAL_WITHOUT_IOS)
+                    assertValues(client, FINAL_WITHOUT_IOS)
                 }
 
                 destroyLocalInstallationState()
                 val receiver = freshClient(
                     keyBundle, requiredServerURL, requiredAccessToken, requiredSpaceID)
-                assertValues(receiver.state.value, FINAL_WITHOUT_IOS)
+                assertValues(receiver, FINAL_WITHOUT_IOS)
             }
             "chaos-stale-cursor" -> {
                 val cursorBefore = requireNotNull(client.configuration().cursor)
                 client.syncNow()
-                assertValues(client.state.value, FINAL_WITHOUT_IOS)
+                assertValues(client, FINAL_WITHOUT_IOS)
                 assertNotNull(client.configuration().cursor)
                 assertEquals(cursorBefore, client.configuration().cursor)
             }
-            "verify-deletion" -> assertValues(client.state.value, FINAL_WITHOUT_IOS)
+            "verify-deletion" -> assertValues(client, FINAL_WITHOUT_IOS)
             else -> error("validated above")
         }
 
@@ -159,18 +160,31 @@ class CloudEndToEndTest {
         client.configureCloud(serverURL, accessToken, spaceID)
         assertNull(client.state.value.errorCode)
         client.syncNow()
-        assertSynced(client.state.value)
+        assertSynced(client)
         return client
     }
 
-    private fun assertSynced(state: LibraryState) {
+    private fun assertSynced(client: SnippetRepository) {
+        val state = client.state.value
         assertNull(state.errorCode)
-        assertEquals("Synced", state.syncLabel)
+        assertFalse(state.isBusy)
+        assertEquals(SyncProvider.SNIPPETS_CLOUD, state.provider)
+        assertEquals(CloudKeyStatus.READY, state.cloudKeyStatus)
+        assertTrue(state.hasLibraryKey)
+        // This data-plane fixture supplies a token directly, so it has no native
+        // sign-in setup stage. Require the durable completed sync checkpoint rather
+        // than presentation copy such as "Up to date" or a native-session UI state.
+        val configuration = client.configuration()
+        assertTrue((configuration.lastSuccessfulSyncEpochSeconds ?: 0) > 0)
+        assertNotNull(configuration.cursor)
+        assertNotNull(configuration.scopeBinding)
+        assertNotNull(configuration.datasetGeneration)
+        assertNotNull(configuration.feedEpoch)
     }
 
-    private fun assertValues(state: LibraryState, expected: Map<String, String>) {
-        assertSynced(state)
-        assertLibraryValues(state, expected)
+    private fun assertValues(client: SnippetRepository, expected: Map<String, String>) {
+        assertSynced(client)
+        assertLibraryValues(client.state.value, expected)
     }
 
     private fun assertLibraryValues(state: LibraryState, expected: Map<String, String>) {

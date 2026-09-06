@@ -52,7 +52,7 @@ data class CloudConfiguration(
     val feedEpoch: String? = null,
     val lastSuccessfulSyncEpochSeconds: Long? = null,
     /**
-     * The selected library state is durable, but the staged OAuth session has not
+     * The selected library state is durable, but the staged sign-in session has not
      * necessarily replaced the active session yet. Startup completes this commit
      * before allowing the cloud data plane to run.
      */
@@ -395,6 +395,9 @@ internal data class RecoveryKitPresentation(
 
 internal data class CloudSignInCompletion(
     val succeeded: Boolean,
+    val needsLibrarySelection: Boolean = false,
+    val retryAfterSeconds: Int? = null,
+    val errorCode: String? = null,
     val recoveryKit: RecoveryKitPresentation? = null,
 )
 

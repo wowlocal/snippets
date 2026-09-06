@@ -9,6 +9,7 @@ func TestGeneratedContractHasOnlyVersionTwoDataPlane(t *testing.T) {
 	}
 	expected := map[string]bool{
 		"/.well-known/snippets-sync": true, "/health/live": true, "/health/ready": true,
+		"/v2/auth/email/start": true, "/v2/auth/email/verify": true, "/v2/auth/refresh": true, "/v2/auth/revoke": true,
 		"/v2/session": true, "/v2/spaces": true, "/v2/spaces/{space}": true,
 		"/v2/spaces/{space}/changes": true, "/v2/spaces/{space}/records/batch": true,
 		"/v2/spaces/{space}/recovery-envelope": true, "/v2/spaces/{space}/pairings": true,

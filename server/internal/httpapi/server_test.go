@@ -275,6 +275,7 @@ func TestOperationPoliciesMatchOpenAPIContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := map[string]string{
+		"startEmailAuthentication": "native_email_start", "verifyEmailAuthentication": "native_email_verify", "refreshNativeSession": "native_refresh", "revokeNativeSession": "native_revoke",
 		"getDiscovery": "discovery", "getLiveness": "liveness", "getReadiness": "readiness",
 		"revokeCurrentSession": "revoke_session", "listSpaces": "list_spaces", "createSpace": "create_space",
 		"getSpace": "get_space", "getChanges": "get_changes", "submitRecords": "submit_records",

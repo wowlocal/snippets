@@ -126,7 +126,7 @@ HTTPTransport (Swift: protocol JSON, cursor/CAS mapping, validation)
                   |
 HttpExecutor interface (method, origin-relative path, bounded headers/body)
                   |
-OkHttp + OIDC interceptor (Kotlin: TLS, connection pool, token refresh)
+HTTP executor + native token owner (Kotlin: TLS, bounded requests, token refresh)
 ```
 
 This split keeps sync policy and wire validation shared while using Android's mature

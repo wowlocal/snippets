@@ -1,13 +1,110 @@
 import Foundation
-import AuthenticationServices
 import CryptoKit
 import Security
+
+/// One trace spans UI preflight, native email sign-in and library setup. Nested owners borrow it;
+/// the outermost operation emits the sole terminal result. Cleanup cannot overwrite
+/// the first failure with the generic error eventually presented to the user.
+@MainActor
+final class SnippetsCloudSignInDiagnostics {
+    private let started = ProcessInfo.processInfo.systemUptime
+    private let record: (DiagnosticEvent) -> Void
+    private var running = false
+    private(set) var stage: DiagnosticCloudSignInStage = .preflight
+    var storedSessionPresent: Bool?
+    var reason: DiagnosticCloudSignInReason?
+    private var captured: (DiagnosticCloudSignInStage, DiagnosticCloudSignInReason, DiagnosticFailure)?
+
+    init(record: @escaping (DiagnosticEvent) -> Void = { Diagnostics.record($0) }) {
+        self.record = record
+    }
+
+    func enter(_ stage: DiagnosticCloudSignInStage) {
+        self.stage = stage
+        reason = nil
+        emit(stage: stage, outcome: .entered)
+    }
+
+    func capture(_ error: any Error) {
+        guard captured == nil else { return }
+        captured = (stage, reason ?? Self.classify(error), DiagnosticFailure(error))
+    }
+
+    func run<T>(_ operation: () async throws -> T) async throws -> T {
+        let ownsResult = !running
+        if ownsResult {
+            running = true
+            enter(.preflight)
+        }
+        defer { if ownsResult { running = false } }
+        do {
+            let result = try await operation()
+            if ownsResult { emit(stage: stage, outcome: .succeeded) }
+            return result
+        } catch {
+            capture(error)
+            if ownsResult, let (stage, reason, failure) = captured {
+                emit(stage: stage,
+                     outcome: reason == .authorizationCancelled ? .cancelled : .failed,
+                     reason: reason, failure: failure)
+            }
+            throw error
+        }
+    }
+
+    private func emit(
+        stage: DiagnosticCloudSignInStage, outcome: DiagnosticCloudSignInOutcome,
+        reason: DiagnosticCloudSignInReason? = nil, failure: DiagnosticFailure? = nil
+    ) {
+        record(.cloudSignIn(stage: stage, outcome: outcome,
+            durationMilliseconds: Int64(max(0, ProcessInfo.processInfo.systemUptime - started) * 1_000),
+            storedSessionPresent: storedSessionPresent, reason: reason, failure: failure))
+    }
+
+    private static func classify(_ error: any Error) -> DiagnosticCloudSignInReason {
+        if error is CancellationError { return .authorizationCancelled }
+        if let failure = error as? SnippetsCloudEmailSignInFailure {
+            return switch failure {
+            case .invalidEmail: .invalidEmail
+            case .invalidCode: .invalidCode
+            case .codeExpired: .codeExpired
+            case .tooManyAttempts: .tooManyAttempts
+            case .rateLimited: .rateLimited
+            case .unavailable: .requestFailed
+            case .invalidResponse: .invalidJSON
+            case .cancelled: .authorizationCancelled
+            }
+        }
+        if let failure = error as? SnippetsCloudNativeAuthClient.Failure {
+            return switch failure {
+            case .invalidServerURL: .invalidConfiguration
+            case .insecureServerProfile: .insecureServerProfile
+            case .discoveryUnavailable: .discoveryUnavailable
+            case .identityProviderUnavailable: .identityProviderUnavailable
+            case .authorizationCancelled: .authorizationCancelled
+            case .authorizationMismatch: .authorizationMismatch
+            case .tokenExchangeFailed: .tokenExchangeFailed
+            case .backgroundAccessMissing: .backgroundAccessMissing
+            case .spaceSelectionRequired, .readOnlyLibraryUnavailable: .librarySelectionRequired
+            case .stepUpAccountMismatch: .accountMismatch
+            case .invalidStoredSession: .invalidStoredSession
+            }
+        }
+        if let failure = error as? SyncBackendSelectionStore.Failure {
+            switch failure {
+            case .featureDisabled, .missingConfiguration: return .invalidConfiguration
+            default: return .localState
+            }
+        }
+        return .other
+    }
+}
 
 /// Build-time dark-launch gate for the first-party Snippets Cloud service.
 ///
 /// Shipping builds leave `SNIPPETS_CLOUD_ENABLED` at `NO`. Supplying endpoints alone
 /// is deliberately insufficient: an internal build must opt in to both the feature and
-/// its pinned OAuth coordinates before any account UI or HTTP data plane can run.
+/// its pinned server coordinates before any account UI or HTTP data plane can run.
 nonisolated enum SnippetsCloudFeature {
     static let infoDictionaryKey = "SnippetsCloudEnabled"
 
@@ -21,6 +118,26 @@ nonisolated enum SnippetsCloudFeature {
         default:
             return false
         }
+    }
+}
+
+/// Cloud credentials and bootstrap state belong to one app's local connection.
+/// The shared Keychain access group is for iCloud keys; it must not make Debug
+/// consume Release's Cloud session while using a separate UserDefaults domain.
+nonisolated enum SnippetsCloudKeychainScope {
+    enum Store: String, CaseIterable {
+        case credentials = "com.khm.snippets.sync-http"
+        case bootstrap = "com.khm.snippets.cloud-bootstrap"
+        case libraryKey = "com.khm.snippets.cloud-library-key"
+    }
+
+    static func service(
+        for store: Store,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) -> String {
+        // The unshipped API used unscoped services. Do not import their sessions
+        // into an app that has no matching local connection or verified profile.
+        "\(store.rawValue).\(bundleIdentifier ?? "unbundled")"
     }
 }
 
@@ -92,7 +209,7 @@ struct SnippetsCloudPostAuthorizationTarget: Equatable {
     let scopeBinding: String
 }
 
-private struct SnippetsCloudStepUpTarget: Equatable {
+struct SnippetsCloudStepUpTarget: Equatable {
     let serverURL: URL
     let serverInstanceID: UUID
     let protocolMajor: Int
@@ -169,7 +286,7 @@ enum SnippetsCloudCredentialReplacementKind: String, Codable {
 }
 
 /// Serializes interactive credential replacement, orphan cleanup, and logout across
-/// awaits. MainActor alone is reentrant, so without this gate a browser callback could
+/// awaits. MainActor alone is reentrant, so without this gate code verification could
 /// publish a new token generation while logout was already revoking an older plan.
 @MainActor
 final class SnippetsCloudCredentialMutationGate {
@@ -229,7 +346,7 @@ final class SnippetsCloudCredentialMutationGate {
 
 /// Stores the active sync provider without coupling either transport to Settings UI.
 ///
-/// Non-secret coordinates live in UserDefaults. OIDC access/refresh tokens are
+/// Non-secret coordinates live in UserDefaults. Native access/refresh tokens are
 /// device-only Keychain data: they are not synchronized through iCloud Keychain and
 /// are never written to diagnostics. Changing this selection does not delete either
 /// provider's data.
@@ -323,7 +440,7 @@ final class SyncBackendSelectionStore {
     static let oauthSessionReplacementAccount = "oidc-session-replacement-journal-v1"
     static let oauthRevocationAccount = "oidc-revocation-journal-v1"
     static let pendingLocalEraseAccount = "cloud-local-erase-v1"
-    fileprivate static let credentialService = "com.khm.snippets.sync-http"
+    fileprivate static let credentialService = SnippetsCloudKeychainScope.service(for: .credentials)
 
     struct ProviderSwitchReceipt: Codable, Equatable {
         enum Phase: String, Codable { case prepared, targetSelected }
@@ -341,6 +458,7 @@ final class SyncBackendSelectionStore {
     private let defaults: UserDefaults
     private let keychain: KeychainSecretStore
     private let bootstrapSecretsForRecovery: KeychainSecretStore
+    private let nativeAuthSessionConfiguration: URLSessionConfiguration
     let snippetsCloudEnabled: Bool
     let cloudKeys: SnippetsCloudKeyStore
     private(set) var providerSelectionFailure: Failure?
@@ -351,10 +469,12 @@ final class SyncBackendSelectionStore {
         cloudKeys: SnippetsCloudKeyStore? = nil,
         bootstrapSecrets: KeychainSecretStore? = nil,
         snippetsCloudEnabled: Bool = SnippetsCloudFeature.isEnabled,
-        defersCredentialRecovery: Bool = false
+        defersCredentialRecovery: Bool = false,
+        nativeAuthSessionConfiguration: URLSessionConfiguration = .ephemeral
     ) {
         self.defaults = defaults
         self.snippetsCloudEnabled = snippetsCloudEnabled
+        self.nativeAuthSessionConfiguration = nativeAuthSessionConfiguration
         self.keychain = keychain ?? KeychainSecretStore(
             tier: .deviceOnly,
             service: Self.credentialService,
@@ -401,10 +521,8 @@ final class SyncBackendSelectionStore {
         // the crash-safe tail of an already-authorized destructive operation and must
         // finish even if a later build disables Snippets Cloud.
         guard snippetsCloudEnabled else { return }
-        let startupLineage = try? SnippetsCloudOAuthClient(
-            keychain: self.keychain,
-            redirectURL: Self.bundledOAuthRedirectURL
-                ?? URL(string: "https://credentials.invalid/oauth2redirect/apple")!
+        let startupLineage = try? SnippetsCloudNativeAuthClient(
+            keychain: self.keychain
         ).inspectCredentialLineage()
         if startupLineage?.hasRevocation == true {
             // The remote intent journal is written before the first logout request and
@@ -413,15 +531,13 @@ final class SyncBackendSelectionStore {
             Task { @MainActor [weak self] in
                 try? await self?.resumeInterruptedSignOut()
             }
-        } else if startupLineage?.hasReplacement == true,
-                  let redirectURL = Self.bundledOAuthRedirectURL {
+        } else if startupLineage?.hasReplacement == true {
             // This also covers a crash after a first token exchange journaled its
             // credentials but before AUTH_SESSION was committed. With no current
             // session every journal token is superseded and is remotely revoked.
             Task { @MainActor [credentialStore = self.keychain] in
-                try? await SnippetsCloudOAuthClient(
-                    keychain: credentialStore,
-                    redirectURL: redirectURL
+                try? await SnippetsCloudNativeAuthClient(
+                    keychain: credentialStore
                 ).retireSupersededInteractiveSessions()
             }
         }
@@ -496,18 +612,13 @@ final class SyncBackendSelectionStore {
     }
 
     private func credentialLineageFailure() -> Failure? {
-        // Parsing the journal does not use the callback, but keeping construction on
-        // the same validated client avoids a second, weaker credential schema path.
-        let inspectionRedirect = Self.bundledOAuthRedirectURL
-            ?? URL(string: "https://credentials.invalid/oauth2redirect/apple")!
         do {
-            let lineage = try SnippetsCloudOAuthClient(
-                keychain: keychain,
-                redirectURL: inspectionRedirect
+            let lineage = try SnippetsCloudNativeAuthClient(
+                keychain: keychain
             ).inspectCredentialLineage()
             return lineage.hasReplacement || lineage.hasRevocation
                 ? .credentialCleanupRequired : nil
-        } catch SnippetsCloudOAuthClient.Failure.invalidStoredSession {
+        } catch SnippetsCloudNativeAuthClient.Failure.invalidStoredSession {
             return .credentialResetRequired
         } catch {
             return .credentialStoreUnavailable
@@ -516,15 +627,13 @@ final class SyncBackendSelectionStore {
 
     private func schedulePendingCredentialCleanup() {
         guard hasPendingCredentialCleanup,
-              !hasPendingRemoteRevocation,
-              let redirectURL = Self.bundledOAuthRedirectURL else { return }
+              !hasPendingRemoteRevocation else { return }
         Task { @MainActor [credentialStore = keychain] in
             // Success removes the durable boundary. Failure deliberately leaves it in
             // place; makeTransport and every token provider keep the data plane closed,
             // while Try Again/startup can schedule another awaited cleanup attempt.
-            try? await SnippetsCloudOAuthClient(
-                keychain: credentialStore,
-                redirectURL: redirectURL
+            try? await SnippetsCloudNativeAuthClient(
+                keychain: credentialStore
             ).retireSupersededInteractiveSessions()
         }
     }
@@ -592,25 +701,18 @@ final class SyncBackendSelectionStore {
     }
 
     var cloudAccountDisplayName: String {
-        guard let redirectURL = Self.bundledOAuthRedirectURL else { return "Snippets Cloud account" }
-        return SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL).verifiedProfile()?.displayName
+        return SnippetsCloudNativeAuthClient(keychain: keychain).verifiedProfile()?.displayName
             ?? "Snippets Cloud account"
     }
 
-    var cloudAccountCenterURL: URL? {
-        guard hasCloudSession,
-              let raw = Bundle.main.object(forInfoDictionaryKey: "SnippetsCloudAccountCenterURL") as? String,
-              let url = URL(string: raw), url.scheme == "https", url.host != nil,
-              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
-        return url
-    }
 
     func signIn(
         serverURL: URL,
+        diagnostics: SnippetsCloudSignInDiagnostics,
         requiresStrongAuthentication: Bool = false,
         chooseAccount: Bool = false,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding,
+        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void,
         preparePostAuthorization: @escaping (
             SnippetsCloudPostAuthorizationTarget
         ) throws -> Void = { _ in }
@@ -621,18 +723,17 @@ final class SyncBackendSelectionStore {
         if let failure = credentialLineageFailure() {
             switch failure {
             case .credentialCleanupRequired:
-                // signIn() owns the awaited, serialized cleanup before opening a browser.
+                // The native flow owns serialized cleanup before sending an email code.
                 break
             default:
                 throw failure
             }
         }
         guard let pinnedServerURL = Self.bundledServerURL,
-              let redirectURL = Self.bundledOAuthRedirectURL,
               serverURL == pinnedServerURL else {
             throw Failure.missingConfiguration
         }
-        let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+        let oauth = SnippetsCloudNativeAuthClient(keychain: keychain)
         let expectedStepUpTarget: SnippetsCloudStepUpTarget?
         if requiresStrongAuthentication {
             guard let coordinates = cloudCoordinates,
@@ -651,6 +752,7 @@ final class SyncBackendSelectionStore {
         }
         _ = try await oauth.signIn(
             serverURL: pinnedServerURL,
+            diagnostics: diagnostics,
             existingSpaceID: cloudCoordinates?.serverURL == serverURL
                 ? cloudCoordinates?.spaceID
                 : nil,
@@ -659,7 +761,7 @@ final class SyncBackendSelectionStore {
             expectedStepUpTarget: expectedStepUpTarget,
             expectedPostAuthorizationTarget: nil,
             chooseLibrary: chooseLibrary,
-            presentationContext: presentationContext,
+            authenticate: authenticate,
             validateStepUpTarget: { [weak self] in
                 guard let expectedStepUpTarget else { return }
                 guard let current = self?.cloudCoordinates,
@@ -701,12 +803,11 @@ final class SyncBackendSelectionStore {
         guard snippetsCloudEnabled,
               let coordinates = cloudCoordinates,
               let serverInstanceID = coordinates.serverInstanceID,
-              coordinates.protocolMajor == 2,
-              let redirectURL = Self.bundledOAuthRedirectURL else {
+              coordinates.protocolMajor == 2 else {
             throw Failure.missingCredential
         }
         try requireNoPendingPostAuthorization()
-        let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+        let oauth = SnippetsCloudNativeAuthClient(keychain: keychain)
         _ = try await oauth.selectExistingLibrary(
             serverURL: coordinates.serverURL,
             serverInstanceID: serverInstanceID,
@@ -745,11 +846,10 @@ final class SyncBackendSelectionStore {
         _ target: SnippetsCloudPostAuthorizationTarget
     ) async throws {
         guard snippetsCloudEnabled,
-              target.protocolMajor == 2,
-              let redirectURL = Self.bundledOAuthRedirectURL else {
+              target.protocolMajor == 2 else {
             throw Failure.missingCredential
         }
-        let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+        let oauth = SnippetsCloudNativeAuthClient(keychain: keychain)
         do {
             try await oauth.validateExistingMembership(target) { [defaults, keychain] in
                 defaults.set(target.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
@@ -763,25 +863,24 @@ final class SyncBackendSelectionStore {
                 defaults.set(target.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
                 try? keychain.deleteItem(account: Self.tokenAccount)
             }
-        } catch SnippetsCloudOAuthClient.Failure.stepUpAccountMismatch {
+        } catch SnippetsCloudNativeAuthClient.Failure.stepUpAccountMismatch {
             throw Failure.postAuthorizationMembershipMismatch
-        } catch SnippetsCloudOAuthClient.Failure.invalidStoredSession,
-                SnippetsCloudOAuthClient.Failure.tokenExchangeFailed {
+        } catch SnippetsCloudNativeAuthClient.Failure.invalidStoredSession,
+                SnippetsCloudNativeAuthClient.Failure.tokenExchangeFailed {
             throw Failure.missingCredential
         }
     }
 
     func reauthenticateSnippetsCloudPostAuthorization(
         _ target: SnippetsCloudPostAuthorizationTarget,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding
+        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void
     ) async throws {
         guard snippetsCloudEnabled,
               target.serverURL == Self.bundledServerURL,
-              target.protocolMajor == 2,
-              let redirectURL = Self.bundledOAuthRedirectURL else {
+              target.protocolMajor == 2 else {
             throw Failure.missingConfiguration
         }
-        let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+        let oauth = SnippetsCloudNativeAuthClient(keychain: keychain)
         do {
             _ = try await oauth.signIn(
                 serverURL: target.serverURL,
@@ -791,7 +890,7 @@ final class SyncBackendSelectionStore {
                 expectedStepUpTarget: nil,
                 expectedPostAuthorizationTarget: target,
                 chooseLibrary: { _ in throw Failure.postAuthorizationMembershipMismatch },
-                presentationContext: presentationContext,
+                authenticate: authenticate,
                 validateStepUpTarget: {},
                 prepareCoordinatesCommit: { _ in },
                 commitCoordinates: { [defaults, keychain] result in
@@ -806,7 +905,7 @@ final class SyncBackendSelectionStore {
                     defaults.set(result.protocolMajor, forKey: Self.protocolMajorDefaultsKey)
                     try? keychain.deleteItem(account: Self.tokenAccount)
                 })
-        } catch SnippetsCloudOAuthClient.Failure.stepUpAccountMismatch {
+        } catch SnippetsCloudNativeAuthClient.Failure.stepUpAccountMismatch {
             throw Failure.postAuthorizationMembershipMismatch
         }
     }
@@ -836,13 +935,12 @@ final class SyncBackendSelectionStore {
     /// removed. Keeping this separate lets the bootstrap coordinator erase its own
     /// device-only journals only after the server-side credential is no longer usable.
     func revokeSnippetsCloudSession() async throws {
-        guard let coordinates = cloudCoordinates,
-              let redirectURL = Self.bundledOAuthRedirectURL else {
+        guard let coordinates = cloudCoordinates else {
             throw Failure.missingConfiguration
         }
-        try await SnippetsCloudOAuthClient(
+        try await SnippetsCloudNativeAuthClient(
             keychain: keychain,
-            redirectURL: redirectURL
+            sessionConfiguration: nativeAuthSessionConfiguration
         ).revokeCurrentSession(expectedServerURL: coordinates.serverURL)
     }
 
@@ -858,9 +956,9 @@ final class SyncBackendSelectionStore {
         try resumePendingLocalErase(bootstrapSecrets: bootstrapSecrets)
     }
 
-    /// Explicit escape hatch for a structurally unreadable OAuth lineage. Remote
+    /// Explicit escape hatch for a structurally unreadable credential lineage. Remote
     /// revocation cannot be reconstructed from corrupt bytes, so Settings must first
-    /// warn the user to revoke Snippets in the identity provider. The local half still
+    /// warn that remote sessions can remain active until expiry. The local half still
     /// uses the normal journal-first erase and removes the library root before tokens.
     func resetUnreadableCloudCredentialsLocally(
         bootstrapSecrets: KeychainSecretStore? = nil
@@ -950,13 +1048,11 @@ final class SyncBackendSelectionStore {
               coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2"),
               let serverInstanceID = coordinates.serverInstanceID,
               let protocolMajor = coordinates.protocolMajor,
-              protocolMajor == 2,
-              let redirectURL = Self.bundledOAuthRedirectURL else {
+              protocolMajor == 2 else {
             throw Failure.missingConfiguration
         }
-        return try await SnippetsCloudOAuthClient(
-            keychain: keychain,
-            redirectURL: redirectURL
+        return try await SnippetsCloudNativeAuthClient(
+            keychain: keychain
         ).freshAccessToken(
             expectedServerURL: coordinates.serverURL,
             expectedServerInstanceID: serverInstanceID,
@@ -973,11 +1069,9 @@ final class SyncBackendSelectionStore {
               coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2"),
               let serverInstanceID = coordinates.serverInstanceID,
               let protocolMajor = coordinates.protocolMajor,
-              protocolMajor == 2,
-              let redirectURL = Self.bundledOAuthRedirectURL else { return false }
-        return (try? SnippetsCloudOAuthClient(
-            keychain: keychain,
-            redirectURL: redirectURL
+              protocolMajor == 2 else { return false }
+        return (try? SnippetsCloudNativeAuthClient(
+            keychain: keychain
         ).currentTransportCredential(
             expectedServerURL: coordinates.serverURL,
             expectedServerInstanceID: serverInstanceID,
@@ -995,23 +1089,6 @@ final class SyncBackendSelectionStore {
             components.percentEncodedPath.removeLast()
         }
         return components.url
-    }
-
-    /// The callback host must be associated with the signed app through the
-    /// `webcredentials:` entitlement and its apple-app-site-association file.
-    /// A reserved `.invalid` default keeps unconfigured builds fail-closed.
-    static var bundledOAuthRedirectURL: URL? {
-        guard let raw = Bundle.main.object(
-            forInfoDictionaryKey: "SnippetsCloudOAuthCallbackHost") as? String else { return nil }
-        let host = raw.lowercased()
-        guard !host.isEmpty, host.utf8.count <= 253,
-              !host.hasSuffix(".invalid"), host != "invalid",
-              host.contains("."),
-              host.unicodeScalars.allSatisfy({
-                  CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789.-")
-                      .contains($0)
-              }) else { return nil }
-        return URL(string: "https://\(host)/oauth2redirect/apple")
     }
 
     func makeTransport() throws -> any SyncTransport {
@@ -1055,23 +1132,22 @@ final class SyncBackendSelectionStore {
                 throw Failure.missingConfiguration
             }
             guard coordinates.serverURL == Self.bundledServerURL,
-                  coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2"),
-                  let redirectURL = Self.bundledOAuthRedirectURL else {
+                  coordinates.apiBaseURL == coordinates.serverURL.appending(path: "v2") else {
                 throw Failure.missingConfiguration
             }
-            let oauth = SnippetsCloudOAuthClient(keychain: keychain, redirectURL: redirectURL)
+            let oauth = SnippetsCloudNativeAuthClient(keychain: keychain)
             guard let expectedServerInstanceID = coordinates.serverInstanceID,
                   let expectedProtocolMajor = coordinates.protocolMajor,
                   expectedProtocolMajor == 2 else {
                 throw Failure.missingConfiguration
             }
-            let credential: SnippetsCloudOAuthClient.TransportCredential?
+            let credential: SnippetsCloudNativeAuthClient.TransportCredential?
             do {
                 credential = try oauth.currentTransportCredential(
                     expectedServerURL: coordinates.serverURL,
                     expectedServerInstanceID: expectedServerInstanceID,
                     expectedProtocolMajor: expectedProtocolMajor)
-            } catch SnippetsCloudOAuthClient.Failure.invalidStoredSession {
+            } catch SnippetsCloudNativeAuthClient.Failure.invalidStoredSession {
                 throw Failure.invalidCredential
             } catch {
                 throw Failure.credentialStoreUnavailable
@@ -1344,8 +1420,8 @@ final class SyncBackendSelectionStore {
 }
 
 @MainActor
-private final class SnippetsCloudOAuthClient {
-    /// All OAuth client instances, including transport-owned instances, share this
+final class SnippetsCloudNativeAuthClient {
+    /// All native auth client instances, including transport-owned instances, share this
     /// process-wide mutation gate.
     private static let credentialMutationGate = SnippetsCloudCredentialMutationGate()
 
@@ -1381,12 +1457,12 @@ private final class SnippetsCloudOAuthClient {
         var description: String {
             switch self {
             case .invalidServerURL: "Enter a valid HTTPS Snippets Cloud server."
-            case .insecureServerProfile: "This server does not advertise the required secure sign-in profile."
+            case .insecureServerProfile: "This server does not support native email sign-in for Snippets Cloud."
             case .discoveryUnavailable: "Snippets Cloud discovery is temporarily unavailable."
             case .identityProviderUnavailable: "The identity provider is temporarily unavailable."
             case .authorizationCancelled: "Sign-in was cancelled. Nothing changed."
             case .authorizationMismatch: "The sign-in response did not match this request."
-            case .tokenExchangeFailed: "The identity provider could not complete sign-in."
+            case .tokenExchangeFailed: "Snippets Cloud could not complete sign-in. Please sign in again."
             case .backgroundAccessMissing: "The identity provider did not grant background access."
             case .spaceSelectionRequired: "This account has multiple libraries; explicit selection is required."
             case .readOnlyLibraryUnavailable: "This account has no writable Snippets library. Reader access cannot be used as active sync storage."
@@ -1399,13 +1475,12 @@ private final class SnippetsCloudOAuthClient {
     }
 
     struct Discovery: Decodable {
-        struct OIDC: Decodable {
-            let issuer: String
-            let resource: URL
-            let clientId: String
-            let scopes: [String]
-            let authorizationFlow: String
-            let maxAccessTokenAgeSeconds: Int
+        struct NativeAuth: Decodable {
+            let flow: String
+            let startEndpoint: URL
+            let verifyEndpoint: URL
+            let refreshEndpoint: URL
+            let revokeEndpoint: URL
         }
         struct Limits: Decodable {
             let maxBlobBytes: Int
@@ -1420,44 +1495,34 @@ private final class SnippetsCloudOAuthClient {
         let protocolMajor: Int
         let serverInstanceId: UUID
         let apiBase: URL
-        let oidc: OIDC
+        let nativeAuth: NativeAuth
         let limits: Limits
         let recordProfile: String
         let capabilities: [String]
     }
 
-    struct ProviderDiscovery: Decodable {
-        let issuer: String
-        let authorizationEndpoint: URL
-        let tokenEndpoint: URL
-        let revocationEndpoint: URL
-        let codeChallengeMethodsSupported: [String]?
-        let jwksURI: URL
-
-        private enum CodingKeys: String, CodingKey {
-            case issuer
-            case jwksURI = "jwks_uri"
-            case authorizationEndpoint = "authorization_endpoint"
-            case tokenEndpoint = "token_endpoint"
-            case revocationEndpoint = "revocation_endpoint"
-            case codeChallengeMethodsSupported = "code_challenge_methods_supported"
-        }
-    }
-
     struct TokenResponse: Decodable {
+        struct Account: Decodable { let id: String; let email: String }
         let accessToken: String
-        let refreshToken: String?
+        let refreshToken: String
         let expiresIn: Int
         let tokenType: String
-        let idToken: String?
+        let account: Account
 
         private enum CodingKeys: String, CodingKey {
             case accessToken = "access_token"
             case refreshToken = "refresh_token"
             case expiresIn = "expires_in"
             case tokenType = "token_type"
-            case idToken = "id_token"
+            case account
         }
+    }
+
+    private struct EmailCodeResponse: Decodable {
+        let challengeId: String
+        let expiresIn: Int
+        let resendAfter: Int
+        let codeLength: Int
     }
 
     struct StoredSession: Codable {
@@ -1506,345 +1571,151 @@ private final class SnippetsCloudOAuthClient {
     }
 
     private let keychain: KeychainSecretStore
-    private let redirectURL: URL
-    private var webSession: ASWebAuthenticationSession?
-    private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpShouldSetCookies = false
-        configuration.urlCache = nil
-        return URLSession(configuration: configuration, delegate: NoRedirectDelegate(), delegateQueue: nil)
-    }()
+    private let session: URLSession
 
-    init(keychain: KeychainSecretStore, redirectURL: URL) {
+    init(keychain: KeychainSecretStore, sessionConfiguration: URLSessionConfiguration = .ephemeral) {
         self.keychain = keychain
-        self.redirectURL = redirectURL
+        sessionConfiguration.httpShouldSetCookies = false
+        sessionConfiguration.urlCache = nil
+        session = URLSession(configuration: sessionConfiguration, delegate: NoRedirectDelegate(), delegateQueue: nil)
     }
 
     func signIn(
         serverURL: URL,
+        diagnostics suppliedDiagnostics: SnippetsCloudSignInDiagnostics? = nil,
         existingSpaceID: UUID?,
         requiresStrongAuthentication: Bool,
         chooseAccount: Bool,
         expectedStepUpTarget: SnippetsCloudStepUpTarget?,
         expectedPostAuthorizationTarget: SnippetsCloudPostAuthorizationTarget?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding,
+        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void,
         validateStepUpTarget: @escaping () throws -> Void,
         prepareCoordinatesCommit: @escaping (SignInResult) throws -> Void,
         commitCoordinates: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
-        guard requiresStrongAuthentication == (expectedStepUpTarget != nil),
-              expectedStepUpTarget == nil || expectedPostAuthorizationTarget == nil,
-              expectedPostAuthorizationTarget == nil ||
-                (!requiresStrongAuthentication && chooseAccount),
-              !(requiresStrongAuthentication && chooseAccount) else {
-            throw Failure.invalidStoredSession
-        }
-        return try await Self.credentialMutationGate.run { [self] in
-            try await retireSupersededInteractiveSessionsWithoutGate()
-            if expectedStepUpTarget != nil {
-                try validateStepUpTarget()
+        let diagnostics = suppliedDiagnostics ?? SnippetsCloudSignInDiagnostics()
+        return try await diagnostics.run {
+            // Email proves account ownership, never phishing-resistant step-up.
+            guard !requiresStrongAuthentication, expectedStepUpTarget == nil else {
+                throw Failure.invalidStoredSession
             }
-            let expectedStepUpBinding: SnippetsCloudStepUpBinding?
-            if let expectedStepUpTarget {
-                guard expectedStepUpTarget.serverURL == serverURL,
-                      expectedStepUpTarget.protocolMajor == 2 else {
-                    throw Failure.invalidStoredSession
-                }
-                let currentToken = try await freshAccessTokenWithoutGate(
-                    expectedServerURL: expectedStepUpTarget.serverURL,
-                    expectedServerInstanceID: expectedStepUpTarget.serverInstanceID,
-                    expectedProtocolMajor: expectedStepUpTarget.protocolMajor,
-                    forceRefresh: false)
-                let current: Space = try await authorizedJSON(
-                    url: serverURL.appending(
-                        path: "v2/spaces/\(expectedStepUpTarget.spaceID.uuidString.lowercased())"),
-                    method: "GET",
-                    accessToken: currentToken)
-                guard current.scope.serverInstanceId == expectedStepUpTarget.serverInstanceID,
-                      current.scope.spaceId == expectedStepUpTarget.spaceID,
-                      (32...256).contains(current.scope.scopeBinding.utf8.count),
-                      ["owner", "writer"].contains(current.role) else {
-                    throw Failure.invalidStoredSession
-                }
-                expectedStepUpBinding = SnippetsCloudStepUpBinding(
-                    serverURL: serverURL,
-                    serverInstanceID: current.scope.serverInstanceId,
-                    spaceID: current.scope.spaceId,
-                    scopeBinding: current.scope.scopeBinding)
-            } else {
-                expectedStepUpBinding = nil
-            }
-            do {
-                let result = try await performSignIn(
-                    serverURL: serverURL,
-                    existingSpaceID: existingSpaceID,
-                    requiresStrongAuthentication: requiresStrongAuthentication,
-                    chooseAccount: chooseAccount,
-                    expectedStepUpBinding: expectedStepUpBinding,
-                    expectedPostAuthorizationTarget: expectedPostAuthorizationTarget,
-                    chooseLibrary: chooseLibrary,
-                    presentationContext: presentationContext,
-                    prepareCoordinatesCommit: prepareCoordinatesCommit)
-                try commitCoordinates(result)
-                return result
-            } catch {
-                // If token exchange already journaled a candidate, revoke it before
-                // returning. Failure leaves the journal as a fail-closed retry boundary.
+            return try await Self.credentialMutationGate.run { [self] in
                 do {
-                    try await retireSupersededInteractiveSessionsWithoutGate()
+                    let result = try await performSignIn(
+                        serverURL: serverURL, diagnostics: diagnostics,
+                        existingSpaceID: existingSpaceID, chooseAccount: chooseAccount,
+                        expectedPostAuthorizationTarget: expectedPostAuthorizationTarget,
+                        chooseLibrary: chooseLibrary, authenticate: authenticate,
+                        prepareCoordinatesCommit: prepareCoordinatesCommit)
+                    diagnostics.enter(.coordinateCommit)
+                    try commitCoordinates(result)
+                    return result
                 } catch {
-                    throw Failure.invalidStoredSession
+                    diagnostics.capture(error)
+                    do { try await retireSupersededInteractiveSessionsWithoutGate() }
+                    catch { throw Failure.invalidStoredSession }
+                    throw error
                 }
-                throw error
             }
         }
     }
 
     private func performSignIn(
         serverURL: URL,
+        diagnostics: SnippetsCloudSignInDiagnostics,
         existingSpaceID: UUID?,
-        requiresStrongAuthentication: Bool,
         chooseAccount: Bool,
-        expectedStepUpBinding: SnippetsCloudStepUpBinding?,
         expectedPostAuthorizationTarget: SnippetsCloudPostAuthorizationTarget?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding,
+        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void,
         prepareCoordinatesCommit: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
-        guard !(requiresStrongAuthentication && chooseAccount) else {
-            throw Failure.invalidStoredSession
-        }
-        guard try keychain.loadItem(
-            account: SyncBackendSelectionStore.oauthRevocationAccount) == nil
-        else { throw Failure.invalidStoredSession }
-        // Capture the active generation before the first await. At commit we verify
-        // that logout or another interactive sign-in did not replace it while the
-        // browser was open. Every observed/new generation is journaled first.
-        let sessionAtStart = try loadSession()
-        if let sessionAtStart,
-           let replacements = try loadSessionReplacementJournal(boundTo: sessionAtStart) {
-            guard replacements.accessTokens.count < 16,
-                  replacements.refreshTokens.count < 16 else {
-                throw Failure.invalidStoredSession
-            }
-        }
         let serverURL = try validatedBaseURL(serverURL)
-        let discoveryURL = serverURL.appending(path: ".well-known/snippets-sync")
-        let discovery: Discovery = try await getJSON(
-            discoveryURL,
-            maximumBytes: 256 * 1_024,
-            failure: .discoveryUnavailable)
-        guard discovery.protocolMajor == 2,
-              discovery.recordProfile == "snippets-wire-v1",
-              discovery.limits.maxBlobBytes == 900_000,
-              discovery.limits.maxRevisionBytes == 256,
-              discovery.limits.maxBatchRecords == 50,
-              discovery.limits.maxPageRecords == 50,
-              discovery.limits.maxRequestBytes == 16 * 1_024 * 1_024,
-              discovery.limits.maxResponseBytes == 64 * 1_024 * 1_024,
-              discovery.limits.maxKeyEnvelopeBytes == 4_096,
-              discovery.limits.maxPairingSeconds == 600,
-              discovery.apiBase == serverURL.appending(path: "v2"),
-              try validatedBaseURL(discovery.oidc.resource) == serverURL,
-              discovery.oidc.authorizationFlow == "authorization_code_pkce",
-              discovery.capabilities.contains("oidc-pkce"),
-              discovery.capabilities.contains("oauth-resource-indicators"),
-              discovery.capabilities.contains("oauth-token-revocation"),
-              discovery.capabilities.contains("oauth-refresh-token-rotation"),
-              discovery.capabilities.contains("resource-session-revocation"),
-              discovery.capabilities.contains("account-without-required-email"),
-              discovery.capabilities.contains("library-action-proof-v1"),
-              discovery.capabilities.contains("pairing-v2"),
-              discovery.capabilities.contains("offline-recovery-v1"),
-              (1...16).contains(discovery.capabilities.count),
-              Set(discovery.capabilities).count == discovery.capabilities.count,
-              discovery.capabilities.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
-              (1...16).contains(discovery.oidc.scopes.count),
-              Set(discovery.oidc.scopes).count == discovery.oidc.scopes.count,
-              discovery.oidc.scopes.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
-              discovery.oidc.scopes.contains("openid"),
-              discovery.oidc.scopes.contains("offline_access"),
-              (60...86_400).contains(discovery.oidc.maxAccessTokenAgeSeconds),
-              !discovery.oidc.clientId.isEmpty,
-              discovery.oidc.clientId.utf8.count <= 256 else {
-            throw Failure.insecureServerProfile
-        }
-
-        let issuerValue = discovery.oidc.issuer
-        let issuer = try validatedIssuer(issuerValue)
-        let providerURL = issuer.appending(path: ".well-known/openid-configuration")
-        let provider: ProviderDiscovery = try await getJSON(
-            providerURL,
-            maximumBytes: 256 * 1_024,
-            failure: .identityProviderUnavailable)
-        guard provider.issuer == issuerValue,
-              try secureEndpoint(provider.authorizationEndpoint) == provider.authorizationEndpoint,
-              try secureEndpoint(provider.tokenEndpoint) == provider.tokenEndpoint,
-              try secureEndpoint(provider.revocationEndpoint) == provider.revocationEndpoint,
-              provider.codeChallengeMethodsSupported?.contains("S256") == true else {
-            throw Failure.identityProviderUnavailable
-        }
-        if let sessionAtStart {
-            // A grant can only be journaled and later revoked by the authority that
-            // minted it. Reject a changed issuer/client/revocation endpoint before
-            // opening the browser or exchanging a code, never after a new refresh
-            // token already exists.
-            guard sessionAtStart.serverURL == serverURL,
-                  sessionAtStart.issuer == issuer,
-                  sessionAtStart.resource == discovery.oidc.resource,
-                  sessionAtStart.revocationEndpoint == provider.revocationEndpoint,
-                  sessionAtStart.clientID == discovery.oidc.clientId else {
-                throw Failure.invalidStoredSession
+        var sessionAtStart: StoredSession?
+        var preparedDiscovery: Discovery?
+        var challengeID: String?
+        var requestedEmail: String?
+        var candidate: StoredSession?
+        var issuedToken: TokenResponse?
+        let flow = SnippetsCloudEmailSignInFlow(sendCode: { [self] email in
+            if preparedDiscovery == nil {
+                diagnostics.enter(.credentialCleanup)
+                try await retireSupersededInteractiveSessionsWithoutGate()
+                diagnostics.enter(.storedSession)
+                guard try keychain.loadItem(account: SyncBackendSelectionStore.oauthRevocationAccount) == nil else {
+                    throw Failure.invalidStoredSession
+                }
+                sessionAtStart = try loadSession()
+                diagnostics.storedSessionPresent = sessionAtStart != nil
+                diagnostics.enter(.serverDiscovery)
+                let discovery = try await nativeDiscovery(serverURL: serverURL)
+                diagnostics.enter(.sessionBinding)
+                if let sessionAtStart {
+                    try validateServerBinding(sessionAtStart, expectedServerURL: serverURL,
+                        expectedServerInstanceID: discovery.serverInstanceId, expectedProtocolMajor: 2)
+                }
+                preparedDiscovery = discovery
             }
-        }
-
-        guard provider.jwksURI.scheme == "https", provider.jwksURI.host == issuer.host,
-              provider.jwksURI.port == issuer.port, provider.jwksURI.user == nil,
-              provider.jwksURI.password == nil, provider.jwksURI.fragment == nil else { throw Failure.insecureServerProfile }
-        let identityKeys: SnippetsCloudVerifiedProfile.Keys = try await getJSON(
-            provider.jwksURI, maximumBytes: 256 * 1_024, failure: .identityProviderUnavailable)
-        let state = try randomBase64URL(bytes: 32)
-        let nonce = try randomBase64URL(bytes: 32)
-        let verifier = try randomBase64URL(bytes: 64)
-        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URL
-        guard var components = URLComponents(
-            url: provider.authorizationEndpoint,
-            resolvingAgainstBaseURL: false
-        ) else { throw Failure.identityProviderUnavailable }
-        let existingItems = components.queryItems ?? []
-        var requestItems = [
-            URLQueryItem(name: "client_id", value: discovery.oidc.clientId),
-            URLQueryItem(name: "redirect_uri", value: redirectURL.absoluteString),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: discovery.oidc.scopes.joined(separator: " ")),
-            URLQueryItem(name: "resource", value: discovery.oidc.resource.absoluteString),
-            URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "nonce", value: nonce),
-            URLQueryItem(name: "code_challenge", value: challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-        ]
-        if requiresStrongAuthentication {
-            requestItems.append(URLQueryItem(name: "prompt", value: "login"))
-            requestItems.append(URLQueryItem(name: "max_age", value: "0"))
-        } else if chooseAccount {
-            requestItems.append(URLQueryItem(name: "prompt", value: "select_account"))
-        }
-        guard existingItems.count <= 16,
-              Set(existingItems.map(\.name)).count == existingItems.count,
-              Set(existingItems.map(\.name)).isDisjoint(with: Set(requestItems.map(\.name))),
-              existingItems.allSatisfy({
-                  !$0.name.isEmpty && $0.name.utf8.count <= 128
-                      && ($0.value?.utf8.count ?? 0) <= 1_024
-              }) else { throw Failure.identityProviderUnavailable }
-        components.queryItems = existingItems + requestItems
-        guard let authorizationURL = components.url else { throw Failure.identityProviderUnavailable }
-        let callback = try await authorize(
-            url: authorizationURL,
-            presentationContext: presentationContext)
-        let callbackComponents = URLComponents(url: callback, resolvingAgainstBaseURL: false)
-        guard callbackComponents?.scheme == redirectURL.scheme,
-              callbackComponents?.path == redirectURL.path,
-              callbackComponents?.host == redirectURL.host,
-              callbackComponents?.user == nil,
-              callbackComponents?.password == nil,
-              callbackComponents?.fragment == nil,
-              let items = callbackComponents?.queryItems,
-              Set(items.map(\.name)).count == items.count else {
-            throw Failure.authorizationMismatch
-        }
-        let values = Dictionary(uniqueKeysWithValues: items.compactMap { item in
-            item.value.map { (item.name, $0) }
+            guard let discovery = preparedDiscovery else { throw Failure.invalidStoredSession }
+            diagnostics.enter(.emailCodeSend)
+            let response: EmailCodeResponse = try await nativeRequest(
+                endpoint: discovery.nativeAuth.startEndpoint, values: ["email": email], diagnosticEndpoint: .emailCodeSend)
+            guard (32...256).contains(response.challengeId.utf8.count),
+                  response.challengeId.utf8.allSatisfy({ (33...126).contains($0) }),
+                  (1...1_800).contains(response.expiresIn), (0...600).contains(response.resendAfter),
+                  response.codeLength == 6 else { throw SnippetsCloudEmailSignInFailure.invalidResponse }
+            challengeID = response.challengeId
+            requestedEmail = email
+            return SnippetsCloudEmailChallenge(email: email,
+                expiresAt: Date().addingTimeInterval(TimeInterval(response.expiresIn)),
+                resendAvailableAt: Date().addingTimeInterval(TimeInterval(response.resendAfter)),
+                codeLength: response.codeLength)
+        }, verifyCode: { [self] code in
+            guard let discovery = preparedDiscovery, let challengeID, candidate == nil else {
+                throw SnippetsCloudEmailSignInFailure.codeExpired
+            }
+            diagnostics.enter(.emailCodeVerify)
+            let token: TokenResponse = try await nativeRequest(
+                endpoint: discovery.nativeAuth.verifyEndpoint,
+                values: ["challengeId": challengeID, "code": code], diagnosticEndpoint: .emailCodeVerify)
+            // A bounded token pair grants revocation authority even if the server's
+            // account/expiry metadata is rejected below.
+            try validateNativeTokenPair(token)
+            let stored = StoredSession(
+                profile: .init(issuer: serverURL.absoluteString, subject: token.account.id, name: nil, email: token.account.email),
+                schemaVersion: 6, serverURL: serverURL, apiBase: discovery.apiBase,
+                serverInstanceID: discovery.serverInstanceId, protocolMajor: 2,
+                issuer: serverURL, resource: serverURL,
+                tokenEndpoint: discovery.nativeAuth.refreshEndpoint,
+                revocationEndpoint: discovery.nativeAuth.revokeEndpoint,
+                clientID: "native-email-code-v1", maximumAccessTokenAgeSeconds: 300,
+                accessToken: token.accessToken, refreshToken: token.refreshToken,
+                expiresAt: Date().addingTimeInterval(TimeInterval(min(max(token.expiresIn, 1), 300))))
+            // No await between receiving credentials and recording their revocation authority.
+            // Even cancellation of the native sheet must retire this candidate safely.
+            diagnostics.enter(.credentialJournal)
+            try storeSessionReplacementJournal(sessions: [sessionAtStart, stored].compactMap { $0 }, kind: .interactiveReplacement)
+            try validateNativeToken(token)
+            guard token.account.email.lowercased() == requestedEmail else { throw Failure.authorizationMismatch }
+            candidate = stored
+            issuedToken = token
         })
-        if values["error"] != nil { throw Failure.authorizationCancelled }
-        guard values["state"] == state,
-              let code = values["code"],
-              (8...16_384).contains(code.utf8.count),
-              !code.contains(where: \.isWhitespace) else {
-            throw Failure.authorizationMismatch
-        }
-
-        let token: TokenResponse = try await tokenRequest(
-            endpoint: provider.tokenEndpoint,
-            values: [
-                "grant_type": "authorization_code",
-                "client_id": discovery.oidc.clientId,
-                "code": code,
-                "redirect_uri": redirectURL.absoluteString,
-                "code_verifier": verifier,
-                "resource": discovery.oidc.resource.absoluteString,
-            ])
-        guard token.tokenType.caseInsensitiveCompare("Bearer") == .orderedSame,
-              (8...16_384).contains(token.accessToken.utf8.count),
-              !token.accessToken.contains(where: \.isWhitespace),
-              let refreshToken = token.refreshToken,
-              (8...16_384).contains(refreshToken.utf8.count),
-              !refreshToken.contains(where: \.isWhitespace),
-              (60...86_400).contains(token.expiresIn) else {
-            throw Failure.backgroundAccessMissing
-        }
-        try validateResourceAudience(
-            accessToken: token.accessToken,
-            resource: discovery.oidc.resource)
-
-        var stored = StoredSession(
-            schemaVersion: 5,
-            serverURL: serverURL,
-            apiBase: discovery.apiBase,
-            serverInstanceID: discovery.serverInstanceId,
-            protocolMajor: discovery.protocolMajor,
-            issuer: issuer,
-            resource: discovery.oidc.resource,
-            tokenEndpoint: provider.tokenEndpoint,
-            revocationEndpoint: provider.revocationEndpoint,
-            clientID: discovery.oidc.clientId,
-            maximumAccessTokenAgeSeconds: discovery.oidc.maxAccessTokenAgeSeconds,
-            accessToken: token.accessToken,
-            refreshToken: refreshToken,
-            expiresAt: Date().addingTimeInterval(TimeInterval(min(
-                token.expiresIn,
-                discovery.oidc.maxAccessTokenAgeSeconds
-            ))))
-        // Persist the newly minted grant before any further await. If space lookup,
-        // selection, or process lifetime fails, startup sees B as an abandoned
-        // generation and revokes both its resource session and refresh token.
-        try storeSessionReplacementJournal(
-            sessions: [sessionAtStart, stored].compactMap { $0 },
-            kind: .interactiveReplacement)
-        guard let idToken = token.idToken else { throw Failure.authorizationMismatch }
         do {
-            stored.profile = try SnippetsCloudVerifiedProfile.verify(idToken: idToken,
-                accessToken: token.accessToken, keys: identityKeys, issuer: provider.issuer,
-                clientID: discovery.oidc.clientId, resource: discovery.oidc.resource.absoluteString, nonce: nonce)
-        } catch { throw Failure.authorizationMismatch }
+            // The native sheet appears before any discovery/cleanup network request.
+            try await authenticate(flow)
+        } catch {
+            await flow.cancelAndWait()
+            throw error
+        }
+        await flow.cancelAndWait()
+        guard let discovery = preparedDiscovery, let stored = candidate, let token = issuedToken else {
+            throw Failure.authorizationCancelled
+        }
+        try Task.checkCancellation()
+        diagnostics.enter(.librarySelection)
         let selectedMembership: SnippetsCloudLibraryChoice
-        if let expectedStepUpBinding {
-            let candidate: Space
-            do {
-                candidate = try await authorizedJSON(
-                    url: serverURL.appending(
-                        path: "v2/spaces/\(expectedStepUpBinding.spaceID.uuidString.lowercased())"),
-                    method: "GET",
-                    accessToken: token.accessToken)
-            } catch let failure as HTTPFailure where [
-                "not_found", "forbidden", "authentication_required"
-            ].contains(failure.code) {
-                throw Failure.stepUpAccountMismatch
-            }
-            guard expectedStepUpBinding.matches(
-                serverURL: serverURL,
-                serverInstanceID: candidate.scope.serverInstanceId,
-                spaceID: candidate.scope.spaceId,
-                scopeBinding: candidate.scope.scopeBinding,
-                role: candidate.role) else {
-                throw Failure.stepUpAccountMismatch
-            }
-            selectedMembership = SnippetsCloudLibraryChoice(
-                spaceID: candidate.scope.spaceId,
-                serverInstanceID: candidate.scope.serverInstanceId,
-                role: candidate.role,
-                scopeBinding: candidate.scope.scopeBinding)
-        } else if let expectedPostAuthorizationTarget {
+        if let expectedPostAuthorizationTarget {
             let candidate: Space
             do {
                 candidate = try await authorizedJSON(
@@ -1881,6 +1752,7 @@ private final class SnippetsCloudOAuthClient {
                 confirmAccountChange: chooseAccount,
                 chooseLibrary: chooseLibrary)
         }
+        diagnostics.enter(.credentialCommit)
         let sessionAtCommit = try loadSession()
         try storeSessionReplacementJournal(
             sessions: [sessionAtStart, sessionAtCommit, stored].compactMap { $0 },
@@ -2081,29 +1953,14 @@ private final class SnippetsCloudOAuthClient {
     }
 
     private func performRefresh(_ stored: StoredSession) async throws -> String {
-        let token: TokenResponse = try await tokenRequest(
-            endpoint: stored.tokenEndpoint,
-            values: [
-                "grant_type": "refresh_token",
-                "client_id": stored.clientID,
-                "refresh_token": stored.refreshToken,
-                "resource": stored.resource.absoluteString,
-            ])
-        guard let refreshToken = token.refreshToken,
-              refreshToken != stored.refreshToken,
-              token.accessToken != stored.accessToken,
-              token.tokenType.caseInsensitiveCompare("Bearer") == .orderedSame,
-              (8...16_384).contains(token.accessToken.utf8.count),
-              !token.accessToken.contains(where: \.isWhitespace),
-              (8...16_384).contains(refreshToken.utf8.count),
-              !refreshToken.contains(where: \.isWhitespace),
-              (60...86_400).contains(token.expiresIn) else {
-            throw Failure.tokenExchangeFailed
-        }
-        try validateResourceAudience(accessToken: token.accessToken, resource: stored.resource)
+        let token: TokenResponse = try await nativeRequest(
+            endpoint: stored.tokenEndpoint, values: ["refreshToken": stored.refreshToken])
+        try validateNativeTokenPair(token)
+        let refreshToken = token.refreshToken
         let updated = StoredSession(
-            profile: stored.profile,
-            schemaVersion: 5,
+            profile: .init(issuer: stored.serverURL.absoluteString, subject: token.account.id,
+                           name: nil, email: token.account.email),
+            schemaVersion: 6,
             serverURL: stored.serverURL,
             apiBase: stored.apiBase,
             serverInstanceID: stored.serverInstanceID,
@@ -2126,13 +1983,16 @@ private final class SnippetsCloudOAuthClient {
         if joinedRevocation {
             throw Failure.invalidStoredSession
         }
-        // Ordinary refresh is also a credential-replacement transaction. Journal A/B
-        // before publishing B, then revoke A and clear the journal. A crash before the
-        // session write retires B while keeping A; a crash after it retires A while
-        // keeping B. No token generation can disappear from durable lineage.
+        // Journal before validating account metadata or publishing the new session.
+        // A crash before commit revokes the uncommitted rotated family and requires
+        // sign-in again. After commit only the obsolete access token is retired;
+        // revoking its refresh token would also invalidate the new generation.
         try storeSessionReplacementJournal(
             sessions: [stored, updated],
             kind: .refreshRotation)
+        try validateNativeToken(token)
+        guard refreshToken != stored.refreshToken, token.accessToken != stored.accessToken,
+              token.account.id == stored.profile?.subject else { throw Failure.tokenExchangeFailed }
         try keychain.storeItem(
             try JSONEncoder().encode(updated),
             account: SyncBackendSelectionStore.oauthSessionAccount)
@@ -2165,21 +2025,24 @@ private final class SnippetsCloudOAuthClient {
             account: SyncBackendSelectionStore.oauthSessionAccount) else { return nil }
         guard data.count <= 128 * 1_024,
               let value = try? JSONDecoder().decode(StoredSession.self, from: data),
-              (value.schemaVersion == 4 || value.schemaVersion == 5),
-              (value.schemaVersion == 4
-                ? value.serverInstanceID == nil
-                    && value.protocolMajor == nil
-                    && value.apiBase == nil
-                : value.protocolMajor == 2
-                    && value.apiBase == value.serverURL.appending(path: "v2")),
+              value.schemaVersion == 6,
+              value.serverInstanceID != nil, value.protocolMajor == 2,
+              value.apiBase == value.serverURL.appending(path: "v2"),
+              value.clientID == "native-email-code-v1",
+              value.issuer == value.serverURL,
+              value.tokenEndpoint == value.serverURL.appending(path: "v2/auth/refresh"),
+              value.revocationEndpoint == value.serverURL.appending(path: "v2/auth/revoke"),
+              value.profile?.issuer == value.serverURL.absoluteString,
+              value.profile?.subject.isEmpty == false,
               !value.clientID.isEmpty, value.clientID.utf8.count <= 256,
-              (60...86_400).contains(value.maximumAccessTokenAgeSeconds),
-              (8...16_384).contains(value.accessToken.utf8.count),
-              !value.accessToken.contains(where: \.isWhitespace),
-              (8...16_384).contains(value.refreshToken.utf8.count),
-              !value.refreshToken.contains(where: \.isWhitespace),
+              value.maximumAccessTokenAgeSeconds == 300,
+              validToken(value.accessToken), validToken(value.refreshToken),
+              value.accessToken != value.refreshToken,
+              value.profile.map({ (1...256).contains($0.subject.utf8.count)
+                  && !$0.subject.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+                  && SnippetsCloudEmailSignInFlow.isValidEmail($0.email ?? "") }) == true,
               value.expiresAt.timeIntervalSince1970.isFinite,
-              value.expiresAt.timeIntervalSinceNow <= 86_460,
+              value.expiresAt.timeIntervalSinceNow <= 360,
               (try? validatedBaseURL(value.serverURL)) == value.serverURL,
               (try? validatedBaseURL(value.resource)) == value.serverURL,
               (try? validatedIssuer(value.issuer)) == value.issuer,
@@ -2254,7 +2117,7 @@ private final class SnippetsCloudOAuthClient {
         // the data plane; provider revocation below closes every refresh generation.
         try await revokeCredentialPlan(plan, authority: revocationJournal)
         // Keep the remote-intent journal until the caller durably records local erase.
-        // If the process dies here, startup repeats these idempotent RFC 7009/resource
+        // If the process dies here, startup repeats these idempotent native/resource
         // revocations and then removes the root key.
     }
 
@@ -2334,28 +2197,17 @@ private final class SnippetsCloudOAuthClient {
         authority: RevocationJournal
     ) async throws {
         func revokeAtProvider(_ token: String, hint: String) async throws {
-            var components = URLComponents()
-            components.queryItems = [
-                URLQueryItem(name: "client_id", value: authority.clientID),
-                URLQueryItem(name: "token", value: token),
-                URLQueryItem(name: "token_type_hint", value: hint),
-            ]
-            guard let body = components.percentEncodedQuery?.data(using: .utf8) else {
-                throw Failure.tokenExchangeFailed
-            }
             var request = URLRequest(url: authority.revocationEndpoint)
             request.httpMethod = "POST"
-            request.httpBody = body
+            request.httpBody = try JSONEncoder().encode(["token": token, "tokenTypeHint": hint])
             request.timeoutInterval = 20
             request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue(
-                "application/x-www-form-urlencoded",
-                forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let (_, response) = try await boundedResponse(
                 request,
                 maximumBytes: 256 * 1_024)
             guard let http = response as? HTTPURLResponse,
-                  http.statusCode == 200 else { throw Failure.tokenExchangeFailed }
+                  response.url == request.url, http.statusCode == 204 else { throw Failure.tokenExchangeFailed }
         }
         for token in plan.accessTokens {
             try await revokeAtProvider(token, hint: "access_token")
@@ -2425,7 +2277,10 @@ private final class SnippetsCloudOAuthClient {
                 || (account == SyncBackendSelectionStore.oauthSessionReplacementAccount
                     && keys == baseKeys.union(["replacementKind"])),
               let journal = try? JSONDecoder().decode(RevocationJournal.self, from: data),
-              journal.schemaVersion == 1,
+              journal.schemaVersion == 2,
+              journal.issuer == journal.serverURL,
+              journal.clientID == "native-email-code-v1",
+              journal.revocationEndpoint == journal.serverURL.appending(path: "v2/auth/revoke"),
               journal.replacementKind == nil
                 || account == SyncBackendSelectionStore.oauthSessionReplacementAccount,
               (try? validatedBaseURL(journal.serverURL)) == journal.serverURL,
@@ -2446,7 +2301,7 @@ private final class SnippetsCloudOAuthClient {
         return journal
     }
 
-    /// Records every interactive OAuth generation before replacing the active
+    /// Records every interactive sign-in generation before replacing the active
     /// session. This is deliberately separate from the logout-intent journal: its
     /// presence must not disable a valid newly authenticated session, while a later
     /// logout still has durable authority to revoke every older token family.
@@ -2463,7 +2318,7 @@ private final class SnippetsCloudOAuthClient {
             throw Failure.invalidStoredSession
         }
         let journal = RevocationJournal(
-            schemaVersion: 1,
+            schemaVersion: 2,
             serverURL: first.serverURL,
             issuer: first.issuer,
             resource: first.resource,
@@ -2489,7 +2344,7 @@ private final class SnippetsCloudOAuthClient {
             throw Failure.invalidStoredSession
         }
         return RevocationJournal(
-            schemaVersion: 1,
+            schemaVersion: 2,
             serverURL: authority.serverURL,
             issuer: authority.issuer,
             resource: authority.resource,
@@ -2508,7 +2363,7 @@ private final class SnippetsCloudOAuthClient {
         guard let first = sessions.first,
               let existing = try loadRevocationJournal(boundTo: first) else { return false }
         let merged = RevocationJournal(
-            schemaVersion: 1,
+            schemaVersion: 2,
             serverURL: existing.serverURL,
             issuer: existing.issuer,
             resource: existing.resource,
@@ -2528,7 +2383,7 @@ private final class SnippetsCloudOAuthClient {
     ) -> RevocationJournal {
         let first = sessions[0]
         return RevocationJournal(
-            schemaVersion: 1,
+            schemaVersion: 2,
             serverURL: first.serverURL,
             issuer: first.issuer,
             resource: first.resource,
@@ -2607,44 +2462,13 @@ private final class SnippetsCloudOAuthClient {
     }
 
     private func validToken(_ token: String) -> Bool {
-        (8...16_384).contains(token.utf8.count)
-            && !token.contains(where: \.isWhitespace)
+        (32...512).contains(token.utf8.count)
+            && token.utf8.allSatisfy { (33...126).contains($0) }
     }
 
     private func orderedUnique(_ values: [String]) -> [String] {
         var seen: Set<String> = []
         return values.filter { seen.insert($0).inserted }
-    }
-
-    private func authorize(
-        url: URL,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding
-    ) async throws -> URL {
-        guard let callbackHost = redirectURL.host else {
-            throw Failure.invalidStoredSession
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(
-                url: url,
-                callback: .https(host: callbackHost, path: redirectURL.path)
-            ) { [weak self] callback, error in
-                self?.webSession = nil
-                if let callback {
-                    continuation.resume(returning: callback)
-                } else {
-                    _ = error
-                    continuation.resume(throwing: Failure.authorizationCancelled)
-                }
-            }
-            session.presentationContextProvider = presentationContext
-            session.prefersEphemeralWebBrowserSession = false
-            webSession = session
-            guard session.start() else {
-                webSession = nil
-                continuation.resume(throwing: Failure.authorizationCancelled)
-                return
-            }
-        }
     }
 
     private func resolvePersonalSpace(
@@ -2751,27 +2575,100 @@ private final class SnippetsCloudOAuthClient {
             scopeBinding: created.scope.scopeBinding))
     }
 
-    private func tokenRequest(endpoint: URL, values: [String: String]) async throws -> TokenResponse {
-        var components = URLComponents()
-        components.queryItems = values.sorted(by: { $0.key < $1.key }).map {
-            URLQueryItem(name: $0.key, value: $0.value)
+    private func nativeDiscovery(serverURL: URL) async throws -> Discovery {
+        let discovery: Discovery = try await getJSON(
+            serverURL.appending(path: ".well-known/snippets-sync"), maximumBytes: 256 * 1_024,
+            failure: .discoveryUnavailable, diagnosticEndpoint: .serverDiscovery)
+        guard discovery.protocolMajor == 2, discovery.serverInstanceId != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+              discovery.recordProfile == "snippets-wire-v1",
+              discovery.apiBase == serverURL.appending(path: "v2"),
+              discovery.limits.maxBlobBytes == 900_000, discovery.limits.maxRevisionBytes == 256,
+              discovery.limits.maxBatchRecords == 50, discovery.limits.maxPageRecords == 50,
+              discovery.limits.maxRequestBytes == 16 * 1_024 * 1_024,
+              discovery.limits.maxResponseBytes == 64 * 1_024 * 1_024,
+              discovery.limits.maxKeyEnvelopeBytes == 4_096, discovery.limits.maxPairingSeconds == 600,
+              (1...16).contains(discovery.capabilities.count),
+              Set(discovery.capabilities).count == discovery.capabilities.count,
+              discovery.capabilities.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
+              ["native-email-code-v1", "library-action-proof-v1", "pairing-v2", "offline-recovery-v1", "resource-session-revocation"]
+                .allSatisfy(discovery.capabilities.contains),
+              discovery.nativeAuth.flow == "email_code",
+              discovery.nativeAuth.startEndpoint == serverURL.appending(path: "v2/auth/email/start"),
+              discovery.nativeAuth.verifyEndpoint == serverURL.appending(path: "v2/auth/email/verify"),
+              discovery.nativeAuth.refreshEndpoint == serverURL.appending(path: "v2/auth/refresh"),
+              discovery.nativeAuth.revokeEndpoint == serverURL.appending(path: "v2/auth/revoke") else {
+            throw Failure.insecureServerProfile
         }
-        guard let body = components.percentEncodedQuery?.data(using: .utf8) else {
+        return discovery
+    }
+
+    private func validateNativeTokenPair(_ token: TokenResponse) throws {
+        guard validToken(token.accessToken), validToken(token.refreshToken),
+              token.accessToken != token.refreshToken else { throw Failure.tokenExchangeFailed }
+    }
+
+    private func validateNativeToken(_ token: TokenResponse) throws {
+        try validateNativeTokenPair(token)
+        guard token.tokenType == "Bearer", (1...300).contains(token.expiresIn),
+              (1...256).contains(token.account.id.utf8.count),
+              !token.account.id.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+              SnippetsCloudEmailSignInFlow.isValidEmail(token.account.email) else {
             throw Failure.tokenExchangeFailed
         }
+    }
+
+    private func nativeRequest<Response: Decodable>(
+        endpoint: URL, values: [String: String],
+        diagnosticEndpoint: DiagnosticCloudSignInEndpoint? = nil
+    ) async throws -> Response {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.httpBody = body
+        request.httpBody = try JSONEncoder().encode(values)
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let started = ProcessInfo.processInfo.systemUptime
+        var status: Int?
+        var reason: DiagnosticCloudSignInReason = .requestFailed
+        func record(_ outcome: DiagnosticCloudSignInRequestOutcome, error: (any Error)? = nil) {
+            guard let diagnosticEndpoint else { return }
+            Diagnostics.record(.cloudSignInRequest(endpoint: diagnosticEndpoint, outcome: outcome,
+                durationMilliseconds: Int64(max(0, ProcessInfo.processInfo.systemUptime - started) * 1_000),
+                httpStatus: status, reason: error == nil ? nil : reason,
+                failure: error.map { DiagnosticFailure($0) }))
+        }
         do {
-            return try await responseJSON(
-                request,
-                maximumBytes: 256 * 1_024,
-                failure: .tokenExchangeFailed)
+            let (data, response) = try await boundedResponse(request, maximumBytes: 256 * 1_024)
+            reason = .unexpectedResponse
+            guard let http = response as? HTTPURLResponse, response.url == request.url else {
+                throw SnippetsCloudEmailSignInFailure.invalidResponse
+            }
+            status = http.statusCode
+            reason = .httpStatus
+            guard http.statusCode == 200 else {
+                let code = (try? JSONDecoder().decode(HTTPError.self, from: data))?.code
+                switch code {
+                case "invalid_email": reason = .invalidEmail; throw SnippetsCloudEmailSignInFailure.invalidEmail
+                case "invalid_code": reason = .invalidCode; throw SnippetsCloudEmailSignInFailure.invalidCode
+                case "code_expired": reason = .codeExpired; throw SnippetsCloudEmailSignInFailure.codeExpired
+                case "too_many_attempts": reason = .tooManyAttempts; throw SnippetsCloudEmailSignInFailure.tooManyAttempts
+                case "rate_limited":
+                    let delay = Double(http.value(forHTTPHeaderField: "Retry-After") ?? "60") ?? 60
+                    reason = .rateLimited
+                    throw SnippetsCloudEmailSignInFailure.rateLimited(delay.isFinite ? min(max(1, delay), 86_400) : 60)
+                case "authentication_required": throw Failure.tokenExchangeFailed
+                default: throw SnippetsCloudEmailSignInFailure.unavailable
+                }
+            }
+            reason = .invalidJSON
+            let responseValue = try JSONDecoder().decode(Response.self, from: data)
+            record(.succeeded)
+            return responseValue
         } catch {
-            throw Failure.tokenExchangeFailed
+            record(.failed, error: error)
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+            if error is SnippetsCloudEmailSignInFailure || error is Failure { throw error }
+            throw SnippetsCloudEmailSignInFailure.unavailable
         }
     }
 
@@ -2805,27 +2702,51 @@ private final class SnippetsCloudOAuthClient {
     private func getJSON<Response: Decodable>(
         _ url: URL,
         maximumBytes: Int,
-        failure: Failure
+        failure: Failure,
+        diagnosticEndpoint: DiagnosticCloudSignInEndpoint
     ) async throws -> Response {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return try await responseJSON(request, maximumBytes: maximumBytes, failure: failure)
+        return try await responseJSON(request, maximumBytes: maximumBytes, failure: failure,
+                                      diagnosticEndpoint: diagnosticEndpoint)
     }
 
     private func responseJSON<Response: Decodable>(
         _ request: URLRequest,
         maximumBytes: Int,
-        failure: Failure
+        failure: Failure,
+        diagnosticEndpoint: DiagnosticCloudSignInEndpoint? = nil
     ) async throws -> Response {
+        let started = ProcessInfo.processInfo.systemUptime
+        var status: Int?
+        var reason: DiagnosticCloudSignInReason = .requestFailed
+        func record(_ outcome: DiagnosticCloudSignInRequestOutcome, error: (any Error)? = nil) {
+            guard let diagnosticEndpoint else { return }
+            Diagnostics.record(.cloudSignInRequest(
+                endpoint: diagnosticEndpoint, outcome: outcome,
+                durationMilliseconds: Int64(max(0, ProcessInfo.processInfo.systemUptime - started) * 1_000),
+                httpStatus: status, reason: error == nil ? nil : reason,
+                failure: error.map { DiagnosticFailure($0) }))
+        }
         do {
             let (data, response) = try await boundedResponse(request, maximumBytes: maximumBytes)
-            guard let http = response as? HTTPURLResponse,
-                  http.statusCode == 200,
-                  response.url == request.url else { throw failure }
-            return try JSONDecoder().decode(Response.self, from: data)
+            reason = .unexpectedResponse
+            guard let http = response as? HTTPURLResponse else { throw failure }
+            status = http.statusCode
+            reason = .httpStatus
+            guard http.statusCode == 200 else { throw failure }
+            reason = .redirectRejected
+            guard response.url == request.url else { throw failure }
+            reason = .invalidJSON
+            let result = try JSONDecoder().decode(Response.self, from: data)
+            record(.succeeded)
+            return result
         } catch {
+            // Retain only the classified cause and numeric error before the UI's
+            // intentionally broad error mapping discards the transport/decoder error.
+            record(.failed, error: error)
             throw failure
         }
     }
@@ -2883,40 +2804,6 @@ private final class SnippetsCloudOAuthClient {
               value.absoluteString.utf8.count <= 2_048,
               value.fragment == nil else { throw Failure.identityProviderUnavailable }
         return value
-    }
-
-    /// This is an audience leak-prevention check, not a replacement for the
-    /// server's signature verification. The token came directly from the
-    /// issuer's HTTPS token endpoint and must name only this exact RFC 8707
-    /// resource before it is ever sent to a sync origin.
-    private func validateResourceAudience(accessToken: String, resource: URL) throws {
-        let segments = accessToken.split(separator: ".", omittingEmptySubsequences: false)
-        guard segments.count == 3,
-              segments[1].utf8.count <= 32 * 1_024,
-              let payload = Data(base64URL: String(segments[1])),
-              payload.count <= 24 * 1_024,
-              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
-        else { throw Failure.tokenExchangeFailed }
-        let audiences: [String]
-        if let value = object["aud"] as? String {
-            audiences = [value]
-        } else if let values = object["aud"] as? [String] {
-            audiences = values
-        } else {
-            throw Failure.tokenExchangeFailed
-        }
-        guard audiences == [resource.absoluteString] else {
-            throw Failure.tokenExchangeFailed
-        }
-    }
-
-    private func randomBase64URL(bytes: Int) throws -> String {
-        var data = Data(count: bytes)
-        let status = data.withUnsafeMutableBytes {
-            SecRandomCopyBytes(kSecRandomDefault, bytes, $0.baseAddress!)
-        }
-        guard status == errSecSuccess else { throw Failure.authorizationMismatch }
-        return data.base64URL
     }
 
     private struct HTTPError: Decodable { let code: String }

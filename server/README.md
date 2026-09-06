@@ -38,11 +38,90 @@ test covers RLS tenant isolation, CAS, interleaved snapshot pagination, role par
 change retrieval, restore, and the multi-instance-safe logout boundary against
 PostgreSQL 18.4.
 
+## Native account authentication
+
+Set `AUTH_MODE=native` and configure SMTP as shown in `.env.example`. Native mode has
+no Logto/OIDC dependency and does not fetch provider metadata during startup. Clients
+render email and six-digit code screens using platform controls; all four endpoints
+below accept JSON and return `Cache-Control: no-store`:
+
+```text
+POST /v2/auth/email/start   {"email":"you@example.com"}
+POST /v2/auth/email/verify  {"challengeId":"…","code":"123456"}
+POST /v2/auth/refresh       {"refreshToken":"…"}
+POST /v2/auth/revoke        {"token":"…","tokenTypeHint":"refresh_token"}
+```
+
+Start returns a random challenge, `expiresIn:600`, `resendAfter:60`, `codeLength:6`.
+Verify and refresh return `access_token`, `refresh_token`, `expires_in` (at most 300),
+`token_type:"Bearer"`, and `account:{id,email}`. The account ID is immutable and
+independent of its email. Signup and sign-in use the same path, response shape and
+SMTP behavior. Email is normalized to lowercase ASCII; aliases are not stripped or
+linked. Email exists in private authentication records, never in sync identities or
+logs. There is no account-profile or provider browser screen in this flow.
+
+`NATIVE_AUTH_SECRET` is an independent 32–64-byte base64 secret for keyed OTP, challenge,
+credential and rate digests. `IDENTITY_PEPPER` is the persistent account/email identity
+pepper; changing it requires an explicit identity migration. Preserve both across
+restarts. Losing the auth secret invalidates pending codes and sessions, but does not
+change email account lookup or sync identity. Only digests of codes and tokens persist;
+OTP comparison is constant time inside a row-locked transaction. A code lasts ten
+minutes, allows five guesses, is consumed once, and is replaced by resend.
+
+PostgreSQL rate limits work across server replicas: a 60-second email cooldown, five
+sends/email/hour, ten/email/day, thirty/source-IP/hour, and a thousand sends/deployment/hour.
+Verification permits 300 attempts/source-IP/hour and 10,000/deployment/hour; refresh
+permits 1,000/source-IP/hour and 30,000/deployment/hour. `429 rate_limited` includes
+`Retry-After` and `retryAfterSeconds`. Invalid, expired and exhausted codes have closed
+error codes. Rate keys are keyed digests. By default the server uses the TCP peer IP and
+ignores all forwarded headers, so clients behind a proxy share its IP budget. To preserve
+per-client limits behind a managed edge, set `AUTH_TRUSTED_PROXY_CIDRS` to its immediate
+TCP peer networks (comma-separated canonical CIDRs, maximum 32 and 2,048 bytes). Empty
+configuration trusts no proxy; `/0`, host bits and IPv4-mapped prefixes are rejected.
+Use narrow networks and prevent direct access to the origin from other clients in them.
+
+For native start, verify and refresh, a trusted peer must provide exactly one
+`X-Snippets-Client-IP` header containing one literal unicast IP, with no port, list or IPv6
+zone. Missing, repeated or malformed values fail with `400 invalid_request` before
+authentication. IPv4-mapped peer and client addresses are normalized to IPv4. Headers
+from untrusted peers are ignored; `Forwarded` and `X-Forwarded-For` are never consulted.
+The edge must remove any incoming `X-Snippets-Client-IP` and set its own value from a
+verified transport source. For another upstream proxy/CDN, configure that trust at the
+edge first; copying arbitrary forwarded headers would let callers choose a rate bucket.
+Discovery, revocation and the data plane do not require this header. Addresses and rejected
+header values are not logged. Email, IP and deployment budgets remain unchanged.
+
+Expired transient rows are
+pruned in bounded batches every minute and on starts, with creation bounded by global budgets.
+
+Access tokens expire within five minutes. Refresh tokens rotate once within a fixed
+30-day family lifetime. Reusing a rotated refresh token revokes that entire family;
+clients must serialize refresh and durably replace tokens before further requests.
+Revoking any refresh generation also revokes its family. Access-token revocation and
+`DELETE /v2/session` revoke only the exact credential. Other device sessions remain
+usable. Family revocation takes the same credential advisory locks as the data plane,
+so acknowledged logout cannot race a later write using an already-validated token.
+Native email authentication does not claim phishing resistance; encrypted library
+operations still require the existing root-key proof and local owner authentication.
+
+SMTP supports verified STARTTLS (default), direct TLS, or plaintext only in a private
+development/test environment. Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` and optional
+`SMTP_USERNAME`/`SMTP_PASSWORD`; credentials cannot be sent over plaintext SMTP.
+The SMTP connection and request context have bounded deadlines. Delivery failures
+return a sanitized `dependency_unavailable` and invalidate the undelivered challenge.
+For local Mailpit use port 1025, `SMTP_TLS=none`, and keep its mailbox UI private.
+
+The optional `AUTH_MODE=oidc` retains the previous server adapter for existing deployments
+and protocol tests. The default when the variable is absent remains `oidc`; new native
+setups should use the explicit sample configuration. These modes represent distinct
+account authorities; switching an existing deployment does not merge accounts.
+
 ## Protocol v2
 
-Discovery is `GET /.well-known/snippets-sync`. It advertises protocol 2.0,
-`apiBase=<PUBLIC_BASE_URL>/v2`, the OAuth resource equal to the canonical
-`PUBLIC_BASE_URL` origin, and record profile `snippets-wire-v1`.
+Discovery is `GET /.well-known/snippets-sync`. It advertises protocol 2.1,
+`apiBase=<PUBLIC_BASE_URL>/v2`, record profile `snippets-wire-v1`, and the configured
+authentication flow. Native deployments publish `nativeAuth` and the
+`native-email-code-v1` capability. OIDC deployments publish the existing provider metadata.
 
 The data plane is:
 
@@ -198,6 +277,7 @@ PGHOST=database.example PGDATABASE=snippets PGUSER=snippets_owner \
   PGPASSFILE=/secure/path/owner.pgpass ./Scripts/migrate.sh
 ```
 
+This binary requires schema version 3 (baseline 1, library authority 2, native auth 3).
 The server refuses startup when the database schema falls outside the binary's declared
 compatibility range. The expand/migrate/contract, rollback, and backfill policy is in
 ADR 0003.

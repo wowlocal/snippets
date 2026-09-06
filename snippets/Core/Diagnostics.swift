@@ -153,6 +153,81 @@ nonisolated enum DiagnosticSyncTrigger: String, Codable, Sendable {
     case retry
 }
 
+/// Sign-in diagnostics accept classifications only, never OAuth URLs or payloads.
+nonisolated enum DiagnosticCloudSignInStage: String, Codable, Sendable {
+    case preflight
+    case credentialCleanup = "credential_cleanup"
+    case stepUpValidation = "step_up_validation"
+    case storedSession = "stored_session"
+    case emailCodeSend = "email_code_send"
+    case emailCodeVerify = "email_code_verify"
+    case serverDiscovery = "server_discovery"
+    case providerDiscovery = "provider_discovery"
+    case sessionBinding = "session_binding"
+    case identityKeys = "identity_keys"
+    case authorizationRequest = "authorization_request"
+    case browserStart = "browser_start"
+    case browserWaiting = "browser_waiting"
+    case callbackValidation = "callback_validation"
+    case tokenExchange = "token_exchange"
+    case credentialJournal = "credential_journal"
+    case identityValidation = "identity_validation"
+    case librarySelection = "library_selection"
+    case credentialCommit = "credential_commit"
+    case coordinateCommit = "coordinate_commit"
+    case librarySetup = "library_setup"
+}
+
+nonisolated enum DiagnosticCloudSignInOutcome: String, Codable, Sendable {
+    case entered, succeeded, failed, cancelled
+}
+
+nonisolated enum DiagnosticCloudSignInReason: String, Codable, Sendable {
+    case invalidStoredSession = "invalid_stored_session"
+    case invalidEmail = "invalid_email"
+    case invalidCode = "invalid_code"
+    case codeExpired = "code_expired"
+    case tooManyAttempts = "too_many_attempts"
+    case rateLimited = "rate_limited"
+    case storedServerMismatch = "stored_server_mismatch"
+    case storedIssuerMismatch = "stored_issuer_mismatch"
+    case storedResourceMismatch = "stored_resource_mismatch"
+    case storedRevocationMismatch = "stored_revocation_mismatch"
+    case storedClientMismatch = "stored_client_mismatch"
+    case invalidConfiguration = "invalid_configuration"
+    case insecureServerProfile = "insecure_server_profile"
+    case discoveryUnavailable = "discovery_unavailable"
+    case identityProviderUnavailable = "identity_provider_unavailable"
+    case authorizationCancelled = "authorization_cancelled"
+    case authorizationMismatch = "authorization_mismatch"
+    case browserStartRejected = "browser_start_rejected"
+    case browserFailed = "browser_failed"
+    case tokenExchangeFailed = "token_exchange_failed"
+    case backgroundAccessMissing = "background_access_missing"
+    case librarySelectionRequired = "library_selection_required"
+    case accountMismatch = "account_mismatch"
+    case localState = "local_state"
+    case requestFailed = "request_failed"
+    case unexpectedResponse = "unexpected_response"
+    case httpStatus = "http_status"
+    case redirectRejected = "redirect_rejected"
+    case invalidJSON = "invalid_json"
+    case other
+}
+
+nonisolated enum DiagnosticCloudSignInEndpoint: String, Codable, Sendable {
+    case emailCodeSend = "email_code_send"
+    case emailCodeVerify = "email_code_verify"
+    case serverDiscovery = "server_discovery"
+    case providerDiscovery = "provider_discovery"
+    case identityKeys = "identity_keys"
+    case token
+}
+
+nonisolated enum DiagnosticCloudSignInRequestOutcome: String, Codable, Sendable {
+    case succeeded, failed
+}
+
 nonisolated enum DiagnosticSyncState: String, Codable, Sendable {
     case disabled
     case idle
@@ -493,6 +568,23 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
     case syncTriggered(DiagnosticSyncTrigger)
     case syncState(DiagnosticSyncState, haltReason: DiagnosticSyncHaltReason?)
     case syncRound(DiagnosticSyncRound)
+    case cloudSignIn(
+        stage: DiagnosticCloudSignInStage,
+        outcome: DiagnosticCloudSignInOutcome,
+        durationMilliseconds: Int64,
+        storedSessionPresent: Bool?,
+        reason: DiagnosticCloudSignInReason?,
+        failure: DiagnosticFailure?
+    )
+    case cloudSignInRequest(
+        endpoint: DiagnosticCloudSignInEndpoint,
+        outcome: DiagnosticCloudSignInRequestOutcome,
+        durationMilliseconds: Int64,
+        httpStatus: Int?,
+        reason: DiagnosticCloudSignInReason?,
+        failure: DiagnosticFailure?
+    )
+    case cloudSignInPresentationAnchor(available: Bool)
     case cloudKitFailure(operation: DiagnosticCloudOperation, failure: DiagnosticFailure)
     case cloudKitBatchSplit(recordCount: Int)
     case cloudKitRecordsIgnored(count: Int)
@@ -543,7 +635,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         switch self {
         case .appStarted, .lifecycle: .app
         case .storageFailure, .storageState, .libraryMerge: .persistence
-        case .syncTriggered, .syncState, .syncRound: .sync
+        case .syncTriggered, .syncState, .syncRound,
+             .cloudSignIn, .cloudSignInRequest, .cloudSignInPresentationAnchor: .sync
         case .cloudKitFailure, .cloudKitBatchSplit, .cloudKitRecordsIgnored,
              .cloudKitSyncEvent, .cloudKitSchedulerTransition: .cloudKit
         case .vaultAction, .secureReveal, .secureEditorTransition: .vault
@@ -564,6 +657,9 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .syncTriggered: "sync_triggered"
         case .syncState: "sync_state"
         case .syncRound: "sync_round"
+        case .cloudSignIn: "cloud_sign_in"
+        case .cloudSignInRequest: "cloud_sign_in_request"
+        case .cloudSignInPresentationAnchor: "cloud_sign_in_presentation_anchor"
         case .cloudKitFailure: "cloudkit_failure"
         case .cloudKitBatchSplit: "cloudkit_batch_split"
         case .cloudKitRecordsIgnored: "cloudkit_records_ignored"
@@ -582,6 +678,10 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
 
     var defaultLevel: DiagnosticLevel {
         switch self {
+        case .cloudSignIn(_, .failed, _, _, _, _),
+             .cloudSignInRequest(_, .failed, _, _, _, _),
+             .cloudSignInPresentationAnchor(false):
+            .error
         case .storageFailure, .cloudKitFailure:
             .error
         case .expansionAccessibility:
@@ -601,6 +701,12 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
 
     var requiresSynchronousWrite: Bool {
         switch self {
+        // Preserve the last boundary before a native browser/presentation failure,
+        // and terminal failures, without synchronously writing normal progress.
+        case .cloudSignIn(.browserStart, .entered, _, _, _, _),
+             .cloudSignIn(_, .failed, _, _, _, _),
+             .cloudSignInPresentationAnchor(false):
+            true
         case .storageFailure,
              .cloudKitFailure,
              .syncState(.halted, _),
@@ -657,6 +763,24 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
                 "quarantined": .integer(Int64(round.quarantined)),
                 "full_resync": .boolean(round.fullResync),
             ]
+        case .cloudSignIn(let stage, let outcome, let duration, let present, let reason, let failure):
+            var fields = failure?.fields ?? [:]
+            fields["stage"] = .string(stage.rawValue)
+            fields["outcome"] = .string(outcome.rawValue)
+            fields["duration_ms"] = .integer(min(max(0, duration), 86_400_000))
+            if let present { fields["stored_session_present"] = .boolean(present) }
+            if let reason { fields["reason"] = .string(reason.rawValue) }
+            return fields
+        case .cloudSignInRequest(let endpoint, let outcome, let duration, let status, let reason, let failure):
+            var fields = failure?.fields ?? [:]
+            fields["endpoint"] = .string(endpoint.rawValue)
+            fields["outcome"] = .string(outcome.rawValue)
+            fields["duration_ms"] = .integer(min(max(0, duration), 86_400_000))
+            if let status, (100...599).contains(status) { fields["http_status"] = .integer(Int64(status)) }
+            if let reason { fields["reason"] = .string(reason.rawValue) }
+            return fields
+        case .cloudSignInPresentationAnchor(let available):
+            return ["available": .boolean(available)]
         case .cloudKitFailure(let operation, let failure):
             var fields = failure.fields
             fields["operation"] = .string(operation.rawValue)

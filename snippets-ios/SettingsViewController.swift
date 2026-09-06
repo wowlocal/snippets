@@ -1,5 +1,4 @@
 import UIKit
-import AuthenticationServices
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import LocalAuthentication
@@ -435,6 +434,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     private var didRevealHighlightedRow = false
     private var temporaryExportURL: URL?
     private var syncObservation: UUID?
+    private var cloudSignInInProgress = false
     private var cloudBootstrap: SnippetsCloudAccountBootstrap {
         environment.cloudBootstrap
     }
@@ -612,8 +612,8 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         case .exportDiagnostics:
             cell.textLabel?.text = "Export Diagnostic Logs"
             cell.detailTextLabel?.text = "Plaintext JSON Lines. Operation counts, CloudKit "
-                + "callback and scheduler states, and secure-snippet keywords may be included; "
-                + "bodies, names, tags, IDs, paths, keys and ciphertext are excluded."
+                + "callback and scheduler states, sign-in stages and HTTP status codes, and secure-snippet keywords may be included; "
+                + "bodies, names, tags, IDs, paths, email addresses, sign-in codes, tokens, keys and ciphertext are excluded."
             cell.imageView?.image = UIImage(systemName: "square.and.arrow.up")
             cell.textLabel?.textColor = AppTheme.tint
         case .deleteDiagnostics:
@@ -734,7 +734,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         guard selection.snippetsCloudEnabled else { return }
         let alert = UIAlertController(
             title: "Cloud Provider",
-            message: "Switch and Sync preserves the local library and the other cloud. iCloud continues using the existing CloudKit implementation.",
+            message: "Switch and Sync preserves your local library and the other cloud. Switching back to iCloud keeps your existing iCloud library.",
             preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: "iCloud", style: .default) { [weak self] _ in
             self?.confirmProviderSwitch(to: .iCloud)
@@ -882,11 +882,10 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             retryInterruptedCloudSignOut()
             return
         }
-        guard let bundled = SyncBackendSelectionStore.bundledServerURL,
-              SyncBackendSelectionStore.bundledOAuthRedirectURL != nil else {
+        guard let bundled = SyncBackendSelectionStore.bundledServerURL else {
             let unavailable = UIAlertController(
                 title: "Snippets Cloud Isn’t Configured",
-                message: "This build has no verified cloud endpoint and HTTPS sign-in callback. A self-hosted build must pin both at build time.",
+                message: "This build has no verified cloud endpoint. A self-hosted build must pin its server address at build time.",
                 preferredStyle: .alert)
             unavailable.addAction(UIAlertAction(title: "OK", style: .default))
             present(unavailable, animated: true)
@@ -906,7 +905,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     private func confirmUnreadableCloudCredentialReset() {
         let alert = UIAlertController(
             title: "Reset Unreadable Cloud Sign-In?",
-            message: "Snippets cannot verify the saved sign-in history or confirm that every older sign-in was disconnected. First revoke Snippets in your identity provider’s connected-app settings. Reset removes this device’s cloud connection and its access to open the library; local snippets and the cloud library are not deleted.",
+            message: "Snippets cannot verify the saved sign-in history or confirm that every older sign-in was disconnected. Unreadable sessions cannot be signed out remotely and may remain active until they expire. Reset removes this device’s cloud connection and its access to open the library; local snippets and the cloud library are not deleted.",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Reset This Device", style: .destructive) {
@@ -937,19 +936,29 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         selection: SyncBackendSelectionStore,
         changeAccount: Bool = false
     ) {
+        guard !cloudSignInInProgress else { return }
+        cloudSignInInProgress = true
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { cloudSignInInProgress = false }
             do {
                 let state = try await cloudBootstrap.signIn(
                     serverURL: serverURL,
                     changeAccount: changeAccount,
                     chooseLibrary: chooseCloudLibrary,
-                    presentationContext: self)
+                    authenticate: authenticateCloudAccount)
                 try presentCloudState(state)
+            } catch is CancellationError {
+                // The native sign-in sheet was cancelled.
+            } catch SnippetsCloudEmailSignInFailure.cancelled {
             } catch {
                 showError(title: "Couldn’t Sign In to Snippets Cloud", error: error)
             }
         }
+    }
+
+    private func authenticateCloudAccount(_ flow: SnippetsCloudEmailSignInFlow) async throws {
+        try await CloudEmailSignInViewController.authenticate(flow: flow, presenting: self)
     }
 
     private func confirmCloudAccountChange() {
@@ -1039,7 +1048,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                 guard let self else { return }
                 try self.presentCloudState(
                     try await self.cloudBootstrap.resumePostAuthorizationSetup(
-                        reauthenticatingIfNeededWith: self))
+                        reauthenticatingIfNeededWith: self.authenticateCloudAccount))
             }
         })
         present(alert, animated: true)
@@ -1290,6 +1299,8 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     ) {
         Task { @MainActor [weak self] in
             do { try await operation() }
+            catch is CancellationError { }
+            catch SnippetsCloudEmailSignInFailure.cancelled { }
             catch { self?.showError(title: title, error: error) }
         }
     }
@@ -1531,7 +1542,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
 private final class SnippetsCloudAccountViewController: UITableViewController {
     private enum Section: Int, CaseIterable { case account, sync, security, actions }
     private enum Action: CaseIterable {
-        case manageAccount, continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
+        case continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
         case changeAccount, changeLibrary, disconnect
     }
 
@@ -1686,8 +1697,6 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
         guard Section(rawValue: indexPath.section) == .actions else { return }
         switch visibleActions[indexPath.row] {
-        case .manageAccount:
-            if let url = environment.backendSelection.cloudAccountCenterURL { UIApplication.shared.open(url) }
         case .continueSetup, .saveRecovery: continueSetup()
         case .switchToCloud: switchToCloud()
         case .syncNow: syncNowAction()
@@ -1711,7 +1720,6 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
             (environment.backendSelection.provider == .snippetsCloud
                 ? [.syncNow]
                 : [.switchToCloud])
-                + (environment.backendSelection.cloudAccountCenterURL != nil ? [.manageAccount] : [])
                 + (bootstrap.hasPendingRecoveryKit ? [.saveRecovery] : [])
                 + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
         case .setupInterrupted:
@@ -1778,7 +1786,6 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
                 "Save and check recovery kit"
             default: "Continue setup"
             }
-        case .manageAccount: "Manage account and sign-in methods"
         case .saveRecovery: "Save recovery kit — recommended"
         case .switchToCloud: "Use Snippets Cloud for sync"
         case .syncNow: "Sync now"
@@ -1788,13 +1795,6 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .changeLibrary: "Change library"
         case .disconnect: "Disconnect this device"
         }
-    }
-}
-
-extension SettingsPaneViewController: ASWebAuthenticationPresentationContextProviding {
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        _ = session
-        return view.window!
     }
 }
 

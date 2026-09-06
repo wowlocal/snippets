@@ -15,6 +15,46 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
     private let accessGroup = "TESTTEAM.com.khm.snippets"
     private let service = "com.khm.snippets.keychain-policy-tests"
 
+    func testCloudSecretsStayIndependentAcrossReleaseDebugAndOldUnscopedServices() throws {
+        for kind in SnippetsCloudKeychainScope.Store.allCases {
+            let debugService = SnippetsCloudKeychainScope.service(
+                for: kind, bundleIdentifier: "com.khm.snippets.debug")
+            let releaseService = SnippetsCloudKeychainScope.service(
+                for: kind, bundleIdentifier: "com.khm.snippets")
+            let backends = [
+                kind.rawValue: KeychainOperationsProbe(),
+                debugService: KeychainOperationsProbe(),
+                releaseService: KeychainOperationsProbe(),
+            ]
+            func backend(_ query: CFDictionary) -> KeychainOperationsProbe? {
+                let service = (query as NSDictionary)[kSecAttrService] as? String
+                return service.flatMap { backends[$0] }
+            }
+            let operations = KeychainItemOperations(
+                copyMatching: { query, result in
+                    backend(query)?.copyMatching(query, result) ?? errSecParam
+                },
+                update: { query, values in backend(query)?.update(query, values) ?? errSecParam },
+                add: { query, result in backend(query)?.add(query, result) ?? errSecParam },
+                delete: { query in backend(query)?.delete(query) ?? errSecParam })
+            func store(_ service: String) -> KeychainSecretStore {
+                .init(tier: .deviceOnly, service: service,
+                      itemAccessibility: .afterFirstUnlock, keychainOperations: operations)
+            }
+            let old = store(kind.rawValue), release = store(releaseService), debug = store(debugService)
+            let account = "same-account"
+            try old.storeItem(Data("old-test-session".utf8), account: account)
+            try release.storeItem(Data("release-session".utf8), account: account)
+
+            XCTAssertNil(try debug.loadItem(account: account), "Debug must start independently")
+            try debug.storeItem(Data("debug-session".utf8), account: account)
+            try debug.deleteItem(account: account)
+
+            XCTAssertEqual(try release.loadItem(account: account), Data("release-session".utf8))
+            XCTAssertEqual(try old.loadItem(account: account), Data("old-test-session".utf8))
+        }
+    }
+
     func testCloudLibraryIdentifierUsesEightHexCharacters() {
         let choice = SnippetsCloudLibraryChoice(
             spaceID: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
@@ -788,14 +828,14 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             serverInstanceID: UUID(),
             accessToken: "test-access-token")
         let journal: [String: Any] = [
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "serverURL": "https://sync.example",
-            "issuer": "https://identity.example",
+            "issuer": "https://sync.example",
             "resource": "https://sync.example",
-            "revocationEndpoint": "https://identity.example/revoke",
-            "clientID": "snippets-native",
-            "accessTokens": ["old-access-token"],
-            "refreshTokens": ["old-refresh-token"],
+            "revocationEndpoint": "https://sync.example/v2/auth/revoke",
+            "clientID": "native-email-code-v1",
+            "accessTokens": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            "refreshTokens": ["rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"],
         ]
         try credentials.storeItem(
             JSONSerialization.data(withJSONObject: journal, options: [.sortedKeys]),

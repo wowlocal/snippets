@@ -175,6 +175,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var suppressMainWindowForColdServicePicker = false
     private var postLaunchServicesWorkItem: DispatchWorkItem?
     private var postLaunchServicesStarted = false
+    #if DEBUG
+    private var isIsolatedCloudIntegrationHost: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["SNIPPETS_CLOUD_E2E"] == "1"
+            && !(environment[SnippetStorageLocations.rootOverrideEnvironmentKey] ?? "").isEmpty
+    }
+    #endif
     private var shouldTerminateForReal = false
     private var terminationReplyPending = false
     #if !NO_SPARKLE
@@ -226,6 +233,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        // The opt-in integration test constructs and owns its isolated production
+        // stack. Its global sync override must never start a second host coordinator
+        // or the user's keychain-backed services while that test is awaiting I/O.
+        if isIsolatedCloudIntegrationHost { return }
         // `swift test` runs unsigned, so it can only ever exercise the login-keychain
         // tier. The data-protection tier — the one that carries the vault key to other
         // Macs through iCloud Keychain — needs the app's real entitlements, which means

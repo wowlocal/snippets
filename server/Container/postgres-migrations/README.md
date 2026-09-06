@@ -1,9 +1,10 @@
 # PostgreSQL migrations
 
 Snippets Cloud has not had a production deployment, so all pre-launch schema candidates
-were squashed into the empty-database baseline, version 1. The directory is intentionally
-empty until the first post-launch schema change. Add forward-only migrations as
-`0002_description.sql`, `0003_description.sql`, and so on. Migration files contain only
+were squashed into the empty-database baseline, version 1. Migration 2 adds encrypted
+library action authority; migration 3 adds isolated native email authentication. The
+current binary requires schema 3. Add subsequent forward-only migrations as
+`0004_description.sql` and so on. Migration files contain only
 the reviewed application DDL/data change. They must not modify
 `schema_migrations`/`schema_migration_checksums`, issue transaction control, or contain
 psql meta-commands. Version and checksum publication belong exclusively to the runner.

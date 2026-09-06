@@ -234,4 +234,4 @@ docker run --rm \
     --env DATABASE_OWNER_PASSWORD="$owner_password" \
     --env DATABASE_TLS_MODE=disable \
     golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 \
-    sh -c 'go test -race -v ./internal/postgres'
+    sh -c 'go test -race -v ./internal/postgres ./internal/auth'

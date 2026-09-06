@@ -24,6 +24,81 @@ private final class RecordingDiagnosticsSink: DiagnosticsSink, @unchecked Sendab
 
 @Suite("Persistent diagnostics privacy contract", .serialized)
 struct DiagnosticsTests {
+    @Test func cloudSignInRecordsAreBoundedAndExcludeAuthenticationErrorPayloads() throws {
+        let secret = "email@example.test code=SECRET-CODE token=SECRET-TOKEN https://secret.example/callback"
+        let failure = DiagnosticFailure(NSError(domain: NSURLErrorDomain, code: -1001,
+            userInfo: [NSLocalizedDescriptionKey: secret, NSURLErrorFailingURLStringErrorKey: secret]))
+        let events: [DiagnosticEvent] = [
+            .cloudSignIn(stage: .providerDiscovery, outcome: .failed,
+                durationMilliseconds: -8, storedSessionPresent: false,
+                reason: .identityProviderUnavailable, failure: failure),
+            .cloudSignInRequest(endpoint: .providerDiscovery, outcome: .failed,
+                durationMilliseconds: .max, httpStatus: 503, reason: .httpStatus, failure: failure),
+            .cloudSignInPresentationAnchor(available: false),
+        ]
+        let expectedFields: [Set<String>] = [
+            ["stage", "outcome", "duration_ms", "stored_session_present", "reason", "error_family", "error_code"],
+            ["endpoint", "outcome", "duration_ms", "http_status", "reason", "error_family", "error_code"],
+            ["available"],
+        ]
+        for (index, event) in events.enumerated() {
+            let record = DiagnosticRecord(event: event, timestamp: "2026-09-06T10:00:00.000Z",
+                elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: UInt64(index))
+            let data = try record.jsonLine()
+            let text = try #require(String(data: data, encoding: .utf8))
+            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let fields = try #require(object["fields"] as? [String: Any])
+            #expect(Set(fields.keys) == expectedFields[index])
+            #expect(object["category"] as? String == "sync")
+            #expect(!text.contains("SECRET"))
+            #expect(!text.contains("email@example"))
+            #expect(!text.contains("secret.example"))
+        }
+        #expect(events[0].fields["duration_ms"] == .integer(0))
+        #expect(events[1].fields["duration_ms"] == .integer(86_400_000))
+        #expect(events[1].fields["http_status"] == .integer(503))
+        let invalidStatus = DiagnosticEvent.cloudSignInRequest(endpoint: .token,
+            outcome: .failed, durationMilliseconds: 1, httpStatus: 100_000, reason: nil, failure: nil)
+        #expect(invalidStatus.fields["http_status"] == nil)
+    }
+
+    @Test func nativeEmailSignInUsesClosedPrivacySafeVocabulary() throws {
+        for (stage, endpoint) in [(DiagnosticCloudSignInStage.emailCodeSend, DiagnosticCloudSignInEndpoint.emailCodeSend),
+                                  (.emailCodeVerify, .emailCodeVerify)] {
+            for reason in [DiagnosticCloudSignInReason.invalidEmail, .invalidCode, .codeExpired, .tooManyAttempts, .rateLimited] {
+                let events: [DiagnosticEvent] = [
+                    .cloudSignIn(stage: stage, outcome: .failed, durationMilliseconds: 1,
+                                 storedSessionPresent: nil, reason: reason, failure: nil),
+                    .cloudSignInRequest(endpoint: endpoint, outcome: .failed, durationMilliseconds: 1,
+                                        httpStatus: 429, reason: reason, failure: nil)
+                ]
+                for event in events {
+                    let data = try DiagnosticRecord(event: event, timestamp: "2026-09-06T12:00:00.000Z", elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1).jsonLine()
+                    let text = String(decoding: data, as: UTF8.self)
+                    #expect(text.contains(reason.rawValue))
+                    #expect(!text.contains("challengeId"))
+                    #expect(!text.contains("refreshToken"))
+                }
+            }
+        }
+    }
+
+    @Test func cloudSignInOnlyCriticalBoundariesWriteSynchronously() {
+        func event(_ stage: DiagnosticCloudSignInStage, _ outcome: DiagnosticCloudSignInOutcome) -> DiagnosticEvent {
+            .cloudSignIn(stage: stage, outcome: outcome, durationMilliseconds: 1,
+                storedSessionPresent: nil, reason: nil, failure: nil)
+        }
+        #expect(event(.browserStart, .entered).requiresSynchronousWrite)
+        #expect(event(.storedSession, .failed).requiresSynchronousWrite)
+        #expect(event(.storedSession, .failed).defaultLevel == .error)
+        #expect(!event(.browserWaiting, .entered).requiresSynchronousWrite)
+        #expect(!event(.librarySetup, .succeeded).requiresSynchronousWrite)
+        #expect(!event(.browserWaiting, .cancelled).requiresSynchronousWrite)
+        #expect(event(.browserWaiting, .cancelled).defaultLevel == .info)
+        #expect(DiagnosticEvent.cloudSignInPresentationAnchor(available: false).requiresSynchronousWrite)
+        #expect(!DiagnosticEvent.cloudSignInPresentationAnchor(available: true).requiresSynchronousWrite)
+    }
+
     @Test func secureKeywordIsNormalizedBoundedAndUnicodeSafe() {
         let raw = "\\  launch   " + String(repeating: "ключслово ", count: 80)
         let keyword = DiagnosticKeyword(raw)

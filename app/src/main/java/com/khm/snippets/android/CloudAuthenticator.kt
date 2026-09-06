@@ -1,79 +1,24 @@
 package com.khm.snippets.android
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.util.Base64
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import net.openid.appauth.AuthorizationException
-import net.openid.appauth.AuthorizationRequest
-import net.openid.appauth.AuthorizationResponse
-import net.openid.appauth.AuthorizationService
-import net.openid.appauth.AuthorizationServiceConfiguration
-import net.openid.appauth.AuthorizationServiceDiscovery
-import net.openid.appauth.GrantTypeValues
-import net.openid.appauth.ResponseTypeValues
-import net.openid.appauth.TokenRequest
-import net.openid.appauth.TokenResponse
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
-import java.net.URLEncoder
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-
-internal data class CloudCredentialRevocationPlan(
-    val accessTokens: List<String>,
-    val refreshTokens: List<String>,
-)
-
-/** The durable journal wins if refresh crashed before replacing the primary session. */
-internal fun cloudCredentialRevocationPlan(
-    sessionAccessToken: String?,
-    sessionRefreshToken: String?,
-    journalAccessTokens: List<String>,
-    journalRefreshTokens: List<String>,
-): CloudCredentialRevocationPlan = CloudCredentialRevocationPlan(
-    accessTokens = (journalAccessTokens + listOfNotNull(sessionAccessToken)).distinct(),
-    refreshTokens = (journalRefreshTokens + listOfNotNull(sessionRefreshToken)).distinct(),
-)
+import java.util.UUID
 
 internal data class CloudCredentialReplacementCleanupPlan(
     val accessTokensToRetire: List<String>,
     val refreshTokensToRetire: List<String>,
 )
 
-/** The primary generation decides which side of an interactive replacement survived. */
-internal fun cloudCredentialReplacementCleanupPlan(
-    currentAccessToken: String?,
-    currentRefreshToken: String?,
-    journalAccessTokens: List<String>,
-    journalRefreshTokens: List<String>,
-): CloudCredentialReplacementCleanupPlan? {
-    if (journalAccessTokens.isEmpty() || journalRefreshTokens.isEmpty() ||
-        (currentAccessToken == null) != (currentRefreshToken == null)) return null
-    if (currentAccessToken != null && (
-            currentAccessToken !in journalAccessTokens ||
-                currentRefreshToken !in journalRefreshTokens
-            )) return null
-    return CloudCredentialReplacementCleanupPlan(
-        accessTokensToRetire = journalAccessTokens.filter { it != currentAccessToken },
-        refreshTokensToRetire = journalRefreshTokens.filter { it != currentRefreshToken },
-    )
-}
-
-/**
- * Browser-based OIDC for the native app. Passkeys, Apple and Google stay in the
- * system browser; Snippets has no password and does not require or consume email.
- * It persists only a minimal token session inside the device-bound encrypted store.
- * ID tokens and their profile claims are deliberately discarded.
- */
+/** Native email-code authentication; secrets remain in the device-bound encrypted store. */
 class CloudAuthenticator(
-    context: Context,
+    @Suppress("UNUSED_PARAMETER") context: Context,
     private val store: EncryptedStore,
 ) {
     data class CompletedAuthorization(
@@ -84,377 +29,162 @@ class CloudAuthenticator(
         val resumeBinding: CloudStepUpBinding?,
     )
 
-    private data class ServiceDiscovery(
-        val serverURL: String,
-        val issuer: String,
-        val resource: String,
-        val clientID: String,
-        val scopes: List<String>,
-        val maximumAccessTokenAgeSeconds: Int,
+    private data class PendingEmail(
+        val authority: NativeCloudAuthority,
+        val challenge: CloudEmailChallenge,
+        val accountChange: Boolean,
+        val stepUpBinding: CloudStepUpBinding?,
+        val resumeBinding: CloudStepUpBinding?,
     )
 
     private data class StoredSession(
-        val profile: JSONObject? = null,
-        val protocolMajor: Int,
-        val apiBaseURL: String,
         val serverURL: String,
-        val issuer: String,
-        val resource: String,
-        val authorizationEndpoint: String,
-        val tokenEndpoint: String,
-        val revocationEndpoint: String,
-        val clientID: String,
-        val maximumAccessTokenAgeSeconds: Int,
-        val accessToken: String,
-        val refreshToken: String,
+        val generation: NativeCloudCredentialGeneration,
+        val accountID: String,
+        val email: String,
         val expiresAtMillis: Long,
     )
 
-    private data class RevocationJournal(
+    private data class CredentialJournal(
         val serverURL: String,
-        val issuer: String,
-        val resource: String,
-        val revocationEndpoint: String,
-        val clientID: String,
-        val accessTokens: List<String>,
-        val refreshTokens: List<String>,
+        val generations: List<NativeCloudCredentialGeneration>,
     )
 
-    private val applicationContext = context.applicationContext
+    // Email and OTP are never written to pending state, diagnostics or saved-instance state.
+    private var pendingEmail: PendingEmail? = null
 
-    suspend fun authorizationIntent(
+    suspend fun startEmailSignIn(
         rawServerURL: String,
+        email: String,
         stepUp: Boolean = false,
         chooseAccount: Boolean = false,
         stepUpBinding: CloudStepUpBinding? = null,
         resumeBinding: CloudStepUpBinding? = null,
-    ): Intent = withContext(Dispatchers.IO) {
-        guard(!(stepUp && chooseAccount), "authorization_session_invalid")
-        guard(stepUp == (stepUpBinding != null), "authorization_session_invalid")
-        guard(stepUpBinding == null || resumeBinding == null, "authorization_session_invalid")
-        guard(!stepUp || resumeBinding == null, "authorization_session_invalid")
+    ): CloudEmailChallenge = withContext(Dispatchers.IO) {
+        cloudAuthGuard(!(stepUp && chooseAccount) && stepUp == (stepUpBinding != null) &&
+            (stepUpBinding == null || resumeBinding == null), "authorization_session_invalid")
+        val serverURL = configuredServerURL()
+        cloudAuthGuard(nativeCloudServerURL(rawServerURL) == serverURL, "server_identity_mismatch")
+        resumeBinding?.let { cloudAuthGuard(it.serverURL == serverURL, "authorization_session_invalid") }
+        cloudAuthGuard(email.toByteArray().size in 3..254 && email.contains('@') &&
+            email.none { it.isWhitespace() || it.isISOControl() }, "invalid_email")
         retireSupersededInteractiveSessions()
-        guard(store.read(AUTH_REVOCATION) == null, "credential_revocation_incomplete")
-        val pinnedServerURL = configuredServerURL()
-        guard(normalizedBaseURL(rawServerURL) == pinnedServerURL, "server_identity_mismatch")
-        resumeBinding?.let {
-            guard(it.serverURL == pinnedServerURL, "authorization_session_invalid")
-        }
-        val redirectURI = configuredRedirectURI()
-        val discovery = fetchServiceDiscovery(pinnedServerURL)
-        val oidcConfiguration = fetchOIDCConfiguration(discovery.issuer)
-        validateOIDCConfiguration(oidcConfiguration)
-        val revocationEndpoint = secureEndpoint(
-            oidcConfiguration.discoveryDoc?.docJson?.getString("revocation_endpoint")
-                ?: throw CloudAuthFailure("identity_provider_configuration_invalid"),
-        )
-        // Do not mint a new grant under an authority that cannot later revoke the
-        // active generation. This check happens before the browser is opened.
-        loadSession()?.let { current ->
-            guard(
-                current.serverURL == discovery.serverURL &&
-                    current.issuer == discovery.issuer &&
-                    current.resource == discovery.resource &&
-                    current.authorizationEndpoint == secureEndpoint(
-                        oidcConfiguration.authorizationEndpoint.toString(),
-                    ) && current.tokenEndpoint == secureEndpoint(
-                        oidcConfiguration.tokenEndpoint.toString(),
-                    ) && current.revocationEndpoint == revocationEndpoint &&
-                    current.clientID == discovery.clientID,
-                "authorization_state_invalid",
-            )
-        }
-
-        val builder = AuthorizationRequest.Builder(
-            oidcConfiguration,
-            discovery.clientID,
-            ResponseTypeValues.CODE,
-            redirectURI,
-        ).setScopes(discovery.scopes)
-        val parameters = mutableMapOf("resource" to discovery.resource)
-        if (stepUp) {
-            builder.setPrompt("login")
-            parameters["max_age"] = "0"
-        } else if (chooseAccount) {
-            builder.setPrompt("select_account")
-        }
-        builder.setAdditionalParameters(parameters)
-        val request = builder.build()
-        guard(!request.state.isNullOrBlank(), "authorization_session_invalid")
-        guard(!request.nonce.isNullOrBlank(), "authorization_session_invalid")
-        guard(
-            request.codeVerifierChallengeMethod == AuthorizationRequest.CODE_CHALLENGE_METHOD_S256 &&
-                !request.codeVerifier.isNullOrBlank(),
-            "authorization_session_invalid",
-        )
-        store.write(PENDING, JSONObject()
-            .put("schemaVersion", 5)
-            .put("serverURL", discovery.serverURL)
-            .put("issuer", discovery.issuer)
-            .put("resource", discovery.resource)
-            .put("clientID", discovery.clientID)
-            .put("redirectURI", redirectURI.toString())
-            .put("maximumAccessTokenAgeSeconds", discovery.maximumAccessTokenAgeSeconds)
-            .put("accountChange", chooseAccount && resumeBinding == null)
-            .put("stepUp", stepUp)
-            .also { value ->
-                stepUpBinding?.let { binding ->
-                    value.put("expectedServerInstanceID", binding.serverInstanceID)
-                        .put("expectedSpaceID", binding.spaceID)
-                        .put("expectedScopeBinding", binding.scopeBinding)
-                }
-            }
-            .put("resumeBootstrap", resumeBinding != null)
-            .also { value ->
-                resumeBinding?.let { binding ->
-                    value.put("resumeServerInstanceID", binding.serverInstanceID)
-                        .put("resumeSpaceID", binding.spaceID)
-                        .put("resumeScopeBinding", binding.scopeBinding)
-                }
-            }
-            .put("state", request.state)
-            .put("nonce", request.nonce)
-            .toString())
-
-        val service = AuthorizationService(applicationContext)
-        try {
-            service.getAuthorizationRequestIntent(request)
-        } finally {
-            service.dispose()
-        }
+        cloudAuthGuard(store.read(AUTH_REVOCATION) == null, "credential_revocation_incomplete")
+        loadSession()?.let { cloudAuthGuard(it.serverURL == serverURL, "authorization_state_invalid") }
+        val authority = NativeCloudAuthority.parse(serverURL,
+            requestJSON("$serverURL/.well-known/snippets-sync"))
+        val challenge = CloudEmailChallenge.parse(requestJSON(authority.startEndpoint,
+            JSONObject().put("email", email)))
+        pendingEmail = PendingEmail(authority, challenge, chooseAccount && resumeBinding == null,
+            stepUpBinding, resumeBinding)
+        challenge
     }
 
-    suspend fun completeAuthorization(intent: Intent?): CompletedAuthorization =
-        withContext(Dispatchers.IO) {
-            val pending = store.read(PENDING)?.let(::JSONObject)
-                ?: throw CloudAuthFailure("authorization_session_missing")
-            try {
-                guard(pending.optInt("schemaVersion") in 2..5, "authorization_session_missing")
-                val exception = intent?.let(AuthorizationException::fromIntent)
-                val response = intent?.let(AuthorizationResponse::fromIntent)
-                if (exception != null || response == null) {
-                    throw CloudAuthFailure("authorization_cancelled")
-                }
-                val clientID = pending.getString("clientID")
-                val resource = pending.getString("resource")
-                val redirectURI = configuredRedirectURI()
-                guard(response.request.clientId == clientID, "authorization_response_mismatch")
-                guard(response.request.redirectUri == redirectURI, "authorization_response_mismatch")
-                guard(pending.getString("redirectURI") == redirectURI.toString(), "authorization_response_mismatch")
-                guard(
-                    response.request.additionalParameters["resource"] == resource,
-                    "authorization_response_mismatch",
-                )
-                guard(response.state == pending.getString("state"), "authorization_response_mismatch")
-                guard(response.request.responseType == ResponseTypeValues.CODE, "authorization_response_mismatch")
-                guard(
-                    response.request.codeVerifierChallengeMethod ==
-                        AuthorizationRequest.CODE_CHALLENGE_METHOD_S256 &&
-                        !response.request.codeVerifier.isNullOrBlank(),
-                    "authorization_response_mismatch",
-                )
-                guard(
-                    response.request.configuration.discoveryDoc?.issuer == pending.getString("issuer"),
-                    "authorization_response_mismatch",
-                )
+    fun cancelEmailSignIn() { pendingEmail = null }
 
-                guard(response.request.nonce == pending.getString("nonce"), "authorization_response_mismatch")
-                val jwks = fetchIdentityKeys(response.request.configuration, pending.getString("issuer"))
-                val tokenResponse = performTokenRequest(
-                    response.createTokenExchangeRequest(mapOf("resource" to resource)),
-                )
-                var stored = sessionFromTokenResponse(
-                    serverURL = pending.getString("serverURL"),
-                    issuer = pending.getString("issuer"),
-                    resource = resource,
-                    configuration = response.request.configuration,
-                    clientID = clientID,
-                    maximumAccessTokenAgeSeconds = pending.getInt("maximumAccessTokenAgeSeconds"),
-                    response = tokenResponse,
-                )
-                // Journal old and candidate generations before publishing the staged
-                // session. A crash, chooser cancellation, or scope mismatch can then
-                // remotely retire the generation that did not become primary.
-                storeReplacementJournal(makeRevocationJournal(
-                    listOfNotNull(loadSession(), stored),
-                ))
-                try {
-                    stored = stored.copy(profile = VerifiedCloudProfile.verify(
-                        tokenResponse.idToken ?: throw CloudAuthFailure("authorization_response_mismatch"),
-                        stored.accessToken, jwks, pending.getString("issuer"), clientID, resource, pending.getString("nonce")))
-                } catch (_: Exception) { throw CloudAuthFailure("authorization_response_mismatch") }
-                // Keep an existing account usable until the repository has resolved
-                // and the user has confirmed the target library. The staged session
-                // is device-bound and survives process death with the chooser.
-                store.write(PENDING_AUTH_SESSION, stored.toJSON())
-                store.delete(LEGACY_AUTH_STATE)
-                store.delete(LEGACY_AUTH_SERVER)
-                CompletedAuthorization(
-                    serverURL = stored.serverURL,
-                    accessToken = stored.accessToken,
-                    accountChange = pending.optBoolean("accountChange", false),
-                    stepUpBinding = if (pending.optBoolean("stepUp", false)) {
-                        CloudStepUpBinding(
-                            serverURL = stored.serverURL,
-                            serverInstanceID = pending.getString("expectedServerInstanceID"),
-                            spaceID = pending.getString("expectedSpaceID"),
-                            scopeBinding = pending.getString("expectedScopeBinding"),
-                        ).also { binding ->
-                            guard(
-                                binding.scopeBinding.toByteArray().size in 32..256,
-                                "authorization_session_invalid",
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                    resumeBinding = if (pending.optBoolean("resumeBootstrap", false)) {
-                        CloudStepUpBinding(
-                            serverURL = stored.serverURL,
-                            serverInstanceID = pending.getString("resumeServerInstanceID"),
-                            spaceID = pending.getString("resumeSpaceID"),
-                            scopeBinding = pending.getString("resumeScopeBinding"),
-                        ).also { binding ->
-                            guard(
-                                binding.scopeBinding.toByteArray().size in 32..256,
-                                "authorization_session_invalid",
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                )
-            } finally {
-                store.delete(PENDING)
+    suspend fun completeEmailSignIn(challengeID: String, code: String): CompletedAuthorization =
+        withContext(Dispatchers.IO + NonCancellable) {
+            val pending = pendingEmail ?: throw CloudAuthFailure("authorization_session_missing")
+            cloudAuthGuard(pending.challenge.challengeID == challengeID &&
+                code.length == pending.challenge.codeLength && code.all { it in '0'..'9' }, "invalid_code")
+            val existing = loadSession()
+            val response = requestJSON(pending.authority.verifyEndpoint,
+                JSONObject().put("challengeId", challengeID).put("code", code))
+            val grantID = UUID.randomUUID().toString()
+            // A rejected profile or TTL must not orphan a successfully issued grant.
+            val token = NativeCloudTokenResponse.parseAfterJournaling(response, grantID) { issued ->
+                writeJournal(AUTH_REPLACEMENT, CredentialJournal(pending.authority.serverURL,
+                    listOfNotNull(existing?.generation, issued)))
             }
+            val stored = session(pending.authority.serverURL, token, grantID)
+            store.write(PENDING_AUTH_SESSION, stored.toJSON())
+            pendingEmail = null
+            CompletedAuthorization(stored.serverURL, stored.generation.accessToken,
+                pending.accountChange, pending.stepUpBinding, pending.resumeBinding)
         }
 
-    suspend fun freshAccessToken(
-        expectedServerURL: String,
-        forceRefresh: Boolean = false,
-    ): String = freshAccessToken(AUTH_SESSION, expectedServerURL, forceRefresh)
+    suspend fun freshAccessToken(expectedServerURL: String, forceRefresh: Boolean = false): String =
+        freshAccessToken(AUTH_SESSION, expectedServerURL, forceRefresh)
 
-    suspend fun freshPendingAccessToken(
-        expectedServerURL: String,
-        forceRefresh: Boolean = false,
-    ): String = freshAccessToken(PENDING_AUTH_SESSION, expectedServerURL, forceRefresh)
+    suspend fun freshPendingAccessToken(expectedServerURL: String, forceRefresh: Boolean = false): String =
+        freshAccessToken(PENDING_AUTH_SESSION, expectedServerURL, forceRefresh)
 
-    private suspend fun freshAccessToken(
-        sessionFile: String,
-        expectedServerURL: String,
-        forceRefresh: Boolean,
-    ): String = withContext(Dispatchers.IO) {
-        if (sessionFile == AUTH_SESSION) {
-            guard(store.read(AUTH_REPLACEMENT) == null, "credential_cleanup_required")
+    private suspend fun freshAccessToken(file: String, expectedServerURL: String,
+                                         forceRefresh: Boolean): String = withContext(Dispatchers.IO + NonCancellable) {
+        retireInterruptedRefresh()
+        if (file == AUTH_SESSION) cloudAuthGuard(store.read(AUTH_REPLACEMENT) == null,
+            "credential_cleanup_required")
+        val stored = loadSession(file) ?: throw CloudAuthFailure("sign_in_required")
+        cloudAuthGuard(stored.serverURL == nativeCloudServerURL(expectedServerURL) &&
+            stored.serverURL == configuredServerURL(), "sign_in_required")
+        if (!forceRefresh && stored.expiresAtMillis - System.currentTimeMillis() > 60_000) {
+            return@withContext stored.generation.accessToken
         }
-        val stored = loadSession(sessionFile) ?: throw CloudAuthFailure("sign_in_required")
-        val pinnedServerURL = configuredServerURL()
-        guard(
-            stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
-            stored.serverURL == pinnedServerURL &&
-                normalizedBaseURL(expectedServerURL) == pinnedServerURL,
-            "sign_in_required",
-        )
-        if (!forceRefresh &&
-            stored.expiresAtMillis - System.currentTimeMillis() > REFRESH_EARLY_MILLIS) {
-            return@withContext stored.accessToken
-        }
-        if (sessionFile == PENDING_AUTH_SESSION) {
-            val replacement = loadReplacementJournal(stored)
+        if (file == PENDING_AUTH_SESSION) {
+            val journal = loadJournal(AUTH_REPLACEMENT, stored.serverURL)
                 ?: throw CloudAuthFailure("authorization_state_invalid")
-            // Reserve room before asking the provider to mint a rotated generation;
-            // otherwise a full journal could strand the just-issued token.
-            guard(
-                replacement.accessTokens.size < 16 && replacement.refreshTokens.size < 16,
-                "authorization_state_invalid",
-            )
+            cloudAuthGuard(journal.generations.size < 16, "authorization_state_invalid")
         }
-
-        val configuration = AuthorizationServiceConfiguration(
-            Uri.parse(stored.authorizationEndpoint),
-            Uri.parse(stored.tokenEndpoint),
-        )
-        val request = TokenRequest.Builder(configuration, stored.clientID)
-            .setGrantType(GrantTypeValues.REFRESH_TOKEN)
-            .setRefreshToken(stored.refreshToken)
-            .setAdditionalParameters(mapOf("resource" to stored.resource))
-            .build()
-        val response = try {
-            performTokenRequest(request)
-        } catch (_: CloudAuthFailure) {
+        val response = requestJSON(NativeCloudAuthority.forServer(stored.serverURL).refreshEndpoint,
+            JSONObject().put("refreshToken", stored.generation.refreshToken))
+        val token = try {
+            NativeCloudTokenResponse.parseAfterJournaling(response, stored.generation.grantID,
+                stored.generation.refreshToken, stored.accountID) { issued ->
+                store.write(AUTH_REFRESH, JSONObject().put("schemaVersion", 1)
+                    .put("serverURL", stored.serverURL).put("sessionFile", file)
+                    .put("previous", generationJSON(stored.generation))
+                    .put("issued", generationJSON(issued)).toString())
+            }
+        } catch (_: Exception) {
+            try { retireInterruptedRefresh() }
+            catch (_: Exception) { throw CloudAuthFailure("credential_cleanup_required") }
             throw CloudAuthFailure("sign_in_required")
         }
-        val updated = sessionFromTokenResponse(
-            serverURL = stored.serverURL,
-            issuer = stored.issuer,
-            resource = stored.resource,
-            configuration = configuration,
-            clientID = stored.clientID,
-            maximumAccessTokenAgeSeconds = stored.maximumAccessTokenAgeSeconds,
-            response = response,
-            previousRefreshToken = stored.refreshToken,
-            previousRevocationEndpoint = stored.revocationEndpoint,
-        ).copy(profile = stored.profile)
-        // If logout forced this refresh, journal both generations before replacing
-        // the stored session. Process death cannot otherwise strand the old refresh
-        // token at a provider that does not invalidate it during rotation.
-        if (sessionFile == AUTH_SESSION) {
-            extendRevocationJournalIfPresent(listOf(stored, updated))
-        } else if (sessionFile == PENDING_AUTH_SESSION) {
-            extendReplacementJournalIfPresent(listOf(stored, updated))
+        val updated = session(stored.serverURL, token, stored.generation.grantID)
+        val journalFile = if (file == PENDING_AUTH_SESSION) AUTH_REPLACEMENT else AUTH_REVOCATION
+        loadJournal(journalFile, stored.serverURL)?.let {
+            writeJournal(journalFile, it.copy(generations =
+                (it.generations + listOf(stored.generation, updated.generation)).distinct()))
         }
-        store.write(sessionFile, updated.toJSON())
-        updated.accessToken
+        store.write(file, updated.toJSON())
+        retireInterruptedRefresh()
+        updated.generation.accessToken
     }
 
-    fun hasSession(serverURL: String? = null): Boolean {
-        return try {
-            if (store.read(AUTH_REPLACEMENT) != null) return false
-            val stored = loadSession() ?: return false
-            val pinnedServerURL = configuredServerURL()
-            stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
-                stored.serverURL == pinnedServerURL &&
-                (serverURL == null || normalizedBaseURL(serverURL) == pinnedServerURL)
-        } catch (_: Exception) {
-            false
-        }
+    fun hasSession(serverURL: String? = null): Boolean = runCatching {
+        store.read(AUTH_REPLACEMENT) == null && store.read(AUTH_REFRESH) == null &&
+            hasSessionFile(AUTH_SESSION, serverURL)
+    }.getOrDefault(false)
+
+    fun hasPendingAuthorization(serverURL: String? = null): Boolean = runCatching {
+        hasSessionFile(PENDING_AUTH_SESSION, serverURL)
+    }.getOrDefault(false)
+
+    private fun hasSessionFile(file: String, serverURL: String?): Boolean {
+        val session = loadSession(file) ?: return false
+        return session.serverURL == configuredServerURL() &&
+            (serverURL == null || session.serverURL == nativeCloudServerURL(serverURL))
     }
 
-    fun hasPendingAuthorization(serverURL: String? = null): Boolean {
-        return try {
-            val stored = loadSession(PENDING_AUTH_SESSION) ?: return false
-            val pinnedServerURL = configuredServerURL()
-            stored.protocolMajor == 2 && stored.apiBaseURL == stored.serverURL + "/v2" &&
-                stored.serverURL == pinnedServerURL &&
-                (serverURL == null || normalizedBaseURL(serverURL) == pinnedServerURL)
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    /** Commits a previously staged browser session after library confirmation. */
     fun commitPendingAuthorization(expectedServerURL: String) {
+        retireInterruptedRefresh()
         val candidate = loadSession(PENDING_AUTH_SESSION)
             ?: throw CloudAuthFailure("authorization_state_invalid")
-        guard(
-            candidate.serverURL == normalizedBaseURL(expectedServerURL),
-            "authorization_state_invalid",
-        )
-        guard(store.read(AUTH_REPLACEMENT) != null, "authorization_state_invalid")
+        cloudAuthGuard(candidate.serverURL == nativeCloudServerURL(expectedServerURL) &&
+            candidate.serverURL == configuredServerURL(), "authorization_state_invalid")
+        val journal = loadJournal(AUTH_REPLACEMENT, candidate.serverURL)
+            ?: throw CloudAuthFailure("authorization_state_invalid")
+        cloudAuthGuard(candidate.generation in journal.generations, "authorization_state_invalid")
         store.write(AUTH_SESSION, candidate.toJSON())
     }
 
-    /** Retires the superseded grant after the repository cleared its commit marker. */
-    suspend fun finalizePendingAuthorization() {
-        retireSupersededInteractiveSessions()
-    }
+    suspend fun finalizePendingAuthorization() { retireSupersededInteractiveSessions() }
 
-    /** Cancels and remotely retires the uncommitted browser grant. */
     suspend fun discardPendingAuthorization() {
-        store.delete(PENDING)
+        pendingEmail = null
         val candidate = loadSession(PENDING_AUTH_SESSION)
         if (store.read(AUTH_REPLACEMENT) == null && candidate != null) {
-            storeReplacementJournal(makeRevocationJournal(listOf(candidate)))
+            writeJournal(AUTH_REPLACEMENT, CredentialJournal(candidate.serverURL, listOf(candidate.generation)))
         }
         retireSupersededInteractiveSessions()
     }
@@ -463,660 +193,192 @@ class CloudAuthenticator(
         runCatching { store.read(AUTH_REVOCATION) != null }.getOrDefault(true)
 
     fun hasPendingCredentialCleanup(): Boolean =
-        runCatching { store.read(AUTH_REPLACEMENT) != null }.getOrDefault(true)
+        runCatching { store.read(AUTH_REPLACEMENT) != null || store.read(AUTH_REFRESH) != null }.getOrDefault(true)
 
     suspend fun revokeCurrentSession() = withContext(Dispatchers.IO) {
         retireSupersededInteractiveSessions()
-        val initialSession = loadSession()
-        if (initialSession == null) {
-            guard(store.read(AUTH_REVOCATION) == null, "authorization_state_invalid")
-        } else {
-            val session = initialSession
-            val journal = loadRevocationJournal(session)
-                ?: makeRevocationJournal(listOf(session)).also(::storeRevocationJournal)
-            val plan = cloudCredentialRevocationPlan(
-                sessionAccessToken = session.accessToken,
-                sessionRefreshToken = session.refreshToken,
-                journalAccessTokens = journal.accessTokens,
-                journalRefreshTokens = journal.refreshTokens,
-            )
-            // A 401 for the old primary session must not trigger refresh: after a
-            // crash the usable rotated access token may exist only in the journal.
-            // Iterate every generation; provider revocation then closes every
-            // refresh token that could mint another one.
-            plan.accessTokens.forEach { token ->
-                val resourceStatus = revokeResourceAccessToken(session.serverURL, token)
-                guard(
-                    resourceStatus == 204 || resourceStatus == 401,
-                    "credential_revocation_failed",
-                )
-            }
-            revokeProviderCredentials(session, plan)
-            // The journal remains until the repository durably commits local erase.
-            // A crash in that handoff repeats both idempotent revocation protocols.
-        }
+        val current = loadSession()
+        val journal = loadJournal(AUTH_REVOCATION, current?.serverURL)
+            ?: current?.let { CredentialJournal(it.serverURL, listOf(it.generation)) }
+                ?.also { writeJournal(AUTH_REVOCATION, it) }
+            ?: return@withContext
+        retire(journal.serverURL, journal.generations.map { it.accessToken }.distinct(),
+            journal.generations.map { it.refreshToken }.distinct())
+        // Keep the journal until the repository commits the local erase.
     }
 
     fun forgetLocalSession() {
-        store.delete(PENDING)
-        store.delete(PENDING_AUTH_SESSION)
-        store.delete(AUTH_SESSION)
-        store.delete(LEGACY_AUTH_STATE)
-        store.delete(LEGACY_AUTH_SERVER)
-        store.delete(AUTH_REVOCATION)
-        store.delete(AUTH_REPLACEMENT)
-    }
-
-    private suspend fun performTokenRequest(request: TokenRequest): TokenResponse {
-        val service = AuthorizationService(applicationContext)
-        try {
-            return suspendCancellableCoroutine { continuation ->
-                service.performTokenRequest(request) { tokenResponse, exception ->
-                    if (!continuation.isActive) return@performTokenRequest
-                    if (exception != null || tokenResponse == null) {
-                        continuation.resumeWithException(CloudAuthFailure("token_exchange_failed"))
-                    } else {
-                        continuation.resume(tokenResponse)
-                    }
-                }
-            }
-        } finally {
-            service.dispose()
-        }
-    }
-
-    private fun sessionFromTokenResponse(
-        serverURL: String,
-        issuer: String,
-        resource: String,
-        configuration: AuthorizationServiceConfiguration,
-        clientID: String,
-        maximumAccessTokenAgeSeconds: Int,
-        response: TokenResponse,
-        previousRefreshToken: String? = null,
-        previousRevocationEndpoint: String? = null,
-    ): StoredSession {
-        guard(response.tokenType?.equals("Bearer", ignoreCase = true) == true, "token_exchange_failed")
-        val accessToken = response.accessToken ?: throw CloudAuthFailure("access_token_missing")
-        val refreshToken = response.refreshToken ?: throw CloudAuthFailure("refresh_token_missing")
-        guard(previousRefreshToken == null || refreshToken != previousRefreshToken, "refresh_token_not_rotated")
-        validateToken(accessToken, "access_token_missing")
-        validateToken(refreshToken, "refresh_token_missing")
-        validateResourceAudience(accessToken, resource)
-        val now = System.currentTimeMillis()
-        val expiresAt = response.accessTokenExpirationTime
-            ?: throw CloudAuthFailure("token_exchange_failed")
-        guard(
-            expiresAt >= now + MIN_TOKEN_LIFETIME_MILLIS &&
-                expiresAt <= now + MAX_TOKEN_LIFETIME_MILLIS,
-            "token_exchange_failed",
-        )
-        return StoredSession(
-            protocolMajor = 2,
-            apiBaseURL = normalizedBaseURL(serverURL) + "/v2",
-            serverURL = normalizedBaseURL(serverURL),
-            issuer = normalizedIssuer(issuer),
-            resource = normalizedBaseURL(resource),
-            authorizationEndpoint = secureEndpoint(configuration.authorizationEndpoint.toString()),
-            tokenEndpoint = secureEndpoint(configuration.tokenEndpoint.toString()),
-            revocationEndpoint = previousRevocationEndpoint ?: secureEndpoint(
-                configuration.discoveryDoc?.docJson?.getString("revocation_endpoint")
-                    ?: throw CloudAuthFailure("identity_provider_configuration_invalid"),
-            ),
-            clientID = clientID.also {
-                guard(it.isNotBlank() && it.toByteArray().size <= 256, "token_exchange_failed")
-            },
-            maximumAccessTokenAgeSeconds = maximumAccessTokenAgeSeconds.also {
-                guard(it in 60..86_400, "token_exchange_failed")
-            },
-            accessToken = accessToken,
-            refreshToken = refreshToken,
-            expiresAtMillis = minOf(
-                expiresAt,
-                now + maximumAccessTokenAgeSeconds * 1_000L,
-            ),
-        )
-    }
-
-    private fun StoredSession.toJSON(): String = JSONObject()
-        .put("profile", profile)
-        .put("schemaVersion", 5)
-        .put("protocolMajor", protocolMajor)
-        .put("apiBaseURL", apiBaseURL)
-        .put("serverURL", serverURL)
-        .put("issuer", issuer)
-        .put("resource", resource)
-        .put("authorizationEndpoint", authorizationEndpoint)
-        .put("tokenEndpoint", tokenEndpoint)
-        .put("revocationEndpoint", revocationEndpoint)
-        .put("clientID", clientID)
-        .put("maximumAccessTokenAgeSeconds", maximumAccessTokenAgeSeconds)
-        .put("accessToken", accessToken)
-        .put("refreshToken", refreshToken)
-        .put("expiresAtMillis", expiresAtMillis)
-        .toString()
-        .also { guard(it.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid") }
-
-    private fun loadSession(sessionFile: String = AUTH_SESSION): StoredSession? {
-        val raw = store.read(sessionFile) ?: return null
-        try {
-            guard(raw.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid")
-            val value = JSONObject(raw)
-            val schemaVersion = value.optInt("schemaVersion")
-            guard(schemaVersion == 4 || schemaVersion == 5, "authorization_state_invalid")
-            val clientID = value.getString("clientID")
-            guard(
-                clientID.isNotBlank() && clientID.toByteArray().size <= 256,
-                "authorization_state_invalid",
-            )
-            val accessToken = value.getString("accessToken")
-            val refreshToken = value.getString("refreshToken")
-            val maximumAccessTokenAgeSeconds = value.getInt("maximumAccessTokenAgeSeconds")
-            guard(
-                maximumAccessTokenAgeSeconds in 60..86_400,
-                "authorization_state_invalid",
-            )
-            validateToken(accessToken, "authorization_state_invalid")
-            validateToken(refreshToken, "authorization_state_invalid")
-            val expiresAt = value.getLong("expiresAtMillis")
-            val now = System.currentTimeMillis()
-            guard(
-                expiresAt > 0 && expiresAt <= now + MAX_TOKEN_LIFETIME_MILLIS,
-                "authorization_state_invalid",
-            )
-            val serverURL = normalizedBaseURL(value.getString("serverURL"))
-            val protocolMajor = if (schemaVersion == 5) value.getInt("protocolMajor") else 1
-            val apiBaseURL = if (schemaVersion == 5) value.getString("apiBaseURL") else "$serverURL/v1"
-            guard(
-                (schemaVersion == 4 && protocolMajor == 1 && apiBaseURL == "$serverURL/v1") ||
-                    (schemaVersion == 5 && protocolMajor == 2 && apiBaseURL == "$serverURL/v2"),
-                "authorization_state_invalid",
-            )
-            val resource = normalizedBaseURL(value.getString("resource"))
-            guard(resource == serverURL, "authorization_state_invalid")
-            return StoredSession(
-                profile = value.optJSONObject("profile"),
-                protocolMajor = protocolMajor,
-                apiBaseURL = apiBaseURL,
-                serverURL = serverURL,
-                issuer = normalizedIssuer(value.getString("issuer")),
-                resource = resource,
-                authorizationEndpoint = secureEndpoint(value.getString("authorizationEndpoint")),
-                tokenEndpoint = secureEndpoint(value.getString("tokenEndpoint")),
-                revocationEndpoint = secureEndpoint(value.getString("revocationEndpoint")),
-                clientID = clientID,
-                maximumAccessTokenAgeSeconds = maximumAccessTokenAgeSeconds,
-                accessToken = accessToken,
-                refreshToken = refreshToken,
-                expiresAtMillis = expiresAt,
-            )
-        } catch (failure: CloudAuthFailure) {
-            throw failure
-        } catch (_: Exception) {
-            throw CloudAuthFailure("authorization_state_invalid")
-        }
+        pendingEmail = null
+        listOf(AUTH_SESSION, PENDING_AUTH_SESSION, AUTH_REVOCATION, AUTH_REPLACEMENT, AUTH_REFRESH).forEach(store::delete)
     }
 
     fun accountDisplayName(): String = runCatching {
-        val profile = loadSession()?.profile
-        profile?.optString("name")?.takeIf { it.isNotBlank() }
-            ?: profile?.optString("email")?.takeIf { it.isNotBlank() } ?: "Snippets Cloud account"
+        loadSession()?.email ?: "Snippets Cloud account"
     }.getOrDefault("Snippets Cloud account")
 
-    private fun fetchIdentityKeys(configuration: AuthorizationServiceConfiguration, issuer: String): JSONObject {
-        val uri = URI(configuration.discoveryDoc?.docJson?.getString("jwks_uri")
-            ?: throw CloudAuthFailure("identity_provider_configuration_invalid"))
-        val authority = URI(issuer)
-        guard(uri.scheme == "https" && uri.host == authority.host && uri.port == authority.port &&
-            uri.userInfo == null && uri.fragment == null, "identity_provider_configuration_invalid")
-        val connection = uri.toURL().openConnection() as HttpURLConnection
-        try {
-            connection.connectTimeout = 15_000; connection.readTimeout = 15_000
-            connection.instanceFollowRedirects = false
-            guard(connection.responseCode == 200, "identity_provider_unavailable")
-            return JSONObject(readBounded(connection.inputStream, DISCOVERY_MAX_BYTES).toString(Charsets.UTF_8))
-        } finally { connection.disconnect() }
-    }
+    private fun session(serverURL: String, token: NativeCloudTokenResponse, grantID: String) =
+        StoredSession(serverURL, NativeCloudCredentialGeneration(grantID, token.accessToken,
+            token.refreshToken), token.accountID, token.email,
+            System.currentTimeMillis() + token.expiresIn * 1_000L)
 
-    private fun fetchOIDCConfiguration(issuer: String): AuthorizationServiceConfiguration {
-        try {
-            val discoveryURL = URI(issuer.trimEnd('/') + "/.well-known/openid-configuration")
-                .toURL()
-            val connection = discoveryURL.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 15_000
-            connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Accept", "application/json")
-            val status = connection.responseCode
-            val data = readBounded(
-                if (status == 200) connection.inputStream else connection.errorStream,
-                DISCOVERY_MAX_BYTES,
-            )
-            guard(status == 200, "identity_provider_unavailable")
-            val document = JSONObject(data.toString(Charsets.UTF_8))
-            guard(document.getString("issuer") == issuer, "identity_provider_configuration_invalid")
-            return AuthorizationServiceConfiguration(AuthorizationServiceDiscovery(document))
-        } catch (failure: CloudAuthFailure) {
-            throw failure
-        } catch (_: Exception) {
-            throw CloudAuthFailure("identity_provider_unavailable")
-        }
-    }
+    private fun StoredSession.toJSON(): String = JSONObject()
+        .put("schemaVersion", 1).put("serverURL", serverURL)
+        .put("accountID", accountID).put("email", email).put("expiresAtMillis", expiresAtMillis)
+        .put("generation", generationJSON(generation)).toString()
 
-    private fun fetchServiceDiscovery(rawServerURL: String): ServiceDiscovery {
-        val serverURL = normalizedBaseURL(rawServerURL)
-        val connection = URI("$serverURL/")
-            .resolve(".well-known/snippets-sync")
-            .toURL()
-            .openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 15_000
-        connection.instanceFollowRedirects = false
-        connection.setRequestProperty("Accept", "application/json")
-        val status = connection.responseCode
-        val data = readBounded(
-            if (status in 200..299) connection.inputStream else connection.errorStream,
-            DISCOVERY_MAX_BYTES,
-        )
-        if (status != 200) throw CloudAuthFailure("server_discovery_failed")
-        val value = try {
-            JSONObject(data.toString(Charsets.UTF_8))
-        } catch (_: Exception) {
-            throw CloudAuthFailure("server_discovery_invalid")
-        }
-        guard(value.optInt("protocolMajor") == 2, "server_protocol_incompatible")
-        guard(
-            value.getString("apiBase") == "$serverURL/v2",
-            "server_identity_mismatch",
-        )
-        val oidc = value.getJSONObject("oidc")
-        guard(oidc.optString("authorizationFlow") == "authorization_code_pkce", "server_auth_insecure")
-        val capabilities = value.getJSONArray("capabilities").strings(maximumUTF8Bytes = 64)
-        guard(
-            "oidc-pkce" in capabilities && "oauth-resource-indicators" in capabilities &&
-                "oauth-token-revocation" in capabilities &&
-                "resource-session-revocation" in capabilities &&
-                "account-without-required-email" in capabilities &&
-                "library-action-proof-v1" in capabilities &&
-                "pairing-v2" in capabilities && "offline-recovery-v1" in capabilities,
-            "server_auth_insecure",
-        )
-        val scopes = oidc.getJSONArray("scopes").strings(maximumUTF8Bytes = 64)
-        guard("openid" in scopes && "offline_access" in scopes, "server_auth_insecure")
-        val issuer = normalizedIssuer(oidc.getString("issuer"))
-        val resource = normalizedBaseURL(oidc.getString("resource"))
-        guard(resource == serverURL, "server_identity_mismatch")
-        val clientID = oidc.getString("clientId")
-        val maximumAccessTokenAgeSeconds = oidc.getInt("maxAccessTokenAgeSeconds")
-        guard(clientID.isNotBlank() && clientID.toByteArray().size <= 256, "server_discovery_invalid")
-        guard(maximumAccessTokenAgeSeconds in 60..86_400, "server_discovery_invalid")
-        return ServiceDiscovery(
-            serverURL = serverURL,
-            issuer = issuer,
-            resource = resource,
-            clientID = clientID,
-            scopes = scopes,
-            maximumAccessTokenAgeSeconds = maximumAccessTokenAgeSeconds,
-        )
-    }
-
-    private fun validateOIDCConfiguration(configuration: AuthorizationServiceConfiguration) {
-        listOf(configuration.authorizationEndpoint, configuration.tokenEndpoint).forEach { endpoint ->
-            val uri = URI(endpoint.toString())
-            guard(
-                uri.scheme == "https" && uri.host != null && uri.userInfo == null && uri.fragment == null,
-                "identity_provider_configuration_invalid",
-            )
-        }
-        val document = configuration.discoveryDoc?.docJson
-            ?: throw CloudAuthFailure("identity_provider_configuration_invalid")
-        val methods = document.optJSONArray("code_challenge_methods_supported")
-            ?: throw CloudAuthFailure("identity_provider_configuration_invalid")
-        guard(
-            (0 until methods.length()).map(methods::getString).contains("S256"),
-            "identity_provider_configuration_invalid",
-        )
-        secureEndpoint(document.getString("revocation_endpoint"))
-    }
-
-    private fun revokeResourceAccessToken(serverURL: String, accessToken: String): Int {
-        try {
-            val connection = URI("$serverURL/v2/session").toURL()
-                .openConnection() as HttpURLConnection
-            connection.requestMethod = "DELETE"
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 15_000
-            connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("Authorization", "Bearer $accessToken")
-            val status = connection.responseCode
-            val body = readBounded(
-                if (status == 204) connection.inputStream else connection.errorStream,
-                DISCOVERY_MAX_BYTES,
-            )
-            guard(status != 204 || body.isEmpty(), "credential_revocation_failed")
-            return status
-        } catch (failure: CloudAuthFailure) {
-            throw failure
-        } catch (_: Exception) {
-            throw CloudAuthFailure("credential_revocation_failed")
-        }
-    }
-
-    private fun revokeProviderCredentials(
-        session: StoredSession,
-        plan: CloudCredentialRevocationPlan,
-    ) = revokeProviderCredentials(
-        revocationEndpoint = session.revocationEndpoint,
-        clientID = session.clientID,
-        plan = plan,
-    )
-
-    private fun revokeProviderCredentials(
-        revocationEndpoint: String,
-        clientID: String,
-        plan: CloudCredentialRevocationPlan,
-    ) {
-        try {
-            fun revoke(token: String, hint: String) {
-                val values = linkedMapOf(
-                    "client_id" to clientID,
-                    "token" to token,
-                    "token_type_hint" to hint,
-                )
-                val body = values.entries.joinToString("&") { (key, value) ->
-                    "${URLEncoder.encode(key, Charsets.UTF_8.name())}=" +
-                        URLEncoder.encode(value, Charsets.UTF_8.name())
-                }.toByteArray(Charsets.UTF_8)
-                val connection = URI(revocationEndpoint).toURL()
-                    .openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 15_000
-                connection.instanceFollowRedirects = false
-                connection.doOutput = true
-                connection.setFixedLengthStreamingMode(body.size)
-                connection.setRequestProperty("Accept", "application/json")
-                connection.setRequestProperty(
-                    "Content-Type",
-                    "application/x-www-form-urlencoded",
-                )
-                connection.outputStream.use { it.write(body) }
-                val status = connection.responseCode
-                readBounded(
-                    if (status == 200) connection.inputStream else connection.errorStream,
-                    DISCOVERY_MAX_BYTES,
-                )
-                guard(status == 200, "credential_revocation_failed")
-            }
-            plan.accessTokens.forEach {
-                revoke(it, "access_token")
-            }
-            plan.refreshTokens.forEach {
-                revoke(it, "refresh_token")
-            }
-        } catch (failure: CloudAuthFailure) {
-            throw failure
-        } catch (_: Exception) {
-            throw CloudAuthFailure("credential_revocation_failed")
-        }
-    }
-
-    private fun makeRevocationJournal(sessions: List<StoredSession>): RevocationJournal {
-        val first = sessions.first()
-        guard(sessions.all { session ->
-            session.serverURL == first.serverURL && session.issuer == first.issuer &&
-                session.resource == first.resource &&
-                session.revocationEndpoint == first.revocationEndpoint &&
-                session.clientID == first.clientID
-        }, "authorization_state_invalid")
-        return RevocationJournal(
-            serverURL = first.serverURL,
-            issuer = first.issuer,
-            resource = first.resource,
-            revocationEndpoint = first.revocationEndpoint,
-            clientID = first.clientID,
-            accessTokens = sessions.map(StoredSession::accessToken).distinct(),
-            refreshTokens = sessions.map(StoredSession::refreshToken).distinct(),
-        )
-    }
-
-    private fun extendRevocationJournalIfPresent(sessions: List<StoredSession>) {
-        val first = sessions.first()
-        val existing = loadRevocationJournal(first) ?: return
-        storeRevocationJournal(existing.copy(
-            accessTokens = (existing.accessTokens + sessions.map(StoredSession::accessToken)).distinct(),
-            refreshTokens = (existing.refreshTokens + sessions.map(StoredSession::refreshToken)).distinct(),
-        ))
-    }
-
-    private fun extendReplacementJournalIfPresent(sessions: List<StoredSession>) {
-        val first = sessions.first()
-        val existing = loadReplacementJournal(first)
-            ?: throw CloudAuthFailure("authorization_state_invalid")
-        storeReplacementJournal(existing.copy(
-            accessTokens = (existing.accessTokens +
-                sessions.map(StoredSession::accessToken)).distinct(),
-            refreshTokens = (existing.refreshTokens +
-                sessions.map(StoredSession::refreshToken)).distinct(),
-        ))
-    }
-
-    private fun storeRevocationJournal(journal: RevocationJournal) {
-        storeCredentialJournal(AUTH_REVOCATION, journal)
-    }
-
-    private fun storeReplacementJournal(journal: RevocationJournal) {
-        storeCredentialJournal(AUTH_REPLACEMENT, journal)
-    }
-
-    private fun storeCredentialJournal(file: String, journal: RevocationJournal) {
-        guard(
-            journal.accessTokens.size in 1..16 && journal.refreshTokens.size in 1..16,
-            "authorization_state_invalid",
-        )
-        val value = JSONObject()
-            .put("schemaVersion", 1)
-            .put("serverURL", journal.serverURL)
-            .put("issuer", journal.issuer)
-            .put("resource", journal.resource)
-            .put("revocationEndpoint", journal.revocationEndpoint)
-            .put("clientID", journal.clientID)
-            .put("accessTokens", JSONArray(journal.accessTokens))
-            .put("refreshTokens", JSONArray(journal.refreshTokens))
-            .toString()
-        guard(value.toByteArray().size <= REVOCATION_MAX_BYTES, "authorization_state_invalid")
-        store.write(file, value)
-    }
-
-    private fun loadRevocationJournal(session: StoredSession): RevocationJournal? {
-        return loadCredentialJournal(AUTH_REVOCATION, session)
-    }
-
-    private fun loadReplacementJournal(session: StoredSession): RevocationJournal? {
-        return loadCredentialJournal(AUTH_REPLACEMENT, session)
-    }
-
-    private fun loadCredentialJournal(
-        file: String,
-        session: StoredSession? = null,
-    ): RevocationJournal? {
+    private fun loadSession(file: String = AUTH_SESSION): StoredSession? {
         val raw = store.read(file) ?: return null
         try {
-            guard(raw.toByteArray().size <= REVOCATION_MAX_BYTES, "authorization_state_invalid")
+            cloudAuthGuard(raw.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid")
             val value = JSONObject(raw)
-            val expected = setOf(
-                "schemaVersion", "serverURL", "issuer", "resource",
-                "revocationEndpoint", "clientID", "accessTokens", "refreshTokens",
-            )
-            guard(value.keys().asSequence().toSet() == expected, "authorization_state_invalid")
-            guard(value.getInt("schemaVersion") == 1, "authorization_state_invalid")
-            val accessTokens = tokenArray(value.getJSONArray("accessTokens"))
-            val refreshTokens = tokenArray(value.getJSONArray("refreshTokens"))
-            val journal = RevocationJournal(
-                serverURL = normalizedBaseURL(value.getString("serverURL")),
-                issuer = normalizedIssuer(value.getString("issuer")),
-                resource = normalizedBaseURL(value.getString("resource")),
-                revocationEndpoint = secureEndpoint(value.getString("revocationEndpoint")),
-                clientID = value.getString("clientID"),
-                accessTokens = accessTokens,
-                refreshTokens = refreshTokens,
-            )
-            if (session != null) {
-                guard(
-                    journal.serverURL == session.serverURL && journal.issuer == session.issuer &&
-                        journal.resource == session.resource &&
-                        journal.revocationEndpoint == session.revocationEndpoint &&
-                        journal.clientID == session.clientID,
-                    "authorization_state_invalid",
-                )
+            cloudAuthGuard(value.optInt("schemaVersion") == 1, "authorization_state_invalid")
+            val serverURL = nativeCloudServerURL(value.getString("serverURL"))
+            cloudAuthGuard(serverURL == configuredServerURL(), "authorization_state_invalid")
+            val generation = parseGeneration(value.getJSONObject("generation"))
+            val accountID = value.getString("accountID")
+            val email = value.getString("email")
+            val expiresAt = value.getLong("expiresAtMillis")
+            cloudAuthGuard(accountID.toByteArray().size in 1..256 && accountID.none(Char::isISOControl) &&
+                email.toByteArray().size in 3..254 && email.contains('@') &&
+                email.none { it.isWhitespace() || it.isISOControl() } && expiresAt > 0 &&
+                expiresAt <= System.currentTimeMillis() + 300_000L, "authorization_state_invalid")
+            return StoredSession(serverURL, generation, accountID, email, expiresAt)
+        } catch (error: CloudAuthFailure) { throw error }
+        catch (_: Exception) { throw CloudAuthFailure("authorization_state_invalid") }
+    }
+
+    private fun generationJSON(value: NativeCloudCredentialGeneration) = JSONObject()
+        .put("grantID", value.grantID).put("accessToken", value.accessToken)
+        .put("refreshToken", value.refreshToken)
+
+    private fun parseGeneration(value: JSONObject): NativeCloudCredentialGeneration {
+        val id = value.getString("grantID")
+        cloudAuthGuard(UUID.fromString(id).toString() == id, "authorization_state_invalid")
+        val access = value.getString("accessToken")
+        val refresh = value.getString("refreshToken")
+        validateNativeCloudToken(access); validateNativeCloudToken(refresh)
+        return NativeCloudCredentialGeneration(id, access, refresh)
+    }
+
+    private fun writeJournal(file: String, journal: CredentialJournal) {
+        cloudAuthGuard(journal.generations.size in 1..16, "authorization_state_invalid")
+        val raw = JSONObject().put("schemaVersion", 1).put("serverURL", journal.serverURL)
+            .put("generations", JSONArray(journal.generations.map(::generationJSON))).toString()
+        cloudAuthGuard(raw.toByteArray().size <= JOURNAL_MAX_BYTES, "authorization_state_invalid")
+        store.write(file, raw)
+    }
+
+    private fun loadJournal(file: String, expectedServerURL: String? = null): CredentialJournal? {
+        val raw = store.read(file) ?: return null
+        try {
+            cloudAuthGuard(raw.toByteArray().size <= JOURNAL_MAX_BYTES, "authorization_state_invalid")
+            val value = JSONObject(raw)
+            cloudAuthGuard(value.keys().asSequence().toSet() == setOf("schemaVersion", "serverURL", "generations") &&
+                value.getInt("schemaVersion") == 1, "authorization_state_invalid")
+            val serverURL = nativeCloudServerURL(value.getString("serverURL"))
+            cloudAuthGuard(serverURL == configuredServerURL() &&
+                (expectedServerURL == null || serverURL == expectedServerURL), "authorization_state_invalid")
+            val entries = value.getJSONArray("generations")
+            cloudAuthGuard(entries.length() in 1..16, "authorization_state_invalid")
+            val generations = (0 until entries.length()).map { parseGeneration(entries.getJSONObject(it)) }
+            cloudAuthGuard(generations.distinct().size == generations.size, "authorization_state_invalid")
+            return CredentialJournal(serverURL, generations)
+        } catch (error: CloudAuthFailure) { throw error }
+        catch (_: Exception) { throw CloudAuthFailure("authorization_state_invalid") }
+    }
+
+    private suspend fun retireSupersededInteractiveSessions() = withContext(Dispatchers.IO) {
+        retireInterruptedRefresh()
+        val current = loadSession()
+        val pending = loadSession(PENDING_AUTH_SESSION)
+        val journal = loadJournal(AUTH_REPLACEMENT, (current ?: pending)?.serverURL)
+            ?: return@withContext
+        val plan = nativeCloudReplacementCleanupPlan(current?.generation, journal.generations)
+            ?: throw CloudAuthFailure("authorization_state_invalid")
+        retire(journal.serverURL, plan.accessTokensToRetire, plan.refreshTokensToRetire)
+        store.delete(PENDING_AUTH_SESSION)
+        store.delete(AUTH_REPLACEMENT)
+    }
+
+    /** Rejected or uncommitted refresh metadata retires the issued family before local erase. */
+    private fun retireInterruptedRefresh() {
+        val raw = store.read(AUTH_REFRESH) ?: return
+        val serverURL: String
+        val file: String
+        val plan: NativeCloudRefreshCleanupPlan
+        try {
+            cloudAuthGuard(raw.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid")
+            val value = JSONObject(raw)
+            cloudAuthGuard(value.keys().asSequence().toSet() ==
+                setOf("schemaVersion", "serverURL", "sessionFile", "previous", "issued") &&
+                value.getInt("schemaVersion") == 1, "authorization_state_invalid")
+            serverURL = nativeCloudServerURL(value.getString("serverURL"))
+            cloudAuthGuard(serverURL == configuredServerURL(), "authorization_state_invalid")
+            file = value.getString("sessionFile")
+            cloudAuthGuard(file == AUTH_SESSION || file == PENDING_AUTH_SESSION, "authorization_state_invalid")
+            plan = nativeCloudRefreshCleanupPlan(loadSession(file)?.generation,
+                parseGeneration(value.getJSONObject("previous")), parseGeneration(value.getJSONObject("issued")))
+                ?: throw CloudAuthFailure("authorization_state_invalid")
+        } catch (error: CloudAuthFailure) { throw error }
+        catch (_: Exception) { throw CloudAuthFailure("authorization_state_invalid") }
+        retire(serverURL, plan.accessTokensToRetire, plan.refreshTokensToRetire)
+        if (plan.discardStoredSession) store.delete(file)
+        // Deletion order permits retry after a crash without ever trusting rejected metadata.
+        store.delete(AUTH_REFRESH)
+    }
+
+    private fun retire(serverURL: String, accessTokens: List<String>, refreshTokens: List<String>) {
+        val endpoint = NativeCloudAuthority.forServer(serverURL).revokeEndpoint
+        accessTokens.forEach { requestJSON(endpoint,
+            JSONObject().put("token", it).put("tokenTypeHint", "access_token"), emptyResponse = true) }
+        refreshTokens.forEach { requestJSON(endpoint,
+            JSONObject().put("token", it).put("tokenTypeHint", "refresh_token"), emptyResponse = true) }
+    }
+
+    /** HTTPS origin is pinned before any credential is sent, and redirects are never followed. */
+    private fun requestJSON(endpoint: String, body: JSONObject? = null,
+                            emptyResponse: Boolean = false): JSONObject {
+        val uri = URI(endpoint)
+        val origin = URI(configuredServerURL())
+        cloudAuthGuard(uri.scheme == origin.scheme && uri.host == origin.host && uri.port == origin.port &&
+            uri.userInfo == null && uri.fragment == null && uri.query == null, "server_identity_mismatch")
+        val connection = uri.toURL().openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = if (body == null) "GET" else "POST"
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 15_000
+            connection.instanceFollowRedirects = false
+            connection.setRequestProperty("Accept", "application/json")
+            if (body != null) {
+                val bytes = body.toString().toByteArray(Charsets.UTF_8)
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setFixedLengthStreamingMode(bytes.size)
+                connection.outputStream.use { it.write(bytes) }
             }
-            return journal
-        } catch (failure: CloudAuthFailure) {
-            throw failure
-        } catch (_: Exception) {
-            throw CloudAuthFailure("authorization_state_invalid")
-        }
-    }
-
-    private suspend fun retireSupersededInteractiveSessions() =
-        withContext(Dispatchers.IO) {
-            val current = loadSession()
-            val pending = loadSession(PENDING_AUTH_SESSION)
-            val authority = current ?: pending
-            // The replacement journal is self-contained so it can retire a first-ever
-            // grant after a crash between journaling it and publishing the staged session.
-            val journal = if (authority == null) {
-                loadCredentialJournal(AUTH_REPLACEMENT)
-            } else {
-                loadReplacementJournal(authority)
-            } ?: return@withContext
-            val plan = cloudCredentialReplacementCleanupPlan(
-                currentAccessToken = current?.accessToken,
-                currentRefreshToken = current?.refreshToken,
-                journalAccessTokens = journal.accessTokens,
-                journalRefreshTokens = journal.refreshTokens,
-            ) ?: throw CloudAuthFailure("authorization_state_invalid")
-            plan.accessTokensToRetire.forEach { token ->
-                val status = revokeResourceAccessToken(journal.serverURL, token)
-                guard(status == 204 || status == 401, "credential_revocation_failed")
+            val status = connection.responseCode
+            val bytes = readBounded(if (status in 200..299) connection.inputStream else connection.errorStream)
+            if (status != if (emptyResponse) 204 else 200) {
+                val allowed = setOf("invalid_email", "invalid_code", "code_expired", "too_many_attempts",
+                    "rate_limited", "authentication_required", "dependency_unavailable")
+                val error = runCatching { JSONObject(bytes.toString(Charsets.UTF_8)) }.getOrNull()
+                val code = (error?.optJSONObject("problem")?.optString("code") ?: error?.optString("code"))
+                    ?.takeIf { it in allowed } ?: "server_request_failed"
+                val retry = nativeCloudRetryAfter(connection.getHeaderField("Retry-After"))
+                throw CloudAuthFailure(code, retry)
             }
-            revokeProviderCredentials(
-                revocationEndpoint = journal.revocationEndpoint,
-                clientID = journal.clientID,
-                plan = CloudCredentialRevocationPlan(
-                    accessTokens = plan.accessTokensToRetire,
-                    refreshTokens = plan.refreshTokensToRetire,
-                ),
-            )
-            // Delete the staged duplicate first. The journal remains the fail-closed
-            // boundary until every remote retirement has succeeded.
-            store.delete(PENDING_AUTH_SESSION)
-            store.delete(AUTH_REPLACEMENT)
-        }
-
-    private fun tokenArray(value: JSONArray): List<String> {
-        guard(value.length() in 1..16, "authorization_state_invalid")
-        return (0 until value.length()).map(value::getString).also { tokens ->
-            tokens.forEach { validateToken(it, "authorization_state_invalid") }
-            guard(tokens.distinct().size == tokens.size, "authorization_state_invalid")
-        }
+            if (emptyResponse) {
+                cloudAuthGuard(bytes.isEmpty(), "server_response_invalid")
+                return JSONObject()
+            }
+            return try { JSONObject(bytes.toString(Charsets.UTF_8)) }
+                catch (_: Exception) { throw CloudAuthFailure("server_response_invalid") }
+        } catch (error: CloudAuthFailure) { throw error }
+        catch (_: java.io.IOException) { throw CloudAuthFailure("server_unavailable") }
+        finally { connection.disconnect() }
     }
 
-    private fun secureEndpoint(raw: String): String {
-        val uri = try {
-            URI(raw)
-        } catch (_: Exception) {
-            throw CloudAuthFailure("identity_provider_configuration_invalid")
-        }
-        guard(
-            raw.toByteArray().size <= 2_048 && uri.scheme == "https" && uri.host != null &&
-                uri.userInfo == null && uri.fragment == null,
-            "identity_provider_configuration_invalid",
-        )
-        return uri.toASCIIString()
-    }
-
-    private fun validateToken(value: String, code: String) {
-        guard(
-            value.toByteArray().size in 8..16_384 && value.none(Char::isWhitespace),
-            code,
-        )
-    }
-
-    /**
-     * Leak-prevention check performed before an access token ever leaves for a
-     * sync origin. Signature validation remains the server's job; this token
-     * arrived directly from the issuer's HTTPS endpoint and must have one exact
-     * RFC 8707 audience equal to the pinned resource.
-     */
-    private fun validateResourceAudience(accessToken: String, resource: String) {
-        val segments = accessToken.split('.', limit = 4)
-        guard(segments.size == 3 && segments[1].length <= 32 * 1024, "token_exchange_failed")
-        guard(
-            segments[1].all { it.isLetterOrDigit() || it == '-' || it == '_' },
-            "token_exchange_failed",
-        )
-        val payload = try {
-            Base64.decode(segments[1], Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-        } catch (_: IllegalArgumentException) {
-            throw CloudAuthFailure("token_exchange_failed")
-        }
-        guard(payload.size <= 24 * 1024, "token_exchange_failed")
-        val value = try {
-            JSONObject(payload.toString(Charsets.UTF_8)).get("aud")
-        } catch (_: Exception) {
-            throw CloudAuthFailure("token_exchange_failed")
-        }
-        val audiences = when (value) {
-            is String -> listOf(value)
-            is org.json.JSONArray -> value.strings(maximumUTF8Bytes = 2_048)
-            else -> emptyList()
-        }
-        guard(audiences == listOf(resource), "token_exchange_failed")
-    }
-
-    private fun configuredServerURL(): String {
-        guard(BuildConfig.SNIPPETS_CLOUD_URL.isNotBlank(), "cloud_build_not_configured")
-        return normalizedBaseURL(BuildConfig.SNIPPETS_CLOUD_URL)
-    }
-
-    private fun configuredRedirectURI(): Uri {
-        val value = URI(BuildConfig.SNIPPETS_OAUTH_REDIRECT_URI)
-        guard(
-            value.scheme == "https" && value.host != null && value.userInfo == null &&
-                value.query == null && value.fragment == null &&
-                value.path == "/oauth2redirect/android" &&
-                !value.host.endsWith(".invalid") && value.host != "invalid",
-            "cloud_build_not_configured",
-        )
-        return Uri.parse(value.toASCIIString())
-    }
-
-    private fun normalizedBaseURL(raw: String): String {
-        guard(raw.toByteArray().size <= 2_048, "server_url_invalid")
-        val uri = URI(raw.trim().trimEnd('/'))
-        guard(
-            uri.scheme == "https" && uri.host != null && uri.userInfo == null &&
-                uri.query == null && uri.fragment == null,
-            "server_url_invalid",
-        )
-        return uri.toASCIIString().trimEnd('/')
-    }
-
-    private fun normalizedIssuer(raw: String): String {
-        val uri = URI(raw.trim())
-        guard(
-            uri.scheme == "https" && uri.host != null && uri.userInfo == null &&
-                uri.query == null && uri.fragment == null,
-            "server_discovery_invalid",
-        )
-        return uri.toASCIIString()
-    }
-
-    private fun readBounded(input: java.io.InputStream?, maximumBytes: Int): ByteArray {
+    private fun readBounded(input: java.io.InputStream?): ByteArray {
         if (input == null) return ByteArray(0)
         input.use { stream ->
             val output = ByteArrayOutputStream()
@@ -1124,47 +386,30 @@ class CloudAuthenticator(
             while (true) {
                 val count = stream.read(buffer)
                 if (count < 0) break
-                if (output.size() > maximumBytes - count) {
-                    throw CloudAuthFailure("server_discovery_too_large")
-                }
+                cloudAuthGuard(output.size() <= RESPONSE_MAX_BYTES - count, "server_response_invalid")
                 output.write(buffer, 0, count)
             }
             return output.toByteArray()
         }
     }
 
-    private fun org.json.JSONArray.strings(
-        allowEmpty: Boolean = false,
-        maximumUTF8Bytes: Int = 256,
-    ): List<String> =
-        (0 until length()).map(::getString).also { values ->
-            guard(
-                (allowEmpty || values.isNotEmpty()) && values.size <= 16 &&
-                    values.toSet().size == values.size &&
-                    values.all { it.isNotBlank() && it.toByteArray().size <= maximumUTF8Bytes },
-                "server_discovery_invalid",
-            )
-        }
-
-    private fun guard(condition: Boolean, code: String) {
-        if (!condition) throw CloudAuthFailure(code)
+    private fun configuredServerURL(): String {
+        cloudAuthGuard(BuildConfig.SNIPPETS_CLOUD_URL.isNotBlank(), "cloud_build_not_configured")
+        return nativeCloudServerURL(BuildConfig.SNIPPETS_CLOUD_URL)
     }
 
     private companion object {
-        const val DISCOVERY_MAX_BYTES = 256 * 1024
+        const val RESPONSE_MAX_BYTES = 256 * 1024
         const val SESSION_MAX_BYTES = 128 * 1024
-        const val REVOCATION_MAX_BYTES = 256 * 1024
-        const val REFRESH_EARLY_MILLIS = 60_000L
-        const val MIN_TOKEN_LIFETIME_MILLIS = 30_000L
-        const val MAX_TOKEN_LIFETIME_MILLIS = 86_460_000L
-        const val AUTH_SESSION = "oidc-session.enc"
-        const val PENDING_AUTH_SESSION = "oidc-pending-session.enc"
-        const val AUTH_REPLACEMENT = "oidc-replacement-journal.enc"
-        const val AUTH_REVOCATION = "oidc-revocation-journal.enc"
-        const val LEGACY_AUTH_STATE = "oidc-auth-state.enc"
-        const val LEGACY_AUTH_SERVER = "oidc-auth-server.enc"
-        const val PENDING = "oidc-pending.enc"
+        const val JOURNAL_MAX_BYTES = 1024 * 1024
+        // Old browser sessions remain unconsumed. Native authentication never guesses
+        // an account from a legacy email, JWT or saved library configuration.
+        const val AUTH_SESSION = "native-cloud-session.enc"
+        const val PENDING_AUTH_SESSION = "native-cloud-pending-session.enc"
+        const val AUTH_REPLACEMENT = "native-cloud-replacement-journal.enc"
+        const val AUTH_REVOCATION = "native-cloud-revocation-journal.enc"
+        const val AUTH_REFRESH = "native-cloud-refresh-journal.enc"
     }
 }
 
-class CloudAuthFailure(val code: String) : Exception(code)
+class CloudAuthFailure(val code: String, val retryAfterSeconds: Int? = null) : Exception(code)

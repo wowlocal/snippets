@@ -26,8 +26,8 @@ type Store struct {
 	codec            *domain.TokenCodec
 }
 
-const minimumSchemaVersion int64 = 2
-const maximumSchemaVersion int64 = 2
+const minimumSchemaVersion int64 = 3
+const maximumSchemaVersion int64 = 3
 
 func NewPool(ctx context.Context, configuration config.Database) (*pgxpool.Pool, error) {
 	poolConfig, err := newPoolConfig(configuration)

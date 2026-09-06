@@ -7,7 +7,8 @@ import XCTest
 @testable import Snippets
 #endif
 
-/// Opt-in, multi-process integration test used by `scripts/test-cross-platform-sync.sh`.
+/// Opt-in, multi-process integration test used by `scripts/test-cross-platform-sync.sh`
+/// and `scripts/test-native-cloud-integration.py`.
 ///
 /// Every invocation gets a fresh local installation but shares one disposable server
 /// space with the other platforms. That makes a successful phase prove that the
@@ -15,6 +16,8 @@ import XCTest
 /// result, not merely an in-process fixture.
 @MainActor
 final class SnippetsCloudAppIntegrationTests: XCTestCase {
+    private var activeProtocolLocations: SyncProtocolLocations?
+
     private struct FileConfiguration: Decodable {
         let serverURL: String
         let accessToken: String
@@ -88,16 +91,34 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
 
         let keychain = KeychainSecretStore(tier: .deviceOnly, inMemory: true)
         try keychain.storeItem(Self.portableSyncMaterial, account: SyncKeyStore.account)
+        let serverURL = try XCTUnwrap(URL(string: serverText))
+        let spaceID = try XCTUnwrap(UUID(uuidString: spaceText))
+        let serverInstanceID = try XCTUnwrap(UUID(uuidString: serverInstanceText))
+        let cloudKeys = SnippetsCloudKeyStore(
+            keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            coordinates: {
+                .init(serverURL: serverURL, apiBaseURL: serverURL.appending(path: "v2"),
+                      spaceID: spaceID, serverInstanceID: serverInstanceID, protocolMajor: 2)
+            })
+        // The portable fixture is explicit test authority, never the user's shared
+        // iCloud or device Cloud key. Exercise the production provider key selector.
+        try cloudKeys.install(Self.portableSyncMaterial, serverURL: serverURL,
+                              spaceID: spaceID, serverInstanceID: serverInstanceID,
+                              protocolMajor: 2)
         let selection = SyncBackendSelectionStore(
             defaults: defaults,
             keychain: keychain,
+            cloudKeys: cloudKeys,
+            bootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
             snippetsCloudEnabled: true)
         XCTAssertEqual(selection.provider, .iCloud)
         try selection.selectSnippetsCloud(
-            serverURL: try XCTUnwrap(URL(string: serverText)),
-            spaceID: try XCTUnwrap(UUID(uuidString: spaceText)),
-            serverInstanceID: try XCTUnwrap(UUID(uuidString: serverInstanceText)),
+            serverURL: serverURL,
+            spaceID: spaceID,
+            serverInstanceID: serverInstanceID,
             accessToken: token)
+        activeProtocolLocations = try selection.protocolLocations()
+        defer { activeProtocolLocations = nil }
         XCTAssertTrue(try selection.makeTransport().supportsPush)
         if phase == .macChaosTruncatedFetch {
             try await assertTruncatedFetchRecovers(selection)
@@ -119,7 +140,8 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         let library = SnippetLibraryBridge(store: store, secureStore: secureStore)
         let coordinator = SyncCoordinator(
             library: library,
-            keys: SyncKeyStore(keychain: keychain),
+            keys: SyncKeyStore(keychain: keychain, cloudKeys: cloudKeys,
+                               usesSnippetsCloud: { true }),
             device: store.deviceID,
             backendSelection: selection)
         store.syncDelegate = coordinator
@@ -200,9 +222,9 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
         }
 
         XCTAssertTrue(FileManager.default.fileExists(
-            atPath: SnippetStorageLocations.syncBaseFileURL.path))
+            atPath: try XCTUnwrap(activeProtocolLocations).baseURL.path))
         XCTAssertTrue(FileManager.default.fileExists(
-            atPath: SnippetStorageLocations.syncJournalFileURL.path))
+            atPath: try XCTUnwrap(activeProtocolLocations).journalURL.path))
     }
 
     private func integrationEnvironment() throws -> [String: String] {
@@ -248,8 +270,9 @@ final class SnippetsCloudAppIntegrationTests: XCTestCase {
     }
 
     private func assertConfirmedRecordCount(_ expected: Int) {
-        guard case .loaded(let base) = SyncBaseFile.load(
-            from: SnippetStorageLocations.syncBaseFileURL) else {
+        guard let activeProtocolLocations,
+              case .loaded(let base) = SyncBaseFile.load(
+            from: activeProtocolLocations.baseURL) else {
             return XCTFail("sync base was not readable")
         }
         XCTAssertEqual(base.envelopes.count, expected)

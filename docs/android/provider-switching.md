@@ -39,7 +39,7 @@ Add a versioned `SyncProviderSelection` containing only:
 - display class (`Snippets Cloud` or `Custom Server`), not a secret endpoint string;
 - selection generation and transaction/review state.
 
-Secrets, OAuth tokens, raw server origins, space IDs, and keys do not live in this
+Secrets, authentication tokens, raw server origins, space IDs, and keys do not live in this
 preference. The Android credential/secret stores and Apple Keychain-backed adapters own
 them.
 
@@ -142,7 +142,7 @@ credential:
 - Local Only needs no wire key until the first remote provider is selected.
 
 Bundle schema 1 contains only the fixed `sync-v1` scope, 32-byte wire key and 32-byte
-salt. It never contains OAuth tokens, records, `K_lib`, vault identity, device IDs, or
+salt. It never contains authentication tokens, records, `K_lib`, vault identity, device IDs, or
 receipts. The service stores only an encrypted recovery/pairing envelope and cannot test
 or unwrap it.
 
@@ -178,7 +178,7 @@ The safe default is always loss-preserving:
 
 After a provider has been attached successfully, switching back does not repeat pairing,
 recovery-key entry, or a full upload. It reuses the locally wrapped portable bundle and
-provider state after binding validation; normal OIDC/iCloud reauthentication may still be
+provider state after binding validation; normal email-code/iCloud reauthentication may still be
 required when the platform account session has expired.
 
 An explicit destructive **Replace target from backup** may exist under advanced recovery,
@@ -290,7 +290,7 @@ receipts. It never guesses from whichever provider preference happened to be wri
 | HTTP -> empty iCloud | Resolve the signed CloudKit scope, install the portable key in an empty compatible Keychain slot, upload the same encrypted records, select iCloud. |
 | HTTP -> existing compatible iCloud | Revalidate Keychain/vault/account, automatically merge retained iCloud state and current intent, select iCloud. |
 | Any -> incompatible target key/vault | Halt before write and require account/space correction or advanced rival-library recovery. |
-| HTTP A -> HTTP B | Requires a separately pinned/associated app distribution today; carry the same encrypted portable bundle and records to the new authorized server and keep provider cursors/CAS isolated. |
+| HTTP A -> HTTP B | Requires a separately pinned app distribution today; carry the same encrypted portable bundle and records to the new authorized server and keep provider cursors/CAS isolated. |
 | Remote -> Local Only | Stop/shutdown transport and keep current local projection; do not delete remote/provider state or keys. |
 | Local Only -> previous provider | Revalidate account/key/base, capture offline edits, fetch and automatically merge. |
 | Account changed in active provider | Sticky account-review halt before local data-plane access; never auto-attach the new account. |

@@ -48,10 +48,18 @@ func main() {
 		logger.Error("startup_failed", "error_code", "invalid_store_configuration")
 		os.Exit(1)
 	}
-	validator, err := auth.NewOIDCValidator(ctx, configuration.OIDC, nil)
+	var validator auth.Validator
+	if configuration.AuthMode == "native" {
+		validator, err = auth.NewNative(pool, configuration.NativeAuth, auth.SMTPSender{Configuration: configuration.NativeAuth})
+	} else {
+		validator, err = auth.NewOIDCValidator(ctx, configuration.OIDC, nil)
+	}
 	if err != nil {
-		logger.Error("startup_failed", "error_code", "oidc_jwks_unavailable")
+		logger.Error("startup_failed", "error_code", "authentication_unavailable")
 		os.Exit(1)
+	}
+	if native, ok := validator.(*auth.Native); ok {
+		go native.RunMaintenance(ctx)
 	}
 	service := httpapi.NewServer(configuration, store, validator, logger)
 	listener, err := net.Listen("tcp", net.JoinHostPort(configuration.BindHost, strconv.Itoa(configuration.Port)))

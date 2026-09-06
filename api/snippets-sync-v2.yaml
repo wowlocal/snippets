@@ -42,6 +42,66 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v2/auth/email/start:
+    post:
+      operationId: startEmailAuthentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmailStartRequest' }
+      responses:
+        '200':
+          description: Send a sign-in code without exposing whether an account exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmailChallenge' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/auth/email/verify:
+    post:
+      operationId: verifyEmailAuthentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmailVerifyRequest' }
+      responses:
+        '200':
+          description: Consume the code and issue a native session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NativeTokenResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/auth/refresh:
+    post:
+      operationId: refreshNativeSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NativeRefreshRequest' }
+      responses:
+        '200':
+          description: Rotate the refresh token; reuse revokes the entire session family.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NativeTokenResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/auth/revoke:
+    post:
+      operationId: revokeNativeSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NativeRevokeRequest' }
+      responses:
+        '204': { description: 'Revoke the exact access token or whole refresh family, including rotated tokens.' }
+        default: { $ref: '#/components/responses/Error' }
   /v2/session:
     delete:
       operationId: revokeCurrentSession
@@ -296,7 +356,7 @@ components:
     Discovery:
       type: object
       additionalProperties: false
-      required: [protocolMajor, protocolMinor, serverVersion, serverInstanceId, apiBase, oidc, limits, recordProfile, capabilities]
+      required: [protocolMajor, protocolMinor, serverVersion, serverInstanceId, apiBase, limits, recordProfile, capabilities]
       properties:
         protocolMajor: { type: integer, const: 2 }
         protocolMinor: { type: integer, const: 1 }
@@ -304,12 +364,75 @@ components:
         serverInstanceId: { type: string, format: uuid }
         apiBase: { type: string, format: uri, maxLength: 2048 }
         oidc: { $ref: '#/components/schemas/OIDCDiscovery' }
+        nativeAuth: { $ref: '#/components/schemas/NativeAuthDiscovery' }
         limits: { $ref: '#/components/schemas/Limits' }
         recordProfile: { type: string, const: snippets-wire-v1 }
         capabilities:
           type: array
           maxItems: 16
           items: { type: string, maxLength: 64 }
+    NativeAuthDiscovery:
+      type: object
+      additionalProperties: false
+      required: [flow, startEndpoint, verifyEndpoint, refreshEndpoint, revokeEndpoint]
+      properties:
+        flow: { type: string, const: email_code }
+        startEndpoint: { type: string, format: uri, maxLength: 2048 }
+        verifyEndpoint: { type: string, format: uri, maxLength: 2048 }
+        refreshEndpoint: { type: string, format: uri, maxLength: 2048 }
+        revokeEndpoint: { type: string, format: uri, maxLength: 2048 }
+    EmailStartRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: { type: string, minLength: 1, maxLength: 254 }
+    EmailChallenge:
+      type: object
+      additionalProperties: false
+      required: [challengeId, expiresIn, resendAfter, codeLength]
+      properties:
+        challengeId: { type: string, minLength: 1, maxLength: 256 }
+        expiresIn: { type: integer, const: 600 }
+        resendAfter: { type: integer, const: 60 }
+        codeLength: { type: integer, const: 6 }
+    EmailVerifyRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeId, code]
+      properties:
+        challengeId: { type: string, minLength: 1, maxLength: 256 }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    NativeRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string, minLength: 1, maxLength: 512 }
+    NativeRevokeRequest:
+      type: object
+      additionalProperties: false
+      required: [token, tokenTypeHint]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 512 }
+        tokenTypeHint: { type: string, enum: [access_token, refresh_token] }
+    NativeAccount:
+      type: object
+      additionalProperties: false
+      required: [id, email]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 256 }
+        email: { type: string, minLength: 1, maxLength: 254 }
+    NativeTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [access_token, refresh_token, expires_in, token_type, account]
+      properties:
+        access_token: { type: string, minLength: 1, maxLength: 512 }
+        refresh_token: { type: string, minLength: 1, maxLength: 512 }
+        expires_in: { type: integer, minimum: 1, maximum: 300 }
+        token_type: { type: string, const: Bearer }
+        account: { $ref: '#/components/schemas/NativeAccount' }
     OIDCDiscovery:
       type: object
       additionalProperties: false
@@ -545,7 +668,7 @@ components:
         limit: { type: integer, minimum: 0 }
     ErrorCode:
       type: string
-      enum: [invalid_request, authentication_required, reauthentication_required, forbidden, not_found, conflict, cursor_invalid, dataset_reset, incompatible_version, payload_too_large, quota_exceeded, rate_limited, pairing_expired, dependency_unavailable, internal_error]
+      enum: [invalid_email, invalid_code, code_expired, too_many_attempts, invalid_request, authentication_required, reauthentication_required, forbidden, not_found, conflict, cursor_invalid, dataset_reset, incompatible_version, payload_too_large, quota_exceeded, rate_limited, pairing_expired, dependency_unavailable, internal_error]
 
     LibraryActionProof:
       type: object

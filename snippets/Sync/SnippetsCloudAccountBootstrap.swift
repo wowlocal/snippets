@@ -1,4 +1,3 @@
-import AuthenticationServices
 import CryptoKit
 import Foundation
 
@@ -235,7 +234,7 @@ final class SnippetsCloudAccountBootstrap {
     static let recoveryPresentationAccount = "recovery-display-v1"
     static let recoveryVerifiedAccount = "recovery-verified-v1"
     static let pendingPostAuthorizationAccount = "post-authorization-bootstrap-v1"
-    static let bootstrapService = "com.khm.snippets.cloud-bootstrap"
+    static let bootstrapService = SnippetsCloudKeychainScope.service(for: .bootstrap)
     static let bootstrapSecretAccounts = [
         pairingAccount,
         approvalAccount,
@@ -406,38 +405,43 @@ final class SnippetsCloudAccountBootstrap {
         serverURL: URL,
         changeAccount: Bool = false,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        presentationContext: any ASWebAuthenticationPresentationContextProviding
+        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void
     ) async throws -> State {
-        let previousCoordinates = selection.cloudCoordinates
-        let operation: PendingPostAuthorization.Operation = if changeAccount {
-            .changeAccount
-        } else {
-            .signIn
+        let diagnostics = SnippetsCloudSignInDiagnostics()
+        return try await diagnostics.run {
+            let previousCoordinates = selection.cloudCoordinates
+            let operation: PendingPostAuthorization.Operation = if changeAccount {
+                .changeAccount
+            } else {
+                .signIn
+            }
+            try await selection.signIn(
+                serverURL: serverURL,
+                diagnostics: diagnostics,
+                requiresStrongAuthentication: false,
+                chooseAccount: changeAccount,
+                chooseLibrary: chooseLibrary,
+                authenticate: authenticate,
+                preparePostAuthorization: { [weak self] target in
+                    guard let self else { throw Failure.invalidState }
+                    try self.storePendingPostAuthorization(target, operation: operation)
+                })
+            diagnostics.enter(.librarySetup)
+            if let previousCoordinates,
+               let currentCoordinates = selection.cloudCoordinates,
+               currentCoordinates != previousCoordinates {
+                // Pending approvals and recovery replacements were prepared for the old
+                // deployment/account. Never replay them merely because account sign-in succeeded at
+                // the same URL; ordinary sync now owns the explicit account review.
+                try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
+            }
+            if try await syncCheckpointRequiresReviewBeforeBootstrap() {
+                try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
+            }
+            let state = try await finishPostAuthorization()
+            try clearPendingPostAuthorization()
+            return state
         }
-        try await selection.signIn(
-            serverURL: serverURL,
-            requiresStrongAuthentication: false,
-            chooseAccount: changeAccount,
-            chooseLibrary: chooseLibrary,
-            presentationContext: presentationContext,
-            preparePostAuthorization: { [weak self] target in
-                guard let self else { throw Failure.invalidState }
-                try self.storePendingPostAuthorization(target, operation: operation)
-            })
-        if let previousCoordinates,
-           let currentCoordinates = selection.cloudCoordinates,
-           currentCoordinates != previousCoordinates {
-            // Pending approvals and recovery replacements were prepared for the old
-            // deployment/account. Never replay them merely because OAuth succeeded at
-            // the same URL; ordinary sync now owns the explicit account review.
-            try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
-        }
-        if try await syncCheckpointRequiresReviewBeforeBootstrap() {
-            try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
-        }
-        let state = try await finishPostAuthorization()
-        try clearPendingPostAuthorization()
-        return state
     }
 
     @discardableResult
@@ -485,8 +489,8 @@ final class SnippetsCloudAccountBootstrap {
 
     @discardableResult
     func resumePostAuthorizationSetup(
-        reauthenticatingIfNeededWith presentationContext:
-            any ASWebAuthenticationPresentationContextProviding
+        reauthenticatingIfNeededWith authenticate:
+            @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void
     ) async throws -> State {
         do {
             return try await resumePostAuthorizationSetup()
@@ -497,7 +501,7 @@ final class SnippetsCloudAccountBootstrap {
             guard let pending = try pendingPostAuthorization() else { throw failure }
             try await selection.reauthenticateSnippetsCloudPostAuthorization(
                 pending.target,
-                presentationContext: presentationContext)
+                authenticate: authenticate)
             if try await syncCheckpointRequiresReviewBeforeBootstrap() {
                 try discardBootstrapIntentAfterScopeChange(
                     preservingPostAuthorization: true)

@@ -1154,8 +1154,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
     val context = LocalContext.current
     val activity = LocalActivity.current as? MainActivity
     val cloudConfigured = BuildConfig.SNIPPETS_CLOUD_ENABLED &&
-        BuildConfig.SNIPPETS_CLOUD_URL.isNotBlank() &&
-        !BuildConfig.SNIPPETS_OAUTH_REDIRECT_URI.contains(".invalid/")
+        BuildConfig.SNIPPETS_CLOUD_URL.isNotBlank()
     // Recovery input is a decryption secret: never serialize it into SavedState.
     var recoveryCode by remember { mutableStateOf("") }
     var recoveryCodeVisible by remember { mutableStateOf(false) }
@@ -1195,13 +1194,25 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         repository.isCloudSignedIn()
     }
     val setupInterrupted = state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED
-    val loginLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        scope.launch {
-            val completion = repository.completeCloudSignIn(result.data)
-            completion.recoveryKit?.let { recoveryPresentation = it }
-        }
+    var emailSignInMode by remember { mutableStateOf<NativeCloudSignInMode?>(null) }
+    emailSignInMode?.let { mode ->
+        NativeCloudSignInDialog(
+            start = { email ->
+                if (mode == NativeCloudSignInMode.RESUME) repository.beginResumeCloudSetupSignIn(email)
+                else repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL, email,
+                    chooseAccount = mode == NativeCloudSignInMode.CHANGE_ACCOUNT)
+            },
+            verify = repository::completeCloudSignIn,
+            onEditEmail = repository::cancelCloudEmailSignIn,
+            onDismiss = {
+                repository.cancelCloudEmailSignIn()
+                emailSignInMode = null
+            },
+            onComplete = { completion ->
+                emailSignInMode = null
+                completion.recoveryKit?.let { recoveryPresentation = it }
+            },
+        )
     }
 
     LaunchedEffect(
@@ -1339,12 +1350,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
             confirmButton = {
                 Button(onClick = {
                     showChangeAccountConfirmation = false
-                    scope.launch {
-                        repository.beginCloudSignIn(
-                            BuildConfig.SNIPPETS_CLOUD_URL,
-                            chooseAccount = true,
-                        )?.let(loginLauncher::launch)
-                    }
+                    emailSignInMode = NativeCloudSignInMode.CHANGE_ACCOUNT
                 }) { Text("Choose another account") }
             },
             dismissButton = {
@@ -1465,12 +1471,12 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     if (signedIn || setupInterrupted) {
                         "${state.accountDisplayName}\nLibrary ID ${state.libraryID ?: "—"} · Used for support"
                     }
-                    else "Continue in your browser with Apple, Google, or an email code. You can add a passkey later.",
+                    else "Sign in with your email address and a one-time code.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (!cloudConfigured) {
                     Text(
-                        "This build has no pinned cloud endpoint and verified HTTPS sign-in callback.",
+                        "This build has no pinned cloud endpoint.",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -1485,17 +1491,13 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                                         recoveryPresentation = it
                                     }
                                 } else {
-                                    repository.beginResumeCloudSetupSignIn()
-                                        ?.let(loginLauncher::launch)
+                                    emailSignInMode = NativeCloudSignInMode.RESUME
                                 }
                             }
                         } else if (signedIn) {
                             showChangeAccountConfirmation = true
                         } else {
-                            scope.launch {
-                                repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL)
-                                    ?.let(loginLauncher::launch)
-                            }
+                            emailSignInMode = NativeCloudSignInMode.SIGN_IN
                         }
                     },
                 ) {
@@ -1751,11 +1753,6 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     }
 
                     CloudKeyStatus.READY -> {
-                        if (BuildConfig.SNIPPETS_CLOUD_ACCOUNT_CENTER_URL.isNotBlank()) {
-                            TextButton(onClick = { activity?.startActivity(android.content.Intent(
-                                android.content.Intent.ACTION_VIEW, android.net.Uri.parse(BuildConfig.SNIPPETS_CLOUD_ACCOUNT_CENTER_URL)))
-                            }) { Text("Manage account and sign-in methods") }
-                        }
                         if (state.hasPendingRecoveryKit) {
                             Text("Save your recovery kit. Sync is available; the kit restores access if you lose all approved devices.")
                             OutlinedButton(enabled = !state.isBusy, onClick = {
@@ -1795,19 +1792,8 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     Text(error.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     when (error.action) {
                         CloudErrorAction.SIGN_IN -> Button(onClick = {
-                            scope.launch {
-                                val intent = if (
-                                    state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED
-                                ) {
-                                    repository.beginResumeCloudSetupSignIn()
-                                } else {
-                                    repository.beginCloudSignIn(
-                                        BuildConfig.SNIPPETS_CLOUD_URL,
-                                    )
-                                }
-                                intent
-                                    ?.let(loginLauncher::launch)
-                            }
+                            emailSignInMode = if (state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED)
+                                NativeCloudSignInMode.RESUME else NativeCloudSignInMode.SIGN_IN
                         }) { Text(error.actionTitle) }
                         CloudErrorAction.RECOVER_LIBRARY -> Button(onClick = {
                             scan(repository::restoreWithRecoveryKit)
