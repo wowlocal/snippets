@@ -280,6 +280,10 @@ final class SyncCoordinator {
     private var pollTimer: Timer?
     private var startRetryTimer: Timer?
     private var eventTask: Task<Void, Never>?
+    private let preparesKeyInBackground: Bool
+    private var keyPreparationTask: Task<Void, Never>?
+    private var keyPreparationCompletions: [RequestCompletion] = []
+    private var keyPreparationTrigger: DiagnosticSyncTrigger = .startup
     /// A startup-level Repair action may rebuild base/journal while an older durable
     /// checkpoint halt still exists in state.json. Carry that exact user authority into
     /// the first successfully constructed engine so the same Repair is not requested
@@ -425,11 +429,13 @@ final class SyncCoordinator {
         keys: SyncKeyStore,
         device: String,
         transportFactory: (() throws -> any SyncTransport)? = nil,
+        preparesKeyInBackground: Bool = false,
         backendSelection: SyncBackendSelectionStore? = nil,
         offlineRetryScheduler: SyncOfflineRetryScheduler? = nil
     ) {
         self.library = library
         self.keys = keys
+        self.preparesKeyInBackground = preparesKeyInBackground
         self.device = device
         let selection = backendSelection ?? SyncBackendSelectionStore()
         self.backendSelection = selection
@@ -490,7 +496,9 @@ final class SyncCoordinator {
 
     /// Destructive local maintenance may proceed only after an old round has returned,
     /// not merely after the checkbox was switched off.
-    var isQuiescent: Bool { roundTask == nil && shutdownTask == nil }
+    var isQuiescent: Bool {
+        roundTask == nil && shutdownTask == nil && keyPreparationTask == nil
+    }
 
     /// Whether a user-facing Sync Now can do useful work. A sticky/startup condition
     /// with its own recovery action must never be presented as a generic retry, and a
@@ -553,6 +561,16 @@ final class SyncCoordinator {
     }
 
     func start() {
+        guard Self.isEnabled, !cloudMutationInProgress, engine == nil,
+              roundTask == nil, shutdownTask == nil else { return }
+        if preparesKeyInBackground {
+            _ = enqueueSyncRequest(trigger: .startup, completion: nil)
+        } else {
+            start(preparedMaterial: nil)
+        }
+    }
+
+    private func start(preparedMaterial: Result<Data, Error>?) {
         guard Self.isEnabled, !cloudMutationInProgress, engine == nil else { return }
         // Re-enabling is intentionally deferred while the prior transport drains. The
         // shutdown task calls start again after its awaited backend barrier completes.
@@ -579,7 +597,7 @@ final class SyncCoordinator {
             try locations.createDirectories()
             library.activateProtocolLocations(locations)
             try validateProtocolFilesForStartup(at: locations)
-            material = try keys.materialMintingIfNeeded()
+            material = try preparedMaterial?.get() ?? keys.materialMintingIfNeeded()
             sealer = SnippetCryptoSealer(
                 keyring: try SyncKeyStore.keyring(from: material), scopeID: keys.scopeID)
             try discardAgreedBaseIfWireKeyChanged(material, at: locations)
@@ -671,7 +689,8 @@ final class SyncCoordinator {
 
         startPolling(every: transport.pollInterval)
         startEventPump(for: transport)
-        _ = syncNow(trigger: .startup)
+        _ = enqueueSyncRequest(
+            trigger: .startup, completion: nil, preparedMaterial: .success(material))
     }
 
     /// Retries a start that failed on the keychain.
@@ -713,6 +732,8 @@ final class SyncCoordinator {
         // cancellation, and local vault removal must wait until it has returned and the
         // transport's awaited shutdown has prevented further callbacks or automatic
         // scheduler work.
+        let retiringPreparation = keyPreparationTask
+        retiringPreparation?.cancel()
         let retiringRound = roundTask
         let retiringTransport = transport
         retiringRound?.cancel()
@@ -725,15 +746,18 @@ final class SyncCoordinator {
         publish(localRecoveryEngine?.state ?? .disabled)
         finishAllRequests(with: .completed(.disabled))
 
-        if shutdownTask == nil, retiringRound != nil || retiringTransport != nil {
-            shutdownTask = Task { @MainActor [weak self, retiringRound, retiringTransport] in
+        if shutdownTask == nil,
+           retiringPreparation != nil || retiringRound != nil || retiringTransport != nil {
+            shutdownTask = Task { @MainActor [weak self, retiringPreparation, retiringRound, retiringTransport] in
                 // SyncEngine owns the transport strongly, so first let its data-plane
                 // call return. Then stop transport-owned automatic work and wait until
                 // the backend confirms quiescence before a replacement can be built.
+                if let retiringPreparation { await retiringPreparation.value }
                 if let retiringRound { await retiringRound.value }
                 if let retiringTransport { await retiringTransport.shutdown() }
 
                 guard let self else { return }
+                self.keyPreparationTask = nil
                 self.shutdownTask = nil
                 if Self.isEnabled, !self.cloudMutationInProgress { self.start() }
             }
@@ -897,7 +921,8 @@ final class SyncCoordinator {
     @discardableResult
     private func enqueueSyncRequest(
         trigger: DiagnosticSyncTrigger,
-        completion: RequestCompletion?
+        completion: RequestCompletion?,
+        preparedMaterial: Result<Data, Error>? = nil
     ) -> RequestDisposition {
         let bypassesBackoff: Bool
         switch trigger {
@@ -921,12 +946,17 @@ final class SyncCoordinator {
             return .queued
         }
 
+        if preparesKeyInBackground, preparedMaterial == nil, roundTask == nil,
+           !cloudMutationInProgress {
+            return prepareKeyForRequest(trigger: trigger, completion: completion)
+        }
+
         guard engine != nil else {
             // A start that failed — the keychain would not answer — is retried here
             // rather than only at launch. Without this the only way back was to relaunch
             // or toggle the checkbox, because the poll timer is started by `start()` and
             // so does not exist yet. `start()` ends by syncing, so this call is done.
-            start()
+            start(preparedMaterial: preparedMaterial)
             guard engine != nil else {
                 let unavailable = readiness
                 completion?(.notStarted(unavailable))
@@ -944,7 +974,7 @@ final class SyncCoordinator {
             return .queued
         }
         // A rebuild also ends by syncing; running a second round here would be waste.
-        if restartIfWireKeyChanged() {
+        if restartIfWireKeyChanged(preparedMaterial: preparedMaterial) {
             if shutdownTask != nil {
                 queueReplay(bypassingBackoff: bypassesBackoff)
                 if let completion { replayRoundCompletions.append(completion) }
@@ -1561,14 +1591,62 @@ final class SyncCoordinator {
     /// Returns whether it restarted, because `start()` finishes by syncing and the caller
     /// must not then run a second round.
     @discardableResult
-    private func restartIfWireKeyChanged() -> Bool {
+    private func restartIfWireKeyChanged(preparedMaterial: Result<Data, Error>?) -> Bool {
         guard engine != nil, roundTask == nil, let activeKeyMaterial else { return false }
-        guard let current = try? keys.material(), current != activeKeyMaterial else { return false }
+        let current: Data?
+        if let preparedMaterial {
+            current = try? preparedMaterial.get()
+        } else if preparesKeyInBackground {
+            return false
+        } else {
+            current = try? keys.material()
+        }
+        guard let current, current != activeKeyMaterial else { return false }
 
         Diagnostics.record(.syncTriggered(.keyChanged))
         stop()
         start()
         return true
+    }
+
+    /// All requests made while Security.framework is busy share one preparation.
+    /// The UI remains free to read/edit local data; the ordinary round snapshots those
+    /// edits only after preparation and the transport's account-scope checks complete.
+    private func prepareKeyForRequest(
+        trigger: DiagnosticSyncTrigger,
+        completion: RequestCompletion?
+    ) -> RequestDisposition {
+        if let completion { keyPreparationCompletions.append(completion) }
+        if keyPreparationTask != nil {
+            if trigger == .manual { keyPreparationTrigger = .manual }
+            return .queued
+        }
+        keyPreparationTrigger = trigger
+        let generation = lifecycleGeneration
+        let starting = engine == nil
+        let existingMaterial = activeKeyMaterial
+        keyPreparationTask = Task { @MainActor [weak self, keys] in
+            let prepared: Result<Data, Error>
+            do {
+                // An established engine only checks for convergence. A missing shared
+                // item must never mint a replacement key during a foreground refresh.
+                guard let material = try await keys.prepareMaterialInBackground(
+                    mintingIfNeeded: starting) ?? existingMaterial else {
+                    throw SyncKeyStore.Failure.keychainUnavailable
+                }
+                prepared = .success(material)
+            } catch { prepared = .failure(error) }
+            guard let self, self.lifecycleGeneration == generation,
+                  !Task.isCancelled else { return }
+            self.keyPreparationTask = nil
+            let completions = self.keyPreparationCompletions
+            self.keyPreparationCompletions.removeAll()
+            _ = self.enqueueSyncRequest(
+                trigger: self.keyPreparationTrigger,
+                completion: { result in completions.forEach { $0(result) } },
+                preparedMaterial: prepared)
+        }
+        return .queued
     }
 
     private func startRound(
@@ -1663,6 +1741,8 @@ final class SyncCoordinator {
 
     private func finishAllRequests(with result: RequestResult) {
         let completions = currentRoundCompletions + replayRoundCompletions
+            + keyPreparationCompletions
+        keyPreparationCompletions.removeAll(keepingCapacity: true)
         currentRoundCompletions.removeAll(keepingCapacity: true)
         replayRoundCompletions.removeAll(keepingCapacity: true)
         for completion in completions { completion(result) }

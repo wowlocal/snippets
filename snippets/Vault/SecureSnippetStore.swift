@@ -198,6 +198,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// Publishes and adopts the vault's identity through iCloud Keychain, which is what
     /// makes a second Mac join this vault instead of minting a rival one.
     private let identityStore: VaultIdentityStore
+    private let maintainsKeychainInBackground: Bool
+    private var keychainMaintenanceTask: Task<Void, Never>?
     private let vaultURL: URL
     private let libraryURL: URL
     private let lockURL: URL
@@ -221,6 +223,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
     init(
         session: VaultSession,
         keychain: KeychainSecretStore? = nil,
+        maintainsKeychainInBackground: Bool = false,
         deviceID: String,
         vaultURL: URL = SnippetStorageLocations.vaultFileURL,
         libraryURL: URL = SnippetStorageLocations.snippetsFileURL,
@@ -248,6 +251,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         self.session = session
         self.keychain = resolvedKeychain
         self.identityStore = VaultIdentityStore(keychain: resolvedKeychain)
+        self.maintainsKeychainInBackground = maintainsKeychainInBackground
         self.vaultURL = vaultURL
         self.libraryURL = libraryURL
         self.lockURL = lockURL
@@ -282,17 +286,22 @@ final class SecureSnippetStore: SecureSnippetProviding {
             document = loaded
             isUnreadable = false
             session.adopt(keyID: loaded.kid)
-            // Opportunistic, and cheap after the first call. It upgrades a vault created
-            // before identity sharing existed, and heals a slot another Mac cleared,
-            // without either needing a migration step of its own.
-            identityStore.publish(loaded)
+            if maintainsKeychainInBackground {
+                scheduleKeychainMaintenance()
+            } else {
+                identityStore.publish(loaded)
+            }
             healLegacyPlainSyncMetadata(for: loaded)
             Diagnostics.record(.vaultAction(.loaded, count: loaded.records.count))
         case .missing:
             document = nil
             isUnreadable = false
             session.adopt(keyID: nil)
-            adoptSharedVaultIfAvailable()
+            if maintainsKeychainInBackground {
+                scheduleKeychainMaintenance()
+            } else {
+                adoptSharedVaultIfAvailable()
+            }
         case .tooNew(let version):
             // A newer build owns this file. Show what we can; never write.
             document = nil
@@ -314,6 +323,35 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 attempt: nil))
         }
         if notifyChange { onChange?() }
+    }
+
+    /// Local vault metadata is sufficient to render secure shells. Keychain identity
+    /// sharing is opportunistic and must not block launch or scene activation.
+    private func scheduleKeychainMaintenance() {
+        guard keychainMaintenanceTask == nil, !isUnreadable else { return }
+        let candidate = document
+        guard candidate != nil || SyncCoordinator.isEnabled else { return }
+        keychainMaintenanceTask = Task { @MainActor [weak self, identityStore] in
+            let shared = await Task.detached(priority: .utility) {
+                if let candidate {
+                    identityStore.publish(candidate)
+                    return nil as VaultDocument?
+                }
+                return identityStore.published()
+            }.value
+            guard let self else { return }
+            self.keychainMaintenanceTask = nil
+            guard self.document == candidate, !self.isUnreadable else {
+                // A newer local identity needs its own publication, never the stale
+                // result of a lookup started for an earlier document.
+                self.scheduleKeychainMaintenance()
+                return
+            }
+            if let shared, SyncCoordinator.isEnabled,
+               self.adoptSharedVault(shared) != nil {
+                self.onChange?()
+            }
+        }
     }
 
     /// Old promotion builds could leave a plaintext projection envelope beside a now-
@@ -464,7 +502,11 @@ final class SecureSnippetStore: SecureSnippetProviding {
         guard document == nil, !isUnreadable else { return nil }
         guard !requireSyncEnabled || SyncCoordinator.isEnabled else { return nil }
         guard let identity = identityStore.published() else { return nil }
+        return adoptSharedVault(identity)
+    }
 
+    private func adoptSharedVault(_ identity: VaultDocument) -> VaultDocument? {
+        guard document == nil, !isUnreadable else { return nil }
         let adopted: VaultDocument
         do {
             adopted = try VaultFile.update(
@@ -516,6 +558,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// vault change, neither of which a Mac with no secure snippets ever has.
     @discardableResult
     func joinSharedVaultIfAvailable() -> Bool {
+        if maintainsKeychainInBackground {
+            scheduleKeychainMaintenance()
+            return false
+        }
         guard adoptSharedVaultIfAvailable() != nil else { return false }
         onChange?()
         return true
@@ -1196,7 +1242,9 @@ final class SecureSnippetStore: SecureSnippetProviding {
         guard !SyncCoordinator.isEnabled else {
             throw Failure.forgetRequiresSyncOff
         }
-        guard syncIsQuiescent else { throw Failure.forgetWaitForSync }
+        guard syncIsQuiescent, keychainMaintenanceTask == nil else {
+            throw Failure.forgetWaitForSync
+        }
 
         // A synchronizable item has no honest "delete only here" operation. Preserve the
         // shared key and identity, regardless of whether the identity lookup currently

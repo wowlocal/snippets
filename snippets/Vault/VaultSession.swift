@@ -74,6 +74,9 @@ final class VaultSession {
     var now: () -> Date = { Date() }
 
     private let keychain: KeychainSecretStore
+    private let checksKeychainInBackground: Bool
+    private var availabilityTask: Task<Void, Never>?
+    private var availabilityGeneration: UInt64 = 0
     private let duration: TimeInterval
     private let authenticationEvaluator: AuthenticationEvaluator?
     private var keyID: String?
@@ -98,16 +101,17 @@ final class VaultSession {
     private var authenticationContext: LAContext?
 
     /// - Parameter keychain: injected so tests can avoid the real keychain entirely.
-    ///   Defaulted to `nil` rather than to `KeychainSecretStore()`, because a default
-    ///   argument is evaluated at the call site — outside this type's actor — and
-    ///   constructing a `@MainActor` type there does not typecheck.
+    /// - Parameter checksKeychainInBackground: keeps iOS scene activation independent
+    ///   of Keychain latency; changed identities still lock the session immediately.
     init(
         keychain: KeychainSecretStore? = nil,
+        checksKeychainInBackground: Bool = false,
         duration: TimeInterval = VaultSession.defaultDuration,
         authenticationEvaluator: AuthenticationEvaluator? = nil,
         lifecycleNotificationCenter: NotificationCenter = .default
     ) {
         self.keychain = keychain ?? KeychainSecretStore()
+        self.checksKeychainInBackground = checksKeychainInBackground
         self.duration = duration
         self.authenticationEvaluator = authenticationEvaluator
         observeSystemLockEvents(lifecycleNotificationCenter: lifecycleNotificationCenter)
@@ -121,6 +125,10 @@ final class VaultSession {
 
     /// Points the session at a vault. Call whenever the vault is created or reloaded.
     func adopt(keyID: String?) {
+        if checksKeychainInBackground {
+            adoptWithBackgroundAvailability(keyID: keyID)
+            return
+        }
         // Foreground activation reloads the vault after LocalAuthentication returns.
         // Face ID temporarily deactivates the scene, so that reload can race both an
         // in-flight prompt and the freshly unlocked session. Re-adopting the exact same,
@@ -134,6 +142,37 @@ final class VaultSession {
         self.keyID = keyID
         lock()
         refreshAvailability()
+    }
+
+    private func adoptWithBackgroundAvailability(keyID: String?) {
+        if self.keyID != keyID {
+            availabilityGeneration &+= 1
+            availabilityTask?.cancel()
+            availabilityTask = nil
+            self.keyID = keyID
+            lock()
+            if keyID != nil { transition(to: .locked) }
+        }
+        guard let keyID else {
+            transition(to: .noKey)
+            return
+        }
+        guard availabilityTask == nil else { return }
+        let generation = availabilityGeneration
+        availabilityTask = Task { @MainActor [weak self, keychain] in
+            let exists = await Task.detached(priority: .utility) {
+                keychain.hasKey(keyID: keyID)
+            }.value
+            guard let self, self.availabilityGeneration == generation,
+                  self.keyID == keyID else { return }
+            self.availabilityTask = nil
+            if !exists {
+                self.lock()
+                self.transition(to: .noKey)
+            } else if !self.state.isUnlocked {
+                self.transition(to: .locked)
+            }
+        }
     }
 
     private func refreshAvailability() {

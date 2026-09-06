@@ -350,7 +350,8 @@ final class SyncBackendSelectionStore {
         keychain: KeychainSecretStore? = nil,
         cloudKeys: SnippetsCloudKeyStore? = nil,
         bootstrapSecrets: KeychainSecretStore? = nil,
-        snippetsCloudEnabled: Bool = SnippetsCloudFeature.isEnabled
+        snippetsCloudEnabled: Bool = SnippetsCloudFeature.isEnabled,
+        defersCredentialRecovery: Bool = false
     ) {
         self.defaults = defaults
         self.snippetsCloudEnabled = snippetsCloudEnabled
@@ -375,7 +376,23 @@ final class SyncBackendSelectionStore {
         // A successful remote logout writes this journal before deleting any local
         // secret. Finishing it during normal app construction makes process death at
         // every subsequent deletion boundary recoverable and fail-closed.
-        try? resumePendingLocalErase()
+        if defersCredentialRecovery {
+            Task { @MainActor [weak self, keychain = self.keychain] in
+                // Even an absent marker is synchronous Security.framework IPC. The
+                // common iCloud launch must not pay its unbounded latency on MainActor.
+                let pending = try? await keychain.loadItemInBackground(
+                    account: Self.pendingLocalEraseAccount)
+                guard let self else { return }
+                if pending != nil { try? self.resumePendingLocalErase() }
+                self.resumeCredentialLineageIfNeeded()
+            }
+        } else {
+            try? resumePendingLocalErase()
+            resumeCredentialLineageIfNeeded()
+        }
+    }
+
+    private func resumeCredentialLineageIfNeeded() {
         // Shipping builds expose only iCloud. Credential replacement/revocation state
         // belongs exclusively to the dark-launched Snippets Cloud data plane, and that
         // plane revalidates the same lineage before constructing a transport. Avoid

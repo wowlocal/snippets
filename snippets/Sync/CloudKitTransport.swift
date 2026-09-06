@@ -94,6 +94,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         eventContinuation.finish()
     }
 
+    @concurrent
     func shutdown() async {
         let detached = adapterCreationLock.withLock { () -> (
             Task<Void, Never>?, Task<Void, Never>?, (any NSObjectProtocol)?
@@ -126,6 +127,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
 
     // MARK: - Account scope
 
+    @concurrent
     func resolveAccountIdentity() async throws -> SyncAccountIdentity? {
         let preflight = try await preflightScope()
         switch preflight.checkpointIssue {
@@ -137,6 +139,10 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         }
     }
 
+    // Approachable Concurrency otherwise inherits the caller's actor even for a
+    // nonisolated async method. Container creation and checkpoint Keychain IPC must
+    // execute away from the UI, including before the first network suspension.
+    @concurrent
     func preflightScope() async throws -> SyncScopePreflight {
         let identity = try await currentAccountIdentity()
         let retirement = adapterCreationLock.withLock { () -> Task<Void, Never>? in
@@ -182,6 +188,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
 
     /// Called by Core only after it durably captured local intent in the old account's
     /// journal. That ordering makes replacing account-scoped CKSyncEngine state safe.
+    @concurrent
     func resetAfterAccountReview(
         expectedIdentity: SyncAccountIdentity?,
         expectedDatasetIdentity: SyncDatasetIdentity?
@@ -211,6 +218,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         try await verifyAccountIdentity(identity)
     }
 
+    @concurrent
     func resetAfterCheckpointReview(
         expectedIdentity: SyncAccountIdentity?,
         expectedDatasetIdentity: SyncDatasetIdentity?
@@ -226,6 +234,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         try await verifyAccountIdentity(identity)
     }
 
+    @concurrent
     func resetAfterRemoteDataResetReview(
         expectedIdentity: SyncAccountIdentity?,
         expectedDatasetIdentity: SyncDatasetIdentity?
@@ -243,6 +252,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         try await verifyAccountIdentity(identity)
     }
 
+    @concurrent
     func resetForLocalFullResync(
         expectedIdentity: SyncAccountIdentity?,
         expectedDatasetIdentity: SyncDatasetIdentity?
@@ -348,6 +358,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
 
     // MARK: - Data plane
 
+    @concurrent
     func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
         let identity = try await beginAccountOperation()
         let active = try await adapter(for: identity)
@@ -359,6 +370,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         return fetched
     }
 
+    @concurrent
     func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
         let identity = try await beginAccountOperation()
         guard !records.isEmpty else {
@@ -374,6 +386,7 @@ nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
         return submitted
     }
 
+    @concurrent
     func acknowledgeFetched(through cursor: SyncCursor?) async throws {
         let identity = try await beginAccountOperation()
         guard let active = lock.withLock({

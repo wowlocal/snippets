@@ -51,7 +51,7 @@ final class SyncKeyStore {
     /// Fixed. Also the `scopeID` bound into every envelope's AAD — see
     /// `SnippetCryptoSealer.scopeID` for why a scope must come from somewhere that
     /// cannot regenerate itself, which a constant trivially satisfies.
-    static let account = "sync-v1"
+    nonisolated static let account = "sync-v1"
 
     /// 32 bytes of key followed by 32 bytes of HKDF salt, exactly what
     /// `SnippetCrypto.Keyring.generate()` produces.
@@ -155,6 +155,37 @@ final class SyncKeyStore {
         } catch {
             throw Failure.keychainUnavailable
         }
+    }
+
+    /// iOS lifecycle requests must not execute Security.framework IPC on MainActor.
+    /// Capture the selected provider before leaving the actor; the coordinator rejects
+    /// the result if its lifecycle changes while this worker is running.
+    func prepareMaterialInBackground(mintingIfNeeded: Bool) async throws -> Data? {
+        if usesSnippetsCloud() {
+            return try mintingIfNeeded ? materialMintingIfNeeded() : material()
+        }
+        return try await Task.detached(priority: .utility) { [keychain] in
+            do {
+                if let stored = try keychain.loadItem(
+                    account: Self.account, expectedByteCount: Self.materialByteCount) {
+                    return stored
+                }
+                guard mintingIfNeeded else { return nil }
+                var minted = SnippetCrypto.randomBytes(SnippetCrypto.keyByteCount)
+                minted.append(SnippetCrypto.randomBytes(SnippetCrypto.saltByteCount))
+                let stored = try keychain.addItemIfAbsent(minted, account: Self.account)
+                guard stored.count == Self.materialByteCount else {
+                    throw Failure.malformedMaterial(stored.count)
+                }
+                return stored
+            } catch KeychainSecretStore.Failure.invalidItemLength(_, let actual) {
+                throw Failure.malformedMaterial(actual)
+            } catch let failure as Failure {
+                throw failure
+            } catch {
+                throw Failure.keychainUnavailable
+            }
+        }.value
     }
 
     /// Splits stored material into the keyring the sealer wants.

@@ -295,6 +295,14 @@ final class SnippetsCloudAccountBootstrap {
         }
     }
 
+    /// Launch needs only the durable setup fence, not the full Settings state (which
+    /// probes several unrelated credentials). Read it without blocking scene creation.
+    func requiresPostAuthorizationResume() async throws -> Bool {
+        let data = try await secrets.loadItemInBackground(
+            account: Self.pendingPostAuthorizationAccount)
+        return try decodePendingPostAuthorization(data) != nil
+    }
+
     func state() throws -> State {
         if try pendingPostAuthorization() != nil {
             return .setupInterrupted
@@ -993,9 +1001,12 @@ final class SnippetsCloudAccountBootstrap {
     }
 
     private func pendingPostAuthorization() throws -> PendingPostAuthorization? {
-        guard let data = try secrets.loadItem(
-            account: Self.pendingPostAuthorizationAccount
-        ) else { return nil }
+        try decodePendingPostAuthorization(
+            secrets.loadItem(account: Self.pendingPostAuthorizationAccount))
+    }
+
+    private func decodePendingPostAuthorization(_ data: Data?) throws -> PendingPostAuthorization? {
+        guard let data else { return nil }
         guard data.count <= 16 * 1_024,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == [

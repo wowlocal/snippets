@@ -61,8 +61,9 @@ nonisolated struct KeychainItemOperations: @unchecked Sendable {
 /// the login keychain, which makes the entitlement-free tier fail with
 /// `errSecMissingEntitlement`. It is also incompatible with a synchronizable item. The
 /// vault session evaluates the human-presence policy before asking this type for bytes.
-@MainActor
-final class KeychainSecretStore {
+// Security.framework calls may block on its daemon. The immutable production client
+// can be used by background workers; only the injected memory backend needs a lock.
+nonisolated final class KeychainSecretStore: Sendable {
 
     enum ItemAccessibility: Equatable {
         case whenUnlocked
@@ -112,7 +113,11 @@ final class KeychainSecretStore {
     /// Instance-local test backend. Production always leaves this `nil` and reaches
     /// Security.framework; unsigned simulator tests can exercise vault ordering without
     /// requiring or mutating a real keychain access group.
-    private var inMemoryItems: [String: Data]?
+    private final class MemoryItems: @unchecked Sendable {
+        let lock = NSLock()
+        var values: [String: Data] = [:]
+    }
+    private let memory: MemoryItems?
     let tier: Tier
 
     init(
@@ -125,7 +130,7 @@ final class KeychainSecretStore {
         self.tier = tier ?? Self.detectTier()
         self.service = service
         self.itemAccessibility = itemAccessibility
-        self.inMemoryItems = inMemory ? [:] : nil
+        self.memory = inMemory ? MemoryItems() : nil
         self.keychainOperations = keychainOperations
     }
 
@@ -196,8 +201,8 @@ final class KeychainSecretStore {
     /// Writes an item without a delete-first window. If replacement fails, the previous
     /// value is still present.
     func storeItem(_ data: Data, account: String) throws {
-        if inMemoryItems != nil {
-            inMemoryItems?[account] = data
+        if let memory {
+            memory.lock.withLock { memory.values[account] = data }
             return
         }
         let query = baseQuery(account: account)
@@ -230,10 +235,12 @@ final class KeychainSecretStore {
     /// `SyncKeyStore` for what is done about that.
     @discardableResult
     func addItemIfAbsent(_ data: Data, account: String) throws -> Data {
-        if let existing = inMemoryItems?[account] { return existing }
-        if inMemoryItems != nil {
-            inMemoryItems?[account] = data
-            return data
+        if let memory {
+            return memory.lock.withLock {
+                if let existing = memory.values[account] { return existing }
+                memory.values[account] = data
+                return data
+            }
         }
         if let existing = try loadItem(account: account) { return existing }
 
@@ -280,8 +287,8 @@ final class KeychainSecretStore {
             return data
         }
 
-        if let inMemoryItems {
-            guard let value = inMemoryItems[account] else { return nil }
+        if let memory {
+            guard let value = memory.lock.withLock({ memory.values[account] }) else { return nil }
             return try validated(value)
         }
 
@@ -311,13 +318,18 @@ final class KeychainSecretStore {
         return try validated(migrated)
     }
 
+    @concurrent
+    func loadItemInBackground(account: String, expectedByteCount: Int? = nil) async throws -> Data? {
+        try loadItem(account: account, expectedByteCount: expectedByteCount)
+    }
+
     /// Whether an item exists, without reading its bytes. The legacy-tier fallback keeps
     /// an entitlement upgrade from making an existing vault look keyless. A query
     /// failure is deliberately treated as present: Boolean presentation callers must
     /// never turn a locked/unavailable Keychain into authority to enter a data plane or
     /// overwrite recovery state. Mutation boundaries use the throwing load API.
     func hasItem(account: String) -> Bool {
-        if let inMemoryItems { return inMemoryItems[account] != nil }
+        if let memory { return memory.lock.withLock { memory.values[account] != nil } }
         do {
             if try itemExists(baseQuery(account: account)) { return true }
             if case .synchronizable = tier {
@@ -331,8 +343,8 @@ final class KeychainSecretStore {
 
     /// Removes an item from every tier it may be in.
     func deleteItem(account: String) throws {
-        if inMemoryItems != nil {
-            inMemoryItems?[account] = nil
+        if let memory {
+            memory.lock.withLock { memory.values[account] = nil }
             return
         }
         guard case .synchronizable = tier else {

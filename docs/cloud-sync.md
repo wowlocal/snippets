@@ -10,6 +10,29 @@ required not to break.
 
 ---
 
+## iOS launch and foreground responsiveness
+
+The iPhone and iPad roots render the persisted local library independently of cloud
+availability. The account-scope checks below fence the sync data plane; they must never
+become a prerequisite for displaying or editing snippets already on the device.
+
+Security.framework calls have no useful UI latency bound, including existence checks
+and queries for absent items. iOS loads vault metadata locally, then checks key availability
+and publishes/adopts the shared identity on background workers. Wire-key preparation and
+convergence checks also run off MainActor. Pending preparations coalesce sync requests,
+and disabling or replacing sync drains the preparation before starting a new generation.
+A missing wire key during an established round's refresh never mints a replacement.
+
+Cloud setup/erase markers are checked asynchronously during startup. Their recovery and
+validation remain fail-closed. CloudKit transport entry points explicitly leave the caller's
+actor: with Approachable Concurrency, merely marking an async method `nonisolated` does
+not keep its synchronous container/checkpoint work off the UI thread.
+
+`SyncLifecycleTests` exercises cached-library access with deliberately blocked Keychain,
+cloud-setup markers, and CloudKit account preflight, plus stale results and rapid re-enable.
+The UI launch benchmark uses isolated storage with sync disabled and is therefore only
+a baseline; it cannot detect a regression in these enabled-sync paths by itself.
+
 ## 1. What is built, and what is not
 
 | Phase | State |

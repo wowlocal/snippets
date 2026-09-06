@@ -1,5 +1,8 @@
 import Darwin
 import CryptoKit
+import CloudKit
+import Security
+import UIKit
 import XCTest
 @testable import Snippets
 
@@ -1526,6 +1529,221 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertNil(coordinator.recoveryAction)
     }
 
+    func testCachedIOSLibraryCanRenderAndEditWhileLaunchKeychainIsBlocked() async throws {
+        let seed = SnippetStore(configuration: .iOS)
+        let cached = try seed.addSnippet(name: "Cached startup fixture", content: "Local body")
+        seed.flushPendingWrites()
+        let gate = StartupBlockingProbe()
+        defer { gate.release() }
+        let transport = SyncLifecycleTransport()
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let environment = AppEnvironment(
+            keychain: gate.keychain(),
+            cloudCredentialStore: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            cloudBootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            syncTransportFactory: { transport })
+        environment.start()
+        environment.start()
+        let entered = await waitForStartup { gate.hasEntered }
+        XCTAssertTrue(entered)
+
+        // Exercise both native roots against the same pending process startup.
+        let phone = PhoneRootViewController(environment: environment)
+        phone.loadViewIfNeeded()
+        let pad = MainSplitViewController(environment: environment)
+        pad.loadViewIfNeeded()
+        XCTAssertEqual(environment.store.snippet(id: cached.id)?.content, "Local body")
+        var edit = cached
+        edit.content = "Edited before iCloud answered"
+        XCTAssertTrue(environment.store.update(edit))
+        environment.store.flushPendingWrites()
+        environment.becameActive()
+        XCTAssertFalse(gate.calledOnMainThread)
+        XCTAssertFalse(environment.syncCoordinator.isQuiescent)
+        XCTAssertEqual(transport.fetchAttempts, 0)
+        XCTAssertNil(environment.syncCoordinator.engine)
+
+        let request = Task { await environment.syncCoordinator.requestSync(trigger: .manual) }
+        gate.release()
+        _ = await request.value
+        XCTAssertGreaterThan(transport.fetchAttempts + transport.submitAttempts, 0)
+        XCTAssertEqual(environment.store.snippet(id: cached.id)?.content, edit.content)
+        XCTAssertFalse(gate.calledOnMainThread)
+        environment.syncCoordinator.setEnabled(false)
+        let stopped = await waitForStartup { environment.syncCoordinator.isQuiescent }
+        XCTAssertTrue(stopped)
+    }
+
+    func testStoppingPendingKeychainPreparationDrainsBeforeRapidReenable() async {
+        let gate = StartupBlockingProbe()
+        defer { gate.release() }
+        var factoryCalls = 0
+        let coordinator = SyncCoordinator(
+            library: SnapshotSyncLibrary([]), keys: SyncKeyStore(keychain: gate.keychain()),
+            device: "aaaaaaa1", transportFactory: {
+                factoryCalls += 1
+                return SyncLifecycleTransport()
+            }, preparesKeyInBackground: true)
+        coordinator.setEnabled(true)
+        let entered = await waitForStartup { gate.hasEntered }
+        XCTAssertTrue(entered)
+        coordinator.setEnabled(false)
+        XCTAssertFalse(coordinator.isQuiescent)
+        coordinator.setEnabled(true)
+        XCTAssertEqual(factoryCalls, 0)
+        gate.release()
+        let restarted = await waitForStartup { coordinator.engine != nil }
+        XCTAssertTrue(restarted)
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertFalse(gate.calledOnMainThread)
+        coordinator.setEnabled(false)
+        let stopped = await waitForStartup { coordinator.isQuiescent }
+        XCTAssertTrue(stopped)
+    }
+
+    func testCloudKitAccountPreflightCannotBlockCachedIOSLibrary() async throws {
+        let seed = SnippetStore(configuration: .iOS)
+        let cached = try seed.addSnippet(name: "Offline fixture", content: "Already on disk")
+        seed.flushPendingWrites()
+        let gate = StartupBlockingProbe()
+        defer { gate.release() }
+        let cloud = CloudKitTransport(
+            accountStatusProvider: {
+                gate.block()
+                return .noAccount
+            },
+            environmentProvider: { .production })
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let environment = AppEnvironment(
+            keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            cloudCredentialStore: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            cloudBootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            syncTransportFactory: { cloud })
+        environment.start()
+        let entered = await waitForStartup { gate.hasEntered }
+        XCTAssertTrue(entered)
+        XCTAssertFalse(gate.calledOnMainThread)
+        XCTAssertEqual(environment.store.snippet(id: cached.id)?.content, "Already on disk")
+        XCTAssertNoThrow(try environment.store.addSnippet(name: "Created offline"))
+        environment.becameActive()
+        gate.release()
+        _ = await environment.syncCoordinator.requestSync(trigger: .manual)
+        if case .needsAuthentication = environment.syncCoordinator.state {} else {
+            XCTFail("the blocked account lookup should finish as unavailable")
+        }
+        XCTAssertEqual(environment.store.snippets.count, 2)
+        environment.store.flushPendingWrites()
+        environment.syncCoordinator.setEnabled(false)
+        let stopped = await waitForStartup { environment.syncCoordinator.isQuiescent }
+        XCTAssertTrue(stopped)
+    }
+
+    func testBackgroundVaultAvailabilityIgnoresAnOldIdentity() async {
+        let gate = StartupBlockingProbe()
+        defer { gate.release() }
+        let session = VaultSession(
+            keychain: gate.keychain(), checksKeychainInBackground: true)
+        session.adopt(keyID: "old-fixture-key")
+        let entered = await waitForStartup { gate.hasEntered }
+        XCTAssertTrue(entered)
+        session.adopt(keyID: nil)
+        gate.release()
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertEqual(session.state, .noKey)
+        XCTAssertFalse(gate.calledOnMainThread)
+    }
+
+    func testCachedVaultLoadsWithoutWaitingForIdentityPublication() async throws {
+        let seedKeychain = KeychainSecretStore(tier: .deviceOnly, inMemory: true)
+        let seedSession = VaultSession(keychain: seedKeychain)
+        let seed = SecureSnippetStore(
+            session: seedSession, keychain: seedKeychain, deviceID: "aaaaaaa1")
+        let document = try seed.createVaultIfNeeded(confirmRecoveryKey: { _ in true })
+        let gate = StartupBlockingProbe()
+        defer { gate.release() }
+        let environment = AppEnvironment(
+            keychain: gate.keychain(),
+            cloudCredentialStore: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            cloudBootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true))
+        XCTAssertEqual(environment.secureStore.document?.kid, document.kid)
+        environment.becameActive()
+        let entered = await waitForStartup { gate.hasEntered }
+        XCTAssertTrue(entered)
+        XCTAssertFalse(gate.calledOnMainThread)
+        XCTAssertEqual(environment.secureStore.document?.kid, document.kid)
+        XCTAssertThrowsError(try environment.secureStore.forgetEverything(syncIsQuiescent: true),
+                             "teardown must drain pending identity publication")
+        gate.release()
+        let removed = await waitForStartup {
+            do {
+                try environment.secureStore.forgetEverything(syncIsQuiescent: true)
+                return true
+            } catch { return false }
+        }
+        XCTAssertTrue(removed)
+        XCTAssertNil(environment.secureStore.document)
+    }
+
+    func testBackgroundForegroundKeyCheckDoesNotMintAMissingSharedKey() async throws {
+        let keychain = KeychainSecretStore(tier: .deviceOnly, inMemory: true)
+        let keys = SyncKeyStore(keychain: keychain)
+        var factoryCalls = 0
+        let coordinator = SyncCoordinator(
+            library: SnapshotSyncLibrary([]), keys: keys,
+            device: "aaaaaaa1", transportFactory: {
+                factoryCalls += 1
+                return SyncLifecycleTransport()
+            }, preparesKeyInBackground: true)
+        coordinator.setEnabled(true)
+        _ = await coordinator.requestSync(trigger: .manual)
+        XCTAssertNotNil(try keys.material())
+        try keychain.deleteItem(account: SyncKeyStore.account)
+        _ = await coordinator.requestSync(trigger: .manual)
+        XCTAssertNil(try keys.material())
+        XCTAssertEqual(factoryCalls, 1)
+        coordinator.setEnabled(false)
+        let stopped = await waitForStartup { coordinator.isQuiescent }
+        XCTAssertTrue(stopped)
+    }
+
+    func testIOSLaunchDoesNotBlockOnUnrelatedCloudCredentialMarkers() async {
+        let gate = StartupBlockingProbe()
+        defer { gate.release() }
+        var factoryCalls = 0
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let environment = AppEnvironment(
+            keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            cloudCredentialStore: gate.keychain(),
+            cloudBootstrapSecrets: gate.keychain(),
+            syncTransportFactory: {
+                factoryCalls += 1
+                return SyncLifecycleTransport()
+            })
+        environment.start()
+        let entered = await waitForStartup { gate.hasEntered }
+        XCTAssertTrue(entered)
+        XCTAssertFalse(gate.calledOnMainThread)
+        XCTAssertNil(environment.syncCoordinator.engine)
+        XCTAssertNoThrow(try environment.store.addSnippet(name: "Usable during bootstrap"))
+        gate.release()
+        let started = await waitForStartup { environment.syncCoordinator.engine != nil }
+        XCTAssertTrue(started)
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertFalse(gate.calledOnMainThread)
+        environment.store.flushPendingWrites()
+        environment.syncCoordinator.setEnabled(false)
+        let stopped = await waitForStartup { environment.syncCoordinator.isQuiescent }
+        XCTAssertTrue(stopped)
+    }
+
+    private func waitForStartup(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+
     private func makeCoordinatorForRekeyTests(
         transport: SyncLifecycleTransport = SyncLifecycleTransport(),
         liveEnvelopes: [SyncEnvelope] = []
@@ -2110,5 +2328,56 @@ private final class OfflineRetryArmHarness {
               evenIfCancelled || !entries[index].isCancelled else { return }
         entries[index].didFire = true
         entries[index].action()
+    }
+}
+
+/// Blocks the actual synchronous boundary, with a bounded escape so a regression
+/// produces a test failure instead of hanging the entire simulator test host.
+private nonisolated final class StartupBlockingProbe: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var entered = false
+    private var released = false
+    private var usedMainThread = false
+    var hasEntered: Bool { condition.withLock { entered } }
+    var calledOnMainThread: Bool { condition.withLock { usedMainThread } }
+
+    func block() {
+        condition.lock()
+        defer { condition.unlock() }
+        entered = true
+        usedMainThread = usedMainThread || Thread.isMainThread
+        guard !Thread.isMainThread else { return }
+        let deadline = Date().addingTimeInterval(5)
+        while !released {
+            if !condition.wait(until: deadline) { break }
+        }
+    }
+
+    func release() {
+        condition.withLock {
+            released = true
+            condition.broadcast()
+        }
+    }
+
+    func keychain() -> KeychainSecretStore {
+        KeychainSecretStore(
+            tier: .deviceOnly,
+            keychainOperations: KeychainItemOperations(
+                copyMatching: { [self] query, result in
+                    block()
+                    let attributes = query as NSDictionary
+                    guard attributes[kSecAttrAccount] as? String == SyncKeyStore.account else {
+                        return errSecItemNotFound
+                    }
+                    result?.pointee = [
+                        kSecValueData: Data(repeating: 0x47, count: 64),
+                        kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
+                    ] as CFDictionary
+                    return errSecSuccess
+                },
+                update: { _, _ in errSecSuccess },
+                add: { _, _ in errSecSuccess },
+                delete: { _ in errSecSuccess }))
     }
 }

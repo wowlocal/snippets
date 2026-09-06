@@ -30,6 +30,10 @@ final class AppEnvironment {
     var isPerformingLocalEditorChange: Bool { localEditorChangeDepth > 0 }
 
     init(
+        keychain: KeychainSecretStore? = nil,
+        cloudCredentialStore: KeychainSecretStore? = nil,
+        cloudBootstrapSecrets: KeychainSecretStore? = nil,
+        syncTransportFactory: (() throws -> any SyncTransport)? = nil,
         pasteboard: (any SnippetPasteboard)? = nil,
         secureContentLoader: SnippetActionService.SecureContentLoader? = nil
     ) {
@@ -59,9 +63,14 @@ final class AppEnvironment {
         #endif
         diagnostics = DiagnosticsService.shared
         store = SnippetStore(configuration: .iOS)
-        keychain = KeychainSecretStore()
-        backendSelection = SyncBackendSelectionStore()
-        cloudBootstrap = SnippetsCloudAccountBootstrap(selection: backendSelection)
+        self.keychain = keychain ?? KeychainSecretStore()
+        let keychain = self.keychain
+        backendSelection = SyncBackendSelectionStore(
+            keychain: cloudCredentialStore,
+            bootstrapSecrets: cloudBootstrapSecrets,
+            defersCredentialRecovery: true)
+        cloudBootstrap = SnippetsCloudAccountBootstrap(
+            selection: backendSelection, secrets: cloudBootstrapSecrets)
         #if DEBUG
         let usesDeterministicUITestAuthentication =
             isUITestReset
@@ -74,14 +83,16 @@ final class AppEnvironment {
         }
         vaultSession = VaultSession(
             keychain: keychain,
+            checksKeychainInBackground: true,
             authenticationEvaluator: authenticationEvaluator
         )
         #else
-        vaultSession = VaultSession(keychain: keychain)
+        vaultSession = VaultSession(keychain: keychain, checksKeychainInBackground: true)
         #endif
         secureStore = SecureSnippetStore(
             session: vaultSession,
             keychain: keychain,
+            maintainsKeychainInBackground: true,
             deviceID: store.deviceID
         )
         syncLibrary = SnippetLibraryBridge(store: store, secureStore: secureStore)
@@ -93,6 +104,8 @@ final class AppEnvironment {
                 cloudKeys: backendSelection.cloudKeys,
                 usesSnippetsCloud: { selectedBackend.provider == .snippetsCloud }),
             device: store.deviceID,
+            transportFactory: syncTransportFactory,
+            preparesKeyInBackground: true,
             backendSelection: backendSelection
         )
         snippetActions = SnippetActionService(
@@ -118,25 +131,20 @@ final class AppEnvironment {
         guard !hasStarted else { return }
         hasStarted = true
         store.onChange?(.init(source: .external))
-        do {
-            if try cloudBootstrap.state() == .setupInterrupted {
-                Task { @MainActor [cloudBootstrap, syncCoordinator] in
-                    do {
-                        let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
-                        if resumed == .ready {
-                            syncCoordinator.startIfEnabled()
-                        }
-                    } catch {
-                        // The durable bootstrap marker keeps the cloud data plane paused.
-                        // Settings exposes the same idempotent resume action.
-                    }
+        Task { @MainActor [weak self, cloudBootstrap] in
+            do {
+                let requiresResume = try await cloudBootstrap.requiresPostAuthorizationResume()
+                guard let self else { return }
+                if requiresResume {
+                    let resumed = try await cloudBootstrap.resumePostAuthorizationSetup()
+                    if resumed == .ready { self.syncCoordinator.startIfEnabled() }
+                } else {
+                    self.syncCoordinator.startIfEnabled()
                 }
-            } else {
-                syncCoordinator.startIfEnabled()
+            } catch {
+                // Preserve the durable setup fence on an unavailable/malformed marker.
+                // Local library presentation is independent; Settings exposes retry.
             }
-        } catch {
-            // An unavailable or malformed bootstrap marker is a data-plane boundary.
-            // Settings exposes retry without interpreting uncertainty as absence.
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
             TemporaryExportFiles.removeStale()

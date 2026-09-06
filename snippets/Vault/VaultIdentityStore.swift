@@ -34,8 +34,7 @@ import Foundation
 /// the only copy of secrets that exist nowhere else, and silently re-pointing it at a
 /// key it was not encrypted under would destroy them. That state is reported rather
 /// than repaired; the recovery key is the way out.
-@MainActor
-final class VaultIdentityStore {
+nonisolated final class VaultIdentityStore: Sendable {
 
     /// Fixed, because there is exactly one vault identity per iCloud account. A varying
     /// name would mean two Macs could never find each other's.
@@ -128,10 +127,8 @@ final class VaultIdentityStore {
         // real vault re-publishes an identity someone else cleared) then never ran until
         // the app was relaunched, and a third Mac meanwhile minted a rival `kid`.
         //
-        // The cost is one `SecItemCopyMatching` and a small JSON decode per `reload()`,
-        // which is sub-millisecond and not on any hot path. Correctness is worth more
-        // than that here, and a cache that can be invalidated by another machine is not a
-        // cache this type can hold.
+        // Security.framework IPC has no latency bound. iOS schedules reload maintenance
+        // on a worker so this uncached correctness check cannot hold up the library UI.
         var valueToPublish = identity
         if let existing = published() {
             guard existing.kid == identity.kid else {
