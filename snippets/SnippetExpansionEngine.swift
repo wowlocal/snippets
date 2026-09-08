@@ -80,7 +80,8 @@ final class SnippetExpansionEngine {
     /// only while keyboard focus remains on this same object.
     private var suggestionTargetElement: AXUIElement?
     private var suggestionTargetRole: String?
-    private var suggestionHasAXConfirmedContext = false
+    private var suggestionHasReadableAXContext = false
+    private var suggestionCaretUnavailable = false
     private var pendingSpaceShortcutFocusValidation = false
     private var pendingSpaceShortcutInputSourceID: String?
     private var suggestionSyncGeneration = 0
@@ -180,16 +181,12 @@ final class SnippetExpansionEngine {
         let stage: DiagnosticExpansionAXStage
         let failure: DiagnosticExpansionAXFailure
         let errorCode: Int?
+        var allowsLocalTracking = false
     }
 
     private enum AXTextRead {
         case value(String)
-        case unavailable(AXContextUnavailable)
-    }
-
-    private enum AXRangeRead {
-        case value(CFRange)
-        case unavailable(AXContextUnavailable)
+        case unavailable(AXContextUnavailable, mayReadAncestor: Bool)
     }
 
     private enum AXElementRead {
@@ -1095,7 +1092,8 @@ final class SnippetExpansionEngine {
             of: anchorFocusedElement,
             attribute: kAXRoleAttribute as CFString,
             axBudget: axBudget)
-        suggestionHasAXConfirmedContext = false
+        suggestionHasReadableAXContext = false
+        suggestionCaretUnavailable = false
         pendingSpaceShortcutFocusValidation = false
         pendingSpaceShortcutInputSourceID = nil
         suggestionObserverAllowsAutoExpand = false
@@ -1407,7 +1405,7 @@ final class SnippetExpansionEngine {
         case .confirmed(let confirmed):
             deletion = .confirmed(confirmed)
             suggestionContextState = .axConfirmed
-            suggestionHasAXConfirmedContext = true
+            suggestionHasReadableAXContext = true
             recordExpansionAccessibility(
                 operation: .acceptance,
                 outcome: .confirmed,
@@ -1423,25 +1421,17 @@ final class SnippetExpansionEngine {
             dismissSuggestions()
             return
         case .missingTrigger:
-            if canUseUnconfirmedTextAreaLocalTracking(state: stateBefore) {
-                deletion = .localTracking(query: localQuery)
-                recordExpansionAccessibility(
-                    operation: .acceptance,
-                    outcome: .localTracking,
-                    stateBefore: stateBefore,
-                    stateAfter: stateBefore)
-            } else {
-                recordExpansionAccessibility(
-                    operation: .acceptance,
-                    outcome: .missingTrigger,
-                    stateBefore: stateBefore,
-                    stateAfter: stateBefore)
-                pendingSelectionMemoryQuery = nil
-                dismissSuggestions()
-                return
-            }
+            recordExpansionAccessibility(
+                operation: .acceptance,
+                outcome: .missingTrigger,
+                stateBefore: stateBefore,
+                stateAfter: stateBefore)
+            pendingSelectionMemoryQuery = nil
+            dismissSuggestions()
+            return
         case .unavailable(let unavailable):
-            if canUseUnconfirmedTextAreaLocalTracking(state: stateBefore) {
+            if unavailable.allowsLocalTracking,
+               canUseUnconfirmedTextAreaLocalTracking(state: stateBefore) {
                 deletion = .localTracking(query: localQuery)
                 recordExpansionAccessibility(
                     operation: .acceptance,
@@ -1726,7 +1716,14 @@ final class SnippetExpansionEngine {
                     stateAfter: .axConfirmed)
                 return .confirmed(.confirmed(context))
             case .unavailable(let unavailable):
-                consecutiveUnconfirmedReads += 1
+                if unavailable.allowsLocalTracking {
+                    consecutiveUnconfirmedReads += 1
+                } else {
+                    consecutiveUnconfirmedReads = 0
+                    if unavailable.failure == .invalidRange {
+                        localFallbackRemainsEligible = false
+                    }
+                }
                 recordExpansionAccessibility(
                     operation: .secureRevalidation,
                     outcome: .unavailable,
@@ -1745,7 +1742,8 @@ final class SnippetExpansionEngine {
                     stateAfter: .uncertainAfterHostEdit)
                 continue
             case .missingTrigger:
-                consecutiveUnconfirmedReads += 1
+                localFallbackRemainsEligible = false
+                consecutiveUnconfirmedReads = 0
                 recordExpansionAccessibility(
                     operation: .secureRevalidation,
                     outcome: .missingTrigger,
@@ -1792,7 +1790,8 @@ final class SnippetExpansionEngine {
         suggestionTargetPID = nil
         suggestionTargetElement = nil
         suggestionTargetRole = nil
-        suggestionHasAXConfirmedContext = false
+        suggestionHasReadableAXContext = false
+        suggestionCaretUnavailable = false
         pendingSpaceShortcutFocusValidation = false
         pendingSpaceShortcutInputSourceID = nil
 
@@ -2077,7 +2076,7 @@ final class SnippetExpansionEngine {
             suggestionQuery = context.query
             suggestionDeleteCount = context.triggerLength
             suggestionContextState = .axConfirmed
-            suggestionHasAXConfirmedContext = true
+            suggestionHasReadableAXContext = true
             // One printable key grants at most one opportunity to auto-expand.
             // Duplicate or later programmatic AX notifications may still
             // reconcile the panel, but cannot spend the same authorization.
@@ -2159,7 +2158,7 @@ final class SnippetExpansionEngine {
     }
 
     /// Capability-based fallback for an AXTextArea that never supplied a usable
-    /// insertion caret: no ambiguous edit, no earlier AX confirmation, same process,
+    /// insertion caret: no ambiguous edit, no earlier readable AX context, same process,
     /// and the exact same focused AX object. No application identity is consulted.
     private func canUseUnconfirmedTextAreaLocalTracking(
         state: SuggestionContextState
@@ -2176,7 +2175,8 @@ final class SnippetExpansionEngine {
         return UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
             focusedRole: suggestionTargetRole,
             contextState: state,
-            hasAXConfirmedContext: suggestionHasAXConfirmedContext,
+            hasReadableAXContext: suggestionHasReadableAXContext,
+            caretUnavailable: suggestionCaretUnavailable,
             targetStillMatches: targetStillMatches)
     }
 
@@ -3418,18 +3418,32 @@ final class SnippetExpansionEngine {
                 axBudget: axBudget
             ) {
             case .value(let textBeforeCaret):
+                // Even a readable value without a trigger proves this control
+                // can supply insertion context. It must never fall back to blind
+                // deletion later in this session, including after a transient read.
+                if suggestionActive {
+                    suggestionHasReadableAXContext = true
+                    suggestionCaretUnavailable = false
+                }
                 // The first readable candidate is authoritative: injected
                 // backspaces land in the actually focused field, so a trigger
                 // found in an ancestor's unrelated text must never authorize a
-                // deletion here. Keep walking ancestors only while candidates
-                // are unreadable.
+                // deletion here. Only unreadable wrappers may lead to ancestors;
+                // a text control without a caret still owns its insertion context.
                 if let context = SuggestionTriggerContext.context(
                     inTextBeforeCaret: textBeforeCaret
                 ) {
                     return .found(context)
                 }
                 return .missingTrigger
-            case .unavailable(let unavailable):
+            case .unavailable(let unavailable, let mayReadAncestor):
+                if suggestionActive {
+                    suggestionCaretUnavailable = unavailable.allowsLocalTracking
+                    if unavailable.failure == .invalidRange {
+                        suggestionContextState = .uncertainAfterHostEdit
+                    }
+                }
+                guard mayReadAncestor else { return .unavailable(unavailable) }
                 lastUnavailable = unavailable
             }
 
@@ -3534,109 +3548,22 @@ final class SnippetExpansionEngine {
         maxCharacters: Int,
         axBudget: AXMessagingBudget
     ) -> AXTextRead {
-        let selectedRange: CFRange
-        switch detailedSelectedRange(of: element, axBudget: axBudget) {
-        case .value(let range):
-            selectedRange = range
-        case .unavailable(let unavailable):
-            return .unavailable(unavailable)
-        }
-
-        guard selectedRange.location >= 0 else {
-            return .unavailable(AXContextUnavailable(
-                stage: .selectedRange,
-                failure: .invalidRange,
-                errorCode: nil))
-        }
-
-        let start = max(0, selectedRange.location - maxCharacters)
-        let rangeBeforeCaret = CFRange(
-            location: start,
-            length: selectedRange.location - start)
-        if rangeBeforeCaret.length == 0 {
-            return .value("")
-        }
-
-        var requestedRange = rangeBeforeCaret
-        guard let rangeValue = AXValueCreate(.cfRange, &requestedRange) else {
-            return .unavailable(AXContextUnavailable(
-                stage: .rangeText,
-                failure: .invalidRange,
-                errorCode: nil))
-        }
-
-        var rangeTextValue: CFTypeRef?
-        let rangeResult = axBudget.copyParameterizedAttributeValue(
-            of: element,
-            attribute: kAXStringForRangeParameterizedAttribute as CFString,
-            parameter: rangeValue,
-            into: &rangeTextValue)
-        if rangeResult == .success, let text = rangeTextValue as? String {
+        switch SuggestionAXTextReader(element: element, budget: axBudget).read(
+            maxCharacters: maxCharacters
+        ) {
+        case .text(let text):
             return .value(text)
+        case .unavailable(let failure):
+            let stage: DiagnosticExpansionAXStage
+            switch failure.stage {
+            case .selectedRange: stage = .selectedRange
+            case .rangeText: stage = .rangeText
+            case .value: stage = .value
+            }
+            var unavailable = axUnavailable(stage: stage, error: failure.error)
+            unavailable.allowsLocalTracking = failure.allowsLocalTracking
+            return .unavailable(unavailable, mayReadAncestor: failure.mayReadAncestor)
         }
-
-        // Some browser controls expose AXValue but not AXStringForRange. That
-        // is a supported fallback, not an unavailable result.
-        var wholeValue: CFTypeRef?
-        let valueResult = axBudget.copyAttributeValue(
-            of: element,
-            attribute: kAXValueAttribute as CFString,
-            into: &wholeValue)
-        guard valueResult == .success else {
-            return .unavailable(axUnavailable(stage: .value, error: valueResult))
-        }
-        guard let value = wholeValue as? String else {
-            return .unavailable(AXContextUnavailable(
-                stage: .value,
-                failure: .invalidType,
-                errorCode: nil))
-        }
-
-        let nsValue = value as NSString
-        let boundedLocation = min(max(0, selectedRange.location), nsValue.length)
-        let boundedStart = max(0, boundedLocation - maxCharacters)
-        return .value(nsValue.substring(with: NSRange(
-            location: boundedStart,
-            length: boundedLocation - boundedStart)))
-    }
-
-    private func detailedSelectedRange(
-        of element: AXUIElement,
-        axBudget: AXMessagingBudget
-    ) -> AXRangeRead {
-        var value: CFTypeRef?
-        let result = axBudget.copyAttributeValue(
-            of: element,
-            attribute: kAXSelectedTextRangeAttribute as CFString,
-            into: &value)
-        guard result == .success else {
-            return .unavailable(axUnavailable(stage: .selectedRange, error: result))
-        }
-        guard let value, CFGetTypeID(value) == AXValueGetTypeID() else {
-            return .unavailable(AXContextUnavailable(
-                stage: .selectedRange,
-                failure: .invalidType,
-                errorCode: nil))
-        }
-
-        let axValue = value as! AXValue
-        guard AXValueGetType(axValue) == .cfRange else {
-            return .unavailable(AXContextUnavailable(
-                stage: .selectedRange,
-                failure: .invalidType,
-                errorCode: nil))
-        }
-
-        var range = CFRange(location: 0, length: 0)
-        guard AXValueGetValue(axValue, .cfRange, &range),
-              range.location >= 0,
-              range.length >= 0 else {
-            return .unavailable(AXContextUnavailable(
-                stage: .selectedRange,
-                failure: .invalidRange,
-                errorCode: nil))
-        }
-        return .value(range)
     }
 
     private func axUnavailable(

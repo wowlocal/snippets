@@ -87,31 +87,42 @@ struct TextReplacementTests {
         }
 
         @Test func anyUnconfirmedTextAreaCanUseAnUnchangedLocalSession() {
+            #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
+                focusedRole: "AXTextArea",
+                contextState: .localDisplayOnly,
+                hasReadableAXContext: false,
+                caretUnavailable: false,
+                targetStillMatches: true), "an unconfirmed trigger alone does not prove a missing caret")
             #expect(UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .localDisplayOnly,
-                hasAXConfirmedContext: false,
+                hasReadableAXContext: false,
+                caretUnavailable: true,
                 targetStillMatches: true))
 
             #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextField",
                 contextState: .localDisplayOnly,
-                hasAXConfirmedContext: false,
+                hasReadableAXContext: false,
+                caretUnavailable: true,
                 targetStillMatches: true), "ordinary fields continue to require their readable caret")
             #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .uncertainAfterHostEdit,
-                hasAXConfirmedContext: false,
+                hasReadableAXContext: false,
+                caretUnavailable: true,
                 targetStillMatches: true), "Backspace and other host edits revoke local authority")
             #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .localDisplayOnly,
-                hasAXConfirmedContext: true,
+                hasReadableAXContext: true,
+                caretUnavailable: true,
                 targetStillMatches: true), "a host that once supplied AX context may not fall back")
             #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .localDisplayOnly,
-                hasAXConfirmedContext: false,
+                hasReadableAXContext: false,
+                caretUnavailable: true,
                 targetStillMatches: false), "moving to another pane or tab revokes local authority")
         }
 

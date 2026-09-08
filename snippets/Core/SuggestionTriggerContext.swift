@@ -96,7 +96,8 @@ nonisolated enum SuggestionContextState: String, Codable, Equatable, Sendable {
 /// Local tracking is allowed only while every other signal still proves that this
 /// is the same uninterrupted suggestion session. In particular, a Backspace or
 /// other host-owned edit moves the state to `uncertainAfterHostEdit`, and a control
-/// that has ever supplied a real AX context is never allowed to fall back. The
+/// that has ever supplied readable AX insertion context (even without a trigger)
+/// is never allowed to fall back. A missing trigger is not a missing caret. The
 /// decision deliberately takes no bundle identifier: terminal emulators and other
 /// custom text surfaces qualify (or fail) by their observable capabilities.
 nonisolated enum UnconfirmedTextAreaSuggestionPolicy {
@@ -105,12 +106,14 @@ nonisolated enum UnconfirmedTextAreaSuggestionPolicy {
     static func canAuthorizeLocalTracking(
         focusedRole: String?,
         contextState: SuggestionContextState,
-        hasAXConfirmedContext: Bool,
+        hasReadableAXContext: Bool,
+        caretUnavailable: Bool,
         targetStillMatches: Bool
     ) -> Bool {
         focusedRole == textAreaRole
             && contextState == .localDisplayOnly
-            && !hasAXConfirmedContext
+            && !hasReadableAXContext
+            && caretUnavailable
             && targetStillMatches
     }
 }

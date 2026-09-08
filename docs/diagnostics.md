@@ -88,6 +88,14 @@ records the query, surrounding field text, app identity,
 snippet identity, or snippet content. These events are asynchronous debug records; the
 setting can be switched off immediately after reproducing a problem to limit volume.
 
+For suggestion dismissal, `missing_trigger` means readable insertion context without
+a trigger. A text area's `{0, 0}` range with a non-settable selection and unsupported
+caret bounds is instead `unavailable` at `range_text`; it can retain locally tracked
+suggestions while the original focus and uninterrupted input session remain valid.
+A readable missing trigger never authorizes local deletion, including after secure
+authentication. AX timeouts, selections, and inconsistent ranges do not establish
+permission for local deletion either.
+
 Use **Settings → Diagnostics → Export Logs** for a single portable JSONL file.
 The UI states that the export is plaintext before presenting the save or Files picker.
 It can also delete retained logs and a legacy reveal-audit file that could not be
