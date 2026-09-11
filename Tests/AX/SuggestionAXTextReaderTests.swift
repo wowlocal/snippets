@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import SnippetsAX
+@testable import SnippetsCore
 
 @Suite("Suggestion insertion context")
 @MainActor
@@ -103,10 +104,65 @@ struct SuggestionAXTextReaderTests {
         #expect(text == "😀\\ab")
     }
 
-    @Test func inconsistentReadsAndSelectionsCannotAuthorizeLocalDeletion() {
+    @Test(arguments: ["ja", "jazz"])
+    func autocompleteKeepsTypedTriggerReadableForAcceptanceAndExactMatch(query: String) {
+        // Tab may accept a partial query; whole-keyword expansion reads the
+        // complete query. Chrome selects the completion after either prefix.
+        let prefix = "hello 😀 "
+        let beforeSelection = prefix + "\\" + query
+        let value = prefix + "\\jazzband suffix"
+        let selection = CFRange(
+            location: beforeSelection.utf16.count,
+            length: "jazzband".utf16.count - query.utf16.count)
+
+        for textError in [AXError.success, .parameterizedAttributeUnsupported] {
+            let host = Host(
+                range: selection, role: kAXTextFieldRole,
+                rangeText: beforeSelection, textError: textError, value: value)
+            guard case .text(let text) = host.reader.read(maxCharacters: 500),
+                  let context = SuggestionTriggerContext.context(inTextBeforeCaret: text) else {
+                Issue.record("a selected completion must not hide the typed trigger")
+                continue
+            }
+            #expect(context.query == query)
+            let deletion = TriggerDeletion.confirmed(context)
+            #expect(deletion.provenance == .accessibilityConfirmed)
+            let replacement = "EXPANDED"
+            guard case .plan(let plan) = AccessibilityTextReplacement.plan(
+                textBeforeCaret: text,
+                caretRange: NSRange(location: selection.location, length: selection.length),
+                expectedTrigger: deletion.expectedText,
+                triggerCharacterCount: deletion.characterCount,
+                replacementUTF16Length: replacement.utf16.count) else {
+                Issue.record("the confirmed trigger and selected suffix must be replaceable")
+                continue
+            }
+            #expect((value as NSString).replacingCharacters(
+                in: plan.replacementRange, with: replacement) == prefix + replacement + " suffix")
+            #expect(plan.caretLocation == (prefix + replacement).utf16.count)
+        }
+    }
+
+    @Test func aTriggerInsideSelectedTextCannotAuthorizeExpansion() {
+        for prefix in ["", "plain "] {
+            let host = Host(
+                range: CFRange(location: prefix.utf16.count, length: 5),
+                value: prefix + "\\jazz")
+            guard case .text(let text) = host.reader.read(maxCharacters: 500) else {
+                Issue.record("a real selection has readable context before its start")
+                continue
+            }
+            #expect(text == prefix)
+            #expect(SuggestionTriggerContext.context(inTextBeforeCaret: text) == nil)
+        }
+    }
+
+    @Test func inconsistentReadsAndMalformedSelectionsCannotAuthorizeLocalDeletion() {
         let hosts = [
             Host(range: CFRange(location: 80, length: 0), value: "\\abc"),
-            Host(range: CFRange(location: 4, length: 1), value: "\\abcX"),
+            Host(range: CFRange(location: 4, length: 2), value: "\\abcX"),
+            Host(range: CFRange(location: 4, length: -1), value: "\\abc"),
+            Host(range: CFRange(location: 4, length: Int.max), value: "\\abc"),
             Host(range: CFRange(location: 4, length: 0), rangeText: "ab", textError: .success),
             Host(range: CFRange(location: NSNotFound, length: 0)),
             Host(boundsError: .success, caretBounds: .zero),

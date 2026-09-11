@@ -1,7 +1,7 @@
 import AppKit
 
-/// Reads insertion context without confusing a terminal's placeholder {0, 0}
-/// selection with a real caret at the beginning of an editable document.
+/// Reads text before the selection start (or the collapsed caret), without
+/// confusing a terminal's placeholder {0, 0} with a real document position.
 @MainActor
 struct SuggestionAXTextReader {
     enum Stage { case selectedRange, rangeText, value }
@@ -43,13 +43,19 @@ struct SuggestionAXTextReader {
         var selection = CFRange()
         guard AXValueGetValue(value as! AXValue, .cfRange, &selection),
               selection.location >= 0, selection.location != NSNotFound,
-              selection.length == 0 else {
-            // A selection is not an insertion caret. Nor may malformed ranges
-            // authorize local backspaces or an ancestor's unrelated text.
+              selection.length >= 0,
+              selection.length < Int.max - selection.location else {
+            // Malformed ranges must not authorize local backspaces or an
+            // ancestor's unrelated text. A valid nonempty selection is useful:
+            // Chrome selects its autocomplete suffix after the typed trigger,
+            // and replacement already includes that suffix in the deleted range.
             return .unavailable(Failure(stage: .selectedRange, error: .illegalArgument))
         }
 
         if selection.location == 0 {
+            // A real selection beginning at zero has no text before it. Only
+            // the collapsed {0, 0} case needs terminal-placeholder detection.
+            if selection.length > 0 { return .text("") }
             let (settableResult, settable) = isSelectionSettable()
             if settableResult == .success && settable { return .text("") }
             guard settableResult == .success || Self.isCapabilityUnavailable(settableResult) else {
@@ -107,7 +113,8 @@ struct SuggestionAXTextReader {
             return .unavailable(Failure(stage: .value, error: valueResult))
         }
         guard let text = wholeValue as? String,
-              selection.location <= (text as NSString).length else {
+              selection.location <= (text as NSString).length,
+              selection.length <= (text as NSString).length - selection.location else {
             return .unavailable(Failure(stage: .value, error: .illegalArgument))
         }
         return .text((text as NSString).substring(with: NSRange(

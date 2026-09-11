@@ -58,7 +58,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SnippetsAXTests",
-            dependencies: ["SnippetsAX"],
+            dependencies: ["SnippetsAX", "SnippetsCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
