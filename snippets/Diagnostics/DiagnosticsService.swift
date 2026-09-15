@@ -520,6 +520,11 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
                 "operation", "outcome", "state_before", "state_after", "query_length",
             ],
             optional: ["stage", "failure", "ax_error_code"]),
+        "paste_delivery": ExportEventSchema(
+            category: "integration",
+            required: ["outcome", "restoration", "duration_ms", "had_fingerprint"]),
+        "pasteboard_recovery": ExportEventSchema(
+            category: "integration", required: ["outcome"]),
         "metrickit_diagnostic": ExportEventSchema(
             category: "metrickit",
             required: ["kind", "truncated"],
@@ -543,11 +548,11 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "halt_reason", "action", "keyword", "outcome", "caller", "source", "reason",
         "kind", "surface", "from_state", "to_state", "vault_state",
         "state_before", "state_after", "stage", "failure", "exported_at",
-        "oldest_entry_at", "newest_entry_at", "endpoint",
+        "oldest_entry_at", "newest_entry_at", "endpoint", "restoration",
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",
-        "submit_active", "generation_sealed", "stored_session_present", "available",
+        "submit_active", "generation_sealed", "stored_session_present", "available", "had_fingerprint",
     ]
     private static let exportNumericFields: Set<String> = [
         "error_code", "attempt", "value", "conflict_copies", "keyword_collisions",

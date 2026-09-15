@@ -187,6 +187,40 @@ struct DiagnosticsTests {
         ])
     }
 
+    @Test func pasteDiagnosticsContainOnlyClosedOutcomesAndBoundedTiming() throws {
+        for outcome in DiagnosticPasteOutcome.allCases {
+            for restoration in DiagnosticPasteboardRestoration.allCases {
+                let event = DiagnosticEvent.pasteDelivery(
+                    outcome: outcome, restoration: restoration,
+                    durationMilliseconds: .max, hadFingerprint: false)
+                let record = DiagnosticRecord(
+                    event: event, timestamp: "2026-09-15T10:00:00.000Z",
+                    elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1)
+                let object = try #require(
+                    JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+                let fields = try #require(object["fields"] as? [String: Any])
+                #expect(object["event"] as? String == "paste_delivery")
+                #expect(object["category"] as? String == "integration")
+                #expect(Set(fields.keys) == ["outcome", "restoration", "duration_ms", "had_fingerprint"])
+                #expect(fields["outcome"] as? String == outcome.rawValue)
+                #expect(fields["restoration"] as? String == restoration.rawValue)
+                #expect(fields["duration_ms"] as? Int == 600_000)
+                #expect(fields["had_fingerprint"] as? Bool == false)
+                #expect(event.requiresSynchronousWrite == (restoration == .pending))
+            }
+        }
+        let timeout = DiagnosticEvent.pasteDelivery(
+            outcome: .timedOut, restoration: .restored,
+            durationMilliseconds: -10, hadFingerprint: true)
+        #expect(timeout.fields["duration_ms"] == .integer(0))
+        #expect(timeout.defaultLevel == .warning)
+        for restoration in DiagnosticPasteboardRestoration.allCases {
+            let recovery = DiagnosticEvent.pasteboardRecovery(outcome: restoration)
+            #expect(recovery.fields == ["outcome": .string(restoration.rawValue)])
+            #expect(recovery.requiresSynchronousWrite == (restoration == .pending))
+        }
+    }
+
     @Test func expansionAccessibilityPersistsOnlyClosedContentFreeFacts() throws {
         let record = DiagnosticRecord(
             event: .expansionAccessibility(

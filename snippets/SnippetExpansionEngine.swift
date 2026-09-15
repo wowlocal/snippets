@@ -169,6 +169,7 @@ final class SnippetExpansionEngine {
         case failed
         case inserted
         case insertedWithPasteboardRecoveryPending
+        case unconfirmed(pasteboardRecoveryPending: Bool)
     }
 
     private enum FocusedTriggerContextRead {
@@ -573,6 +574,8 @@ final class SnippetExpansionEngine {
                 self.usage.record(.pasteFromApp, snippetID: snippet.id)
                 self.lastExpansionName = snippet.displayName
                 self.statusText = "Pasted \(snippet.displayName); restoring your previous clipboard is still pending."
+            case .unconfirmed(let pending):
+                self.reportUnconfirmedPaste(recoveryPending: pending)
             }
         }
     }
@@ -2627,6 +2630,15 @@ final class SnippetExpansionEngine {
         case .insertedWithPasteboardRecoveryPending:
             recordExpansion(of: snippet, bindingQuery: bindingQuery)
             statusText = "Expanded \(snippet.displayName); restoring your previous clipboard is still pending."
+        case .unconfirmed(let pending):
+            reportUnconfirmedPaste(recoveryPending: pending)
+        }
+    }
+
+    private func reportUnconfirmedPaste(recoveryPending: Bool) {
+        statusText = "Paste was sent, but insertion could not be confirmed. Check the field before trying again."
+        if recoveryPending {
+            statusText += " Restoring your previous clipboard is still pending."
         }
     }
 
@@ -2934,12 +2946,32 @@ final class SnippetExpansionEngine {
         isConcealed: Bool = false,
         expectedFocusedElement: AXUIElement? = nil
     ) async -> EventReplacementOutcome {
+        let start = ContinuousClock.now
+        let targetPID = targetPID ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+        var diagnosticOutcome: DiagnosticPasteOutcome = .interrupted
+        var diagnosticLease: TemporaryPasteboardLease?
+        var hadFingerprint = false
+        defer {
+            let elapsed = start.duration(to: .now).components
+            Diagnostics.record(.pasteDelivery(
+                outcome: diagnosticOutcome,
+                restoration: pasteboardRestoration(for: diagnosticLease),
+                durationMilliseconds: elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000,
+                hadFingerprint: hadFingerprint))
+        }
         guard injectionIsAllowed(generation: generation, targetPID: targetPID),
               expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true
         else { return .failed }
+        // Build the complete shortcut before borrowing the clipboard or deleting the trigger.
+        guard let pasteEvents = makePasteShortcutEvents() else {
+            diagnosticOutcome = .eventCreationFailed
+            return .failed
+        }
         // Borrowed before a single character is deleted: a pasteboard we cannot borrow safely must
         // cost the user nothing, and once the trigger is gone "nothing" is no longer on the table.
         guard beginPasteboardLease(placing: replacement, isConcealed: isConcealed) else {
+            diagnosticOutcome = .clipboardUnavailable
+            diagnosticLease = activePasteboardLease
             return .failed
         }
         guard let lease = activePasteboardLease, lease.isOwned else {
@@ -2947,6 +2979,7 @@ final class SnippetExpansionEngine {
             return .failed
         }
         pasteboardInjectionLease = lease
+        diagnosticLease = lease
         defer {
             if pasteboardInjectionLease === lease {
                 pasteboardInjectionLease = nil
@@ -2983,30 +3016,43 @@ final class SnippetExpansionEngine {
         await settle(for: pasteboardWriteSettleDelay)
 
         guard activePasteboardLease === lease, lease.isOwned else {
+            diagnosticOutcome = .pasteboardSuperseded
             finishPendingPasteboardOwnership(finishingInFlightLease: lease)
             return .failed
         }
-        guard expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true else {
+        guard injectionIsAllowed(
+            generation: generation, targetPID: targetPID, allowingTerminationDrain: true),
+              expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true else {
             finishPendingPasteboardOwnership(
                 schedulingRetryOnFailure: true,
                 finishingInFlightLease: lease
             )
             return .failed
         }
-        let baseline = focusedCaretFingerprint()
-        postPasteShortcut()
-        await waitForPasteConfirmation(
+        let baselineBudget = AXMessagingBudget(
+            totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+            perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+        let confirmationElement = expectedFocusedElement ?? frontmostFocusedElement(axBudget: baselineBudget)
+        let baseline = confirmationElement.flatMap { focusedCaretFingerprint(in: $0, axBudget: baselineBudget) }
+        hadFingerprint = baseline != nil
+        // One uninterrupted burst, with every event already allocated and tagged.
+        for event in pasteEvents { event.post(tap: .cghidEventTap) }
+        let verdict = await waitForPasteConfirmation(
             pastedText: replacement,
             baseline: baseline,
             lease: lease,
-            targetPID: targetPID
+            targetPID: targetPID,
+            expectedFocusedElement: confirmationElement
         )
-        return finishPendingPasteboardOwnership(
+        diagnosticOutcome = verdict.diagnosticOutcome
+        let restored = finishPendingPasteboardOwnership(
             schedulingRetryOnFailure: true,
             finishingInFlightLease: lease
         )
-            ? .inserted
-            : .insertedWithPasteboardRecoveryPending
+        guard verdict == .confirmed else {
+            return .unconfirmed(pasteboardRecoveryPending: !restored)
+        }
+        return restored ? .inserted : .insertedWithPasteboardRecoveryPending
     }
 
     /// Holds the borrowed pasteboard until there is evidence the host applied the paste. A fixed
@@ -3017,18 +3063,28 @@ final class SnippetExpansionEngine {
         pastedText: String,
         baseline: PasteCaretFingerprint?,
         lease: TemporaryPasteboardLease,
-        targetPID: pid_t?
-    ) async {
+        targetPID: pid_t?,
+        expectedFocusedElement: AXUIElement?
+    ) async -> PasteConfirmationVerdict {
         var baseline = baseline
-        var sawReadableFingerprintAfterPaste = false
-        var firstForwardEditAttempt: Int?
+        var focusChanged = false
         let start = ContinuousClock.now
         var attempt = 0
 
         while true {
             let abort = pasteConfirmationAbort(lease: lease, targetPID: targetPID)
-            let current = abort == nil ? focusedCaretFingerprint() : nil
-            if current != nil { sawReadableFingerprintAfterPaste = true }
+            let axBudget = AXMessagingBudget(
+                totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+            let focused = abort == nil ? frontmostFocusedElement(axBudget: axBudget) : nil
+            if let expectedFocusedElement, let focused,
+               !CFEqual(focused, expectedFocusedElement) {
+                focusChanged = true
+            }
+            // A different field cannot acknowledge this paste. Keep the bounded lease alive:
+            // renderer node replacement or focus movement may precede consumption of Cmd+V.
+            let current = abort == nil && !focusChanged && expectedFocusedElement != nil
+                ? focused.flatMap { focusedCaretFingerprint(in: $0, axBudget: axBudget) } : nil
 
             let progress = SnippetPasteConfirmationPolicy.progress(
                 before: baseline,
@@ -3036,25 +3092,20 @@ final class SnippetExpansionEngine {
                 pastedText: pastedText,
                 tailLength: pasteConfirmationTuning.fingerprintTailLength
             )
-            if progress == .forwardEditObserved, firstForwardEditAttempt == nil {
-                firstForwardEditAttempt = attempt
-            }
-
             let verdict = SnippetPasteConfirmationPolicy.verdict(
                 SnippetPasteConfirmationPolicy.Input(
                     attempt: attempt,
                     elapsed: start.duration(to: .now),
                     progress: progress,
-                    hadFingerprintBeforePaste: baseline != nil,
-                    sawReadableFingerprintAfterPaste: sawReadableFingerprintAfterPaste,
-                    firstForwardEditAttempt: firstForwardEditAttempt,
                     abort: abort
                 ),
                 tuning: pasteConfirmationTuning
             )
             switch verdict {
-            case .confirmed, .timedOut, .abandoned:
-                return
+            case .timedOut:
+                return focusChanged ? .abandoned(.focusedElementChanged) : verdict
+            case .confirmed, .abandoned:
+                return verdict
             case .keepWaiting:
                 break
             }
@@ -3129,7 +3180,12 @@ final class SnippetExpansionEngine {
         if pasteboardInjectionLease === lease, finishingInFlightLease !== lease {
             return false
         }
+        let wasRecoveryPending = lease.lastRestoreResult == .failed
         let restoredOrSuperseded = lease.restoreWithRetries()
+        if wasRecoveryPending {
+            // One aggregate outcome for a recovery batch, never for each immediate write retry.
+            Diagnostics.record(.pasteboardRecovery(outcome: pasteboardRestoration(for: lease)))
+        }
         // A lease that is still owned here could not hand the clipboard back — as opposed to
         // having lost it to a newer copy, which finishes it. Reporting success would mean
         // telling `beginPasteboardLease` it may take a clipboard we are still holding, and
@@ -3242,20 +3298,30 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func focusedCaretFingerprint() -> PasteCaretFingerprint? {
-        guard let element = frontmostFocusedElement(),
-              let range = selectedRange(of: element),
-              range.location >= 0
+    private func pasteboardRestoration(for lease: TemporaryPasteboardLease?) -> DiagnosticPasteboardRestoration {
+        guard let lease else { return .notBorrowed }
+        switch lease.lastRestoreResult {
+        case .restored: return .restored
+        case .superseded: return .superseded
+        case .failed, nil: return lease.isOwned ? .pending : .superseded
+        }
+    }
+
+    private func focusedCaretFingerprint(
+        in element: AXUIElement, axBudget: AXMessagingBudget
+    ) -> PasteCaretFingerprint? {
+        guard let range = selectedRange(of: element, axBudget: axBudget),
+              range.location >= 0, range.length >= 0
         else { return nil }
-        AXUIElementSetMessagingTimeout(element, confirmationAXMessagingTimeoutSeconds)
         // Never the whole value: in a real editor that is the entire document, re-serialized over
         // Accessibility IPC on every poll.
-        let tail = textBeforeCaret(
+        guard let tail = textBeforeCaret(
             in: element,
             caretLocation: range.location,
             maxCharacters: pasteConfirmationTuning.fingerprintTailLength,
-            allowFullValueFallback: false
-        ) ?? ""
+            allowFullValueFallback: false,
+            axBudget: axBudget
+        ) else { return nil }
         return PasteCaretFingerprint(
             caretLocation: range.location,
             selectionLength: max(0, range.length),
@@ -3263,16 +3329,24 @@ final class SnippetExpansionEngine {
         )
     }
 
-    private func postPasteShortcut() {
-        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+    private func makePasteShortcutEvents() -> [CGEvent]? {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return nil }
         let commandKey = UInt16(kVK_Command)
-
-        // One uninterrupted burst: a suspension between Command down and up would leave the host
-        // believing Command is held, turning the user's next keystroke into a shortcut.
-        postKeyEvent(source: source, keyCode: commandKey, keyDown: true)
-        postKeyEvent(source: source, keyCode: UInt16(kVK_ANSI_V), keyDown: true, flags: .maskCommand)
-        postKeyEvent(source: source, keyCode: UInt16(kVK_ANSI_V), keyDown: false, flags: .maskCommand)
-        postKeyEvent(source: source, keyCode: commandKey, keyDown: false)
+        let strokes: [(UInt16, Bool, CGEventFlags)] = [
+            (commandKey, true, []),
+            (UInt16(kVK_ANSI_V), true, .maskCommand),
+            (UInt16(kVK_ANSI_V), false, .maskCommand),
+            (commandKey, false, []),
+        ]
+        var events: [CGEvent] = []
+        for (key, down, flags) in strokes {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
+            else { return nil }
+            event.flags = flags
+            tag(event)
+            events.append(event)
+        }
+        return events
     }
 
     private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = []) {
@@ -3637,17 +3711,18 @@ final class SnippetExpansionEngine {
         in element: AXUIElement,
         caretLocation: Int,
         maxCharacters: Int,
-        allowFullValueFallback: Bool
+        allowFullValueFallback: Bool,
+        axBudget: AXMessagingBudget? = nil
     ) -> String? {
         guard caretLocation >= 0 else { return nil }
         let start = max(0, caretLocation - maxCharacters)
         let length = caretLocation - start
         let rangeBeforeCaret = CFRange(location: start, length: length)
 
-        if let text = stringForRange(of: element, range: rangeBeforeCaret) {
+        if let text = stringForRange(of: element, range: rangeBeforeCaret, axBudget: axBudget) {
             return text
         }
-
+        guard allowFullValueFallback else { return nil }
         return stringValueBeforeCaret(of: element, caretLocation: caretLocation, maxCharacters: maxCharacters)
     }
 

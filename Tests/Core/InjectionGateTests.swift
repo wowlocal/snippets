@@ -27,18 +27,12 @@ private func input(
     attempt: Int,
     elapsedMilliseconds: Int,
     progress: PasteProgress,
-    hadFingerprintBeforePaste: Bool = true,
-    sawReadableFingerprintAfterPaste: Bool = true,
-    firstForwardEditAttempt: Int? = nil,
     abort: PasteConfirmationAbort? = nil
 ) -> SnippetPasteConfirmationPolicy.Input {
     SnippetPasteConfirmationPolicy.Input(
         attempt: attempt,
         elapsed: .milliseconds(elapsedMilliseconds),
         progress: progress,
-        hadFingerprintBeforePaste: hadFingerprintBeforePaste,
-        sawReadableFingerprintAfterPaste: sawReadableFingerprintAfterPaste,
-        firstForwardEditAttempt: firstForwardEditAttempt,
         abort: abort
     )
 }
@@ -471,15 +465,15 @@ struct InjectionGateTests {
     @Suite("Paste progress")
     struct PasteProgressTests {
 
-        @Test func theCaretAdvancingByExactlyThePastedLengthIsAConfirmedPaste() {
+        @Test func matchingCaretMotionWithoutTextEvidenceDoesNotConfirmPaste() {
             #expect(
                 SnippetPasteConfirmationPolicy.progress(
                     before: fingerprint(caret: 10),
                     after: fingerprint(caret: 15),
                     pastedText: "hello",
                     tailLength: 32
-                ) == .pasteObserved,
-                "the caret advanced by exactly the pasted length"
+                ) == .forwardEditObserved,
+                "even exactly matching motion cannot prove the replacement was inserted"
             )
             // utf16.count differs from character count here; measuring in the wrong unit misses the paste.
             #expect(
@@ -488,21 +482,21 @@ struct InjectionGateTests {
                     after: fingerprint(caret: 6),
                     pastedText: "🎉",
                     tailLength: 32
-                ) == .pasteObserved,
-                "an emoji snippet advances the caret by its UTF-16 width"
+                ) == .forwardEditObserved,
+                "matching UTF-16 width alone cannot confirm an emoji paste"
             )
         }
 
-        @Test func aMatchingTailConfirmsEvenWhenTheCaretLocationWasReset() {
-            // Chromium can reset the caret into a fresh node, so the delta lies but the tail does not.
+        @Test func matchingTextAtAnEarlierCaretCannotConfirmPendingDeletions() {
+            // Backspaces can expose text equal to the replacement before Cmd+V has landed.
             #expect(
                 SnippetPasteConfirmationPolicy.progress(
-                    before: fingerprint(caret: 40, tail: "\\sig"),
+                    before: fingerprint(caret: 40, tail: "Regards\\sig"),
                     after: fingerprint(caret: 5, tail: "Regards"),
                     pastedText: "Regards",
                     tailLength: 32
-                ) == .pasteObserved,
-                "a matching tail confirms even when the caret location was reset"
+                ) == .pendingEditObserved,
+                "a matching suffix exposed by deletion does not confirm insertion"
             )
         }
 
@@ -516,6 +510,26 @@ struct InjectionGateTests {
                 ) == .idle,
                 "an unchanged field never confirms, even when its tail already matched"
             )
+        }
+
+        @Test func selectionMovementOverMatchingTextCannotAcknowledgePaste() {
+            #expect(SnippetPasteConfirmationPolicy.progress(
+                before: fingerprint(caret: 10, selection: 5, tail: "Regards"),
+                after: fingerprint(caret: 17, tail: "Regards"),
+                pastedText: "Regards", tailLength: 32) == .forwardEditObserved)
+        }
+
+        @Test func changedTextConfirmsUnicodeAndMultilineReplacements() {
+            for replacement in ["🎉", "hello", "first\nsecond\n"] {
+                #expect(SnippetPasteConfirmationPolicy.progress(
+                    before: fingerprint(caret: 5, tail: "prefix"),
+                    after: fingerprint(caret: 20, tail: "prefix" + replacement),
+                    pastedText: replacement, tailLength: 32) == .pasteObserved)
+            }
+            #expect(SnippetPasteConfirmationPolicy.progress(
+                before: fingerprint(caret: 5, tail: "prefix"),
+                after: fingerprint(caret: 6, tail: "second"),
+                pastedText: "first\nsecond\n", tailLength: 32) == .pasteObserved)
         }
 
         @Test func forwardMotionByTheWrongAmountIsANormalizedEditRatherThanAPaste() {
@@ -579,22 +593,20 @@ struct InjectionGateTests {
             )
         }
 
-        @Test func aNormalizedEditWaitsForTheGraceWindowAndThenConfirms() {
+        @Test func unrelatedForwardEditsNeverConfirmByWaiting() {
             #expect(
                 SnippetPasteConfirmationPolicy.verdict(
                     input(
-                        attempt: 0, elapsedMilliseconds: 0, progress: .forwardEditObserved,
-                        firstForwardEditAttempt: 0)
+                        attempt: 0, elapsedMilliseconds: 0, progress: .forwardEditObserved)
                 ) == .keepWaiting,
                 "a normalized edit waits for a stronger signal first"
             )
             #expect(
                 SnippetPasteConfirmationPolicy.verdict(
                     input(
-                        attempt: 5, elapsedMilliseconds: 100, progress: .forwardEditObserved,
-                        firstForwardEditAttempt: 0)
-                ) == .confirmed,
-                "a normalized edit confirms once the grace window passes"
+                        attempt: 5, elapsedMilliseconds: 100, progress: .forwardEditObserved)
+                ) == .keepWaiting,
+                "movement still needs text evidence after the old grace window"
             )
         }
 
@@ -621,36 +633,37 @@ struct InjectionGateTests {
             )
         }
 
-        @Test func aBlindHostIsHeldForTheFullConservativeDelayAndThenAccepted() {
+        @Test func aBlindHostUsesTheFullBudgetWithoutFalseSuccess() {
             #expect(
                 SnippetPasteConfirmationPolicy.verdict(
                     input(
-                        attempt: 19, elapsedMilliseconds: 380, progress: .unreadable,
-                        hadFingerprintBeforePaste: false)
+                        attempt: 19, elapsedMilliseconds: 380, progress: .unreadable)
                 ) == .keepWaiting,
                 "a blind host is held for the full conservative delay"
             )
             #expect(
                 SnippetPasteConfirmationPolicy.verdict(
                     input(
-                        attempt: 20, elapsedMilliseconds: 400, progress: .unreadable,
-                        hadFingerprintBeforePaste: false)
-                ) == .confirmed,
-                "a terminal with no readable state is accepted after the conservative delay"
+                        attempt: 20, elapsedMilliseconds: 400, progress: .unreadable)
+                ) == .keepWaiting,
+                "an unreadable host does not release the clipboard at the old blind delay"
             )
+            let verdict = SnippetPasteConfirmationPolicy.verdict(
+                input(attempt: 60, elapsedMilliseconds: 1200, progress: .unreadable))
+            #expect(verdict == .timedOut)
+            #expect(verdict.diagnosticOutcome == .timedOut)
         }
 
-        @Test func aHostThatWentQuietRightAfterThePasteIsAcceptedToo() {
+        @Test func aHostThatWentQuietRightAfterThePasteIsStillUnconfirmed() {
             #expect(
                 SnippetPasteConfirmationPolicy.verdict(
                     input(
                         attempt: 20,
                         elapsedMilliseconds: 400,
-                        progress: .unreadable,
-                        sawReadableFingerprintAfterPaste: false
+                        progress: .unreadable
                     )
-                ) == .confirmed,
-                "a host that went quiet right after the paste is accepted too"
+                ) == .keepWaiting,
+                "losing Accessibility state does not acknowledge consumption"
             )
         }
 
@@ -672,6 +685,14 @@ struct InjectionGateTests {
                 ) == .abandoned(.pasteboardSuperseded),
                 "an abort outranks every other signal"
             )
+        }
+
+        @Test func changingFieldsCannotConfirmUsingAnotherEditorsText() {
+            let result = SnippetPasteConfirmationPolicy.verdict(input(
+                attempt: 1, elapsedMilliseconds: 20, progress: .pasteObserved,
+                abort: .focusedElementChanged))
+            #expect(result == .abandoned(.focusedElementChanged))
+            #expect(result.diagnosticOutcome == .targetChanged)
         }
     }
 
@@ -709,20 +730,10 @@ struct InjectionGateTests {
             )
         }
 
-        @Test func theBlindPathStaysAtLeastAsConservativeAsTheFixedDelayItReplaced() {
+        @Test func thePollingBudgetCoversTheEntireHoldWindow() {
             let tuning = SnippetPasteConfirmationPolicy.Tuning.default
-            let blindHold = tuning.pollInterval * tuning.blindAcceptAttempt
-            let fixedDelayItReplaced = Duration.milliseconds(350)
-            // The behaviour this replaced held the clipboard for a flat 350 ms. Tuning must never make
-            // the blind path — the one with no evidence at all — riskier than what already shipped.
-            #expect(
-                blindHold >= fixedDelayItReplaced,
-                "the blind accept delay stays at least as conservative as the fixed delay it replaced"
-            )
-            #expect(
-                tuning.maxWait > blindHold,
-                "the overall budget outlasts the blind accept delay"
-            )
+            #expect(tuning.pollInterval * tuning.maxAttempts >= tuning.maxWait)
+            #expect(tuning.maxWait == .milliseconds(1200))
         }
     }
 }

@@ -346,6 +346,31 @@ password prompt with no event left to dismiss it.
 
 ## Known limits
 
+### Temporary pasteboard insertion
+
+The event fallback captures every readable item/type/payload before deleting the trigger,
+then publishes one fresh item containing only the replacement string and a transient marker.
+It never lends any original HTML, RTF, custom representation, or additional item: rich-text
+receivers can prefer those over plain text and would insert the previous copy. Concealed
+insertion retains its concealed marker and current-host-only scope. Markers are courtesy
+requests to clipboard managers, not confidentiality guarantees.
+
+Restoration republishes the full snapshot, including its original type ordering, and changes
+the pasteboard generation. Ownership checks protect newer copies; failed writes retain the
+snapshot and re-anchor ownership for bounded immediate and scheduled recovery attempts.
+Unavailable snapshots refuse insertion before deleting anything. Tests use a private named
+pasteboard, never the user's general clipboard.
+
+Confirmation requires forward caret motion and changed text matching the replacement tail in the original focused
+element. Caret motion, restoration success, and elapsed time cannot confirm insertion.
+Unconfirmed hosts use the full bounded 1.2-second window, then report an uncertain result
+without counting usage or automatically retrying. An arbitrarily late Cmd+V can still read
+the restored clipboard; this is a limit of asynchronous cross-application paste, not a
+guarantee that can be supplied by a larger fixed delay. See `docs/diagnostics.md` for the
+content-free `paste_delivery` and `pasteboard_recovery` events.
+
+### Platform limits
+
 - Secure/password fields may block AX details or synthetic events by design.
 - A framework may ignore the Unicode string attached to a direct keyboard event. Since
   macOS provides no consumption acknowledgement, direct secure input is deliberately

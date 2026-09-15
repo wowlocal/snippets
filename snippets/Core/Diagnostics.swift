@@ -450,6 +450,25 @@ nonisolated enum DiagnosticExpansionAXFailure: String, Codable, Sendable {
     case other
 }
 
+/// One aggregate result per clipboard insertion, never per keystroke or snippet identity.
+nonisolated enum DiagnosticPasteOutcome: String, Codable, Sendable, CaseIterable {
+    case interrupted
+    case clipboardUnavailable = "clipboard_unavailable"
+    case eventCreationFailed = "event_creation_failed"
+    case textObserved = "text_observed"
+    case timedOut = "timed_out"
+    case targetChanged = "target_changed"
+    case pasteboardSuperseded = "pasteboard_superseded"
+    case secureInputEnabled = "secure_input_enabled"
+}
+
+nonisolated enum DiagnosticPasteboardRestoration: String, Codable, Sendable, CaseIterable {
+    case notBorrowed = "not_borrowed"
+    case restored
+    case superseded
+    case pending
+}
+
 nonisolated enum DiagnosticMetricKind: String, Codable, Sendable {
     case crash
     case hang
@@ -627,6 +646,13 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         axErrorCode: Int?,
         queryLength: Int
     )
+    case pasteDelivery(
+        outcome: DiagnosticPasteOutcome,
+        restoration: DiagnosticPasteboardRestoration,
+        durationMilliseconds: Int64,
+        hadFingerprint: Bool
+    )
+    case pasteboardRecovery(outcome: DiagnosticPasteboardRestoration)
     case metricKit(DiagnosticMetric)
     case diagnosticsMaintenance(DiagnosticMaintenanceAction, count: Int?)
     case diagnosticsManifest(DiagnosticExportManifest)
@@ -641,7 +667,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
              .cloudKitSyncEvent, .cloudKitSchedulerTransition: .cloudKit
         case .vaultAction, .secureReveal, .secureEditorTransition: .vault
         case .suggestionAnchor: .performance
-        case .expansionAccessibility: .integration
+        case .expansionAccessibility, .pasteDelivery, .pasteboardRecovery: .integration
         case .metricKit: .metricKit
         case .diagnosticsMaintenance, .diagnosticsManifest: .diagnostics
         }
@@ -670,6 +696,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .secureEditorTransition: "secure_editor_transition"
         case .suggestionAnchor: "suggestion_anchor"
         case .expansionAccessibility: "expansion_accessibility"
+        case .pasteDelivery: "paste_delivery"
+        case .pasteboardRecovery: "pasteboard_recovery"
         case .metricKit: "metrickit_diagnostic"
         case .diagnosticsMaintenance: "diagnostics_maintenance"
         case .diagnosticsManifest: "diagnostics_manifest"
@@ -686,6 +714,10 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             .error
         case .expansionAccessibility:
             .debug
+        case .pasteDelivery(_, .pending, _, _), .pasteboardRecovery(.pending):
+            .error
+        case .pasteDelivery(let outcome, _, _, _):
+            outcome == .textObserved ? .info : .warning
         case .syncState(.halted, _):
             .fault
         case .storageState(_, .versionTooNew, _),
@@ -712,6 +744,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
              .syncState(.halted, _),
              .secureReveal,
              .metricKit:
+            true
+        case .pasteDelivery(_, .pending, _, _), .pasteboardRecovery(.pending):
             true
         case .secureEditorTransition(_, let from, let to, _, _):
             from == .presentingPlaintext
@@ -868,6 +902,15 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             if let failure { fields["failure"] = .string(failure.rawValue) }
             if let axErrorCode { fields["ax_error_code"] = .integer(Int64(axErrorCode)) }
             return fields
+        case .pasteDelivery(let outcome, let restoration, let duration, let hadFingerprint):
+            return [
+                "outcome": .string(outcome.rawValue),
+                "restoration": .string(restoration.rawValue),
+                "duration_ms": .integer(min(600_000, max(0, duration))),
+                "had_fingerprint": .boolean(hadFingerprint),
+            ]
+        case .pasteboardRecovery(let outcome):
+            return ["outcome": .string(outcome.rawValue)]
         case .metricKit(let metric):
             var fields: [String: DiagnosticJSONValue] = [
                 "kind": .string(metric.kind.rawValue),

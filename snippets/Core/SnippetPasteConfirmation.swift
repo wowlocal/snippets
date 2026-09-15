@@ -10,10 +10,9 @@ nonisolated struct PasteCaretFingerprint: Equatable {
 }
 
 nonisolated enum PasteProgress: Equatable {
-    /// The caret advanced by exactly the pasted length, or the text before it now ends with what we
-    /// pasted.
+    /// Changed text before the caret matches the replacement tail.
     case pasteObserved
-    /// Forward movement, but not by our length — the host normalized something.
+    /// Caret movement without matching text is not evidence of this paste.
     case forwardEditObserved
     /// Movement backwards or a change without forward motion: our deletes are still arriving.
     case pendingEditObserved
@@ -23,6 +22,7 @@ nonisolated enum PasteProgress: Equatable {
 
 nonisolated enum PasteConfirmationAbort: Equatable {
     case frontmostAppChanged
+    case focusedElementChanged
     case pasteboardSuperseded
     case secureInputEnabled
     case newExpansionStarted
@@ -34,6 +34,18 @@ nonisolated enum PasteConfirmationVerdict: Equatable {
     case keepWaiting
     case timedOut
     case abandoned(PasteConfirmationAbort)
+
+    var diagnosticOutcome: DiagnosticPasteOutcome {
+        switch self {
+        case .confirmed: .textObserved
+        case .timedOut: .timedOut
+        case .keepWaiting: .interrupted
+        case .abandoned(.pasteboardSuperseded): .pasteboardSuperseded
+        case .abandoned(.secureInputEnabled): .secureInputEnabled
+        case .abandoned(.frontmostAppChanged), .abandoned(.focusedElementChanged): .targetChanged
+        case .abandoned(.newExpansionStarted), .abandoned(.applicationTerminating): .interrupted
+        }
+    }
 }
 
 nonisolated enum SnippetPasteConfirmationPolicy {
@@ -43,11 +55,6 @@ nonisolated enum SnippetPasteConfirmationPolicy {
         /// cost up to the Accessibility messaging timeout, so counting attempts alone is not a bound.
         var maxWait: Duration = .milliseconds(1200)
         var maxAttempts: Int = 60
-        /// 100 ms for a stronger signal to show up before accepting a normalized edit.
-        var forwardEditGrace: Int = 5
-        /// 400 ms — deliberately no shorter than the fixed 350 ms delay this replaced, because a
-        /// host that tells us nothing is exactly where the old delay was already too short.
-        var blindAcceptAttempt: Int = 20
         var fingerprintTailLength: Int = 32
 
         static let `default` = Tuning()
@@ -57,9 +64,6 @@ nonisolated enum SnippetPasteConfirmationPolicy {
         var attempt: Int
         var elapsed: Duration
         var progress: PasteProgress
-        var hadFingerprintBeforePaste: Bool
-        var sawReadableFingerprintAfterPaste: Bool
-        var firstForwardEditAttempt: Int?
         var abort: PasteConfirmationAbort?
     }
 
@@ -70,13 +74,8 @@ nonisolated enum SnippetPasteConfirmationPolicy {
         if let abort = input.abort { return .abandoned(abort) }
         if input.progress == .pasteObserved { return .confirmed }
         if input.attempt >= tuning.maxAttempts || input.elapsed >= tuning.maxWait { return .timedOut }
-        if let first = input.firstForwardEditAttempt, input.attempt - first >= tuning.forwardEditGrace {
-            return .confirmed
-        }
-        if input.attempt >= tuning.blindAcceptAttempt,
-           !input.hadFingerprintBeforePaste || !input.sawReadableFingerprintAfterPaste {
-            return .confirmed
-        }
+        // An unreadable host gets the entire bounded window. Neither a timer nor unrelated
+        // caret motion can confirm a paste; the caller must preserve the timed-out outcome.
         return .keepWaiting
     }
 
@@ -89,16 +88,13 @@ nonisolated enum SnippetPasteConfirmationPolicy {
         guard let before, let after else { return .unreadable }
 
         let delta = after.caretLocation - before.caretLocation
-        if after.selectionLength == 0,
-           delta == pastedText.utf16.count || delta == pastedText.unicodeScalars.count {
-            return .pasteObserved
-        }
-
-        // Only when something actually changed: a field that already ended with the same characters
-        // would otherwise confirm a paste that never happened.
-        if after != before {
+        // Require forward motion and changed matching text. Our backspaces can expose an old
+        // occurrence of the snippet; matching that suffix must not release the clipboard early.
+        // A renderer that resets the caret into an earlier node remains unconfirmed.
+        if delta > 0, after.selectionLength == 0, after.textBeforeCaret != before.textBeforeCaret {
             let tail = confirmationTail(of: pastedText, maxLength: tailLength)
-            if !tail.isEmpty, after.textBeforeCaret.hasSuffix(tail) { return .pasteObserved }
+            let observed = confirmationTail(of: after.textBeforeCaret, maxLength: tailLength)
+            if !tail.isEmpty, observed.hasSuffix(tail) { return .pasteObserved }
         }
         if delta > 0 { return .forwardEditObserved }
         if after != before { return .pendingEditObserved }

@@ -72,6 +72,29 @@ vault session was `no_key`, `locked`, or `unlocked`. No-op policy updates are om
 protected renderer refreshes caused by typing, selection, scrolling, or layout do not
 become a high-frequency log.
 
+Clipboard insertion on macOS emits one `paste_delivery` record per attempt, independently
+of verbose logging. Its exact fields are `outcome`, `restoration`, `duration_ms` (bounded to
+0–600,000), and `had_fingerprint` (whether Accessibility supplied a baseline). Outcomes are
+`interrupted`, `clipboard_unavailable`, `event_creation_failed`, `text_observed`, `timed_out`,
+`target_changed`, `pasteboard_superseded`, and `secure_input_enabled`. Restoration is separately
+`not_borrowed`, `restored`, `superseded`, or `pending`: returning the clipboard does not prove
+insertion. `text_observed` means the caret advanced and changed text matched the bounded replacement tail in the
+original focused element; it is an Accessibility observation, not a receiver acknowledgement.
+
+An unreadable or nonmatching field keeps the loan for the full 1.2-second confirmation budget.
+Timeouts stay unconfirmed in both UI and diagnostics and do not count as snippet usage.
+There is no automatic insertion retry. A focus-element change prevents confirmation and
+drains the bounded window; app switches, secure input, and a new clipboard owner end it early.
+macOS provides no consumption acknowledgement for a posted Cmd+V, so an arbitrarily delayed
+receiver can still outlast the budget.
+
+`pasteboard_recovery` records one aggregate `outcome` (`restored`, `superseded`, or `pending`)
+per retry batch after an earlier restoration failure, including failed acquisition rollback.
+No per-write or per-poll records are emitted. Normal results are asynchronous; a still-pending
+restoration is an error persisted synchronously because the user's snapshot is still owed.
+Neither event contains clipboard or snippet text, keywords, names, formats, text fingerprints,
+identifiers, paths, or application identity. The fingerprint itself stays only in memory.
+
 Per-keystroke expansion Accessibility diagnostics are opt-in on macOS under
 **Settings → Diagnostics → Expansion Accessibility logging**:
 

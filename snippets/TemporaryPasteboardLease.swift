@@ -57,35 +57,14 @@ struct PasteboardSnapshot {
         self.changeCount = changeCount
     }
 
-    var firstStringData: Data? {
-        items?.first?.values.first { $0.type == .string }?.data
-    }
-
     /// Fresh objects every call: writing an item that is already associated with a pasteboard raises.
     func makeItems() -> [NSPasteboardItem]? {
-        makePasteboardItems(firstString: nil)
-    }
-
-    func makeItems(replacingFirstStringWith text: String) -> [NSPasteboardItem]? {
-        guard firstStringData != nil else { return nil }
-        return makePasteboardItems(firstString: text)
-    }
-
-    private func makePasteboardItems(firstString: String?) -> [NSPasteboardItem]? {
         guard let items else { return nil }
         var pasteboardItems: [NSPasteboardItem] = []
         pasteboardItems.reserveCapacity(items.count)
-        for (index, item) in items.enumerated() {
+        for item in items {
             let pasteboardItem = NSPasteboardItem()
-            var replacedString = false
-            // Declaration order is significant — a receiver takes the first type it understands — so
-            // the substitution happens in place rather than by writing the string first.
             for value in item.values {
-                if index == 0, let firstString, value.type == .string, !replacedString {
-                    guard pasteboardItem.setString(firstString, forType: .string) else { return nil }
-                    replacedString = true
-                    continue
-                }
                 guard pasteboardItem.setData(value.data, forType: value.type) else { return nil }
             }
             pasteboardItems.append(pasteboardItem)
@@ -96,8 +75,9 @@ struct PasteboardSnapshot {
 
 /// Borrows the general pasteboard for one paste and gives it back.
 ///
-/// The point is `inPlace`: the original item object is mutated back, so returning the user's
-/// clipboard does not bump `changeCount` and clipboard managers never record a second entry.
+/// The loan contains only the replacement text and temporary markers. Keeping any original
+/// representation (HTML, RTF, custom editor data, or another item) lets a receiver paste the
+/// previous copy instead. Restoration republishes the complete snapshot as a new generation.
 @MainActor
 final class TemporaryPasteboardLease {
     enum AcquisitionResult {
@@ -131,22 +111,14 @@ final class TemporaryPasteboardLease {
         case failed
     }
 
-    private enum Strategy {
-        /// The first item carried plain text: only its string payload was swapped, so handing the
-        /// clipboard back costs no change count at all.
-        case inPlace(temporaryItem: NSPasteboardItem, originalStringData: Data)
-        /// The first item carried no plain text (image, file) or the pasteboard was empty: the
-        /// snapshot is rewritten wholesale, which bumps `changeCount` once, as the old code did.
-        case rewrite(PasteboardSnapshot)
-    }
-
     private let pasteboard: any SnippetPasteboardAccess
     /// The change count our own last write left behind. `var`, because the rewrite restore
     /// clears the pasteboard before it writes and that moves the count: re-anchoring keeps the
     /// question `isOwned` asks — "has anyone copied since we last wrote?" — answerable.
     private var ownedChangeCount: Int
-    private let strategy: Strategy
+    private let snapshot: PasteboardSnapshot
     private var isFinished = false
+    private(set) var lastRestoreResult: RestoreResult?
 
     /// Also the failure signal: a restore that could not put the user's data back leaves the
     /// lease unfinished, so `isOwned` stays `true` to say we still owe the clipboard back.
@@ -155,11 +127,11 @@ final class TemporaryPasteboardLease {
     private init(
         pasteboard: any SnippetPasteboardAccess,
         ownedChangeCount: Int,
-        strategy: Strategy
+        snapshot: PasteboardSnapshot
     ) {
         self.pasteboard = pasteboard
         self.ownedChangeCount = ownedChangeCount
-        self.strategy = strategy
+        self.snapshot = snapshot
     }
 
     /// Markers that ask clipboard managers not to record an item.
@@ -193,49 +165,10 @@ final class TemporaryPasteboardLease {
             return .refused
         }
 
-        // The in-place strategy can restore the original string bytes without a
-        // second pasteboard write, but NSPasteboardItem has no API for removing the
-        // concealed/transient marker types afterwards. Secure content therefore uses
-        // the snapshot/rewrite strategy below so its markers disappear with it.
-        if !isConcealed,
-           let originalStringData = snapshot.firstStringData,
-           let temporaryItems = snapshot.makeItems(replacingFirstStringWith: text),
-           let temporaryItem = temporaryItems.first {
-            // Building the replacement can take arbitrary local work. Recheck immediately before
-            // the destructive operation so a copy made while we were building always wins.
-            guard pasteboard.changeCount == snapshot.changeCount else { return .refused }
-            let acquiredChangeCount = pasteboard.clearContents()
-            guard pasteboard.writeObjects(temporaryItems) else {
-                // A writer can take the pasteboard while our write is failing. Never recover over
-                // that newer content; otherwise retry a few times with fresh item objects.
-                let rolledBack = restoreSnapshot(
-                    snapshot,
-                    to: pasteboard,
-                    whileOwnedAt: acquiredChangeCount
-                )
-                return failedAcquisitionResult(
-                    snapshot: snapshot,
-                    pasteboard: pasteboard,
-                    ownedChangeCount: acquiredChangeCount,
-                    rolledBack: rolledBack
-                )
-            }
-            // If ownership changed during the write, the later owner wins and there is no lease.
-            guard pasteboard.changeCount == acquiredChangeCount else { return .refused }
-            return .acquired(
-                TemporaryPasteboardLease(
-                    pasteboard: pasteboard,
-                    ownedChangeCount: acquiredChangeCount,
-                    strategy: .inPlace(
-                        temporaryItem: temporaryItem,
-                        originalStringData: originalStringData
-                    )
-                )
-            )
-        }
-
         let temporaryItem = NSPasteboardItem()
         guard temporaryItem.setString(text, forType: .string) else { return .refused }
+        // A courtesy to clipboard history tools, not a privacy guarantee.
+        _ = temporaryItem.setString("", forType: transientType)
         if isConcealed {
             // Local item mutation belongs before the last ownership check. However unlikely, a
             // copy made while adding marker flavors must win instead of being cleared below.
@@ -271,7 +204,7 @@ final class TemporaryPasteboardLease {
             TemporaryPasteboardLease(
                 pasteboard: pasteboard,
                 ownedChangeCount: acquiredChangeCount,
-                strategy: .rewrite(snapshot)
+                snapshot: snapshot
             )
         )
     }
@@ -288,13 +221,13 @@ final class TemporaryPasteboardLease {
         else {
             return .refused
         }
-        return .recoveryPending(
-            TemporaryPasteboardLease(
-                pasteboard: pasteboard,
-                ownedChangeCount: ownedChangeCount,
-                strategy: .rewrite(snapshot)
-            )
+        let pending = TemporaryPasteboardLease(
+            pasteboard: pasteboard,
+            ownedChangeCount: ownedChangeCount,
+            snapshot: snapshot
         )
+        pending.lastRestoreResult = .failed
+        return .recoveryPending(pending)
     }
 
     /// Best-effort rollback for a temporary write that never acquired a lease. Each attempt uses
@@ -334,76 +267,60 @@ final class TemporaryPasteboardLease {
 
     /// Idempotent: after a successful restore, later calls report `.superseded`.
     func restoreIfOwned() -> RestoreResult {
+        let result = attemptRestoreIfOwned()
+        lastRestoreResult = result
+        return result
+    }
+
+    private func attemptRestoreIfOwned() -> RestoreResult {
         guard !isFinished else { return .superseded }
         guard pasteboard.changeCount == ownedChangeCount else {
             isFinished = true
             return .superseded
         }
 
-        switch strategy {
-        case .inPlace(let temporaryItem, let originalStringData):
-            guard temporaryItem.setData(originalStringData, forType: .string) else {
-                if pasteboard.changeCount != ownedChangeCount {
-                    isFinished = true
-                    return .superseded
-                }
-                return .failed
-            }
+        guard let items = snapshot.makeItems() else { return .failed }
+        guard pasteboard.changeCount == ownedChangeCount else {
+            isFinished = true
+            return .superseded
+        }
+        // `clearContents` moves the change count, so the count `begin` handed us can never
+        // match again. Re-anchor on our own write before anything can fail: a newer copy by
+        // the user still pushes the count past this one, so the ownership guard keeps its
+        // meaning, while a failed write no longer masquerades as supersession on retry.
+        ownedChangeCount = pasteboard.clearContents()
+        if items.isEmpty || pasteboard.writeObjects(items) {
             guard pasteboard.changeCount == ownedChangeCount else {
                 isFinished = true
                 return .superseded
             }
             isFinished = true
-            return .restored(changeCount: ownedChangeCount)
-
-        case .rewrite(let snapshot):
-            guard let items = snapshot.makeItems() else { return .failed }
-            guard pasteboard.changeCount == ownedChangeCount else {
-                isFinished = true
-                return .superseded
-            }
-            // `clearContents` moves the change count, so the count `begin` handed us can never
-            // match again. Re-anchor on our own write before anything can fail: a newer copy by
-            // the user still pushes the count past this one, so the "never overwrite a newer
-            // copy" guard keeps its meaning, while a failed write no longer masquerades as
-            // `superseded` on the next attempt.
-            ownedChangeCount = pasteboard.clearContents()
-            if items.isEmpty || pasteboard.writeObjects(items) {
-                guard pasteboard.changeCount == ownedChangeCount else {
-                    isFinished = true
-                    return .superseded
-                }
-                isFinished = true
-                return .restored(changeCount: pasteboard.changeCount)
-            }
-            // The clipboard is empty right now and that is our doing. Rebuild the items and try
-            // once more, the same recovery the acquisition path performs — a write can fail for
-            // reasons that do not survive building fresh `NSPasteboardItem`s.
-            // Recheck after the failed write as well: another app may have copied while that
-            // synchronous request was in flight, and its newer content must not be overwritten.
-            guard pasteboard.changeCount == ownedChangeCount else {
-                isFinished = true
-                return .superseded
-            }
-            if let rebuilt = snapshot.makeItems(),
-               pasteboard.changeCount == ownedChangeCount,
-               pasteboard.writeObjects(rebuilt) {
-                guard pasteboard.changeCount == ownedChangeCount else {
-                    isFinished = true
-                    return .superseded
-                }
-                isFinished = true
-                return .restored(changeCount: pasteboard.changeCount)
-            }
-            guard pasteboard.changeCount == ownedChangeCount else {
-                isFinished = true
-                return .superseded
-            }
-            // Left cleared. `isFinished` stays false on purpose: `isOwned` remains true, the
-            // caller's retry loop gets its remaining attempts, and a caller that runs out of
-            // them reports failure instead of calling an emptied clipboard a success.
-            return .failed
+            return .restored(changeCount: pasteboard.changeCount)
         }
+        // The clipboard is empty right now and that is our doing. Rebuild the items and try
+        // once more, the same recovery the acquisition path performs — a write can fail for
+        // reasons that do not survive building fresh NSPasteboardItems.
+        // A newer copy made during the failed synchronous write must still win.
+        guard pasteboard.changeCount == ownedChangeCount else {
+            isFinished = true
+            return .superseded
+        }
+        if let rebuilt = snapshot.makeItems(),
+           pasteboard.changeCount == ownedChangeCount,
+           pasteboard.writeObjects(rebuilt) {
+            guard pasteboard.changeCount == ownedChangeCount else {
+                isFinished = true
+                return .superseded
+            }
+            isFinished = true
+            return .restored(changeCount: pasteboard.changeCount)
+        }
+        guard pasteboard.changeCount == ownedChangeCount else {
+            isFinished = true
+            return .superseded
+        }
+        // Left cleared. Keep the snapshot and ownership alive for immediate or delayed recovery.
+        return .failed
     }
 
     /// Production retry policy for handing the user's clipboard back. Returning `true` means
@@ -411,7 +328,6 @@ final class TemporaryPasteboardLease {
     /// still owns the pasteboard and therefore still owes the snapshot back.
     func restoreWithRetries(maxAttempts: Int = 3) -> Bool {
         for _ in 0..<max(0, maxAttempts) {
-            guard isOwned else { break }
             if case .failed = restoreIfOwned() { continue }
             break
         }

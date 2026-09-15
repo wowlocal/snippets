@@ -1855,6 +1855,61 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(fields["caller"] as? String, "unknown")
     }
 
+    func testPasteDiagnosticsExportAndRejectUnexpectedFieldsAndTypes() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        for outcome in DiagnosticPasteOutcome.allCases {
+            let event = DiagnosticEvent.pasteDelivery(
+                outcome: outcome, restoration: .restored,
+                durationMilliseconds: 1200, hadFingerprint: true)
+            service.emit(event, level: event.defaultLevel, synchronous: false)
+        }
+        for restoration in DiagnosticPasteboardRestoration.allCases {
+            let event = DiagnosticEvent.pasteboardRecovery(outcome: restoration)
+            service.emit(event, level: event.defaultLevel, synchronous: event.requiresSynchronousWrite)
+        }
+        let exportedURL = rootURL.appendingPathComponent("paste-export.jsonl")
+        _ = try await service.export(to: exportedURL)
+        let exported = try String(contentsOf: exportedURL, encoding: .utf8)
+        for outcome in DiagnosticPasteOutcome.allCases {
+            XCTAssertTrue(exported.contains("\"outcome\":\"\(outcome.rawValue)\""))
+        }
+        XCTAssertTrue(exported.contains("\"event\":\"pasteboard_recovery\""))
+        XCTAssertTrue(exported.contains("\"had_fingerprint\":true"))
+
+        let record = DiagnosticRecord(
+            event: .pasteDelivery(outcome: .timedOut, restoration: .restored,
+                durationMilliseconds: 1200, hadFingerprint: false),
+            timestamp: "2026-09-15T10:00:00.000Z", elapsedMilliseconds: 1,
+            sessionIdentifier: "test-session", sequence: 1)
+        let original = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        // The new schema must remain fail-closed for extra fields, wrong types, and omissions.
+        for variant in 0..<4 {
+            var object = original
+            var fields = try XCTUnwrap(object["fields"] as? [String: Any])
+            switch variant {
+            case 0: fields["clipboard"] = "PRIVATE-BODY-SENTINEL"
+            case 1: fields["had_fingerprint"] = "false"
+            case 2: fields["duration_ms"] = true
+            default: fields.removeValue(forKey: "restoration")
+            }
+            object["fields"] = fields
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            let injectedURL = SnippetStorageLocations.diagnosticsLogsFolderURL
+                .appendingPathComponent("snippets-paste-injected.jsonl")
+            try data.write(to: injectedURL)
+            let destination = rootURL.appendingPathComponent("rejected-paste-\(variant).jsonl")
+            do {
+                _ = try await service.export(to: destination)
+                XCTFail("Invalid paste diagnostics must be rejected")
+            } catch DiagnosticsExportError.corruptLog {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            }
+            try FileManager.default.removeItem(at: injectedURL)
+        }
+    }
+
     func testDiagnosticsExportRejectsFieldsOutsideClosedPrivacySchema() async throws {
         let service = DiagnosticsService(
             registerGlobally: false,

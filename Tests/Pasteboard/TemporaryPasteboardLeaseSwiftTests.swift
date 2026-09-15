@@ -75,11 +75,11 @@ private func acquiredLease(
 @Suite("Temporary pasteboard lease")
 @MainActor
 struct TemporaryPasteboardLeaseSwiftTests {
-    @Test("the in-place strategy preserves item shape and flavor order")
-    func inPlaceLeasePreservesShape() throws {
+    @Test("a rich multi-item clipboard lends only replacement text")
+    func temporaryLeaseExcludesEveryOriginalRepresentation() throws {
         let pasteboard = FakePasteboard()
         pasteboard.items = [
-            item([(.string, "user text"), (html, "<b>user text</b>")]),
+            item([(.string, "user text"), (html, "<b>user text</b>"), (.rtf, "old rtf")]),
             item([(tiff, "image bytes")]),
         ]
         let before = pasteboard.changeCount
@@ -87,25 +87,24 @@ struct TemporaryPasteboardLeaseSwiftTests {
         let lease = try #require(acquiredLease(text: "snippet", pasteboard: pasteboard))
 
         #expect(pasteboard.changeCount == before + 1)
-        #expect(pasteboard.items.count == 2)
-        #expect(pasteboard.items[0].types == [.string, html])
+        #expect(pasteboard.items.count == 1)
+        #expect(Set(pasteboard.items[0].types) == [
+            .string, NSPasteboard.PasteboardType("org.nspasteboard.TransientType"),
+        ])
         #expect(pasteboard.items[0].string(forType: .string) == "snippet")
-        #expect(pasteboard.items[0].data(forType: html).flatMap { String(data: $0, encoding: .utf8) }
-            == "<b>user text</b>")
-        #expect(pasteboard.items[1].data(forType: tiff).flatMap { String(data: $0, encoding: .utf8) }
-            == "image bytes")
+        #expect(pasteboard.items[0].availableType(from: [.html, .rtf, .string]) == .string)
         #expect(lease.isOwned)
     }
 
-    @Test("in-place restore returns the original string without another change count")
-    func inPlaceRestoreDoesNotBumpChangeCount() throws {
+    @Test("restoration publishes the complete original as a new generation")
+    func restorePublishesOriginalSnapshot() throws {
         let pasteboard = FakePasteboard()
         pasteboard.items = [item([(.string, "user text"), (html, "<b>user text</b>")])]
         let lease = try #require(acquiredLease(text: "snippet", pasteboard: pasteboard))
         let owned = pasteboard.changeCount
 
-        #expect(lease.restoreIfOwned() == .restored(changeCount: owned))
-        #expect(pasteboard.changeCount == owned)
+        #expect(lease.restoreIfOwned() == .restored(changeCount: owned + 1))
+        #expect(pasteboard.changeCount == owned + 1)
         #expect(pasteboard.items[0].string(forType: .string) == "user text")
         #expect(pasteboard.items[0].data(forType: html).flatMap { String(data: $0, encoding: .utf8) }
             == "<b>user text</b>")
@@ -132,7 +131,7 @@ struct TemporaryPasteboardLeaseSwiftTests {
         let lease = try #require(acquiredLease(text: "snippet", pasteboard: pasteboard))
         let owned = pasteboard.changeCount
 
-        #expect(lease.restoreIfOwned() == .restored(changeCount: owned))
+        #expect(lease.restoreIfOwned() == .restored(changeCount: owned + 1))
         #expect(lease.restoreIfOwned() == .superseded)
         #expect(pasteboard.items[0].string(forType: .string) == "user text")
     }
@@ -337,5 +336,64 @@ struct TemporaryPasteboardLeaseSwiftTests {
 
         #expect(!lease.restoreWithRetries())
         #expect(lease.isOwned)
+        #expect(lease.lastRestoreResult == .failed)
+        pasteboard.writesAlwaysFail = false
+        #expect(lease.restoreWithRetries())
+        #expect(lease.lastRestoreResult == .restored(changeCount: pasteboard.changeCount))
+        #expect(pasteboard.items.first?.data(forType: tiff) == Data("image bytes".utf8))
+    }
+
+    @Test("real pasteboard isolates formats and restores every item byte for byte")
+    func realPasteboardRoundTrip() throws {
+        // Never use .general: tests must not borrow the user's clipboard.
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let custom = NSPasteboard.PasteboardType("com.example.editor-fragment")
+        let original = [
+            item([(.html, "<b>original</b>"), (.rtf, "{\\rtf1 original}"),
+                  (.string, "original"), (custom, "opaque editor payload")]),
+            item([(.string, "second item"), (tiff, "image bytes")]),
+        ]
+        #expect(board.writeObjects(original))
+        let snapshot = PasteboardSnapshot(reading: board)
+        let lease = try #require(TemporaryPasteboardLease.begin(
+            text: "replacement\nsecond line 🎉", pasteboard: board).acquiredLease)
+        let temporary = try #require(board.pasteboardItems?.first)
+        #expect(board.pasteboardItems?.count == 1)
+        #expect(Set(temporary.types) == [
+            .string, NSPasteboard.PasteboardType("org.nspasteboard.TransientType"),
+        ])
+        #expect(temporary.availableType(from: [.html, .rtf, custom, .string]) == .string)
+        #expect(temporary.string(forType: .string) == "replacement\nsecond line 🎉")
+        let editor = NSTextView()
+        editor.isRichText = true
+        #expect(editor.readSelection(from: board))
+        #expect(editor.string == "replacement\nsecond line 🎉")
+        let borrowedCount = board.changeCount
+        #expect(lease.restoreWithRetries())
+        #expect(board.changeCount != borrowedCount)
+        let restored = try #require(board.pasteboardItems)
+        let savedItems = try #require(snapshot.items)
+        #expect(restored.count == savedItems.count)
+        for (actual, saved) in zip(restored, savedItems) {
+            #expect(actual.types == saved.values.map(\.type))
+            for value in saved.values { #expect(actual.data(forType: value.type) == value.data) }
+        }
+    }
+
+    @Test("rich text recovery retains all formats after exhausting immediate retries")
+    func richTextRecoverySurvivesExhaustedRetries() throws {
+        let board = FakePasteboard()
+        board.items = [item([(.string, "original"), (.html, "<b>original</b>")])]
+        let lease = try #require(acquiredLease(text: "snippet", pasteboard: board))
+        board.writeFailuresRemaining = 6
+        #expect(!lease.restoreWithRetries())
+        #expect(lease.isOwned)
+        #expect(lease.lastRestoreResult == .failed)
+        #expect(board.items.isEmpty)
+        #expect(lease.restoreWithRetries())
+        #expect(board.items.first?.string(forType: .string) == "original")
+        #expect(board.items.first?.data(forType: .html) == Data("<b>original</b>".utf8))
+        #expect(lease.lastRestoreResult == .restored(changeCount: board.changeCount))
     }
 }
