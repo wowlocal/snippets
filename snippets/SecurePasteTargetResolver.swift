@@ -4,6 +4,31 @@ import AppKit
 /// search is never evidence that a candidate is the only focused field.
 @MainActor
 enum SecurePasteTargetResolver {
+    enum Validation: String, CaseIterable {
+        case valid
+        case budgetExhausted = "budget_exhausted"
+        case fieldUnavailable = "field_unavailable"
+        case fieldDisabled = "field_disabled"
+        case fieldTypeChanged = "field_type_changed"
+        case windowChanged = "window_changed"
+        case ancestryChanged = "ancestry_changed"
+        case focusUnavailable = "focus_unavailable"
+        case focusChanged = "focus_changed"
+        case fieldFocusPending = "field_focus_pending"
+        case hitTargetChanged = "hit_target_changed"
+        case applicationNotFrontmost = "application_not_frontmost"
+        case keyboardOwnerPending = "keyboard_owner_pending"
+        case secureInputPending = "secure_input_pending"
+        case cancelled
+
+        var canRetryHandoff: Bool {
+            switch self {
+            case .valid, .budgetExhausted, .focusUnavailable, .fieldFocusPending,
+                 .applicationNotFrontmost, .keyboardOwnerPending, .secureInputPending: true
+            default: false
+            }
+        }
+    }
     struct Metadata {
         let isTextControl: Bool
         let isFocused: Bool
@@ -75,7 +100,7 @@ enum SecurePasteTargetResolver {
     /// Re-run against fresh metadata after every asynchronous handoff and before
     /// writing. An explicit hit is authority for this object, not another field
     /// that happens to occupy its old position after navigation.
-    static func validates<Node: Equatable>(
+    static func validation<Node: Equatable>(
         field: Node, root: Node, window: Node, wasSecure: Bool,
         explicit: Bool,
         canContinue: () -> Bool,
@@ -85,20 +110,76 @@ enum SecurePasteTargetResolver {
         windowIsUnchanged: () -> Bool,
         parent: (Node) -> Node?,
         hitTest: () -> Node?
-    ) -> Bool {
-        guard canContinue(), field != root,
-              let info = metadata(field), info.isTextControl, info.isEnabled,
-              info.isSecure == wasSecure,
-              currentWindow(field) == window, windowIsUnchanged(),
-              belongs(field, to: root, parent: parent),
-              let focus = currentFocus(), focus == root || focus == field
-        else { return false }
-        if explicit {
-            guard let hit = hitTest(), belongs(hit, to: field, parent: parent) else { return false }
-        } else if !info.isFocused {
-            return false
+    ) -> Validation {
+        func failure(_ reason: Validation) -> Validation {
+            canContinue() ? reason : .budgetExhausted
         }
-        return canContinue()
+        guard canContinue() else { return .budgetExhausted }
+        guard field != root, let info = metadata(field) else { return failure(.fieldUnavailable) }
+        guard info.isTextControl, info.isSecure == wasSecure else { return failure(.fieldTypeChanged) }
+        guard info.isEnabled else { return failure(.fieldDisabled) }
+        guard currentWindow(field) == window, windowIsUnchanged() else { return failure(.windowChanged) }
+        guard belongs(field, to: root, parent: parent) else { return failure(.ancestryChanged) }
+        guard let focus = currentFocus() else { return failure(.focusUnavailable) }
+        guard focus == root || focus == field else { return failure(.focusChanged) }
+        if explicit {
+            guard let hit = hitTest(), belongs(hit, to: field, parent: parent)
+            else { return failure(.hitTargetChanged) }
+        } else if !info.isFocused {
+            return failure(.fieldFocusPending)
+        }
+        return canContinue() ? .valid : .budgetExhausted
+    }
+}
+
+/// Runs the shipping container handoff with injectable observations/sleeps. Only
+/// transient focus/AX availability may settle; structural changes abort the attempt.
+/// No plaintext-bearing operation belongs in this loop.
+@MainActor
+enum SecurePasteContainerHandoff {
+    struct Report {
+        let validation: SecurePasteTargetResolver.Validation
+        let firstTransient: SecurePasteTargetResolver.Validation?
+        let attempts: Int
+    }
+
+    static func run(
+        sleep: (Duration) async -> Void,
+        observe: () -> SecurePasteTargetResolver.Validation,
+        restoreFocus: () -> Void
+    ) async -> Report {
+        var consecutive = 0
+        var firstTransient: SecurePasteTargetResolver.Validation?
+        var last: SecurePasteTargetResolver.Validation = .focusUnavailable
+        let delays: [Duration] = [.milliseconds(80), .milliseconds(100), .milliseconds(160),
+                                  .milliseconds(300), .milliseconds(500), .milliseconds(500)]
+        for (index, delay) in delays.enumerated() {
+            await sleep(delay)
+            guard !Task.isCancelled else {
+                return Report(validation: .cancelled, firstTransient: firstTransient, attempts: index + 1)
+            }
+            last = observe()
+            if last == .valid || last == .fieldFocusPending {
+                if last == .fieldFocusPending { firstTransient = firstTransient ?? last }
+                restoreFocus()
+                last = observe()
+            }
+            guard last.canRetryHandoff else {
+                return Report(validation: last, firstTransient: firstTransient, attempts: index + 1)
+            }
+            if last == .valid {
+                consecutive += 1
+                if consecutive == 2 {
+                    return Report(validation: .valid, firstTransient: firstTransient, attempts: index + 1)
+                }
+            } else {
+                consecutive = 0
+                firstTransient = firstTransient ?? last
+            }
+        }
+        // One last valid sample is insufficient: stable handoff requires two.
+        return Report(validation: last == .valid ? .focusUnavailable : last,
+                      firstTransient: firstTransient, attempts: delays.count)
     }
 }
 

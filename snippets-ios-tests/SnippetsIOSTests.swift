@@ -1855,6 +1855,75 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(fields["caller"] as? String, "unknown")
     }
 
+    func testSecurePasteDiagnosticsExportAndRejectUnsafeFields() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        for stage in DiagnosticSecurePasteStage.allCases {
+            let event = DiagnosticEvent.securePaste(stage: stage, outcome: .succeeded,
+                target: .explicit, transport: .secureValue, reason: .none,
+                attempts: 2, durationMilliseconds: 180, axErrorCode: 0, failure: nil)
+            service.emit(event, level: event.defaultLevel, synchronous: false)
+        }
+        for transport in DiagnosticSecurePasteTransport.allCases {
+            let event = DiagnosticEvent.securePaste(stage: .delivery, outcome: .ambiguous,
+                target: .focused, transport: transport, reason: .axWriteUnconfirmed,
+                attempts: 1, durationMilliseconds: 1, axErrorCode: 0, failure: nil)
+            service.emit(event, level: event.defaultLevel, synchronous: false)
+        }
+        let exportURL = rootURL.appendingPathComponent("secure-paste-export.jsonl")
+        _ = try await service.export(to: exportURL)
+        let exported = try String(contentsOf: exportURL, encoding: .utf8)
+        for stage in DiagnosticSecurePasteStage.allCases {
+            XCTAssertTrue(exported.contains("\"stage\":\"\(stage.rawValue)\""))
+        }
+        for transport in DiagnosticSecurePasteTransport.allCases {
+            XCTAssertTrue(exported.contains("\"transport\":\"\(transport.rawValue)\""))
+        }
+        XCTAssertTrue(exported.contains("\"reason\":\"ax_write_unconfirmed\""))
+        let failure = DiagnosticFailure(NSError(domain: NSCocoaErrorDomain, code: 42,
+            userInfo: [NSLocalizedDescriptionKey: "PRIVATE-PASSWORD-SENTINEL"]))
+        let event = DiagnosticEvent.securePaste(stage: .authentication, outcome: .failed,
+            target: .explicit, transport: .none, reason: .authenticationFailed,
+            attempts: 1, durationMilliseconds: 100, axErrorCode: nil, failure: failure)
+        service.emit(event, level: event.defaultLevel, synchronous: false)
+        let failureURL = rootURL.appendingPathComponent("secure-paste-failure.jsonl")
+        _ = try await service.export(to: failureURL)
+        XCTAssertFalse(try String(contentsOf: failureURL, encoding: .utf8).contains("PRIVATE-PASSWORD-SENTINEL"))
+
+        let record = DiagnosticRecord(event: event, timestamp: "2026-09-20T10:00:00.000Z",
+            elapsedMilliseconds: 1, sessionIdentifier: UUID().uuidString.lowercased(), sequence: 1)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        for variant in 0..<11 {
+            var object = original
+            var fields = try XCTUnwrap(object["fields"] as? [String: Any])
+            switch variant {
+            case 0: fields["body"] = "PRIVATE-PASSWORD-SENTINEL"
+            case 1: fields["target"] = "PRIVATE-APP-NAME"
+            case 2: fields["reason"] = "PRIVATE-EXCEPTION-TEXT"
+            case 3: fields["attempts"] = true
+            case 4: fields["duration_ms"] = "100"
+            case 5: fields["attempts"] = 100
+            case 6: fields.removeValue(forKey: "stage")
+            case 7: fields.removeValue(forKey: "error_family")
+            case 8: fields["transport"] = "arbitrary"
+            case 9: fields["duration_ms"] = -1
+            default: fields["ax_error_code"] = 1.5
+            }
+            object["fields"] = fields
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            let injected = SnippetStorageLocations.diagnosticsLogsFolderURL.appendingPathComponent("snippets-injected.jsonl")
+            try data.write(to: injected)
+            let destination = rootURL.appendingPathComponent("rejected-secure-paste-\(variant).jsonl")
+            do {
+                _ = try await service.export(to: destination)
+                XCTFail("Unsafe Secure Paste diagnostics must be rejected")
+            } catch DiagnosticsExportError.corruptLog {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            }
+            try FileManager.default.removeItem(at: injected)
+        }
+    }
+
     func testPasteDiagnosticsExportAndRejectUnexpectedFieldsAndTypes() async throws {
         let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
         for outcome in DiagnosticPasteOutcome.allCases {

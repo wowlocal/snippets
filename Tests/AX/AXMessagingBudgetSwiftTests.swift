@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 @testable import SnippetsAX
+@testable import SnippetsCore
 
 @Suite("Secure Paste container targets")
 @MainActor
@@ -27,11 +28,11 @@ struct SecurePasteContainerTargetTests {
         }
 
         func validates(explicit: Bool = true) -> Bool {
-            SecurePasteTargetResolver.validates(field: 2, root: 1, window: 10,
+            SecurePasteTargetResolver.validation(field: 2, root: 1, window: 10,
                 wasSecure: true, explicit: explicit, canContinue: { withinBudget },
                 metadata: { metadata[$0] }, currentFocus: { focus },
                 currentWindow: { _ in window }, windowIsUnchanged: { windowUnchanged },
-                parent: { parents[$0] }, hitTest: { hit })
+                parent: { parents[$0] }, hitTest: { hit }) == .valid
         }
     }
 
@@ -110,12 +111,80 @@ struct SecurePasteContainerTargetTests {
     func expiredDuringValidation() {
         let fixture = Fixture()
         var checks = 0
-        #expect(!SecurePasteTargetResolver.validates(field: 2, root: 1, window: 10,
+        #expect(SecurePasteTargetResolver.validation(field: 2, root: 1, window: 10,
             wasSecure: true, explicit: true,
             canContinue: { checks += 1; return checks == 1 },
             metadata: { fixture.metadata[$0] }, currentFocus: { 1 },
             currentWindow: { _ in 10 }, windowIsUnchanged: { true },
-            parent: { fixture.parents[$0] }, hitTest: { 2 }))
+            parent: { fixture.parents[$0] }, hitTest: { 2 }) == .budgetExhausted)
+    }
+
+    @Test("authentication keyboard ownership settles before focus restoration")
+    func handoffWaitsForKeyboardOwner() async {
+        var observations: [SecurePasteTargetResolver.Validation] = [
+            .keyboardOwnerPending, .focusUnavailable, .valid, .valid, .valid, .valid,
+        ]
+        var restorations = 0
+        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
+            observe: { observations.removeFirst() }, restoreFocus: { restorations += 1 })
+        #expect(report.validation == .valid)
+        #expect(report.attempts == 4)
+        #expect(report.firstTransient == .keyboardOwnerPending)
+        #expect(restorations == 2)
+    }
+
+    @Test("an intact automatic descendant can regain focus after authentication")
+    func handoffRestoresFieldFocus() async {
+        var focused = false
+        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
+            observe: { focused ? .valid : .fieldFocusPending }, restoreFocus: { focused = true })
+        #expect(report.validation == .valid)
+        #expect(report.firstTransient == .fieldFocusPending)
+        #expect(report.attempts == 2)
+    }
+
+    @Test("structural changes abort immediately, even after a valid sample",
+          arguments: SecurePasteTargetResolver.Validation.allCases.filter { !$0.canRetryHandoff })
+    func handoffRejectsChangedDestination(failure: SecurePasteTargetResolver.Validation) async {
+        var samples = [SecurePasteTargetResolver.Validation.valid, .valid, failure]
+        var restorations = 0
+        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
+            observe: { samples.removeFirst() }, restoreFocus: { restorations += 1 })
+        #expect(report.validation == failure)
+        #expect(report.attempts == 2)
+        #expect(restorations == 1)
+    }
+
+    @Test("focus interruption resets consecutive confirmations and retries stay bounded")
+    func handoffIsBoundedAndConsecutive() async {
+        var samples: [SecurePasteTargetResolver.Validation] = [
+            .valid, .valid, .keyboardOwnerPending, .valid, .valid, .focusUnavailable,
+            .valid, .valid, .keyboardOwnerPending,
+        ]
+        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
+            observe: { samples.removeFirst() }, restoreFocus: {})
+        #expect(report.validation == .keyboardOwnerPending)
+        #expect(report.attempts == 6)
+    }
+
+    @Test("task cancellation while waiting prevents focus restoration")
+    func cancelledHandoff() async {
+        var restorations = 0
+        let task = Task { @MainActor in
+            await SecurePasteContainerHandoff.run(sleep: { _ in await Task.yield() },
+                observe: { .valid }, restoreFocus: { restorations += 1 })
+        }
+        task.cancel()
+        let report = await task.value
+        #expect(report.validation == .cancelled)
+        #expect(restorations == 0)
+    }
+
+    @Test("every failed validation has a closed diagnostic reason")
+    func diagnosticVocabulary() {
+        for validation in SecurePasteTargetResolver.Validation.allCases where validation != .valid {
+            #expect(DiagnosticSecurePasteReason(rawValue: validation.rawValue) != nil)
+        }
     }
 
     @Test("cancelling field selection discards the request without selecting or delivering")
@@ -189,12 +258,12 @@ struct AXMessagingBudgetSwiftTests {
         #expect(!AXMessagingBudget.primingResultIsCacheable(.illegalArgument))
     }
 
-    @Test("Secure Paste replaces a positively identified password field")
+    @Test("Secure Paste retains native password whole-value replacement")
     func securePastePrefersWholeSecureValue() {
         #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: true,
             valueIsSettable: true,
-            targetIsInsideWebArea: true,
+            targetIsInsideWebArea: false,
             targetHasEligibleWebTextRole: true,
             webRangeReplacementIsAvailable: true
         ) == .replaceSecureValue)
@@ -205,10 +274,63 @@ struct AXMessagingBudgetSwiftTests {
         #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: true,
             valueIsSettable: false,
-            targetIsInsideWebArea: true,
+            targetIsInsideWebArea: false,
             targetHasEligibleWebTextRole: true,
             webRangeReplacementIsAvailable: true
         ) == .unavailable)
+    }
+
+    @Test("web passwords use input events even when AXValue advertises success",
+          arguments: [true, false], [true, false])
+    func secureWebPasteDoesNotDependOnAXWrites(valueSettable: Bool, rangeAvailable: Bool) {
+        #expect(SecurePasteDeliveryPolicy.strategy(
+            targetIsSecureTextField: true, valueIsSettable: valueSettable,
+            targetIsInsideWebArea: true, targetHasEligibleWebTextRole: true,
+            webRangeReplacementIsAvailable: rangeAvailable) == .typeSecureUnicode)
+        #expect(SecurePasteDeliveryPolicy.strategy(
+            targetIsSecureTextField: true, valueIsSettable: valueSettable,
+            targetIsInsideWebArea: true, targetHasEligibleWebTextRole: false,
+            webRangeReplacementIsAvailable: rangeAvailable) == .unavailable)
+    }
+
+    @Test("container evidence never substitutes for keyboard focus in a web password",
+          arguments: [true, false], [true, false])
+    func directInputRequiresConcreteSecureField(container: Bool, focused: Bool) {
+        #expect(SecurePasteDeliveryPolicy.permitsDirectInput(isSecureWebField: true,
+            hasContainerBinding: container, exactFieldHasKeyboardFocus: focused) == focused)
+        #expect(SecurePasteDeliveryPolicy.permitsDirectInput(isSecureWebField: false,
+            hasContainerBinding: container, exactFieldHasKeyboardFocus: focused) == !container)
+    }
+
+    @Test("an accepted/no-op or rejected password setter is never confirmed delivery",
+          arguments: [AXError.success, .cannotComplete, .attributeUnsupported, .invalidUIElement])
+    func acceptedPasswordSetterIsUnconfirmed(error: AXError) {
+        #expect(SecurePasteDeliveryPolicy.secureValueWriteResult(error) == .attemptedAmbiguous)
+        #expect(SecurePasteCompletionPolicy.reaction(after: .attemptedAmbiguous) == .warnWithoutRestoringFocus)
+    }
+
+    @Test("native and web password ancestry require positive metadata")
+    func secureWebAncestryClassification() {
+        for rootRole in ["AXWebArea", "AXWindow", "AXApplication"] {
+            #expect(SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { true },
+                role: { $0 == 1 ? "AXTextField" : rootRole },
+                parent: { $0 == 1 ? 2 : nil }) == (rootRole == "AXWebArea"))
+        }
+        #expect(SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { true },
+            role: { _ in "AXTextField" }, parent: { _ in nil }) == nil)
+        #expect(SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { true },
+            role: { _ in nil }, parent: { _ in 2 }) == nil)
+        #expect(SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { false },
+            role: { _ in "AXWebArea" }, parent: { _ in 2 }) == nil)
+        #expect(SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { true },
+            role: { _ in "AXGroup" }, parent: { $0 == 1 ? 2 : 1 }) == nil)
+        var visited = 0
+        #expect(SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { true },
+            role: { _ in visited += 1; return "AXGroup" }, parent: { $0 + 1 }) == nil)
+        #expect(visited == 16)
+        var budget = true
+        #expect(SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { budget },
+            role: { _ in budget = false; return "AXWindow" }, parent: { _ in nil }) == nil)
     }
 
     @Test("Secure Paste prefers the advertised browser range operation in web text fields")

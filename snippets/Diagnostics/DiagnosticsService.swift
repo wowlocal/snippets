@@ -525,6 +525,10 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             required: ["outcome", "restoration", "duration_ms", "had_fingerprint"]),
         "pasteboard_recovery": ExportEventSchema(
             category: "integration", required: ["outcome"]),
+        "secure_paste": ExportEventSchema(
+            category: "integration",
+            required: ["stage", "outcome", "target", "transport", "reason", "attempts", "duration_ms"],
+            optional: ["ax_error_code", "error_family", "error_code"]),
         "metrickit_diagnostic": ExportEventSchema(
             category: "metrickit",
             required: ["kind", "truncated"],
@@ -548,7 +552,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "halt_reason", "action", "keyword", "outcome", "caller", "source", "reason",
         "kind", "surface", "from_state", "to_state", "vault_state",
         "state_before", "state_after", "stage", "failure", "exported_at",
-        "oldest_entry_at", "newest_entry_at", "endpoint", "restoration",
+        "oldest_entry_at", "newest_entry_at", "endpoint", "restoration", "target", "transport",
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",
@@ -560,7 +564,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "record_count", "count", "exception_type", "exception_code", "signal",
         "file_count", "byte_count", "skipped_trailing_lines", "query_length",
         "ax_error_code", "fetch_depth", "pending_generation_count",
-        "unready_generation_count", "http_status",
+        "unready_generation_count", "http_status", "attempts",
     ]
 
     private func makeExport(at destination: URL) throws -> DiagnosticsExportResult {
@@ -706,7 +710,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         guard schemaForEvent.requiredFields.isSubset(of: fieldNames),
               fieldNames.isSubset(of: schemaForEvent.requiredFields.union(schemaForEvent.optionalFields)),
               fields.allSatisfy({ validateExportField(key: $0.key, value: $0.value) }),
-              validateCloudSignInFields(event: event, fields: fields)
+              validateCloudSignInFields(event: event, fields: fields),
+              validateSecurePasteFields(event: event, fields: fields)
         else { return nil }
 
         return ExportLine(
@@ -714,6 +719,27 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             session: session,
             sequence: sequence.uint64Value,
             data: data)
+    }
+
+    private static func validateSecurePasteFields(event: String, fields: [String: Any]) -> Bool {
+        guard event == "secure_paste" else { return true }
+        guard let stage = fields["stage"] as? String, DiagnosticSecurePasteStage(rawValue: stage) != nil,
+              let outcome = fields["outcome"] as? String, DiagnosticSecurePasteOutcome(rawValue: outcome) != nil,
+              let target = fields["target"] as? String, DiagnosticSecurePasteTarget(rawValue: target) != nil,
+              let transport = fields["transport"] as? String, DiagnosticSecurePasteTransport(rawValue: transport) != nil,
+              let reason = fields["reason"] as? String, DiagnosticSecurePasteReason(rawValue: reason) != nil,
+              let attempts = fields["attempts"] as? NSNumber,
+              (0...16).contains(attempts.doubleValue), attempts.doubleValue.rounded(.towardZero) == attempts.doubleValue,
+              let duration = fields["duration_ms"] as? NSNumber,
+              (0...600_000).contains(duration.doubleValue), duration.doubleValue.rounded(.towardZero) == duration.doubleValue,
+              (fields["error_family"] == nil) == (fields["error_code"] == nil)
+        else { return false }
+        if let family = fields["error_family"] as? String,
+           DiagnosticFailureFamily(rawValue: family) == nil { return false }
+        if let code = fields["ax_error_code"] as? NSNumber,
+           code.doubleValue < Double(Int32.min) || code.doubleValue > Double(Int32.max)
+            || code.doubleValue.rounded(.towardZero) != code.doubleValue { return false }
+        return true
     }
 
     private static func validateCloudSignInFields(event: String, fields: [String: Any]) -> Bool {

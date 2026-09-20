@@ -24,6 +24,50 @@ private final class RecordingDiagnosticsSink: DiagnosticsSink, @unchecked Sendab
 
 @Suite("Persistent diagnostics privacy contract", .serialized)
 struct DiagnosticsTests {
+    @Test func securePasteDiagnosticsAreClosedBoundedAndContentFree() throws {
+        let secret = "PRIVATE-PASSWORD PRIVATE-NAME /private/path caller=123"
+        let failure = DiagnosticFailure(NSError(domain: NSCocoaErrorDomain, code: 42,
+            userInfo: [NSLocalizedDescriptionKey: secret]))
+        for stage in DiagnosticSecurePasteStage.allCases {
+            for reason in DiagnosticSecurePasteReason.allCases {
+                let event = DiagnosticEvent.securePaste(stage: stage, outcome: .failed,
+                    target: .explicit, transport: .secureValue, reason: reason,
+                    attempts: .max, durationMilliseconds: .max, axErrorCode: -25202, failure: failure)
+                let record = DiagnosticRecord(event: event, timestamp: "2026-09-20T10:00:00.000Z",
+                    elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1)
+                let data = try record.jsonLine()
+                let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let fields = try #require(object["fields"] as? [String: Any])
+                #expect(object["event"] as? String == "secure_paste")
+                #expect(object["category"] as? String == "integration")
+                #expect(Set(fields.keys) == ["stage", "outcome", "target", "transport", "reason",
+                    "attempts", "duration_ms", "ax_error_code", "error_family", "error_code"])
+                #expect(fields["reason"] as? String == reason.rawValue)
+                #expect(fields["attempts"] as? Int == 16)
+                #expect(fields["duration_ms"] as? Int == 600_000)
+                #expect(fields["ax_error_code"] as? Int == -25202)
+                #expect(!String(decoding: data, as: UTF8.self).contains(secret))
+                #expect(event.defaultLevel == .warning)
+                #expect(!event.requiresSynchronousWrite)
+            }
+        }
+        let bounded = DiagnosticEvent.securePaste(stage: .handoff, outcome: .succeeded,
+            target: .focused, transport: .none, reason: .none, attempts: -1,
+            durationMilliseconds: -1, axErrorCode: .max, failure: nil)
+        #expect(bounded.fields["attempts"] == .integer(0))
+        #expect(bounded.fields["duration_ms"] == .integer(0))
+        #expect(bounded.fields["ax_error_code"] == .integer(Int64(Int32.max)))
+        #expect(bounded.defaultLevel == .info)
+        for transport in DiagnosticSecurePasteTransport.allCases {
+            let event = DiagnosticEvent.securePaste(stage: .delivery, outcome: .ambiguous,
+                target: .focused, transport: transport, reason: .axWriteUnconfirmed,
+                attempts: 1, durationMilliseconds: 1, axErrorCode: 0, failure: nil)
+            #expect(event.fields["transport"] == .string(transport.rawValue))
+            #expect(event.fields["reason"] == .string("ax_write_unconfirmed"))
+            #expect(event.defaultLevel == .warning)
+        }
+    }
+
     @Test func cloudSignInRecordsAreBoundedAndExcludeAuthenticationErrorPayloads() throws {
         let secret = "email@example.test code=SECRET-CODE token=SECRET-TOKEN https://secret.example/callback"
         let failure = DiagnosticFailure(NSError(domain: NSURLErrorDomain, code: -1001,

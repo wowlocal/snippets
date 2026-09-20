@@ -88,6 +88,33 @@ drains the bounded window; app switches, secure input, and a new clipboard owner
 macOS provides no consumption acknowledgement for a posted Cmd+V, so an arbitrarily delayed
 receiver can still outlast the budget.
 
+Explicit Secure Paste (`⌘\`) emits `secure_paste` events independently of verbose
+logging. Each boundary records one outcome: `capture`, explicit field `selection`,
+`picker`, `authentication`, `handoff`, `preparation`, `delivery`, and `completion`.
+The required fields are `stage`, `outcome`, `target`, `transport`, `reason`, `attempts`
+(0–16), and `duration_ms` (0–600,000). Optional `ax_error_code` is a signed 32-bit
+numeric AX result; authentication errors include only `error_family` and `error_code`.
+Target categories are `unresolved`, `focused`, `descendant`, and `explicit`. Transport
+is `none`, `secure_value`, `secure_unicode`, `web_range`, or `unicode`. `secure_unicode`
+identifies the browser-password keyboard-input route. These are closed enums, never
+application names, AX descriptions, window titles, identifiers, geometry, field
+contents, or snippet identities. The export validator also rejects unknown enum
+values, invalid bounds, and unpaired error fields. These low-frequency outcomes
+remain asynchronous; no per-poll events are written.
+
+Handoff retries are aggregated into one event. Its reason identifies the final
+failure or, on recovery, the first transient condition (for example
+`keyboard_owner_pending`). Stale controls, changed windows/ancestry, a different
+concrete focused control, and a changed hit target remain terminal refusals.
+`delivery` is emitted only if the delivery function was reached. AX success for a
+native password-value write is `ambiguous` with reason `ax_write_unconfirmed`, even
+with `ax_error_code: 0`: API acceptance is not delivery proof. Browser-password Unicode
+delivery is also `ambiguous`, with `direct_input_unconfirmed`, because keyboard posting
+has no host acknowledgement and password values are never read. An AX error after a write is `ambiguous`, never
+permission to retry with a different transport. `completion` summarizes the overall
+attempt; consult the preceding stage for its specific failure reason. Returning
+focus after cancellation or failure does not emit a second handoff event.
+
 `pasteboard_recovery` records one aggregate `outcome` (`restored`, `superseded`, or `pending`)
 per retry batch after an earlier restoration failure, including failed acquisition rollback.
 No per-write or per-poll records are emitted. Normal results are asynchronous; a still-pending

@@ -204,10 +204,23 @@ explicit targets must still be hit at the selected position. A different concret
 focused control, moved window, detached/replaced element or changed hit refuses
 delivery. No replacement control is searched for during that attempt.
 
-Container targets permit only an AX-addressed password-value or supported web-range
-write, with the existing one-attempt semantics. They never fall through to Unicode
-key events or the pasteboard. Hosts that cannot supply the necessary AX evidence
-remain unsupported. The actual password value is never read during resolution.
+During authentication handoff, identity validation is separate from keyboard
+readiness. The original application's focus is queried even while the authentication
+UI owns system focus. Temporary unavailable focus, AX deadline expiry, and keyboard
+ownership transitions retry within six delays (80, 100, 160, 300, 500, 500 ms), with
+two consecutive valid samples required. An intact automatically discovered field
+may have focus reasserted once the host owns keyboard input. Structural changes
+abort immediately; only focus/metadata operations occur in this loop. Secure Paste
+stage diagnostics report the outcome and aggregate attempt count, so authentication
+success can be distinguished from handoff, preparation, and delivery failures.
+
+Container evidence alone permits only an AX-addressed native password-value or
+supported ordinary web-range write. A browser-backed password may use direct input
+only after the concrete password field itself becomes the exact keyboard-focused AX
+object. A container that remains focused is insufficient, even after explicit field
+selection. There is never a fallback after a plaintext-bearing attempt. Hosts that
+cannot supply the necessary evidence remain unsupported. Password values are never
+read during resolution or delivery.
 
 Regression coverage lives in `Tests/AX/AXMessagingBudgetSwiftTests.swift`, which
 exercises the shipping resolver with a metadata-only adapter, including ambiguous
@@ -219,9 +232,17 @@ picker/authentication UI is open. Do not submit test login forms.
 `⌘\` never moves secure content through the pasteboard. It chooses exactly one
 plaintext-bearing transport while the captured PID and AX focus are freshly confirmed:
 
-- A positively identified `AXSecureTextField` uses the established password-manager-style
-  `AXValue` replacement without reading the existing password.
-- An eligible browser field uses the capability-gated, readback-verified range operation
+- A native `AXSecureTextField` retains whole-field `AXValue` replacement without reading
+  the existing password. An accepted setter is still an unconfirmed attempt, not proof
+  of insertion. Unknown password-field ancestry fails closed instead of selecting this
+  route on incomplete browser evidence.
+- A browser-backed `AXSecureTextField` uses the Unicode input route, after checking the
+  exact field's keyboard focus, enabled state and secure subrole. This updates the host's
+  input-event-driven model. It behaves like typing/pasting at the current selection;
+  it does not silently select all or overwrite other text in a partially filled field.
+  Neither AXValue writability nor range-readback capabilities are required. The route
+  is selected before materializing the secure body and is not a retry after an AX write.
+- An eligible ordinary browser field uses the capability-gated, readback-verified range operation
   described below.
 - Any content selected from Secure Paste for another native or custom text surface uses
   one Unicode-bearing `CGEvent` key-down, plus a non-text-bearing key-up, posted directly
@@ -237,6 +258,20 @@ delivery, so the result remains `attemptedAmbiguous`, is not recorded as usage, 
 never presented as a confirmed paste. A control-character refusal returns focus to the
 captured field and displays a failure HUD explaining that no text was inserted because
 line breaks and other controls can execute commands in a terminal.
+
+`bash scripts/test-secure-paste-host.sh` is an opt-in GUI integration check using the
+shipping transport policy and Unicode event builder in a separate sender process.
+It creates only disposable native/WKWebView password controls, with synthetic text and
+an input-event-backed web model. It checks empty and selected-range input, non-ASCII and
+longer payloads, control-character refusal, and focus moving to another field. It does
+not access snippets, the vault, the clipboard, or real login forms. Run from an
+Accessibility-authorized terminal and leave the fixture focused until it exits.
+
+On macOS 27, the isolated WKWebView reproducer accepted `AXValue` with AX error 0 and
+changed the DOM value without dispatching an `input` event; `AXReplaceRangeWithText`
+had the same event-model limitation. Unicode input updated both the DOM and the model.
+This is why web passwords do not reuse the ordinary range/readback transport, and why
+the production path never reads a password back to claim success.
 
 When a secure snippet requires Local Authentication, a non-password destination that
 did not already own Secure Event Input at capture waits for authentication's temporary

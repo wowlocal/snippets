@@ -179,9 +179,10 @@ final class AXMessagingBudget {
 /// A password field's current value is intentionally never read. That rules out the
 /// ordinary read/modify/write insertion path and also means a failed write must not be
 /// followed by a second strategy: the first call may have landed even if its reply was
-/// lost. For a positively identified secure field, replacing `AXValue` matches password
-/// manager fill semantics. Ordinary web text fields may use an explicitly advertised,
-/// range-scoped browser operation. Content going to any other captured text surface
+/// lost. Native secure fields retain whole-value replacement. A browser-backed secure
+/// field instead needs the keyboard input path: AXValue can acknowledge the setter
+/// without updating the form's input-event-driven model. Ordinary web fields retain an
+/// explicitly advertised, range-scoped browser operation. Other captured text surfaces
 /// uses one PID-bound Unicode keyboard event instead of trusting an unverifiable
 /// `AXSelectedText` success. This is based only on target capabilities; secure and
 /// ordinary snippets use the same transport and no host identity enters the decision.
@@ -193,6 +194,7 @@ nonisolated enum SecurePasteDeliveryPolicy {
 
     enum Strategy: Equatable {
         case replaceSecureValue
+        case typeSecureUnicode
         case replaceWebRange
         case typeUnicode
         case unavailable
@@ -206,6 +208,9 @@ nonisolated enum SecurePasteDeliveryPolicy {
         webRangeReplacementIsAvailable: Bool
     ) -> Strategy {
         if targetIsSecureTextField {
+            if targetIsInsideWebArea {
+                return targetHasEligibleWebTextRole ? .typeSecureUnicode : .unavailable
+            }
             return valueIsSettable ? .replaceSecureValue : .unavailable
         }
         if targetIsInsideWebArea {
@@ -231,6 +236,41 @@ nonisolated enum SecurePasteDeliveryPolicy {
         requiredWebRangeParameterizedAttributes.isSubset(
             of: advertisedParameterizedAttributes
         )
+    }
+
+    /// Container evidence can address an AX write but cannot route a keyboard event.
+    /// Secure web input therefore always needs the concrete field to own focus, even
+    /// if an explicit selection or descendant search originally found it.
+    static func permitsDirectInput(
+        isSecureWebField: Bool, hasContainerBinding: Bool, exactFieldHasKeyboardFocus: Bool
+    ) -> Bool {
+        isSecureWebField ? exactFieldHasKeyboardFocus : !hasContainerBinding
+    }
+
+    /// AX setters have no application-level acknowledgement. Never mistake an
+    /// accepted password write for verified delivery, and never retry after it.
+    static func secureValueWriteResult(_ error: AXError) -> SecurePasteResult {
+        .attemptedAmbiguous
+    }
+
+    /// Distinguish native ancestry from failed/incomplete web ancestry without
+    /// reading values. Unknown must not choose the native password setter.
+    static func webAncestry<Element: Equatable>(
+        of element: Element, canContinue: () -> Bool,
+        role: (Element) -> String?, parent: (Element) -> Element?
+    ) -> Bool? {
+        var current = element
+        var visited: [Element] = []
+        for _ in 0..<16 {
+            guard canContinue(), !visited.contains(current), let currentRole = role(current),
+                  canContinue() else { return nil }
+            if currentRole == "AXWebArea" { return true }
+            if currentRole == "AXWindow" || currentRole == "AXApplication" { return false }
+            visited.append(current)
+            guard let next = parent(current) else { return nil }
+            current = next
+        }
+        return nil
     }
 }
 

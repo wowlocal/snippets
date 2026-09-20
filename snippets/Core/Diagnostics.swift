@@ -379,6 +379,60 @@ nonisolated enum DiagnosticSecureEditorReason: String, Codable, Sendable {
     case viewDisappeared = "view_disappeared"
 }
 
+/// Explicit Secure Paste emits one content-free outcome per boundary, never one
+/// event per focus poll. No field text, app identity or snippet identity is carried.
+nonisolated enum DiagnosticSecurePasteStage: String, Codable, Sendable, CaseIterable {
+    case capture, selection, picker, authentication, handoff, preparation, delivery, completion
+}
+
+nonisolated enum DiagnosticSecurePasteOutcome: String, Codable, Sendable, CaseIterable {
+    case succeeded, failed, cancelled, ambiguous
+    case selectionRequired = "selection_required"
+    case clipboard
+}
+
+nonisolated enum DiagnosticSecurePasteTarget: String, Codable, Sendable, CaseIterable {
+    case unresolved, focused, descendant, explicit
+}
+
+nonisolated enum DiagnosticSecurePasteTransport: String, Codable, Sendable, CaseIterable {
+    case none
+    case secureValue = "secure_value"
+    case secureUnicode = "secure_unicode"
+    case webRange = "web_range"
+    case unicode
+}
+
+nonisolated enum DiagnosticSecurePasteReason: String, Codable, Sendable, CaseIterable {
+    case none, unavailable, cancelled
+    case permissionRequired = "permission_required"
+    case noTextField = "no_text_field"
+    case ambiguousFocus = "ambiguous_focus"
+    case budgetExhausted = "budget_exhausted"
+    case fieldUnavailable = "field_unavailable"
+    case fieldDisabled = "field_disabled"
+    case fieldTypeChanged = "field_type_changed"
+    case windowChanged = "window_changed"
+    case ancestryChanged = "ancestry_changed"
+    case focusUnavailable = "focus_unavailable"
+    case focusChanged = "focus_changed"
+    case fieldFocusPending = "field_focus_pending"
+    case hitTargetChanged = "hit_target_changed"
+    case applicationNotFrontmost = "application_not_frontmost"
+    case keyboardOwnerPending = "keyboard_owner_pending"
+    case applicationUnavailable = "application_unavailable"
+    case clipboardRecovery = "clipboard_recovery"
+    case authenticationFailed = "authentication_failed"
+    case unsupportedTarget = "unsupported_target"
+    case invalidContent = "invalid_content"
+    case unsafeContent = "unsafe_content"
+    case axWriteRejected = "ax_write_rejected"
+    case axWriteUnconfirmed = "ax_write_unconfirmed"
+    case readbackUnconfirmed = "readback_unconfirmed"
+    case directInputUnconfirmed = "direct_input_unconfirmed"
+    case secureInputPending = "secure_input_pending"
+}
+
 nonisolated enum DiagnosticSuggestionAnchorSource: String, Codable, Sendable {
     case accessibility
     case caret
@@ -653,6 +707,17 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         hadFingerprint: Bool
     )
     case pasteboardRecovery(outcome: DiagnosticPasteboardRestoration)
+    case securePaste(
+        stage: DiagnosticSecurePasteStage,
+        outcome: DiagnosticSecurePasteOutcome,
+        target: DiagnosticSecurePasteTarget,
+        transport: DiagnosticSecurePasteTransport,
+        reason: DiagnosticSecurePasteReason,
+        attempts: Int,
+        durationMilliseconds: Int64,
+        axErrorCode: Int?,
+        failure: DiagnosticFailure?
+    )
     case metricKit(DiagnosticMetric)
     case diagnosticsMaintenance(DiagnosticMaintenanceAction, count: Int?)
     case diagnosticsManifest(DiagnosticExportManifest)
@@ -667,7 +732,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
              .cloudKitSyncEvent, .cloudKitSchedulerTransition: .cloudKit
         case .vaultAction, .secureReveal, .secureEditorTransition: .vault
         case .suggestionAnchor: .performance
-        case .expansionAccessibility, .pasteDelivery, .pasteboardRecovery: .integration
+        case .expansionAccessibility, .pasteDelivery, .pasteboardRecovery, .securePaste: .integration
         case .metricKit: .metricKit
         case .diagnosticsMaintenance, .diagnosticsManifest: .diagnostics
         }
@@ -698,6 +763,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .expansionAccessibility: "expansion_accessibility"
         case .pasteDelivery: "paste_delivery"
         case .pasteboardRecovery: "pasteboard_recovery"
+        case .securePaste: "secure_paste"
         case .metricKit: "metrickit_diagnostic"
         case .diagnosticsMaintenance: "diagnostics_maintenance"
         case .diagnosticsManifest: "diagnostics_manifest"
@@ -706,6 +772,9 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
 
     var defaultLevel: DiagnosticLevel {
         switch self {
+        case .securePaste(_, .failed, _, _, _, _, _, _, _),
+             .securePaste(_, .ambiguous, _, _, _, _, _, _, _):
+            .warning
         case .cloudSignIn(_, .failed, _, _, _, _),
              .cloudSignInRequest(_, .failed, _, _, _, _),
              .cloudSignInPresentationAnchor(false):
@@ -759,6 +828,18 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
 
     var fields: [String: DiagnosticJSONValue] {
         switch self {
+        case .securePaste(let stage, let outcome, let target, let transport, let reason,
+                          let attempts, let duration, let axErrorCode, let failure):
+            var fields: [String: DiagnosticJSONValue] = [
+                "stage": .string(stage.rawValue), "outcome": .string(outcome.rawValue),
+                "target": .string(target.rawValue), "transport": .string(transport.rawValue),
+                "reason": .string(reason.rawValue),
+                "attempts": .integer(Int64(min(max(attempts, 0), 16))),
+                "duration_ms": .integer(min(max(duration, 0), 600_000)),
+            ]
+            if let axErrorCode { fields["ax_error_code"] = .integer(Int64(Int32(clamping: axErrorCode))) }
+            if let failure { fields.merge(failure.fields) { _, new in new } }
+            return fields
         case .appStarted(let app):
             return app.fields
         case .lifecycle(let state):
