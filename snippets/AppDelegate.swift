@@ -71,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private enum SecurePasteDestination {
         case textField(SnippetExpansionEngine.SecurePasteTarget)
+        case chooseField(SnippetExpansionEngine.SecurePasteFieldSelection)
         case clipboard
 
         var textFieldTarget: SnippetExpansionEngine.SecurePasteTarget? {
@@ -165,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// password field that was focused in the frontmost app.
     private var statusMenuSecurePasteDestination: SecurePasteDestination?
     private var securePasteDestination: SecurePasteDestination?
+    private let securePasteFieldSelection = SecurePasteFieldSelectionController()
     private var securePasteTask: Task<Void, Never>?
     /// AppKit marks a launch performed on behalf of a Service as non-default.
     /// Consume that fact in the first routed launch action so Command-Backslash
@@ -495,6 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // A LocalAuthentication request may outlive the panel that started it. Cancellation
         // makes the engine wipe any returned lease before termination is allowed to continue.
         securePasteTask?.cancel()
+        securePasteFieldSelection.cancel()
         if securePasteDestination != nil {
             expansionEngine.dismissSecurePastePicker()
         }
@@ -820,6 +823,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     ) {
         let isColdServiceLaunch = initialLaunchRouting.consumeRoutedAction()
         guard GlobalHotkeyManager.shared.isEnabled else { return }
+        if securePasteFieldSelection.isVisible {
+            securePasteFieldSelection.cancel()
+            return
+        }
         if expansionEngine.securePastePickerIsVisible {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
             return
@@ -982,6 +989,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         switch expansionEngine.captureSecurePasteTarget() {
         case .target(let target):
             return .textField(target)
+        case .chooseField(let context):
+            return .chooseField(context)
         case .noTextField:
             return .clipboard
         case .accessibilityRequired, .unavailable:
@@ -990,6 +999,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func toggleSecurePasteFromGlobalHotkey() {
+        if securePasteFieldSelection.isVisible {
+            securePasteFieldSelection.cancel()
+            suppressMainWindowForColdServicePicker = false
+            return
+        }
         if expansionEngine.securePastePickerIsVisible {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
             return
@@ -1011,6 +1025,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     @objc private func securePasteFromStatusBar(_ sender: Any?) {
+        if securePasteFieldSelection.isVisible {
+            securePasteFieldSelection.cancel()
+            return
+        }
         if expansionEngine.securePastePickerIsVisible {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
             return
@@ -1039,6 +1057,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func beginSecurePaste(for destination: SecurePasteDestination) {
+        securePasteFieldSelection.cancel()
+        if case .chooseField(let context) = destination {
+            securePasteFieldSelection.show(frame: context.frame, targetPID: context.targetPID,
+                onDismiss: { [weak self] in self?.suppressMainWindowForColdServicePicker = false }
+            ) { [weak self] point in
+                guard let self else { return }
+                guard let target = self.expansionEngine.captureExplicitSecurePasteTarget(
+                    in: context, at: point) else {
+                    self.suppressMainWindowForColdServicePicker = false
+                    self.transientScreenMessageController.show(
+                        "Secure Paste couldn’t verify that field. Focus it and try again.",
+                        kind: .failure)
+                    return
+                }
+                self.beginSecurePaste(for: .textField(target))
+            }
+            return
+        }
         securePasteDestination = destination
         let didShow = expansionEngine.showSecurePastePicker(
             for: destination.textFieldTarget,
@@ -1063,6 +1099,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         securePasteDestination = nil
 
         switch destination {
+        case .chooseField:
+            return
         case .textField(let target):
             securePasteTask = Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -1473,6 +1511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Activation Policy Switching
 
     private func hideToBackground() {
+        securePasteFieldSelection.cancel()
         if securePasteDestination != nil {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
         }

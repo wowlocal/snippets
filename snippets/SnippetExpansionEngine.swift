@@ -230,11 +230,27 @@ final class SnippetExpansionEngine {
         fileprivate let window: AXUIElement?
         fileprivate let isSecureTextField: Bool
         fileprivate let secureInputWasEnabledAtCapture: Bool
+        fileprivate var containerBinding: SecurePasteContainerBinding? = nil
         let applicationName: String
+    }
+
+    struct SecurePasteFieldSelection {
+        let targetPID: pid_t
+        fileprivate let root: AXUIElement
+        fileprivate let window: AXUIElement
+        fileprivate let applicationName: String
+        let frame: NSRect
+    }
+
+    fileprivate struct SecurePasteContainerBinding {
+        let context: SecurePasteFieldSelection
+        /// nil means the descendant positively reported keyboard focus.
+        let explicitPoint: CGPoint?
     }
 
     enum SecurePasteTargetCapture {
         case target(SecurePasteTarget)
+        case chooseField(SecurePasteFieldSelection)
         /// No safe text destination was focused; Copy is the non-destructive fallback.
         case noTextField
         case accessibilityRequired
@@ -617,10 +633,18 @@ final class SnippetExpansionEngine {
             statusText = "Secure Paste could not safely capture the focused application."
             return .unavailable
         }
-        guard let textElement = securePasteTextElement(
+        let textElement = securePasteTextElement(
             startingAt: focusedElement,
             axBudget: budget
-        ) else {
+        )
+        let role = stringAttribute(of: focusedElement, attribute: kAXRoleAttribute as CFString,
+                                   axBudget: budget)
+        // A web area may advertise selected-text ranges for the whole page. That
+        // does not identify an input. Preserve native/custom input detection.
+        if role == "AXWebArea" || (textElement == nil && role == "AXGroup") {
+            return captureSecurePasteContainer(focusedElement, app: app, budget: budget)
+        }
+        guard let textElement else {
             resetTypingContext()
             statusText = "No text field is focused. Choose an ordinary snippet to copy it."
             return .noTextField
@@ -653,6 +677,160 @@ final class SnippetExpansionEngine {
                 applicationName: app.localizedName ?? "the target app"
             )
         )
+    }
+
+    private func captureSecurePasteContainer(
+        _ root: AXUIElement, app: NSRunningApplication, budget: AXMessagingBudget
+    ) -> SecurePasteTargetCapture {
+        guard let window = elementAttribute(of: root, attribute: kAXWindowAttribute as CFString,
+                                            axBudget: budget),
+              let frame = securePasteWindowFrame(window, budget: budget)
+        else { return .unavailable }
+        let context = SecurePasteFieldSelection(targetPID: app.processIdentifier, root: root,
+            window: window, applicationName: app.localizedName ?? "the target app", frame: frame)
+        let resolution = SecurePasteTargetResolver.focusedDescendant(
+            of: root, canContinue: { budget.canContinue },
+            metadata: { [self] element in
+                guard processIdentifier(of: element) == app.processIdentifier,
+                      let role = stringAttribute(of: element, attribute: kAXRoleAttribute as CFString,
+                                                 axBudget: budget) else { return nil }
+                return .init(isTextControl: SecurePasteDeliveryPolicy.isEligibleWebTextRole(role),
+                    isFocused: boolAttribute(of: element, attribute: kAXFocusedAttribute as CFString,
+                                              axBudget: budget) == true,
+                    isEnabled: boolAttribute(of: element, attribute: kAXEnabledAttribute as CFString,
+                                              axBudget: budget) == true)
+            }, children: { [self] element in
+                var value: CFTypeRef?
+                let result = copyAttributeValue(of: element, attribute: kAXChildrenAttribute as CFString,
+                                                into: &value, axBudget: budget)
+                if result == .attributeUnsupported || result == .noValue { return [] }
+                guard result == .success else { return nil }
+                return value as? [AXUIElement]
+            })
+        resetTypingContext()
+        if case .noTextField = resolution { return .noTextField }
+        if case .focused(let field) = resolution,
+           let target = makeContainerSecurePasteTarget(field, context: context,
+                                                       explicitPoint: nil, budget: budget) {
+            return .target(target)
+        }
+        // An explicit choice does not depend on a complete descendant search.
+        return .chooseField(context)
+    }
+
+    /// Called only after the user clicks our destination-selection overlay.
+    func captureExplicitSecurePasteTarget(
+        in context: SecurePasteFieldSelection, at point: CGPoint
+    ) -> SecurePasteTarget? {
+        guard !isPreparingForTermination, accessibilityGranted else { return nil }
+        let budget = AXMessagingBudget()
+        guard currentFocusMatches(context.root, axBudget: budget),
+              let hit = securePasteHitTest(point, context: context, budget: budget),
+              let field = securePasteTextElement(startingAt: hit, axBudget: budget),
+              let role = stringAttribute(of: field, attribute: kAXRoleAttribute as CFString,
+                                        axBudget: budget),
+              SecurePasteDeliveryPolicy.isEligibleWebTextRole(role)
+        else { return nil }
+        return makeContainerSecurePasteTarget(field, context: context,
+                                              explicitPoint: point, budget: budget)
+    }
+
+    private func makeContainerSecurePasteTarget(
+        _ field: AXUIElement, context: SecurePasteFieldSelection,
+        explicitPoint: CGPoint?, budget: AXMessagingBudget
+    ) -> SecurePasteTarget? {
+        let secure = stringAttribute(of: field, attribute: kAXSubroleAttribute as CFString,
+                                     axBudget: budget) == (kAXSecureTextFieldSubrole as String)
+        let target = SecurePasteTarget(targetPID: context.targetPID, focusedElement: field,
+            textElement: field, window: context.window, isSecureTextField: secure,
+            secureInputWasEnabledAtCapture: secureEventInputEnabled,
+            containerBinding: .init(context: context, explicitPoint: explicitPoint),
+            applicationName: context.applicationName)
+        guard securePasteTargetStillMatches(target, budget: budget) else { return nil }
+        // Container fallbacks may use only an addressed AX operation, never
+        // PID-wide Unicode events whose destination cannot be established here.
+        if secure {
+            guard attributeIsSettable(kAXValueAttribute as CFString, on: field, axBudget: budget)
+            else { return nil }
+        } else {
+            guard elementIsInsideWebArea(field, axBudget: budget),
+                  let attributes = parameterizedAttributes(on: field, axBudget: budget),
+                  SecurePasteDeliveryPolicy.supportsWebRangeReplacement(
+                    advertisedParameterizedAttributes: attributes) else { return nil }
+        }
+        return budget.canContinue ? target : nil
+    }
+
+    private func securePasteHitTest(
+        _ point: CGPoint, context: SecurePasteFieldSelection, budget: AXMessagingBudget
+    ) -> AXUIElement? {
+        let application = AXUIElementCreateApplication(context.targetPID)
+        guard budget.bind(application) else { return nil }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit)
+                == .success, budget.canContinue else { return nil }
+        return hit
+    }
+
+    private func securePasteWindowFrame(_ window: AXUIElement, budget: AXMessagingBudget) -> NSRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard copyAttributeValue(of: window, attribute: kAXPositionAttribute as CFString,
+                                 into: &positionValue, axBudget: budget) == .success,
+              copyAttributeValue(of: window, attribute: kAXSizeAttribute as CFString,
+                                 into: &sizeValue, axBudget: budget) == .success,
+              let positionValue, let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID(),
+              let screen = NSScreen.screens.first else { return nil }
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &point),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size),
+              point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else { return nil }
+        return NSRect(x: point.x, y: screen.frame.maxY - point.y - size.height,
+                      width: size.width, height: size.height)
+    }
+
+    /// Existing targets retain exact-focus identity checks. Container targets also
+    /// require a live enabled field in the original window/subtree. An explicit
+    /// choice is re-hit-tested; automatic discovery must still report field focus.
+    private func securePasteTargetStillMatches(
+        _ target: SecurePasteTarget, budget: AXMessagingBudget
+    ) -> Bool {
+        guard let binding = target.containerBinding else {
+            return currentFocusMatches(target.focusedElement, axBudget: budget)
+        }
+        let context = binding.context
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID,
+              systemWideFocusedApplicationPID(axBudget: budget) == target.targetPID,
+              processIdentifier(of: target.textElement) == target.targetPID
+        else { return false }
+        return SecurePasteTargetResolver.validates(
+            field: target.textElement, root: context.root, window: context.window,
+            wasSecure: target.isSecureTextField, explicit: binding.explicitPoint != nil,
+            canContinue: { budget.canContinue },
+            metadata: { [self] element in
+                guard let role = stringAttribute(of: element, attribute: kAXRoleAttribute as CFString,
+                                                 axBudget: budget) else { return nil }
+                return .init(isTextControl: SecurePasteDeliveryPolicy.isEligibleWebTextRole(role),
+                    isFocused: boolAttribute(of: element, attribute: kAXFocusedAttribute as CFString,
+                                              axBudget: budget) == true,
+                    isEnabled: boolAttribute(of: element, attribute: kAXEnabledAttribute as CFString,
+                                              axBudget: budget) == true,
+                    isSecure: stringAttribute(of: element, attribute: kAXSubroleAttribute as CFString,
+                                               axBudget: budget) == (kAXSecureTextFieldSubrole as String))
+            },
+            currentFocus: { self.frontmostFocusedElement(axBudget: budget) },
+            currentWindow: { self.elementAttribute(of: $0, attribute: kAXWindowAttribute as CFString,
+                                                   axBudget: budget) },
+            windowIsUnchanged: { self.securePasteWindowFrame(context.window, budget: budget) == context.frame },
+            parent: { self.parentElement(of: $0, axBudget: budget) },
+            hitTest: {
+                guard let point = binding.explicitPoint else { return nil }
+                return self.securePasteHitTest(point, context: context, budget: budget)
+            })
     }
 
     /// Reuses the ordinary suggestion panel for an explicit, searchable action.
@@ -3892,11 +4070,22 @@ final class SnippetExpansionEngine {
             // Match the secure trigger-expansion handoff: the authentication sheet can
             // disappear from NSWorkspace before keyboard ownership has fully returned.
             _ = target.activate()
-            let focusWasReasserted = reassertKeyboardFocus(
-                element: focusTarget.focusedElement,
-                window: focusTarget.window,
-                targetPID: focusTarget.targetPID
-            )
+            let focusWasReasserted: Bool
+            if focusTarget.containerBinding != nil {
+                // Validate the chosen field before touching focus. Never revive a
+                // stale target by searching for a replacement after authentication.
+                let budget = AXMessagingBudget()
+                guard securePasteTargetStillMatches(focusTarget, budget: budget) else { return false }
+                _ = budget.setAttributeValue(of: focusTarget.textElement,
+                    attribute: kAXFocusedAttribute as CFString, value: kCFBooleanTrue)
+                focusWasReasserted = securePasteTargetStillMatches(focusTarget, budget: budget)
+            } else {
+                focusWasReasserted = reassertKeyboardFocus(
+                    element: focusTarget.focusedElement,
+                    window: focusTarget.window,
+                    targetPID: focusTarget.targetPID
+                )
+            }
             consecutiveFocusConfirmations =
                 SecurePasteAuthenticationHandoffPolicy
                     .updatedConsecutiveFocusConfirmations(
@@ -3957,7 +4146,7 @@ final class SnippetExpansionEngine {
         else { return nil }
 
         let budget = AXMessagingBudget()
-        guard currentFocusMatches(target.focusedElement, axBudget: budget) else {
+        guard securePasteTargetStillMatches(target, budget: budget) else {
             return nil
         }
 
@@ -4027,6 +4216,7 @@ final class SnippetExpansionEngine {
                 selection: selection
             ))
         case .typeUnicode:
+            guard target.containerBinding == nil else { return nil }
             return .typeUnicode
         case .unavailable:
             return nil
@@ -4049,12 +4239,17 @@ final class SnippetExpansionEngine {
         else { return .failedBeforeAttempt }
 
         let budget = AXMessagingBudget()
-        guard currentFocusMatches(target.focusedElement, axBudget: budget) else {
+        guard securePasteTargetStillMatches(target, budget: budget) else {
             return .failedBeforeAttempt
         }
 
         switch preparation {
         case .replaceSecureValue:
+            if target.containerBinding != nil,
+               !attributeIsSettable(kAXValueAttribute as CFString,
+                                     on: target.textElement, axBudget: budget) {
+                return .failedBeforeAttempt
+            }
             let result = budget.setAttributeValue(
                 of: target.textElement,
                 attribute: kAXValueAttribute as CFString,
@@ -4084,7 +4279,7 @@ final class SnippetExpansionEngine {
         _ text: String,
         to target: SecurePasteTarget
     ) -> SecurePasteResult {
-        guard CGPreflightPostEventAccess(),
+        guard target.containerBinding == nil, CGPreflightPostEventAccess(),
               let targetApplication = NSRunningApplication(
                 processIdentifier: target.targetPID
               ),
@@ -4182,7 +4377,7 @@ final class SnippetExpansionEngine {
             "AXReplacementText": text,
         ]
 
-        guard currentFocusMatches(target.focusedElement, axBudget: axBudget) else {
+        guard securePasteTargetStillMatches(target, budget: axBudget) else {
             return .failedBeforeAttempt
         }
 

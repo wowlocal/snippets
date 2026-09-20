@@ -2,6 +2,140 @@ import AppKit
 import Testing
 @testable import SnippetsAX
 
+@Suite("Secure Paste container targets")
+@MainActor
+struct SecurePasteContainerTargetTests {
+    @MainActor
+    private struct Fixture {
+        var metadata: [Int: SecurePasteTargetResolver.Metadata] = [
+            1: .init(isTextControl: false, isFocused: true, isEnabled: true),
+            2: .init(isTextControl: true, isFocused: false, isEnabled: true, isSecure: true),
+            3: .init(isTextControl: true, isFocused: false, isEnabled: true),
+        ]
+        var children = [1: [2, 3]]
+        var parents = [2: 1, 3: 1]
+        var focus: Int? = 1
+        var window: Int? = 10
+        var hit: Int? = 2
+        var windowUnchanged = true
+        var withinBudget = true
+
+        func resolve(nodes: Int = 128, depth: Int = 16) -> SecurePasteTargetResolver.Resolution<Int> {
+            SecurePasteTargetResolver.focusedDescendant(of: 1, maximumNodes: nodes,
+                maximumDepth: depth, canContinue: { withinBudget },
+                metadata: { metadata[$0] }, children: { children[$0] ?? [] })
+        }
+
+        func validates(explicit: Bool = true) -> Bool {
+            SecurePasteTargetResolver.validates(field: 2, root: 1, window: 10,
+                wasSecure: true, explicit: explicit, canContinue: { withinBudget },
+                metadata: { metadata[$0] }, currentFocus: { focus },
+                currentWindow: { _ in window }, windowIsUnchanged: { windowUnchanged },
+                parent: { parents[$0] }, hitTest: { hit })
+        }
+    }
+
+    @Test("page focus and one password field do not authorize automatic insertion")
+    func ambiguousPage() {
+        var fixture = Fixture()
+        fixture.children = [1: [2]]
+        guard case .ambiguous = fixture.resolve() else { Issue.record("Guessed a field"); return }
+        #expect(!fixture.validates(explicit: false))
+        #expect(fixture.validates())
+    }
+
+    @Test("only a uniquely focused enabled descendant is resolved automatically")
+    func focusedDescendants() {
+        var fixture = Fixture()
+        fixture.metadata[2] = .init(isTextControl: true, isFocused: true, isEnabled: true, isSecure: true)
+        guard case .focused(2) = fixture.resolve() else { Issue.record("Missing focused field"); return }
+        #expect(fixture.validates(explicit: false))
+        fixture.metadata[3] = .init(isTextControl: true, isFocused: true, isEnabled: true)
+        guard case .ambiguous = fixture.resolve() else { Issue.record("Accepted two focused fields"); return }
+    }
+
+    @Test("empty containers preserve the ordinary clipboard action")
+    func emptyContainer() {
+        var fixture = Fixture()
+        fixture.children = [:]
+        guard case .noTextField = fixture.resolve() else { Issue.record("Not empty"); return }
+    }
+
+    @Test("failed reads, cycles, depth and node limits never prove uniqueness", arguments: 0..<5)
+    func incompleteTraversal(reason: Int) {
+        var fixture = Fixture()
+        var nodes = 128
+        var depth = 16
+        switch reason {
+        case 0: fixture.metadata.removeValue(forKey: 3)
+        case 1: fixture.children[1] = [1]
+        case 2: nodes = 2
+        case 3: depth = 0
+        default: fixture.withinBudget = false
+        }
+        guard case .unavailable = fixture.resolve(nodes: nodes, depth: depth)
+        else { Issue.record("Incomplete traversal accepted"); return }
+    }
+
+    @Test("authentication handoff refuses changed or unprovable destinations", arguments: 0..<10)
+    func revalidation(reason: Int) {
+        var fixture = Fixture()
+        #expect(fixture.validates())
+        switch reason {
+        case 0: fixture.focus = 3
+        case 1: fixture.window = 11
+        case 2: fixture.hit = 3 // New field at the same screen position.
+        case 3: fixture.parents.removeValue(forKey: 2) // Navigation detached the captured object.
+        case 4: fixture.metadata.removeValue(forKey: 2) // Stale AX element.
+        case 5: fixture.metadata[2] = .init(isTextControl: true, isFocused: false, isEnabled: false, isSecure: true)
+        case 6: fixture.metadata[2] = .init(isTextControl: true, isFocused: false, isEnabled: true)
+        case 7: fixture.windowUnchanged = false
+        case 8: fixture.withinBudget = false
+        default: fixture.parents[2] = 2
+        }
+        #expect(!fixture.validates())
+    }
+
+    @Test("a hit on field decoration must still belong to the exact chosen field")
+    func hitAncestry() {
+        var fixture = Fixture()
+        fixture.hit = 4
+        fixture.parents[4] = 2
+        #expect(fixture.validates())
+        fixture.parents[4] = 3
+        #expect(!fixture.validates())
+    }
+
+    @Test("deadline expiry after metadata reads refuses the write")
+    func expiredDuringValidation() {
+        let fixture = Fixture()
+        var checks = 0
+        #expect(!SecurePasteTargetResolver.validates(field: 2, root: 1, window: 10,
+            wasSecure: true, explicit: true,
+            canContinue: { checks += 1; return checks == 1 },
+            metadata: { fixture.metadata[$0] }, currentFocus: { 1 },
+            currentWindow: { _ in 10 }, windowIsUnchanged: { true },
+            parent: { fixture.parents[$0] }, hitTest: { 2 }))
+    }
+
+    @Test("cancelling field selection discards the request without selecting or delivering")
+    func cancelSelection() {
+        _ = NSApplication.shared
+        let controller = SecurePasteFieldSelectionController()
+        var selections = 0
+        var dismissals = 0
+        controller.show(frame: NSRect(x: -10_000, y: -10_000, width: 300, height: 200),
+            targetPID: ProcessInfo.processInfo.processIdentifier,
+            onDismiss: { dismissals += 1 }, onSelection: { _ in selections += 1 })
+        #expect(controller.isVisible)
+        controller.cancel()
+        controller.cancel()
+        #expect(!controller.isVisible)
+        #expect(selections == 0)
+        #expect(dismissals == 1)
+    }
+}
+
 @Suite("Accessibility messaging budget")
 @MainActor
 struct AXMessagingBudgetSwiftTests {

@@ -175,6 +175,47 @@ Handled intentionally:
 
 ## Secure Paste delivery transports
 
+### Container focus and explicit destination selection
+
+Secure Paste (`⌘\`) has a separate destination resolver; keyword expansion and
+native/custom text-input detection keep their existing paths. Some embedded login
+views report an `AXWebArea` as focused even while the password caret is visible.
+The page's selected-text-range capability does not identify the password control.
+
+For a focused web area (or a non-editable group), Secure Paste searches only that
+subtree, within the existing aggregate AX deadline, 128 nodes and 16 levels. It
+accepts only a uniquely focused, enabled standard text control. Failed reads,
+cycles, or exhausted limits cannot establish uniqueness. It never infers the
+destination from a single password field, labels, values, or an app bundle ID.
+
+When no field can be proven focused, a nonactivating overlay asks the user to click
+the destination field. The click is consumed by Snippets, not delivered to the
+underlying page. An application-scoped AX hit test identifies the selected control.
+`⌘\` again cancels; switching applications or waiting 30 seconds also cancels.
+No snippet has been selected or decrypted at this stage. An empty, fully inspected
+container retains the ordinary Copy picker action.
+
+The captured binding includes the exact control, container, window and window
+frame, plus the explicitly selected position when applicable. After the picker and
+authentication, and immediately before delivery, Snippets verifies the control's
+identity, enabled state, role, secure subrole, original window/subtree membership,
+and keyboard-owning application. Automatic descendants must still report focus;
+explicit targets must still be hit at the selected position. A different concrete
+focused control, moved window, detached/replaced element or changed hit refuses
+delivery. No replacement control is searched for during that attempt.
+
+Container targets permit only an AX-addressed password-value or supported web-range
+write, with the existing one-attempt semantics. They never fall through to Unicode
+key events or the pasteboard. Hosts that cannot supply the necessary AX evidence
+remain unsupported. The actual password value is never read during resolution.
+
+Regression coverage lives in `Tests/AX/AXMessagingBudgetSwiftTests.swift`, which
+exercises the shipping resolver with a metadata-only adapter, including ambiguous
+focus, traversal failures and destination changes across authentication. Manual
+checks should use synthetic text in native password controls, browser forms and
+embedded web views, including multiple password fields and navigation while the
+picker/authentication UI is open. Do not submit test login forms.
+
 `⌘\` never moves secure content through the pasteboard. It chooses exactly one
 plaintext-bearing transport while the captured PID and AX focus are freshly confirmed:
 
