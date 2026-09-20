@@ -1021,7 +1021,7 @@ final class SnippetExpansionEngine {
     private func diagnosticOutcome(_ result: SecurePasteResult) -> DiagnosticSecurePasteOutcome {
         switch result {
         case .inserted: .succeeded
-        case .attemptedAmbiguous: .ambiguous
+        case .attemptedAmbiguous, .dispatchedUnconfirmed: .ambiguous
         case .failedBeforeAttempt, .blockedUnsafeControlCharacters: .failed
         }
     }
@@ -1029,6 +1029,7 @@ final class SnippetExpansionEngine {
     private func diagnosticResultReason(_ result: SecurePasteResult) -> DiagnosticSecurePasteReason {
         switch result {
         case .inserted: .none
+        case .dispatchedUnconfirmed: .directInputUnconfirmed
         case .attemptedAmbiguous: .readbackUnconfirmed
         case .failedBeforeAttempt: .unavailable
         case .blockedUnsafeControlCharacters: .unsafeContent
@@ -1094,6 +1095,8 @@ final class SnippetExpansionEngine {
             usage.record(.pasteFromApp, snippetID: snippet.id)
             lastExpansionName = snippet.displayName
             statusText = "Pasted \(snippet.displayName)."
+        case .dispatchedUnconfirmed:
+            statusText = "Secure Paste keyboard input sent."
         case .failedBeforeAttempt:
             statusText = "The target field did not accept Secure Paste."
         case .blockedUnsafeControlCharacters:
@@ -1214,6 +1217,8 @@ final class SnippetExpansionEngine {
             usage.record(.pasteFromApp, snippetID: shell.id)
             lastExpansionName = shell.displayName
             statusText = "Pasted \(shell.displayName) securely."
+        case .dispatchedUnconfirmed:
+            statusText = "Secure Paste keyboard input sent."
         case .failedBeforeAttempt:
             statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
         case .blockedUnsafeControlCharacters:
@@ -4409,9 +4414,9 @@ final class SnippetExpansionEngine {
 
     /// Sends exactly the transport selected before plaintext materialization. An ordinary
     /// browser request is confirmed only after bounded range/count readback. Password
-    /// setters remain unconfirmed even when AX accepts them. Direct
-    /// input is one PID-bound Unicode key event and is always ambiguous because a hidden
-    /// terminal read has no observable delivery acknowledgement. No outcome falls through
+    /// setters remain unconfirmed even when AX accepts them. Direct input is one
+    /// PID-bound Unicode key event; normal dispatch remains unverified without presenting
+    /// the lack of host acknowledgement as a user-facing failure. No outcome falls through
     /// to another AX operation, key event, or the pasteboard.
     private func deliverSecurePasteText(
         _ text: String,
@@ -4535,7 +4540,7 @@ final class SnippetExpansionEngine {
         events.keyDown.postToPid(target.targetPID)
         events.keyUp.postToPid(target.targetPID)
         reason = .directInputUnconfirmed
-        return .attemptedAmbiguous
+        return .dispatchedUnconfirmed
     }
 
     private func directInputValidationFailure(

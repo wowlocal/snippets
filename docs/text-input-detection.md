@@ -254,8 +254,11 @@ the exact focused AX object immediately before posting. It refuses C0/C1 control
 characters, including Return, newline, Tab, Escape, and NUL, and never adds Return. It
 also refuses payloads above 16,384 UTF-16 units. There is one attempt with no AX,
 pasteboard, or event retry: Core Graphics acknowledges neither host consumption nor PTY
-delivery, so the result remains `attemptedAmbiguous`, is not recorded as usage, and is
-never presented as a confirmed paste. A control-character refusal returns focus to the
+delivery, so the result is `dispatchedUnconfirmed`, is not recorded as usage, and is
+never presented as a confirmed paste. Normal dispatch is quiet: no warning HUD, beep,
+or focus restoration merely because the host provides no acknowledgement. Diagnostics
+retain `ambiguous` / `direct_input_unconfirmed`. Failed AX writes and readbacks still
+return `attemptedAmbiguous` and warn without restoring focus. A control-character refusal returns focus to the
 captured field and displays a failure HUD explaining that no text was inserted because
 line breaks and other controls can execute commands in a terminal.
 

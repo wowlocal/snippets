@@ -463,7 +463,15 @@ struct AXMessagingBudgetSwiftTests {
         ) == .tooLong)
     }
 
-    @Test("an ambiguous Secure Paste attempt is not treated as a retryable failure")
+    @Test("routine keyboard dispatch has no warning, beep or focus restoration")
+    func securePasteDispatchedInputIsQuietButNotConfirmed() {
+        #expect(SecurePasteCompletionPolicy.reaction(after: .dispatchedUnconfirmed) == .none)
+        // Do not turn an unacknowledged keyboard operation into verified insertion
+        // just to silence the HUD. The engine records usage only for .inserted.
+        #expect(SecurePasteResult.dispatchedUnconfirmed != .inserted)
+    }
+
+    @Test("an ambiguous Secure Paste attempt still warns without restoring focus")
     func securePasteAmbiguityDoesNotRestoreFocus() {
         #expect(SecurePasteCompletionPolicy.reaction(after: .inserted) == .none)
         #expect(SecurePasteCompletionPolicy.reaction(

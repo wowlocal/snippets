@@ -110,7 +110,10 @@ concrete focused control, and a changed hit target remain terminal refusals.
 native password-value write is `ambiguous` with reason `ax_write_unconfirmed`, even
 with `ax_error_code: 0`: API acceptance is not delivery proof. Browser-password Unicode
 delivery is also `ambiguous`, with `direct_input_unconfirmed`, because keyboard posting
-has no host acknowledgement and password values are never read. An AX error after a write is `ambiguous`, never
+has no host acknowledgement and password values are never read. Normal keyboard dispatch
+does not show a warning HUD or beep; this diagnostic uncertainty does not mean a failure
+was detected. Its completion reason is also `direct_input_unconfirmed`, and it is not
+counted as verified usage. An AX error after a write is `ambiguous`, never
 permission to retry with a different transport. `completion` summarizes the overall
 attempt; consult the preceding stage for its specific failure reason. Returning
 focus after cancellation or failure does not emit a second handoff event.

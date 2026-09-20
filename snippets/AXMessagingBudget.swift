@@ -274,11 +274,12 @@ nonisolated enum SecurePasteDeliveryPolicy {
     }
 }
 
-/// Once a plaintext-bearing AX request has been sent, neither an error reply nor a
-/// failed readback authorizes another transport. The request may have landed even
-/// when its reply was lost.
+/// Once plaintext-bearing input has been sent, no outcome authorizes another
+/// transport. Routine keyboard dispatch is unverified, but is not itself a failure.
+/// AX errors or failed readback remain ambiguous: the request may still have landed.
 nonisolated enum SecurePasteResult: Equatable {
     case inserted
+    case dispatchedUnconfirmed
     case failedBeforeAttempt
     case blockedUnsafeControlCharacters
     case attemptedAmbiguous
@@ -296,7 +297,7 @@ nonisolated enum SecurePasteCompletionPolicy {
 
     static func reaction(after result: SecurePasteResult) -> Reaction {
         switch result {
-        case .inserted:
+        case .inserted, .dispatchedUnconfirmed:
             return .none
         case .failedBeforeAttempt:
             return .restoreOriginalFocus
