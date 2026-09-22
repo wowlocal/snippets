@@ -60,6 +60,27 @@ nonisolated private final class HistoryTestStorage: ClipboardHistoryPersisting, 
 
 @MainActor
 final class ClipboardHistoryServiceTests: XCTestCase {
+    func testPrimaryActionPersistsWithoutEnablingCaptureAndUnknownValuesDefaultToPaste() async {
+        let defaults = makeDefaults()
+        let pasteboard = HistoryTestPasteboard()
+        let storage = HistoryTestStorage()
+        var providerCalls = 0
+        let service = ClipboardHistoryService(defaults: defaults, storage: storage,
+            pasteboardProvider: { providerCalls += 1; return pasteboard }, schedulesTimer: false)
+        XCTAssertEqual(service.primaryAction, .paste)
+        service.primaryAction = .copy
+        let restored = ClipboardHistoryService(defaults: defaults, storage: storage,
+            pasteboardProvider: { providerCalls += 1; return pasteboard }, schedulesTimer: false)
+        XCTAssertEqual(restored.primaryAction, .copy)
+        XCTAssertFalse(restored.isEnabled)
+        await service.waitForPendingPersistence()
+        XCTAssertEqual(providerCalls, 0)
+        XCTAssertEqual(storage.snapshot.loads, 0)
+        XCTAssertEqual(storage.snapshot.saves, 0)
+        defaults.set("unknown", forKey: ClipboardHistoryService.primaryActionPreferenceKey)
+        XCTAssertEqual(restored.primaryAction, .paste)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let name = "ClipboardHistoryTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!

@@ -6,6 +6,199 @@ import AppKit
 
 @MainActor
 final class ClipboardHistoryPanelTests: XCTestCase {
+    func testCommandKDefersExplicitPasteUntilMenuClosesWithCopyPreference() async throws {
+        let entry = ClipboardHistoryEntry(text: "Menu paste")
+        let fixture = await makeFixture(entries: [entry])
+        fixture.service.primaryAction = .copy
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        var events: [String] = []
+        let controller = ClipboardHistoryPanelController(service: fixture.service, presentActionsMenu: { menu, _ in
+            events.append("menu opened")
+            XCTAssertTrue(menu.item(withTitle: "Paste")?.isEnabled == true)
+            XCTAssertEqual(menu.item(withTitle: "Paste")?.keyEquivalent, "")
+            XCTAssertEqual(menu.items.first?.title, "Copy")
+            menu.performActionForItem(at: menu.indexOfItem(withTitle: "Paste"))
+            XCTAssertEqual(events, ["menu opened"], "Menu tracking must release focus before paste starts")
+            events.append("menu closed")
+        })
+        defer { controller.dismiss() }
+        controller.show(canPaste: true, onPaste: {
+            XCTAssertFalse(controller.isVisible)
+            XCTAssertEqual($0, entry)
+            events.append("paste")
+        }, onCopy: { _ in XCTFail("The explicit Paste menu action overrides the Copy preference") },
+        onCreateSnippet: { _ in XCTFail("Unexpected create") }, onDismiss: { _ in events.append("dismiss") })
+        try sendKey(code: 40, characters: "k", modifiers: .command, to: pickerWindow(excluding: initialWindows))
+        XCTAssertEqual(events, ["menu opened", "menu closed", "dismiss", "paste"])
+    }
+
+    func testMenuCancellationPreservesSearchAndMenuCommandReturnCopiesOnceAfterTracking() async throws {
+        let entry = ClipboardHistoryEntry(text: "Searchable entry")
+        let fixture = await makeFixture(entries: [entry])
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        var invocation = 0
+        var copyCount = 0
+        weak var observedController: ClipboardHistoryPanelController?
+        let controller = ClipboardHistoryPanelController(service: fixture.service, presentActionsMenu: { menu, anchor in
+            invocation += 1
+            if let window = anchor.window {
+                observedController?.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: window))
+            }
+            XCTAssertFalse(observedController?.control(NSSearchField(), textView: NSTextView(),
+                doCommandBy: #selector(NSResponder.cancelOperation(_:))) ?? true,
+                "The menu owns Escape while tracking")
+            if invocation == 2 {
+                guard let window = anchor.window,
+                      let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                        timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                        characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)
+                else { return XCTFail("Expected a menu keyboard event") }
+                XCTAssertTrue(menu.performKeyEquivalent(with: key))
+            }
+            XCTAssertEqual(copyCount, 0, "Callbacks must wait until the menu returns")
+        })
+        observedController = controller
+        defer { controller.dismiss() }
+        controller.show(canPaste: true, onPaste: { _ in XCTFail("Unexpected paste") }, onCopy: {
+            XCTAssertEqual($0, entry)
+            XCTAssertFalse(controller.isVisible)
+            copyCount += 1
+        }, onCreateSnippet: { _ in XCTFail("Unexpected create") }, onDismiss: { _ in })
+        let window = try pickerWindow(excluding: initialWindows)
+        let search = try XCTUnwrap(descendants(of: try XCTUnwrap(window.contentView))
+            .compactMap { $0 as? NSSearchField }.first)
+        search.stringValue = "Searchable"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        try sendKey(code: 40, characters: "k", modifiers: .command, to: window)
+        XCTAssertTrue(controller.isVisible)
+        XCTAssertEqual(search.stringValue, "Searchable")
+        XCTAssertEqual(copyCount, 0)
+        try sendKey(code: 40, characters: "k", modifiers: .command, to: window)
+        XCTAssertEqual(copyCount, 1)
+    }
+
+    func testDisablingHistoryDuringMenuTrackingInvalidatesPendingAction() async throws {
+        let fixture = await makeFixture(entries: [ClipboardHistoryEntry(text: "Entry")])
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        var chosen = false
+        var dismissCount = 0
+        let controller = ClipboardHistoryPanelController(service: fixture.service, presentActionsMenu: { menu, _ in
+            menu.performActionForItem(at: menu.indexOfItem(withTitle: "Copy"))
+            fixture.service.setEnabled(false)
+        })
+        defer { controller.dismiss() }
+        controller.show(canPaste: true, onPaste: { _ in chosen = true }, onCopy: { _ in chosen = true },
+            onCreateSnippet: { _ in chosen = true }, onDismiss: { _ in dismissCount += 1 })
+        try sendKey(code: 40, characters: "k", modifiers: .command, to: pickerWindow(excluding: initialWindows))
+        XCTAssertFalse(chosen)
+        XCTAssertFalse(controller.isVisible)
+        XCTAssertEqual(dismissCount, 1)
+    }
+
+    func testPrimaryPreferenceControlsReturnAndNumbersWhileCommandReturnAlwaysCopies() async throws {
+        let entry = ClipboardHistoryEntry(text: "  exact\n{clipboard}\n")
+        let fixture = await makeFixture(entries: [entry])
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        var copied: [ClipboardHistoryEntry] = []
+        func show() {
+            controller.show(canPaste: true, onPaste: { _ in XCTFail("These commands should copy") },
+                onCopy: {
+                    XCTAssertFalse(controller.isVisible)
+                    copied.append($0)
+                }, onCreateSnippet: { _ in XCTFail("Unexpected create") }, onDismiss: { _ in })
+        }
+        show()
+        let window = try pickerWindow(excluding: initialWindows)
+        fixture.service.primaryAction = .copy
+        let buttons = descendants(of: try XCTUnwrap(window.contentView)).compactMap { $0 as? NSButton }
+        XCTAssertTrue(buttons.contains { $0.title == "Copy ↩" })
+        try sendKey(code: 36, characters: "\r", to: window)
+        show()
+        try sendKey(code: 18, characters: "1", modifiers: .command, to: window)
+        show()
+        try sendKey(code: 36, characters: "\r", modifiers: .command, to: window)
+        fixture.service.primaryAction = .paste
+        show()
+        try sendKey(code: 36, characters: "\r", modifiers: .command, to: window)
+        XCTAssertEqual(copied, Array(repeating: entry, count: 4))
+    }
+
+    func testActionsMenuUsesCapturedEntryAfterHistoryAndSelectionChange() async throws {
+        let now = Date()
+        let entry = ClipboardHistoryEntry(text: "Original entry", copiedAt: now)
+        let other = ClipboardHistoryEntry(text: "Other entry", copiedAt: now.addingTimeInterval(-1))
+        let fixture = await makeFixture(entries: [entry, other], now: now)
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        var copied: ClipboardHistoryEntry?
+        controller.show(canPaste: true, onPaste: { _ in XCTFail("Unexpected paste") },
+            onCopy: {
+                XCTAssertFalse(controller.isVisible)
+                copied = $0
+            }, onCreateSnippet: { _ in XCTFail("Unexpected create") }, onDismiss: { _ in })
+        let menu = controller.makeActionsMenu()
+        let paste = try XCTUnwrap(menu.item(withTitle: "Paste"))
+        let copy = try XCTUnwrap(menu.item(withTitle: "Copy"))
+        XCTAssertTrue(paste.isEnabled)
+        XCTAssertEqual(paste.keyEquivalent, "\r")
+        XCTAssertEqual(paste.keyEquivalentModifierMask, [])
+        XCTAssertEqual(copy.keyEquivalent, "\r")
+        XCTAssertEqual(copy.keyEquivalentModifierMask, .command)
+        XCTAssertNotNil(menu.item(withTitle: "Create Snippet"))
+        XCTAssertNotNil(menu.item(withTitle: "Delete"))
+
+        fixture.clipboard.text = "Newly captured entry"
+        fixture.clipboard.changeCount += 1
+        fixture.service.capturePendingCopy()
+        let window = try pickerWindow(excluding: initialWindows)
+        let table = try XCTUnwrap(descendants(of: try XCTUnwrap(window.contentView))
+            .compactMap { $0 as? NSTableView }.first)
+        table.selectRowIndexes(IndexSet(integer: 2), byExtendingSelection: false)
+        menu.performActionForItem(at: menu.index(of: copy))
+        XCTAssertEqual(copied, entry)
+    }
+
+    func testActionsMenuRejectsRemovedEntryAndOldPresentationAndDisablesUnavailablePaste() async throws {
+        let now = Date()
+        let entry = ClipboardHistoryEntry(text: "Entry", copiedAt: now)
+        let remaining = ClipboardHistoryEntry(text: "Remaining", copiedAt: now.addingTimeInterval(-1))
+        let fixture = await makeFixture(entries: [entry, remaining], now: now)
+        defer { fixture.cleanup() }
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        var chosen = false
+        func show() {
+            controller.show(canPaste: false, onPaste: { _ in chosen = true }, onCopy: { _ in chosen = true },
+                onCreateSnippet: { _ in chosen = true }, onDismiss: { _ in })
+        }
+        show()
+        let menu = controller.makeActionsMenu()
+        XCTAssertFalse(try XCTUnwrap(menu.item(withTitle: "Paste")).isEnabled)
+        XCTAssertTrue(try XCTUnwrap(menu.item(withTitle: "Copy")).isEnabled)
+        fixture.service.delete(id: entry.id)
+        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Copy"))
+        XCTAssertFalse(chosen)
+        XCTAssertTrue(controller.isVisible)
+
+        let previousSessionMenu = controller.makeActionsMenu()
+        show()
+        previousSessionMenu.performActionForItem(at: previousSessionMenu.indexOfItem(withTitle: "Copy"))
+        XCTAssertFalse(chosen)
+        XCTAssertTrue(controller.isVisible)
+        let currentMenu = controller.makeActionsMenu()
+        currentMenu.performActionForItem(at: currentMenu.indexOfItem(withTitle: "Copy"))
+        XCTAssertTrue(chosen)
+        XCTAssertFalse(controller.isVisible)
+    }
+
     func testCommandNineUsesFilteredRankAndPastesLiteralEntryAfterDismissal() async throws {
         let now = Date()
         let matches = (0..<10).map { index in

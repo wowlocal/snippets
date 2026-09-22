@@ -9,17 +9,27 @@ Secure Paste launches do not open that invitation. Settings always provides acce
 ## Interaction
 
 `⌘⇧V` toggles a non-activating AppKit panel with search, recency list, and a literal text
-preview. Return inserts into the captured original text field; with no supported field
-it copies. `⌘Return` copies, `⌘N` creates a snippet from the selection, `⌘Delete` removes
-one entry, and Escape closes. A conflicting global registration is reported in Settings;
+preview. Return inserts into the captured original text field by default; with no supported
+field it copies. Settings → Clipboard History → Pressing Enter can switch the primary
+action to Copy to Clipboard. The per-bundle preference
+`SnippetsClipboardHistoryPrimaryAction` defaults to `paste` and can be changed while
+capture is off. `⌘Return` always copies, regardless of this setting.
+
+`⌘K` or the footer's Actions button opens a native menu with Paste, Copy, Create Snippet,
+and Delete. Paste is available only when the panel captured a supported text field.
+`⌘N` creates a snippet from the selection, `⌘Delete` removes one entry, and Escape closes
+the menu first, then the panel. Menu actions retain the original entry by identity across
+incoming copies and execute after menu tracking ends; a deleted entry or expired panel
+session cannot trigger an action. A conflicting global registration is reported in Settings;
 the menu-bar entry remains available. Recording is independent of the expansion shortcut
 preference.
 
 While the history panel or the `⌘\` snippet picker is open, `⌘1` through `⌘9`
 immediately choose the corresponding result in the current search order. The first nine
 rows display their shortcuts; filtering and new copies update the numbering. Selection
-uses the same primary action as Return: paste to the captured destination, or copy when
-there is no supported destination. Secure snippets still use the existing authentication
+uses the same primary action as Return: for history, the configured Paste or Copy action;
+for snippets, paste to the captured destination or copy when there is no supported field.
+Secure snippets still use the existing authentication
 and paste checks. Missing result numbers and key repeats do nothing. These shortcuts
 are local to the keyboard-enabled picker; ordinary inline suggestions leave them alone.
 

@@ -64,6 +64,7 @@ final class ClipboardHistoryPanelController: NSObject,
     NSWindowDelegate
 {
     private let service: ClipboardHistoryService
+    private let presentActionsMenu: (NSMenu, NSView) -> Void
     private let panel: ClipboardHistoryPanel
     private let searchField = ClipboardHistorySearchField()
     private let tableView = NSTableView()
@@ -74,9 +75,7 @@ final class ClipboardHistoryPanelController: NSObject,
     private let countLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let primaryButton = NSButton(title: "Paste ↩", target: nil, action: nil)
-    private let copyButton = NSButton(title: "Copy ⌘↩", target: nil, action: nil)
-    private let createButton = NSButton(title: "Create Snippet ⌘N", target: nil, action: nil)
-    private let deleteButton = NSButton()
+    private let actionsButton = NSButton(title: "Actions ⌘K", target: nil, action: nil)
     private var items: [ClipboardHistoryEntry] = []
     private var canPaste = false
     private var pasteAction: ((ClipboardHistoryEntry) -> Void)?
@@ -89,9 +88,34 @@ final class ClipboardHistoryPanelController: NSObject,
     private var isReloading = false
     private var globalClickMonitor: Any?
     private var localEventMonitor: Any?
+    /// Stays set for the entire native tracking call, including menu close and
+    /// action delivery. Menu windows temporarily own clicks and keyboard focus.
+    private var activeActionsMenu: NSMenu?
+    private var pendingMenuAction: ActionsMenuSelection?
 
-    init(service: ClipboardHistoryService) {
+    private enum ActionsMenuCommand: Int {
+        case paste, copy, createSnippet, delete
+    }
+
+    private struct ActionsMenuContext {
+        let entryID: UUID
+        let presentationGeneration: Int
+    }
+
+    private struct ActionsMenuSelection {
+        let context: ActionsMenuContext
+        let command: ActionsMenuCommand
+    }
+
+    init(
+        service: ClipboardHistoryService,
+        presentActionsMenu: @escaping (NSMenu, NSView) -> Void = { menu, anchor in
+            menu.popUp(positioning: nil,
+                at: NSPoint(x: anchor.bounds.minX, y: anchor.bounds.maxY + 4), in: anchor)
+        }
+    ) {
         self.service = service
+        self.presentActionsMenu = presentActionsMenu
         panel = ClipboardHistoryPanel(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 420),
             styleMask: [.nonactivatingPanel, .fullSizeContentView],
@@ -136,8 +160,6 @@ final class ClipboardHistoryPanelController: NSObject,
         presentationStartedWithHiddenApplication = NSApp.isHidden
         panel.canHide = false
         searchField.stringValue = ""
-        primaryButton.title = canPaste ? "Paste ↩" : "Copy ↩"
-        primaryButton.setAccessibilityLabel(canPaste ? "Paste selected clipboard entry" : "Copy selected clipboard entry")
         reloadEntries(preservingSelection: false)
         positionPanel()
 
@@ -161,6 +183,10 @@ final class ClipboardHistoryPanelController: NSObject,
         guard let dismissal = dismissalAction, !isEndingPresentation else { return }
         isEndingPresentation = true
         presentationGeneration += 1
+        let trackingMenu = activeActionsMenu
+        activeActionsMenu = nil
+        pendingMenuAction = nil
+        trackingMenu?.cancelTracking()
         dismissalAction = nil
         pasteAction = nil
         copyAction = nil
@@ -365,24 +391,17 @@ final class ClipboardHistoryPanelController: NSObject,
         countLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         primaryButton.target = self
         primaryButton.action = #selector(performPrimaryAction)
-        copyButton.target = self
-        copyButton.action = #selector(copySelection)
-        copyButton.setAccessibilityLabel("Copy selected clipboard entry")
-        createButton.target = self
-        createButton.action = #selector(createSnippet)
-        createButton.setAccessibilityLabel("Create snippet from selected clipboard entry")
-        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Delete clipboard entry")
-        deleteButton.imagePosition = .imageOnly
-        deleteButton.target = self
-        deleteButton.action = #selector(deleteSelection)
-        deleteButton.toolTip = "Delete selected entry (⌘⌫)"
-        deleteButton.setAccessibilityLabel("Delete selected clipboard entry")
-        for button in [primaryButton, copyButton, createButton, deleteButton] {
+        actionsButton.target = self
+        actionsButton.action = #selector(showActionsMenu)
+        actionsButton.identifier = NSUserInterfaceItemIdentifier("clipboardHistoryActionsButton")
+        actionsButton.setAccessibilityLabel("Actions for selected clipboard entry")
+        actionsButton.toolTip = "Paste, copy, create a snippet, or delete (⌘K)"
+        for button in [primaryButton, actionsButton] {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.font = .systemFont(ofSize: 11)
         }
-        let footer = NSStackView(views: [countLabel, NSView(), deleteButton, createButton, copyButton, primaryButton])
+        let footer = NSStackView(views: [countLabel, NSView(), actionsButton, primaryButton])
         footer.orientation = .horizontal
         footer.alignment = .centerY
         footer.spacing = 8
@@ -451,13 +470,18 @@ final class ClipboardHistoryPanelController: NSObject,
             previewView.setSelectedRange(NSRange(location: 0, length: 0))
             previewView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         }
-        for button in [primaryButton, copyButton, createButton, deleteButton] {
+        let copies = primaryActionCopies
+        primaryButton.title = copies ? "Copy ↩" : "Paste ↩"
+        primaryButton.setAccessibilityLabel(copies ? "Copy selected clipboard entry" : "Paste selected clipboard entry")
+        for button in [primaryButton, actionsButton] {
             button.isEnabled = selected != nil
         }
     }
 
+    private var primaryActionCopies: Bool { !canPaste || service.primaryAction == .copy }
+
     @objc private func performPrimaryAction() {
-        finishSelection(using: canPaste ? pasteAction : copyAction)
+        finishSelection(using: primaryActionCopies ? copyAction : pasteAction)
     }
 
     @objc private func copySelection() { finishSelection(using: copyAction) }
@@ -469,6 +493,10 @@ final class ClipboardHistoryPanelController: NSObject,
             NSSound.beep()
             return
         }
+        finishSelection(entry, using: action)
+    }
+
+    private func finishSelection(_ entry: ClipboardHistoryEntry, using action: (ClipboardHistoryEntry) -> Void) {
         dismiss()
         action(entry)
     }
@@ -478,11 +506,110 @@ final class ClipboardHistoryPanelController: NSObject,
         service.delete(id: selectedEntry.id)
     }
 
+    /// Creating the menu does not enter AppKit's tracking loop. Every action is
+    /// bound to this selection and presentation, so tests can also invoke menu
+    /// items directly without interacting with a running application's menus.
+    func makeActionsMenu() -> NSMenu {
+        let menu = NSMenu(title: "Clipboard History Actions")
+        menu.autoenablesItems = false
+        let context = selectedEntry.map {
+            ActionsMenuContext(entryID: $0.id, presentationGeneration: presentationGeneration)
+        }
+        let hasSelection = context != nil && panel.isVisible && dismissalAction != nil && service.isEnabled
+        func add(
+            _ title: String,
+            command: ActionsMenuCommand,
+            keyEquivalent: String,
+            modifiers: NSEvent.ModifierFlags,
+            enabled: Bool
+        ) {
+            let item = NSMenuItem(title: title, action: #selector(performMenuAction(_:)), keyEquivalent: keyEquivalent)
+            item.target = self
+            item.tag = command.rawValue
+            item.representedObject = context
+            item.keyEquivalentModifierMask = modifiers
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        add("Paste", command: .paste, keyEquivalent: primaryActionCopies ? "" : "\r",
+            modifiers: [], enabled: hasSelection && canPaste)
+        add("Copy", command: .copy, keyEquivalent: "\r", modifiers: .command, enabled: hasSelection)
+        if primaryActionCopies {
+            // Keep the first menu action consistent with the footer's primary action.
+            let copyItem = menu.items[1]
+            menu.removeItem(copyItem)
+            menu.insertItem(copyItem, at: 0)
+        }
+        add("Create Snippet", command: .createSnippet, keyEquivalent: "n", modifiers: .command, enabled: hasSelection)
+        menu.addItem(.separator())
+        add("Delete", command: .delete, keyEquivalent: "\u{8}", modifiers: .command, enabled: hasSelection)
+        return menu
+    }
+
+    @objc private func showActionsMenu() {
+        guard panel.isVisible, dismissalAction != nil, selectedEntry != nil,
+              activeActionsMenu == nil else { return }
+        let menu = makeActionsMenu()
+        let generation = presentationGeneration
+        pendingMenuAction = nil
+        activeActionsMenu = menu
+        presentActionsMenu(menu, actionsButton)
+
+        // An external dismissal may have cancelled tracking and already started
+        // another presentation. Never restore or act on that newer picker here.
+        guard activeActionsMenu === menu else { return }
+        activeActionsMenu = nil
+        let selection = pendingMenuAction
+        pendingMenuAction = nil
+        if let selection { executeMenuAction(selection) }
+        reconcileKeyStatus(after: generation)
+    }
+
+    @objc private func performMenuAction(_ sender: NSMenuItem) {
+        guard sender.isEnabled,
+              let context = sender.representedObject as? ActionsMenuContext,
+              let command = ActionsMenuCommand(rawValue: sender.tag) else { return }
+        let selection = ActionsMenuSelection(context: context, command: command)
+        if let activeActionsMenu {
+            guard sender.menu === activeActionsMenu else { return }
+            // NSMenu can deliver this before popUp returns. Wait until the menu
+            // releases keyboard focus before dismissing and delivering the text.
+            pendingMenuAction = selection
+        } else {
+            executeMenuAction(selection)
+        }
+    }
+
+    private func executeMenuAction(_ selection: ActionsMenuSelection) {
+        let context = selection.context
+        guard panel.isVisible, dismissalAction != nil, service.isEnabled,
+              presentationGeneration == context.presentationGeneration else { return }
+        // Refresh retention and look up the captured ID, never the row currently
+        // selected after incoming copies, filtering, deletion, or expiry.
+        guard let entry = service.search("").first(where: { $0.id == context.entryID }),
+              panel.isVisible, dismissalAction != nil, service.isEnabled,
+              presentationGeneration == context.presentationGeneration else { return }
+        switch selection.command {
+        case .paste:
+            guard canPaste, let pasteAction else { return }
+            finishSelection(entry, using: pasteAction)
+        case .copy:
+            guard let copyAction else { return }
+            finishSelection(entry, using: copyAction)
+        case .createSnippet:
+            guard let createAction else { return }
+            finishSelection(entry, using: createAction)
+        case .delete:
+            service.delete(id: entry.id)
+        }
+    }
+
     func controlTextDidChange(_ obj: Notification) {
         reloadEntries(preservingSelection: true)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard activeActionsMenu == nil else { return false }
         switch commandSelector {
         case #selector(NSResponder.moveUp(_:)):
             moveSelection(by: -1)
@@ -536,11 +663,17 @@ final class ClipboardHistoryPanelController: NSObject,
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard panel.isVisible, !isEndingPresentation else { return }
-        let generation = presentationGeneration
+        guard panel.isVisible, !isEndingPresentation, activeActionsMenu == nil else { return }
+        reconcileKeyStatus(after: presentationGeneration)
+    }
+
+    private func reconcileKeyStatus(after generation: Int) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.presentationGeneration == generation,
-                  self.panel.isVisible, !self.panel.isKeyWindow else { return }
+                  self.panel.isVisible, self.activeActionsMenu == nil,
+                  !self.panel.isKeyWindow else { return }
+            // Native menu cancellation restores key status on its own. A click
+            // in another app does not; dismiss without pulling focus back there.
             self.dismiss()
         }
     }
@@ -560,7 +693,7 @@ final class ClipboardHistoryPanelController: NSObject,
     /// Only the picker's explicit commands are intercepted. Search selection,
     /// copy/paste, word movement, deletion, IME composition, and Tab remain native.
     private func handleKeyEvent(_ event: NSEvent) -> Bool {
-        guard panel.isVisible, dismissalAction != nil else { return false }
+        guard panel.isVisible, dismissalAction != nil, activeActionsMenu == nil else { return false }
         if let row = PickerQuickSelection.row(for: event) {
             if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
             // Missing rows and held-key repeats still belong to the picker, but
@@ -576,6 +709,9 @@ final class ClipboardHistoryPanelController: NSObject,
             case 36, 76: copySelection()
             case 45: createSnippet()
             case 51: deleteSelection()
+            case 40:
+                if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
+                if !event.isARepeat { showActionsMenu() }
             default: return false
             }
             return true
@@ -602,7 +738,7 @@ final class ClipboardHistoryPanelController: NSObject,
     }
 
     private func dismissForOutsideClick() {
-        guard panel.isVisible else { return }
+        guard panel.isVisible, activeActionsMenu == nil else { return }
         let point = NSEvent.mouseLocation
         let frame = panel.frame
         if frame.contains(point) {

@@ -527,6 +527,9 @@ private struct MacSettingsSearchEntry {
         .init(title: "Clear Clipboard History", pane: .clipboardHistory,
               terms: ["delete", "remove", "copied text", "privacy"],
               needles: ["Clear History"]),
+        .init(title: "Clipboard History Primary Action", pane: .clipboardHistory,
+              terms: ["return", "enter", "paste", "copy", "keyboard", "shortcut"],
+              needles: ["Pressing Enter"]),
         .init(title: "Excluded Clipboard Apps", pane: .clipboardHistory,
               terms: ["ignore", "exclude", "applications", "clipboard history"],
               needles: ["Excluded Apps"]),
@@ -1365,6 +1368,7 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private let clearButton = NSButton(title: "Clear History…", target: nil, action: nil)
+    private let primaryActionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let tableView = NSTableView()
     private let removeButton = NSButton(title: "Remove Selected", target: nil, action: nil)
     private var excludedBundleIDs: [String] = []
@@ -1397,6 +1401,22 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
         clearRow.alignment = .centerY
         clearRow.spacing = 8
 
+        let primaryActionLabel = NSTextField(labelWithString: "Pressing Enter:")
+        primaryActionPopup.target = self
+        primaryActionPopup.action = #selector(changePrimaryAction(_:))
+        primaryActionPopup.setAccessibilityIdentifier("clipboardHistoryPrimaryAction")
+        primaryActionPopup.setAccessibilityLabel("Clipboard History primary action")
+        for action in ClipboardHistoryPrimaryAction.allCases {
+            primaryActionPopup.addItem(withTitle: action.title)
+            primaryActionPopup.lastItem?.representedObject = action.rawValue
+        }
+        let primaryActionRow = NSStackView(views: [primaryActionLabel, primaryActionPopup, NSView()])
+        primaryActionRow.orientation = .horizontal
+        primaryActionRow.alignment = .centerY
+        primaryActionRow.spacing = 8
+        let primaryActionHelp = makeTertiaryLabel(
+            "⌘1–9 uses the same action. ⌘Return always copies. Open Actions with ⌘K. If there is no supported text field, Paste copies instead.")
+
         let exclusionsTitle = makeSettingsSectionTitle("Excluded Apps")
         let exclusionsHelp = makeTertiaryLabel(
             "Skip new copies while one of these apps is active. Existing items stay in history until you clear them.")
@@ -1428,11 +1448,11 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
         exclusionActions.spacing = 8
 
         let separator = NSBox.horizontalSeparator()
-        for item in [title, intro, enabledCheckbox, statusLabel, limits, clearRow,
+        for item in [title, intro, enabledCheckbox, statusLabel, primaryActionRow, primaryActionHelp, limits, clearRow,
                      separator, exclusionsTitle, exclusionsHelp, scrollView, exclusionActions] {
             stack.addArrangedSubview(item)
         }
-        for item in [intro, statusLabel, limits, clearRow, separator, exclusionsHelp, scrollView, exclusionActions] {
+        for item in [intro, statusLabel, primaryActionRow, primaryActionHelp, limits, clearRow, separator, exclusionsHelp, scrollView, exclusionActions] {
             item.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         reloadFromStorage()
@@ -1459,6 +1479,7 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
         guard isViewLoaded else { return }
         guard let service else {
             enabledCheckbox.isEnabled = false
+            primaryActionPopup.isEnabled = false
             clearButton.isEnabled = false
             removeButton.isEnabled = false
             statusLabel.stringValue = "Clipboard History is unavailable."
@@ -1466,6 +1487,12 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
         }
         enabledCheckbox.isEnabled = true
         enabledCheckbox.state = service.isEnabled ? .on : .off
+        primaryActionPopup.isEnabled = true
+        if let item = primaryActionPopup.itemArray.first(where: {
+            ($0.representedObject as? String) == service.primaryAction.rawValue
+        }) {
+            primaryActionPopup.select(item)
+        }
         if service.isLoading {
             countLabel.stringValue = "Updating saved history…"
         } else if service.entries.isEmpty, service.statusMessage != nil {
@@ -1496,6 +1523,12 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
     }
 
     @objc private func historyDidChange() { reloadFromStorage() }
+
+    @objc private func changePrimaryAction(_ sender: NSPopUpButton) {
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let action = ClipboardHistoryPrimaryAction(rawValue: rawValue) else { return }
+        service?.primaryAction = action
+    }
 
     @objc private func changeEnabled() {
         guard let service else { return }

@@ -3,6 +3,18 @@ import AppKit
 import CryptoKit
 import Foundation
 
+enum ClipboardHistoryPrimaryAction: String, CaseIterable {
+    case paste
+    case copy
+
+    var title: String {
+        switch self {
+        case .paste: "Paste to Active App"
+        case .copy: "Copy to Clipboard"
+        }
+    }
+}
+
 @MainActor
 protocol ClipboardHistoryPasteboardReading: AnyObject {
     var changeCount: Int { get }
@@ -28,6 +40,7 @@ final class ClipboardHistoryService {
     static let enabledPreferenceKey = "SnippetsClipboardHistoryEnabled"
     static let offerDismissedPreferenceKey = "SnippetsClipboardHistoryOfferDismissed"
     static let exclusionsPreferenceKey = "SnippetsClipboardHistoryExcludedBundleIDs"
+    static let primaryActionPreferenceKey = "SnippetsClipboardHistoryPrimaryAction"
     static let retentionDays = ClipboardHistory.retentionDays
     static let internalPasteboardType = NSPasteboard.PasteboardType(ClipboardHistoryCapturePolicy.internalType)
 
@@ -39,6 +52,17 @@ final class ClipboardHistoryService {
     var isCapturing: Bool { isEnabled && loaded && sessionActive && systemAwake }
     var onWillCreateStorageDirectory: (() -> Void)?
     var onDidCreateStorageDirectory: (() -> Void)?
+
+    var primaryAction: ClipboardHistoryPrimaryAction {
+        get {
+            ClipboardHistoryPrimaryAction(rawValue: defaults.string(forKey: Self.primaryActionPreferenceKey) ?? "") ?? .paste
+        }
+        set {
+            guard defaults.string(forKey: Self.primaryActionPreferenceKey) != newValue.rawValue else { return }
+            defaults.set(newValue.rawValue, forKey: Self.primaryActionPreferenceKey)
+            notify()
+        }
+    }
 
     var excludedBundleIDs: [String] {
         get { defaults.stringArray(forKey: Self.exclusionsPreferenceKey) ?? [] }
