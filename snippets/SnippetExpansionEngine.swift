@@ -236,6 +236,7 @@ final class SnippetExpansionEngine {
     private struct SecurePasteWebPreparation {
         let fieldUTF16Count: Int
         let selection: CFRange
+        let lineEndings: SecurePasteWebReplacementPolicy.LineEndings
     }
 
     private enum SecurePasteDeliveryPreparation {
@@ -4958,7 +4959,9 @@ final class SnippetExpansionEngine {
 
             return .replaceWebRange(SecurePasteWebPreparation(
                 fieldUTF16Count: fieldUTF16Count,
-                selection: selection
+                selection: selection,
+                lineEndings: SecurePasteWebReplacementPolicy.lineEndings(
+                    bundleIdentifier: targetApplication.bundleIdentifier, role: role)
             ))
         case .typeUnicode:
             guard target.containerBinding == nil else { return nil }
@@ -5160,7 +5163,8 @@ final class SnippetExpansionEngine {
               ),
               let plan = SecurePasteWebReplacementPolicy.plan(
                 replacing: snapshot,
-                with: text
+                with: text,
+                lineEndings: preparation.lineEndings
               )
         else { return .failedBeforeAttempt }
 
@@ -5196,17 +5200,18 @@ final class SnippetExpansionEngine {
             location: plan.replacementLocation,
             length: plan.replacementUTF16Count
         )
-        guard integerAttribute(
+        guard let confirmedFieldCount = integerAttribute(
             of: target.textElement,
             attribute: kAXNumberOfCharactersAttribute as CFString,
             axBudget: axBudget
-        ) == plan.expectedFieldUTF16Count,
+        ), confirmedFieldCount == plan.expectedFieldUTF16Count,
               let insertedText = stringForRange(
                 of: target.textElement,
                 range: insertedRange,
                 axBudget: axBudget
               ),
-              SecurePasteWebReplacementPolicy.utf16ContentsMatch(insertedText, text)
+              SecurePasteWebReplacementPolicy.confirms(plan,
+                fieldUTF16Count: confirmedFieldCount, insertedText: insertedText)
         else { reason = .readbackUnconfirmed; return .attemptedAmbiguous }
 
         // Chromium currently leaves the replacement selected. This non-plaintext write

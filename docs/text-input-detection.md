@@ -317,6 +317,16 @@ fallback. Multiline snippets remain supported; range validation and readback are
 to 1,000,000 UTF-16 units. Web groups and non-text contenteditable controls remain
 ineligible.
 
+Safari/Safari Technology Preview ordinary web `AXTextField` and `AXTextArea` targets
+confirm against their measured line-ending normalization: single-line fields replace
+internal CR/LF with spaces and trim trailing CR/LF; text areas normalize CRLF/CR to LF.
+The original text is sent unchanged. Expected count, bounded readback and caret use
+the normalized result, with exact UTF-16 comparison. Other hosts and roles retain
+original-text verification. This reuses captured metadata without new AX calls or
+waiting; unexpected rewrites remain ambiguous and never authorize another insertion.
+See the [multiline investigation](secure-paste-multiline-investigation.md) for the
+integration probe, negative cases, performance measurements and remaining limits.
+
 ## Expansion and pasteboard timing quirks
 
 Direct Accessibility replacement is preferred. If that transport is unavailable before any

@@ -427,6 +427,53 @@ nonisolated enum SecurePasteWebReplacementPolicy {
     static let maximumFieldUTF16Count = 1_000_000
     static let maximumReplacementUTF16Count = maximumFieldUTF16Count
 
+    enum LineEndings: Equatable {
+        case exact
+        case webKitSingleLine
+        case webKitMultiline
+    }
+
+    /// Only measured Safari controls opt in. Other browsers, roles and missing metadata
+    /// retain exact original-text verification; AXTextArea alone is not engine evidence.
+    static func lineEndings(bundleIdentifier: String?, role: String?) -> LineEndings {
+        guard bundleIdentifier == "com.apple.Safari"
+                || bundleIdentifier == "com.apple.SafariTechnologyPreview" else { return .exact }
+        switch role {
+        case "AXTextField": return .webKitSingleLine
+        case "AXTextArea": return .webKitMultiline
+        default: return .exact
+        }
+    }
+
+    /// Expected host transformation, never the bytes sent to the browser. Preserve every
+    /// non-CR/LF code unit (including spaces, tabs, Unicode separators and combining marks).
+    static func expectedText(_ text: String, lineEndings: LineEndings) -> String {
+        guard lineEndings != .exact,
+              text.utf16.contains(where: { $0 == 13 || (lineEndings == .webKitSingleLine && $0 == 10) })
+        else { return text }
+        var result: [UInt16] = []
+        result.reserveCapacity(text.utf16.count)
+        var previousWasCR = false
+        var lastNonNewlineEnd = 0
+        for unit in text.utf16 {
+            if unit == 10 && previousWasCR {
+                previousWasCR = false
+                continue
+            }
+            previousWasCR = unit == 13
+            if unit == 13 || unit == 10 {
+                result.append(lineEndings == .webKitSingleLine ? 32 : 10)
+            } else {
+                result.append(unit)
+                lastNonNewlineEnd = result.count
+            }
+        }
+        if lineEndings == .webKitSingleLine {
+            result.removeSubrange(lastNonNewlineEnd..<result.count)
+        }
+        return String(decoding: result, as: UTF16.self)
+    }
+
     struct Snapshot: Equatable {
         let fieldUTF16Count: Int
         let selectionLocation: Int
@@ -440,6 +487,7 @@ nonisolated enum SecurePasteWebReplacementPolicy {
         let replacementUTF16Count: Int
         let expectedFieldUTF16Count: Int
         let caretLocation: Int
+        let expectedText: String
     }
 
     static func snapshot(
@@ -466,12 +514,16 @@ nonisolated enum SecurePasteWebReplacementPolicy {
         )
     }
 
-    static func plan(replacing snapshot: Snapshot, with replacement: String) -> Plan? {
-        let replacementUTF16Count = replacement.utf16.count
+    static func plan(
+        replacing snapshot: Snapshot, with replacement: String, lineEndings: LineEndings = .exact
+    ) -> Plan? {
+        // Bound the original request even when normalization would make it smaller.
+        guard !replacement.isEmpty, replacement.utf16.count <= maximumReplacementUTF16Count else { return nil }
+        let expected = expectedText(replacement, lineEndings: lineEndings)
+        let replacementUTF16Count = expected.utf16.count
         guard replacementUTF16Count > 0,
-              replacementUTF16Count <= maximumReplacementUTF16Count,
               !(snapshot.selectionLength == replacementUTF16Count
-                && utf16ContentsMatch(snapshot.selectedText, replacement))
+                && utf16ContentsMatch(snapshot.selectedText, expected))
         else { return nil }
 
         let retainedCount = snapshot.fieldUTF16Count - snapshot.selectionLength
@@ -488,8 +540,14 @@ nonisolated enum SecurePasteWebReplacementPolicy {
             replacementLength: snapshot.selectionLength,
             replacementUTF16Count: replacementUTF16Count,
             expectedFieldUTF16Count: expectedFieldUTF16Count,
-            caretLocation: snapshot.selectionLocation + replacementUTF16Count
+            caretLocation: snapshot.selectionLocation + replacementUTF16Count,
+            expectedText: expected
         )
+    }
+
+    static func confirms(_ plan: Plan, fieldUTF16Count: Int?, insertedText: String?) -> Bool {
+        guard fieldUTF16Count == plan.expectedFieldUTF16Count, let insertedText else { return false }
+        return utf16ContentsMatch(insertedText, plan.expectedText)
     }
 
     static func utf16ContentsMatch(_ lhs: String, _ rhs: String) -> Bool {

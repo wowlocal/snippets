@@ -688,6 +688,80 @@ struct AXMessagingBudgetSwiftTests {
         #expect(SecurePasteWebReplacementPolicy.utf16ContentsMatch(first, first))
     }
 
+    @Test("line-ending normalization requires a measured Safari host and field role")
+    func webLineEndingClassification() {
+        for bundle in ["com.apple.Safari", "com.apple.SafariTechnologyPreview"] {
+            #expect(SecurePasteWebReplacementPolicy.lineEndings(bundleIdentifier: bundle, role: "AXTextField") == .webKitSingleLine)
+            #expect(SecurePasteWebReplacementPolicy.lineEndings(bundleIdentifier: bundle, role: "AXTextArea") == .webKitMultiline)
+            for role in [nil, "AXGroup", "AXComboBox", "AXSecureTextField"] as [String?] {
+                #expect(SecurePasteWebReplacementPolicy.lineEndings(bundleIdentifier: bundle, role: role) == .exact)
+            }
+        }
+        for bundle in [nil, "com.google.Chrome", "org.mozilla.firefox", "com.example.App"] as [String?] {
+            #expect(SecurePasteWebReplacementPolicy.lineEndings(bundleIdentifier: bundle, role: "AXTextField") == .exact)
+            #expect(SecurePasteWebReplacementPolicy.lineEndings(bundleIdentifier: bundle, role: "AXTextArea") == .exact)
+        }
+    }
+
+    @Test("only CR/LF are normalized; other whitespace and exact Unicode are preserved")
+    func webLineEndingNormalizationIsNarrow() {
+        let source = " 😀\t a\u{0301}\u{2028}\r\nb\rc\n\n "
+        #expect(SecurePasteWebReplacementPolicy.expectedText(source, lineEndings: .exact) == source)
+        #expect(SecurePasteWebReplacementPolicy.expectedText(source, lineEndings: .webKitSingleLine)
+            == " 😀\t a\u{0301}\u{2028} b c   ")
+        #expect(SecurePasteWebReplacementPolicy.expectedText(source, lineEndings: .webKitMultiline)
+            == " 😀\t a\u{0301}\u{2028}\nb\nc\n\n ")
+        #expect(SecurePasteWebReplacementPolicy.expectedText("a\r\n\r\n", lineEndings: .webKitSingleLine) == "a")
+        #expect(SecurePasteWebReplacementPolicy.expectedText("a\r\n\r\n", lineEndings: .webKitMultiline) == "a\n\n")
+        #expect(SecurePasteWebReplacementPolicy.expectedText("\n\na\n", lineEndings: .webKitSingleLine) == "  a")
+    }
+
+    @Test("normalized planning uses delivered length for readback and caret without changing the request")
+    func webNormalizedReplacementPlanning() throws {
+        let snapshot = try #require(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 16, selectionLocation: 7, selectionLength: 3, selectedText: "OLD"))
+        let original = "one\r\ntwo\n"
+        let plan = try #require(SecurePasteWebReplacementPolicy.plan(
+            replacing: snapshot, with: original, lineEndings: .webKitSingleLine))
+        #expect(original == "one\r\ntwo\n")
+        #expect(plan.expectedText == "one two")
+        #expect(plan.replacementUTF16Count == 7)
+        #expect(plan.expectedFieldUTF16Count == 20)
+        #expect(plan.caretLocation == 14)
+        #expect(SecurePasteWebReplacementPolicy.confirms(plan, fieldUTF16Count: 20, insertedText: "one two"))
+        for text in [nil, "one tw", "one  two", "one XXX", "onetwo", "one\ntwo"] as [String?] {
+            #expect(!SecurePasteWebReplacementPolicy.confirms(plan, fieldUTF16Count: 20, insertedText: text))
+        }
+        #expect(!SecurePasteWebReplacementPolicy.confirms(plan, fieldUTF16Count: 19, insertedText: "one two"))
+        #expect(!SecurePasteWebReplacementPolicy.confirms(plan, fieldUTF16Count: nil, insertedText: "one two"))
+    }
+
+    @Test("textarea normalization cannot hide a lost line or blank line")
+    func webMultilineReadbackRejectsDataLoss() throws {
+        let snapshot = try #require(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 0, selectionLocation: 0, selectionLength: 0, selectedText: ""))
+        let plan = try #require(SecurePasteWebReplacementPolicy.plan(
+            replacing: snapshot, with: "one\r\n\r\ntwo\r\n", lineEndings: .webKitMultiline))
+        #expect(plan.expectedText == "one\n\ntwo\n")
+        #expect(SecurePasteWebReplacementPolicy.confirms(plan, fieldUTF16Count: 9, insertedText: "one\n\ntwo\n"))
+        for text in ["one\ntwo\n", "one  two ", "one\n\ntwo", "one\n\nXXX\n"] {
+            #expect(!SecurePasteWebReplacementPolicy.confirms(plan,
+                fieldUTF16Count: plan.expectedFieldUTF16Count, insertedText: text))
+        }
+    }
+
+    @Test("normalization cannot authorize an empty edit, a preexisting result, or an oversized original")
+    func webNormalizationPreservesPreflightSafety() throws {
+        let snapshot = try #require(SecurePasteWebReplacementPolicy.snapshot(
+            fieldUTF16Count: 7, selectionLocation: 0, selectionLength: 7, selectedText: "one two"))
+        #expect(SecurePasteWebReplacementPolicy.plan(
+            replacing: snapshot, with: "one\ntwo", lineEndings: .webKitSingleLine) == nil)
+        #expect(SecurePasteWebReplacementPolicy.plan(
+            replacing: snapshot, with: "\r\n\n", lineEndings: .webKitSingleLine) == nil)
+        #expect(SecurePasteWebReplacementPolicy.plan(replacing: snapshot,
+            with: "x" + String(repeating: "\n", count: 1_000_000), lineEndings: .webKitSingleLine) == nil)
+    }
+
     @Test("Secure Paste keeps relevance ahead of security preference")
     func securePasteRelevanceComesFirst() {
         #expect(SecurePasteSuggestionRankingPolicy.decision(
