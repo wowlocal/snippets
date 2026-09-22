@@ -523,6 +523,46 @@ nonisolated enum DiagnosticPasteboardRestoration: String, Codable, Sendable, Cas
     case pending
 }
 
+nonisolated enum DiagnosticPasteStage: String, Sendable, CaseIterable {
+    case preflight
+    case eventPreparation = "event_preparation"
+    case clipboardAcquisition = "clipboard_acquisition"
+    case triggerDeletion = "trigger_deletion"
+    case prePaste = "pre_paste"
+    case confirmation
+}
+
+nonisolated enum DiagnosticPasteReason: String, Sendable, CaseIterable {
+    case none
+    case newExpansionStarted = "new_expansion_started"
+    case quitting
+    case contextChanged = "context_changed"
+    // Unmarked events can also come from another automation tool; this does not claim human input.
+    case unmarkedKeyDown = "unmarked_key_down"
+    case pointerInteraction = "pointer_interaction"
+    case applicationActivation = "application_activation"
+    case monitorsRestarted = "monitors_restarted"
+    case listeningStopped = "listening_stopped"
+    case secureInputEnabled = "secure_input_enabled"
+    case ownAppFrontmost = "own_app_frontmost"
+    case frontmostAppChanged = "frontmost_app_changed"
+    case focusedElementChanged = "focused_element_changed"
+    case eventCreationFailed = "event_creation_failed"
+    case clipboardUnavailable = "clipboard_unavailable"
+    case pasteboardSuperseded = "pasteboard_superseded"
+    case confirmationTimedOut = "confirmation_timed_out"
+}
+
+/// Content-free progress for a single aggregate paste record. Counts describe attempted
+/// synthetic deletes, never proof that the receiving app deleted that many characters.
+nonisolated struct DiagnosticPasteProgress: Sendable, Equatable {
+    var stage: DiagnosticPasteStage = .preflight
+    var reason: DiagnosticPasteReason = .none
+    var plannedDeletes: Int = 0
+    var deleteAttempts: Int = 0
+    var pastePosted = false
+}
+
 nonisolated enum DiagnosticMetricKind: String, Codable, Sendable {
     case crash
     case hang
@@ -704,7 +744,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         outcome: DiagnosticPasteOutcome,
         restoration: DiagnosticPasteboardRestoration,
         durationMilliseconds: Int64,
-        hadFingerprint: Bool
+        hadFingerprint: Bool,
+        progress: DiagnosticPasteProgress? = nil
     )
     case pasteboardRecovery(outcome: DiagnosticPasteboardRestoration)
     case securePaste(
@@ -783,9 +824,9 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             .error
         case .expansionAccessibility:
             .debug
-        case .pasteDelivery(_, .pending, _, _), .pasteboardRecovery(.pending):
+        case .pasteDelivery(_, .pending, _, _, _), .pasteboardRecovery(.pending):
             .error
-        case .pasteDelivery(let outcome, _, _, _):
+        case .pasteDelivery(let outcome, _, _, _, _):
             outcome == .textObserved ? .info : .warning
         case .syncState(.halted, _):
             .fault
@@ -814,7 +855,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
              .secureReveal,
              .metricKit:
             true
-        case .pasteDelivery(_, .pending, _, _), .pasteboardRecovery(.pending):
+        case .pasteDelivery(_, .pending, _, _, _), .pasteboardRecovery(.pending):
             true
         case .secureEditorTransition(_, let from, let to, _, _):
             from == .presentingPlaintext
@@ -983,13 +1024,21 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             if let failure { fields["failure"] = .string(failure.rawValue) }
             if let axErrorCode { fields["ax_error_code"] = .integer(Int64(axErrorCode)) }
             return fields
-        case .pasteDelivery(let outcome, let restoration, let duration, let hadFingerprint):
-            return [
+        case .pasteDelivery(let outcome, let restoration, let duration, let hadFingerprint, let progress):
+            var fields: [String: DiagnosticJSONValue] = [
                 "outcome": .string(outcome.rawValue),
                 "restoration": .string(restoration.rawValue),
                 "duration_ms": .integer(min(600_000, max(0, duration))),
                 "had_fingerprint": .boolean(hadFingerprint),
             ]
+            if let progress {
+                fields["stage"] = .string(progress.stage.rawValue)
+                fields["reason"] = .string(progress.reason.rawValue)
+                fields["planned_deletes"] = .integer(Int64(min(10_000, max(0, progress.plannedDeletes))))
+                fields["delete_attempts"] = .integer(Int64(min(10_000, max(0, progress.deleteAttempts))))
+                fields["paste_posted"] = .boolean(progress.pastePosted)
+            }
+            return fields
         case .pasteboardRecovery(let outcome):
             return ["outcome": .string(outcome.rawValue)]
         case .metricKit(let metric):

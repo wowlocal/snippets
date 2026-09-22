@@ -265,6 +265,37 @@ struct DiagnosticsTests {
         }
     }
 
+    @Test func pasteProgressContainsOnlyClosedReasonsAndBoundedDispatchCounts() throws {
+        for stage in DiagnosticPasteStage.allCases {
+            for reason in DiagnosticPasteReason.allCases {
+                let event = DiagnosticEvent.pasteDelivery(
+                    outcome: .interrupted, restoration: .superseded,
+                    durationMilliseconds: 30, hadFingerprint: false,
+                    progress: .init(stage: stage, reason: reason, plannedDeletes: .max,
+                                    deleteAttempts: .min, pastePosted: false))
+                let record = DiagnosticRecord(event: event, timestamp: "2026-09-22T10:00:00.000Z",
+                    elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1)
+                let object = try #require(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+                let fields = try #require(object["fields"] as? [String: Any])
+                #expect(Set(fields.keys) == ["outcome", "restoration", "duration_ms", "had_fingerprint",
+                    "stage", "reason", "planned_deletes", "delete_attempts", "paste_posted"])
+                #expect(fields["stage"] as? String == stage.rawValue)
+                #expect(fields["reason"] as? String == reason.rawValue)
+                #expect(fields["planned_deletes"] as? Int == 10_000)
+                #expect(fields["delete_attempts"] as? Int == 0)
+                #expect(fields["paste_posted"] as? Bool == false)
+                #expect(!event.requiresSynchronousWrite)
+                #expect(event.defaultLevel == .warning)
+            }
+        }
+        let delivered = DiagnosticEvent.pasteDelivery(outcome: .textObserved, restoration: .restored,
+            durationMilliseconds: 177, hadFingerprint: true,
+            progress: .init(stage: .confirmation, plannedDeletes: 7, deleteAttempts: 7, pastePosted: true))
+        #expect(delivered.fields["paste_posted"] == .boolean(true))
+        #expect(delivered.fields["delete_attempts"] == .integer(7))
+        #expect(delivered.fields["reason"] == .string("none"))
+    }
+
     @Test func expansionAccessibilityPersistsOnlyClosedContentFreeFacts() throws {
         let record = DiagnosticRecord(
             event: .expansionAccessibility(

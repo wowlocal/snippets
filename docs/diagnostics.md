@@ -73,13 +73,29 @@ protected renderer refreshes caused by typing, selection, scrolling, or layout d
 become a high-frequency log.
 
 Clipboard insertion on macOS emits one `paste_delivery` record per attempt, independently
-of verbose logging. Its exact fields are `outcome`, `restoration`, `duration_ms` (bounded to
+of verbose logging. Its base fields are `outcome`, `restoration`, `duration_ms` (bounded to
 0–600,000), and `had_fingerprint` (whether Accessibility supplied a baseline). Outcomes are
 `interrupted`, `clipboard_unavailable`, `event_creation_failed`, `text_observed`, `timed_out`,
 `target_changed`, `pasteboard_superseded`, and `secure_input_enabled`. Restoration is separately
 `not_borrowed`, `restored`, `superseded`, or `pending`: returning the clipboard does not prove
 insertion. `text_observed` means the caret advanced and changed text matched the bounded replacement tail in the
 original focused element; it is an Accessibility observation, not a receiver acknowledgement.
+
+New records also include `stage`, `reason`, `planned_deletes`, `delete_attempts` (both
+bounded to 0–10,000), and `paste_posted`. Stages identify preflight, event preparation,
+clipboard acquisition, trigger deletion, the pre-paste wait/check, or confirmation.
+Reasons are closed categories for context invalidation (unmarked key-down, pointer
+interaction, application activation, monitor restart, or other context change),
+quitting, a new expansion, stopped listening, secure input, target changes, event creation failure,
+clipboard acquisition failure/supersession, confirmation timeout, or no failure.
+Delete attempts count synthetic key dispatch attempts, not acknowledged host edits.
+`unmarked_key_down` does not distinguish physical typing from another tool's synthetic
+input. Clipboard supersession does not identify the writer. No key codes, modifier
+values, clipboard contents, process identifiers, or application identities are added.
+The stopping reason is captured before clipboard cleanup; `restoration` independently
+reports the cleanup result. Records remain one asynchronous outcome per attempt, except
+pending restoration retains its existing synchronous policy. Export accepts old records
+without progress, but rejects incomplete progress groups and unknown stage/reason values.
 
 An unreadable or nonmatching field keeps the loan for the full 1.2-second confirmation budget.
 Timeouts stay unconfirmed in both UI and diagnostics and do not count as snippet usage.

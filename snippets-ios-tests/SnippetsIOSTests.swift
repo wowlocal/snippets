@@ -1926,6 +1926,7 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testPasteDiagnosticsExportAndRejectUnexpectedFieldsAndTypes() async throws {
         let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        // Legacy records remain exportable alongside complete new progress records.
         for outcome in DiagnosticPasteOutcome.allCases {
             let event = DiagnosticEvent.pasteDelivery(
                 outcome: outcome, restoration: .restored,
@@ -1936,6 +1937,14 @@ final class SnippetsIOSTests: XCTestCase {
             let event = DiagnosticEvent.pasteboardRecovery(outcome: restoration)
             service.emit(event, level: event.defaultLevel, synchronous: event.requiresSynchronousWrite)
         }
+        for stage in DiagnosticPasteStage.allCases {
+            for reason in DiagnosticPasteReason.allCases {
+                let event = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .superseded,
+                    durationMilliseconds: 30, hadFingerprint: false,
+                    progress: .init(stage: stage, reason: reason, plannedDeletes: 7, deleteAttempts: 1))
+                service.emit(event, level: event.defaultLevel, synchronous: false)
+            }
+        }
         let exportedURL = rootURL.appendingPathComponent("paste-export.jsonl")
         _ = try await service.export(to: exportedURL)
         let exported = try String(contentsOf: exportedURL, encoding: .utf8)
@@ -1944,23 +1953,43 @@ final class SnippetsIOSTests: XCTestCase {
         }
         XCTAssertTrue(exported.contains("\"event\":\"pasteboard_recovery\""))
         XCTAssertTrue(exported.contains("\"had_fingerprint\":true"))
+        for stage in DiagnosticPasteStage.allCases {
+            XCTAssertTrue(exported.contains("\"stage\":\"\(stage.rawValue)\""))
+        }
+        for reason in DiagnosticPasteReason.allCases {
+            XCTAssertTrue(exported.contains("\"reason\":\"\(reason.rawValue)\""))
+        }
+        XCTAssertTrue(exported.contains("\"delete_attempts\":1"))
+        XCTAssertTrue(exported.contains("\"paste_posted\":false"))
 
         let record = DiagnosticRecord(
             event: .pasteDelivery(outcome: .timedOut, restoration: .restored,
-                durationMilliseconds: 1200, hadFingerprint: false),
+                durationMilliseconds: 1200, hadFingerprint: false,
+                progress: .init(stage: .confirmation, reason: .confirmationTimedOut,
+                                plannedDeletes: 7, deleteAttempts: 7, pastePosted: true)),
             timestamp: "2026-09-15T10:00:00.000Z", elapsedMilliseconds: 1,
-            sessionIdentifier: "test-session", sequence: 1)
+            sessionIdentifier: "00000000-0000-4000-8000-000000000001", sequence: 1)
         let original = try XCTUnwrap(
             JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
         // The new schema must remain fail-closed for extra fields, wrong types, and omissions.
-        for variant in 0..<4 {
+        for variant in 0..<14 {
             var object = original
             var fields = try XCTUnwrap(object["fields"] as? [String: Any])
             switch variant {
             case 0: fields["clipboard"] = "PRIVATE-BODY-SENTINEL"
             case 1: fields["had_fingerprint"] = "false"
             case 2: fields["duration_ms"] = true
-            default: fields.removeValue(forKey: "restoration")
+            case 3: fields.removeValue(forKey: "restoration")
+            case 4: fields["reason"] = "PRIVATE-BODY-SENTINEL"
+            case 5: fields["stage"] = "unknown"
+            case 6: fields["delete_attempts"] = -1
+            case 7: fields["planned_deletes"] = 10_001
+            case 8: fields["delete_attempts"] = true
+            case 9: fields["paste_posted"] = "false"
+            case 10: fields.removeValue(forKey: "reason")
+            case 11: fields["planned_deletes"] = 1.5
+            case 12: fields["outcome"] = "unknown"
+            default: fields["duration_ms"] = -1
             }
             object["fields"] = fields
             var data = try JSONSerialization.data(withJSONObject: object)

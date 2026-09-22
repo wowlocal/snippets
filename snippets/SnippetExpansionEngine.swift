@@ -52,6 +52,7 @@ final class SnippetExpansionEngine {
     /// Bumped whenever the caret may have moved, so a queued delete count that no longer describes
     /// the text before it is discarded rather than applied to whatever is there now.
     private var injectionContextGeneration: UInt = 0
+    private var injectionInvalidationReason: DiagnosticPasteReason = .contextChanged
     private var activePasteboardLease: TemporaryPasteboardLease?
     /// The lease currently being consumed by a posted paste. It must not be restored merely
     /// because Quit, sleep, or another command arrived while the host was still accepting Cmd+V.
@@ -308,7 +309,7 @@ final class SnippetExpansionEngine {
                       SnippetInjectionGate.pointerInteractionInvalidatesContext(
                           secureAuthenticationTargetPID: self.secureSuggestionAuthenticationTargetPID)
                 else { return }
-                self.resetTypingContext()
+                self.resetTypingContext(reason: .pointerInteraction)
             }
         }
 
@@ -335,7 +336,7 @@ final class SnippetExpansionEngine {
                         secureExpansionTargetPID: self.secureExpansionActivationTargetPID,
                         secureEventInputEnabled: self.secureEventInputEnabled
                     ) {
-                        self.resetTypingContext()
+                        self.resetTypingContext(reason: .applicationActivation)
                     }
                 }
             }
@@ -348,10 +349,11 @@ final class SnippetExpansionEngine {
     /// The typed buffer and suggestion session describe text immediately
     /// before the caret; once the caret or focus may have moved, that state
     /// must not authorize deletions any more.
-    private func resetTypingContext() {
+    private func resetTypingContext(reason: DiagnosticPasteReason = .contextChanged) {
         typedBuffer = ""
         // Anything already queued was measured against a caret that has since moved.
         injectionContextGeneration &+= 1
+        injectionInvalidationReason = reason
         dismissSuggestions()
     }
 
@@ -463,6 +465,7 @@ final class SnippetExpansionEngine {
             return
         }
         injectionContextGeneration &+= 1
+        injectionInvalidationReason = .monitorsRestarted
         injectionQueue.cancelAll()
         stopSuggestionSecureInputWatchdog()
         finishPendingPasteboardOwnership(schedulingRetryOnFailure: true)
@@ -1245,6 +1248,7 @@ final class SnippetExpansionEngine {
         // deleted. Queued/not-yet-started work is still invalidated below.
         if pasteboardInjectionLease == nil {
             injectionContextGeneration &+= 1
+            injectionInvalidationReason = .quitting
         }
         injectionQueue.cancelAll()
         pasteboardRestoreRetryWorkItem?.cancel()
@@ -1305,9 +1309,10 @@ final class SnippetExpansionEngine {
         guard !isPreparingForTermination || pasteboardInjectionLease != nil else { return false }
         let origin = SnippetSyntheticEvent.origin(eventUserData: eventUserData)
         let isAuthenticatingSecureSuggestion = secureSuggestionAuthenticationTargetPID != nil
+        let secureInputEnabled = secureEventInputEnabled
         switch SnippetInjectionGate.inputDisposition(
             origin: origin,
-            secureEventInputEnabled: secureEventInputEnabled,
+            secureEventInputEnabled: secureInputEnabled,
             isListening: listening,
             isInjecting: isInjecting,
             ownAppIsFrontmost: frontmostProcessIsThisApp(),
@@ -1320,10 +1325,11 @@ final class SnippetExpansionEngine {
             // that target plus its exact trigger are revalidated after the prompt.
             if origin == .user, isInjecting, !isAuthenticatingSecureSuggestion {
                 injectionContextGeneration &+= 1
+                injectionInvalidationReason = .unmarkedKeyDown
             }
             return false
         case .resetAndPassThrough:
-            resetTypingContext()
+            resetTypingContext(reason: secureInputEnabled ? .secureInputEnabled : .ownAppFrontmost)
             return false
         case .process:
             break
@@ -1435,7 +1441,7 @@ final class SnippetExpansionEngine {
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.secureEventInputEnabled else { return }
-                self.resetTypingContext()
+                self.resetTypingContext(reason: .secureInputEnabled)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -2983,15 +2989,32 @@ final class SnippetExpansionEngine {
         targetPID: pid_t?,
         allowingTerminationDrain: Bool = false
     ) -> String? {
-        if isPreparingForTermination, !allowingTerminationDrain { return "the app is quitting" }
-        if generation != injectionContextGeneration { return "the input context changed before insertion" }
-        if !listening { return "global expansion stopped before insertion" }
-        if secureEventInputEnabled { return "macOS still had secure keyboard entry enabled" }
+        switch injectionBlockReason(generation: generation, targetPID: targetPID,
+                                    allowingTerminationDrain: allowingTerminationDrain) {
+        case nil: return nil
+        case .quitting: return "the app is quitting"
+        case .listeningStopped: return "global expansion stopped before insertion"
+        case .secureInputEnabled: return "macOS still had secure keyboard entry enabled"
+        case .ownAppFrontmost: return "Snippets itself became the target"
+        case .frontmostAppChanged: return "another app became active before insertion"
+        default: return "the input context changed before insertion"
+        }
+    }
+
+    private func injectionBlockReason(
+        generation: UInt,
+        targetPID: pid_t?,
+        allowingTerminationDrain: Bool = false
+    ) -> DiagnosticPasteReason? {
+        if isPreparingForTermination, !allowingTerminationDrain { return .quitting }
+        if generation != injectionContextGeneration { return injectionInvalidationReason }
+        if !listening { return .listeningStopped }
+        if secureEventInputEnabled { return .secureInputEnabled }
         guard let targetPID else {
-            return frontmostProcessIsThisApp() ? "Snippets itself became the target" : nil
+            return frontmostProcessIsThisApp() ? .ownAppFrontmost : nil
         }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
-            return "another app became active before insertion"
+            return .frontmostAppChanged
         }
         return nil
     }
@@ -3255,30 +3278,49 @@ final class SnippetExpansionEngine {
         var diagnosticOutcome: DiagnosticPasteOutcome = .interrupted
         var diagnosticLease: TemporaryPasteboardLease?
         var hadFingerprint = false
+        var progress = DiagnosticPasteProgress(plannedDeletes: characterCount)
+        // Capture the reason at the guard that actually stops insertion, before cleanup.
+        func insertionIsAllowed(allowingTerminationDrain: Bool = false) -> Bool {
+            if let reason = injectionBlockReason(generation: generation, targetPID: targetPID,
+                                                 allowingTerminationDrain: allowingTerminationDrain) {
+                progress.reason = reason
+                return false
+            }
+            if let expectedFocusedElement, !currentFocusMatches(expectedFocusedElement) {
+                progress.reason = .focusedElementChanged
+                return false
+            }
+            return true
+        }
         defer {
             let elapsed = start.duration(to: .now).components
             Diagnostics.record(.pasteDelivery(
                 outcome: diagnosticOutcome,
                 restoration: pasteboardRestoration(for: diagnosticLease),
                 durationMilliseconds: elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000,
-                hadFingerprint: hadFingerprint))
+                hadFingerprint: hadFingerprint, progress: progress))
         }
-        guard injectionIsAllowed(generation: generation, targetPID: targetPID),
-              expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true
-        else { return .failed }
+        guard insertionIsAllowed() else { return .failed }
         // Build the complete shortcut before borrowing the clipboard or deleting the trigger.
+        progress.stage = .eventPreparation
         guard let pasteEvents = makePasteShortcutEvents() else {
             diagnosticOutcome = .eventCreationFailed
+            progress.reason = .eventCreationFailed
             return .failed
         }
         // Borrowed before a single character is deleted: a pasteboard we cannot borrow safely must
         // cost the user nothing, and once the trigger is gone "nothing" is no longer on the table.
+        progress.stage = .clipboardAcquisition
         guard beginPasteboardLease(placing: replacement, isConcealed: isConcealed) else {
             diagnosticOutcome = .clipboardUnavailable
+            progress.reason = .clipboardUnavailable
             diagnosticLease = activePasteboardLease
             return .failed
         }
+        diagnosticLease = activePasteboardLease
         guard let lease = activePasteboardLease, lease.isOwned else {
+            diagnosticOutcome = .pasteboardSuperseded
+            progress.reason = .pasteboardSuperseded
             finishPendingPasteboardOwnership()
             return .failed
         }
@@ -3293,14 +3335,9 @@ final class SnippetExpansionEngine {
 
         // Delete trigger text one character at a time with a small delay to avoid
         // dropped synthetic key events in some host apps.
+        progress.stage = .triggerDeletion
         for index in 0..<characterCount {
-            guard injectionIsAllowed(
-                generation: generation,
-                targetPID: targetPID,
-                allowingTerminationDrain: true
-            ),
-                  expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true
-            else {
+            guard insertionIsAllowed(allowingTerminationDrain: true) else {
                 finishPendingPasteboardOwnership(
                     schedulingRetryOnFailure: true,
                     finishingInFlightLease: lease
@@ -3308,6 +3345,7 @@ final class SnippetExpansionEngine {
                 return .failed
             }
             postKeyStroke(keyCode: UInt16(kVK_Delete))
+            progress.deleteAttempts += 1
             if index < characterCount - 1 {
                 await settle(for: injectedKeyDelay)
             }
@@ -3315,18 +3353,18 @@ final class SnippetExpansionEngine {
         // Past here the trigger is gone, so bailing out would leave the user with neither their text
         // nor the snippet. These waits are deliberately not cancellable: a cancelled `Task.sleep`
         // returns at once and would rush the paste into a host still applying our deletions.
+        progress.stage = .prePaste
         if characterCount > 0 { await settle(for: injectedKeyDelay) }
         await settle(for: prePasteDelayAfterDelete)
         await settle(for: pasteboardWriteSettleDelay)
 
         guard activePasteboardLease === lease, lease.isOwned else {
             diagnosticOutcome = .pasteboardSuperseded
+            progress.reason = .pasteboardSuperseded
             finishPendingPasteboardOwnership(finishingInFlightLease: lease)
             return .failed
         }
-        guard injectionIsAllowed(
-            generation: generation, targetPID: targetPID, allowingTerminationDrain: true),
-              expectedFocusedElement.map({ currentFocusMatches($0) }) ?? true else {
+        guard insertionIsAllowed(allowingTerminationDrain: true) else {
             finishPendingPasteboardOwnership(
                 schedulingRetryOnFailure: true,
                 finishingInFlightLease: lease
@@ -3341,6 +3379,8 @@ final class SnippetExpansionEngine {
         hadFingerprint = baseline != nil
         // One uninterrupted burst, with every event already allocated and tagged.
         for event in pasteEvents { event.post(tap: .cghidEventTap) }
+        progress.pastePosted = true
+        progress.stage = .confirmation
         let verdict = await waitForPasteConfirmation(
             pastedText: replacement,
             baseline: baseline,
@@ -3349,6 +3389,16 @@ final class SnippetExpansionEngine {
             expectedFocusedElement: confirmationElement
         )
         diagnosticOutcome = verdict.diagnosticOutcome
+        switch verdict {
+        case .confirmed, .keepWaiting: progress.reason = .none
+        case .timedOut: progress.reason = .confirmationTimedOut
+        case .abandoned(.pasteboardSuperseded): progress.reason = .pasteboardSuperseded
+        case .abandoned(.secureInputEnabled): progress.reason = .secureInputEnabled
+        case .abandoned(.frontmostAppChanged): progress.reason = .frontmostAppChanged
+        case .abandoned(.focusedElementChanged): progress.reason = .focusedElementChanged
+        case .abandoned(.newExpansionStarted): progress.reason = .newExpansionStarted
+        case .abandoned(.applicationTerminating): progress.reason = .quitting
+        }
         let restored = finishPendingPasteboardOwnership(
             schedulingRetryOnFailure: true,
             finishingInFlightLease: lease

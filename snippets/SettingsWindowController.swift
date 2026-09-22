@@ -3625,7 +3625,7 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         let privacy = makeTertiaryLabel(
             "Exports are plaintext JSON Lines. They can include app and OS versions, "
             + "operation counts, CloudKit callback and scheduler states, sign-in stages and HTTP status codes, error families and "
-            + "numeric codes, paste outcomes, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry counts and numeric AX codes, and secure-snippet keywords. When expansion verbose logging is "
+            + "numeric codes, paste outcomes, insertion stages, interruption reasons, delete-attempt counts, paste-dispatch status, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry counts and numeric AX codes, and secure-snippet keywords. When expansion verbose logging is "
             + "enabled, they can also include "
             + "content-free Accessibility stages, outcomes, state transitions, query lengths, "
             + "and numeric AX error codes. Snippet bodies, names, tags, paths, record IDs, keys and "
