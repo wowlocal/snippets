@@ -2157,6 +2157,84 @@ final class SnippetsIOSTests: XCTestCase {
         }
     }
 
+    func testSelectionConfirmationExportRequiresCompleteClosedBoundedFields() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        for phase in DiagnosticSelectionPhase.allCases {
+            for observation in DiagnosticSelectionObservation.allCases {
+                let event = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .restored,
+                    durationMilliseconds: 30, hadFingerprint: false,
+                    progress: .init(transport: .selectionPaste, selectionRestoration: .timedOut,
+                        selectionConfirmation: .init(phase: phase, observation: observation,
+                            writeAttempted: true, polls: 3, waitMilliseconds: 24)))
+                service.emit(event, level: event.defaultLevel, synchronous: false)
+            }
+        }
+        let destination = rootURL.appendingPathComponent("selection-confirmation.jsonl")
+        _ = try await service.export(to: destination)
+        let exported = try String(contentsOf: destination, encoding: .utf8)
+        for phase in DiagnosticSelectionPhase.allCases {
+            XCTAssertTrue(exported.contains("\"selection_phase\":\"\(phase.rawValue)\""))
+        }
+        for observation in DiagnosticSelectionObservation.allCases {
+            XCTAssertTrue(exported.contains("\"selection_observation\":\"\(observation.rawValue)\""))
+        }
+        XCTAssertTrue(exported.contains("\"selection_write_attempted\":true"))
+        XCTAssertTrue(exported.contains("\"selection_polls\":3"))
+        XCTAssertTrue(exported.contains("\"selection_wait_ms\":24"))
+        XCTAssertTrue(exported.contains("\"selection_restoration\":\"timed_out\""))
+
+        let record = DiagnosticRecord(
+            event: .pasteDelivery(outcome: .interrupted, restoration: .restored,
+                durationMilliseconds: 30, hadFingerprint: false,
+                progress: .init(transport: .selectionPaste, selectionConfirmation: .init())),
+            timestamp: "2026-09-22T10:00:00.000Z", elapsedMilliseconds: 1,
+            sessionIdentifier: "00000000-0000-4000-8000-000000000001", sequence: 1)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        let confirmationKeys = ["selection_phase", "selection_observation", "selection_write_attempted",
+                                "selection_polls", "selection_wait_ms"]
+        for variant in 0..<22 {
+            var object = original
+            var fields = try XCTUnwrap(object["fields"] as? [String: Any])
+            switch variant {
+            case 0: fields["selection_phase"] = "PRIVATE-BODY-SENTINEL"
+            case 1: fields["selection_observation"] = "PRIVATE-BODY-SENTINEL"
+            case 2: fields["selection_phase"] = true
+            case 3: fields["selection_observation"] = 1
+            case 4: fields["selection_write_attempted"] = "true"
+            case 5: fields["selection_write_attempted"] = 1
+            case 6: fields["selection_polls"] = true
+            case 7: fields["selection_polls"] = -1
+            case 8: fields["selection_polls"] = 41
+            case 9: fields["selection_polls"] = 1.5
+            case 10: fields["selection_wait_ms"] = true
+            case 11: fields["selection_wait_ms"] = -1
+            case 12: fields["selection_wait_ms"] = 600_001
+            case 13: fields["selection_wait_ms"] = 0.5
+            case 14...18: fields.removeValue(forKey: confirmationKeys[variant - 14])
+            case 19: fields["transport"] = "backspace_paste"
+            case 20:
+                for key in ["transport", "selection", "selection_restoration"] { fields.removeValue(forKey: key) }
+            default:
+                for key in ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
+                            "transport", "selection", "selection_restoration"] { fields.removeValue(forKey: key) }
+            }
+            object["fields"] = fields
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            let injectedURL = SnippetStorageLocations.diagnosticsLogsFolderURL
+                .appendingPathComponent("snippets-selection-injected.jsonl")
+            try data.write(to: injectedURL)
+            let rejectedURL = rootURL.appendingPathComponent("rejected-selection-\(variant).jsonl")
+            do {
+                _ = try await service.export(to: rejectedURL)
+                XCTFail("Invalid selection confirmation fields must be rejected")
+            } catch DiagnosticsExportError.corruptLog {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: rejectedURL.path))
+            }
+            try FileManager.default.removeItem(at: injectedURL)
+        }
+    }
+
     func testDiagnosticsExportRejectsFieldsOutsideClosedPrivacySchema() async throws {
         let service = DiagnosticsService(
             registerGlobally: false,

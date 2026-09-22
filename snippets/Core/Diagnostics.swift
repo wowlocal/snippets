@@ -556,6 +556,7 @@ nonisolated enum DiagnosticPasteReason: String, Sendable, CaseIterable {
     case selectionUnavailable = "selection_unavailable"
     case selectionChanged = "selection_changed"
     case selectionWriteFailed = "selection_write_failed"
+    case selectionConfirmationTimedOut = "selection_confirmation_timed_out"
     case targetUnavailable = "target_unavailable"
     case triggerChanged = "trigger_changed"
 }
@@ -577,6 +578,7 @@ nonisolated enum DiagnosticPasteSelectionRestoration: String, Sendable, CaseIter
     case restored
     case skippedContextChanged = "skipped_context_changed"
     case failed
+    case timedOut = "timed_out"
 }
 
 nonisolated enum DiagnosticPasteAccessibilityOutcome: String, Sendable, CaseIterable {
@@ -601,6 +603,31 @@ nonisolated enum DiagnosticPasteInterruptionOrigin: String, Sendable, CaseIterab
     case otherProcess = "other_process"
 }
 
+/// Content-free classifications of asynchronous selection proof, without ranges or text.
+nonisolated enum DiagnosticSelectionPhase: String, Sendable, CaseIterable {
+    case originalValidation = "original_validation"
+    case selectionRequest = "selection_request"
+    case confirmation
+    case finalValidation = "final_validation"
+}
+
+nonisolated enum DiagnosticSelectionObservation: String, Sendable, CaseIterable {
+    case notRead = "not_read"
+    case original
+    case replacement
+    case rangeChanged = "range_changed"
+    case textChanged = "text_changed"
+    case unavailable
+}
+
+nonisolated struct DiagnosticSelectionConfirmation: Equatable, Sendable {
+    var phase: DiagnosticSelectionPhase = .originalValidation
+    var observation: DiagnosticSelectionObservation = .notRead
+    var writeAttempted = false
+    var polls = 0
+    var waitMilliseconds: Int64 = 0
+}
+
 /// Content-free progress for a single aggregate paste record. Counts describe attempted
 /// synthetic deletes, never proof that the receiving app deleted that many characters.
 nonisolated struct DiagnosticPasteProgress: Sendable, Equatable {
@@ -615,6 +642,7 @@ nonisolated struct DiagnosticPasteProgress: Sendable, Equatable {
     var selectionRestoration: DiagnosticPasteSelectionRestoration = .notNeeded
     var interruptionOrigin: DiagnosticPasteInterruptionOrigin? = nil
     var accessibilityOutcome: DiagnosticPasteAccessibilityOutcome? = nil
+    var selectionConfirmation: DiagnosticSelectionConfirmation? = nil
 }
 
 nonisolated enum DiagnosticMetricKind: String, Codable, Sendable {
@@ -1121,6 +1149,13 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
                 }
                 if let outcome = progress.accessibilityOutcome {
                     fields["ax_replacement_outcome"] = .string(outcome.rawValue)
+                }
+                if let confirmation = progress.selectionConfirmation, progress.transport == .selectionPaste {
+                    fields["selection_phase"] = .string(confirmation.phase.rawValue)
+                    fields["selection_observation"] = .string(confirmation.observation.rawValue)
+                    fields["selection_write_attempted"] = .boolean(confirmation.writeAttempted)
+                    fields["selection_polls"] = .integer(Int64(min(40, max(0, confirmation.polls))))
+                    fields["selection_wait_ms"] = .integer(min(600_000, max(0, confirmation.waitMilliseconds)))
                 }
             }
             return fields

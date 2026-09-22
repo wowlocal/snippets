@@ -528,7 +528,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             required: ["outcome", "restoration", "duration_ms", "had_fingerprint"],
             optional: ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
                        "transport", "selection", "selection_restoration", "interruption_origin",
-                       "ax_replacement_outcome"]),
+                       "ax_replacement_outcome", "selection_phase", "selection_observation",
+                       "selection_write_attempted", "selection_polls", "selection_wait_ms"]),
         "pasteboard_recovery": ExportEventSchema(
             category: "integration", required: ["outcome"]),
         "secure_paste": ExportEventSchema(
@@ -560,11 +561,12 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "state_before", "state_after", "stage", "failure", "exported_at",
         "oldest_entry_at", "newest_entry_at", "endpoint", "restoration", "target", "transport",
         "selection", "selection_restoration", "interruption_origin", "ax_replacement_outcome",
+        "selection_phase", "selection_observation",
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",
         "submit_active", "generation_sealed", "stored_session_present", "available", "had_fingerprint",
-        "paste_posted", "text_write_attempted",
+        "paste_posted", "text_write_attempted", "selection_write_attempted",
     ]
     private static let exportNumericFields: Set<String> = [
         "error_code", "attempt", "value", "conflict_copies", "keyword_collisions",
@@ -573,7 +575,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "file_count", "byte_count", "skipped_trailing_lines", "query_length",
         "ax_error_code", "fetch_depth", "pending_generation_count",
         "unready_generation_count", "http_status", "attempts",
-        "planned_deletes", "delete_attempts",
+        "planned_deletes", "delete_attempts", "selection_polls", "selection_wait_ms",
     ]
 
     private func makeExport(at destination: URL) throws -> DiagnosticsExportResult {
@@ -764,10 +766,13 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         // must be complete; accepting partial groups would conceal corrupt diagnostics.
         let progressFields: Set<String> = ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted"]
         let selectionFields: Set<String> = ["transport", "selection", "selection_restoration"]
+        let confirmationFields: Set<String> = ["selection_phase", "selection_observation",
+            "selection_write_attempted", "selection_polls", "selection_wait_ms"]
         let fieldNames = Set(fields.keys)
         if progressFields.isDisjoint(with: fieldNames) {
             return selectionFields.isDisjoint(with: fieldNames)
                 && fields["interruption_origin"] == nil && fields["ax_replacement_outcome"] == nil
+                && confirmationFields.isDisjoint(with: fieldNames)
         }
         guard progressFields.isSubset(of: fieldNames),
               let stage = fields["stage"] as? String, DiagnosticPasteStage(rawValue: stage) != nil,
@@ -789,6 +794,20 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         }
         if let outcome = fields["ax_replacement_outcome"] {
             guard let value = outcome as? String, DiagnosticPasteAccessibilityOutcome(rawValue: value) != nil
+            else { return false }
+        }
+        if !confirmationFields.isDisjoint(with: fieldNames) {
+            guard confirmationFields.isSubset(of: fieldNames),
+                  selectionFields.isSubset(of: fieldNames),
+                  fields["transport"] as? String == DiagnosticPasteTransport.selectionPaste.rawValue,
+                  let phase = fields["selection_phase"] as? String,
+                  DiagnosticSelectionPhase(rawValue: phase) != nil,
+                  let observation = fields["selection_observation"] as? String,
+                  DiagnosticSelectionObservation(rawValue: observation) != nil,
+                  let polls = fields["selection_polls"] as? NSNumber,
+                  (0...40).contains(polls.doubleValue), polls.doubleValue.rounded(.towardZero) == polls.doubleValue,
+                  let wait = fields["selection_wait_ms"] as? NSNumber,
+                  (0...600_000).contains(wait.doubleValue), wait.doubleValue.rounded(.towardZero) == wait.doubleValue
             else { return false }
         }
         return ["planned_deletes", "delete_attempts"].allSatisfy { key in

@@ -529,6 +529,18 @@ struct TextReplacementTests {
                 readSelectedText: { "xy" }) == .rejected)
         }
 
+        @Test func selectionObservationSeparatesLagFromRangeTextAndUnicodeConflicts() throws {
+            let proof = try #require(VerifiedTriggerSelection.make(deletion: .localTracking(query: "é"),
+                textBeforeCaret: "😀 \\é", originalSelection: NSRange(location: 5, length: 2), selectedText: "xy"))
+            #expect(proof.observation(range: proof.originalSelection, text: "\\éxy") == .original)
+            #expect(proof.observation(range: proof.replacementRange, text: "\\éxy") == .replacement)
+            #expect(proof.observation(range: proof.originalSelection, text: "\\exy") == .textChanged)
+            #expect(proof.observation(range: proof.originalSelection, text: "\\e\u{301}xy") == .textChanged)
+            #expect(proof.observation(range: NSRange(location: 0, length: 0), text: nil) == .rangeChanged)
+            #expect(proof.observation(range: proof.originalSelection, text: nil) == .unavailable)
+            #expect(proof.observation(range: nil, text: "\\éxy") == .unavailable)
+        }
+
         @Test func negativeMissingAndOverflowingRangesAreRefusedWithoutArithmeticTraps() {
             let ranges = [
                 NSRange(location: -1, length: 0),
@@ -605,12 +617,20 @@ struct TextReplacementTests {
     // MARK: Native paste transaction
 
     @Suite("Selection paste transaction")
+    @MainActor
     struct SelectionPasteTransactionTests {
         private final class Host {
             var clipboardIsOwned = true
             var focusMatches = true
             var originalMatches = true
             var triggerIsSelected = false
+            var editorIsSelected = false
+            var cacheDelay = 0
+            var editorDelay = 0
+            var waits = 0
+            var clock = ContinuousClock.now
+            var observationOverride: TriggerSelectionObservation?
+            var lastProgress = SelectionPasteTransaction.Progress()
             var setterSucceeds = true
             var setterApplies = true
             var posts = 0
@@ -621,39 +641,53 @@ struct TextReplacementTests {
             var duringSelectedProof: ((Int) -> Void)?
             var duringSelectionWrite: (() -> Void)?
             var duringBaselineRead: (() -> Void)?
+            var duringWait: ((Int) -> Void)?
 
-            func run() -> SelectionPasteTransaction.Result {
-                SelectionPasteTransaction.run(
+            func run() async -> SelectionPasteTransaction.Result {
+                let report = await SelectionPasteTransaction.run(
                     contextIsValid: { self.clipboardIsOwned && self.focusMatches },
-                    originalSelectionMatches: {
-                        self.duringOriginalProof?()
-                        return self.originalMatches
+                    observeSelection: {
+                        if self.selectionWrites == 0 {
+                            self.duringOriginalProof?()
+                            return self.originalMatches ? .original : .rangeChanged
+                        }
+                        self.proofReads += 1
+                        let observation = self.observationOverride
+                            ?? (self.triggerIsSelected ? .replacement : .original)
+                        self.duringSelectedProof?(self.proofReads)
+                        return observation
                     },
                     selectTrigger: {
                         self.selectionWrites += 1
-                        self.triggerIsSelected = self.setterApplies
+                        self.editorIsSelected = self.setterApplies && self.editorDelay == 0
+                        self.triggerIsSelected = self.editorIsSelected && self.cacheDelay == 0
                         self.duringSelectionWrite?()
                         return self.setterSucceeds
-                    },
-                    selectedTriggerMatches: {
-                        self.proofReads += 1
-                        // Simulate an AX reply that was true when requested, with another
-                        // process changing context while that request is in flight.
-                        let matchedAtRead = self.triggerIsSelected
-                        self.duringSelectedProof?(self.proofReads)
-                        return matchedAtRead
                     },
                     captureBaseline: {
                         self.baselineReads += 1
                         self.duringBaselineRead?()
                     },
-                    postPaste: { self.posts += 1 })
+                    postPaste: {
+                        #expect(self.editorIsSelected, "Never paste into an unselected live editor")
+                        self.posts += 1
+                    },
+                    wait: { duration in
+                        self.clock = self.clock.advanced(by: duration)
+                        self.waits += 1
+                        if self.setterApplies, self.waits >= self.editorDelay { self.editorIsSelected = true }
+                        if self.editorIsSelected, self.waits >= self.cacheDelay { self.triggerIsSelected = true }
+                        self.duringWait?(self.waits)
+                    },
+                    now: { self.clock })
+                lastProgress = report.progress
+                return report.result
             }
         }
 
-        @Test func oneVerifiedSelectionProducesExactlyOnePaste() {
+        @Test func oneVerifiedSelectionProducesExactlyOnePaste() async {
             let host = Host()
-            #expect(host.run() == .posted)
+            #expect(await host.run() == .posted)
             #expect(host.selectionWrites == 1)
             #expect(host.posts == 1)
             #expect(host.baselineReads == 1)
@@ -661,62 +695,62 @@ struct TextReplacementTests {
             // No text-delete callback exists: the host's native paste owns the one text mutation.
         }
 
-        @Test func clipboardSupersessionBeforeSelectionCostsNoHostMutation() {
+        @Test func clipboardSupersessionBeforeSelectionCostsNoHostMutation() async {
             let host = Host()
             host.duringOriginalProof = { host.clipboardIsOwned = false }
-            #expect(host.run() == .contextChanged)
+            #expect(await host.run() == .contextChanged)
             #expect(host.selectionWrites == 0)
             #expect(host.posts == 0)
         }
 
-        @Test func clipboardSupersessionAfterSelectionNeverDispatchesPaste() {
+        @Test func clipboardSupersessionAfterSelectionNeverDispatchesPaste() async {
             let host = Host()
             host.duringSelectionWrite = { host.clipboardIsOwned = false }
-            #expect(host.run() == .contextChanged)
+            #expect(await host.run() == .contextChanged)
             #expect(host.selectionWrites == 1)
             #expect(host.posts == 0)
         }
 
-        @Test func focusMovementDuringTheLastAXReadCannotReceiveThePaste() {
+        @Test func focusMovementDuringTheLastAXReadCannotReceiveThePaste() async {
             let host = Host()
             host.duringSelectedProof = { read in
                 if read == 2 { host.focusMatches = false }
             }
-            #expect(host.run() == .contextChanged)
+            #expect(await host.run() == .contextChanged)
             #expect(host.proofReads == 2)
             #expect(host.posts == 0)
         }
 
-        @Test func clipboardSupersessionDuringTheLastAXReadCannotPasteNewClipboardContents() {
+        @Test func clipboardSupersessionDuringTheLastAXReadCannotPasteNewClipboardContents() async {
             let host = Host()
             host.duringSelectedProof = { read in
                 if read == 2 { host.clipboardIsOwned = false }
             }
-            #expect(host.run() == .contextChanged)
+            #expect(await host.run() == .contextChanged)
             #expect(host.posts == 0)
         }
 
-        @Test func aBaselineReadThatChangesTheSelectionRevokesTheProof() {
+        @Test func aBaselineReadThatChangesTheSelectionRevokesTheProof() async {
             let host = Host()
             host.duringBaselineRead = { host.triggerIsSelected = false }
-            #expect(host.run() == .selectionChanged)
+            #expect(await host.run() == .selectionChanged)
             #expect(host.baselineReads == 1)
             #expect(host.posts == 0)
         }
 
-        @Test func anIgnoredSelectionSetterDoesNotAuthorizePaste() {
+        @Test func anIgnoredSelectionSetterDoesNotAuthorizePaste() async {
             let host = Host()
             host.setterApplies = false
-            #expect(host.run() == .selectionChanged)
+            #expect(await host.run() == .selectionTimedOut)
             #expect(host.selectionWrites == 1)
             #expect(host.posts == 0)
             #expect(host.baselineReads == 0)
         }
 
-        @Test func aFailedSetterNeverRetriesEvenIfItChangedTheHostSelection() {
+        @Test func aFailedSetterNeverRetriesEvenIfItChangedTheHostSelection() async {
             let host = Host()
             host.setterSucceeds = false
-            #expect(host.run() == .selectionWriteFailed)
+            #expect(await host.run() == .selectionWriteFailed)
             #expect(host.triggerIsSelected,
                     "a failed reply is ambiguous; conservative restoration belongs to the caller")
             #expect(host.selectionWrites == 1)
@@ -724,21 +758,208 @@ struct TextReplacementTests {
             #expect(host.proofReads == 0)
         }
 
-        @Test func anAlreadyChangedOriginalSelectionIsNeverOverwritten() {
+        @Test func anAlreadyChangedOriginalSelectionIsNeverOverwritten() async {
             let host = Host()
             host.originalMatches = false
-            #expect(host.run() == .originalSelectionChanged)
+            #expect(await host.run() == .originalSelectionChanged)
             #expect(host.selectionWrites == 0)
             #expect(host.posts == 0)
         }
 
-        @Test func anAlreadyInvalidContextDoesNotTouchTheHost() {
+        @Test func anAlreadyInvalidContextDoesNotTouchTheHost() async {
             let host = Host()
             host.focusMatches = false
-            #expect(host.run() == .contextChanged)
+            #expect(await host.run() == .contextChanged)
             #expect(host.selectionWrites == 0)
             #expect(host.proofReads == 0)
             #expect(host.posts == 0)
+        }
+
+        @Test func browserRendererAndAXCacheMayAcknowledgeOnDifferentTurns() async {
+            let host = Host()
+            host.editorDelay = 1
+            host.cacheDelay = 4
+            #expect(await host.run() == .posted)
+            #expect(host.waits == 4)
+            #expect(host.selectionWrites == 1)
+            #expect(host.posts == 1)
+            #expect(host.lastProgress.polls == 5)
+            #expect(host.lastProgress.waitMilliseconds == 48)
+            #expect(host.lastProgress.phase == .finalValidation)
+            #expect(host.lastProgress.observation == .replacement)
+        }
+
+        @Test func visibleSelectionWithStaleOriginalAXRangeIsPendingNotAConflict() async {
+            let host = Host()
+            host.cacheDelay = 2
+            host.duringWait = { _ in #expect(host.editorIsSelected) }
+            #expect(await host.run() == .posted)
+            #expect(host.waits == 2)
+        }
+
+        @Test func temporarilyUnreadableAXReplyCanRecoverWithoutAnotherWrite() async {
+            let host = Host()
+            host.observationOverride = .unavailable
+            host.duringWait = { _ in host.observationOverride = nil }
+            #expect(await host.run() == .posted)
+            #expect(host.selectionWrites == 1)
+        }
+
+        @Test(arguments: [TriggerSelectionObservation.rangeChanged, .textChanged])
+        func realConflictsNeverWaitOrRetry(observation: TriggerSelectionObservation) async {
+            let host = Host()
+            host.observationOverride = observation
+            #expect(await host.run() == .selectionChanged)
+            #expect(host.waits == 0)
+            #expect(host.posts == 0)
+            #expect(host.lastProgress.observation == observation)
+        }
+
+        @Test func focusOrClipboardLossDuringWaitRevokesTheRequest() async {
+            for losesFocus in [true, false] {
+                let host = Host()
+                host.cacheDelay = 2
+                host.duringWait = { _ in
+                    if losesFocus { host.focusMatches = false } else { host.clipboardIsOwned = false }
+                }
+                #expect(await host.run() == .contextChanged)
+                #expect(host.posts == 0)
+                #expect(host.waits == 1)
+            }
+        }
+
+        @Test func confirmationAtOrAfterDeadlineCannotAuthorizePaste() async {
+            let host = Host()
+            host.cacheDelay = 1
+            host.duringWait = { _ in host.clock = host.clock.advanced(by: .seconds(1)) }
+            #expect(await host.run() == .selectionTimedOut)
+            #expect(host.posts == 0)
+        }
+
+        @Test func aBlockedAXReplyPastDeadlineCannotAuthorizePaste() async {
+            let host = Host()
+            host.duringSelectedProof = { _ in host.clock = host.clock.advanced(by: .seconds(1)) }
+            #expect(await host.run() == .selectionTimedOut)
+            #expect(host.posts == 0)
+            #expect(host.waits == 0)
+        }
+
+        @Test func pollLimitStillBoundsAClockOrWaitAdapterThatDoesNotAdvance() async {
+            let clock = ContinuousClock.now
+            var writes = 0
+            let report = await SelectionPasteTransaction.run(
+                contextIsValid: { true }, observeSelection: { .original },
+                selectTrigger: { writes += 1; return true }, captureBaseline: {},
+                postPaste: { Issue.record("An unacknowledged selection must never paste") },
+                wait: { _ in }, now: { clock })
+            #expect(report.result == .selectionTimedOut)
+            #expect(report.progress.polls == SelectionPasteTransaction.maximumPolls)
+            #expect(writes == 1)
+
+            var reads = 0
+            let restored = await SelectionPasteTransaction.restore(
+                contextIsValid: { true }, observeSelection: { reads += 1; return .original },
+                restoreOriginal: { Issue.record("Do not overwrite a still-pending selection"); return false },
+                wait: { _ in }, now: { clock })
+            #expect(restored == .timedOut)
+            #expect(reads == SelectionPasteTransaction.maximumPolls)
+        }
+
+        @Test func originalValidationAndFinalValidationHaveDistinctDiagnostics() async {
+            let original = Host()
+            original.originalMatches = false
+            #expect(await original.run() == .originalSelectionChanged)
+            #expect(original.lastProgress.phase == .originalValidation)
+            #expect(!original.lastProgress.writeAttempted)
+            let final = Host()
+            final.duringBaselineRead = { final.triggerIsSelected = false }
+            #expect(await final.run() == .selectionChanged)
+            #expect(final.lastProgress.phase == .finalValidation)
+            #expect(final.lastProgress.writeAttempted)
+        }
+
+        @Test func pendingSelectionAndItsRestorationBothWaitForAXAcknowledgement() async {
+            var clock = ContinuousClock.now
+            var editorSelected = true // The real field has changed, but AX still says original.
+            var cache: TriggerSelectionObservation = .original
+            var waits = 0
+            var writes = 0
+            let result = await SelectionPasteTransaction.restore(
+                contextIsValid: { true }, observeSelection: { cache },
+                restoreOriginal: { writes += 1; editorSelected = false; return true },
+                wait: { duration in
+                    clock = clock.advanced(by: duration)
+                    waits += 1
+                    if waits == 2 { cache = .replacement }
+                    if waits == 4, !editorSelected { cache = .original }
+                }, now: { clock })
+            #expect(result == .restored)
+            #expect(writes == 1)
+            #expect(waits == 4)
+            #expect(!editorSelected)
+        }
+
+        @Test func staleOriginalCannotBeReportedAsAlreadyRestored() async {
+            var clock = ContinuousClock.now
+            var writes = 0
+            let result = await SelectionPasteTransaction.restore(
+                contextIsValid: { true }, observeSelection: { .original },
+                restoreOriginal: { writes += 1; return true },
+                wait: { clock = clock.advanced(by: $0) }, now: { clock })
+            #expect(result == .timedOut)
+            #expect(writes == 0)
+        }
+
+        @Test func restorationStopsWhenUserTakesOverDuringWait() async {
+            var contextMatches = true
+            var writes = 0
+            let result = await SelectionPasteTransaction.restore(
+                contextIsValid: { contextMatches }, observeSelection: { .original },
+                restoreOriginal: { writes += 1; return true },
+                wait: { _ in contextMatches = false })
+            #expect(result == .skippedContextChanged)
+            #expect(writes == 0)
+        }
+
+        @Test func unacknowledgedRestoreIsNotRetriedOrReportedAsSuccess() async {
+            var clock = ContinuousClock.now
+            var writes = 0
+            let result = await SelectionPasteTransaction.restore(
+                contextIsValid: { true }, observeSelection: { .replacement },
+                restoreOriginal: { writes += 1; return true },
+                wait: { clock = clock.advanced(by: $0) }, now: { clock })
+            #expect(result == .timedOut)
+            #expect(writes == 1)
+        }
+
+        @Test func restorationRechecksContextAfterAStaleButMatchingReply() async {
+            var contextMatches = true
+            var writes = 0
+            let result = await SelectionPasteTransaction.restore(
+                contextIsValid: { contextMatches },
+                observeSelection: { contextMatches = false; return .replacement },
+                restoreOriginal: { writes += 1; return true }, wait: { _ in })
+            #expect(result == .skippedContextChanged)
+            #expect(writes == 0)
+        }
+
+        @Test func failedRestorationSetterIsNeverRetried() async {
+            var writes = 0
+            let result = await SelectionPasteTransaction.restore(
+                contextIsValid: { true }, observeSelection: { .replacement },
+                restoreOriginal: { writes += 1; return false }, wait: { _ in })
+            #expect(result == .failed)
+            #expect(writes == 1)
+        }
+
+        @Test(arguments: [TriggerSelectionObservation.rangeChanged, .textChanged])
+        func restorationLeavesUnrelatedSelectionsAndTextAlone(observation: TriggerSelectionObservation) async {
+            var writes = 0
+            let result = await SelectionPasteTransaction.restore(
+                contextIsValid: { true }, observeSelection: { observation },
+                restoreOriginal: { writes += 1; return true }, wait: { _ in })
+            #expect(result == .skippedContextChanged)
+            #expect(writes == 0)
         }
     }
 

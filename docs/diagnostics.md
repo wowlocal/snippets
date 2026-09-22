@@ -117,10 +117,34 @@ Clipboard attempts can include the complete group `transport`, `selection`, and
 `selection_restoration`. Transport is `insertion_only`, `selection_paste` (one paste
 over a verified trigger selection), or `backspace_paste` (legacy deletion fallback).
 Selection is `unavailable`, `verified`, or `rejected`; its restoration is `not_needed`,
-`restored`, `skipped_context_changed`, or `failed`. These fields show which path was
+`restored`, `skipped_context_changed`, `failed`, or `timed_out`. These fields show which path was
 attempted and whether an unpasted selection was safely restored, without recording
 selection coordinates, selected text, or a field identity. The selection route sends
 no synthetic deletes, so its `delete_attempts` remains zero.
+
+Selection-paste records additionally carry one complete, optional group: `selection_phase`
+(`original_validation`, `selection_request`, `confirmation`, `final_validation`),
+`selection_observation` (`not_read`, `original`, `replacement`, `range_changed`,
+`text_changed`, `unavailable`), `selection_write_attempted` (boolean), `selection_polls`
+(0–40), and `selection_wait_ms` (0–600,000). These describe the final proof and aggregate
+confirmation wait, not individual AX reads. They distinguish rejection before the setter,
+pending browser acknowledgement, a real conflict, and loss of proof after baseline capture.
+`selection_confirmation_timed_out` is distinct from a timeout after Cmd+V.
+
+The selection setter is sent once. Its unchanged original range or temporarily unreadable
+AX cache can be polled for up to 400 ms; an unrelated range or changed text aborts immediately.
+The final exact proof and context/clipboard checks still precede paste without an intervening
+await. Cleanup also waits for a pending selection before restoring it once and confirming the
+restore. A stale original-range reply alone cannot establish `not_needed`; unacknowledged
+cleanup is `timed_out`. No text is deleted, pasted, or retried on a failed selection proof.
+All fields remain content-free and are recorded without enabling verbose Accessibility logs.
+
+For opt-in GUI regression verification, run `./scripts/test-selection-paste-browser.sh`.
+It temporarily focuses an isolated Chrome profile with synthetic input, textarea and
+contenteditable fields, exercises the shipping selection transaction/clipboard lease,
+and checks the real DOM/input-event model and selection rollback. It requires Chrome
+plus Accessibility/post-event permission for the terminal. It does not open the user's
+browser profile or Snippets library; the borrowed clipboard is restored while owned.
 
 Optional `ax_replacement_outcome` records the preceding direct Accessibility attempt
 as `unavailable`, `delivered`, `rejected`, or `ambiguous`. Optional
@@ -134,7 +158,7 @@ The stopping reason is captured before clipboard cleanup; `restoration` independ
 reports the cleanup result. Records remain one asynchronous outcome per attempt, except
 pending restoration retains its existing synchronous policy. Export accepts old records
 without progress or the newer optional fields, but rejects incomplete progress or
-transport/selection groups, unknown enum values, and wrong types. The optional origin
+transport/selection or selection-confirmation groups, unknown enum values, and wrong types. The optional origin
 and Accessibility outcome fields require the complete progress group.
 
 An unreadable or nonmatching field keeps the loan for the full 1.2-second confirmation budget.

@@ -389,6 +389,39 @@ struct DiagnosticsTests {
         }
     }
 
+    @Test func selectionConfirmationDiagnosticsAreClosedBoundedAndOptional() {
+        for phase in SelectionPasteTransaction.Phase.allCases {
+            for observation in TriggerSelectionObservation.allCases {
+                let event = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .restored,
+                    durationMilliseconds: 0, hadFingerprint: false,
+                    progress: .init(transport: .selectionPaste,
+                        selectionConfirmation: .init(phase: phase, observation: observation,
+                            writeAttempted: true, polls: .max, waitMilliseconds: .max)))
+                #expect(Set(event.fields.keys) == ["outcome", "restoration", "duration_ms", "had_fingerprint",
+                    "stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
+                    "transport", "selection", "selection_restoration", "selection_phase",
+                    "selection_observation", "selection_write_attempted", "selection_polls", "selection_wait_ms"])
+                #expect(event.fields["selection_phase"] == .string(phase.rawValue))
+                #expect(event.fields["selection_observation"] == .string(observation.rawValue))
+                #expect(event.fields["selection_write_attempted"] == .boolean(true))
+                #expect(event.fields["selection_polls"] == .integer(40))
+                #expect(event.fields["selection_wait_ms"] == .integer(600_000))
+                #expect(!event.requiresSynchronousWrite)
+            }
+        }
+        let negative = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .restored,
+            durationMilliseconds: 0, hadFingerprint: false,
+            progress: .init(transport: .selectionPaste,
+                selectionConfirmation: .init(polls: .min, waitMilliseconds: .min)))
+        #expect(negative.fields["selection_polls"] == .integer(0))
+        #expect(negative.fields["selection_wait_ms"] == .integer(0))
+        #expect(negative.fields["selection_write_attempted"] == .boolean(false))
+        let unrelated = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .restored,
+            durationMilliseconds: 0, hadFingerprint: false,
+            progress: .init(transport: .backspacePaste, selectionConfirmation: .init()))
+        #expect(unrelated.fields["selection_phase"] == nil)
+    }
+
     @Test func expansionAccessibilityPersistsOnlyClosedContentFreeFacts() throws {
         let record = DiagnosticRecord(
             event: .expansionAccessibility(

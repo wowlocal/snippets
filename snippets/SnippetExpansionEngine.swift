@@ -3540,6 +3540,43 @@ final class SnippetExpansionEngine {
         return proof.matches(range: proof.replacementRange, text: text)
     }
 
+    private func observeTriggerSelection(_ prepared: PreparedTriggerSelection) -> TriggerSelectionObservation {
+        let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                       perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+        let actual = selectedRange(of: prepared.element, axBudget: budget)
+            .map { NSRange(location: $0.location, length: $0.length) }
+        let proof = prepared.verification
+        // Avoid fetching any text at a range that already proves a conflict.
+        guard actual == proof.originalSelection || actual == proof.replacementRange else {
+            return actual == nil ? .unavailable : .rangeChanged
+        }
+        let text = stringForRange(of: prepared.element,
+            range: CFRange(location: proof.replacementRange.location, length: proof.replacementRange.length),
+            axBudget: budget)
+        return proof.observation(range: actual, text: text)
+    }
+
+    private func restorePendingTriggerSelection(
+        _ prepared: PreparedTriggerSelection, generation: UInt, targetPID: pid_t?
+    ) async -> DiagnosticPasteSelectionRestoration {
+        await SelectionPasteTransaction.restore(
+            contextIsValid: {
+                let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                               perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+                return injectionIsAllowed(generation: generation, targetPID: targetPID,
+                                          allowingTerminationDrain: true)
+                    && currentFocusMatches(prepared.element, axBudget: budget)
+            },
+            observeSelection: { observeTriggerSelection(prepared) },
+            restoreOriginal: {
+                let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                               perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+                return setSelectedRange(prepared.verification.originalSelection,
+                                        on: prepared.element, axBudget: budget)
+            },
+            wait: { await settle(for: $0) })
+    }
+
     /// No Undo or text rewrite: only give back an unchanged selection we can still prove ours.
     private func restoreTriggerSelection(
         _ prepared: PreparedTriggerSelection, generation: UInt, targetPID: pid_t?,
@@ -3648,13 +3685,8 @@ final class SnippetExpansionEngine {
         }
         pasteboardInjectionLease = lease
         diagnosticLease = lease
-        var selectionWasAttempted = false
         defer {
             if !progress.pastePosted {
-                if selectionWasAttempted, let preparedSelection {
-                    progress.selectionRestoration = restoreTriggerSelection(
-                        preparedSelection, generation: generation, targetPID: targetPID)
-                }
                 finishPendingPasteboardOwnership(schedulingRetryOnFailure: true, finishingInFlightLease: lease)
             }
             if pasteboardInjectionLease === lease {
@@ -3687,29 +3719,41 @@ final class SnippetExpansionEngine {
         }
 
         if let preparedSelection {
-            // Wait before changing selection; afterwards there is no artificial delay between
-            // verified selection and the host's single paste. No text has been deleted here.
             await settle(for: pasteboardWriteSettleDelay)
             progress.stage = .selectionValidation
-            let result = SelectionPasteTransaction.run(
-                contextIsValid: { insertionIsAllowed(allowingTerminationDrain: true) && clipboardIsOwned() },
-                originalSelectionMatches: {
-                    triggerSelectionMatches(preparedSelection, originalSelection: true, budget: AXMessagingBudget())
+            let report = await SelectionPasteTransaction.run(
+                contextIsValid: {
+                    // No destructive edit has happened: cancellation need not finish a paste.
+                    guard !Task.isCancelled else {
+                        progress.reason = isPreparingForTermination ? .quitting : .contextChanged
+                        return false
+                    }
+                    return insertionIsAllowed(allowingTerminationDrain: true) && clipboardIsOwned()
                 },
+                observeSelection: { observeTriggerSelection(preparedSelection) },
                 selectTrigger: {
-                    selectionWasAttempted = true
+                    let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                                   perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
                     return setSelectedRange(preparedSelection.verification.replacementRange,
-                                            on: preparedSelection.element, axBudget: AXMessagingBudget())
-                },
-                selectedTriggerMatches: {
-                    let matches = triggerSelectionMatches(preparedSelection, budget: AXMessagingBudget())
-                    if matches { progress.selection = .verified }
-                    return matches
+                                            on: preparedSelection.element, axBudget: budget)
                 },
                 captureBaseline: captureConfirmationBaseline,
-                postPaste: postPaste)
-            switch result {
+                postPaste: postPaste,
+                wait: { await settle(for: $0) })
+            progress.selectionConfirmation = report.progress
+            if report.result != .posted {
+                // Return the borrowed text before waiting on selection-only cleanup. The queue
+                // and injection guard stay held until cleanup ends; no detached task can later
+                // restore an obsolete range into a newer expansion.
+                finishPendingPasteboardOwnership(schedulingRetryOnFailure: true, finishingInFlightLease: lease)
+                if report.progress.writeAttempted {
+                    progress.selectionRestoration = await restorePendingTriggerSelection(
+                        preparedSelection, generation: generation, targetPID: targetPID)
+                }
+            }
+            switch report.result {
             case .posted:
+                progress.selection = .verified
                 break
             case .contextChanged:
                 return .failed // The failing guard already captured the precise reason.
@@ -3719,6 +3763,10 @@ final class SnippetExpansionEngine {
                 return .failed
             case .selectionWriteFailed:
                 progress.reason = .selectionWriteFailed
+                progress.selection = .rejected
+                return .failed
+            case .selectionTimedOut:
+                progress.reason = .selectionConfirmationTimedOut
                 progress.selection = .rejected
                 return .failed
             }

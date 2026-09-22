@@ -276,6 +276,16 @@ nonisolated struct VerifiedTriggerSelection: Equatable {
         range == replacementRange && text.utf16.elementsEqual(expectedText.utf16)
     }
 
+    /// A browser can accept a selection request before its AX cache observes it. Only the
+    /// unchanged original range is pending; another range or changed text is a real conflict.
+    func observation(range: NSRange?, text: String?) -> TriggerSelectionObservation {
+        guard let range else { return .unavailable }
+        guard range == originalSelection || range == replacementRange else { return .rangeChanged }
+        guard let text else { return .unavailable }
+        guard text.utf16.elementsEqual(expectedText.utf16) else { return .textChanged }
+        return range == replacementRange ? .replacement : .original
+    }
+
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.originalSelection == rhs.originalSelection
             && lhs.replacementRange == rhs.replacementRange
@@ -322,36 +332,131 @@ nonisolated enum AccessibilitySelectedTextTransaction {
     }
 }
 
-/// Orders the host boundary for one native paste over a verified trigger selection. All callbacks
-/// are synchronous, but an AX call can block while another process changes the field or clipboard.
-/// The final context check therefore follows every AX proof and the confirmation-baseline read.
-/// The caller owns conservative selection restoration; a failed transaction never retries editing.
+typealias TriggerSelectionObservation = DiagnosticSelectionObservation
+
+/// One selection request, bounded asynchronous AX acknowledgement, then at most one native paste.
+/// AX setters acknowledge dispatch, not renderer completion. Never turn a stale read into either
+/// permission to paste or a destructive fallback. All host callbacks stay on the caller's main actor.
 nonisolated enum SelectionPasteTransaction {
-    enum Result: Equatable {
+    enum Result: Equatable, Sendable {
         case posted
         case contextChanged
         case originalSelectionChanged
         case selectionWriteFailed
         case selectionChanged
+        case selectionTimedOut
     }
 
+    typealias Phase = DiagnosticSelectionPhase
+    typealias Progress = DiagnosticSelectionConfirmation
+
+    struct Report: Equatable, Sendable {
+        let result: Result
+        let progress: Progress
+    }
+
+    // A second bound prevents a faulty clock/wait adapter from spinning. Production waits survive
+    // task cancellation; the context guard then decides whether any further mutation is allowed.
+    static let timeout: Duration = .milliseconds(400)
+    static let pollInterval: Duration = .milliseconds(12)
+    static let maximumPolls = 40
+
+    private static func milliseconds(_ duration: Duration) -> Int64 {
+        let bounded = min(.seconds(600), max(.zero, duration)).components
+        return bounded.seconds * 1_000 + bounded.attoseconds / 1_000_000_000_000_000
+    }
+
+    @MainActor
     static func run(
         contextIsValid: () -> Bool,
-        originalSelectionMatches: () -> Bool,
+        observeSelection: () -> TriggerSelectionObservation,
         selectTrigger: () -> Bool,
-        selectedTriggerMatches: () -> Bool,
         captureBaseline: () -> Void,
-        postPaste: () -> Void
-    ) -> Result {
-        guard contextIsValid() else { return .contextChanged }
-        guard originalSelectionMatches() else { return .originalSelectionChanged }
-        guard contextIsValid() else { return .contextChanged }
-        guard selectTrigger() else { return .selectionWriteFailed }
-        guard selectedTriggerMatches() else { return .selectionChanged }
-        captureBaseline()
-        guard selectedTriggerMatches() else { return .selectionChanged }
-        guard contextIsValid() else { return .contextChanged }
-        postPaste()
-        return .posted
+        postPaste: () -> Void,
+        wait: (Duration) async -> Void,
+        now: () -> ContinuousClock.Instant = { .now }
+    ) async -> Report {
+        var progress = Progress()
+        func finish(_ result: Result) -> Report { Report(result: result, progress: progress) }
+        guard contextIsValid() else { return finish(.contextChanged) }
+        progress.observation = observeSelection()
+        guard contextIsValid() else { return finish(.contextChanged) }
+        guard progress.observation == .original else { return finish(.originalSelectionChanged) }
+        progress.phase = .selectionRequest
+        progress.writeAttempted = true
+        guard selectTrigger() else { return finish(.selectionWriteFailed) }
+
+        progress.phase = .confirmation
+        let start = now()
+        while true {
+            let allowedBeforeRead = contextIsValid()
+            progress.waitMilliseconds = milliseconds(start.duration(to: now()))
+            guard allowedBeforeRead else { return finish(.contextChanged) }
+            guard start.duration(to: now()) < timeout else { return finish(.selectionTimedOut) }
+            progress.observation = observeSelection()
+            progress.polls += 1
+            let contextMatches = contextIsValid() // Recheck after every blocking AX reply.
+            let elapsed = start.duration(to: now())
+            progress.waitMilliseconds = milliseconds(elapsed)
+            guard contextMatches else { return finish(.contextChanged) }
+            guard elapsed < timeout else { return finish(.selectionTimedOut) }
+            switch progress.observation {
+            case .replacement:
+                captureBaseline()
+                progress.phase = .finalValidation
+                progress.observation = observeSelection()
+                guard contextIsValid() else { return finish(.contextChanged) }
+                // Once confirmed, loss of that proof is not a pending initial request anymore.
+                guard progress.observation == .replacement else { return finish(.selectionChanged) }
+                postPaste() // No await between the final proof, context check and dispatch.
+                return finish(.posted)
+            case .original, .unavailable:
+                guard progress.polls < maximumPolls else { return finish(.selectionTimedOut) }
+                await wait(min(pollInterval, timeout - elapsed))
+            case .rangeChanged, .textChanged, .notRead:
+                return finish(.selectionChanged)
+            }
+        }
+    }
+
+    /// Called only after an attempted selection with no paste. An original-range reply may predate
+    /// the still-pending request, so it is never immediately reported as `notNeeded`. Wait for our
+    /// exact selection, restore once, and acknowledge that restoration asynchronously too. If the
+    /// host never acknowledges or the user takes over, report uncertainty and stop without edits.
+    @MainActor
+    static func restore(
+        contextIsValid: () -> Bool,
+        observeSelection: () -> TriggerSelectionObservation,
+        restoreOriginal: () -> Bool,
+        wait: (Duration) async -> Void,
+        now: () -> ContinuousClock.Instant = { .now }
+    ) async -> DiagnosticPasteSelectionRestoration {
+        var restorationRequested = false
+        var start = now()
+        var polls = 0
+        while true {
+            guard contextIsValid() else { return .skippedContextChanged }
+            guard start.duration(to: now()) < timeout, polls < maximumPolls else { return .timedOut }
+            let observation = observeSelection()
+            guard contextIsValid() else { return .skippedContextChanged }
+            let elapsed = start.duration(to: now())
+            guard elapsed < timeout else { return .timedOut }
+            polls += 1
+            switch observation {
+            case .replacement where !restorationRequested:
+                restorationRequested = true
+                guard restoreOriginal() else { return .failed }
+                // Give the single restore request its own bounded acknowledgement window.
+                start = now()
+                polls = 0
+                continue
+            case .original where restorationRequested:
+                return .restored
+            case .original, .replacement, .unavailable:
+                await wait(min(pollInterval, timeout - elapsed))
+            case .rangeChanged, .textChanged, .notRead:
+                return .skippedContextChanged
+            }
+        }
     }
 }
