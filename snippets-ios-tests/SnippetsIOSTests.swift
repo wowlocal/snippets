@@ -2073,6 +2073,10 @@ final class SnippetsIOSTests: XCTestCase {
 
     func testPasteDiagnosticsExportAndRejectUnexpectedFieldsAndTypes() async throws {
         let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        let dispatched = DiagnosticEvent.pasteDelivery(outcome: .dispatched, restoration: .notBorrowed,
+            durationMilliseconds: 3, hadFingerprint: false,
+            progress: .init(stage: .dispatch, pastePosted: true, transport: .clipboardHistory))
+        service.emit(dispatched, level: dispatched.defaultLevel, synchronous: false)
         // Legacy records remain exportable alongside complete new progress records.
         for outcome in DiagnosticPasteOutcome.allCases {
             let event = DiagnosticEvent.pasteDelivery(
@@ -2122,6 +2126,18 @@ final class SnippetsIOSTests: XCTestCase {
         let exportedURL = rootURL.appendingPathComponent("paste-export.jsonl")
         _ = try await service.export(to: exportedURL)
         let exported = try String(contentsOf: exportedURL, encoding: .utf8)
+        let historyDispatch = try XCTUnwrap(try exported.split(separator: "\n").compactMap { line -> [String: Any]? in
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            guard let fields = object["fields"] as? [String: Any],
+                  fields["transport"] as? String == "clipboard_history",
+                  fields["outcome"] as? String == "dispatched" else { return nil }
+            XCTAssertEqual(object["level"] as? String, "info")
+            return fields
+        }.first)
+        XCTAssertEqual(historyDispatch["stage"] as? String, "dispatch")
+        XCTAssertEqual(historyDispatch["restoration"] as? String, "not_borrowed")
+        XCTAssertEqual(historyDispatch["had_fingerprint"] as? Bool, false)
+        XCTAssertEqual(historyDispatch["paste_posted"] as? Bool, true)
         for outcome in DiagnosticPasteOutcome.allCases {
             XCTAssertTrue(exported.contains("\"outcome\":\"\(outcome.rawValue)\""))
         }

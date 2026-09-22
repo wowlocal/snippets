@@ -534,6 +534,7 @@ nonisolated enum DiagnosticExpansionAXFailure: String, Codable, Sendable {
 /// One aggregate result per clipboard insertion, never per keystroke or snippet identity.
 nonisolated enum DiagnosticPasteOutcome: String, Codable, Sendable, CaseIterable {
     case interrupted
+    case dispatched
     case clipboardUnavailable = "clipboard_unavailable"
     case eventCreationFailed = "event_creation_failed"
     case textObserved = "text_observed"
@@ -558,6 +559,7 @@ nonisolated enum DiagnosticPasteStage: String, Sendable, CaseIterable {
     case selectionValidation = "selection_validation"
     case triggerDeletion = "trigger_deletion"
     case prePaste = "pre_paste"
+    case dispatch
     case confirmation
 }
 
@@ -590,6 +592,7 @@ nonisolated enum DiagnosticPasteReason: String, Sendable, CaseIterable {
 
 nonisolated enum DiagnosticPasteTransport: String, Sendable, CaseIterable {
     case insertionOnly = "insertion_only"
+    case clipboardHistory = "clipboard_history"
     case selectionPaste = "selection_paste"
     case backspacePaste = "backspace_paste"
 }
@@ -947,7 +950,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .pasteDelivery(_, .pending, _, _, _), .pasteboardRecovery(.pending):
             .error
         case .pasteDelivery(let outcome, _, _, _, _):
-            outcome == .textObserved ? .info : .warning
+            outcome == .textObserved || outcome == .dispatched ? .info : .warning
         case .syncState(.halted, _):
             .fault
         case .storageState(_, .versionTooNew, _),

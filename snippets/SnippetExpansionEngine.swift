@@ -647,8 +647,7 @@ final class SnippetExpansionEngine {
         }
     }
 
-    /// History is literal text. It shares delivery and clipboard ownership, but never
-    /// resolves snippet placeholders or records a snippet use.
+    /// History is literal text. It never resolves snippet placeholders or records a snippet use.
     func captureClipboardHistoryTarget() -> SecurePasteTarget? {
         let previousStatus = statusText
         defer { statusText = previousStatus }
@@ -673,14 +672,17 @@ final class SnippetExpansionEngine {
 
     @discardableResult
     func copyClipboardHistoryText(_ text: String) -> Bool {
+        guard prepareClipboardHistoryWrite(),
+              let writtenChangeCount = ClipboardHistoryPasteTransaction.write(text, to: NSPasteboard.general)
+        else { return false }
+        return NSPasteboard.general.changeCount == writtenChangeCount
+    }
+
+    private func prepareClipboardHistoryWrite() -> Bool {
         guard !isPreparingForTermination,
               finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else { return false }
         beforeTemporaryPasteboardWrite?()
-        let item = NSPasteboardItem()
-        guard item.setString(text, forType: .string),
-              item.setString("", forType: .init("com.khm.snippets.clipboard-history")) else { return false }
-        NSPasteboard.general.clearContents()
-        return NSPasteboard.general.writeObjects([item])
+        return true
     }
 
     func pasteClipboardHistoryText(
@@ -715,27 +717,24 @@ final class SnippetExpansionEngine {
                 source: .clipboardHistory, contextIsValid: {
                 generation == self.injectionContextGeneration
                     && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID
-            }),
-                  !Task.isCancelled,
-                  generation == self.injectionContextGeneration,
-                  self.securePasteTargetStillMatches(target, budget: AXMessagingBudget()) else {
+            }) else {
                 completion("Could not restore the original field. Copy the entry and paste it manually.")
                 return
             }
-            let result = await self.replaceTypedText(characterCount: 0, with: text,
-                generation: generation, targetPID: target.targetPID,
-                expectedFocusedElement: target.focusedElement)
-            switch result {
-            case .inserted: completion(nil)
-            case .insertedWithPasteboardRecoveryPending:
-                completion("Inserted; restoring your previous clipboard is still pending.")
-            case .unconfirmed(let pending):
-                completion(pending
-                    ? "Paste sent; check the field. Clipboard restoration is still pending."
-                    : "Paste sent; check the field before trying again.")
-            case .failed:
-                completion("Could not paste into the original field.")
-            }
+            let result = ClipboardHistoryPasteTransaction.paste(text, to: NSPasteboard.general,
+                validateTarget: {
+                    guard !Task.isCancelled else { return .contextChanged }
+                    if let reason = self.injectionBlockReason(generation: generation, targetPID: target.targetPID) {
+                        return reason
+                    }
+                    return self.securePasteTargetStillMatches(target, budget: AXMessagingBudget())
+                        ? nil : .focusedElementChanged
+                }, prepareClipboard: { self.prepareClipboardHistoryWrite() },
+                prepareShortcut: {
+                    guard let events = self.makePasteShortcutEvents() else { return nil }
+                    return { for event in events { event.postToPid(target.targetPID) } }
+                })
+            completion(result.message)
         }
     }
 

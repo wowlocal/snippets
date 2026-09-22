@@ -93,16 +93,23 @@ writes and warnings otherwise, and include no text, selection coordinates, or id
 Clipboard insertion on macOS emits one `paste_delivery` record per attempt, independently
 of verbose logging. Its base fields are `outcome`, `restoration`, `duration_ms` (bounded to
 0–600,000), and `had_fingerprint` (whether Accessibility supplied a baseline). Outcomes are
-`interrupted`, `clipboard_unavailable`, `event_creation_failed`, `text_observed`, `timed_out`,
+`interrupted`, `dispatched`, `clipboard_unavailable`, `event_creation_failed`, `text_observed`, `timed_out`,
 `target_changed`, `pasteboard_superseded`, and `secure_input_enabled`. Restoration is separately
 `not_borrowed`, `restored`, `superseded`, or `pending`: returning the clipboard does not prove
 insertion. `text_observed` means the caret advanced and changed text matched the bounded replacement tail in the
 original focused element; it is an Accessibility observation, not a receiver acknowledgement.
+`dispatched` means the clipboard-history shortcut was sent; it does not claim that the
+receiving app changed text. History keeps the chosen entry on the current clipboard and
+finishes immediately after dispatch, without waiting for readback or restoring an older
+copy. Its normal record has `restoration: not_borrowed`, `had_fingerprint: false`,
+`paste_posted: true`, and `transport: clipboard_history`. This informational event is
+asynchronous and carries no entry content or identity. Only pre-dispatch failures show
+an error to the user.
 
 New records also include `stage`, `reason`, `planned_deletes`, `delete_attempts` (both
 bounded to 0–10,000), and `paste_posted`. Stages identify preflight, event preparation,
 clipboard acquisition, selection preparation/validation, trigger deletion, the pre-paste
-wait/check, or confirmation.
+wait/check, dispatch, or confirmation.
 Reasons are closed categories for context invalidation (unmarked key-down, pointer
 interaction, application activation, monitor restart, or other context change),
 quitting, a new expansion, stopped listening, secure input, target changes, event creation failure,
@@ -114,7 +121,7 @@ input. Clipboard supersession does not identify the writer. No key codes, modifi
 values, clipboard contents, process identifiers, or application identities are added.
 
 Clipboard attempts can include the complete group `transport`, `selection`, and
-`selection_restoration`. Transport is `insertion_only`, `selection_paste` (one paste
+`selection_restoration`. Transport is `insertion_only`, `clipboard_history`, `selection_paste` (one paste
 over a verified trigger selection), or `backspace_paste` (legacy deletion fallback).
 Selection is `unavailable`, `verified`, or `rejected`; its restoration is `not_needed`,
 `restored`, `skipped_context_changed`, `failed`, or `timed_out`. These fields show which path was
@@ -161,7 +168,8 @@ without progress or the newer optional fields, but rejects incomplete progress o
 transport/selection or selection-confirmation groups, unknown enum values, and wrong types. The optional origin
 and Accessibility outcome fields require the complete progress group.
 
-An unreadable or nonmatching field keeps the loan for the full 1.2-second confirmation budget.
+For snippet insertion, an unreadable or nonmatching field keeps the loan for the full
+1.2-second confirmation budget. Clipboard history does not take a loan or enter this wait.
 Timeouts stay unconfirmed in both UI and diagnostics and do not count as snippet usage.
 There is no automatic insertion retry. A focus-element change prevents confirmation and
 drains the bounded window; app switches, secure input, and a new clipboard owner end it early.

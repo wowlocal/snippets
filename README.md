@@ -54,8 +54,9 @@ The project is free and open source under the [MIT License](LICENSE).
   original field, `⌘Return` copies, and `⌘N` opens a snippet draft from the selected entry.
   With no supported text field, Return copies instead. Escape closes the panel.
 - Text and links stay literal, including whitespace and `{placeholder}` text. Temporary
-  snippet insertions and clipboard restoration do not enter history. Insertion preserves
-  the prior clipboard and gives way to a newer user copy.
+  snippet insertions and clipboard restoration do not enter history. Pasting a history
+  entry makes it the current clipboard and finishes when Command-V is sent, so the
+  history panel can reopen immediately without waiting for text readback.
 - History stays encrypted on this Mac, outside sync and snippet exports. While enabled,
   it retains up to seven days, 1,000 entries, and 32 MiB of text; individual entries are
   limited to 256 KiB. Images and files are not captured.

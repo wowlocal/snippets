@@ -314,6 +314,25 @@ struct DiagnosticsTests {
         #expect(legacy.fields["selection_restoration"] == nil)
     }
 
+    @Test func clipboardHistoryDispatchIsInformationalAndDoesNotClaimReadback() throws {
+        var progress = DiagnosticPasteProgress(stage: .dispatch, pastePosted: true)
+        progress.transport = .clipboardHistory
+        let event = DiagnosticEvent.pasteDelivery(outcome: .dispatched, restoration: .notBorrowed,
+            durationMilliseconds: 3, hadFingerprint: false, progress: progress)
+        let fields = event.fields
+        #expect(fields["outcome"] == .string("dispatched"))
+        #expect(fields["stage"] == .string("dispatch"))
+        #expect(fields["transport"] == .string("clipboard_history"))
+        #expect(fields["restoration"] == .string("not_borrowed"))
+        #expect(fields["had_fingerprint"] == .boolean(false))
+        #expect(fields["paste_posted"] == .boolean(true))
+        #expect(Set(fields.keys) == ["outcome", "restoration", "duration_ms", "had_fingerprint",
+            "stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
+            "transport", "selection", "selection_restoration"])
+        #expect(event.defaultLevel == .info)
+        #expect(!event.requiresSynchronousWrite)
+    }
+
     @Test func pasteDiagnosticsContainOnlyClosedOutcomesAndBoundedTiming() throws {
         for outcome in DiagnosticPasteOutcome.allCases {
             for restoration in DiagnosticPasteboardRestoration.allCases {

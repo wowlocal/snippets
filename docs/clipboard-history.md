@@ -83,11 +83,20 @@ including acquisition rollback. A competing user copy is never acknowledged as o
 Transient, concealed, sensitive, generated, file, and private history markers are rejected
 by capture. Ordinary explicit snippet copies remain eligible.
 
-History insertion shares the existing injection queue, exact captured field checks,
-bounded confirmation, and clipboard restoration. It never fakes a snippet or starts a
-second independent clipboard lease. Picker search keystrokes are excluded from expansion
-tracking. Protected fields use the existing Secure Paste feature; history falls back to
-Copy when it cannot capture a supported ordinary destination.
+History insertion shares the existing injection queue and exact captured field checks.
+Choosing an entry writes its literal text to the current clipboard with the internal
+history marker, then posts one PID-addressed Command-V. The entry stays on the clipboard,
+just like Copy, so a slow receiver can read it without racing clipboard restoration.
+There is no artificial paste delay, post-dispatch Accessibility readback, temporary lease,
+or delayed restoration. The operation finishes when the shortcut is sent, making the
+picker available again immediately. Dispatch is logged without claiming confirmed text
+insertion, and it does not show an unconfirmed-paste warning.
+
+A pending snippet clipboard loan must finish before a history entry can replace it.
+Focus, secure-input state, and clipboard generation are checked before dispatch; a
+changed destination or newer copy prevents the paste. Picker search keystrokes are
+excluded from expansion tracking. Protected fields use the existing Secure Paste
+feature; history falls back to Copy when it cannot capture a supported ordinary destination.
 
 New history files must not disturb the library's directory observer. A previously enabled
 service prepares its directory before SnippetStore initialization. First-time enablement
