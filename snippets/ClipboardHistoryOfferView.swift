@@ -13,49 +13,71 @@ final class ClipboardHistoryOfferView: NSView {
         setContentHuggingPriority(.required, for: .vertical)
         setContentCompressionResistancePriority(.required, for: .vertical)
 
-        let title = NSTextField(wrappingLabelWithString: "Recently copied, close at hand")
+        let icon = NSImageView(image: NSImage(systemSymbolName: "clipboard", accessibilityDescription: nil)!)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+        icon.contentTintColor = .secondaryLabelColor
+
+        let title = NSTextField(labelWithString: "Clipboard History")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let shortcut = NSTextField(labelWithString: "⌘⇧V")
+        shortcut.font = .systemFont(ofSize: 11, weight: .medium)
+        shortcut.textColor = .secondaryLabelColor
         let detail = NSTextField(wrappingLabelWithString:
-            "Keep copied text and links for 7 days and find them with ⌘⇧V. History stays encrypted on this Mac and is never synced.")
+            "Keep copied text and links for 7 days. Encrypted on this Mac, never synced.")
         detail.font = .systemFont(ofSize: 12)
         detail.textColor = .secondaryLabelColor
-        let copy = NSStackView(views: [title, detail])
-        copy.orientation = .vertical
-        copy.distribution = .fill
-        copy.alignment = .leading
-        copy.spacing = 4
-        title.widthAnchor.constraint(equalTo: copy.widthAnchor).isActive = true
-        detail.widthAnchor.constraint(equalTo: copy.widthAnchor).isActive = true
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // The text defines the banner's height. A center-aligned horizontal stack
+        // can absorb the window's surplus height even when its wrapper hugs tightly,
+        // because the wrapper has no intrinsic size of its own.
+        [title, detail].forEach {
+            $0.setContentHuggingPriority(.required, for: .vertical)
+            $0.setContentCompressionResistancePriority(.required, for: .vertical)
+        }
+        title.setContentHuggingPriority(.required, for: .horizontal)
 
         let enable = NSButton(title: "Enable History", target: self, action: #selector(enableHistory))
-        let dismiss = NSButton(title: "Not Now", target: self, action: #selector(dismissOffer))
+        enable.controlSize = .small
+        enable.bezelStyle = .rounded
+        enable.setContentHuggingPriority(.required, for: .horizontal)
+        enable.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let dismiss = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)!,
+            target: self, action: #selector(dismissOffer))
+        dismiss.isBordered = false
+        dismiss.contentTintColor = .secondaryLabelColor
+        dismiss.imageScaling = .scaleProportionallyDown
+        dismiss.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
+        dismiss.setAccessibilityLabel("Not Now")
+        dismiss.toolTip = "Not Now — you can enable Clipboard History in Settings later."
         enable.setAccessibilityIdentifier("clipboardHistoryOfferEnable")
         dismiss.setAccessibilityIdentifier("clipboardHistoryOfferDismiss")
-        let actions = NSStackView(views: [enable, dismiss])
-        actions.orientation = .vertical
-        actions.distribution = .fill
-        actions.alignment = .trailing
-        actions.spacing = 4
-        actions.setContentHuggingPriority(.required, for: .horizontal)
-        actions.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        let content = NSStackView(views: [copy, actions])
-        content.orientation = .horizontal
-        content.distribution = .fill
-        content.alignment = .centerY
-        content.spacing = 16
-        content.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(content)
 
         let divider = NSBox()
         divider.boxType = .separator
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(divider)
+        [icon, title, shortcut, detail, enable, dismiss, divider].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            addSubview($0)
+        }
         NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            content.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            content.bottomAnchor.constraint(equalTo: divider.topAnchor, constant: -12),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 24),
+            icon.heightAnchor.constraint(equalToConstant: 24),
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            shortcut.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 8),
+            shortcut.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            shortcut.trailingAnchor.constraint(lessThanOrEqualTo: enable.leadingAnchor, constant: -16),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: enable.leadingAnchor, constant: -16),
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
+            detail.bottomAnchor.constraint(equalTo: divider.topAnchor, constant: -12),
+            enable.centerYAnchor.constraint(equalTo: centerYAnchor),
+            enable.trailingAnchor.constraint(equalTo: dismiss.leadingAnchor, constant: -8),
+            dismiss.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            dismiss.centerYAnchor.constraint(equalTo: centerYAnchor),
+            dismiss.widthAnchor.constraint(equalToConstant: 24),
+            dismiss.heightAnchor.constraint(equalToConstant: 24),
             divider.leadingAnchor.constraint(equalTo: leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: bottomAnchor),

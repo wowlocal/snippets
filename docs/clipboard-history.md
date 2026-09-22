@@ -2,7 +2,8 @@
 
 Clipboard history is a macOS-only, explicitly enabled text feature. The preference
 `SnippetsClipboardHistoryEnabled` defaults to false. The main library offers it without
-stealing focus on a normal foreground opening; **Not Now** is remembered. Login and
+stealing focus on a normal foreground opening in a compact banner below the toolbar.
+Closing the banner is remembered; history stays off. Login and
 Secure Paste launches do not open that invitation. Settings always provides access.
 
 ## Interaction
