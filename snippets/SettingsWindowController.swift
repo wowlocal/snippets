@@ -1419,7 +1419,7 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
 
         let exclusionsTitle = makeSettingsSectionTitle("Excluded Apps")
         let exclusionsHelp = makeTertiaryLabel(
-            "Skip new copies while one of these apps is active. Existing items stay in history until you clear them.")
+            "Password managers are excluded by default. Edit this list to choose which apps to skip. Existing items stay in history until you clear them.")
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
@@ -1594,6 +1594,7 @@ private final class ClipboardHistorySettingsViewController: NSViewController, NS
         let bundleID = excludedBundleIDs[row]
         let appName = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
             .map { FileManager.default.displayName(atPath: $0.path) }
+            ?? ClipboardHistoryService.defaultExcludedAppNames[bundleID]
         let label = NSTextField(labelWithString: appName.map { "\($0) — \(bundleID)" } ?? bundleID)
         label.lineBreakMode = .byTruncatingMiddle
         label.toolTip = bundleID

@@ -41,6 +41,19 @@ final class ClipboardHistoryService {
     static let offerDismissedPreferenceKey = "SnippetsClipboardHistoryOfferDismissed"
     static let exclusionsPreferenceKey = "SnippetsClipboardHistoryExcludedBundleIDs"
     static let primaryActionPreferenceKey = "SnippetsClipboardHistoryPrimaryAction"
+    /// Dedicated password apps are excluded even before they are installed. A
+    /// user's saved list, including an explicitly empty list, always takes precedence.
+    static let defaultExcludedAppNames: [String: String] = [
+        "com.apple.Passwords": "Passwords",
+        "com.apple.keychainaccess": "Keychain Access",
+        "com.1password.1password": "1Password",
+        "com.agilebits.onepassword7": "1Password 7",
+        "com.bitwarden.desktop": "Bitwarden",
+        "org.keepassxc.keepassxc": "KeePassXC",
+        "in.sinew.Enpass-Desktop": "Enpass",
+        "me.proton.pass.electron": "Proton Pass",
+    ]
+    static let defaultExcludedBundleIDs = defaultExcludedAppNames.keys.sorted()
     static let retentionDays = ClipboardHistory.retentionDays
     static let internalPasteboardType = NSPasteboard.PasteboardType(ClipboardHistoryCapturePolicy.internalType)
 
@@ -65,7 +78,7 @@ final class ClipboardHistoryService {
     }
 
     var excludedBundleIDs: [String] {
-        get { defaults.stringArray(forKey: Self.exclusionsPreferenceKey) ?? [] }
+        get { defaults.stringArray(forKey: Self.exclusionsPreferenceKey) ?? Self.defaultExcludedBundleIDs }
         set {
             let normalized = Array(Set(newValue.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
             defaults.set(normalized, forKey: Self.exclusionsPreferenceKey)

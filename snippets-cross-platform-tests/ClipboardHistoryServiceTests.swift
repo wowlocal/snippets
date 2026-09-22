@@ -60,6 +60,61 @@ nonisolated private final class HistoryTestStorage: ClipboardHistoryPersisting, 
 
 @MainActor
 final class ClipboardHistoryServiceTests: XCTestCase {
+    func testDefaultExclusionsSkipPasswordAppsBeforeReadingText() async {
+        let defaults = makeDefaults()
+        let pasteboard = HistoryTestPasteboard()
+        var source = "com.apple.Passwords"
+        let service = ClipboardHistoryService(defaults: defaults, storage: HistoryTestStorage(),
+            pasteboardProvider: { pasteboard }, frontmostBundleID: { source }, schedulesTimer: false)
+        XCTAssertTrue(service.excludedBundleIDs.contains("com.apple.Passwords"))
+        XCTAssertTrue(service.excludedBundleIDs.contains("com.apple.keychainaccess"))
+        XCTAssertTrue(service.excludedBundleIDs.contains("com.1password.1password"))
+        XCTAssertNil(defaults.object(forKey: ClipboardHistoryService.exclusionsPreferenceKey),
+            "Reading defaults must not turn them into a user-customized list")
+        service.setEnabled(true)
+        await service.waitForPendingPersistence()
+        for bundleID in service.excludedBundleIDs {
+            source = bundleID
+            pasteboard.copy("Synthetic credential")
+            service.capturePendingCopy()
+        }
+        XCTAssertEqual(pasteboard.textReads, 0)
+        XCTAssertTrue(service.entries.isEmpty)
+
+        source = "com.apple.Safari"
+        pasteboard.copy("Ordinary copied text")
+        service.capturePendingCopy()
+        XCTAssertEqual(pasteboard.textReads, 1)
+        XCTAssertEqual(service.entries.map(\.text), ["Ordinary copied text"])
+        await service.waitForPendingPersistence()
+    }
+
+    func testSavedCustomExclusionsAndExplicitEmptyListOverrideDefaultsAcrossInstances() async {
+        let defaults = makeDefaults()
+        let pasteboard = HistoryTestPasteboard()
+        let storage = HistoryTestStorage()
+        let source = "com.apple.Passwords"
+        func makeService() -> ClipboardHistoryService {
+            ClipboardHistoryService(defaults: defaults, storage: storage, pasteboardProvider: { pasteboard },
+                frontmostBundleID: { source }, schedulesTimer: false)
+        }
+        defaults.set(["example.private"], forKey: ClipboardHistoryService.exclusionsPreferenceKey)
+        let service = makeService()
+        XCTAssertEqual(service.excludedBundleIDs, ["example.private"])
+        service.excludedBundleIDs = ClipboardHistoryService.defaultExcludedBundleIDs.filter { $0 != source }
+        XCTAssertFalse(makeService().excludedBundleIDs.contains(source), "Removed defaults must stay removed")
+        service.excludedBundleIDs = []
+        let restored = makeService()
+        XCTAssertTrue(restored.excludedBundleIDs.isEmpty)
+        restored.setEnabled(true)
+        await restored.waitForPendingPersistence()
+        pasteboard.copy("Explicitly allowed synthetic text")
+        restored.capturePendingCopy()
+        XCTAssertEqual(pasteboard.textReads, 1)
+        XCTAssertEqual(restored.entries.map(\.text), ["Explicitly allowed synthetic text"])
+        await restored.waitForPendingPersistence()
+    }
+
     func testPrimaryActionPersistsWithoutEnablingCaptureAndUnknownValuesDefaultToPaste() async {
         let defaults = makeDefaults()
         let pasteboard = HistoryTestPasteboard()

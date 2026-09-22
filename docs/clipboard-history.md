@@ -50,6 +50,15 @@ history. A 0.5-second poll samples `changeCount`, checks all advertised item typ
 reading text, and rechecks the generation after reading. Intermediate rapid copies can
 be missed. Exclusions use the frontmost application's bundle ID, an approximate source.
 
+The default excluded apps are Passwords, Keychain Access, 1Password (7 and 8), Bitwarden,
+KeePassXC, Enpass, and Proton Pass. The defaults apply only when the exclusions preference
+has never been saved; a customized or explicitly empty list is preserved across launches.
+Users can remove any default. The list includes apps that are not installed yet, and
+Settings shows their names alongside their bundle IDs. No browser or general text editor
+is excluded by default. Exclusions reject a copy before reading its text and do not remove
+previously saved entries. Browser extensions still depend on the sensitive pasteboard
+markers because the foreground app is the browser.
+
 The Foundation-only `ClipboardHistory` policy preserves exact UTF-8 text, including
 whitespace and normalization. Repeated identical copies reuse the entry ID and refresh
 its position. The bounded, in-memory search index is never written as plaintext.
