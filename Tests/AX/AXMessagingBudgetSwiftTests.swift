@@ -125,7 +125,7 @@ struct SecurePasteContainerTargetTests {
             .keyboardOwnerPending, .focusUnavailable, .valid, .valid, .valid, .valid,
         ]
         var restorations = 0
-        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
+        let report = await SecurePasteFocusHandoff.runForContainer(mode: .afterAuthentication, sleep: { _ in },
             observe: { observations.removeFirst() }, restoreFocus: { restorations += 1 })
         #expect(report.validation == .valid)
         #expect(report.attempts == 4)
@@ -136,7 +136,7 @@ struct SecurePasteContainerTargetTests {
     @Test("an intact automatic descendant can regain focus after authentication")
     func handoffRestoresFieldFocus() async {
         var focused = false
-        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
+        let report = await SecurePasteFocusHandoff.runForContainer(mode: .afterAuthentication, sleep: { _ in },
             observe: { focused ? .valid : .fieldFocusPending }, restoreFocus: { focused = true })
         #expect(report.validation == .valid)
         #expect(report.firstTransient == .fieldFocusPending)
@@ -148,7 +148,7 @@ struct SecurePasteContainerTargetTests {
     func handoffRejectsChangedDestination(failure: SecurePasteTargetResolver.Validation) async {
         var samples = [SecurePasteTargetResolver.Validation.valid, .valid, failure]
         var restorations = 0
-        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
+        let report = await SecurePasteFocusHandoff.runForContainer(mode: .afterAuthentication, sleep: { _ in },
             observe: { samples.removeFirst() }, restoreFocus: { restorations += 1 })
         #expect(report.validation == failure)
         #expect(report.attempts == 2)
@@ -161,17 +161,21 @@ struct SecurePasteContainerTargetTests {
             .valid, .valid, .keyboardOwnerPending, .valid, .valid, .focusUnavailable,
             .valid, .valid, .keyboardOwnerPending,
         ]
-        let report = await SecurePasteContainerHandoff.run(sleep: { _ in },
-            observe: { samples.removeFirst() }, restoreFocus: {})
+        var elapsed = Duration.zero
+        let report = await SecurePasteFocusHandoff.runForContainer(mode: .afterAuthentication,
+            sleep: { elapsed += $0 },
+            observe: { samples.isEmpty ? .keyboardOwnerPending : samples.removeFirst() }, restoreFocus: {})
         #expect(report.validation == .keyboardOwnerPending)
-        #expect(report.attempts == 6)
+        #expect(report.attempts < 20)
+        #expect(elapsed <= .milliseconds(1_640))
     }
 
     @Test("task cancellation while waiting prevents focus restoration")
     func cancelledHandoff() async {
         var restorations = 0
         let task = Task { @MainActor in
-            await SecurePasteContainerHandoff.run(sleep: { _ in await Task.yield() },
+            await SecurePasteFocusHandoff.runForContainer(mode: .afterAuthentication,
+                sleep: { _ in await Task.yield() },
                 observe: { .valid }, restoreFocus: { restorations += 1 })
         }
         task.cancel()
