@@ -520,7 +520,7 @@ final class ClipboardHistoryPanelController: NSObject,
         let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? ClipboardHistoryCellView
             ?? ClipboardHistoryCellView()
         cell.identifier = identifier
-        cell.configure(entry: items[row])
+        cell.configure(entry: items[row], row: row)
         return cell
     }
 
@@ -561,6 +561,15 @@ final class ClipboardHistoryPanelController: NSObject,
     /// copy/paste, word movement, deletion, IME composition, and Tab remain native.
     private func handleKeyEvent(_ event: NSEvent) -> Bool {
         guard panel.isVisible, dismissalAction != nil else { return false }
+        if let row = PickerQuickSelection.row(for: event) {
+            if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
+            // Missing rows and held-key repeats still belong to the picker, but
+            // must never fall through to a different app command or paste twice.
+            guard !event.isARepeat, items.indices.contains(row) else { return true }
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            performPrimaryAction()
+            return true
+        }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if modifiers == .command {
             switch event.keyCode {
@@ -609,6 +618,8 @@ final class ClipboardHistoryPanelController: NSObject,
 private final class ClipboardHistoryCellView: NSTableCellView {
     private let textLabel = NSTextField(labelWithString: "")
     private let dateLabel = NSTextField(labelWithString: "")
+    private let shortcutLabel = NSTextField(labelWithString: "")
+    private var textTrailingConstraint: NSLayoutConstraint!
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -625,24 +636,34 @@ private final class ClipboardHistoryCellView: NSTableCellView {
         dateLabel.font = .systemFont(ofSize: 10)
         dateLabel.textColor = .secondaryLabelColor
         dateLabel.lineBreakMode = .byTruncatingTail
+        shortcutLabel.identifier = NSUserInterfaceItemIdentifier("clipboardHistoryQuickSelectionShortcut")
+        shortcutLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        shortcutLabel.textColor = .secondaryLabelColor
+        shortcutLabel.alignment = .right
+        shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
+        shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         let stack = NSStackView(views: [textLabel, dateLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        addSubview(shortcutLabel)
+        textTrailingConstraint = stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            textTrailingConstraint,
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             textLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             dateLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(entry: ClipboardHistoryEntry) {
+    func configure(entry: ClipboardHistoryEntry, row: Int) {
         // Collapse whitespace in the compact row only. The preview and selection
         // callback always use the exact captured text, including indentation.
         textLabel.stringValue = String(entry.text.prefix(220))
@@ -651,6 +672,10 @@ private final class ClipboardHistoryCellView: NSTableCellView {
             .joined(separator: " ")
         if textLabel.stringValue.isEmpty { textLabel.stringValue = "Whitespace" }
         dateLabel.stringValue = Self.dateFormatter.string(from: entry.copiedAt)
+        let shortcut = PickerQuickSelection.label(forRow: row)
+        shortcutLabel.stringValue = shortcut ?? ""
+        shortcutLabel.isHidden = shortcut == nil
+        textTrailingConstraint.constant = shortcut == nil ? -14 : -44
         setAccessibilityLabel(textLabel.stringValue)
     }
 }

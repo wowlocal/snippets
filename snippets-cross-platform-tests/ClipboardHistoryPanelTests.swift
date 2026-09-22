@@ -6,6 +6,122 @@ import AppKit
 
 @MainActor
 final class ClipboardHistoryPanelTests: XCTestCase {
+    func testCommandNineUsesFilteredRankAndPastesLiteralEntryAfterDismissal() async throws {
+        let now = Date()
+        let matches = (0..<10).map { index in
+            ClipboardHistoryEntry(text: "needle \(index)\n  {date}\t{clipboard}\n",
+                copiedAt: now.addingTimeInterval(-Double(index + 1)))
+        }
+        let unrelated = ClipboardHistoryEntry(text: "Most recent unrelated entry", copiedAt: now)
+        let fixture = await makeFixture(entries: [unrelated] + matches, now: now)
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        var events: [String] = []
+        var pasted: ClipboardHistoryEntry?
+        controller.show(canPaste: true, onPaste: {
+            XCTAssertFalse(controller.isVisible)
+            pasted = $0
+            events.append("paste")
+        }, onCopy: { _ in XCTFail("Number shortcut should paste when a destination exists") },
+        onCreateSnippet: { _ in XCTFail("Number shortcut should not create a snippet") }, onDismiss: {
+            XCTAssertFalse($0)
+            events.append("dismiss")
+        })
+        let window = try pickerWindow(excluding: initialWindows)
+        let views = descendants(of: try XCTUnwrap(window.contentView))
+        let search = try XCTUnwrap(views.compactMap { $0 as? NSSearchField }.first)
+        let table = try XCTUnwrap(views.compactMap { $0 as? NSTableView }.first)
+        search.stringValue = "needle"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        XCTAssertEqual(table.numberOfRows, 10)
+
+        let ninthCell = try XCTUnwrap(controller.tableView(table, viewFor: table.tableColumns.first, row: 8))
+        let ninthHint = try XCTUnwrap(descendants(of: ninthCell).compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "clipboardHistoryQuickSelectionShortcut"
+        })
+        XCTAssertEqual(ninthHint.stringValue, "⌘9")
+        XCTAssertFalse(ninthHint.isHidden)
+        let tenthCell = try XCTUnwrap(controller.tableView(table, viewFor: table.tableColumns.first, row: 9))
+        let tenthHint = try XCTUnwrap(descendants(of: tenthCell).compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "clipboardHistoryQuickSelectionShortcut"
+        })
+        XCTAssertTrue(tenthHint.isHidden)
+        XCTAssertEqual(tenthHint.stringValue, "")
+
+        try sendKey(code: 25, characters: "9", modifiers: .command, to: window)
+        XCTAssertEqual(pasted, matches[8])
+        XCTAssertEqual(events, ["dismiss", "paste"])
+        XCTAssertFalse(controller.isVisible)
+    }
+
+    func testNumberShortcutCopiesWithoutTargetAndAcceptsNumericPad() async throws {
+        let now = Date()
+        let first = ClipboardHistoryEntry(text: "First entry", copiedAt: now)
+        let second = ClipboardHistoryEntry(text: "  Literal second entry\n{clipboard}\n", copiedAt: now.addingTimeInterval(-1))
+        let fixture = await makeFixture(entries: [first, second], now: now)
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        var events: [String] = []
+        var copied: ClipboardHistoryEntry?
+        controller.show(canPaste: false, onPaste: { _ in XCTFail("No paste target was captured") }, onCopy: {
+            XCTAssertFalse(controller.isVisible)
+            copied = $0
+            events.append("copy")
+        }, onCreateSnippet: { _ in XCTFail("Unexpected create") }, onDismiss: { _ in events.append("dismiss") })
+        let window = try pickerWindow(excluding: initialWindows)
+        try sendKey(code: 84, characters: "2", modifiers: [.command, .numericPad, .capsLock], to: window)
+        XCTAssertEqual(copied, second)
+        XCTAssertEqual(events, ["dismiss", "copy"])
+    }
+
+    func testMissingRowsRepeatsAndAdditionalModifiersDoNotActivateNumberShortcut() async throws {
+        let fixture = await makeFixture(entries: [ClipboardHistoryEntry(text: "One entry")])
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        var chosen = false
+        controller.show(canPaste: true, onPaste: { _ in chosen = true }, onCopy: { _ in chosen = true },
+            onCreateSnippet: { _ in chosen = true }, onDismiss: { _ in })
+        let window = try pickerWindow(excluding: initialWindows)
+        XCTAssertTrue(window.performKeyEquivalent(with: try keyEvent(
+            code: 25, characters: "9", modifiers: .command, window: window)))
+        XCTAssertTrue(window.performKeyEquivalent(with: try keyEvent(
+            code: 18, characters: "1", modifiers: .command, isARepeat: true, window: window)))
+        let extraModifiers: [NSEvent.ModifierFlags] = [.shift, .option, .control]
+        for extra in extraModifiers {
+            XCTAssertFalse(window.performKeyEquivalent(with: try keyEvent(
+                code: 18, characters: "1", modifiers: [.command, extra], window: window)))
+        }
+        XCTAssertFalse(chosen)
+        XCTAssertTrue(controller.isVisible)
+    }
+
+    func testNumberShortcutLeavesMarkedSearchTextToInputMethod() async throws {
+        let fixture = await makeFixture(entries: [ClipboardHistoryEntry(text: "needle")])
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        var chosen = false
+        controller.show(canPaste: true, onPaste: { _ in chosen = true }, onCopy: { _ in chosen = true },
+            onCreateSnippet: { _ in chosen = true }, onDismiss: { _ in })
+        let window = try pickerWindow(excluding: initialWindows)
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        editor.setMarkedText("needle", selectedRange: NSRange(location: 6, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertFalse(window.performKeyEquivalent(with: try keyEvent(
+            code: 18, characters: "1", modifiers: .command, window: window)))
+        XCTAssertFalse(chosen)
+        XCTAssertTrue(controller.isVisible)
+        editor.unmarkText()
+    }
+
     func testLiveAppearanceChangePreservesPreviewAndUpdatesReadingSurface() async throws {
         let entry = ClipboardHistoryEntry(text: "  A clipboard preview\n\twith exact whitespace.\n")
         let fixture = await makeFixture(entries: [entry])
@@ -216,12 +332,22 @@ final class ClipboardHistoryPanelTests: XCTestCase {
         modifiers: NSEvent.ModifierFlags = [],
         to window: NSWindow
     ) throws {
-        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
-            modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber,
-            context: nil, characters: characters, charactersIgnoringModifiers: characters,
-            isARepeat: false, keyCode: code))
+        let event = try keyEvent(code: code, characters: characters, modifiers: modifiers, window: window)
         // Deliver to this panel only: never inject keystrokes into the user's app.
         window.sendEvent(event)
+    }
+
+    private func keyEvent(
+        code: UInt16,
+        characters: String,
+        modifiers: NSEvent.ModifierFlags,
+        isARepeat: Bool = false,
+        window: NSWindow
+    ) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: isARepeat, keyCode: code))
     }
 
     private func descendants(of view: NSView) -> [NSView] {

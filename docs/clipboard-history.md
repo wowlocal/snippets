@@ -15,6 +15,14 @@ one entry, and Escape closes. A conflicting global registration is reported in S
 the menu-bar entry remains available. Recording is independent of the expansion shortcut
 preference.
 
+While the history panel or the `⌘\` snippet picker is open, `⌘1` through `⌘9`
+immediately choose the corresponding result in the current search order. The first nine
+rows display their shortcuts; filtering and new copies update the numbering. Selection
+uses the same primary action as Return: paste to the captured destination, or copy when
+there is no supported destination. Secure snippets still use the existing authentication
+and paste checks. Missing result numbers and key repeats do nothing. These shortcuts
+are local to the keyboard-enabled picker; ordinary inline suggestions leave them alone.
+
 The history and snippet pickers share a system-adaptive floating surface. Light/dark
 appearance changes update open panels without resetting their selection or search.
 The full-text preview has a slightly denser reading background over the glass.

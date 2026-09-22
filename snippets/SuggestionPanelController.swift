@@ -1,8 +1,19 @@
 import AppKit
 
 private final class SuggestionPanel: NSPanel {
+    var handlePickerCommand: ((NSEvent) -> Bool)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, handlePickerCommand?(event) == true { return }
+        super.sendEvent(event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if handlePickerCommand?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 private final class SuggestionSearchField: NSSearchField {
@@ -56,7 +67,7 @@ final class SuggestionPanelController: NSObject,
         case securePaste
     }
 
-    private let panel: NSPanel
+    private let panel: SuggestionPanel
     private let tableView: NSTableView
     private let scrollView: NSScrollView
     private let searchField = SuggestionSearchField()
@@ -269,6 +280,7 @@ final class SuggestionPanelController: NSObject,
         super.init()
 
         panel.delegate = self
+        panel.handlePickerCommand = { [weak self] event in self?.handleQuickSelection(event) ?? false }
         tableView.dataSource = self
         tableView.delegate = self
         tableView.target = self
@@ -599,6 +611,17 @@ final class SuggestionPanelController: NSObject,
     }
 
     // MARK: - Secure Paste Search
+
+    private func handleQuickSelection(_ event: NSEvent) -> Bool {
+        guard isSecurePasteVisible,
+              let row = PickerQuickSelection.row(for: event) else { return false }
+        if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
+        // Consume an unavailable number while the picker is open, so it cannot
+        // become a command in the destination app. Repeats never deliver twice.
+        guard !event.isARepeat, items.indices.contains(row) else { return true }
+        select(items[row].snippet)
+        return true
+    }
 
     func controlTextDidChange(_ obj: Notification) {
         guard presentationMode == .securePaste,
@@ -1394,6 +1417,7 @@ final class SuggestionPanelController: NSObject,
             isSecure: item.isSecure,
             nameMatchRanges: item.nameMatchRanges,
             keywordMatchRanges: item.keywordMatchRanges,
+            shortcut: presentationMode == .securePaste ? PickerQuickSelection.label(forRow: row) : nil,
             availableWidth: Self.panelWidth - horizontalCellPadding
         )
         return cell
@@ -1401,13 +1425,15 @@ final class SuggestionPanelController: NSObject,
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         guard items.indices.contains(row) else { return singleLineRowHeight }
-        return shouldWrapName(for: items[row]) ? wrappedNameRowHeight : singleLineRowHeight
+        return shouldWrapName(at: row) ? wrappedNameRowHeight : singleLineRowHeight
     }
 
-    private func shouldWrapName(for item: SuggestionItem) -> Bool {
-        let name = item.snippet.displayName as NSString
+    private func shouldWrapName(at row: Int) -> Bool {
+        let name = items[row].snippet.displayName as NSString
         let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        let availableWidth = Self.panelWidth - horizontalCellPadding
+        let shortcutWidth = presentationMode == .securePaste && row < 9
+            ? SuggestionCellView.shortcutReservedWidth : 0
+        let availableWidth = Self.panelWidth - horizontalCellPadding - shortcutWidth
         let width = name.size(withAttributes: [.font: font]).width
         return width > availableWidth
     }
@@ -1417,6 +1443,7 @@ final class SuggestionPanelController: NSObject,
 
 private final class SuggestionCellView: NSTableCellView {
     private let primaryLabel = MatchHighlightLabel(labelWithString: "")
+    private let shortcutLabel = NSTextField(labelWithString: "")
     private let secondaryLabel = MatchHighlightLabel(labelWithString: "")
     private let secureBadge = NSStackView()
     private let secureIcon = NSImageView()
@@ -1427,6 +1454,7 @@ private final class SuggestionCellView: NSTableCellView {
     private static let maxVisibleTagChips = 2
     private static let secondaryRowSpacing: CGFloat = 6
     private static let tagChipSpacing: CGFloat = 4
+    static let shortcutReservedWidth: CGFloat = 30
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1434,6 +1462,15 @@ private final class SuggestionCellView: NSTableCellView {
         primaryLabel.lineBreakMode = .byWordWrapping
         primaryLabel.maximumNumberOfLines = 2
         primaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        primaryLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        shortcutLabel.identifier = NSUserInterfaceItemIdentifier("pickerQuickSelectionHint")
+        shortcutLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        shortcutLabel.textColor = .secondaryLabelColor
+        shortcutLabel.alignment = .right
+        shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
+        shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        shortcutLabel.widthAnchor.constraint(equalToConstant: Self.shortcutReservedWidth - 8).isActive = true
 
         secondaryLabel.lineBreakMode = .byTruncatingTail
         secondaryLabel.maximumNumberOfLines = 1
@@ -1488,7 +1525,13 @@ private final class SuggestionCellView: NSTableCellView {
         secondaryRow.alignment = .centerY
         secondaryRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let labelsStack = NSStackView(views: [primaryLabel, secondaryRow])
+        let primaryRow = NSStackView(views: [primaryLabel, shortcutLabel])
+        primaryRow.orientation = .horizontal
+        primaryRow.distribution = .fill
+        primaryRow.spacing = 8
+        primaryRow.alignment = .firstBaseline
+
+        let labelsStack = NSStackView(views: [primaryRow, secondaryRow])
         labelsStack.orientation = .vertical
         labelsStack.spacing = 1
         labelsStack.alignment = .leading
@@ -1503,7 +1546,7 @@ private final class SuggestionCellView: NSTableCellView {
             labelsStack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 4),
             labelsStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4),
 
-            primaryLabel.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
+            primaryRow.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
             secondaryRow.widthAnchor.constraint(equalTo: labelsStack.widthAnchor),
         ])
     }
@@ -1517,8 +1560,12 @@ private final class SuggestionCellView: NSTableCellView {
         isSecure: Bool,
         nameMatchRanges: [NSRange],
         keywordMatchRanges: [NSRange],
+        shortcut: String?,
         availableWidth: CGFloat
     ) {
+        shortcutLabel.stringValue = shortcut ?? ""
+        shortcutLabel.isHidden = shortcut == nil
+        shortcutLabel.setAccessibilityLabel(shortcut.map { "Select result with \($0)" })
         // Read once per cell rather than per label: the style is a defaults read,
         // and this runs for every visible row on every keystroke.
         let style = MatchHighlightPreference.style
