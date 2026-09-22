@@ -10,6 +10,7 @@ nonisolated enum SettingsPlatform: Hashable, Sendable {
 nonisolated enum SettingsDestination: String, CaseIterable, Hashable, Sendable {
     case general
     case expansion
+    case clipboardHistory
     case sync
     case secureSnippets
     case backup
@@ -21,6 +22,7 @@ nonisolated enum SettingsDestination: String, CaseIterable, Hashable, Sendable {
         switch self {
         case .general: "General"
         case .expansion: "Expansion"
+        case .clipboardHistory: "Clipboard History"
         case .sync: "Sync"
         case .secureSnippets: "Secure Snippets"
         case .backup: "Backup"
@@ -34,6 +36,7 @@ nonisolated enum SettingsDestination: String, CaseIterable, Hashable, Sendable {
         switch self {
         case .general: "gearshape"
         case .expansion: "text.cursor"
+        case .clipboardHistory: "clock.arrow.circlepath"
         case .sync: "arrow.triangle.2.circlepath"
         case .secureSnippets: "lock"
         case .backup: "externaldrive"
@@ -53,6 +56,9 @@ nonisolated enum SettingsRowID: String, CaseIterable, Hashable, Sendable {
     case suggestionRanking
     case selectionMemory
     case resetUsage
+    case clipboardHistoryEnabled
+    case clearClipboardHistory
+    case clipboardExcludedApps
     case cloudProvider
     case cloudAccount
     case syncEnabled
@@ -103,7 +109,7 @@ nonisolated enum SettingsCatalog {
             [
                 SettingsNavigationSection(
                     title: "Application",
-                    destinations: [.general, .expansion]
+                    destinations: [.general, .expansion, .clipboardHistory]
                 ),
                 SettingsNavigationSection(
                     title: "Library",
@@ -187,6 +193,10 @@ nonisolated enum SettingsCatalog {
         entry(.suggestionRanking, "Suggestion Ranking", .expansion, ["frequency", "frecency", "usage"], macOSOnly),
         entry(.selectionMemory, "Remember Selections", .expansion, ["prefix", "suggestion", "choice"], macOSOnly),
         entry(.resetUsage, "Reset Usage Data", .expansion, ["ranking", "history", "memory"], macOSOnly),
+
+        entry(.clipboardHistoryEnabled, "Keep Clipboard History", .clipboardHistory, ["enable", "pause", "copied text", "links", "command shift v", "retention", "7 days", "encrypted"], macOSOnly),
+        entry(.clearClipboardHistory, "Clear Clipboard History", .clipboardHistory, ["delete", "remove", "privacy", "copied text"], macOSOnly),
+        entry(.clipboardExcludedApps, "Excluded Apps", .clipboardHistory, ["ignore", "exclude", "applications", "clipboard"], macOSOnly),
 
         entry(.cloudProvider, "Cloud Provider", .sync, ["icloud", "snippets cloud", "backend"], allPlatforms),
         entry(.cloudAccount, "Cloud Account", .sync, ["sign in", "sign out", "account"], allPlatforms),

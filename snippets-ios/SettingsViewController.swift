@@ -110,7 +110,7 @@ final class SettingsViewController: UIViewController {
             return BackupSettingsViewController(actions: backupActions, highlightedRow: highlightedRow)
         case .about:
             return AboutSettingsViewController(highlightedRow: highlightedRow)
-        case .general, .expansion, .integrations:
+        case .general, .expansion, .clipboardHistory, .integrations:
             preconditionFailure("macOS-only Settings destination used on iOS")
         }
     }
@@ -444,7 +444,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         case .sync: [.sync]
         case .secureSnippets: [.security]
         case .diagnostics: [.diagnostics]
-        case .general, .expansion, .backup, .integrations, .about: []
+        case .general, .expansion, .clipboardHistory, .backup, .integrations, .about: []
         }
     }
 

@@ -117,6 +117,7 @@ final class TemporaryPasteboardLease {
     /// question `isOwned` asks — "has anyone copied since we last wrote?" — answerable.
     private var ownedChangeCount: Int
     private let snapshot: PasteboardSnapshot
+    private let onRestore: ((Int) -> Void)?
     private var isFinished = false
     private(set) var lastRestoreResult: RestoreResult?
 
@@ -127,11 +128,13 @@ final class TemporaryPasteboardLease {
     private init(
         pasteboard: any SnippetPasteboardAccess,
         ownedChangeCount: Int,
-        snapshot: PasteboardSnapshot
+        snapshot: PasteboardSnapshot,
+        onRestore: ((Int) -> Void)? = nil
     ) {
         self.pasteboard = pasteboard
         self.ownedChangeCount = ownedChangeCount
         self.snapshot = snapshot
+        self.onRestore = onRestore
     }
 
     /// Markers that ask clipboard managers not to record an item.
@@ -158,7 +161,8 @@ final class TemporaryPasteboardLease {
     static func begin(
         text: String,
         pasteboard: any SnippetPasteboardAccess,
-        isConcealed: Bool = false
+        isConcealed: Bool = false,
+        onRestore: ((Int) -> Void)? = nil
     ) -> AcquisitionResult {
         let snapshot = PasteboardSnapshot(reading: pasteboard)
         guard !snapshot.isUnavailable, pasteboard.changeCount == snapshot.changeCount else {
@@ -192,11 +196,13 @@ final class TemporaryPasteboardLease {
                 to: pasteboard,
                 whileOwnedAt: acquiredChangeCount
             )
+            if rolledBack { onRestore?(acquiredChangeCount) }
             return failedAcquisitionResult(
                 snapshot: snapshot,
                 pasteboard: pasteboard,
                 ownedChangeCount: acquiredChangeCount,
-                rolledBack: rolledBack
+                rolledBack: rolledBack,
+                onRestore: onRestore
             )
         }
         guard pasteboard.changeCount == acquiredChangeCount else { return .refused }
@@ -204,7 +210,8 @@ final class TemporaryPasteboardLease {
             TemporaryPasteboardLease(
                 pasteboard: pasteboard,
                 ownedChangeCount: acquiredChangeCount,
-                snapshot: snapshot
+                snapshot: snapshot,
+                onRestore: onRestore
             )
         )
     }
@@ -213,7 +220,8 @@ final class TemporaryPasteboardLease {
         snapshot: PasteboardSnapshot,
         pasteboard: any SnippetPasteboardAccess,
         ownedChangeCount: Int,
-        rolledBack: Bool
+        rolledBack: Bool,
+        onRestore: ((Int) -> Void)?
     ) -> AcquisitionResult {
         guard !rolledBack,
               snapshot.items?.isEmpty == false,
@@ -224,7 +232,8 @@ final class TemporaryPasteboardLease {
         let pending = TemporaryPasteboardLease(
             pasteboard: pasteboard,
             ownedChangeCount: ownedChangeCount,
-            snapshot: snapshot
+            snapshot: snapshot,
+            onRestore: onRestore
         )
         pending.lastRestoreResult = .failed
         return .recoveryPending(pending)
@@ -269,6 +278,8 @@ final class TemporaryPasteboardLease {
     func restoreIfOwned() -> RestoreResult {
         let result = attemptRestoreIfOwned()
         lastRestoreResult = result
+        // Only acknowledge our proven restore generation; a concurrent Copy must still be captured.
+        if case .restored(let changeCount) = result { onRestore?(changeCount) }
         return result
     }
 

@@ -171,6 +171,10 @@ extension ViewController {
         permissionBannerDivider.boxType = .separator
         rootStack.addArrangedSubview(permissionBannerDivider)
 
+        clipboardHistoryOfferView.onEnable = { [weak self] in self?.enableClipboardHistoryFromOffer() }
+        clipboardHistoryOfferView.onDismiss = { [weak self] in self?.dismissClipboardHistoryOffer() }
+        rootStack.addArrangedSubview(clipboardHistoryOfferView)
+
         configureMainSplitViewController()
         addChild(mainSplitViewController)
 
@@ -193,7 +197,7 @@ extension ViewController {
             object: mainSplitView
         )
 
-        [banner, permissionBannerDivider, splitView].forEach {
+        [banner, permissionBannerDivider, clipboardHistoryOfferView, splitView].forEach {
             $0.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
         }
         banner.setContentHuggingPriority(.required, for: .vertical)

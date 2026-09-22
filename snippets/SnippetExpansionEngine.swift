@@ -23,6 +23,10 @@ final class SnippetExpansionEngine {
     static let accessibilityRequiredStatus = "Snippets needs Accessibility access to expand keywords."
 
     var onStateChange: (() -> Void)?
+    var beforeTemporaryPasteboardWrite: (() -> Void)?
+    var afterTemporaryPasteboardRestore: ((Int) -> Void)?
+    private var clipboardHistoryPickerActive = false
+    private var clipboardHistoryInsertionActive = false
     /// The app layer owns the user's opt-in. Keeping this as a closure avoids
     /// coupling the typing engine to UserDefaults or the diagnostics backend.
     var expansionVerboseDiagnosticsEnabled: () -> Bool = { false }
@@ -586,6 +590,7 @@ final class SnippetExpansionEngine {
             return .failed
         }
         let rendered = PlaceholderResolver.resolve(template: snippet.content)
+        beforeTemporaryPasteboardWrite?()
         NSPasteboard.general.clearContents()
         guard NSPasteboard.general.setString(rendered, forType: .string) else {
             statusText = ClipboardCopyFeedback.failed
@@ -638,6 +643,96 @@ final class SnippetExpansionEngine {
                 self.statusText = "Pasted \(snippet.displayName); restoring your previous clipboard is still pending."
             case .unconfirmed(let pending):
                 self.reportUnconfirmedPaste(recoveryPending: pending)
+            }
+        }
+    }
+
+    /// History is literal text. It shares delivery and clipboard ownership, but never
+    /// resolves snippet placeholders or records a snippet use.
+    func captureClipboardHistoryTarget() -> SecurePasteTarget? {
+        let previousStatus = statusText
+        defer { statusText = previousStatus }
+        guard case .target(let target) = captureSecurePasteTargetImpl(),
+              !target.isSecureTextField, !target.secureInputWasEnabledAtCapture else { return nil }
+        return target
+    }
+
+    func setClipboardHistoryPickerActive(_ active: Bool) {
+        if active { resetTypingContext() }
+        clipboardHistoryPickerActive = active
+    }
+
+    func returnFocusAfterCancellingClipboardHistory(_ target: SecurePasteTarget) async {
+        let generation = injectionContextGeneration
+        _ = await restoreSecurePasteTarget(target, logsHandoff: false, contextIsValid: { [self] in
+            generation == injectionContextGeneration
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID
+        })
+    }
+
+    @discardableResult
+    func copyClipboardHistoryText(_ text: String) -> Bool {
+        guard !isPreparingForTermination,
+              finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else { return false }
+        beforeTemporaryPasteboardWrite?()
+        let item = NSPasteboardItem()
+        guard item.setString(text, forType: .string),
+              item.setString("", forType: .init("com.khm.snippets.clipboard-history")) else { return false }
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.writeObjects([item])
+    }
+
+    func pasteClipboardHistoryText(
+        _ text: String, to target: SecurePasteTarget,
+        completion: @escaping (String?) -> Void
+    ) {
+        guard !text.isEmpty, !isPreparingForTermination, accessibilityGranted,
+              !target.isSecureTextField else {
+            completion("Could not paste into the original field.")
+            return
+        }
+        let generation = injectionContextGeneration
+        beginInjection()
+        injectionQueue.enqueue(isAutomatic: false) { [weak self] in
+            guard let self else { return }
+            defer {
+                self.clipboardHistoryInsertionActive = false
+                if self.secureExpansionActivationTargetPID == target.targetPID {
+                    self.secureExpansionActivationTargetPID = nil
+                }
+                self.endInjection()
+            }
+            guard !Task.isCancelled, !self.isPreparingForTermination,
+                  generation == self.injectionContextGeneration,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID else {
+                completion("Paste canceled because the original input changed.")
+                return
+            }
+            self.clipboardHistoryInsertionActive = true
+            self.secureExpansionActivationTargetPID = target.targetPID
+            guard await self.restoreSecurePasteTarget(target, logsHandoff: false, contextIsValid: {
+                generation == self.injectionContextGeneration
+                    && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID
+            }),
+                  !Task.isCancelled,
+                  generation == self.injectionContextGeneration,
+                  self.securePasteTargetStillMatches(target, budget: AXMessagingBudget()) else {
+                completion("Could not restore the original field. Copy the entry and paste it manually.")
+                return
+            }
+            let result = await self.replaceTypedText(characterCount: 0, with: text,
+                generation: generation, targetPID: target.targetPID,
+                expectedFocusedElement: target.focusedElement)
+            switch result {
+            case .inserted: completion(nil)
+            case .insertedWithPasteboardRecoveryPending:
+                completion("Inserted; restoring your previous clipboard is still pending.")
+            case .unconfirmed(let pending):
+                completion(pending
+                    ? "Paste sent; check the field. Clipboard restoration is still pending."
+                    : "Paste sent; check the field before trying again.")
+            case .failed:
+                completion("Could not paste into the original field.")
             }
         }
     }
@@ -1337,7 +1432,7 @@ final class SnippetExpansionEngine {
         // The event tap still sees keys addressed to our non-activating search
         // panel because the destination app remains frontmost. Let AppKit deliver
         // them to NSSearchField; none belongs in the host typing buffer.
-        if securePastePickerActive { return false }
+        if securePastePickerActive || clipboardHistoryPickerActive { return false }
 
         // Keep observing real input while an already-started paste drains: it still needs normal
         // generation invalidation if the user changes the host text. With no such critical
@@ -3148,7 +3243,7 @@ final class SnippetExpansionEngine {
     ) -> DiagnosticPasteReason? {
         if isPreparingForTermination, !allowingTerminationDrain { return .quitting }
         if generation != injectionContextGeneration { return injectionInvalidationReason }
-        if !listening { return .listeningStopped }
+        if !listening && !clipboardHistoryInsertionActive { return .listeningStopped }
         if secureEventInputEnabled { return .secureInputEnabled }
         guard let targetPID else {
             return frontmostProcessIsThisApp() ? .ownAppFrontmost : nil
@@ -3906,10 +4001,12 @@ final class SnippetExpansionEngine {
         // A previous lease still held would become this one's "original", losing the user's
         // clipboard for good.
         guard finishPendingPasteboardOwnership(schedulingRetryOnFailure: true) else { return false }
+        beforeTemporaryPasteboardWrite?()
         let acquisition = TemporaryPasteboardLease.begin(
             text: text,
             pasteboard: NSPasteboard.general,
-            isConcealed: isConcealed
+            isConcealed: isConcealed,
+            onRestore: afterTemporaryPasteboardRestore
         )
         let lease: TemporaryPasteboardLease
         switch acquisition {
@@ -4611,7 +4708,8 @@ final class SnippetExpansionEngine {
     private func restoreSecurePasteTarget(
         _ focusTarget: SecurePasteTarget,
         waitForAuthenticationSecureInputToClear: Bool = false,
-        logsHandoff: Bool = true
+        logsHandoff: Bool = true,
+        contextIsValid: (() -> Bool)? = nil
     ) async -> Bool {
         let startedAt = ContinuousClock.now
         var succeeded = false
@@ -4625,7 +4723,8 @@ final class SnippetExpansionEngine {
                     startedAt: startedAt, attempts: attempts)
             }
         }
-        guard let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
+        guard contextIsValid?() != false,
+              let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
               !target.isTerminated
         else { return false }
 
@@ -4634,7 +4733,7 @@ final class SnippetExpansionEngine {
             let report = await SecurePasteContainerHandoff.run(
                 sleep: { delay in try? await Task.sleep(for: delay) },
                 observe: { [self] in
-                    guard !target.isTerminated else { return .fieldUnavailable }
+                    guard contextIsValid?() != false, !target.isTerminated else { return .fieldUnavailable }
                     let budget = AXMessagingBudget()
                     let validation = securePasteTargetValidation(focusTarget, budget: budget)
                     if validation == .applicationNotFrontmost { _ = target.activate() }
@@ -4644,6 +4743,7 @@ final class SnippetExpansionEngine {
                         secureEventInputEnabled: secureEventInputEnabled) { return .secureInputPending }
                     return validation
                 }, restoreFocus: {
+                    guard contextIsValid?() != false else { return }
                     let budget = AXMessagingBudget()
                     _ = budget.setAttributeValue(of: focusTarget.textElement,
                         attribute: kAXFocusedAttribute as CFString, value: kCFBooleanTrue)
@@ -4665,7 +4765,8 @@ final class SnippetExpansionEngine {
         ] {
             attempts += 1
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, !target.isTerminated else { return false }
+            guard !Task.isCancelled, !target.isTerminated,
+                  contextIsValid?() != false else { return false }
 
             if SecurePasteAuthenticationHandoffPolicy.secureInputBlocksRestore(
                 waitForAuthenticationSecureInputToClear:

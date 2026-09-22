@@ -1,6 +1,6 @@
 # Snippets Privacy Policy
 
-Last updated: September 6, 2026
+Last updated: September 22, 2026
 
 Snippets is designed so the developer does not receive or read your snippet library.
 
@@ -22,6 +22,30 @@ exposure, but cannot prevent a physical camera from recording a body while it is
 or protect against sufficiently privileged software. The vault auto-locks after five
 minutes without secure-content use, no later than thirty minutes after authentication,
 and immediately on system/session lock, sleep, screensaver start, or iOS backgrounding.
+
+## Optional clipboard history on macOS
+
+Clipboard history is off by default. The library may show a nonmodal invitation;
+choosing **Not Now** dismisses it permanently. You can enable history later in Settings.
+Before you enable it, the history feature does not read the clipboard or register its shortcut.
+
+When enabled, history records new copied text and links, with a copy timestamp and a
+local entry identifier. Contents are encrypted on disk using a separate, non-synchronizable
+Keychain key. History is excluded from app sync, snippet exports, app backups, and diagnostics;
+its storage directory is marked excluded from system backup. While recording is enabled,
+retention is limited to seven days, 1,000 entries, and 32 MiB of text. Individual entries
+larger than 256 KiB, images, and files are not recorded.
+
+Snippets ignores clipboard contents marked sensitive, concealed, transient, or generated,
+and skips its temporary insertion writes. These markers depend on the app that copied the
+text; an unmarked password or other secret can still be captured. You can exclude apps in
+Settings. App exclusions use the frontmost app at capture time and may miss a source if
+you switch apps immediately after copying.
+
+Turning history off stops new recording and releases its shortcut, retaining saved data.
+Expired saved entries are pruned when history is enabled again. **Clear History** deletes
+retained history whether recording is enabled or disabled. Saving an entry as a snippet
+creates an ordinary library item subject to your snippet sync and export settings.
 
 ## Optional iCloud sync
 

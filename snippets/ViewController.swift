@@ -228,6 +228,7 @@ final class ViewController: NSViewController {
     var editorListReloadWorkItem: DispatchWorkItem?
     var clipboardPreviewTimer: Timer?
     var observedPasteboardChangeCount = NSPasteboard.general.changeCount
+    private var awaitsClipboardHistoryEnableFeedback = false
 
     var importExportMessage: String? {
         didSet {
@@ -247,6 +248,7 @@ final class ViewController: NSViewController {
 
     let permissionBannerContainer = NSView()
     let permissionBannerDivider = NSBox()
+    let clipboardHistoryOfferView = ClipboardHistoryOfferView()
     let permissionIconView = NSImageView()
     let permissionStatusLabel = NSTextField(labelWithString: "")
     let permissionButtonsStack = NSStackView()
@@ -386,6 +388,13 @@ final class ViewController: NSViewController {
 
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(refreshClipboardHistoryOffer),
+            name: ClipboardHistoryService.didChangeNotification,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleToggleActionsNotification),
             name: .snippetsToggleActions,
             object: nil
@@ -424,6 +433,7 @@ final class ViewController: NSViewController {
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        refreshClipboardHistoryOffer()
 
         if let window = view.window {
             configureMainWindowChrome(window)
@@ -496,8 +506,44 @@ final class ViewController: NSViewController {
     }
 
     @objc private func handleApplicationDidBecomeActive() {
+        refreshClipboardHistoryOffer()
         guard !engine.accessibilityGranted else { return }
         engine.refreshAccessibilityStatus(prompt: false)
+    }
+
+    @objc func refreshClipboardHistoryOffer() {
+        guard isViewLoaded, let app = NSApp.delegate as? AppDelegate else { return }
+        clipboardHistoryOfferView.isHidden = !app.shouldOfferClipboardHistory
+            || !NSApp.isActive
+            || view.window?.isVisible != true
+            || app.clipboardHistory.isEnabled
+            || app.clipboardHistory.offerDismissed
+        let service = app.clipboardHistory
+        if awaitsClipboardHistoryEnableFeedback, !service.isLoading,
+           service.statusMessage != nil || service.isCapturing || !service.isEnabled {
+            awaitsClipboardHistoryEnableFeedback = false
+            if let message = service.statusMessage {
+                importExportMessage = message
+            } else if service.isCapturing {
+                importExportMessage = GlobalHotkeyManager.shared.clipboardHistoryRegistrationFailed
+                    ? "Clipboard History is on. Open it from the Snippets menu; ⌘⇧V is in use by another app."
+                    : "Clipboard History is on. Press ⌘⇧V to find copied text."
+            }
+        }
+    }
+
+    func enableClipboardHistoryFromOffer() {
+        guard let service = (NSApp.delegate as? AppDelegate)?.clipboardHistory else { return }
+        service.dismissOffer()
+        awaitsClipboardHistoryEnableFeedback = true
+        service.setEnabled(true)
+        if service.isLoading { importExportMessage = "Opening Clipboard History…" }
+        refreshClipboardHistoryOffer()
+    }
+
+    func dismissClipboardHistoryOffer() {
+        (NSApp.delegate as? AppDelegate)?.clipboardHistory.dismissOffer()
+        refreshClipboardHistoryOffer()
     }
 
     /// 1000×660 wants a 1152pt-class display to centre comfortably, so it is

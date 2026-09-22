@@ -13,6 +13,7 @@ private enum SettingsLayout {
 private enum SettingsPane: String, CaseIterable {
     case general
     case expansion
+    case clipboardHistory
     case sync
     case secure
     case backup
@@ -23,6 +24,7 @@ private enum SettingsPane: String, CaseIterable {
         switch self {
         case .general: "General"
         case .expansion: "Expansion"
+        case .clipboardHistory: "Clipboard History"
         case .sync: "Sync"
         case .secure: "Secure"
         case .backup: "Backup"
@@ -35,6 +37,7 @@ private enum SettingsPane: String, CaseIterable {
         switch self {
         case .general: "gearshape"
         case .expansion: "textformat"
+        case .clipboardHistory: "clock.arrow.circlepath"
         case .sync: "arrow.triangle.2.circlepath"
         case .secure: "lock"
         case .backup: "externaldrive"
@@ -47,6 +50,7 @@ private enum SettingsPane: String, CaseIterable {
         switch self {
         case .general: 330
         case .expansion: 560
+        case .clipboardHistory: 520
         case .sync: 480
         case .secure: 480
         case .backup: 300
@@ -89,6 +93,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     func showSettings() {
+        GlobalHotkeyManager.shared.syncRegistration()
         settingsViewController.reloadFromStorage()
         settingsViewController.resizeForCurrentPane(animated: false)
         if window?.isVisible == false {
@@ -102,6 +107,11 @@ final class SettingsWindowController: NSWindowController {
         settingsViewController.selectSync()
         showSettings()
     }
+
+    func showClipboardHistorySettings() {
+        settingsViewController.selectClipboardHistory()
+        showSettings()
+    }
 }
 
 @MainActor
@@ -110,6 +120,7 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
 
     private let generalViewController = GeneralSettingsViewController()
     private let expansionViewController = ExpansionSettingsViewController()
+    private let clipboardHistoryViewController = ClipboardHistorySettingsViewController()
     private let vaultViewController = VaultSettingsViewController()
     private let syncViewController = SyncSettingsViewController()
     private let backupViewController = BackupSettingsViewController()
@@ -126,6 +137,7 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
 
         addTab(.general, viewController: generalViewController)
         addTab(.expansion, viewController: expansionViewController)
+        addTab(.clipboardHistory, viewController: clipboardHistoryViewController)
         addTab(.sync, viewController: syncViewController)
         addTab(.secure, viewController: vaultViewController)
         addTab(.backup, viewController: backupViewController)
@@ -154,6 +166,7 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
     func reloadFromStorage() {
         generalViewController.reloadFromStorage()
         expansionViewController.reloadFromStorage()
+        clipboardHistoryViewController.reloadFromStorage()
         vaultViewController.reloadFromStorage()
         syncViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
@@ -162,6 +175,10 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
 
     func selectSync() {
         select(.sync, highlighting: [])
+    }
+
+    func selectClipboardHistory() {
+        select(.clipboardHistory, highlighting: [])
     }
 
     func resizeForCurrentPane(animated: Bool) {
@@ -504,6 +521,15 @@ private struct MacSettingsSearchEntry {
         .init(title: "Reset Usage Data", pane: .expansion,
               terms: ["clear ranking", "forget usage", "suggestions"],
               needles: ["Reset Usage Data"]),
+        .init(title: "Clipboard History", pane: .clipboardHistory,
+              terms: ["copied text", "links", "enable", "pause", "command shift v", "retention", "7 days", "encrypted"],
+              needles: ["Keep Clipboard History"]),
+        .init(title: "Clear Clipboard History", pane: .clipboardHistory,
+              terms: ["delete", "remove", "copied text", "privacy"],
+              needles: ["Clear History"]),
+        .init(title: "Excluded Clipboard Apps", pane: .clipboardHistory,
+              terms: ["ignore", "exclude", "applications", "clipboard history"],
+              needles: ["Excluded Apps"]),
         .init(title: "Enable iCloud Sync", pane: .sync,
               terms: ["cloud sync", "turn on", "devices"],
               needles: ["Cloud Sync"]),
@@ -1330,6 +1356,221 @@ private final class BackupSettingsViewController: NSViewController {
 
     @objc private func exportEncryptedBackup() {
         (NSApp.delegate as? AppDelegate)?.exportEncryptedBackup(nil)
+    }
+}
+
+@MainActor
+private final class ClipboardHistorySettingsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
+    private let enabledCheckbox = NSButton(checkboxWithTitle: "Keep Clipboard History", target: nil, action: nil)
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let countLabel = NSTextField(labelWithString: "")
+    private let clearButton = NSButton(title: "Clear History…", target: nil, action: nil)
+    private let tableView = NSTableView()
+    private let removeButton = NSButton(title: "Remove Selected", target: nil, action: nil)
+    private var excludedBundleIDs: [String] = []
+
+    private var service: ClipboardHistoryService? {
+        (NSApp.delegate as? AppDelegate)?.clipboardHistory
+    }
+
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+        let title = makeSettingsSectionTitle("Clipboard History")
+        let intro = makeSecondaryLabel(
+            "Find copied text and links with ⌘⇧V. History is encrypted on this Mac and never synced. Items marked as secure or temporary are skipped.")
+        let limits = makeTertiaryLabel(
+            "Keep up to 1,000 items for 7 days. Turning history off keeps saved data; expired items are removed when you enable it again. Clear History deletes it now.")
+        enabledCheckbox.target = self
+        enabledCheckbox.action = #selector(changeEnabled)
+        enabledCheckbox.setAccessibilityIdentifier("clipboardHistoryEnabled")
+        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.textColor = .secondaryLabelColor
+        countLabel.font = .systemFont(ofSize: 12)
+        countLabel.textColor = .secondaryLabelColor
+        clearButton.target = self
+        clearButton.action = #selector(confirmClearHistory)
+        clearButton.setAccessibilityIdentifier("clipboardHistoryClear")
+        LiquidGlassDesign.configureActionButton(clearButton, symbolName: "trash")
+        let clearRow = NSStackView(views: [countLabel, NSView(), clearButton])
+        clearRow.orientation = .horizontal
+        clearRow.alignment = .centerY
+        clearRow.spacing = 8
+
+        let exclusionsTitle = makeSettingsSectionTitle("Excluded Apps")
+        let exclusionsHelp = makeTertiaryLabel(
+            "Skip new copies while one of these apps is active. Existing items stay in history until you clear them.")
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder
+        scrollView.drawsBackground = false
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("ClipboardExcludedApp"))
+        column.resizingMask = .autoresizingMask
+        tableView.addTableColumn(column)
+        tableView.headerView = nil
+        tableView.backgroundColor = .clear
+        tableView.rowHeight = 30
+        tableView.style = .inset
+        tableView.allowsEmptySelection = true
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.setAccessibilityLabel("Apps excluded from Clipboard History")
+        scrollView.documentView = tableView
+        scrollView.heightAnchor.constraint(equalToConstant: 108).isActive = true
+        let addButton = NSButton(title: "Add App…", target: self, action: #selector(addExcludedApp))
+        removeButton.target = self
+        removeButton.action = #selector(removeExcludedApp)
+        LiquidGlassDesign.configureActionButton(addButton, symbolName: "plus")
+        LiquidGlassDesign.configureActionButton(removeButton, symbolName: "minus")
+        let exclusionActions = NSStackView(views: [addButton, removeButton, NSView()])
+        exclusionActions.orientation = .horizontal
+        exclusionActions.spacing = 8
+
+        let separator = NSBox.horizontalSeparator()
+        for item in [title, intro, enabledCheckbox, statusLabel, limits, clearRow,
+                     separator, exclusionsTitle, exclusionsHelp, scrollView, exclusionActions] {
+            stack.addArrangedSubview(item)
+        }
+        for item in [intro, statusLabel, limits, clearRow, separator, exclusionsHelp, scrollView, exclusionActions] {
+            item.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        reloadFromStorage()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(historyDidChange),
+            name: ClipboardHistoryService.didChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(historyDidChange),
+            name: .snippetsGlobalHotkeyChanged, object: nil)
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        reloadFromStorage()
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    func reloadFromStorage() {
+        guard isViewLoaded else { return }
+        guard let service else {
+            enabledCheckbox.isEnabled = false
+            clearButton.isEnabled = false
+            removeButton.isEnabled = false
+            statusLabel.stringValue = "Clipboard History is unavailable."
+            return
+        }
+        enabledCheckbox.isEnabled = true
+        enabledCheckbox.state = service.isEnabled ? .on : .off
+        if service.isLoading {
+            countLabel.stringValue = "Updating saved history…"
+        } else if service.entries.isEmpty, service.statusMessage != nil {
+            countLabel.stringValue = "Saved history is unavailable."
+        } else if !service.isEnabled, service.entries.isEmpty {
+            countLabel.stringValue = "Clear saved history at any time."
+        } else {
+            countLabel.stringValue = service.entries.isEmpty ? "No saved items."
+                : "\(service.entries.count) saved item\(service.entries.count == 1 ? "" : "s")."
+        }
+        let captureStatus = service.isCapturing ? "History is on. Open it with ⌘⇧V."
+            : (service.isLoading ? "Preparing Clipboard History…" : "History is off. New copies are not saved.")
+        var status = service.statusMessage ?? captureStatus
+        if GlobalHotkeyManager.shared.clipboardHistoryRegistrationFailed {
+            status += " macOS could not register ⌘⇧V. Quit the app using that shortcut, then reopen Settings to retry. You can also open history from the Snippets menu."
+        }
+        statusLabel.stringValue = status
+        // Clearing remains available while capture is off, including after a storage error.
+        clearButton.isEnabled = true
+        let selectedID = excludedBundleIDs.indices.contains(tableView.selectedRow)
+            ? excludedBundleIDs[tableView.selectedRow] : nil
+        excludedBundleIDs = service.excludedBundleIDs
+        tableView.reloadData()
+        if let selectedID, let row = excludedBundleIDs.firstIndex(of: selectedID) {
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        updateRemoveButton()
+    }
+
+    @objc private func historyDidChange() { reloadFromStorage() }
+
+    @objc private func changeEnabled() {
+        guard let service else { return }
+        service.dismissOffer()
+        service.setEnabled(enabledCheckbox.state == .on)
+        reloadFromStorage()
+    }
+
+    @objc private func confirmClearHistory() {
+        guard let service else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Clear Clipboard History?"
+        alert.informativeText = "This permanently deletes all saved clipboard items on this Mac. Your current clipboard and snippets stay as they are."
+        alert.addButton(withTitle: "Clear History")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        let clear: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            service.clear()
+            self?.reloadFromStorage()
+        }
+        if let window = view.window {
+            alert.beginSheetModal(for: window, completionHandler: clear)
+        } else {
+            clear(alert.runModal())
+        }
+    }
+
+    @objc private func addExcludedApp() {
+        guard let service, let window = view.window else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = URL(filePath: "/Applications", directoryHint: .isDirectory)
+        panel.prompt = "Exclude Apps"
+        panel.message = "Clipboard History will skip new copies while these apps are active."
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK else { return }
+            let bundleIDs = panel.urls.compactMap { Bundle(url: $0)?.bundleIdentifier }
+            guard !bundleIDs.isEmpty else {
+                self?.statusLabel.stringValue = "The selected apps do not have a readable bundle identifier."
+                return
+            }
+            service.excludedBundleIDs = Array(Set(service.excludedBundleIDs + bundleIDs)).sorted()
+            self?.reloadFromStorage()
+        }
+    }
+
+    @objc private func removeExcludedApp() {
+        guard let service, excludedBundleIDs.indices.contains(tableView.selectedRow) else { return }
+        let removed = excludedBundleIDs[tableView.selectedRow]
+        service.excludedBundleIDs = service.excludedBundleIDs.filter { $0 != removed }
+        reloadFromStorage()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { excludedBundleIDs.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard excludedBundleIDs.indices.contains(row) else { return nil }
+        let bundleID = excludedBundleIDs[row]
+        let appName = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            .map { FileManager.default.displayName(atPath: $0.path) }
+        let label = NSTextField(labelWithString: appName.map { "\($0) — \(bundleID)" } ?? bundleID)
+        label.lineBreakMode = .byTruncatingMiddle
+        label.toolTip = bundleID
+        return label
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) { updateRemoveButton() }
+
+    private func updateRemoveButton() {
+        removeButton.isEnabled = excludedBundleIDs.indices.contains(tableView.selectedRow)
     }
 }
 

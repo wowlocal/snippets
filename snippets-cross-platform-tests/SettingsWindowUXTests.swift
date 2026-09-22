@@ -9,6 +9,7 @@ final class SettingsWindowUXTests: XCTestCase {
     private let expectedPanes = [
         "General",
         "Expansion",
+        "Clipboard History",
         "Sync",
         "Secure",
         "Backup",
@@ -33,7 +34,7 @@ final class SettingsWindowUXTests: XCTestCase {
         let paneIdentifiers = tabs.tabViewItems.compactMap { $0.identifier as? String }
         XCTAssertEqual(
             paneIdentifiers,
-            ["general", "expansion", "sync", "secure", "backup", "integrations", "diagnostics"]
+            ["general", "expansion", "clipboardHistory", "sync", "secure", "backup", "integrations", "diagnostics"]
         )
 
         for (index, title) in expectedPanes.enumerated() {
@@ -111,7 +112,7 @@ final class SettingsWindowUXTests: XCTestCase {
         settle()
         XCTAssertEqual(window.frame.width, 780, accuracy: 1)
 
-        tabs.selectedTabViewItemIndex = 4
+        tabs.selectedTabViewItemIndex = 5
         settle()
         XCTAssertEqual(window.frame.width, 780, accuracy: 1)
         XCTAssertEqual(window.title, "Backup")
@@ -127,7 +128,7 @@ final class SettingsWindowUXTests: XCTestCase {
         settle()
 
         // Exercise a short/tall mix while the preceding window resize is still in flight.
-        for index in [1, 4, 6, 0, 5, 4, 3] {
+        for index in [1, 5, 7, 0, 6, 2, 5, 4] {
             tabs.selectedTabViewItemIndex = index
             settle(0.03)
         }
@@ -319,7 +320,7 @@ final class SettingsWindowUXTests: XCTestCase {
         defer { window.close() }
 
         controller.showSettings()
-        tabs.selectedTabViewItemIndex = 4
+        tabs.selectedTabViewItemIndex = 5
         settle()
 
         let backupView = try XCTUnwrap(tabs.tabViewItems[tabs.selectedTabViewItemIndex].viewController?.view)
@@ -334,8 +335,8 @@ final class SettingsWindowUXTests: XCTestCase {
         let tabs = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         defer { window.close() }
 
-        tabs.selectedTabViewItemIndex = 6
-        let diagnosticsView = try XCTUnwrap(tabs.tabViewItems[6].viewController?.view)
+        tabs.selectedTabViewItemIndex = 7
+        let diagnosticsView = try XCTUnwrap(tabs.tabViewItems[7].viewController?.view)
         let buttons = descendants(of: diagnosticsView).compactMap { $0 as? NSButton }
         let exportButton = try XCTUnwrap(buttons.first { $0.title == "Export Logs…" })
         let deleteButton = try XCTUnwrap(buttons.first { $0.title == "Delete Logs" })

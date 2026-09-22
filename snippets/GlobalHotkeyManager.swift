@@ -18,6 +18,7 @@ final class GlobalHotkeyManager {
     /// How the shortcut is rendered in menus and settings copy.
     static let displayString = "⌥⌘\\"
     static let securePasteDisplayString = "⌘\\"
+    static let clipboardHistoryDisplayString = "⇧⌘V"
 
     /// `\` by physical key position: Carbon matches virtual key codes, not the
     /// character the active keyboard layout produces.
@@ -27,10 +28,16 @@ final class GlobalHotkeyManager {
     private static let signature = OSType(0x534E5054) // 'SNPT'
     private static let openIdentifier: UInt32 = 1
     private static let securePasteIdentifier: UInt32 = 2
+    private static let clipboardHistoryIdentifier: UInt32 = 3
 
     /// Called on the main thread each time the shortcut fires.
     var onTrigger: (() -> Void)?
     var onSecurePasteTrigger: (() -> Void)?
+    var onClipboardHistoryTrigger: (() -> Void)?
+    var clipboardHistoryEnabled = false {
+        didSet { if oldValue != clipboardHistoryEnabled { syncRegistration() } }
+    }
+    private(set) var clipboardHistoryRegistrationFailed = false
 
     /// True when a shortcut is enabled but macOS refused its registration,
     /// which normally means another app already owns that key combination.
@@ -61,9 +68,11 @@ final class GlobalHotkeyManager {
     }
 
     var isSecurePasteActive: Bool { securePasteHotKeyRef != nil }
+    var isClipboardHistoryActive: Bool { clipboardHistoryHotKeyRef != nil }
 
     private var openHotKeyRef: EventHotKeyRef?
     private var securePasteHotKeyRef: EventHotKeyRef?
+    private var clipboardHistoryHotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
 
     private init() {}
@@ -83,6 +92,8 @@ final class GlobalHotkeyManager {
     private func applyRegistration() -> Bool {
         let openWasActive = isActive
         let securePasteWasActive = isSecurePasteActive
+        let clipboardWasActive = isClipboardHistoryActive
+        let clipboardWasFailed = clipboardHistoryRegistrationFailed
 
         if isEnabled {
             register()
@@ -90,7 +101,26 @@ final class GlobalHotkeyManager {
             unregister()
         }
 
+        if clipboardHistoryEnabled {
+            if clipboardHistoryHotKeyRef == nil {
+                if installEventHandlerIfNeeded() {
+                    let result = registerHotKey(keyCode: UInt32(kVK_ANSI_V),
+                        modifierFlags: UInt32(cmdKey | shiftKey), identifier: Self.clipboardHistoryIdentifier)
+                    clipboardHistoryHotKeyRef = result.reference
+                    clipboardHistoryRegistrationFailed = result.reference == nil
+                } else {
+                    clipboardHistoryRegistrationFailed = true
+                }
+            }
+        } else {
+            if let clipboardHistoryHotKeyRef { UnregisterEventHotKey(clipboardHistoryHotKeyRef) }
+            clipboardHistoryHotKeyRef = nil
+            clipboardHistoryRegistrationFailed = false
+        }
+
         return isActive != openWasActive || isSecurePasteActive != securePasteWasActive
+            || clipboardWasActive != isClipboardHistoryActive
+            || clipboardWasFailed != clipboardHistoryRegistrationFailed
     }
 
     private func postChangeNotification() {
@@ -108,6 +138,7 @@ final class GlobalHotkeyManager {
 
         if openHotKeyRef == nil {
             let result = registerHotKey(
+                keyCode: Self.keyCode,
                 modifierFlags: Self.openModifierFlags,
                 identifier: Self.openIdentifier
             )
@@ -118,6 +149,7 @@ final class GlobalHotkeyManager {
 
         if securePasteHotKeyRef == nil {
             let result = registerHotKey(
+                keyCode: Self.keyCode,
                 modifierFlags: Self.securePasteModifierFlags,
                 identifier: Self.securePasteIdentifier
             )
@@ -132,6 +164,7 @@ final class GlobalHotkeyManager {
     }
 
     private func registerHotKey(
+        keyCode: UInt32,
         modifierFlags: UInt32,
         identifier: UInt32
     ) -> (reference: EventHotKeyRef?, status: OSStatus) {
@@ -141,7 +174,7 @@ final class GlobalHotkeyManager {
         // key event reaches us through NSApplication's Carbon event dispatch,
         // so the handler has to sit on the same target the key is bound to.
         let status = RegisterEventHotKey(
-            Self.keyCode,
+            keyCode,
             modifierFlags,
             hotKeyID,
             GetEventDispatcherTarget(),
@@ -235,6 +268,9 @@ final class GlobalHotkeyManager {
             return noErr
         case Self.securePasteIdentifier:
             onSecurePasteTrigger?()
+            return noErr
+        case Self.clipboardHistoryIdentifier:
+            onClipboardHistoryTrigger?()
             return noErr
         default:
             return OSStatus(eventNotHandledErr)

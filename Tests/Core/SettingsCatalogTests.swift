@@ -5,7 +5,7 @@ final class SettingsCatalogTests: XCTestCase {
     func testMacNavigationMatchesProductInformationArchitecture() {
         XCTAssertEqual(
             SettingsCatalog.navigationSections(for: .macOS).flatMap(\.destinations),
-            [.general, .expansion, .sync, .secureSnippets, .backup, .integrations, .diagnostics, .about]
+            [.general, .expansion, .clipboardHistory, .sync, .secureSnippets, .backup, .integrations, .diagnostics, .about]
         )
     }
 
@@ -31,6 +31,21 @@ final class SettingsCatalogTests: XCTestCase {
     func testIOSSearchDoesNotExposeMacOnlyRows() {
         XCTAssertTrue(SettingsCatalog.search("launch startup", platform: .iOS).isEmpty)
         XCTAssertTrue(SettingsCatalog.search("command line", platform: .iOS).isEmpty)
+        XCTAssertTrue(SettingsCatalog.search("clipboard", platform: .iOS).isEmpty)
+    }
+
+    func testClipboardHistorySearchFindsCapturePrivacyAndClearControlsOnMac() {
+        XCTAssertEqual(
+            SettingsCatalog.search("command shift v", platform: .macOS).first?.rowID,
+            .clipboardHistoryEnabled)
+        XCTAssertEqual(
+            SettingsCatalog.search("clear clipboard", platform: .macOS).first?.rowID,
+            .clearClipboardHistory)
+        XCTAssertEqual(
+            SettingsCatalog.search("clipboard exclude", platform: .macOS).first?.rowID,
+            .clipboardExcludedApps)
+        XCTAssertTrue(SettingsCatalog.search("clipboard", platform: .macOS)
+            .allSatisfy { $0.destination == .clipboardHistory })
     }
 
     func testCatalogContainsOnlyStaticProductCopy() {

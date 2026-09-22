@@ -86,7 +86,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // either directory after the monitor went up would look like a library edit.
     let diagnostics = DiagnosticsService.shared
     let usageStore = SnippetUsageStore()
+    // An already-enabled history creates its directory before the library watcher starts.
+    let clipboardHistory: ClipboardHistoryService = {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil {
+            // A hosted test must not inherit the user's recording consent or watch real copies.
+            let defaults = UserDefaults(suiteName: "com.khm.snippets.clipboard-history.test-host")!
+            defaults.set(false, forKey: ClipboardHistoryService.enabledPreferenceKey)
+            defaults.set(true, forKey: ClipboardHistoryService.offerDismissedPreferenceKey)
+            return ClipboardHistoryService(defaults: defaults, schedulesTimer: false)
+        }
+        #endif
+        return ClipboardHistoryService()
+    }()
     let store = SnippetStore()
+    private(set) var shouldOfferClipboardHistory = false
+    private lazy var clipboardHistoryPanel = ClipboardHistoryPanelController(service: clipboardHistory)
+    private var clipboardHistoryPasteInFlight = false
+    private weak var statusMenuClipboardHistoryItem: NSMenuItem?
+    private var statusMenuClipboardHistoryDestination: ClipboardHistoryDestination?
+
+    private enum ClipboardHistoryDestination {
+        case external(SnippetExpansionEngine.SecurePasteTarget)
+        case local(LocalClipboardHistoryDestination)
+    }
+
+    private struct LocalClipboardHistoryDestination {
+        let editor: NSTextView
+        let selection: NSRange
+        let window: NSWindow
+        let delegate: AnyObject?
+        let text: String
+        let snippetID: UUID?
+
+        var isCurrent: Bool {
+            editor.window === window && window.isVisible && editor.isEditable
+                && window.firstResponder === editor
+                && editor.delegate as AnyObject? === delegate
+                && editor.selectedRange() == selection
+                && editor.string.utf8.elementsEqual(text.utf8)
+                && (window.contentViewController as? ViewController)?.selectedSnippetID == snippetID
+                && (editor as? SnippetContentTextView)?.isSecureContentMode != true
+                && !(editor.delegate is NSSecureTextField)
+        }
+    }
     /// AppKit ignores per-view protected-content attributes unless the process
     /// first opts into the application-wide contract. Kept as a separate,
     /// injectable object so the fail-closed path is deterministic in tests.
@@ -133,6 +179,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var syncEngine: SyncEngine? { syncCoordinator.engine }
     lazy var expansionEngine: SnippetExpansionEngine = {
         let engine = SnippetExpansionEngine(store: store, usage: usageStore)
+        engine.beforeTemporaryPasteboardWrite = { [weak self] in self?.clipboardHistory.capturePendingCopy() }
+        engine.afterTemporaryPasteboardRestore = { [weak self] count in
+            self?.clipboardHistory.acknowledgeInternalChange(count)
+        }
         let diagnostics = diagnostics
         engine.expansionVerboseDiagnosticsEnabled = {
             diagnostics.expansionVerboseLogging.isEnabled
@@ -256,6 +306,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let isDefaultLaunch =
             notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
         initialLaunchRouting.begin(isDefaultLaunch: isDefaultLaunch)
+        clipboardHistory.onWillCreateStorageDirectory = { [weak store] in
+            store?.beginAuxiliaryStorageDirectoryCreation()
+        }
+        clipboardHistory.onDidCreateStorageDirectory = { [weak store] in
+            store?.finishAuxiliaryStorageDirectoryCreation()
+        }
 
         // Consulted only when the usage file hits its record cap, so that a
         // forced eviction drops UUIDs of deleted snippets before live ones.
@@ -354,6 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // Synchronous on purpose: this method returns and the process dies long
         // before an async write would run, so an async flush here writes nothing.
         usageStore.flush(synchronously: true)
+        clipboardHistory.flushSynchronously()
         store.flushPendingWrites()
         Diagnostics.flush()
         NotificationCenter.default.removeObserver(self)
@@ -409,6 +466,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         #endif
         setupStatusItem()
         setupGlobalHotkey()
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(clipboardHistoryDidChange),
+            name: ClipboardHistoryService.didChangeNotification, object: clipboardHistory)
         setupServicesProvider()
         NotificationCenter.default.addObserver(
             self,
@@ -910,6 +970,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // `menuWillOpen` fills the title in: it carries a preview of what the
         // clipboard holds right now, which is only knowable at open time.
         statusMenuClipboardItem = clipboardItem
+        let historyItem = NSMenuItem(title: "Clipboard History…",
+            action: #selector(openClipboardHistoryFromMenu(_:)), keyEquivalent: "")
+        historyItem.target = self
+        LiquidGlassDesign.applyMenuSymbol("clock.arrow.circlepath", to: historyItem)
+        statusMenuClipboardHistoryItem = historyItem
         let resetQuitBehaviorItem = NSMenuItem(
             title: "Reset Remembered Cmd+Q Choice",
             action: #selector(resetQuitBehaviorPreference(_:)),
@@ -924,6 +989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.delegate = self
         menu.addItem(openItem)
         menu.addItem(securePasteItem)
+        menu.addItem(historyItem)
         menu.addItem(clipboardItem)
         menu.addItem(.separator())
         menu.addItem(resetQuitBehaviorItem)
@@ -934,6 +1000,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
+        statusMenuClipboardHistoryDestination = clipboardHistory.isEnabled
+            ? captureClipboardHistoryDestination() : nil
         // Secure Event Input can suppress every keyboard observer, including a
         // registered global hotkey. Mouse tracking still works, so capture the
         // destination before this menu becomes the only reliable entry point.
@@ -954,6 +1022,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // menu must not retain an AX target until its next opening.
         DispatchQueue.main.async { [weak self] in
             self?.statusMenuSecurePasteDestination = nil
+            self?.statusMenuClipboardHistoryDestination = nil
         }
     }
 
@@ -981,8 +1050,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         manager.onSecurePasteTrigger = { [weak self] in
             self?.toggleSecurePasteFromGlobalHotkey()
         }
+        manager.onClipboardHistoryTrigger = { [weak self] in self?.toggleClipboardHistory() }
+        manager.clipboardHistoryEnabled = clipboardHistory.isEnabled
         manager.syncRegistration()
         refreshGlobalHotkeyMenuHint()
+    }
+
+    @objc private func clipboardHistoryDidChange() {
+        GlobalHotkeyManager.shared.clipboardHistoryEnabled = clipboardHistory.isEnabled
+        if !clipboardHistory.isEnabled { clipboardHistoryPanel.dismiss(returnFocus: false) }
+        refreshGlobalHotkeyMenuHint()
+    }
+
+    private func captureClipboardHistoryDestination() -> ClipboardHistoryDestination? {
+        if NSApp.isActive, let window = NSApp.keyWindow,
+           let editor = window.firstResponder as? NSTextView, editor.isEditable,
+           (editor as? SnippetContentTextView)?.isSecureContentMode != true,
+           !(editor.delegate is NSSecureTextField) {
+            return .local(.init(editor: editor, selection: editor.selectedRange(), window: window,
+                delegate: editor.delegate as AnyObject?, text: editor.string,
+                snippetID: (window.contentViewController as? ViewController)?.selectedSnippetID))
+        }
+        return expansionEngine.captureClipboardHistoryTarget().map(ClipboardHistoryDestination.external)
+    }
+
+    @objc private func openClipboardHistoryFromMenu(_ sender: Any?) {
+        guard clipboardHistory.isEnabled else {
+            let controller = settingsWindowController ?? SettingsWindowController()
+            settingsWindowController = controller
+            controller.showClipboardHistorySettings()
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let destination = statusMenuClipboardHistoryDestination
+        statusMenuClipboardHistoryDestination = nil
+        DispatchQueue.main.async { [weak self] in self?.toggleClipboardHistory(destination: destination) }
+    }
+
+    private func toggleClipboardHistory(destination capturedDestination: ClipboardHistoryDestination? = nil) {
+        guard clipboardHistory.isEnabled else { return }
+        if clipboardHistoryPanel.isVisible {
+            clipboardHistoryPanel.dismiss(returnFocus: true)
+            return
+        }
+        guard securePasteTask == nil, !clipboardHistoryPasteInFlight else { NSSound.beep(); return }
+        securePasteFieldSelection.cancel()
+        expansionEngine.cancelSecurePastePicker(returnFocus: false)
+        clipboardHistory.capturePendingCopy()
+        let destination = capturedDestination ?? captureClipboardHistoryDestination()
+        expansionEngine.setClipboardHistoryPickerActive(true)
+        clipboardHistoryPanel.show(canPaste: destination != nil,
+            onPaste: { [weak self] entry in
+                guard let self, let destination else { return }
+                switch destination {
+                case .external(let target):
+                    self.clipboardHistoryPasteInFlight = true
+                    self.expansionEngine.pasteClipboardHistoryText(entry.text, to: target) { [weak self] message in
+                        guard let self else { return }
+                        self.clipboardHistoryPasteInFlight = false
+                        if let message { self.transientScreenMessageController.show(message, kind: .failure) }
+                    }
+                case .local(let target):
+                    guard target.isCurrent else {
+                        self.transientScreenMessageController.show("The original field changed. Try again.", kind: .failure)
+                        return
+                    }
+                    target.window.makeKeyAndOrderFront(nil)
+                    target.window.makeFirstResponder(target.editor)
+                    target.editor.insertText(entry.text, replacementRange: target.selection)
+                }
+            }, onCopy: { [weak self] entry in
+                guard let self else { return }
+                let copied = self.expansionEngine.copyClipboardHistoryText(entry.text)
+                self.transientScreenMessageController.show(
+                    copied ? "Copied from history." : "Could not copy. Your clipboard may still be restoring.",
+                    kind: copied ? .confirmation : .failure)
+            }, onCreateSnippet: { [weak self] entry in
+                self?.showMainWindow()?.createSnippet(seededContent: entry.text, seededName: nil)
+            }, onDismiss: { [weak self] returnFocus in
+                guard let self else { return }
+                self.expansionEngine.setClipboardHistoryPickerActive(false)
+                guard returnFocus, let destination else { return }
+                switch destination {
+                case .external(let target):
+                    Task { @MainActor [weak self] in
+                        await self?.expansionEngine.returnFocusAfterCancellingClipboardHistory(target)
+                    }
+                case .local(let target):
+                    if target.isCurrent {
+                        target.window.makeKeyAndOrderFront(nil)
+                        target.window.makeFirstResponder(target.editor)
+                    }
+                }
+            })
     }
 
     private func captureSecurePasteDestination() -> SecurePasteDestination? {
@@ -999,6 +1159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func toggleSecurePasteFromGlobalHotkey() {
+        clipboardHistoryPanel.dismiss(returnFocus: false)
         if securePasteFieldSelection.isVisible {
             securePasteFieldSelection.cancel()
             suppressMainWindowForColdServicePicker = false
@@ -1057,6 +1218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func beginSecurePaste(for destination: SecurePasteDestination) {
+        guard !clipboardHistoryPasteInFlight else { NSSound.beep(); return }
+        clipboardHistoryPanel.dismiss(returnFocus: false)
         securePasteFieldSelection.cancel()
         if case .chooseField(let context) = destination {
             securePasteFieldSelection.show(frame: context.frame, targetPID: context.targetPID,
@@ -1232,6 +1395,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         statusMenuSecurePasteItem?.keyEquivalentModifierMask = showsSecurePasteShortcut
             ? [.command]
             : []
+        statusMenuClipboardHistoryItem?.keyEquivalent = manager.isClipboardHistoryActive ? "v" : ""
+        statusMenuClipboardHistoryItem?.keyEquivalentModifierMask = manager.isClipboardHistoryActive
+            ? [.command, .shift] : []
     }
 
     #if DEBUG && !NO_SPARKLE
@@ -1511,6 +1677,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Activation Policy Switching
 
     private func hideToBackground() {
+        shouldOfferClipboardHistory = false
+        clipboardHistoryPanel.dismiss(returnFocus: false)
         securePasteFieldSelection.cancel()
         if securePasteDestination != nil {
             expansionEngine.cancelSecurePastePicker(returnFocus: true)
@@ -1538,6 +1706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @discardableResult
     private func showMainWindow() -> ViewController? {
+        shouldOfferClipboardHistory = true
         initialLaunchRouting.cancel()
         suppressMainWindowForColdServicePicker = false
         NSApp.setActivationPolicy(.regular)
@@ -1550,6 +1719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             refreshWindowUpdateAccessories()
             #endif
             NSApp.activate(ignoringOtherApps: true)
+            (window.contentViewController as? ViewController)?.refreshClipboardHistoryOffer()
             return window.contentViewController as? ViewController
         } else {
             let storyboard = NSStoryboard(name: "Main", bundle: nil)
@@ -1565,6 +1735,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         refreshWindowUpdateAccessories()
         #endif
         NSApp.activate(ignoringOtherApps: true)
+        (window?.contentViewController as? ViewController)?.refreshClipboardHistoryOffer()
         return window?.contentViewController as? ViewController
     }
 

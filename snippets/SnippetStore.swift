@@ -1880,7 +1880,25 @@ final class SnippetStore {
             guard let self else { return }
             self.scheduleExternalReload(immediately: true)
         }
+        startObservingSupportDirectory()
+        #endif
+    }
 
+    #if os(macOS)
+    /// Creating an opt-in feature's directory must not look like an external library edit.
+    func beginAuxiliaryStorageDirectoryCreation() {
+        saveDirectoryMonitor?.cancel()
+        saveDirectoryMonitor = nil
+    }
+
+    func finishAuxiliaryStorageDirectoryCreation() {
+        startObservingSupportDirectory()
+        // Reconcile any genuine writer that ran during the short observer gap.
+        _ = reloadFromDiskIfNeeded()
+    }
+
+    private func startObservingSupportDirectory() {
+        guard saveDirectoryMonitor == nil else { return }
         let descriptor = open(saveFolderURL.path, O_EVTONLY)
         guard descriptor >= 0 else { return }
 
@@ -1898,8 +1916,8 @@ final class SnippetStore {
         }
         saveDirectoryMonitor = monitor
         monitor.resume()
-        #endif
     }
+    #endif
 
     private func scheduleExternalReload(immediately: Bool) {
         externalReloadWorkItem?.cancel()

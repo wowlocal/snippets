@@ -75,6 +75,42 @@ private func acquiredLease(
 @Suite("Temporary pasteboard lease")
 @MainActor
 struct TemporaryPasteboardLeaseSwiftTests {
+    @Test("history acknowledges only a successfully restored generation")
+    func historyRestoreCallbackPreservesNewUserCopies() throws {
+        let pasteboard = FakePasteboard()
+        pasteboard.items = [item([(.string, "original")])]
+        var restored: [Int] = []
+        let lease = try #require(TemporaryPasteboardLease.begin(text: "{clipboard}",
+            pasteboard: pasteboard, onRestore: { restored.append($0) }).acquiredLease)
+        #expect(restored.isEmpty)
+        #expect(pasteboard.items.first?.string(forType: .string) == "{clipboard}")
+        #expect(lease.restoreWithRetries())
+        #expect(restored == [pasteboard.changeCount])
+        _ = lease.restoreIfOwned()
+        #expect(restored.count == 1)
+
+        let second = try #require(TemporaryPasteboardLease.begin(text: "temporary",
+            pasteboard: pasteboard, onRestore: { restored.append($0) }).acquiredLease)
+        pasteboard.clearContents()
+        pasteboard.items = [item([(.string, "new copy")])]
+        #expect(second.restoreIfOwned() == .superseded)
+        #expect(restored.count == 1)
+        #expect(pasteboard.items.first?.string(forType: .string) == "new copy")
+    }
+
+    @Test("failed acquisition rollback is acknowledged without hiding a foreign copy")
+    func historyObservesAcquisitionRollback() throws {
+        let pasteboard = FakePasteboard()
+        pasteboard.items = [item([(.string, "original")])]
+        pasteboard.writeFailuresRemaining = 1
+        var restored: [Int] = []
+        let result = TemporaryPasteboardLease.begin(text: "temporary", pasteboard: pasteboard,
+            onRestore: { restored.append($0) })
+        #expect(result.isRefused)
+        #expect(restored == [pasteboard.changeCount])
+        #expect(pasteboard.items.first?.string(forType: .string) == "original")
+    }
+
     @Test("a rich multi-item clipboard lends only replacement text")
     func temporaryLeaseExcludesEveryOriginalRepresentation() throws {
         let pasteboard = FakePasteboard()

@@ -46,6 +46,24 @@ The project is free and open source under the [MIT License](LICENSE).
 - Copy a snippet, paste it into the previously active Mac app, or share an ordinary
   snippet through the system share sheet on iOS.
 
+### Optional clipboard history on macOS
+
+- Enable history from the one-time library invitation or **Settings → Clipboard History**.
+  Until enabled, history does not monitor the clipboard or register `⌘⇧V`.
+- Press `⌘⇧V` for a searchable list and full text preview. Return inserts into the
+  original field, `⌘Return` copies, and `⌘N` opens a snippet draft from the selected entry.
+  With no supported text field, Return copies instead. Escape closes the panel.
+- Text and links stay literal, including whitespace and `{placeholder}` text. Temporary
+  snippet insertions and clipboard restoration do not enter history. Insertion preserves
+  the prior clipboard and gives way to a newer user copy.
+- History stays encrypted on this Mac, outside sync and snippet exports. While enabled,
+  it retains up to seven days, 1,000 entries, and 32 MiB of text; individual entries are
+  limited to 256 KiB. Images and files are not captured.
+- Settings can exclude apps, stop recording, or clear retained history even when recording
+  is off. Turning recording off keeps saved data; expired entries are pruned on re-enable.
+  Sensitive clipboard markers are respected, but unmarked secrets cannot be identified
+  reliably. See [clipboard history](docs/clipboard-history.md).
+
 ### Dynamic placeholders
 
 Placeholders are resolved at insertion or copy time:
