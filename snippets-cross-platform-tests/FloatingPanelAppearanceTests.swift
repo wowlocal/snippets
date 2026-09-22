@@ -6,10 +6,10 @@ import AppKit
 
 @MainActor
 final class FloatingPanelAppearanceTests: XCTestCase {
-    func testPickerSurfaceFollowsInheritedThemeAndActualKeyState() throws {
+    func testPickerSurfaceFollowsInheritedThemeWithoutDependingOnKeyboardFocus() throws {
         guard #available(macOS 26.0, *) else { throw XCTSkip("Liquid Glass requires macOS 26") }
         try XCTSkipIf(LiquidGlassDesign.prefersHighContrastHighlight,
-            "System accessibility settings intentionally suppress the decorative wash")
+            "System accessibility settings intentionally use their own material treatment")
         let previousAppearance = NSApp.appearance
         let previousLegacy = LiquidGlassDesign.forcesLegacyAppearance
         LiquidGlassDesign.forcesLegacyAppearance = false
@@ -17,13 +17,13 @@ final class FloatingPanelAppearanceTests: XCTestCase {
             NSApp.appearance = previousAppearance
             LiquidGlassDesign.forcesLegacyAppearance = previousLegacy
         }
-        let panel = makePanel(normalizesKeyAppearance: true)
+        let panel = makePanel(usesPickerAppearance: true)
         defer { panel.close() }
         let content = try XCTUnwrap(descendants(of: try XCTUnwrap(panel.contentView))
             .first { $0.accessibilityIdentifier() == "floatingPanelContent" })
         XCTAssertNil(panel.appearance)
         XCTAssertNil(content.appearance)
-        XCTAssertNil(content.layer?.backgroundColor)
+        XCTAssertNotNil(content.layer?.backgroundColor)
 
         NSApp.appearance = NSAppearance(named: .aqua)
         panel.orderFrontRegardless()
@@ -31,27 +31,27 @@ final class FloatingPanelAppearanceTests: XCTestCase {
         XCTAssertTrue(panel.isKeyWindow)
         panel.contentView?.layoutSubtreeIfNeeded()
         let light = try color(of: content)
-        XCTAssertLessThan(light.redComponent, 0.1)
-        XCTAssertGreaterThan(light.alphaComponent, 0)
+        XCTAssertGreaterThan(light.redComponent, 0.8)
+        XCTAssertGreaterThanOrEqual(light.alphaComponent, 0.65)
 
         NSApp.appearance = NSAppearance(named: .darkAqua)
         panel.contentView?.layoutSubtreeIfNeeded()
         XCTAssertEqual(content.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
         let dark = try color(of: content)
-        XCTAssertGreaterThan(dark.redComponent, 0.9)
-        XCTAssertGreaterThan(dark.alphaComponent, 0)
+        XCTAssertLessThan(dark.redComponent, 0.3)
+        XCTAssertGreaterThanOrEqual(dark.alphaComponent, 0.65)
 
         panel.resignKey()
         XCTAssertFalse(panel.isKeyWindow)
-        XCTAssertNil(content.layer?.backgroundColor,
-            "Returning focus to the destination app must restore the inactive panel surface")
+        XCTAssertEqual(try color(of: content), dark,
+            "Inline suggestions must keep the same theme base as keyboard-enabled pickers")
     }
 
-    func testLegacyPanelKeepsSystemMaterialWithoutGlassCompensation() throws {
+    func testLegacyPanelKeepsSystemMaterialWithoutPickerTint() throws {
         let previousLegacy = LiquidGlassDesign.forcesLegacyAppearance
         LiquidGlassDesign.forcesLegacyAppearance = true
         defer { LiquidGlassDesign.forcesLegacyAppearance = previousLegacy }
-        let panel = makePanel(normalizesKeyAppearance: true)
+        let panel = makePanel(usesPickerAppearance: true)
         defer { panel.close() }
         panel.orderFrontRegardless()
         panel.makeKey()
@@ -62,7 +62,7 @@ final class FloatingPanelAppearanceTests: XCTestCase {
         XCTAssertNil(content.layer?.backgroundColor)
     }
 
-    private func makePanel(normalizesKeyAppearance: Bool) -> NSPanel {
+    private func makePanel(usesPickerAppearance: Bool) -> NSPanel {
         let panel = AppearanceTestPanel(contentRect: NSRect(x: 100, y: 100, width: 320, height: 160),
             styleMask: [.nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
@@ -70,7 +70,7 @@ final class FloatingPanelAppearanceTests: XCTestCase {
         panel.backgroundColor = .clear
         let root = panel.contentView!
         let surface = LiquidGlassDesign.makeFloatingPanelSurface(containing: NSView(),
-            normalizesKeyAppearance: normalizesKeyAppearance)
+            usesPickerAppearance: usesPickerAppearance)
         root.addSubview(surface)
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: root.leadingAnchor),

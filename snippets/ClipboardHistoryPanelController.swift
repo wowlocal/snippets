@@ -296,7 +296,7 @@ final class ClipboardHistoryPanelController: NSObject,
 
         let surface = LiquidGlassDesign.makeFloatingPanelSurface(
             containing: content,
-            normalizesKeyAppearance: true
+            usesPickerAppearance: true
         )
         let root = panel.contentView!
         root.wantsLayer = true

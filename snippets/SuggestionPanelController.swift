@@ -242,7 +242,7 @@ final class SuggestionPanelController: NSObject,
         ])
 
         let surface = LiquidGlassDesign.makeFloatingPanelSurface(
-            containing: panelBody, normalizesKeyAppearance: true)
+            containing: panelBody, usesPickerAppearance: true)
 
         // The surface is Auto Layout driven and has no size of its own, so pinning
         // it is mandatory. Setting `frame`/`autoresizingMask` on it instead is what

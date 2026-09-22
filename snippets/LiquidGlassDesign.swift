@@ -157,9 +157,9 @@ enum LiquidGlassDesign {
         containing content: NSView,
         cornerRadius: CGFloat = effectivePanelCornerRadius,
         fallbackMaterial: NSVisualEffectView.Material = .menu,
-        normalizesKeyAppearance: Bool = false
+        usesPickerAppearance: Bool = false
     ) -> NSView {
-        let clipper = FloatingPanelContentView(normalizesKeyAppearance: normalizesKeyAppearance)
+        let clipper = FloatingPanelContentView(usesPickerAppearance: usesPickerAppearance)
         clipper.translatesAutoresizingMaskIntoConstraints = false
         clipper.wantsLayer = true
         clipper.layer?.cornerRadius = cornerRadius
@@ -332,18 +332,18 @@ enum LiquidGlassDesign {
     }
 }
 
-/// Search pickers need keyboard focus; inline suggestions must leave it with the
-/// destination app. Offset glass's key-window shading with the same subtle wash
-/// for either picker, following the actual window state and inherited appearance.
+/// Anchor text-heavy pickers to the inherited theme, including non-key inline
+/// suggestions. The translucent base preserves glass's blurred backdrop and edge
+/// treatment while keeping dark panels dark even over light content.
 private final class FloatingPanelContentView: NSView {
-    private let normalizesKeyAppearance: Bool
+    private let usesPickerAppearance: Bool
 
-    init(normalizesKeyAppearance: Bool) {
-        self.normalizesKeyAppearance = normalizesKeyAppearance
+    init(usesPickerAppearance: Bool) {
+        self.usesPickerAppearance = usesPickerAppearance
         super.init(frame: .zero)
         wantsLayer = true
         setAccessibilityIdentifier("floatingPanelContent")
-        if normalizesKeyAppearance {
+        if usesPickerAppearance {
             NSWorkspace.shared.notificationCenter.addObserver(self,
                 selector: #selector(updateBackgroundColor),
                 name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
@@ -353,20 +353,11 @@ private final class FloatingPanelContentView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        let center = NotificationCenter.default
-        center.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
-        center.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
-        if normalizesKeyAppearance, let window {
-            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
-                center.addObserver(self, selector: #selector(updateBackgroundColor), name: name, object: window)
-            }
-        }
         updateBackgroundColor()
     }
 
@@ -376,16 +367,15 @@ private final class FloatingPanelContentView: NSView {
     }
 
     @objc private func updateBackgroundColor() {
-        guard normalizesKeyAppearance, window?.isKeyWindow == true,
+        guard usesPickerAppearance,
               #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance,
               !LiquidGlassDesign.prefersHighContrastHighlight else {
             layer?.backgroundColor = nil
             return
         }
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        layer?.backgroundColor = (isDark
-            ? NSColor.white.withAlphaComponent(0.052)
-            : NSColor.black.withAlphaComponent(0.035)).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.80).cgColor
+        }
     }
 }
 
