@@ -20,6 +20,40 @@ private final class ClipboardHistorySearchField: NSSearchField {
     override var needsPanelToBecomeKey: Bool { true }
 }
 
+/// A quiet reading surface over the panel's glass, without another material or blur.
+private final class ClipboardHistoryPreviewSurface: NSView {
+    override var allowsVibrancy: Bool { false }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        identifier = NSUserInterfaceItemIdentifier("clipboardHistoryPreviewSurface")
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        updateBackground()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateBackground()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackground()
+    }
+
+    private func updateBackground() {
+        // CGColor does not retain the semantic color's dynamic appearance.
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.32).cgColor
+        }
+    }
+}
+
 /// A keyboard-enabled, non-activating picker. The caller captures its destination
 /// before showing this panel and owns restoring focus and delivering the text.
 @MainActor
@@ -199,7 +233,10 @@ final class ClipboardHistoryPanelController: NSObject,
         divider.translatesAutoresizingMaskIntoConstraints = false
         let body = NSView()
         body.translatesAutoresizingMaskIntoConstraints = false
-        [listScrollView, divider, previewTitle, previewScrollView, emptyLabel].forEach(body.addSubview)
+        let previewSurface = ClipboardHistoryPreviewSurface()
+        previewSurface.translatesAutoresizingMaskIntoConstraints = false
+        [previewTitle, previewScrollView].forEach(previewSurface.addSubview)
+        [listScrollView, divider, previewSurface, emptyLabel].forEach(body.addSubview)
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.textColor = .secondaryLabelColor
         emptyLabel.alignment = .center
@@ -241,19 +278,26 @@ final class ClipboardHistoryPanelController: NSObject,
             divider.widthAnchor.constraint(equalToConstant: 1),
             divider.topAnchor.constraint(equalTo: body.topAnchor, constant: 5),
             divider.bottomAnchor.constraint(equalTo: body.bottomAnchor, constant: -5),
-            previewTitle.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 14),
-            previewTitle.trailingAnchor.constraint(equalTo: body.trailingAnchor, constant: -14),
-            previewTitle.topAnchor.constraint(equalTo: body.topAnchor, constant: 10),
-            previewScrollView.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 4),
-            previewScrollView.trailingAnchor.constraint(equalTo: body.trailingAnchor, constant: -8),
+            previewSurface.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 4),
+            previewSurface.trailingAnchor.constraint(equalTo: body.trailingAnchor, constant: -8),
+            previewSurface.topAnchor.constraint(equalTo: body.topAnchor, constant: 5),
+            previewSurface.bottomAnchor.constraint(equalTo: body.bottomAnchor, constant: -5),
+            previewTitle.leadingAnchor.constraint(equalTo: previewSurface.leadingAnchor, constant: 10),
+            previewTitle.trailingAnchor.constraint(equalTo: previewSurface.trailingAnchor, constant: -6),
+            previewTitle.topAnchor.constraint(equalTo: previewSurface.topAnchor, constant: 5),
+            previewScrollView.leadingAnchor.constraint(equalTo: previewSurface.leadingAnchor),
+            previewScrollView.trailingAnchor.constraint(equalTo: previewSurface.trailingAnchor),
             previewScrollView.topAnchor.constraint(equalTo: previewTitle.bottomAnchor, constant: 5),
-            previewScrollView.bottomAnchor.constraint(equalTo: body.bottomAnchor, constant: -5),
+            previewScrollView.bottomAnchor.constraint(equalTo: previewSurface.bottomAnchor),
             emptyLabel.leadingAnchor.constraint(equalTo: listScrollView.leadingAnchor, constant: 20),
             emptyLabel.trailingAnchor.constraint(equalTo: listScrollView.trailingAnchor, constant: -20),
             emptyLabel.centerYAnchor.constraint(equalTo: listScrollView.centerYAnchor),
         ])
 
-        let surface = LiquidGlassDesign.makeFloatingPanelSurface(containing: content)
+        let surface = LiquidGlassDesign.makeFloatingPanelSurface(
+            containing: content,
+            normalizesKeyAppearance: true
+        )
         let root = panel.contentView!
         root.wantsLayer = true
         root.layer?.cornerRadius = LiquidGlassDesign.effectivePanelCornerRadius

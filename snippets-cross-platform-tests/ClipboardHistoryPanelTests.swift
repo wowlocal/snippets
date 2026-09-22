@@ -6,6 +6,46 @@ import AppKit
 
 @MainActor
 final class ClipboardHistoryPanelTests: XCTestCase {
+    func testLiveAppearanceChangePreservesPreviewAndUpdatesReadingSurface() async throws {
+        let entry = ClipboardHistoryEntry(text: "  A clipboard preview\n\twith exact whitespace.\n")
+        let fixture = await makeFixture(entries: [entry])
+        defer { fixture.cleanup() }
+        let previousAppearance = NSApp.appearance
+        defer { NSApp.appearance = previousAppearance }
+        NSApp.appearance = NSAppearance(named: .aqua)
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        controller.show(canPaste: true, onPaste: { _ in XCTFail("Unexpected paste") },
+            onCopy: { _ in XCTFail("Unexpected copy") }, onCreateSnippet: { _ in XCTFail("Unexpected create") },
+            onDismiss: { _ in })
+        let window = try pickerWindow(excluding: initialWindows)
+        let views = descendants(of: try XCTUnwrap(window.contentView))
+        let surface = try XCTUnwrap(views.first { $0.identifier?.rawValue == "clipboardHistoryPreviewSurface" })
+        let preview = try XCTUnwrap(views.compactMap { $0 as? NSTextView }.first { !$0.isEditable })
+        let table = try XCTUnwrap(views.compactMap { $0 as? NSTableView }.first)
+        XCTAssertNil(window.appearance)
+        XCTAssertNil(surface.appearance)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let light = try XCTUnwrap(surface.layer?.backgroundColor)
+        preview.setSelectedRange(NSRange(location: 2, length: 9))
+        let selectedRow = table.selectedRow
+
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let dark = try XCTUnwrap(surface.layer?.backgroundColor)
+        XCTAssertNotEqual(light, dark, "The cached layer color must follow a live appearance change")
+        XCTAssertEqual(surface.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
+        XCTAssertEqual(preview.string, entry.text)
+        XCTAssertEqual(preview.selectedRange(), NSRange(location: 2, length: 9))
+        XCTAssertEqual(table.selectedRow, selectedRow)
+        XCTAssertTrue(controller.isVisible)
+
+        NSApp.appearance = NSAppearance(named: .aqua)
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(surface.layer?.backgroundColor, light)
+    }
+
     func testReturnPastesLiteralTextAfterDismissal() async throws {
         let entry = ClipboardHistoryEntry(text: "  {date}\n\t{clipboard}\n")
         let fixture = await makeFixture(entries: [entry])

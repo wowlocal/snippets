@@ -15,6 +15,10 @@ one entry, and Escape closes. A conflicting global registration is reported in S
 the menu-bar entry remains available. Recording is independent of the expansion shortcut
 preference.
 
+The history and snippet pickers share a system-adaptive floating surface. Light/dark
+appearance changes update open panels without resetting their selection or search.
+The full-text preview has a slightly denser reading background over the glass.
+
 History entries are distinct from snippets: insertion never invokes PlaceholderResolver,
 sync, or snippet usage ranking. Creating a snippet uses the existing editor and focuses
 its keyword field. Search and list updates preserve a user-selected entry by identity.
