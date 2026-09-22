@@ -122,15 +122,15 @@ struct SecurePasteContainerTargetTests {
     @Test("authentication keyboard ownership settles before focus restoration")
     func handoffWaitsForKeyboardOwner() async {
         var observations: [SecurePasteTargetResolver.Validation] = [
-            .keyboardOwnerPending, .focusUnavailable, .valid, .valid, .valid, .valid,
+            .keyboardOwnerPending, .focusUnavailable, .valid, .valid, .valid, .valid, .valid, .valid,
         ]
         var restorations = 0
         let report = await SecurePasteFocusHandoff.runForContainer(mode: .afterAuthentication, sleep: { _ in },
             observe: { observations.removeFirst() }, restoreFocus: { restorations += 1 })
         #expect(report.validation == .valid)
-        #expect(report.attempts == 4)
+        #expect(report.attempts == 5)
         #expect(report.firstTransient == .keyboardOwnerPending)
-        #expect(restorations == 2)
+        #expect(restorations == 3)
     }
 
     @Test("an intact automatic descendant can regain focus after authentication")
@@ -140,7 +140,7 @@ struct SecurePasteContainerTargetTests {
             observe: { focused ? .valid : .fieldFocusPending }, restoreFocus: { focused = true })
         #expect(report.validation == .valid)
         #expect(report.firstTransient == .fieldFocusPending)
-        #expect(report.attempts == 2)
+        #expect(report.attempts == 3)
     }
 
     @Test("structural changes abort immediately, even after a valid sample",
@@ -537,6 +537,17 @@ struct AXMessagingBudgetSwiftTests {
         confirmations = SecurePasteAuthenticationHandoffPolicy
             .updatedConsecutiveFocusConfirmations(
                 current: confirmations,
+                targetIsFrontmost: true,
+                focusWasReasserted: true
+            )
+        #expect(confirmations == 2)
+        #expect(!SecurePasteAuthenticationHandoffPolicy.focusIsStable(
+            consecutiveConfirmations: confirmations
+        ))
+
+        confirmations = SecurePasteAuthenticationHandoffPolicy
+            .updatedConsecutiveFocusConfirmations(
+                current: confirmations,
                 targetIsFrontmost: false,
                 focusWasReasserted: false
             )
@@ -555,6 +566,17 @@ struct AXMessagingBudgetSwiftTests {
                 targetIsFrontmost: true,
                 focusWasReasserted: true
             )
+        #expect(confirmations == 2)
+        #expect(!SecurePasteAuthenticationHandoffPolicy.focusIsStable(
+            consecutiveConfirmations: confirmations
+        ))
+        confirmations = SecurePasteAuthenticationHandoffPolicy
+            .updatedConsecutiveFocusConfirmations(
+                current: confirmations,
+                targetIsFrontmost: true,
+                focusWasReasserted: true
+            )
+        #expect(confirmations == 3)
         #expect(SecurePasteAuthenticationHandoffPolicy.focusIsStable(
             consecutiveConfirmations: confirmations
         ))

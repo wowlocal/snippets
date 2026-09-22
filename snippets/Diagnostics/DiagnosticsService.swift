@@ -535,7 +535,8 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "secure_paste": ExportEventSchema(
             category: "integration",
             required: ["stage", "outcome", "target", "transport", "reason", "attempts", "duration_ms"],
-            optional: ["ax_error_code", "error_family", "error_code"]),
+            optional: ["ax_error_code", "error_family", "error_code", "handoff_source", "after_authentication",
+                       "focus_confirmations", "required_focus_confirmations", "first_wait_reason"]),
         "metrickit_diagnostic": ExportEventSchema(
             category: "metrickit",
             required: ["kind", "truncated"],
@@ -561,12 +562,12 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "state_before", "state_after", "stage", "failure", "exported_at",
         "oldest_entry_at", "newest_entry_at", "endpoint", "restoration", "target", "transport",
         "selection", "selection_restoration", "interruption_origin", "ax_replacement_outcome",
-        "selection_phase", "selection_observation",
+        "selection_phase", "selection_observation", "handoff_source", "first_wait_reason",
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",
         "submit_active", "generation_sealed", "stored_session_present", "available", "had_fingerprint",
-        "paste_posted", "text_write_attempted", "selection_write_attempted",
+        "paste_posted", "text_write_attempted", "selection_write_attempted", "after_authentication",
     ]
     private static let exportNumericFields: Set<String> = [
         "error_code", "attempt", "value", "conflict_copies", "keyword_collisions",
@@ -576,6 +577,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "ax_error_code", "fetch_depth", "pending_generation_count",
         "unready_generation_count", "http_status", "attempts",
         "planned_deletes", "delete_attempts", "selection_polls", "selection_wait_ms",
+        "focus_confirmations", "required_focus_confirmations",
     ]
 
     private func makeExport(at destination: URL) throws -> DiagnosticsExportResult {
@@ -835,6 +837,25 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         if let code = fields["ax_error_code"] as? NSNumber,
            code.doubleValue < Double(Int32.min) || code.doubleValue > Double(Int32.max)
             || code.doubleValue.rounded(.towardZero) != code.doubleValue { return false }
+        // Older handoff records have no progress group. New groups must be complete
+        // and closed: never accept an app name, field description, or raw error here.
+        let progressFields: Set<String> = ["handoff_source", "after_authentication",
+            "focus_confirmations", "required_focus_confirmations", "first_wait_reason"]
+        if !progressFields.isDisjoint(with: Set(fields.keys)) {
+            guard stage == DiagnosticSecurePasteStage.handoff.rawValue,
+                  progressFields.isSubset(of: Set(fields.keys)),
+                  let source = fields["handoff_source"] as? String,
+                  DiagnosticPasteHandoffSource(rawValue: source) != nil,
+                  let firstWaitReason = fields["first_wait_reason"] as? String,
+                  DiagnosticSecurePasteReason(rawValue: firstWaitReason) != nil,
+                  let required = fields["required_focus_confirmations"] as? NSNumber,
+                  (1...16).contains(required.doubleValue),
+                  required.doubleValue.rounded(.towardZero) == required.doubleValue,
+                  let confirmations = fields["focus_confirmations"] as? NSNumber,
+                  (0...required.doubleValue).contains(confirmations.doubleValue),
+                  confirmations.doubleValue.rounded(.towardZero) == confirmations.doubleValue
+            else { return false }
+        }
         return true
     }
 

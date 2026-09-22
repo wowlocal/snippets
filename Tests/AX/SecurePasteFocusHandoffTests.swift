@@ -12,6 +12,7 @@ struct SecurePasteFocusHandoffTests {
             attempt: { attempts += 1; return .valid })
         #expect(report.validation == .valid)
         #expect(attempts == 1)
+        #expect(report.consecutiveConfirmations == 1)
     }
 
     @Test("a ready unauthenticated container does not rewrite focus")
@@ -52,7 +53,7 @@ struct SecurePasteFocusHandoffTests {
         #expect(elapsed == .milliseconds(50))
     }
 
-    @Test("authentication requires two successful checks separated by a short wait")
+    @Test("authentication requires three successful checks spanning 50 milliseconds")
     func authenticationSettles() async {
         var elapsed = Duration.zero
         var observations: [Duration] = []
@@ -62,46 +63,47 @@ struct SecurePasteFocusHandoffTests {
                 return .valid
             })
         #expect(report.validation == .valid)
-        #expect(observations.count == 2)
-        #expect(observations.first == .zero)
-        #expect(elapsed > .zero)
-        #expect(elapsed <= .milliseconds(50))
+        #expect(observations == [.zero, .milliseconds(25), .milliseconds(50)])
+        #expect(report.consecutiveConfirmations == 3)
     }
 
     @Test("Keychain keyboard ownership must return even after secure input clears")
     func keychainDialogHandoff() async {
         var samples: [SecurePasteTargetResolver.Validation] = [
             .secureInputPending, .keyboardOwnerPending, .keyboardOwnerPending,
-            .valid, .valid,
+            .valid, .valid, .valid,
         ]
         var attempts = 0
         let report = await SecurePasteFocusHandoff.run(mode: .afterAuthentication,
             sleep: { _ in }, attempt: { attempts += 1; return samples.removeFirst() })
         #expect(report.validation == .valid)
         #expect(report.firstTransient == .secureInputPending)
-        #expect(attempts == 5)
+        #expect(attempts == 6)
     }
 
     @Test("every transient interruption resets authentication focus confirmations",
           arguments: SecurePasteTargetResolver.Validation.allCases.filter { $0.canRetryHandoff && $0 != .valid })
     func interruptedAuthentication(interruption: SecurePasteTargetResolver.Validation) async {
-        var samples: [SecurePasteTargetResolver.Validation] = [.valid, interruption, .valid, .valid]
+        var samples: [SecurePasteTargetResolver.Validation] = [
+            .valid, .valid, interruption, .valid, .valid, .valid,
+        ]
         let report = await SecurePasteFocusHandoff.run(mode: .afterAuthentication,
             sleep: { _ in }, attempt: { samples.removeFirst() })
         #expect(report.validation == .valid)
         #expect(report.firstTransient == interruption)
-        #expect(report.attempts == 4)
+        #expect(report.attempts == 6)
+        #expect(report.consecutiveConfirmations == 3)
     }
 
     @Test("a late successful check is confirmed promptly instead of paying the retry backoff")
     func lateAuthenticationRecovery() async {
         var samples = Array(repeating: SecurePasteTargetResolver.Validation.keyboardOwnerPending, count: 6)
-            + [.valid, .valid]
+            + [.valid, .valid, .valid]
         var sleeps: [Duration] = []
         let report = await SecurePasteFocusHandoff.run(mode: .afterAuthentication,
             sleep: { sleeps.append($0) }, attempt: { samples.removeFirst() })
         #expect(report.validation == .valid)
-        #expect(sleeps.last == .milliseconds(25))
+        #expect(Array(sleeps.suffix(2)) == [.milliseconds(25), .milliseconds(25)])
     }
 
     @Test("a password destination still requires stable focus when secure input is allowed",
@@ -117,8 +119,8 @@ struct SecurePasteFocusHandoffTests {
                     secureEventInputEnabled: true) ? .secureInputPending : .valid
             })
         #expect(report.validation == .valid)
-        #expect(report.attempts == 2)
-        #expect(elapsed > .zero)
+        #expect(report.attempts == 3)
+        #expect(elapsed == .milliseconds(50))
     }
 
     @Test("changed destinations abort before any retry", arguments: SecurePasteFocusHandoff.Mode.allCases)
@@ -127,16 +129,23 @@ struct SecurePasteFocusHandoffTests {
             sleep: { _ in Issue.record("Retried a changed destination") }, attempt: { .fieldUnavailable })
         #expect(report.validation == .fieldUnavailable)
         #expect(report.attempts == 1)
+        #expect(report.consecutiveConfirmations == 0)
     }
 
-    @Test("a single successful check at timeout cannot authorize an authenticated paste")
-    func finalSampleIsNotEnough() async {
+    @Test("one or two successful checks at timeout cannot authorize an authenticated paste",
+          arguments: [1_000, 1_500])
+    func finalSamplesAreNotEnough(readyAfterMilliseconds: Int) async {
         var elapsed = Duration.zero
+        var confirmations = 0
         let report = await SecurePasteFocusHandoff.run(mode: .afterAuthentication,
             sleep: { elapsed += $0 }, attempt: {
-                elapsed >= .milliseconds(1_500) ? .valid : .keyboardOwnerPending
+                guard elapsed >= .milliseconds(readyAfterMilliseconds) else { return .keyboardOwnerPending }
+                confirmations += 1
+                return .valid
             })
         #expect(report.validation == .focusUnavailable)
+        #expect((1...2).contains(confirmations))
+        #expect(report.consecutiveConfirmations == confirmations)
         #expect(elapsed <= .milliseconds(1_640))
     }
 
@@ -154,5 +163,20 @@ struct SecurePasteFocusHandoffTests {
         let report = await task.value
         #expect(report.validation == .cancelled)
         #expect(attempts == 1)
+        #expect(report.attempts == attempts)
+    }
+
+    @Test("a cancelled handoff reports zero focus checks", arguments: SecurePasteFocusHandoff.Mode.allCases)
+    func cancelledBeforeRecovery(mode: SecurePasteFocusHandoff.Mode) async {
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await SecurePasteFocusHandoff.run(mode: mode,
+                sleep: { _ in Issue.record("A cancelled handoff must not wait") },
+                attempt: { Issue.record("A cancelled handoff must not inspect focus"); return .valid })
+        }
+        let report = await task.value
+        #expect(report.validation == .cancelled)
+        #expect(report.attempts == 0)
+        #expect(report.consecutiveConfirmations == 0)
     }
 }

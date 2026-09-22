@@ -712,7 +712,7 @@ final class SnippetExpansionEngine {
             self.clipboardHistoryInsertionActive = true
             self.secureExpansionActivationTargetPID = target.targetPID
             guard await self.restoreSecurePasteTarget(target, mode: .withoutAuthentication,
-                logsHandoff: false, contextIsValid: {
+                source: .clipboardHistory, contextIsValid: {
                 generation == self.injectionContextGeneration
                     && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID
             }),
@@ -1045,13 +1045,15 @@ final class SnippetExpansionEngine {
         stage: DiagnosticSecurePasteStage, outcome: DiagnosticSecurePasteOutcome,
         target: SecurePasteTarget?, transport: DiagnosticSecurePasteTransport = .none,
         reason: DiagnosticSecurePasteReason = .none, startedAt: ContinuousClock.Instant,
-        attempts: Int = 1, axErrorCode: Int? = nil, failure: DiagnosticFailure? = nil
+        attempts: Int = 1, axErrorCode: Int? = nil, failure: DiagnosticFailure? = nil,
+        handoff: DiagnosticPasteHandoffProgress? = nil
     ) {
         let elapsed = startedAt.duration(to: .now).components
         let milliseconds = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
         Diagnostics.record(.securePaste(stage: stage, outcome: outcome,
             target: diagnosticTarget(target), transport: transport, reason: reason,
-            attempts: attempts, durationMilliseconds: milliseconds, axErrorCode: axErrorCode, failure: failure))
+            attempts: attempts, durationMilliseconds: milliseconds, axErrorCode: axErrorCode,
+            failure: failure, handoff: handoff))
     }
 
     /// Reuses the ordinary suggestion panel for an explicit, searchable action.
@@ -2089,9 +2091,27 @@ final class SnippetExpansionEngine {
         acceptedGeneration: UInt,
         focusTarget: SecureExpansionFocusTarget
     ) async -> Bool {
-        guard !Task.isCancelled, acceptedGeneration == injectionContextGeneration,
-              listening,
-              let target = NSRunningApplication(processIdentifier: targetPID),
+        let startedAt = ContinuousClock.now
+        var succeeded = false
+        var reason = DiagnosticSecurePasteReason.applicationUnavailable
+        var attempts = 0
+        var confirmations = 0
+        var firstWaitReason = DiagnosticSecurePasteReason.none
+        defer {
+            let elapsed = startedAt.duration(to: .now).components
+            let milliseconds = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+            Diagnostics.record(.securePaste(stage: .handoff,
+                outcome: Task.isCancelled || reason == .cancelled ? .cancelled : (succeeded ? .succeeded : .failed),
+                target: .focused, transport: .none, reason: Task.isCancelled ? .cancelled : reason,
+                attempts: attempts, durationMilliseconds: milliseconds, axErrorCode: nil, failure: nil,
+                handoff: .init(source: .secureExpansion, afterAuthentication: true,
+                    confirmations: confirmations,
+                    requiredConfirmations: SecurePasteAuthenticationHandoffPolicy.requiredConsecutiveFocusConfirmations,
+                    firstWaitReason: firstWaitReason)))
+        }
+        guard !Task.isCancelled, acceptedGeneration == injectionContextGeneration, listening
+        else { reason = .cancelled; return false }
+        guard let target = NSRunningApplication(processIdentifier: targetPID),
               !target.isTerminated
         else { return false }
 
@@ -2113,7 +2133,12 @@ final class SnippetExpansionEngine {
             return restoreKeyboardFocus(to: focusTarget, targetPID: targetPID)
                 ? .valid : .focusUnavailable
         }
-        return report.validation == .valid
+        attempts = report.attempts
+        confirmations = report.consecutiveConfirmations
+        firstWaitReason = diagnosticReason(report.firstTransient ?? .valid)
+        succeeded = report.validation == .valid
+        reason = diagnosticReason(succeeded ? (report.firstTransient ?? .valid) : report.validation)
+        return succeeded
     }
 
     private func confirmedSecureDeletionAfterAuthentication(
@@ -4688,6 +4713,7 @@ final class SnippetExpansionEngine {
     private func restoreSecurePasteTarget(
         _ focusTarget: SecurePasteTarget,
         mode: SecurePasteFocusHandoff.Mode,
+        source: DiagnosticPasteHandoffSource = .snippetPicker,
         logsHandoff: Bool = true,
         contextIsValid: (() -> Bool)? = nil
     ) async -> Bool {
@@ -4695,16 +4721,23 @@ final class SnippetExpansionEngine {
         var succeeded = false
         var reason: DiagnosticSecurePasteReason = .applicationUnavailable
         var attempts = 0
+        var confirmations = 0
+        var firstWaitReason = DiagnosticSecurePasteReason.none
         defer {
             if logsHandoff {
                 recordSecurePaste(stage: .handoff,
-                    outcome: Task.isCancelled ? .cancelled : (succeeded ? .succeeded : .failed),
+                    outcome: Task.isCancelled || reason == .cancelled ? .cancelled : (succeeded ? .succeeded : .failed),
                     target: focusTarget, reason: Task.isCancelled ? .cancelled : reason,
-                    startedAt: startedAt, attempts: attempts)
+                    startedAt: startedAt, attempts: attempts,
+                    handoff: .init(source: source, afterAuthentication: mode == .afterAuthentication,
+                        confirmations: confirmations,
+                        requiredConfirmations: mode == .afterAuthentication
+                            ? SecurePasteAuthenticationHandoffPolicy.requiredConsecutiveFocusConfirmations : 1,
+                        firstWaitReason: firstWaitReason))
             }
         }
-        guard !Task.isCancelled, contextIsValid?() != false,
-              let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
+        guard !Task.isCancelled, contextIsValid?() != false else { reason = .cancelled; return false }
+        guard let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
               !target.isTerminated
         else { return false }
 
@@ -4721,7 +4754,8 @@ final class SnippetExpansionEngine {
                 mode: mode,
                 sleep: { delay in try? await Task.sleep(for: delay) },
                 observe: { [self] in
-                    guard contextIsValid?() != false, !target.isTerminated else { return .fieldUnavailable }
+                    guard contextIsValid?() != false else { return .cancelled }
+                    guard !target.isTerminated else { return .fieldUnavailable }
                     let budget = AXMessagingBudget()
                     let validation = securePasteTargetValidation(focusTarget, budget: budget)
                     if validation == .applicationNotFrontmost { _ = target.activate() }
@@ -4737,6 +4771,8 @@ final class SnippetExpansionEngine {
                         attribute: kAXFocusedAttribute as CFString, value: kCFBooleanTrue)
                 })
             attempts = report.attempts
+            confirmations = report.consecutiveConfirmations
+            firstWaitReason = diagnosticReason(report.firstTransient ?? .valid)
             succeeded = report.validation == .valid
             reason = diagnosticReason(succeeded ? (report.firstTransient ?? .valid) : report.validation)
             return succeeded
@@ -4775,6 +4811,8 @@ final class SnippetExpansionEngine {
             ) ? .valid : .focusUnavailable
         }
         attempts = report.attempts
+        confirmations = report.consecutiveConfirmations
+        firstWaitReason = diagnosticReason(report.firstTransient ?? .valid)
         succeeded = report.validation == .valid
         reason = diagnosticReason(succeeded ? (report.firstTransient ?? .valid) : report.validation)
         return succeeded

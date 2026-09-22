@@ -395,6 +395,33 @@ nonisolated enum DiagnosticSecurePasteTarget: String, Codable, Sendable, CaseIte
     case unresolved, focused, descendant, explicit
 }
 
+nonisolated enum DiagnosticPasteHandoffSource: String, Codable, Sendable, CaseIterable {
+    case snippetPicker = "snippet_picker"
+    case clipboardHistory = "clipboard_history"
+    case secureExpansion = "secure_expansion"
+}
+
+/// Aggregate focus recovery metadata only. This boundary cannot accept field text,
+/// snippet/app identities, or raw error descriptions.
+nonisolated struct DiagnosticPasteHandoffProgress: Equatable, Sendable {
+    let source: DiagnosticPasteHandoffSource
+    let afterAuthentication: Bool
+    let confirmations: Int
+    let requiredConfirmations: Int
+    let firstWaitReason: DiagnosticSecurePasteReason
+
+    var fields: [String: DiagnosticJSONValue] {
+        let required = min(max(requiredConfirmations, 1), 16)
+        return [
+            "handoff_source": .string(source.rawValue),
+            "after_authentication": .boolean(afterAuthentication),
+            "focus_confirmations": .integer(Int64(min(max(confirmations, 0), required))),
+            "required_focus_confirmations": .integer(Int64(required)),
+            "first_wait_reason": .string(firstWaitReason.rawValue),
+        ]
+    }
+}
+
 nonisolated enum DiagnosticSecurePasteTransport: String, Codable, Sendable, CaseIterable {
     case none
     case secureValue = "secure_value"
@@ -845,7 +872,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         attempts: Int,
         durationMilliseconds: Int64,
         axErrorCode: Int?,
-        failure: DiagnosticFailure?
+        failure: DiagnosticFailure?,
+        handoff: DiagnosticPasteHandoffProgress? = nil
     )
     case metricKit(DiagnosticMetric)
     case diagnosticsMaintenance(DiagnosticMaintenanceAction, count: Int?)
@@ -903,8 +931,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
 
     var defaultLevel: DiagnosticLevel {
         switch self {
-        case .securePaste(_, .failed, _, _, _, _, _, _, _),
-             .securePaste(_, .ambiguous, _, _, _, _, _, _, _):
+        case .securePaste(_, .failed, _, _, _, _, _, _, _, _),
+             .securePaste(_, .ambiguous, _, _, _, _, _, _, _, _):
             .warning
         case .cloudSignIn(_, .failed, _, _, _, _),
              .cloudSignInRequest(_, .failed, _, _, _, _),
@@ -962,7 +990,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
     var fields: [String: DiagnosticJSONValue] {
         switch self {
         case .securePaste(let stage, let outcome, let target, let transport, let reason,
-                          let attempts, let duration, let axErrorCode, let failure):
+                          let attempts, let duration, let axErrorCode, let failure, let handoff):
             var fields: [String: DiagnosticJSONValue] = [
                 "stage": .string(stage.rawValue), "outcome": .string(outcome.rawValue),
                 "target": .string(target.rawValue), "transport": .string(transport.rawValue),
@@ -972,6 +1000,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             ]
             if let axErrorCode { fields["ax_error_code"] = .integer(Int64(Int32(clamping: axErrorCode))) }
             if let failure { fields.merge(failure.fields) { _, new in new } }
+            if stage == .handoff, let handoff { fields.merge(handoff.fields) { _, new in new } }
             return fields
         case .appStarted(let app):
             return app.fields

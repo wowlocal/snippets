@@ -184,7 +184,29 @@ remain asynchronous; no per-poll events are written.
 
 Handoff retries are aggregated into one event. Its reason identifies the final
 failure or, on recovery, the first transient condition (for example
-`keyboard_owner_pending`). Stale controls, changed windows/ancestry, a different
+`keyboard_owner_pending`). The same `secure_paste` / `handoff` boundary now covers
+the snippet picker, clipboard history insertion, and authenticated suggestion
+expansion. Its complete optional progress group is:
+
+- `handoff_source`: `snippet_picker`, `clipboard_history`, or `secure_expansion`;
+- `after_authentication`: whether recovery follows authentication and the Keychain read;
+- `focus_confirmations`: consecutive successful observations at completion (0–16,
+  never above the required count);
+- `required_focus_confirmations`: the required count (1–16);
+- `first_wait_reason`: the first transient condition, or `none`, from the existing
+  closed reason vocabulary.
+
+Authenticated insertion requires three confirmations, with 25 ms between successful
+observations (50 ms total waiting when the destination is immediately ready).
+An interruption resets the count. Unauthenticated insertion can proceed on the first
+valid observation. A failed event with `focus_confirmations: 2` and
+`required_focus_confirmations: 3` shows that recovery ended before stability was
+confirmed; it does not claim that text was delivered. Old records without this group
+remain exportable; partial groups, unknown strings, extra fields, invalid types,
+and out-of-range counts are rejected. No content, names, PIDs, AX descriptions, or
+raw errors enter this group, and it adds no synchronous disk writes or per-poll logs.
+
+Stale controls, changed windows/ancestry, a different
 concrete focused control, and a changed hit target remain terminal refusals.
 `delivery` is emitted only if the delivery function was reached. AX success for a
 native password-value write is `ambiguous` with reason `ax_write_unconfirmed`, even

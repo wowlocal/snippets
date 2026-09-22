@@ -315,7 +315,8 @@ nonisolated enum SecurePasteCompletionPolicy {
 /// enabled. Every other destination must wait for authentication's temporary ownership
 /// to clear before focus confirmations can accumulate.
 nonisolated enum SecurePasteAuthenticationHandoffPolicy {
-    static let requiredConsecutiveFocusConfirmations = 2
+    // Confirm the destination across two polling intervals after system authentication UI.
+    static let requiredConsecutiveFocusConfirmations = 3
 
     static func shouldWaitForSecureInputToClear(
         targetIsSecureTextField: Bool,

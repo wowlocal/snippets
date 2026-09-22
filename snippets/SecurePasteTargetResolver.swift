@@ -145,6 +145,7 @@ enum SecurePasteFocusHandoff {
         let validation: SecurePasteTargetResolver.Validation
         let firstTransient: SecurePasteTargetResolver.Validation?
         let attempts: Int
+        let consecutiveConfirmations: Int
     }
 
     // Probe immediately, then retry quickly while the picker or authentication UI
@@ -170,26 +171,30 @@ enum SecurePasteFocusHandoff {
             // Even sleeping for zero would introduce an unnecessary task handoff.
             if delay > .zero { await sleep(delay) }
             guard !Task.isCancelled else {
-                return Report(validation: .cancelled, firstTransient: firstTransient, attempts: index + 1)
+                return Report(validation: .cancelled, firstTransient: firstTransient, attempts: index,
+                              consecutiveConfirmations: consecutive)
             }
             last = attempt()
-            guard last.canRetryHandoff else {
-                return Report(validation: last, firstTransient: firstTransient, attempts: index + 1)
-            }
             consecutive = SecurePasteAuthenticationHandoffPolicy.updatedConsecutiveFocusConfirmations(
                 current: consecutive, targetIsFrontmost: last == .valid, focusWasReasserted: last == .valid)
+            guard last.canRetryHandoff else {
+                return Report(validation: last, firstTransient: firstTransient, attempts: index + 1,
+                              consecutiveConfirmations: consecutive)
+            }
             if last == .valid {
                 if mode == .withoutAuthentication
                     || SecurePasteAuthenticationHandoffPolicy.focusIsStable(consecutiveConfirmations: consecutive) {
-                    return Report(validation: .valid, firstTransient: firstTransient, attempts: index + 1)
+                    return Report(validation: .valid, firstTransient: firstTransient, attempts: index + 1,
+                                  consecutiveConfirmations: consecutive)
                 }
             } else {
                 firstTransient = firstTransient ?? last
             }
         }
-        // One valid sample after authentication is insufficient, including at timeout.
+        // An incomplete confirmation sequence cannot authorize delivery at timeout.
         return Report(validation: last == .valid ? .focusUnavailable : last,
-                      firstTransient: firstTransient, attempts: retryDelays.count)
+                      firstTransient: firstTransient, attempts: retryDelays.count,
+                      consecutiveConfirmations: consecutive)
     }
 
     /// Container identity must still be valid before attempting an AX focus write.
@@ -217,7 +222,8 @@ enum SecurePasteFocusHandoff {
             }
             return validation
         }
-        return Report(validation: report.validation, firstTransient: firstTransient, attempts: report.attempts)
+        return Report(validation: report.validation, firstTransient: firstTransient, attempts: report.attempts,
+                      consecutiveConfirmations: report.consecutiveConfirmations)
     }
 }
 

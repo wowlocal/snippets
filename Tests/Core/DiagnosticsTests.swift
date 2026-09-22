@@ -24,6 +24,44 @@ private final class RecordingDiagnosticsSink: DiagnosticsSink, @unchecked Sendab
 
 @Suite("Persistent diagnostics privacy contract", .serialized)
 struct DiagnosticsTests {
+    @Test func pasteHandoffDiagnosticsContainOnlyClosedMetadata() throws {
+        for source in DiagnosticPasteHandoffSource.allCases {
+            let event = DiagnosticEvent.securePaste(stage: .handoff, outcome: .failed,
+                target: .focused, transport: .none, reason: .focusUnavailable,
+                attempts: 9, durationMilliseconds: 1_640, axErrorCode: nil, failure: nil,
+                handoff: .init(source: source, afterAuthentication: true, confirmations: 2,
+                    requiredConfirmations: 3, firstWaitReason: .keyboardOwnerPending))
+            let record = DiagnosticRecord(event: event, timestamp: "2026-09-22T10:00:00.000Z",
+                elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1)
+            let object = try #require(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+            let fields = try #require(object["fields"] as? [String: Any])
+            #expect(Set(fields.keys) == ["stage", "outcome", "target", "transport", "reason",
+                "attempts", "duration_ms", "handoff_source", "after_authentication",
+                "focus_confirmations", "required_focus_confirmations", "first_wait_reason"])
+            #expect(fields["handoff_source"] as? String == source.rawValue)
+            #expect(fields["after_authentication"] as? Bool == true)
+            #expect(fields["focus_confirmations"] as? Int == 2)
+            #expect(fields["required_focus_confirmations"] as? Int == 3)
+            #expect(fields["first_wait_reason"] as? String == "keyboard_owner_pending")
+            #expect(fields["reason"] as? String == "focus_unavailable")
+            #expect(event.defaultLevel == .warning)
+            #expect(!event.requiresSynchronousWrite)
+        }
+        let upper = DiagnosticPasteHandoffProgress(source: .snippetPicker, afterAuthentication: true,
+            confirmations: .max, requiredConfirmations: .max, firstWaitReason: .none)
+        #expect(upper.fields["focus_confirmations"] == .integer(16))
+        #expect(upper.fields["required_focus_confirmations"] == .integer(16))
+        let lower = DiagnosticPasteHandoffProgress(source: .clipboardHistory, afterAuthentication: false,
+            confirmations: .min, requiredConfirmations: .min, firstWaitReason: .none)
+        #expect(lower.fields["focus_confirmations"] == .integer(0))
+        #expect(lower.fields["required_focus_confirmations"] == .integer(1))
+        #expect(lower.fields["after_authentication"] == .boolean(false))
+        let delivery = DiagnosticEvent.securePaste(stage: .delivery, outcome: .succeeded,
+            target: .focused, transport: .unicode, reason: .none, attempts: 1,
+            durationMilliseconds: 0, axErrorCode: nil, failure: nil, handoff: upper)
+        #expect(delivery.fields["handoff_source"] == nil)
+    }
+
     @Test func securePasteDiagnosticsAreClosedBoundedAndContentFree() throws {
         let secret = "PRIVATE-PASSWORD PRIVATE-NAME /private/path caller=123"
         let failure = DiagnosticFailure(NSError(domain: NSCocoaErrorDomain, code: 42,

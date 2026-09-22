@@ -1855,6 +1855,77 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(fields["caller"] as? String, "unknown")
     }
 
+    func testPasteHandoffDiagnosticsExportAndRejectUnsafeFields() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        for source in DiagnosticPasteHandoffSource.allCases {
+            for authenticated in [false, true] {
+                let event = DiagnosticEvent.securePaste(stage: .handoff, outcome: .succeeded,
+                    target: .focused, transport: .none, reason: .keyboardOwnerPending,
+                    attempts: 4, durationMilliseconds: 75, axErrorCode: nil, failure: nil,
+                    handoff: .init(source: source, afterAuthentication: authenticated,
+                        confirmations: authenticated ? 3 : 1, requiredConfirmations: authenticated ? 3 : 1,
+                        firstWaitReason: .keyboardOwnerPending))
+                service.emit(event, level: event.defaultLevel, synchronous: false)
+            }
+        }
+        let event = DiagnosticEvent.securePaste(stage: .handoff, outcome: .failed,
+            target: .focused, transport: .none, reason: .focusUnavailable,
+            attempts: 9, durationMilliseconds: 1_640, axErrorCode: nil, failure: nil,
+            handoff: .init(source: .secureExpansion, afterAuthentication: true,
+                confirmations: 2, requiredConfirmations: 3, firstWaitReason: .secureInputPending))
+        service.emit(event, level: event.defaultLevel, synchronous: false)
+        let exportURL = rootURL.appendingPathComponent("paste-handoff-export.jsonl")
+        _ = try await service.export(to: exportURL)
+        let exported = try String(contentsOf: exportURL, encoding: .utf8)
+        for source in DiagnosticPasteHandoffSource.allCases {
+            XCTAssertTrue(exported.contains("\"handoff_source\":\"\(source.rawValue)\""))
+        }
+        XCTAssertTrue(exported.contains("\"focus_confirmations\":3"))
+        XCTAssertTrue(exported.contains("\"focus_confirmations\":2"))
+        XCTAssertTrue(exported.contains("\"required_focus_confirmations\":3"))
+        XCTAssertTrue(exported.contains("\"after_authentication\":false"))
+        XCTAssertTrue(exported.contains("\"first_wait_reason\":\"secure_input_pending\""))
+
+        let record = DiagnosticRecord(event: event, timestamp: "2026-09-22T10:00:00.000Z",
+            elapsedMilliseconds: 1, sessionIdentifier: UUID().uuidString.lowercased(), sequence: 1)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        for variant in 0..<16 {
+            var object = original
+            var fields = try XCTUnwrap(object["fields"] as? [String: Any])
+            switch variant {
+            case 0: fields["body"] = "PRIVATE-SECURE-CONTENT"
+            case 1: fields["clipboard"] = "PRIVATE-CLIPBOARD-CONTENT"
+            case 2: fields["name"] = "PRIVATE-SNIPPET-NAME"
+            case 3: fields["pid"] = 123
+            case 4: fields["handoff_source"] = "PRIVATE-APP-NAME"
+            case 5: fields["first_wait_reason"] = "PRIVATE-ERROR-DESCRIPTION"
+            case 6: fields["after_authentication"] = "true"
+            case 7: fields["focus_confirmations"] = true
+            case 8: fields["focus_confirmations"] = 4
+            case 9: fields["required_focus_confirmations"] = 0
+            case 10: fields["required_focus_confirmations"] = 17
+            case 11: fields["focus_confirmations"] = -1
+            case 12: fields["required_focus_confirmations"] = 2.5
+            case 13: fields.removeValue(forKey: "after_authentication")
+            case 14: fields.removeValue(forKey: "first_wait_reason")
+            default: fields["stage"] = "delivery"
+            }
+            object["fields"] = fields
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            let injected = SnippetStorageLocations.diagnosticsLogsFolderURL.appendingPathComponent("snippets-injected.jsonl")
+            try data.write(to: injected)
+            let destination = rootURL.appendingPathComponent("rejected-handoff-\(variant).jsonl")
+            do {
+                _ = try await service.export(to: destination)
+                XCTFail("Unsafe handoff diagnostics must be rejected")
+            } catch DiagnosticsExportError.corruptLog {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            }
+            try FileManager.default.removeItem(at: injected)
+        }
+    }
+
     func testSecurePasteDiagnosticsExportAndRejectUnsafeFields() async throws {
         let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
         for stage in DiagnosticSecurePasteStage.allCases {
