@@ -664,7 +664,8 @@ final class SnippetExpansionEngine {
 
     func returnFocusAfterCancellingClipboardHistory(_ target: SecurePasteTarget) async {
         let generation = injectionContextGeneration
-        _ = await restoreSecurePasteTarget(target, logsHandoff: false, contextIsValid: { [self] in
+        _ = await restoreSecurePasteTarget(target, mode: .withoutAuthentication,
+            logsHandoff: false, contextIsValid: { [self] in
             generation == injectionContextGeneration
                 && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID
         })
@@ -710,7 +711,8 @@ final class SnippetExpansionEngine {
             }
             self.clipboardHistoryInsertionActive = true
             self.secureExpansionActivationTargetPID = target.targetPID
-            guard await self.restoreSecurePasteTarget(target, logsHandoff: false, contextIsValid: {
+            guard await self.restoreSecurePasteTarget(target, mode: .withoutAuthentication,
+                logsHandoff: false, contextIsValid: {
                 generation == self.injectionContextGeneration
                     && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.targetPID
             }),
@@ -1126,7 +1128,7 @@ final class SnippetExpansionEngine {
                 secureExpansionActivationTargetPID = nil
             }
         }
-        _ = await restoreSecurePasteTarget(target, logsHandoff: false)
+        _ = await restoreSecurePasteTarget(target, mode: .withoutAuthentication, logsHandoff: false)
     }
 
     /// Delivers either kind of snippet through one transport chosen before its body is
@@ -1199,7 +1201,7 @@ final class SnippetExpansionEngine {
             endInjection()
         }
 
-        guard await restoreSecurePasteTarget(target) else {
+        guard await restoreSecurePasteTarget(target, mode: .withoutAuthentication) else {
             statusText = "Skipped \(snippet.displayName): Snippets could not restore the original field."
             return .failedBeforeAttempt
         }
@@ -1295,16 +1297,9 @@ final class SnippetExpansionEngine {
         defer { plaintext.wipe() }
 
         guard !Task.isCancelled else { return .failedBeforeAttempt }
-        let shouldWaitForAuthenticationSecureInputToClear =
-            SecurePasteAuthenticationHandoffPolicy.shouldWaitForSecureInputToClear(
-                targetIsSecureTextField: target.isSecureTextField,
-                secureInputWasEnabledAtCapture: target.secureInputWasEnabledAtCapture
-            )
-        guard await restoreSecurePasteTarget(
-            target,
-            waitForAuthenticationSecureInputToClear:
-                shouldWaitForAuthenticationSecureInputToClear
-        ) else {
+        // The resolver has completed both authentication and the Keychain read.
+        // Either can show system UI, even when the destination permits Secure Input.
+        guard await restoreSecurePasteTarget(target, mode: .afterAuthentication) else {
             statusText = "Skipped \(shell.displayName): Snippets could not restore the original field after authentication."
             return .failedBeforeAttempt
         }
@@ -2094,48 +2089,31 @@ final class SnippetExpansionEngine {
         acceptedGeneration: UInt,
         focusTarget: SecureExpansionFocusTarget
     ) async -> Bool {
-        guard acceptedGeneration == injectionContextGeneration,
+        guard !Task.isCancelled, acceptedGeneration == injectionContextGeneration,
               listening,
               let target = NSRunningApplication(processIdentifier: targetPID),
               !target.isTerminated
         else { return false }
 
-        // Do this even when the target already reports as frontmost. The LocalAuthentication
-        // sheet can disappear from NSWorkspace first and keep the real keyboard focus for a
-        // little longer; activation plus an explicit AX focus write closes that race.
+        // Run after both LocalAuthentication and the Keychain read have completed:
+        // either system dialog can outlive its NSWorkspace activation state.
         _ = target.activate()
-        var consecutiveFocusConfirmations = 0
-        for delay in [
-            Duration.milliseconds(80),
-            .milliseconds(100),
-            .milliseconds(160),
-            .milliseconds(300),
-            .milliseconds(500),
-            .milliseconds(500)
-        ] {
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled,
-                  acceptedGeneration == injectionContextGeneration,
-                  listening
-            else { return false }
-
+        let report = await SecurePasteFocusHandoff.run(
+            mode: .afterAuthentication,
+            sleep: { delay in try? await Task.sleep(for: delay) }
+        ) { [self] in
+            guard acceptedGeneration == injectionContextGeneration, listening,
+                  !target.isTerminated else { return .cancelled }
+            guard !secureEventInputEnabled else { return .secureInputPending }
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
                 _ = target.activate()
-                continue
+                return .applicationNotFrontmost
             }
-
             _ = target.activate()
-            if restoreKeyboardFocus(to: focusTarget, targetPID: targetPID) {
-                // The authentication agent and the host can briefly disagree about
-                // who owns keyboard focus while the sheet animates away. Require the
-                // same system-wide answer twice, separated by a real run-loop turn.
-                consecutiveFocusConfirmations += 1
-                if consecutiveFocusConfirmations >= 2 { return true }
-            } else {
-                consecutiveFocusConfirmations = 0
-            }
+            return restoreKeyboardFocus(to: focusTarget, targetPID: targetPID)
+                ? .valid : .focusUnavailable
         }
-        return false
+        return report.validation == .valid
     }
 
     private func confirmedSecureDeletionAfterAuthentication(
@@ -3878,8 +3856,10 @@ final class SnippetExpansionEngine {
             }
             // Keep timing non-cancellable once destructive events have been sent.
             progress.stage = .prePaste
-            if characterCount > 0 { await settle(for: injectedKeyDelay) }
-            await settle(for: prePasteDelayAfterDelete)
+            if characterCount > 0 {
+                await settle(for: injectedKeyDelay)
+                await settle(for: prePasteDelayAfterDelete)
+            }
             await settle(for: pasteboardWriteSettleDelay)
             captureConfirmationBaseline()
             // Revalidate after the blocking fingerprint read, immediately before dispatch.
@@ -4707,7 +4687,7 @@ final class SnippetExpansionEngine {
     /// input enabled when they were captured.
     private func restoreSecurePasteTarget(
         _ focusTarget: SecurePasteTarget,
-        waitForAuthenticationSecureInputToClear: Bool = false,
+        mode: SecurePasteFocusHandoff.Mode,
         logsHandoff: Bool = true,
         contextIsValid: (() -> Bool)? = nil
     ) async -> Bool {
@@ -4723,14 +4703,22 @@ final class SnippetExpansionEngine {
                     startedAt: startedAt, attempts: attempts)
             }
         }
-        guard contextIsValid?() != false,
+        guard !Task.isCancelled, contextIsValid?() != false,
               let target = NSRunningApplication(processIdentifier: focusTarget.targetPID),
               !target.isTerminated
         else { return false }
 
-        _ = target.activate()
+        let waitForAuthenticationSecureInputToClear = mode == .afterAuthentication
+            && SecurePasteAuthenticationHandoffPolicy.shouldWaitForSecureInputToClear(
+                targetIsSecureTextField: focusTarget.isSecureTextField,
+                secureInputWasEnabledAtCapture: focusTarget.secureInputWasEnabledAtCapture)
+        if mode == .afterAuthentication
+            || NSWorkspace.shared.frontmostApplication?.processIdentifier != focusTarget.targetPID {
+            _ = target.activate()
+        }
         if focusTarget.containerBinding != nil {
-            let report = await SecurePasteContainerHandoff.run(
+            let report = await SecurePasteFocusHandoff.runForContainer(
+                mode: mode,
                 sleep: { delay in try? await Task.sleep(for: delay) },
                 observe: { [self] in
                     guard contextIsValid?() != false, !target.isTerminated else { return .fieldUnavailable }
@@ -4754,73 +4742,42 @@ final class SnippetExpansionEngine {
             return succeeded
         }
         reason = .focusUnavailable
-        var consecutiveFocusConfirmations = 0
-        for delay in [
-            Duration.milliseconds(80),
-            .milliseconds(100),
-            .milliseconds(160),
-            .milliseconds(300),
-            .milliseconds(500),
-            .milliseconds(500),
-        ] {
-            attempts += 1
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, !target.isTerminated,
-                  contextIsValid?() != false else { return false }
-
+        let report = await SecurePasteFocusHandoff.run(
+            mode: mode,
+            sleep: { delay in try? await Task.sleep(for: delay) }
+        ) { [self] in
+            guard !target.isTerminated else { return .fieldUnavailable }
+            guard contextIsValid?() != false else { return .cancelled }
             if SecurePasteAuthenticationHandoffPolicy.secureInputBlocksRestore(
                 waitForAuthenticationSecureInputToClear:
                     waitForAuthenticationSecureInputToClear,
                 secureEventInputEnabled: secureEventInputEnabled
             ) {
-                reason = .secureInputPending
-                consecutiveFocusConfirmations = 0
-                continue
+                return .secureInputPending
             }
-
-            let targetIsFrontmost = NSWorkspace.shared.frontmostApplication?
-                .processIdentifier == focusTarget.targetPID
-            guard targetIsFrontmost else {
-                reason = .applicationNotFrontmost
-                consecutiveFocusConfirmations =
-                    SecurePasteAuthenticationHandoffPolicy
-                        .updatedConsecutiveFocusConfirmations(
-                            current: consecutiveFocusConfirmations,
-                            targetIsFrontmost: false,
-                            focusWasReasserted: false
-                        )
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == focusTarget.targetPID else {
                 _ = target.activate()
-                continue
+                return .applicationNotFrontmost
+            }
+            if mode == .withoutAuthentication,
+               currentFocusMatches(focusTarget.focusedElement, axBudget: AXMessagingBudget()) {
+                return .valid
             }
 
-            // Match the secure trigger-expansion handoff: the authentication sheet can
-            // disappear from NSWorkspace before keyboard ownership has fully returned.
+            // LocalAuthentication or a Keychain unlock dialog can disappear from
+            // NSWorkspace before keyboard ownership has fully returned. Reassert the
+            // captured control and require consecutive observations after authentication.
             _ = target.activate()
-            let focusWasReasserted = reassertKeyboardFocus(
+            return reassertKeyboardFocus(
                 element: focusTarget.focusedElement,
                 window: focusTarget.window,
                 targetPID: focusTarget.targetPID
-            )
-            consecutiveFocusConfirmations =
-                SecurePasteAuthenticationHandoffPolicy
-                    .updatedConsecutiveFocusConfirmations(
-                        current: consecutiveFocusConfirmations,
-                        targetIsFrontmost: true,
-                        focusWasReasserted: focusWasReasserted
-                    )
-            if SecurePasteAuthenticationHandoffPolicy.focusIsStable(
-                consecutiveConfirmations: consecutiveFocusConfirmations
-            ) {
-                succeeded = true
-                reason = .none
-                return true
-            }
-            reason = .focusUnavailable
-            if !focusWasReasserted {
-                _ = target.activate()
-            }
+            ) ? .valid : .focusUnavailable
         }
-        return false
+        attempts = report.attempts
+        succeeded = report.validation == .valid
+        reason = diagnosticReason(succeeded ? (report.firstTransient ?? .valid) : report.validation)
+        return succeeded
     }
 
     private func reassertKeyboardFocus(

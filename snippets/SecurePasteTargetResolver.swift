@@ -132,54 +132,92 @@ enum SecurePasteTargetResolver {
     }
 }
 
-/// Runs the shipping container handoff with injectable observations/sleeps. Only
-/// transient focus/AX availability may settle; structural changes abort the attempt.
-/// No plaintext-bearing operation belongs in this loop.
+/// Shares bounded focus recovery between native fields, container targets, and
+/// authenticated expansions. No plaintext-bearing operation belongs in this loop.
 @MainActor
-enum SecurePasteContainerHandoff {
+enum SecurePasteFocusHandoff {
+    enum Mode: CaseIterable {
+        case withoutAuthentication
+        case afterAuthentication
+    }
+
     struct Report {
         let validation: SecurePasteTargetResolver.Validation
         let firstTransient: SecurePasteTargetResolver.Validation?
         let attempts: Int
     }
 
+    // Probe immediately, then retry quickly while the picker or authentication UI
+    // returns keyboard ownership. Keep the previous 1.64-second total sleep budget
+    // for slow hosts; a successful sample always gets its next check after 25 ms.
+    private static let confirmationDelay: Duration = .milliseconds(25)
+    private static let retryDelays: [Duration] = [
+        .zero, .milliseconds(25), .milliseconds(25), .milliseconds(50),
+        .milliseconds(100), .milliseconds(160), .milliseconds(280),
+        .milliseconds(500), .milliseconds(500),
+    ]
+
     static func run(
+        mode: Mode,
         sleep: (Duration) async -> Void,
-        observe: () -> SecurePasteTargetResolver.Validation,
-        restoreFocus: () -> Void
+        attempt: () -> SecurePasteTargetResolver.Validation
     ) async -> Report {
         var consecutive = 0
         var firstTransient: SecurePasteTargetResolver.Validation?
         var last: SecurePasteTargetResolver.Validation = .focusUnavailable
-        let delays: [Duration] = [.milliseconds(80), .milliseconds(100), .milliseconds(160),
-                                  .milliseconds(300), .milliseconds(500), .milliseconds(500)]
-        for (index, delay) in delays.enumerated() {
-            await sleep(delay)
+        for (index, retryDelay) in retryDelays.enumerated() {
+            let delay = consecutive > 0 ? confirmationDelay : retryDelay
+            // Even sleeping for zero would introduce an unnecessary task handoff.
+            if delay > .zero { await sleep(delay) }
             guard !Task.isCancelled else {
                 return Report(validation: .cancelled, firstTransient: firstTransient, attempts: index + 1)
             }
-            last = observe()
-            if last == .valid || last == .fieldFocusPending {
-                if last == .fieldFocusPending { firstTransient = firstTransient ?? last }
-                restoreFocus()
-                last = observe()
-            }
+            last = attempt()
             guard last.canRetryHandoff else {
                 return Report(validation: last, firstTransient: firstTransient, attempts: index + 1)
             }
+            consecutive = SecurePasteAuthenticationHandoffPolicy.updatedConsecutiveFocusConfirmations(
+                current: consecutive, targetIsFrontmost: last == .valid, focusWasReasserted: last == .valid)
             if last == .valid {
-                consecutive += 1
-                if consecutive == 2 {
+                if mode == .withoutAuthentication
+                    || SecurePasteAuthenticationHandoffPolicy.focusIsStable(consecutiveConfirmations: consecutive) {
                     return Report(validation: .valid, firstTransient: firstTransient, attempts: index + 1)
                 }
             } else {
-                consecutive = 0
                 firstTransient = firstTransient ?? last
             }
         }
-        // One last valid sample is insufficient: stable handoff requires two.
+        // One valid sample after authentication is insufficient, including at timeout.
         return Report(validation: last == .valid ? .focusUnavailable : last,
-                      firstTransient: firstTransient, attempts: delays.count)
+                      firstTransient: firstTransient, attempts: retryDelays.count)
+    }
+
+    /// Container identity must still be valid before attempting an AX focus write.
+    /// Structural changes abort; only transient focus/AX availability may settle.
+    static func runForContainer(
+        mode: Mode,
+        sleep: (Duration) async -> Void,
+        observe: () -> SecurePasteTargetResolver.Validation,
+        restoreFocus: () -> Void
+    ) async -> Report {
+        var firstTransient: SecurePasteTargetResolver.Validation?
+        let report = await run(mode: mode, sleep: sleep) {
+            let validation = observe()
+            if validation != .valid && validation.canRetryHandoff {
+                firstTransient = firstTransient ?? validation
+            }
+            if validation == .valid && mode == .withoutAuthentication { return .valid }
+            if validation == .valid || validation == .fieldFocusPending {
+                restoreFocus()
+                let restored = observe()
+                if restored != .valid && restored.canRetryHandoff {
+                    firstTransient = firstTransient ?? restored
+                }
+                return restored
+            }
+            return validation
+        }
+        return Report(validation: report.validation, firstTransient: firstTransient, attempts: report.attempts)
     }
 }
 
