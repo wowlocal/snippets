@@ -278,6 +278,8 @@ class SnippetTableRowView: NSTableRowView {
     /// needs an outline because it has no inactive-window state of its own.
     var drawsSelectionBorderWhenWindowInactive: Bool { false }
 
+    var hoverHighlightOpacity: CGFloat { 1 }
+
     override var isEmphasized: Bool {
         get { false }
         set {}
@@ -395,6 +397,7 @@ class SnippetTableRowView: NSTableRowView {
 
     private func updateHighlight() {
         let windowIsActive = window?.isKeyWindow != false
+        highlightView.alphaValue = isSelected ? 1 : hoverHighlightOpacity
         highlightView.update(
             isSelected: isSelected,
             isHovering: isHovering,
@@ -411,6 +414,7 @@ class SnippetTableRowView: NSTableRowView {
 /// The table runs `selectionHighlightStyle = .none` and this view paints instead.
 final class SuggestionTableRowView: SnippetTableRowView {
     override var drawsSelectionBorderWhenWindowInactive: Bool { true }
+    override var hoverHighlightOpacity: CGFloat { 0.35 }
 
     /// Concentric with the glass surface: the pill's corner arc and the panel's
     /// share a centre, so the gap around the pill is even on every side.

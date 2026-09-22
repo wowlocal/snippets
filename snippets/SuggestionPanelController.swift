@@ -16,13 +16,6 @@ private final class SuggestionPanel: NSPanel {
     }
 }
 
-private final class SuggestionSearchField: NSSearchField {
-    /// A non-activating panel normally refuses key status for incidental clicks.
-    /// Secure Paste is the deliberate exception: its search field is the one view
-    /// that must be able to take keyboard focus without activating Snippets.
-    override var needsPanelToBecomeKey: Bool { true }
-}
-
 struct SuggestionItem {
     let snippet: Snippet
     let isSecure: Bool
@@ -70,7 +63,7 @@ final class SuggestionPanelController: NSObject,
     private let panel: SuggestionPanel
     private let tableView: NSTableView
     private let scrollView: NSScrollView
-    private let searchField = SuggestionSearchField()
+    private let searchField = PickerSearchField()
     private let searchContainer = NSView()
     private let emptyLabel = NSTextField(labelWithString: "No matching snippets")
     private var searchContainerHeightConstraint: NSLayoutConstraint!

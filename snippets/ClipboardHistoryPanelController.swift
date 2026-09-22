@@ -16,42 +16,16 @@ private final class ClipboardHistoryPanel: NSPanel {
     }
 }
 
-private final class ClipboardHistorySearchField: NSSearchField {
-    override var needsPanelToBecomeKey: Bool { true }
-}
-
-/// A quiet reading surface over the panel's glass, without another material or blur.
+/// Keep preview text legible over glass without a separate background card.
 private final class ClipboardHistoryPreviewSurface: NSView {
     override var allowsVibrancy: Bool { false }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         identifier = NSUserInterfaceItemIdentifier("clipboardHistoryPreviewSurface")
-        wantsLayer = true
-        layer?.cornerRadius = 10
-        layer?.cornerCurve = .continuous
-        layer?.masksToBounds = true
-        updateBackground()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        updateBackground()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateBackground()
-    }
-
-    private func updateBackground() {
-        // CGColor does not retain the semantic color's dynamic appearance.
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.32).cgColor
-        }
-    }
 }
 
 /// A keyboard-enabled, non-activating picker. The caller captures its destination
@@ -66,7 +40,7 @@ final class ClipboardHistoryPanelController: NSObject,
     private let service: ClipboardHistoryService
     private let presentActionsMenu: (NSMenu, NSView) -> Void
     private let panel: ClipboardHistoryPanel
-    private let searchField = ClipboardHistorySearchField()
+    private let searchField = PickerSearchField()
     private let tableView = NSTableView()
     private let listScrollView = NSScrollView()
     private let previewScrollView = NSScrollView()
@@ -341,7 +315,7 @@ final class ClipboardHistoryPanelController: NSObject,
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .none
         tableView.focusRingType = .none
-        tableView.rowHeight = 57
+        tableView.rowHeight = 51
         tableView.intercellSpacing = NSSize(width: 0, height: 4)
         tableView.allowsMultipleSelection = false
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -401,10 +375,14 @@ final class ClipboardHistoryPanelController: NSObject,
             button.controlSize = .small
             button.font = .systemFont(ofSize: 11)
         }
+        primaryButton.bezelColor = .controlAccentColor
+        primaryButton.font = .systemFont(ofSize: 11, weight: .semibold)
+        actionsButton.isBordered = false
+        actionsButton.contentTintColor = .labelColor
         let footer = NSStackView(views: [countLabel, NSView(), actionsButton, primaryButton])
         footer.orientation = .horizontal
         footer.alignment = .centerY
-        footer.spacing = 8
+        footer.spacing = 12
         footer.translatesAutoresizingMaskIntoConstraints = false
         return footer
     }

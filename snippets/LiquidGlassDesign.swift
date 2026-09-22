@@ -1,6 +1,12 @@
 import AppKit
 import QuartzCore
 
+/// Both pickers keep the native search bezel and focus ring, including field-editor
+/// focus handling inside a non-activating panel.
+final class PickerSearchField: NSSearchField {
+    override var needsPanelToBecomeKey: Bool { true }
+}
+
 enum LiquidGlassDesign {
     enum Metrics {
         static let controlCornerRadius: CGFloat = 10

@@ -315,7 +315,7 @@ final class ClipboardHistoryPanelTests: XCTestCase {
         editor.unmarkText()
     }
 
-    func testLiveAppearanceChangePreservesPreviewAndUpdatesReadingSurface() async throws {
+    func testLiveAppearanceChangePreservesPreviewWithoutBackgroundCard() async throws {
         let entry = ClipboardHistoryEntry(text: "  A clipboard preview\n\twith exact whitespace.\n")
         let fixture = await makeFixture(entries: [entry])
         defer { fixture.cleanup() }
@@ -336,14 +336,13 @@ final class ClipboardHistoryPanelTests: XCTestCase {
         XCTAssertNil(window.appearance)
         XCTAssertNil(surface.appearance)
         window.contentView?.layoutSubtreeIfNeeded()
-        let light = try XCTUnwrap(surface.layer?.backgroundColor)
+        XCTAssertNil(surface.layer?.backgroundColor)
         preview.setSelectedRange(NSRange(location: 2, length: 9))
         let selectedRow = table.selectedRow
 
         NSApp.appearance = NSAppearance(named: .darkAqua)
         window.contentView?.layoutSubtreeIfNeeded()
-        let dark = try XCTUnwrap(surface.layer?.backgroundColor)
-        XCTAssertNotEqual(light, dark, "The cached layer color must follow a live appearance change")
+        XCTAssertNil(surface.layer?.backgroundColor)
         XCTAssertEqual(surface.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
         XCTAssertEqual(preview.string, entry.text)
         XCTAssertEqual(preview.selectedRange(), NSRange(location: 2, length: 9))
@@ -352,7 +351,7 @@ final class ClipboardHistoryPanelTests: XCTestCase {
 
         NSApp.appearance = NSAppearance(named: .aqua)
         window.contentView?.layoutSubtreeIfNeeded()
-        XCTAssertEqual(surface.layer?.backgroundColor, light)
+        XCTAssertNil(surface.layer?.backgroundColor)
     }
 
     func testReturnPastesLiteralTextAfterDismissal() async throws {
