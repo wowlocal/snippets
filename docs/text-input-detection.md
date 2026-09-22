@@ -324,6 +324,15 @@ write attempt, the event path first tries to select the verified trigger and pas
 Synthetic backspaces remain a compatibility path for fields without a verifiable writable
 selection. These operations are not atomic across application processes.
 
+Ordinary expansion uses `AXSelectedText` only after ancestry positively identifies a native
+control. Web page inputs (including Safari) and unknown/incomplete ancestry skip that transport
+before any selection or text write, leaving the original trigger for verified selection + native
+paste. A writable `AXSelectedText` attribute is not proof that the page's editing model accepts
+it. Safari's native address bar retains selected-text replacement; Chromium's separate
+browser-chrome whole-value strategy is unchanged. An AX-confirmed trigger mismatch still fails
+closed before this transport decision, and an attempted but unconfirmed text write still
+forbids fallback.
+
 Ordinary suggestion acceptance captures the original focused AX object and, when readable, its
 selection before queueing work. AX-confirmed insertion validates that selection when the queued
 operation starts. Local tracking retains its separate capability and context checks. Both event

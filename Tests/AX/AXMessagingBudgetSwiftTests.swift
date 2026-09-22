@@ -337,6 +337,39 @@ struct AXMessagingBudgetSwiftTests {
             role: { _ in budget = false; return "AXWindow" }, parent: { _ in nil }) == nil)
     }
 
+    @Test("ordinary expansion distinguishes page fields from native Safari controls",
+          arguments: ["AXTextField", "AXTextArea", "AXComboBox", "AXGroup"],
+          ["AXWebArea", "AXWindow", "AXApplication", "unreadable"])
+    func ordinaryExpansionRoutesBeforeAnyWrite(fieldRole: String, ancestorRole: String) {
+        // A group between the field and web area mirrors nested page inputs. Native toolbar
+        // fields instead reach a window/application; a failed read must not imply native.
+        let ancestry = SecurePasteDeliveryPolicy.webAncestry(of: 1, canContinue: { true },
+            role: {
+                if $0 == 1 { return fieldRole }
+                if $0 == 2 { return "AXGroup" }
+                return ancestorRole == "unreadable" ? nil : ancestorRole
+            }, parent: { $0 < 3 ? $0 + 1 : nil })
+        var mutations: [String] = []
+        let result = AccessibilitySelectedTextTransaction.run(
+            targetIsInsideWebArea: ancestry,
+            contextIsValid: { true }, originalSelectionMatches: { true },
+            selectTrigger: { mutations.append("select"); return true },
+            selectedTriggerMatches: { true },
+            writeText: { mutations.append("text"); return true },
+            confirmText: { true },
+            finishCaret: { mutations.append("caret") },
+            restoreSelection: { mutations.append("restore") })
+        if ancestorRole == "AXWindow" || ancestorRole == "AXApplication" {
+            #expect(result == .delivered)
+            #expect(mutations == ["select", "text", "caret"])
+        } else {
+            #expect(result == .unavailable)
+            #expect(mutations.isEmpty)
+            #expect(AccessibilityReplacementPolicy.action(
+                for: .unavailable, provenance: .accessibilityConfirmed) == .useEvents)
+        }
+    }
+
     @Test("Secure Paste prefers the advertised browser range operation in web text fields")
     func securePasteUsesWebRangeReplacement() {
         #expect(SecurePasteDeliveryPolicy.strategy(

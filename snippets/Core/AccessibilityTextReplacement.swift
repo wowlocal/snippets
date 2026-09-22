@@ -298,12 +298,15 @@ nonisolated struct VerifiedTriggerSelection: Equatable {
 /// that call even a failed reply can hide a completed edit: no rollback, fallback or retry is safe.
 nonisolated enum AccessibilitySelectedTextTransaction {
     enum Result: Equatable {
+        /// No mutation was attempted; the caller may choose verified selection + native paste.
+        case unavailable
         case delivered
         case selectionUnconfirmed
         case textUnconfirmed
     }
 
     static func run(
+        targetIsInsideWebArea: Bool?,
         contextIsValid: () -> Bool,
         originalSelectionMatches: () -> Bool,
         selectTrigger: () -> Bool,
@@ -313,6 +316,11 @@ nonisolated enum AccessibilitySelectedTextTransaction {
         finishCaret: () -> Void,
         restoreSelection: () -> Void
     ) -> Result {
+        // Safari can advertise AXSelectedText as writable in page inputs yet ignore the write
+        // or leave the DOM's editing model unchanged. Decide before even selecting the trigger:
+        // after a text-bearing request, an ambiguous reply can never authorize native paste.
+        // Only positive native ancestry permits this transport (including Safari's address bar).
+        guard targetIsInsideWebArea == false else { return .unavailable }
         guard contextIsValid(), originalSelectionMatches(), contextIsValid() else {
             return .selectionUnconfirmed
         }

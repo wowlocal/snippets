@@ -3368,6 +3368,7 @@ final class SnippetExpansionEngine {
                 && currentFocusMatches(element, axBudget: budget)
         }
         let result = AccessibilitySelectedTextTransaction.run(
+            targetIsInsideWebArea: securePasteWebAncestry(element, axBudget: AXMessagingBudget()),
             contextIsValid: contextIsValid,
             originalSelectionMatches: {
                 guard let selected = selectedRange(of: element),
@@ -3405,6 +3406,7 @@ final class SnippetExpansionEngine {
                     generation: generation, targetPID: targetPID, allowSelectedTextFallback: true)
             })
         switch result {
+        case .unavailable: return .unavailable
         case .delivered: return .delivered
         case .selectionUnconfirmed: return .cancelledBeforeText
         case .textUnconfirmed: return .attemptedUnconfirmed

@@ -966,6 +966,7 @@ struct TextReplacementTests {
     @Suite("Accessibility selected-text transaction")
     struct AccessibilitySelectedTextTransactionTests {
         private final class Host {
+            var isInsideWebArea: Bool? = false
             var contextMatches = true
             var originalMatches = true
             var selectedProofMatches = true
@@ -987,6 +988,7 @@ struct TextReplacementTests {
 
             func run() -> AccessibilitySelectedTextTransaction.Result {
                 AccessibilitySelectedTextTransaction.run(
+                    targetIsInsideWebArea: isInsideWebArea,
                     contextIsValid: { self.contextMatches },
                     originalSelectionMatches: {
                         self.duringOriginalProof?()
@@ -1037,6 +1039,32 @@ struct TextReplacementTests {
             #expect(host.textWrites == 1)
             #expect(host.caretWrites == 1)
             #expect(host.restorationChecks == 0)
+        }
+
+        @Test("Safari page inputs bypass a writable but ineffective AXSelectedText setter")
+        func webFieldSelectsNativePasteBeforeAnyMutation() {
+            let host = Host()
+            host.isInsideWebArea = true
+            host.writeApplies = false
+            #expect(host.run() == .unavailable)
+            #expect(host.selectionWrites == 0)
+            #expect(host.textWrites == 0)
+            #expect(host.caretWrites == 0)
+            #expect(host.restorationChecks == 0)
+            #expect(host.text == "\\em")
+            #expect(!host.selected, "native paste must receive the original selection")
+        }
+
+        @Test func unknownAncestryNeverProbesTheTextSetter() {
+            let host = Host()
+            host.isInsideWebArea = nil
+            #expect(host.run() == .unavailable)
+            #expect(host.selectionWrites == 0)
+            #expect(host.textWrites == 0)
+            #expect(host.caretWrites == 0)
+            #expect(host.restorationChecks == 0)
+            #expect(host.text == "\\em")
+            #expect(!host.selected)
         }
 
         @Test func failedSelectionReplyRestoresBeforeTheNextTypedCharacter() {
