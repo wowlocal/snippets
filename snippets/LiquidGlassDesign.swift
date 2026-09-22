@@ -144,7 +144,7 @@ enum LiquidGlassDesign {
     }
 
     /// Surface for a window-filling, free-floating panel that renders over *other*
-    /// applications — the suggestion popup.
+    /// applications — the suggestion and clipboard-history pickers.
     ///
     /// Deliberately separate from `makeTransientSurface`, which is for surfaces that
     /// live inside one of our own windows:
@@ -164,7 +164,7 @@ enum LiquidGlassDesign {
         cornerRadius: CGFloat = effectivePanelCornerRadius,
         fallbackMaterial: NSVisualEffectView.Material = .menu
     ) -> NSView {
-        let clipper = NSView()
+        let clipper = FloatingPanelContentView()
         clipper.setAccessibilityIdentifier("floatingPanelContent")
         clipper.translatesAutoresizingMaskIntoConstraints = false
         clipper.wantsLayer = true
@@ -335,6 +335,24 @@ enum LiquidGlassDesign {
             content.topAnchor.constraint(equalTo: container.topAnchor),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
+    }
+}
+
+/// A neutral veil quiets the desktop behind text without flattening the native glass rim.
+private final class FloatingPanelContentView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateBackdropVeil()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackdropVeil()
+    }
+
+    private func updateBackdropVeil() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.backgroundColor = NSColor(white: isDark ? 0 : 1, alpha: isDark ? 0.36 : 0.30).cgColor
     }
 }
 

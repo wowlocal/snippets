@@ -25,8 +25,6 @@ final class FloatingPanelAppearanceTests: XCTestCase {
         XCTAssertNil(glass.appearance)
         XCTAssertNil(content.appearance)
         XCTAssertEqual(glass.style, .regular)
-        XCTAssertNil(content.layer?.backgroundColor,
-            "The clipping view must not cover the native glass material with a painted background")
 
         NSApp.appearance = NSAppearance(named: .aqua)
         panel.orderFrontRegardless()
@@ -35,29 +33,34 @@ final class FloatingPanelAppearanceTests: XCTestCase {
         panel.contentView?.layoutSubtreeIfNeeded()
         XCTAssertEqual(glass.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
         XCTAssertNil(glass.tintColor, "System glass must control its own backdrop adaptation")
-        XCTAssertNil(content.layer?.backgroundColor)
+        try assertBackdropVeil(content, isDark: false)
 
         NSApp.appearance = NSAppearance(named: .darkAqua)
         panel.contentView?.layoutSubtreeIfNeeded()
         XCTAssertEqual(content.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
         XCTAssertNil(glass.tintColor)
-        XCTAssertNil(content.layer?.backgroundColor)
+        try assertBackdropVeil(content, isDark: true)
 
         panel.resignKey()
         XCTAssertFalse(panel.isKeyWindow)
         XCTAssertEqual(glass.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
         XCTAssertNil(glass.tintColor)
+        try assertBackdropVeil(content, isDark: true)
         NSApp.appearance = NSAppearance(named: .aqua)
         panel.contentView?.layoutSubtreeIfNeeded()
         XCTAssertEqual(glass.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua,
             "System theme changes must also update a panel without keyboard focus")
-        XCTAssertNil(content.layer?.backgroundColor)
+        try assertBackdropVeil(content, isDark: false)
     }
 
-    func testLegacyPanelKeepsSystemMaterialWithoutPickerTint() throws {
+    func testLegacyPanelKeepsBehindWindowMaterialAndAdaptiveVeil() throws {
+        let previousAppearance = NSApp.appearance
         let previousLegacy = LiquidGlassDesign.forcesLegacyAppearance
         LiquidGlassDesign.forcesLegacyAppearance = true
-        defer { LiquidGlassDesign.forcesLegacyAppearance = previousLegacy }
+        defer {
+            NSApp.appearance = previousAppearance
+            LiquidGlassDesign.forcesLegacyAppearance = previousLegacy
+        }
         let panel = makePanel()
         defer { panel.close() }
         panel.orderFrontRegardless()
@@ -66,7 +69,26 @@ final class FloatingPanelAppearanceTests: XCTestCase {
         let material = try XCTUnwrap(views.compactMap { $0 as? NSVisualEffectView }.first)
         XCTAssertEqual(material.blendingMode, .behindWindow)
         let content = try XCTUnwrap(views.first { $0.accessibilityIdentifier() == "floatingPanelContent" })
-        XCTAssertNil(content.layer?.backgroundColor)
+        for isDark in [true, false] {
+            NSApp.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            try assertBackdropVeil(content, isDark: isDark)
+        }
+    }
+
+    private func assertBackdropVeil(
+        _ content: NSView,
+        isDark: Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let cgColor = try XCTUnwrap(content.layer?.backgroundColor, file: file, line: line)
+        let color = try XCTUnwrap(NSColor(cgColor: cgColor)?.usingColorSpace(.deviceRGB), file: file, line: line)
+        XCTAssertEqual(color.redComponent, isDark ? 0 : 1, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(color.greenComponent, color.redComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(color.blueComponent, color.redComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertGreaterThan(color.alphaComponent, 0, file: file, line: line)
+        XCTAssertLessThan(color.alphaComponent, 1, "The veil must preserve translucency", file: file, line: line)
     }
 
     private func makePanel() -> NSPanel {

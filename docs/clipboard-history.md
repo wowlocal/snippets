@@ -33,9 +33,11 @@ Secure snippets still use the existing authentication
 and paste checks. Missing result numbers and key repeats do nothing. These shortcuts
 are local to the keyboard-enabled picker; ordinary inline suggestions leave them alone.
 
-The history and snippet pickers share a system-adaptive floating surface. Light/dark
-appearance changes update open panels without resetting their selection or search.
-The full-text preview has a slightly denser reading background over the glass.
+The history and snippet pickers share a system-adaptive floating surface with a neutral
+veil over the native blur (36% black in dark mode, 30% white in light mode). This mutes
+busy backgrounds while preserving translucency and the glass rim. Light/dark appearance
+changes update open panels without resetting their selection or search. The same veil
+also applies to the pre-macOS 26 material.
 
 History entries are distinct from snippets: insertion never invokes PlaceholderResolver,
 sync, or snippet usage ranking. Creating a snippet uses the existing editor and focuses
