@@ -241,8 +241,7 @@ final class SuggestionPanelController: NSObject,
             emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
         ])
 
-        let surface = LiquidGlassDesign.makeFloatingPanelSurface(
-            containing: panelBody, usesPickerAppearance: true)
+        let surface = LiquidGlassDesign.makeFloatingPanelSurface(containing: panelBody)
 
         // The surface is Auto Layout driven and has no size of its own, so pinning
         // it is mandatory. Setting `frame`/`autoresizingMask` on it instead is what

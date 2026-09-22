@@ -156,10 +156,10 @@ enum LiquidGlassDesign {
     static func makeFloatingPanelSurface(
         containing content: NSView,
         cornerRadius: CGFloat = effectivePanelCornerRadius,
-        fallbackMaterial: NSVisualEffectView.Material = .menu,
-        usesPickerAppearance: Bool = false
+        fallbackMaterial: NSVisualEffectView.Material = .menu
     ) -> NSView {
-        let clipper = FloatingPanelContentView(usesPickerAppearance: usesPickerAppearance)
+        let clipper = NSView()
+        clipper.setAccessibilityIdentifier("floatingPanelContent")
         clipper.translatesAutoresizingMaskIntoConstraints = false
         clipper.wantsLayer = true
         clipper.layer?.cornerRadius = cornerRadius
@@ -329,53 +329,6 @@ enum LiquidGlassDesign {
             content.topAnchor.constraint(equalTo: container.topAnchor),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
-    }
-}
-
-/// Anchor text-heavy pickers to the inherited theme, including non-key inline
-/// suggestions. The translucent base preserves glass's blurred backdrop and edge
-/// treatment while keeping dark panels dark even over light content.
-private final class FloatingPanelContentView: NSView {
-    private let usesPickerAppearance: Bool
-
-    init(usesPickerAppearance: Bool) {
-        self.usesPickerAppearance = usesPickerAppearance
-        super.init(frame: .zero)
-        wantsLayer = true
-        setAccessibilityIdentifier("floatingPanelContent")
-        if usesPickerAppearance {
-            NSWorkspace.shared.notificationCenter.addObserver(self,
-                selector: #selector(updateBackgroundColor),
-                name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
-        }
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    deinit {
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        updateBackgroundColor()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateBackgroundColor()
-    }
-
-    @objc private func updateBackgroundColor() {
-        guard usesPickerAppearance,
-              #available(macOS 26.0, *), !LiquidGlassDesign.forcesLegacyAppearance,
-              !LiquidGlassDesign.prefersHighContrastHighlight else {
-            layer?.backgroundColor = nil
-            return
-        }
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.80).cgColor
-        }
     }
 }
 

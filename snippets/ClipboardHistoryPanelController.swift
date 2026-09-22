@@ -294,10 +294,7 @@ final class ClipboardHistoryPanelController: NSObject,
             emptyLabel.centerYAnchor.constraint(equalTo: listScrollView.centerYAnchor),
         ])
 
-        let surface = LiquidGlassDesign.makeFloatingPanelSurface(
-            containing: content,
-            usesPickerAppearance: true
-        )
+        let surface = LiquidGlassDesign.makeFloatingPanelSurface(containing: content)
         let root = panel.contentView!
         root.wantsLayer = true
         root.layer?.cornerRadius = LiquidGlassDesign.effectivePanelCornerRadius
