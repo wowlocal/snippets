@@ -1,12 +1,16 @@
 import Foundation
 
-/// Outcome of one atomic Accessibility replacement.
+/// Outcome of one direct Accessibility replacement (cross-process reads/writes are not atomic).
 nonisolated enum AccessibilityReplacement: Equatable {
     case delivered
     /// The field does not expose readable text or writable attributes.
     case unavailable
     /// The text before the caret was read and it is not what we expected.
     case rejected
+    /// The selection transaction lost its proof before invoking a text setter. Do not fall back.
+    case cancelledBeforeText
+    /// A write was attempted but its result could not be verified. Never follow it with a second edit.
+    case attemptedUnconfirmed
 }
 
 nonisolated enum AccessibilityReplacementPolicy {
@@ -30,6 +34,8 @@ nonisolated enum AccessibilityReplacementPolicy {
             return .useEvents
         case .rejected:
             return provenance == .accessibilityConfirmed ? .abort : .useEvents
+        case .cancelledBeforeText, .attemptedUnconfirmed:
+            return .abort
         }
     }
 }
@@ -96,7 +102,10 @@ nonisolated enum AccessibilityTextReplacement {
         guard triggerCharacterCount > 0,
               expectedTrigger.count == triggerCharacterCount,
               caretRange.location >= 0,
-              caretRange.length >= 0
+              caretRange.location != NSNotFound,
+              caretRange.length >= 0,
+              caretRange.length < Int.max - caretRange.location,
+              replacementUTF16Length >= 0
         else { return .unavailable }
 
         guard textBeforeCaret.count >= triggerCharacterCount else { return .rejected }
@@ -111,6 +120,7 @@ nonisolated enum AccessibilityTextReplacement {
         guard caretRange.location >= triggerUTF16Length else { return .unavailable }
 
         let location = caretRange.location - triggerUTF16Length
+        guard replacementUTF16Length < Int.max - location else { return .unavailable }
         // An active selection is folded into the range, matching what backspaces would do.
         let length = triggerUTF16Length + caretRange.length
 
@@ -128,17 +138,220 @@ nonisolated enum AccessibilityTextReplacement {
         plan: Plan,
         replacement: String
     ) -> Bool {
-        let text = valueAfter as NSString
-        let inserted = NSRange(location: plan.replacementRange.location, length: replacement.utf16.count)
-        if inserted.location >= 0,
-           NSMaxRange(inserted) <= text.length,
-           text.substring(with: inserted) == replacement {
-            return true
-        }
+        guard let expectedValue = expectedValue(
+            valueBefore: valueBefore, plan: plan, replacement: replacement) else { return false }
+        // Verify the complete edit, including both untouched sides. Matching only the inserted
+        // prefix can acknowledge a no-op; matching a length delta can acknowledge somebody else's
+        // edit. Swift's canonical Unicode equality permits composition normalization, but casing,
+        // line-ending conversion and unrelated same-length text are not proof of our write.
+        return valueAfter == expectedValue
+    }
 
-        // The host may have normalized what it stored (composition form, line endings); the expected
-        // length delta still tells us the edit landed.
-        let expectedDelta = replacement.utf16.count - plan.replacementRange.length
-        return text.length - (valueBefore as NSString).length == expectedDelta
+    nonisolated static func expectedValue(
+        valueBefore: String,
+        plan: Plan,
+        replacement: String
+    ) -> String? {
+        let originalLength = valueBefore.utf16.count
+        let range = plan.replacementRange
+        // Do not trust a malformed plan, even if unrelated text happens to match afterwards.
+        // Subtract only after proving each bound so NSMaxRange cannot overflow.
+        guard range.location >= 0, range.length >= 0,
+              range.location <= originalLength,
+              range.length <= originalLength - range.location else { return nil }
+
+        guard let stringRange = Range(range, in: valueBefore),
+              stringRange.lowerBound.samePosition(in: valueBefore.unicodeScalars) != nil,
+              stringRange.upperBound.samePosition(in: valueBefore.unicodeScalars) != nil else { return nil }
+        return valueBefore.replacingCharacters(in: stringRange, with: replacement)
+    }
+
+    /// Normalization may change UTF-16 offsets even when the whole edit is confirmed. The exact
+    /// untouched suffix anchors the inserted text's end in the actual host rendition; without it
+    /// leave the host's caret alone instead of reusing a possibly obsolete planned offset.
+    nonisolated static func confirmedCaretLocation(
+        valueBefore: String,
+        valueAfter: String,
+        plan: Plan,
+        replacement: String
+    ) -> Int? {
+        guard writeLanded(valueBefore: valueBefore, valueAfter: valueAfter,
+                          plan: plan, replacement: replacement),
+              let originalRange = Range(plan.replacementRange, in: valueBefore) else { return nil }
+        let suffix = valueBefore[originalRange.upperBound...].utf16
+        let actual = valueAfter.utf16
+        guard actual.count >= suffix.count,
+              actual.suffix(suffix.count).elementsEqual(suffix) else { return nil }
+        let location = actual.count - suffix.count
+        guard Range(NSRange(location: location, length: 0), in: valueAfter) != nil else { return nil }
+        return location
+    }
+}
+
+/// A bounded, verified selection for the host's own paste operation. Preparing the selection
+/// changes no text: the trigger and any original selection are replaced together by one paste.
+/// Keep this snapshot in memory only; its text is not diagnostic data.
+nonisolated struct VerifiedTriggerSelection: Equatable {
+    static let maximumReadUTF16Length = 10_000
+
+    let originalSelection: NSRange
+    let replacementRange: NSRange
+    let expectedText: String
+
+    private init(originalSelection: NSRange, replacementRange: NSRange, expectedText: String) {
+        self.originalSelection = originalSelection
+        self.replacementRange = replacementRange
+        self.expectedText = expectedText
+    }
+
+    enum Preparation: Equatable {
+        case verified(VerifiedTriggerSelection)
+        case unavailable
+        case rejected
+    }
+
+    /// `textBeforeCaret` may be a bounded suffix of the field, but it must end exactly at the
+    /// original selection's start. `selectedText` is the host's text in that original selection.
+    static func make(
+        deletion: TriggerDeletion,
+        textBeforeCaret: String,
+        originalSelection: NSRange,
+        selectedText: String
+    ) -> VerifiedTriggerSelection? {
+        guard case let .verified(selection) = prepare(
+            deletion: deletion,
+            textBeforeCaret: textBeforeCaret,
+            originalSelection: originalSelection,
+            readSelectedText: { selectedText }) else { return nil }
+        return selection
+    }
+
+    /// Prove the trigger before asking the host for the selected suffix. A suffix read failure
+    /// must not downgrade an already observed trigger mismatch into permission for Backspace.
+    static func prepare(
+        deletion: TriggerDeletion,
+        textBeforeCaret: String,
+        originalSelection: NSRange,
+        readSelectedText: () -> String?
+    ) -> Preparation {
+        guard deletion.characterCount > 0,
+              deletion.isSelfConsistent,
+              originalSelection.location >= 0,
+              originalSelection.location != NSNotFound,
+              originalSelection.length >= 0,
+              originalSelection.length <= maximumReadUTF16Length,
+              originalSelection.length < Int.max - originalSelection.location
+        else { return .unavailable }
+
+        let beforeLength = textBeforeCaret.utf16.count
+        guard textBeforeCaret.count >= deletion.characterCount else { return .rejected }
+
+        let triggerStart = textBeforeCaret.index(
+            textBeforeCaret.endIndex, offsetBy: -deletion.characterCount)
+        let actualTrigger = textBeforeCaret[triggerStart...]
+        // String equality accepts canonically equivalent Unicode. AX ranges describe the exact
+        // UTF-16 rendition, so even an equivalent spelling must be re-read before selecting it.
+        guard actualTrigger.utf16.elementsEqual(deletion.expectedText.utf16) else { return .rejected }
+        guard beforeLength <= maximumReadUTF16Length - originalSelection.length,
+              beforeLength <= originalSelection.location,
+              case let .plan(plan) = AccessibilityTextReplacement.plan(
+                textBeforeCaret: textBeforeCaret,
+                caretRange: originalSelection,
+                expectedTrigger: deletion.expectedText,
+                triggerCharacterCount: deletion.characterCount,
+                replacementUTF16Length: 0)
+        else { return .unavailable }
+        guard let selectedText = readSelectedText() else { return .unavailable }
+        guard selectedText.utf16.count == originalSelection.length else { return .rejected }
+
+        return .verified(VerifiedTriggerSelection(
+            originalSelection: originalSelection,
+            replacementRange: plan.replacementRange,
+            expectedText: String(actualTrigger) + selectedText))
+    }
+
+    /// Re-read both range and selected text before paste or a conservative selection rollback.
+    /// Equal lengths alone cannot distinguish our selection from a concurrent edit.
+    func matches(range: NSRange, text: String) -> Bool {
+        range == replacementRange && text.utf16.elementsEqual(expectedText.utf16)
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.originalSelection == rhs.originalSelection
+            && lhs.replacementRange == rhs.replacementRange
+            && lhs.expectedText.utf16.elementsEqual(rhs.expectedText.utf16)
+    }
+}
+
+/// The selected-text setter has two distinct failure boundaries. Before the text setter is
+/// invoked, only selection may have changed and the caller can conservatively restore it. After
+/// that call even a failed reply can hide a completed edit: no rollback, fallback or retry is safe.
+nonisolated enum AccessibilitySelectedTextTransaction {
+    enum Result: Equatable {
+        case delivered
+        case selectionUnconfirmed
+        case textUnconfirmed
+    }
+
+    static func run(
+        contextIsValid: () -> Bool,
+        originalSelectionMatches: () -> Bool,
+        selectTrigger: () -> Bool,
+        selectedTriggerMatches: () -> Bool,
+        writeText: () -> Bool,
+        confirmText: () -> Bool,
+        finishCaret: () -> Void,
+        restoreSelection: () -> Void
+    ) -> Result {
+        guard contextIsValid(), originalSelectionMatches(), contextIsValid() else {
+            return .selectionUnconfirmed
+        }
+        var textWriteAttempted = false
+        defer {
+            if !textWriteAttempted { restoreSelection() }
+        }
+        guard selectTrigger(), selectedTriggerMatches(), contextIsValid() else {
+            return .selectionUnconfirmed
+        }
+        textWriteAttempted = true
+        guard writeText(), confirmText() else { return .textUnconfirmed }
+        // A delivered write belongs to its original field even if focus moved during readback.
+        // Only adjust the caret while the caller can still prove the original context.
+        if contextIsValid() { finishCaret() }
+        return .delivered
+    }
+}
+
+/// Orders the host boundary for one native paste over a verified trigger selection. All callbacks
+/// are synchronous, but an AX call can block while another process changes the field or clipboard.
+/// The final context check therefore follows every AX proof and the confirmation-baseline read.
+/// The caller owns conservative selection restoration; a failed transaction never retries editing.
+nonisolated enum SelectionPasteTransaction {
+    enum Result: Equatable {
+        case posted
+        case contextChanged
+        case originalSelectionChanged
+        case selectionWriteFailed
+        case selectionChanged
+    }
+
+    static func run(
+        contextIsValid: () -> Bool,
+        originalSelectionMatches: () -> Bool,
+        selectTrigger: () -> Bool,
+        selectedTriggerMatches: () -> Bool,
+        captureBaseline: () -> Void,
+        postPaste: () -> Void
+    ) -> Result {
+        guard contextIsValid() else { return .contextChanged }
+        guard originalSelectionMatches() else { return .originalSelectionChanged }
+        guard contextIsValid() else { return .contextChanged }
+        guard selectTrigger() else { return .selectionWriteFailed }
+        guard selectedTriggerMatches() else { return .selectionChanged }
+        captureBaseline()
+        guard selectedTriggerMatches() else { return .selectionChanged }
+        guard contextIsValid() else { return .contextChanged }
+        postPaste()
+        return .posted
     }
 }

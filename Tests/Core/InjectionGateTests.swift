@@ -80,6 +80,145 @@ struct InjectionGateTests {
         }
     }
 
+    @Suite("Suggestion acceptance key lifecycle")
+    struct SuggestionAcceptanceKeyTests {
+        // Evaluate mutating decisions before passing them to the expectation macro, whose
+        // function-call expansion otherwise captures a value-type receiver immutably.
+        private func expectDecision(
+            _ actual: Bool,
+            _ expected: Bool,
+            sourceLocation: SourceLocation = #_sourceLocation
+        ) {
+            #expect(actual == expected, sourceLocation: sourceLocation)
+        }
+
+        @Test(arguments: [UInt16(36), UInt16(48), UInt16(76)])
+        func onlyAnAcceptedPressOwnsRepeatsAndItsRelease(keyCode: UInt16) {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyDown, origin: .user), false)
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyUp, origin: .user), false)
+
+            expectDecision(keys.recordAcceptedKeyDown(keyCode: keyCode), true)
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyUp, origin: .user), true)
+
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyDown, origin: .user), false)
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyUp, origin: .user), false)
+        }
+
+        @Test func unrelatedKeysRemainAvailableWhileTheAcceptedKeyIsHeld() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+
+            for otherKey: UInt16 in [0, 36, 51, 76] {
+                expectDecision(keys.consume(keyCode: otherKey, phase: .keyDown, origin: .user), false)
+                expectDecision(keys.consume(keyCode: otherKey, phase: .keyUp, origin: .user), false)
+            }
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user), true)
+        }
+
+        @Test func syntheticEventsReachTheTargetAndDoNotReleaseThePhysicalKey() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .selfInjected), false)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .selfInjected), false)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user), true)
+        }
+
+        @Test func unrelatedKeysCannotBeArmedAccidentally() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            for otherKey: UInt16 in [0, 49, 51, 53, UInt16.max] {
+                expectDecision(keys.recordAcceptedKeyDown(keyCode: otherKey), false)
+                expectDecision(keys.consume(keyCode: otherKey, phase: .keyDown, origin: .user), false)
+                expectDecision(keys.consume(keyCode: otherKey, phase: .keyUp, origin: .user), false)
+            }
+        }
+
+        @Test func releasingOneAcceptedKeyDoesNotReleaseAnother() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+            keys.recordAcceptedKeyDown(keyCode: 36)
+
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user), false)
+            expectDecision(keys.consume(keyCode: 36, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: 36, phase: .keyUp, origin: .user), true)
+        }
+
+        @Test func restartingMonitoringDiscardsStaleHeldKeys() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+            keys.recordAcceptedKeyDown(keyCode: 76)
+            keys.reset()
+
+            for keyCode: UInt16 in [48, 76] {
+                expectDecision(keys.consume(keyCode: keyCode, phase: .keyDown, origin: .user), false)
+                expectDecision(keys.consume(keyCode: keyCode, phase: .keyUp, origin: .user), false)
+            }
+            expectDecision(keys.recordAcceptedKeyDown(keyCode: 48), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user), true)
+        }
+
+        @Test(arguments: [UInt16(36), UInt16(48), UInt16(76)])
+        func aFreshPressSurvivesAReleaseHiddenBySecureInput(keyCode: UInt16) {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: keyCode)
+
+            // Secure Input hid the original release; do not let stale ownership suppress
+            // the next key-down, its repeats, or its release in the destination field.
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyDown, origin: .user), false)
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyDown, origin: .user, isAutorepeat: true), false)
+            expectDecision(keys.consume(keyCode: keyCode, phase: .keyUp, origin: .user), false)
+        }
+
+        @Test func aFreshPressCanAcceptANewSuggestionAfterAMissedRelease() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user), false)
+
+            // The caller is free to accept this new press; it is not a repeat belonging
+            // to the old suggestion.
+            keys.recordAcceptedKeyDown(keyCode: 48)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user), true)
+        }
+
+        @Test func completingAuthenticationDoesNotReleaseAHeldAcceptanceKey() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+
+            // Authentication/Secure Input boundaries deliberately do not reset this state.
+            // The accepted key can remain down through the entire prompt and insertion.
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user), true)
+        }
+
+        @Test func anUnmarkedReleaseDoesNotReleaseAKeyStillDownInHIDState() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user, keyIsDownInHIDState: true), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user, isAutorepeat: true), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user, keyIsDownInHIDState: false), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user, isAutorepeat: true), false)
+        }
+
+        @Test func hardwareStateCannotTurnAFreshPressIntoARepeat() {
+            var keys = SnippetSuggestionAcceptanceKeys()
+            keys.recordAcceptedKeyDown(keyCode: 48)
+
+            // Hardware state may already describe a subsequent press when the queued
+            // release is delivered. Even then the fresh nonrepeat down must recover.
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user, keyIsDownInHIDState: true), true)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyDown, origin: .user, keyIsDownInHIDState: true), false)
+            expectDecision(keys.consume(keyCode: 48, phase: .keyUp, origin: .user), false)
+        }
+    }
+
     // MARK: 2. Refusal precedence
 
     @Suite("Refusal precedence")

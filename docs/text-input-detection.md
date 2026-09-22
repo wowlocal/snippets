@@ -156,7 +156,14 @@ Handled intentionally:
 
 - `Ctrl+N/P` and arrow keys navigate list and are suppressed.
 - `Ctrl+C` dismisses the suggestion panel and is passed through to the host app.
-- `Tab`/`Return` select suggestion and are suppressed.
+- `Tab`, `Return`, and keypad Enter select a suggestion. Once its key-down is consumed, repeats
+  and the matching key-up are consumed through release, even if insertion or authentication has
+  already finished. Dismissing the panel, authentication, and Secure Input do not clear ownership.
+  If Secure Input hid the release, a fresh nonrepeating down clears stale ownership and passes;
+  an indistinguishable unmarked replay is likewise not swallowed. A key-up observed while the HID
+  state still reports the key down is suppressed without releasing ownership. This state check is
+  not proof of a physical event. Unrelated keys and Snippets-tagged events pass through this check.
+  Stopping or restarting the event monitor clears held-key state and invalidates pending insertion.
 - Printable characters and deletion shortcuts are generally passed through so the host app edits real text first.
 - The panel applies printable input and simple backspace immediately; it never waits on an AX timer before repainting.
 - The query carries one of three authority states: `axConfirmed`, `localDisplayOnly`, or `uncertainAfterHostEdit`.
@@ -312,31 +319,52 @@ ineligible.
 
 ## Expansion and pasteboard timing quirks
 
-Replacement has two paths. The Accessibility path is preferred; delete+paste is the fallback.
+Direct Accessibility replacement is preferred. If that transport is unavailable before any
+write attempt, the event path first tries to select the verified trigger and paste over it once.
+Synthetic backspaces remain a compatibility path for fields without a verifiable writable
+selection. These operations are not atomic across application processes.
+
+Ordinary suggestion acceptance captures the original focused AX object and, when readable, its
+selection before queueing work. AX-confirmed insertion validates that selection when the queued
+operation starts. Local tracking retains its separate capability and context checks. Both event
+paths keep the original process and available field identity through dispatch and confirmation.
 
 ### Accessibility path
 
-One atomic replacement, no synthetic events and no clipboard involvement:
+A direct text replacement with no synthetic events and no clipboard involvement:
 
-1. Read the focused element's caret range and the text before it.
+1. Read the focused element's caret range, the text before it, and a before-value for verification.
 2. Prove that text ends with the exact trigger we mean to delete.
-3. Set `AXSelectedTextRange` to the trigger's range and write `AXSelectedText`.
-4. Collapse the caret behind the inserted text.
-5. Verify the write landed by re-reading `AXValue`.
+3. Set `AXSelectedTextRange`, verify its exact range/text and focus, then write `AXSelectedText`.
+4. Verify the complete planned value by re-reading `AXValue`. Canonical Unicode composition
+   normalization is allowed; matching only a prefix or a length delta is not sufficient.
+5. Collapse the caret behind the inserted text only after that verification, using the actual
+   value's end minus the unchanged UTF-16 suffix. If that boundary cannot be proved after
+   normalization, leave the host's caret alone rather than guess an offset.
 
-Reading and writing happen in the same main-actor turn — split them and the proof from step 2 is
-worthless. Three outcomes, and only one of them falls back:
+Reading and writing happen in the same main-actor turn to avoid an additional scheduling gap.
+Another process can still change its field while an AX request is in progress. Outcomes are:
 
 - `delivered` — committed.
-- `unavailable` — the field exposes no writable text attributes, or the write was a silent no-op
-  (the Chromium/Electron failure mode, caught by step 5). Falls back to events.
+- `unavailable` — the field exposes no usable readable/writable attributes, or AX writing is
+  disabled. No write was attempted, so the event path may run.
 - `rejected` — the text before the caret is not what we expected. Fails closed **when the delete
   count came from an Accessibility read**; with a locally tracked count Accessibility is merely
   lagging, which is the normal state in Chromium, so the event path still runs.
+- `cancelledBeforeText` — pre-text validation failed, possibly after selecting the replacement
+  range. Restore the original selection only if the original process/focus, unchanged trigger/suffix text,
+  and our selected range still match. If the host or user changed context, leave the field alone.
+  This cancellation is terminal, including when selection restoration succeeds; it never permits
+  a second insertion transport or Backspace deletion.
+- `attemptedUnconfirmed` — an AX text/value write was attempted but failed or could not
+  be verified. This is terminal for every provenance: no second insertion transport, retry, or
+  automatic Undo. An error reply, unchanged readback, or unreadable post-write value cannot prove
+  that an asynchronous host did nothing. Do not restore the selection after this point, either:
+  the host may already have inserted text despite an error or stale readback.
 
 ### Chromium writes the whole value instead
 
-Chrome's omnibox is the one failure step 5 cannot see. A selected-text write lands in the text it
+Chrome's omnibox is the one failure step 4 cannot see. A selected-text write lands in the text it
 draws and never reaches `OmniboxEditModel`, so `AXValue` reads back exactly what was written while
 Return still navigates to what the user typed: `\crew` expands to a URL on screen and then searches
 the web for `\crew`. The edit model is not in the Accessibility tree, so no read tells that apart
@@ -351,44 +379,68 @@ instead of a refusal. It is deliberately narrow:
   tree does, and a page field one unreadable link below its web area would pass the weaker test.
 - Inside a web area `AXValue` is a flattened rendition of the DOM. Writing it back would strip a rich
   editor to plain text and desynchronize any field whose framework owns its value — the omnibox bug,
-  reintroduced on the web. Web content keeps the event path, which is what it already used: those
-  selected-text writes were silent no-ops that fell through anyway.
+  reintroduced on the web. Chromium web content therefore skips the whole-value write and may use
+  the verified-selection paste path without first attempting a text mutation.
 - The caret is moved only after the value reads back as ours. `plan.caretLocation` is an offset into
   the text we meant to write, so placing the caret before that proof would strand it in the old text
   and the event fallback would backspace from there — eating the user's characters, not the trigger.
   No other exit touches the selection, so no other exit has to restore it.
-- A value that changed into something we did not write answers `rejected`, not `unavailable`: the
-  event path must not paste on top of it.
+- An attempted value write without confirmed delivery answers `attemptedUnconfirmed`, including
+  unchanged, unexpected, or unavailable readback. The event path must not paste on top of it.
 
 Safari is unaffected — WebKit's address bar applies a selected-text write through its normal editing
 path.
 
 `UserDefaults` keys `SnippetsAccessibilityInsertionEnabled` (set to `false`) and
-`SnippetsAccessibilityInsertionExcludedBundleIDs` disable this path globally or per app. An excluded
-Chromium host is excluded, not rerouted to the whole-value strategy.
+`SnippetsAccessibilityInsertionExcludedBundleIDs` disable AX writing globally or per app. This
+also disables the selection setter in the event path; an excluded host keeps the compatibility
+backspace path instead of acquiring a different AX write strategy.
 
 ### Event fallback
 
-1. Borrow the pasteboard — **before** deleting anything, so a pasteboard we cannot borrow safely
-   costs the user nothing.
-2. Delete trigger text with synthetic backspaces.
-3. Send synthetic `Cmd+V`.
-4. Hold the borrowed pasteboard until delivery is confirmed, then hand it back.
+1. For an AX-confirmed trigger with AX writes enabled, try to prepare a bounded proof of the
+   original selection, exact trigger text, and any selected suffix. This changes neither text nor
+   selection. The proof uses exact UTF-16 equality and a 10,000-unit aggregate read limit.
+   A readable trigger mismatch rejects insertion immediately, even when a later selected-suffix
+   read would be unavailable; that missing read cannot erase an already observed contradiction.
+2. Allocate the complete paste shortcut and any required Backspace events before modifying the
+   field or clipboard. Borrow the pasteboard before any destructive action; an unavailable
+   snapshot or failed loan stops insertion.
+3. If the selection proof is available, wait for clipboard propagation, revalidate the original
+   selection/text, then select the trigger plus original selected suffix. Read back the selected
+   range and exact text before dispatch. A mismatch rejects insertion rather than authorizing
+   Backspace fallback. No trigger text has been deleted at this point.
+4. Otherwise, use the compatibility Backspace path. Before every delete, verify input generation,
+   process/available field identity, Secure Event Input, and clipboard ownership. A clipboard
+   manager that only reads the loan does not revoke it; a new clipboard write does.
+5. Recheck the context and clipboard immediately before one uninterrupted `Cmd+V` burst. Hold
+   the loan through confirmation or its bounded failure outcome, then restore only if still owned.
 
-Every event we post carries `SnippetSyntheticEvent.tag` in `kCGEventSourceUserData`, and the tap
-skips events carrying it — our own injection comes back through our own session tap, and a timing
-window cannot tell it apart from real typing.
+If setting the replacement selection was attempted but paste was not posted, restore the original selection
+only while focus, input generation, selected range, and exact trigger/suffix text still match the
+proof. Otherwise leave the field alone and record that rollback was skipped or failed. After
+posting paste, an uncertain result never triggers another insertion or automatic Undo.
 
-The borrow mutates the original `NSPasteboardItem` in place when the first item holds plain text, so
-handing the clipboard back costs no change count and clipboard managers record one entry, not two.
-An image-first or empty clipboard is rewritten wholesale instead; only a pasteboard that cannot be
-snapshotted at all refuses the lease.
+Events use a private `CGEventSource`, retain `SnippetSyntheticEvent.tag` in
+`kCGEventSourceUserData`, and are posted to the captured PID with `postToPid`. The receiving
+process still chooses its focused control, so process targeting neither replaces field checks
+nor guarantees isolation from other event handlers. Our tap always passes tagged events through.
+Other unmarked keys during insertion continue to invalidate the operation; no time-based rule
+assumes that such keys are safe synthetic echoes.
+
+Every loan publishes a fresh pasteboard item containing only the replacement text and the
+transient marker (plus the concealed marker/scope for concealed insertion). It never mutates an
+original item in place or lends the original rich-text representations. Restoration republishes
+the full original snapshot and changes the pasteboard generation. Markers are courtesy requests
+to clipboard managers, not guarantees that they will ignore an entry.
 
 Delays are intentional and tuned, and none of them blocks the main thread:
 
-- `injectedKeyDelay`: helps apps that drop rapid synthetic deletes.
-- `prePasteDelayAfterDelete`: lets host app settle before paste.
-- `pasteboardWriteSettleDelay`: avoid race where paste occurs before clipboard update propagates.
+- `injectedKeyDelay`: spaces compatibility-path synthetic deletes.
+- `prePasteDelayAfterDelete`: lets the host settle on the compatibility path.
+- `pasteboardWriteSettleDelay`: gives the clipboard update time to propagate; in the selection
+  path this wait precedes selection mutation, with no deliberate delay between verified selection
+  and the paste burst.
 
 They are awaited through a non-cancellable `settle(for:)`, not `Task.sleep`: a cancelled sleep
 returns immediately, which would rush the paste into a host still applying our deletions.
@@ -403,16 +455,24 @@ caret location, selection length, and up to 32 characters before the caret — a
 captured just before `Cmd+V`. Never the whole `AXValue`: in an editor that is the entire document,
 re-serialized over Accessibility IPC on every poll.
 
-- Caret advanced by the pasted length, or the text before it now ends with what we pasted → confirmed.
-- Caret moved backwards → our own backspaces are still landing; re-baseline and keep waiting.
-- Host answers nothing at all (terminals, and any host without readable text) → accepted after 400 ms,
-  deliberately no shorter than the fixed 350 ms delay this replaced.
+- Confirmation requires forward caret motion, a collapsed selection, and changed text whose
+  bounded tail matches the replacement. Motion alone or a pre-existing matching suffix is
+  insufficient.
+- Selection-paste fingerprints start at the selected trigger's start, not the old insertion
+  caret. They never re-baseline on subsequent movement; a shortened replacement is still measured
+  from that selected start.
+- Only the Backspace compatibility path may re-baseline on a pending edit while its own deletes
+  are arriving.
+- An unreadable host gets the full bounded 1.2-second window. A timeout is an uncertain outcome,
+  never insertion success, and does not count usage or authorize a retry.
 - Two independent ceilings — attempts and wall clock — guarantee the loop ends even against a host
   that stalls every read.
 
 Waiting stops early, and the clipboard goes back, when another copy supersedes ours, when secure
 input comes on, or when the frontmost app changes. Holding through an app switch would mean the
-user's next manual `Cmd+V` pastes our snippet.
+user's next manual `Cmd+V` pastes our snippet. A different focused AX object cannot confirm
+delivery; the bounded hold allows for host focus/render-tree transitions, then reports the focus
+change if no confirmation was possible.
 
 ### Secure Event Input
 
@@ -484,11 +544,14 @@ When changing detection logic, keep these invariants:
 - Keep Chromium/Electron priming + retry.
 - Keep panel anchor stable for one suggestion session.
 - Keep dual coordinate conversion fallback.
-- Restore only a pasteboard we still own (`changeCount` check), and only once delivery is confirmed
-  or the budget is spent.
-- Read and write in one main-actor turn on the Accessibility path; restore the original selection
-  before falling back to events, or the fallback's first backspace eats the trigger and every one
-  after it eats the user's text.
+- Restore only a pasteboard we still own (`changeCount` check), after pre-dispatch failure or a
+  terminal confirmation outcome; never restore while an in-flight paste still owns the loan.
+- Keep AX proof and writes in one main-actor turn. An attempted, unconfirmed direct AX write is
+  terminal and cannot authorize another insertion transport.
+- Revalidate a prepared trigger selection and clipboard ownership immediately before paste.
+  Roll back selection only before paste and only when the unchanged selection/text proof survives.
+- Keep full acceptance-key ownership through physical release and reset it when the tap loses
+  continuity. Do not reset it merely because the suggestion panel dismissed or insertion finished.
 - Never suppress an event carrying our own tag: consuming our own backspace breaks the expansion in
   progress.
 - Never suppress keys while secure input is on.

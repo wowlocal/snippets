@@ -72,6 +72,24 @@ vault session was `no_key`, `locked`, or `unlocked`. No-op policy updates are om
 protected renderer refreshes caused by typing, selection, scrolling, or layout do not
 become a high-frequency log.
 
+Direct Accessibility replacement on macOS emits one `accessibility_replacement` terminal
+record when the attempt ends without clipboard fallback, independently of verbose logging.
+Its base fields are `outcome` (`delivered`, `rejected`, `ambiguous`, or `unavailable`) and
+`duration_ms` bounded to 0–600,000. `delivered` means the direct write path accepted the
+operation and verified the exact resulting value against the planned replacement; it is
+not a keyboard-paste acknowledgement. `rejected` means a trigger mismatch or pre-text
+validation failure aborted the insertion; the latter may already have changed the selection.
+`ambiguous` means a text-bearing AX write was attempted without a confirmed result, so no
+fallback edit is safe. New records include the complete optional group
+`text_write_attempted` (boolean) and `selection_restoration` (`not_needed`, `restored`,
+`skipped_context_changed`, or `failed`). This distinguishes a selection-only cancellation
+from an uncertain text write and reports conservative pre-text selection cleanup. No rollback
+is attempted after a text-bearing write. Older records without both fields remain exportable;
+partial groups, unknown outcomes, and wrong types are rejected. An attempt proceeding to clipboard fallback
+instead includes its AX outcome in that attempt's `paste_delivery` record, avoiding a
+duplicate terminal event. Direct AX records are asynchronous, informational for delivered
+writes and warnings otherwise, and include no text, selection coordinates, or identities.
+
 Clipboard insertion on macOS emits one `paste_delivery` record per attempt, independently
 of verbose logging. Its base fields are `outcome`, `restoration`, `duration_ms` (bounded to
 0–600,000), and `had_fingerprint` (whether Accessibility supplied a baseline). Outcomes are
@@ -83,19 +101,41 @@ original focused element; it is an Accessibility observation, not a receiver ack
 
 New records also include `stage`, `reason`, `planned_deletes`, `delete_attempts` (both
 bounded to 0–10,000), and `paste_posted`. Stages identify preflight, event preparation,
-clipboard acquisition, trigger deletion, the pre-paste wait/check, or confirmation.
+clipboard acquisition, selection preparation/validation, trigger deletion, the pre-paste
+wait/check, or confirmation.
 Reasons are closed categories for context invalidation (unmarked key-down, pointer
 interaction, application activation, monitor restart, or other context change),
 quitting, a new expansion, stopped listening, secure input, target changes, event creation failure,
-clipboard acquisition failure/supersession, confirmation timeout, or no failure.
+clipboard acquisition failure/supersession, unavailable/rejected/changed selection,
+changed trigger, unavailable target, confirmation timeout, or no failure.
 Delete attempts count synthetic key dispatch attempts, not acknowledged host edits.
 `unmarked_key_down` does not distinguish physical typing from another tool's synthetic
 input. Clipboard supersession does not identify the writer. No key codes, modifier
 values, clipboard contents, process identifiers, or application identities are added.
+
+Clipboard attempts can include the complete group `transport`, `selection`, and
+`selection_restoration`. Transport is `insertion_only`, `selection_paste` (one paste
+over a verified trigger selection), or `backspace_paste` (legacy deletion fallback).
+Selection is `unavailable`, `verified`, or `rejected`; its restoration is `not_needed`,
+`restored`, `skipped_context_changed`, or `failed`. These fields show which path was
+attempted and whether an unpasted selection was safely restored, without recording
+selection coordinates, selected text, or a field identity. The selection route sends
+no synthetic deletes, so its `delete_attempts` remains zero.
+
+Optional `ax_replacement_outcome` records the preceding direct Accessibility attempt
+as `unavailable`, `delivered`, `rejected`, or `ambiguous`. Optional
+`interruption_origin` classifies an unmarked event as `unspecified`, `own_process`, or
+`other_process`. It is derived from the source-process relationship and never includes
+the PID or application name. An own-process event may have lost its marker; this field
+does not prove which tool modified it. Neither a missing source nor another process
+proves physical user input, and these classifications do not relax interruption checks.
+
 The stopping reason is captured before clipboard cleanup; `restoration` independently
 reports the cleanup result. Records remain one asynchronous outcome per attempt, except
 pending restoration retains its existing synchronous policy. Export accepts old records
-without progress, but rejects incomplete progress groups and unknown stage/reason values.
+without progress or the newer optional fields, but rejects incomplete progress or
+transport/selection groups, unknown enum values, and wrong types. The optional origin
+and Accessibility outcome fields require the complete progress group.
 
 An unreadable or nonmatching field keeps the loan for the full 1.2-second confirmation budget.
 Timeouts stay unconfirmed in both UI and diagnostics and do not count as snippet usage.

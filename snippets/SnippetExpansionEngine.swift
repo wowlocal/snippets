@@ -53,6 +53,8 @@ final class SnippetExpansionEngine {
     /// the text before it is discarded rather than applied to whatever is there now.
     private var injectionContextGeneration: UInt = 0
     private var injectionInvalidationReason: DiagnosticPasteReason = .contextChanged
+    private var injectionInvalidationOrigin: DiagnosticPasteInterruptionOrigin?
+    private var acceptanceKeys = SnippetSuggestionAcceptanceKeys()
     private var activePasteboardLease: TemporaryPasteboardLease?
     /// The lease currently being consumed by a posted paste. It must not be restored merely
     /// because Quit, sleep, or another command arrived while the host was still accepting Cmd+V.
@@ -171,6 +173,22 @@ final class SnippetExpansionEngine {
         case inserted
         case insertedWithPasteboardRecoveryPending
         case unconfirmed(pasteboardRecoveryPending: Bool)
+    }
+
+    private struct ExpansionTarget {
+        let element: AXUIElement
+        let selection: NSRange?
+    }
+
+    private struct PreparedTriggerSelection {
+        let element: AXUIElement
+        let verification: VerifiedTriggerSelection
+    }
+
+    private enum TriggerSelectionPreparation {
+        case unavailable
+        case prepared(PreparedTriggerSelection)
+        case rejected(DiagnosticPasteReason)
     }
 
     private enum FocusedTriggerContextRead {
@@ -354,6 +372,7 @@ final class SnippetExpansionEngine {
         // Anything already queued was measured against a caret that has since moved.
         injectionContextGeneration &+= 1
         injectionInvalidationReason = reason
+        injectionInvalidationOrigin = nil
         dismissSuggestions()
     }
 
@@ -384,8 +403,7 @@ final class SnippetExpansionEngine {
                     return Unmanaged.passUnretained(event)
                 }
                 if type == .keyUp {
-                    engine.handleEventTapKeyUp(event)
-                    return Unmanaged.passUnretained(event)
+                    return engine.handleEventTapKeyUp(event) ? nil : Unmanaged.passUnretained(event)
                 }
                 guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
@@ -411,6 +429,12 @@ final class SnippetExpansionEngine {
     nonisolated private func reenableEventTap() {
         MainActor.assumeIsolated {
             guard let tap = eventTap else { return }
+            // Input may have passed while the tap was disabled, including the release of
+            // an accepted Tab. Neither held-key ownership nor insertion authority survives.
+            acceptanceKeys.reset()
+            injectionContextGeneration &+= 1
+            injectionInvalidationReason = .monitorsRestarted
+            injectionInvalidationOrigin = nil
             CGEvent.tapEnable(tap: tap, enable: true)
         }
     }
@@ -427,6 +451,9 @@ final class SnippetExpansionEngine {
         // We're on the main thread (run loop), so we can safely access
         // MainActor-isolated state via MainActor.assumeIsolated.
         return MainActor.assumeIsolated {
+            if acceptanceKeys.consume(keyCode: UInt16(truncatingIfNeeded: cgEvent.getIntegerValueField(.keyboardEventKeycode)),
+                                      phase: .keyDown, origin: .user,
+                                      isAutorepeat: cgEvent.getIntegerValueField(.keyboardEventAutorepeat) != 0) { return true }
             guard let nsEvent = NSEvent(cgEvent: cgEvent) else { return false }
             return handle(event: nsEvent, eventUserData: eventUserData)
         }
@@ -435,19 +462,25 @@ final class SnippetExpansionEngine {
     /// A head-insert tap sees key-up before the rest of the event pipeline. Queue the
     /// focus read onto the main run loop so the key can be delivered first, without
     /// adding a timer or making the shortcut feel delayed.
-    nonisolated private func handleEventTapKeyUp(_ cgEvent: CGEvent) {
+    nonisolated private func handleEventTapKeyUp(_ cgEvent: CGEvent) -> Bool {
         let eventUserData = cgEvent.getIntegerValueField(.eventSourceUserData)
-        guard SnippetSyntheticEvent.origin(eventUserData: eventUserData) == .user,
-              cgEvent.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Space)
-        else { return }
+        guard SnippetSyntheticEvent.origin(eventUserData: eventUserData) == .user else { return false }
+        let keyCode = UInt16(truncatingIfNeeded: cgEvent.getIntegerValueField(.keyboardEventKeycode))
+        if MainActor.assumeIsolated({ acceptanceKeys.consume(
+            keyCode: keyCode, phase: .keyUp, origin: .user,
+            keyIsDownInHIDState: CGEventSource.keyState(.hidSystemState, key: keyCode)) }) {
+            return true
+        }
+        guard keyCode == UInt16(kVK_Space) else { return false }
         let shouldValidate = MainActor.assumeIsolated {
             pendingSpaceShortcutFocusValidation
         }
-        guard shouldValidate else { return }
+        guard shouldValidate else { return false }
 
         DispatchQueue.main.async { [weak self] in
             self?.validatePendingSpaceShortcutFocus()
         }
+        return false
     }
 
     func requestAccessibilityPermission() {
@@ -466,6 +499,8 @@ final class SnippetExpansionEngine {
         }
         injectionContextGeneration &+= 1
         injectionInvalidationReason = .monitorsRestarted
+        injectionInvalidationOrigin = nil
+        acceptanceKeys.reset()
         injectionQueue.cancelAll()
         stopSuggestionSecureInputWatchdog()
         finishPendingPasteboardOwnership(schedulingRetryOnFailure: true)
@@ -1249,6 +1284,7 @@ final class SnippetExpansionEngine {
         if pasteboardInjectionLease == nil {
             injectionContextGeneration &+= 1
             injectionInvalidationReason = .quitting
+            injectionInvalidationOrigin = nil
         }
         injectionQueue.cancelAll()
         pasteboardRestoreRetryWorkItem?.cancel()
@@ -1326,6 +1362,9 @@ final class SnippetExpansionEngine {
             if origin == .user, isInjecting, !isAuthenticatingSecureSuggestion {
                 injectionContextGeneration &+= 1
                 injectionInvalidationReason = .unmarkedKeyDown
+                let sourcePID = event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) ?? 0
+                injectionInvalidationOrigin = sourcePID <= 0 ? .unspecified
+                    : (sourcePID == Int64(ProcessInfo.processInfo.processIdentifier) ? .ownProcess : .otherProcess)
             }
             return false
         case .resetAndPassThrough:
@@ -1779,6 +1818,19 @@ final class SnippetExpansionEngine {
         let acceptedFocusTarget = store.isSecure(snippet.id)
             ? captureSecureExpansionFocusTarget(targetPID: acceptedTargetPID)
             : nil
+        let ordinaryTarget = store.isSecure(snippet.id) ? nil : captureExpansionTarget()
+        if !store.isSecure(snippet.id) {
+            guard let ordinaryTarget,
+                  suggestionTargetElement.map({ CFEqual($0, ordinaryTarget.element) }) ?? false else {
+                Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                    durationMilliseconds: 0, hadFingerprint: false,
+                    progress: .init(reason: .focusedElementChanged, plannedDeletes: deletion.characterCount)))
+                pendingSelectionMemoryQuery = nil
+                dismissSuggestions()
+                statusText = "Expansion stopped because the original input field changed."
+                return
+            }
+        }
         // Captured before `dismissSuggestions()` clears the query. Only an
         // explicit accept teaches selection memory; auto-expansions never do.
         pendingSelectionMemoryQuery = localQuery
@@ -1805,7 +1857,9 @@ final class SnippetExpansionEngine {
                     acceptedFocusTarget: acceptedFocusTarget)
             }
         } else {
-            enqueueExpansion(of: snippet, deletion: deletion)
+            enqueueExpansion(of: snippet, deletion: deletion,
+                expectedGeneration: acceptedGeneration, expectedTargetPID: acceptedTargetPID,
+                expectedTarget: ordinaryTarget)
         }
     }
 
@@ -1862,6 +1916,8 @@ final class SnippetExpansionEngine {
             statusText = "Could not expand \(shell.displayName): \(error)"
             return
         }
+        // Keep ownership if the acceptance key is still held through Touch ID. A fresh
+        // nonrepeat key-down reconciles any release hidden by Secure Event Input.
         defer { plaintext.wipe() }
 
         guard await restoreSecureExpansionTarget(
@@ -2204,6 +2260,8 @@ final class SnippetExpansionEngine {
 
         // Tab or Return selects - suppress so target app doesn't act on the key
         if event.keyCode == UInt16(kVK_Tab) || event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
+            // Own the entire accepted key press, even if insertion finishes before key-up.
+            acceptanceKeys.recordAcceptedKeyDown(keyCode: event.keyCode)
             // Capture the user's explicit selection BEFORE anything can
             // refresh the context and re-rank the list underneath them.
             guard let snippet = suggestionPanel.selectedSnippet() else {
@@ -2771,6 +2829,28 @@ final class SnippetExpansionEngine {
         injectionDepth = max(0, injectionDepth - 1)
     }
 
+    private func captureExpansionTarget() -> ExpansionTarget? {
+        let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                       perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+        guard let element = frontmostFocusedElement(axBudget: budget) else { return nil }
+        let range = selectedRange(of: element, axBudget: budget)
+        let selection = range.flatMap { range -> NSRange? in
+            guard range.location >= 0, range.length >= 0,
+                  range.location <= Int.max - range.length else { return nil }
+            return NSRange(location: range.location, length: range.length)
+        }
+        return ExpansionTarget(element: element, selection: selection)
+    }
+
+    private func expansionTargetMatches(_ target: ExpansionTarget, checkSelection: Bool) -> Bool {
+        let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                       perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+        guard currentFocusMatches(target.element, axBudget: budget) else { return false }
+        guard checkSelection, let expected = target.selection else { return true }
+        guard let actual = selectedRange(of: target.element, axBudget: budget) else { return false }
+        return actual.location == expected.location && actual.length == expected.length
+    }
+
     /// The one place an expansion is scheduled. Callers stay synchronous — a tap callback has to
     /// return its suppress decision immediately — while delivery runs on the queue afterwards.
     private func enqueueExpansion(
@@ -2779,7 +2859,8 @@ final class SnippetExpansionEngine {
         authorization: ExpansionAuthorization = .ordinary,
         expectedGeneration: UInt? = nil,
         expectedTargetPID: pid_t? = nil,
-        securePlaintext: SecurePlaintextLease? = nil
+        securePlaintext: SecurePlaintextLease? = nil,
+        expectedTarget: ExpansionTarget? = nil
     ) {
         guard !isPreparingForTermination else {
             securePlaintext?.wipe()
@@ -2813,6 +2894,15 @@ final class SnippetExpansionEngine {
         let generation = expectedGeneration ?? injectionContextGeneration
         let targetPID = expectedTargetPID
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let target = expectedTarget ?? captureExpansionTarget()
+        if deletion.provenance == .accessibilityConfirmed, target == nil {
+            securePlaintext?.wipe()
+            Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                durationMilliseconds: 0, hadFingerprint: false,
+                progress: .init(reason: .targetUnavailable, plannedDeletes: deletion.characterCount)))
+            statusText = "Expansion stopped because the original input field is unavailable."
+            return
+        }
         // An expansion still waiting its turn was measured against text the one now starting is
         // about to rewrite. Cancelling is a no-op once a unit is past its start check.
         injectionQueue.cancelAutomatic()
@@ -2841,7 +2931,8 @@ final class SnippetExpansionEngine {
                 targetPID: targetPID,
                 authorization: authorization,
                 securePlaintext: securePlaintext,
-                secureFocusTarget: nil
+                secureFocusTarget: nil,
+                ordinaryTarget: target
             )
         }
     }
@@ -2854,19 +2945,36 @@ final class SnippetExpansionEngine {
         targetPID: pid_t?,
         authorization: ExpansionAuthorization,
         securePlaintext: SecurePlaintextLease?,
-        secureFocusTarget: SecureExpansionFocusTarget?
+        secureFocusTarget: SecureExpansionFocusTarget?,
+        ordinaryTarget: ExpansionTarget? = nil
     ) async {
         // Defense in depth for any future caller that bypasses the queue wrapper.
         defer { securePlaintext?.wipe() }
-        if let block = injectionBlockDescription(generation: generation, targetPID: targetPID) {
-            if authorization.authenticatesSecureSnippet {
-                statusText = "Skipped \(snippet.displayName): \(block)."
-            }
+        if let reason = injectionBlockReason(generation: generation, targetPID: targetPID) {
+            var progress = DiagnosticPasteProgress(reason: reason, plannedDeletes: deletion.characterCount)
+            if reason == .unmarkedKeyDown { progress.interruptionOrigin = injectionInvalidationOrigin }
+            Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                durationMilliseconds: 0, hadFingerprint: false, progress: progress))
+            let block = injectionBlockDescription(generation: generation, targetPID: targetPID)
+                ?? "the input context changed before insertion"
+            statusText = "Skipped \(snippet.displayName): \(block)."
             return
         }
         if let secureFocusTarget,
            !restoreKeyboardFocus(to: secureFocusTarget, targetPID: targetPID) {
+            Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                durationMilliseconds: 0, hadFingerprint: false,
+                progress: .init(reason: .focusedElementChanged, plannedDeletes: deletion.characterCount)))
             statusText = "Skipped \(snippet.displayName): the original input field did not regain keyboard focus."
+            return
+        }
+        let expectedElement = secureFocusTarget?.element ?? ordinaryTarget?.element
+        if let ordinaryTarget,
+           !expansionTargetMatches(ordinaryTarget, checkSelection: deletion.provenance == .accessibilityConfirmed) {
+            Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                durationMilliseconds: 0, hadFingerprint: false,
+                progress: .init(reason: .selectionChanged, plannedDeletes: deletion.characterCount)))
+            statusText = "Expansion stopped because the original field or selection changed."
             return
         }
         // `{clipboard}` has to see the user's clipboard, never a snippet we are still holding.
@@ -2906,19 +3014,47 @@ final class SnippetExpansionEngine {
             return
         }
 
+        let accessibilityStart = ContinuousClock.now
+        var accessibilityProgress = DiagnosticAccessibilityReplacementProgress()
         let replacement = replaceUsingAccessibility(
             deletion: deletion,
             with: resolvedText,
-            expectedFocusedElement: secureFocusTarget?.element)
+            expectedFocusedElement: expectedElement,
+            generation: generation, targetPID: targetPID,
+            progress: &accessibilityProgress)
+        let accessibilityElapsed = accessibilityStart.duration(to: .now).components
+        let accessibilityDuration = accessibilityElapsed.seconds * 1_000
+            + accessibilityElapsed.attoseconds / 1_000_000_000_000_000
         switch AccessibilityReplacementPolicy.action(for: replacement, provenance: deletion.provenance) {
         case .commit:
+            Diagnostics.record(.accessibilityReplacement(outcome: .delivered,
+                durationMilliseconds: accessibilityDuration, progress: accessibilityProgress))
             recordExpansion(of: snippet, bindingQuery: bindingQuery)
             return
         case .abort:
-            statusText = "Skipped \(snippet.displayName): the text before the cursor changed."
+            Diagnostics.record(.accessibilityReplacement(
+                outcome: replacement == .attemptedUnconfirmed ? .ambiguous : .rejected,
+                durationMilliseconds: accessibilityDuration, progress: accessibilityProgress))
+            if replacement == .attemptedUnconfirmed {
+                statusText = "Insertion could not be confirmed. Check the field before trying again."
+            } else if replacement == .cancelledBeforeText {
+                statusText = "Expansion stopped before writing text. Check the field before trying again."
+            } else {
+                statusText = "Skipped \(snippet.displayName): the text before the cursor changed."
+            }
             return
         case .useEvents:
             break
+        }
+
+        if let ordinaryTarget,
+           !expansionTargetMatches(ordinaryTarget, checkSelection: deletion.provenance == .accessibilityConfirmed) {
+            var progress = DiagnosticPasteProgress(reason: .selectionChanged, plannedDeletes: deletion.characterCount)
+            progress.accessibilityOutcome = replacement == .unavailable ? .unavailable : .rejected
+            Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                durationMilliseconds: 0, hadFingerprint: false, progress: progress))
+            statusText = "Expansion stopped because the original field or selection changed."
+            return
         }
 
         let deleteCount = adjustedDeleteCountForActiveSelection(baseDeleteCount: deletion.characterCount)
@@ -2928,12 +3064,16 @@ final class SnippetExpansionEngine {
             generation: generation,
             targetPID: targetPID,
             isConcealed: authorization.concealsPasteboard,
-            expectedFocusedElement: secureFocusTarget?.element
+            expectedFocusedElement: expectedElement,
+            deletion: deletion,
+            accessibilityOutcome: replacement == .unavailable ? .unavailable : .rejected
         )
         switch eventOutcome {
         case .failed:
             if authorization.authenticatesSecureSnippet {
                 statusText = "Authentication succeeded, but Snippets could not insert \(snippet.displayName)."
+            } else {
+                statusText = "Expansion stopped before paste. Check the field before trying again."
             }
         case .inserted:
             recordExpansion(of: snippet, bindingQuery: bindingQuery)
@@ -3037,13 +3177,15 @@ final class SnippetExpansionEngine {
 
     // MARK: - Accessibility replacement
 
-    /// The preferred path: one atomic replacement, no synthetic events, no clipboard involvement.
-    /// Synchronous on purpose — the read that proves what sits before the caret and the write that
-    /// replaces it have to happen in the same turn, or the proof means nothing.
+    /// Direct replacement without synthetic events or clipboard involvement. It is synchronous
+    /// to avoid scheduling gaps, but cross-process AX reads and writes are not atomic.
     private func replaceUsingAccessibility(
         deletion: TriggerDeletion,
         with replacement: String,
-        expectedFocusedElement: AXUIElement?
+        expectedFocusedElement: AXUIElement?,
+        generation: UInt,
+        targetPID: pid_t?,
+        progress: inout DiagnosticAccessibilityReplacementProgress
     ) -> AccessibilityReplacement {
         guard accessibilityGranted,
               deletion.isSelfConsistent,
@@ -3055,10 +3197,10 @@ final class SnippetExpansionEngine {
               // Only the focused element, never an ancestor: reading from a parent is safe, writing
               // into one is not.
               let element = frontmostFocusedElement(),
-              expectedFocusedElement.map({ CFEqual(element, $0) }) ?? true,
               let caret = selectedRange(of: element),
               caret.location >= 0, caret.length >= 0
         else { return .unavailable }
+        guard expectedFocusedElement.map({ CFEqual(element, $0) }) ?? true else { return .cancelledBeforeText }
 
         let caretRange = NSRange(location: caret.location, length: caret.length)
         // Enough text that a trigger made of surrogate pairs cannot be clipped by the read window.
@@ -3088,7 +3230,10 @@ final class SnippetExpansionEngine {
             return replaceWholeValueUsingAccessibility(
                 element: element,
                 plan: plan,
-                replacement: replacement
+                replacement: replacement,
+                originalSelection: caretRange, expectedTrigger: deletion.expectedText,
+                generation: generation, targetPID: targetPID,
+                progress: &progress
             )
         }
 
@@ -3098,37 +3243,75 @@ final class SnippetExpansionEngine {
               isAttributeSettable(kAXSelectedTextAttribute as CFString, on: element)
         else { return .unavailable }
 
-        let valueBefore = stringAttribute(of: element, attribute: kAXValueAttribute as CFString)
-
-        guard setSelectedRange(plan.replacementRange, on: element) else { return .unavailable }
-        guard setSelectedText(replacement, on: element) else {
-            // Leaving the trigger selected would make the event fallback's first backspace eat it
-            // and every following one eat a character of the user's text.
-            _ = setSelectedRange(caretRange, on: element)
-            return .rejected
+        // If this transport cannot verify its write, choose native paste before changing
+        // anything. Discovering that limitation after the setter would be too late to retry.
+        guard let valueBefore = stringAttribute(of: element, attribute: kAXValueAttribute as CFString)
+        else { return .unavailable }
+        let selectedBefore = caret.length == 0 ? "" : (
+            stringForRange(of: element, range: caret)
+                ?? stringAttribute(of: element, attribute: kAXSelectedTextAttribute as CFString))
+        guard let selectedBefore else { return .unavailable }
+        let proof: VerifiedTriggerSelection
+        switch VerifiedTriggerSelection.prepare(deletion: deletion, textBeforeCaret: before,
+            originalSelection: caretRange, readSelectedText: { selectedBefore }) {
+        case .verified(let selection): proof = selection
+        case .unavailable: return .unavailable
+        case .rejected: return .cancelledBeforeText
         }
-        // WebKit and Chromium can leave the inserted text selected, so the next keystroke would wipe
-        // the snippet out. Collapse explicitly.
-        _ = setSelectedRange(NSRange(location: plan.caretLocation, length: 0), on: element)
+        guard let currentSelection = selectedRange(of: element),
+              currentSelection.location == caret.location, currentSelection.length == caret.length,
+              currentFocusMatches(element) else { return .cancelledBeforeText }
 
-        guard let valueBefore else { return .delivered }
-        guard let valueAfter = stringAttribute(of: element, attribute: kAXValueAttribute as CFString) else {
-            // Readable before the write and not after: too little to justify a second attempt.
-            return .rejected
+        let prepared = PreparedTriggerSelection(element: element, verification: proof)
+        var confirmedValue: String?
+        func contextIsValid() -> Bool {
+            let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                           perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+            return injectionIsAllowed(generation: generation, targetPID: targetPID)
+                && currentFocusMatches(element, axBudget: budget)
         }
-        if AccessibilityTextReplacement.writeLanded(
-            valueBefore: valueBefore,
-            valueAfter: valueAfter,
-            plan: plan,
-            replacement: replacement
-        ) { return .delivered }
-
-        if valueAfter == valueBefore {
-            // A write that reported success and did nothing — the Chromium/Electron failure mode.
-            _ = setSelectedRange(caretRange, on: element)
-            return .unavailable
+        let result = AccessibilitySelectedTextTransaction.run(
+            contextIsValid: contextIsValid,
+            originalSelectionMatches: {
+                guard let selected = selectedRange(of: element),
+                      selected.location == caret.location, selected.length == caret.length,
+                      let value = stringAttribute(of: element, attribute: kAXValueAttribute as CFString)
+                else { return false }
+                return value.utf16.elementsEqual(valueBefore.utf16)
+            },
+            selectTrigger: { setSelectedRange(plan.replacementRange, on: element) },
+            selectedTriggerMatches: {
+                triggerSelectionMatches(prepared, budget: AXMessagingBudget(), allowSelectedTextFallback: true)
+            },
+            writeText: {
+                // Set before crossing the host boundary, even if it replies with an error.
+                progress.textWriteAttempted = true
+                return setSelectedText(replacement, on: element)
+            },
+            confirmText: {
+                guard let value = stringAttribute(of: element, attribute: kAXValueAttribute as CFString),
+                      AccessibilityTextReplacement.writeLanded(valueBefore: valueBefore,
+                          valueAfter: value, plan: plan, replacement: replacement) else { return false }
+                confirmedValue = value
+                return true
+            },
+            finishCaret: {
+                if let confirmedValue,
+                   let location = AccessibilityTextReplacement.confirmedCaretLocation(
+                       valueBefore: valueBefore, valueAfter: confirmedValue, plan: plan, replacement: replacement),
+                   contextIsValid() {
+                    _ = setSelectedRange(NSRange(location: location, length: 0), on: element)
+                }
+            },
+            restoreSelection: {
+                progress.selectionRestoration = restoreTriggerSelection(prepared,
+                    generation: generation, targetPID: targetPID, allowSelectedTextFallback: true)
+            })
+        switch result {
+        case .delivered: return .delivered
+        case .selectionUnconfirmed: return .cancelledBeforeText
+        case .textUnconfirmed: return .attemptedUnconfirmed
         }
-        return .rejected
     }
 
     /// Chromium's answer: rewrite the field's whole value, because that is the write its edit model
@@ -3137,7 +3320,12 @@ final class SnippetExpansionEngine {
     private func replaceWholeValueUsingAccessibility(
         element: AXUIElement,
         plan: AccessibilityTextReplacement.Plan,
-        replacement: String
+        replacement: String,
+        originalSelection: NSRange,
+        expectedTrigger: String,
+        generation: UInt,
+        targetPID: pid_t?,
+        progress: inout DiagnosticAccessibilityReplacementProgress
     ) -> AccessibilityReplacement {
         guard isAttributeSettable(kAXValueAttribute as CFString, on: element),
               let valueBefore = stringAttribute(of: element, attribute: kAXValueAttribute as CFString)
@@ -3147,19 +3335,31 @@ final class SnippetExpansionEngine {
         // model we do not understand — not something to overwrite wholesale.
         let text = valueBefore as NSString
         guard plan.replacementRange.location >= 0,
-              NSMaxRange(plan.replacementRange) <= text.length
+              NSMaxRange(plan.replacementRange) <= text.length,
+              originalSelection.location >= plan.replacementRange.location,
+              originalSelection.location <= text.length
         else { return .unavailable }
 
-        let newValue = text.replacingCharacters(in: plan.replacementRange, with: replacement)
+        let prefixRange = NSRange(location: plan.replacementRange.location,
+                                  length: originalSelection.location - plan.replacementRange.location)
+        guard text.substring(with: prefixRange).utf16.elementsEqual(expectedTrigger.utf16),
+              let selected = selectedRange(of: element),
+              selected.location == originalSelection.location, selected.length == originalSelection.length
+        else { return .cancelledBeforeText }
+        guard let newValue = AccessibilityTextReplacement.expectedValue(
+            valueBefore: valueBefore, plan: plan, replacement: replacement) else { return .unavailable }
+        guard injectionIsAllowed(generation: generation, targetPID: targetPID),
+              currentFocusMatches(element) else { return .cancelledBeforeText }
+        progress.textWriteAttempted = true
         guard AXUIElementSetAttributeValue(
             element,
             kAXValueAttribute as CFString,
             newValue as CFString
-        ) == .success else { return .unavailable }
+        ) == .success else { return .attemptedUnconfirmed }
 
         guard let valueAfter = stringAttribute(of: element, attribute: kAXValueAttribute as CFString) else {
             // Readable before the write and not after: too little to justify a second attempt.
-            return .rejected
+            return .attemptedUnconfirmed
         }
 
         if AccessibilityTextReplacement.writeLanded(
@@ -3173,17 +3373,21 @@ final class SnippetExpansionEngine {
             // arbitrary in the old text — and the event fallback would then backspace from there,
             // eating the user's characters instead of the trigger. This path never touches the
             // selection on any other exit, so there is nothing to restore.
-            _ = setSelectedRange(NSRange(location: plan.caretLocation, length: 0), on: element)
+            if let location = AccessibilityTextReplacement.confirmedCaretLocation(
+                valueBefore: valueBefore, valueAfter: valueAfter, plan: plan, replacement: replacement),
+               injectionIsAllowed(generation: generation, targetPID: targetPID),
+               currentFocusMatches(element) {
+                _ = setSelectedRange(NSRange(location: location, length: 0), on: element)
+            }
             return .delivered
         }
 
         if valueAfter == valueBefore {
-            // A write that reported success and did nothing — the Chromium/Electron failure mode.
-            return .unavailable
+            return .attemptedUnconfirmed
         }
         // The field holds something we did not write. Saying `.unavailable` here would invite the
         // event path to paste on top of it.
-        return .rejected
+        return .attemptedUnconfirmed
     }
 
     /// Guards the whole-value write: true only for a single-line text field belonging to the
@@ -3243,9 +3447,13 @@ final class SnippetExpansionEngine {
         return settable.boolValue
     }
 
-    private func setSelectedRange(_ range: NSRange, on element: AXUIElement) -> Bool {
+    private func setSelectedRange(_ range: NSRange, on element: AXUIElement, axBudget: AXMessagingBudget? = nil) -> Bool {
         var cfRange = CFRange(location: range.location, length: range.length)
         guard let value = AXValueCreate(.cfRange, &cfRange) else { return false }
+        if let axBudget {
+            return axBudget.setAttributeValue(of: element,
+                attribute: kAXSelectedTextRangeAttribute as CFString, value: value) == .success
+        }
         return AXUIElementSetAttributeValue(
             element,
             kAXSelectedTextRangeAttribute as CFString,
@@ -3263,6 +3471,94 @@ final class SnippetExpansionEngine {
 
     // MARK: - Event fallback
 
+    /// Prepare without changing either the field or clipboard. A host that can select a
+    /// range but cannot write AXSelectedText can still perform its own native paste.
+    private func prepareTriggerSelection(
+        deletion: TriggerDeletion?, element: AXUIElement?
+    ) -> TriggerSelectionPreparation {
+        guard let deletion, deletion.provenance == .accessibilityConfirmed,
+              let app = NSWorkspace.shared.frontmostApplication,
+              accessibilityWriteStrategy(for: app) != .none,
+              let element else { return .unavailable }
+        let budget = AXMessagingBudget()
+        guard currentFocusMatches(element, axBudget: budget) else { return .rejected(.focusedElementChanged) }
+        guard attributeIsSettable(kAXSelectedTextRangeAttribute as CFString, on: element, axBudget: budget),
+              let original = selectedRange(of: element, axBudget: budget) else { return .unavailable }
+        guard original.location >= 0, original.length >= 0,
+              original.location <= Int.max - original.length else { return .rejected(.selectionChanged) }
+        let readLength = max(maxBufferLength, deletion.expectedText.utf16.count)
+        guard readLength <= VerifiedTriggerSelection.maximumReadUTF16Length,
+              original.length <= VerifiedTriggerSelection.maximumReadUTF16Length - readLength else { return .unavailable }
+        guard let before = textBeforeCaret(in: element, caretLocation: original.location,
+                  maxCharacters: readLength, allowFullValueFallback: false, axBudget: budget)
+        else { return .unavailable }
+        // The prefix is authoritative even if a later selected-suffix read fails.
+        let verification: VerifiedTriggerSelection
+        switch VerifiedTriggerSelection.prepare(deletion: deletion, textBeforeCaret: before,
+            originalSelection: NSRange(location: original.location, length: original.length),
+            readSelectedText: { stringForRange(of: element, range: original, axBudget: budget) }) {
+        case .verified(let selection): verification = selection
+        case .unavailable: return .unavailable
+        case .rejected: return .rejected(.triggerChanged)
+        }
+        let prepared = PreparedTriggerSelection(element: element, verification: verification)
+        guard triggerSelectionMatches(prepared, originalSelection: true, budget: budget) else {
+            return .rejected(.selectionChanged)
+        }
+        return .prepared(prepared)
+    }
+
+    private func triggerSelectionMatches(
+        _ prepared: PreparedTriggerSelection, originalSelection: Bool = false,
+        budget: AXMessagingBudget, allowSelectedTextFallback: Bool = false
+    ) -> Bool {
+        let proof = prepared.verification
+        let expected = originalSelection ? proof.originalSelection : proof.replacementRange
+        guard let actual = selectedRange(of: prepared.element, axBudget: budget),
+              actual.location == expected.location, actual.length == expected.length else { return false }
+        var text = stringForRange(of: prepared.element,
+            range: CFRange(location: proof.replacementRange.location, length: proof.replacementRange.length),
+            axBudget: budget)
+        if text == nil, allowSelectedTextFallback {
+            if !originalSelection {
+                text = stringAttribute(of: prepared.element, attribute: kAXSelectedTextAttribute as CFString,
+                                       axBudget: budget)
+            }
+            // Direct AX replacement already requires a whole-value snapshot. Only that
+            // path may use the same capability when parameterized range reads are absent.
+            if text == nil,
+               let value = stringAttribute(of: prepared.element, attribute: kAXValueAttribute as CFString,
+                                           axBudget: budget) {
+                let source = value as NSString
+                let range = proof.replacementRange
+                if range.location <= source.length, range.length <= source.length - range.location {
+                    text = source.substring(with: range)
+                }
+            }
+        }
+        guard let text else { return false }
+        return proof.matches(range: proof.replacementRange, text: text)
+    }
+
+    /// No Undo or text rewrite: only give back an unchanged selection we can still prove ours.
+    private func restoreTriggerSelection(
+        _ prepared: PreparedTriggerSelection, generation: UInt, targetPID: pid_t?,
+        allowSelectedTextFallback: Bool = false
+    ) -> DiagnosticPasteSelectionRestoration {
+        let budget = AXMessagingBudget()
+        guard injectionIsAllowed(generation: generation, targetPID: targetPID, allowingTerminationDrain: true),
+              currentFocusMatches(prepared.element, axBudget: budget) else { return .skippedContextChanged }
+        if triggerSelectionMatches(prepared, originalSelection: true, budget: budget,
+                                   allowSelectedTextFallback: allowSelectedTextFallback) { return .notNeeded }
+        guard triggerSelectionMatches(prepared, budget: budget, allowSelectedTextFallback: allowSelectedTextFallback),
+              injectionIsAllowed(generation: generation, targetPID: targetPID, allowingTerminationDrain: true),
+              currentFocusMatches(prepared.element, axBudget: budget) else { return .skippedContextChanged }
+        guard setSelectedRange(prepared.verification.originalSelection, on: prepared.element, axBudget: budget),
+              triggerSelectionMatches(prepared, originalSelection: true, budget: budget,
+                                      allowSelectedTextFallback: allowSelectedTextFallback) else { return .failed }
+        return .restored
+    }
+
     /// Distinguishes insertion from clipboard handback. Only an inserted outcome may be recorded,
     /// and a pending handback remains visible while delayed recovery continues.
     private func replaceTypedText(
@@ -3271,7 +3567,9 @@ final class SnippetExpansionEngine {
         generation: UInt,
         targetPID: pid_t?,
         isConcealed: Bool = false,
-        expectedFocusedElement: AXUIElement? = nil
+        expectedFocusedElement: AXUIElement? = nil,
+        deletion: TriggerDeletion? = nil,
+        accessibilityOutcome: DiagnosticPasteAccessibilityOutcome? = nil
     ) async -> EventReplacementOutcome {
         let start = ContinuousClock.now
         let targetPID = targetPID ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -3279,14 +3577,20 @@ final class SnippetExpansionEngine {
         var diagnosticLease: TemporaryPasteboardLease?
         var hadFingerprint = false
         var progress = DiagnosticPasteProgress(plannedDeletes: characterCount)
+        progress.transport = characterCount == 0 ? .insertionOnly : .backspacePaste
+        progress.accessibilityOutcome = accessibilityOutcome
+        let expectedFocusedElement = expectedFocusedElement ?? captureExpansionTarget()?.element
         // Capture the reason at the guard that actually stops insertion, before cleanup.
         func insertionIsAllowed(allowingTerminationDrain: Bool = false) -> Bool {
             if let reason = injectionBlockReason(generation: generation, targetPID: targetPID,
                                                  allowingTerminationDrain: allowingTerminationDrain) {
                 progress.reason = reason
+                if reason == .unmarkedKeyDown { progress.interruptionOrigin = injectionInvalidationOrigin }
                 return false
             }
-            if let expectedFocusedElement, !currentFocusMatches(expectedFocusedElement) {
+            let focusBudget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                               perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+            if let expectedFocusedElement, !currentFocusMatches(expectedFocusedElement, axBudget: focusBudget) {
                 progress.reason = .focusedElementChanged
                 return false
             }
@@ -3301,9 +3605,27 @@ final class SnippetExpansionEngine {
                 hadFingerprint: hadFingerprint, progress: progress))
         }
         guard insertionIsAllowed() else { return .failed }
+        guard let targetPID else {
+            progress.reason = .targetUnavailable
+            return .failed
+        }
+        progress.stage = .selectionPreparation
+        let preparedSelection: PreparedTriggerSelection?
+        switch prepareTriggerSelection(deletion: deletion, element: expectedFocusedElement) {
+        case .unavailable:
+            preparedSelection = nil
+        case .rejected(let reason):
+            progress.reason = reason
+            progress.selection = .rejected
+            return .failed
+        case .prepared(let prepared):
+            preparedSelection = prepared
+            progress.transport = .selectionPaste
+        }
         // Build the complete shortcut before borrowing the clipboard or deleting the trigger.
         progress.stage = .eventPreparation
-        guard let pasteEvents = makePasteShortcutEvents() else {
+        guard let pasteEvents = makePasteShortcutEvents(),
+              let deleteEvents = makeDeleteEvents(count: preparedSelection == nil ? characterCount : 0) else {
             diagnosticOutcome = .eventCreationFailed
             progress.reason = .eventCreationFailed
             return .failed
@@ -3326,67 +3648,109 @@ final class SnippetExpansionEngine {
         }
         pasteboardInjectionLease = lease
         diagnosticLease = lease
+        var selectionWasAttempted = false
         defer {
+            if !progress.pastePosted {
+                if selectionWasAttempted, let preparedSelection {
+                    progress.selectionRestoration = restoreTriggerSelection(
+                        preparedSelection, generation: generation, targetPID: targetPID)
+                }
+                finishPendingPasteboardOwnership(schedulingRetryOnFailure: true, finishingInFlightLease: lease)
+            }
             if pasteboardInjectionLease === lease {
                 pasteboardInjectionLease = nil
             }
             continueTerminationPreparationIfNeeded()
         }
+        func clipboardIsOwned() -> Bool {
+            guard activePasteboardLease === lease, lease.isOwned else {
+                diagnosticOutcome = .pasteboardSuperseded
+                progress.reason = .pasteboardSuperseded
+                return false
+            }
+            return true
+        }
+        var confirmationElement: AXUIElement?
+        var baseline: PasteCaretFingerprint?
+        func captureConfirmationBaseline() {
+            let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                           perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+            confirmationElement = expectedFocusedElement ?? frontmostFocusedElement(axBudget: budget)
+            baseline = confirmationElement.flatMap { focusedCaretFingerprint(in: $0, axBudget: budget) }
+            hadFingerprint = baseline != nil
+        }
+        func postPaste() {
+            // One uninterrupted burst, with every event already allocated and tagged.
+            progress.stage = .prePaste
+            for event in pasteEvents { event.postToPid(targetPID) }
+            progress.pastePosted = true
+        }
 
-        // Delete trigger text one character at a time with a small delay to avoid
-        // dropped synthetic key events in some host apps.
-        progress.stage = .triggerDeletion
-        for index in 0..<characterCount {
-            guard insertionIsAllowed(allowingTerminationDrain: true) else {
-                finishPendingPasteboardOwnership(
-                    schedulingRetryOnFailure: true,
-                    finishingInFlightLease: lease
-                )
+        if let preparedSelection {
+            // Wait before changing selection; afterwards there is no artificial delay between
+            // verified selection and the host's single paste. No text has been deleted here.
+            await settle(for: pasteboardWriteSettleDelay)
+            progress.stage = .selectionValidation
+            let result = SelectionPasteTransaction.run(
+                contextIsValid: { insertionIsAllowed(allowingTerminationDrain: true) && clipboardIsOwned() },
+                originalSelectionMatches: {
+                    triggerSelectionMatches(preparedSelection, originalSelection: true, budget: AXMessagingBudget())
+                },
+                selectTrigger: {
+                    selectionWasAttempted = true
+                    return setSelectedRange(preparedSelection.verification.replacementRange,
+                                            on: preparedSelection.element, axBudget: AXMessagingBudget())
+                },
+                selectedTriggerMatches: {
+                    let matches = triggerSelectionMatches(preparedSelection, budget: AXMessagingBudget())
+                    if matches { progress.selection = .verified }
+                    return matches
+                },
+                captureBaseline: captureConfirmationBaseline,
+                postPaste: postPaste)
+            switch result {
+            case .posted:
+                break
+            case .contextChanged:
+                return .failed // The failing guard already captured the precise reason.
+            case .originalSelectionChanged, .selectionChanged:
+                progress.reason = .selectionChanged
+                progress.selection = .rejected
+                return .failed
+            case .selectionWriteFailed:
+                progress.reason = .selectionWriteFailed
+                progress.selection = .rejected
                 return .failed
             }
-            postKeyStroke(keyCode: UInt16(kVK_Delete))
-            progress.deleteAttempts += 1
-            if index < characterCount - 1 {
-                await settle(for: injectedKeyDelay)
+        } else {
+            // Compatibility path for hosts without verifiable AX selection. Check the loan
+            // before EVERY destructive key, not only after the trigger has disappeared.
+            progress.stage = .triggerDeletion
+            for index in 0..<characterCount {
+                guard insertionIsAllowed(allowingTerminationDrain: true), clipboardIsOwned() else { return .failed }
+                deleteEvents[index * 2].postToPid(targetPID)
+                deleteEvents[index * 2 + 1].postToPid(targetPID)
+                progress.deleteAttempts += 1
+                if index < characterCount - 1 { await settle(for: injectedKeyDelay) }
             }
+            // Keep timing non-cancellable once destructive events have been sent.
+            progress.stage = .prePaste
+            if characterCount > 0 { await settle(for: injectedKeyDelay) }
+            await settle(for: prePasteDelayAfterDelete)
+            await settle(for: pasteboardWriteSettleDelay)
+            captureConfirmationBaseline()
+            // Revalidate after the blocking fingerprint read, immediately before dispatch.
+            guard insertionIsAllowed(allowingTerminationDrain: true), clipboardIsOwned() else { return .failed }
+            postPaste()
         }
-        // Past here the trigger is gone, so bailing out would leave the user with neither their text
-        // nor the snippet. These waits are deliberately not cancellable: a cancelled `Task.sleep`
-        // returns at once and would rush the paste into a host still applying our deletions.
-        progress.stage = .prePaste
-        if characterCount > 0 { await settle(for: injectedKeyDelay) }
-        await settle(for: prePasteDelayAfterDelete)
-        await settle(for: pasteboardWriteSettleDelay)
-
-        guard activePasteboardLease === lease, lease.isOwned else {
-            diagnosticOutcome = .pasteboardSuperseded
-            progress.reason = .pasteboardSuperseded
-            finishPendingPasteboardOwnership(finishingInFlightLease: lease)
-            return .failed
-        }
-        guard insertionIsAllowed(allowingTerminationDrain: true) else {
-            finishPendingPasteboardOwnership(
-                schedulingRetryOnFailure: true,
-                finishingInFlightLease: lease
-            )
-            return .failed
-        }
-        let baselineBudget = AXMessagingBudget(
-            totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
-            perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
-        let confirmationElement = expectedFocusedElement ?? frontmostFocusedElement(axBudget: baselineBudget)
-        let baseline = confirmationElement.flatMap { focusedCaretFingerprint(in: $0, axBudget: baselineBudget) }
-        hadFingerprint = baseline != nil
-        // One uninterrupted burst, with every event already allocated and tagged.
-        for event in pasteEvents { event.post(tap: .cghidEventTap) }
-        progress.pastePosted = true
         progress.stage = .confirmation
         let verdict = await waitForPasteConfirmation(
             pastedText: replacement,
             baseline: baseline,
             lease: lease,
             targetPID: targetPID,
-            expectedFocusedElement: confirmationElement
+            expectedFocusedElement: confirmationElement,
+            allowsDeletionRebaseline: preparedSelection == nil
         )
         diagnosticOutcome = verdict.diagnosticOutcome
         switch verdict {
@@ -3418,7 +3782,8 @@ final class SnippetExpansionEngine {
         baseline: PasteCaretFingerprint?,
         lease: TemporaryPasteboardLease,
         targetPID: pid_t?,
-        expectedFocusedElement: AXUIElement?
+        expectedFocusedElement: AXUIElement?,
+        allowsDeletionRebaseline: Bool = true
     ) async -> PasteConfirmationVerdict {
         var baseline = baseline
         var focusChanged = false
@@ -3466,7 +3831,7 @@ final class SnippetExpansionEngine {
 
             // Our own backspaces can still be landing. Re-baseline, or the caret moving back and
             // then forward again would read as a paste that has not happened yet.
-            if progress == .pendingEditObserved, let current { baseline = current }
+            if allowsDeletionRebaseline, progress == .pendingEditObserved, let current { baseline = current }
             await settle(for: pasteConfirmationTuning.pollInterval)
             attempt += 1
         }
@@ -3684,7 +4049,6 @@ final class SnippetExpansionEngine {
     }
 
     private func makePasteShortcutEvents() -> [CGEvent]? {
-        guard let source = CGEventSource(stateID: .hidSystemState) else { return nil }
         let commandKey = UInt16(kVK_Command)
         let strokes: [(UInt16, Bool, CGEventFlags)] = [
             (commandKey, true, []),
@@ -3692,6 +4056,19 @@ final class SnippetExpansionEngine {
             (UInt16(kVK_ANSI_V), false, .maskCommand),
             (commandKey, false, []),
         ]
+        return makeKeyEvents(strokes)
+    }
+
+    private func makeDeleteEvents(count: Int) -> [CGEvent]? {
+        guard count >= 0, count <= VerifiedTriggerSelection.maximumReadUTF16Length else { return nil }
+        let strokes: [(UInt16, Bool, CGEventFlags)] = (0..<count).flatMap { _ in
+            [(UInt16(kVK_Delete), true, CGEventFlags()), (UInt16(kVK_Delete), false, CGEventFlags())]
+        }
+        return makeKeyEvents(strokes)
+    }
+
+    private func makeKeyEvents(_ strokes: [(UInt16, Bool, CGEventFlags)]) -> [CGEvent]? {
+        guard let source = CGEventSource(stateID: .privateState) else { return nil }
         var events: [CGEvent] = []
         for (key, down, flags) in strokes {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
@@ -3703,24 +4080,8 @@ final class SnippetExpansionEngine {
         return events
     }
 
-    private func postKeyStroke(keyCode: UInt16, flags: CGEventFlags = []) {
-        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
-
-        postKeyEvent(source: source, keyCode: keyCode, keyDown: true, flags: flags)
-        postKeyEvent(source: source, keyCode: keyCode, keyDown: false, flags: flags)
-    }
-
-    private func postKeyEvent(source: CGEventSource, keyCode: UInt16, keyDown: Bool, flags: CGEventFlags = []) {
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown) else {
-            return
-        }
-        event.flags = flags
-        tag(event)
-        event.post(tap: .cghidEventTap)
-    }
-
-    /// Everything we post carries this marker. Our events come back through our own session tap, and
-    /// the tap keys off the marker to skip them instead of guessing by elapsed time.
+    /// Everything we post carries this marker. Any copy that reaches our session tap is ignored
+    /// by origin rather than guessed from elapsed time; PID routing is not an isolation guarantee.
     private func tag(_ event: CGEvent) {
         event.setIntegerValueField(.eventSourceUserData, value: SnippetSyntheticEvent.tag)
     }

@@ -383,6 +383,533 @@ struct TextReplacementTests {
                 "a caret at the very start cannot hold the trigger"
             )
         }
+
+        @Test func invalidAndOverflowingOffsetsNeverProduceAReplacementPlan() {
+            let inputs: [(NSRange, Int)] = [
+                (NSRange(location: -1, length: 0), 3),
+                (NSRange(location: 3, length: -1), 3),
+                (NSRange(location: NSNotFound, length: 0), 3),
+                (NSRange(location: Int.max - 2, length: 3), 3),
+                (NSRange(location: 3, length: Int.max), 3),
+                (NSRange(location: 3, length: 0), -1),
+                (NSRange(location: 4, length: 0), Int.max)
+            ]
+            for (range, replacementLength) in inputs {
+                #expect(AccessibilityTextReplacement.plan(
+                    textBeforeCaret: "\\em",
+                    caretRange: range,
+                    expectedTrigger: "\\em",
+                    triggerCharacterCount: 3,
+                    replacementUTF16Length: replacementLength) == .unavailable)
+            }
+        }
+    }
+
+    // MARK: Verified trigger selection
+
+    @Suite("Verified trigger selection")
+    struct VerifiedTriggerSelectionTests {
+        @Test func onePasteReplacesTheTriggerAndTheOriginalSelectedSuffix() throws {
+            let selection = try #require(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: "hello \\em",
+                originalSelection: NSRange(location: 9, length: 4),
+                selectedText: "tail"))
+
+            #expect(selection.originalSelection == NSRange(location: 9, length: 4))
+            #expect(selection.replacementRange == NSRange(location: 6, length: 7))
+            #expect(selection.expectedText == "\\emtail")
+            #expect(selection.matches(range: NSRange(location: 6, length: 7), text: "\\emtail"))
+            #expect(!selection.matches(range: NSRange(location: 6, length: 7), text: "\\emfail"),
+                    "a concurrent edit of equal length revokes paste and rollback authority")
+            #expect(!selection.matches(range: NSRange(location: 7, length: 7), text: "\\emtail"),
+                    "the same text at another position is not the captured selection")
+            #expect(!selection.matches(range: NSRange(location: 6, length: 6), text: "\\emtail"))
+        }
+
+        @Test func graphemesAndSelectedEmojiUseTheirActualUTF16Widths() throws {
+            let prefix = "👨‍👩‍👧‍👦 "
+            let trigger = "\\e\u{301}🎉"
+            let suffix = "🇨🇦"
+            let original = NSRange(location: (prefix + trigger).utf16.count, length: suffix.utf16.count)
+            let selection = try #require(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "e\u{301}🎉"),
+                textBeforeCaret: prefix + trigger,
+                originalSelection: original,
+                selectedText: suffix))
+
+            #expect(selection.replacementRange == NSRange(
+                location: prefix.utf16.count, length: (trigger + suffix).utf16.count))
+            #expect(selection.matches(range: selection.replacementRange, text: trigger + suffix))
+        }
+
+        @Test func canonicallyEquivalentTriggersStillRequireTheExactUTF16Rendition() {
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "é"),
+                textBeforeCaret: "\\e\u{301}",
+                originalSelection: NSRange(location: 3, length: 0),
+                selectedText: "") == nil,
+                "a normalized match does not authorize a different UTF-16 range")
+
+            let query = "a\u{301}\u{327}"
+            let reordered = "a\u{327}\u{301}"
+            #expect(query == reordered, "Swift String equality intentionally normalizes this fixture")
+            #expect(query.utf16.count == reordered.utf16.count)
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: query),
+                textBeforeCaret: "\\" + reordered,
+                originalSelection: NSRange(location: 4, length: 0),
+                selectedText: "") == nil,
+                "matching code-unit counts also cannot authorize a differently encoded trigger")
+        }
+
+        @Test func normalizedSelectedTextCannotAuthorizePasteOrRollback() throws {
+            let selected = "a\u{301}\u{327}"
+            let selection = try #require(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: "\\em",
+                originalSelection: NSRange(location: 3, length: selected.utf16.count),
+                selectedText: selected))
+            #expect(!selection.matches(
+                range: selection.replacementRange, text: "\\ema\u{327}\u{301}"))
+        }
+
+        @Test func mismatchedTriggerOrOriginalSelectionCannotCreateASnapshot() {
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: "\\ex",
+                originalSelection: NSRange(location: 3, length: 0),
+                selectedText: "") == nil)
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: "\\em",
+                originalSelection: NSRange(location: 3, length: 1),
+                selectedText: "🎉") == nil,
+                "the selected text's Character count cannot stand in for its UTF-16 length")
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: "prefix \\em",
+                originalSelection: NSRange(location: 3, length: 0),
+                selectedText: "") == nil,
+                "a prefix that extends before the field's start is contradictory AX evidence")
+            #expect(VerifiedTriggerSelection.make(
+                deletion: TriggerDeletion(characterCount: 4, expectedText: "\\em", provenance: .localTracking),
+                textBeforeCaret: "\\em",
+                originalSelection: NSRange(location: 3, length: 0),
+                selectedText: "") == nil)
+        }
+
+        @Test func aKnownTriggerMismatchWinsOverAnUnreadableSelectedSuffix() {
+            var suffixReads = 0
+            let result = VerifiedTriggerSelection.prepare(
+                deletion: .confirmed(.init(query: "em", triggerLength: 3)),
+                textBeforeCaret: "\\ex",
+                originalSelection: NSRange(location: 3, length: 4),
+                readSelectedText: { suffixReads += 1; return nil })
+            #expect(result == .rejected)
+            #expect(suffixReads == 0, "a later read cannot downgrade positive mismatch evidence")
+        }
+
+        @Test func unreadableSuffixIsUnavailableOnlyAfterTheTriggerWasProved() {
+            var suffixReads = 0
+            let result = VerifiedTriggerSelection.prepare(
+                deletion: .confirmed(.init(query: "em", triggerLength: 3)),
+                textBeforeCaret: "\\em",
+                originalSelection: NSRange(location: 3, length: 4),
+                readSelectedText: { suffixReads += 1; return nil })
+            #expect(result == .unavailable)
+            #expect(suffixReads == 1)
+        }
+
+        @Test func readableButContradictorySelectedSuffixFailsClosed() {
+            #expect(VerifiedTriggerSelection.prepare(
+                deletion: .confirmed(.init(query: "em", triggerLength: 3)),
+                textBeforeCaret: "\\em",
+                originalSelection: NSRange(location: 3, length: 4),
+                readSelectedText: { "xy" }) == .rejected)
+        }
+
+        @Test func negativeMissingAndOverflowingRangesAreRefusedWithoutArithmeticTraps() {
+            let ranges = [
+                NSRange(location: -1, length: 0),
+                NSRange(location: 3, length: -1),
+                NSRange(location: NSNotFound, length: 0),
+                NSRange(location: Int.max - 1, length: 3),
+                NSRange(location: 3, length: Int.max),
+                NSRange(location: 2, length: 0)
+            ]
+            for range in ranges {
+                #expect(VerifiedTriggerSelection.make(
+                    deletion: .localTracking(query: "em"),
+                    textBeforeCaret: "\\em",
+                    originalSelection: range,
+                    selectedText: "") == nil)
+            }
+        }
+
+        @Test func combinedAXReadIsBoundedIncludingTheSelectedSuffix() {
+            let before = String(repeating: "a", count: 9_994) + "\\em"
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: before,
+                originalSelection: NSRange(location: 9_997, length: 3),
+                selectedText: "xyz") != nil)
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: before,
+                originalSelection: NSRange(location: 9_997, length: 4),
+                selectedText: "wxyz") == nil)
+            #expect(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: "a" + before,
+                originalSelection: NSRange(location: 9_998, length: 3),
+                selectedText: "xyz") == nil)
+        }
+
+        @Test func aBoundedSuffixCanSelectATriggerLateInALargeDocument() throws {
+            let selection = try #require(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "em"),
+                textBeforeCaret: "near the caret \\em",
+                originalSelection: NSRange(location: 1_000_000, length: 0),
+                selectedText: ""))
+            #expect(selection.replacementRange == NSRange(location: 999_997, length: 3))
+        }
+
+        @Test(arguments: ["x", "hello!", "a longer replacement"])
+        func selectionPasteConfirmationStartsAtTheReplacementStart(replacement: String) throws {
+            let prefix = "hello "
+            let trigger = "\\email"
+            let selection = try #require(VerifiedTriggerSelection.make(
+                deletion: .localTracking(query: "email"),
+                textBeforeCaret: prefix + trigger,
+                originalSelection: NSRange(location: (prefix + trigger).utf16.count, length: 0),
+                selectedText: ""))
+            let before = PasteCaretFingerprint(
+                caretLocation: selection.replacementRange.location,
+                selectionLength: selection.replacementRange.length,
+                textBeforeCaret: prefix)
+            let after = PasteCaretFingerprint(
+                caretLocation: (prefix + replacement).utf16.count,
+                selectionLength: 0,
+                textBeforeCaret: prefix + replacement)
+
+            #expect(SnippetPasteConfirmationPolicy.progress(
+                before: before, after: after, pastedText: replacement, tailLength: 32) == .pasteObserved,
+                "shorter and equal-length replacements still move forward from the selection start")
+            #expect(SnippetPasteConfirmationPolicy.progress(
+                before: before, after: before, pastedText: replacement, tailLength: 32) == .idle,
+                "preparing a selection alone never confirms a paste")
+        }
+    }
+
+    // MARK: Native paste transaction
+
+    @Suite("Selection paste transaction")
+    struct SelectionPasteTransactionTests {
+        private final class Host {
+            var clipboardIsOwned = true
+            var focusMatches = true
+            var originalMatches = true
+            var triggerIsSelected = false
+            var setterSucceeds = true
+            var setterApplies = true
+            var posts = 0
+            var selectionWrites = 0
+            var proofReads = 0
+            var baselineReads = 0
+            var duringOriginalProof: (() -> Void)?
+            var duringSelectedProof: ((Int) -> Void)?
+            var duringSelectionWrite: (() -> Void)?
+            var duringBaselineRead: (() -> Void)?
+
+            func run() -> SelectionPasteTransaction.Result {
+                SelectionPasteTransaction.run(
+                    contextIsValid: { self.clipboardIsOwned && self.focusMatches },
+                    originalSelectionMatches: {
+                        self.duringOriginalProof?()
+                        return self.originalMatches
+                    },
+                    selectTrigger: {
+                        self.selectionWrites += 1
+                        self.triggerIsSelected = self.setterApplies
+                        self.duringSelectionWrite?()
+                        return self.setterSucceeds
+                    },
+                    selectedTriggerMatches: {
+                        self.proofReads += 1
+                        // Simulate an AX reply that was true when requested, with another
+                        // process changing context while that request is in flight.
+                        let matchedAtRead = self.triggerIsSelected
+                        self.duringSelectedProof?(self.proofReads)
+                        return matchedAtRead
+                    },
+                    captureBaseline: {
+                        self.baselineReads += 1
+                        self.duringBaselineRead?()
+                    },
+                    postPaste: { self.posts += 1 })
+            }
+        }
+
+        @Test func oneVerifiedSelectionProducesExactlyOnePaste() {
+            let host = Host()
+            #expect(host.run() == .posted)
+            #expect(host.selectionWrites == 1)
+            #expect(host.posts == 1)
+            #expect(host.baselineReads == 1)
+            #expect(host.proofReads == 2)
+            // No text-delete callback exists: the host's native paste owns the one text mutation.
+        }
+
+        @Test func clipboardSupersessionBeforeSelectionCostsNoHostMutation() {
+            let host = Host()
+            host.duringOriginalProof = { host.clipboardIsOwned = false }
+            #expect(host.run() == .contextChanged)
+            #expect(host.selectionWrites == 0)
+            #expect(host.posts == 0)
+        }
+
+        @Test func clipboardSupersessionAfterSelectionNeverDispatchesPaste() {
+            let host = Host()
+            host.duringSelectionWrite = { host.clipboardIsOwned = false }
+            #expect(host.run() == .contextChanged)
+            #expect(host.selectionWrites == 1)
+            #expect(host.posts == 0)
+        }
+
+        @Test func focusMovementDuringTheLastAXReadCannotReceiveThePaste() {
+            let host = Host()
+            host.duringSelectedProof = { read in
+                if read == 2 { host.focusMatches = false }
+            }
+            #expect(host.run() == .contextChanged)
+            #expect(host.proofReads == 2)
+            #expect(host.posts == 0)
+        }
+
+        @Test func clipboardSupersessionDuringTheLastAXReadCannotPasteNewClipboardContents() {
+            let host = Host()
+            host.duringSelectedProof = { read in
+                if read == 2 { host.clipboardIsOwned = false }
+            }
+            #expect(host.run() == .contextChanged)
+            #expect(host.posts == 0)
+        }
+
+        @Test func aBaselineReadThatChangesTheSelectionRevokesTheProof() {
+            let host = Host()
+            host.duringBaselineRead = { host.triggerIsSelected = false }
+            #expect(host.run() == .selectionChanged)
+            #expect(host.baselineReads == 1)
+            #expect(host.posts == 0)
+        }
+
+        @Test func anIgnoredSelectionSetterDoesNotAuthorizePaste() {
+            let host = Host()
+            host.setterApplies = false
+            #expect(host.run() == .selectionChanged)
+            #expect(host.selectionWrites == 1)
+            #expect(host.posts == 0)
+            #expect(host.baselineReads == 0)
+        }
+
+        @Test func aFailedSetterNeverRetriesEvenIfItChangedTheHostSelection() {
+            let host = Host()
+            host.setterSucceeds = false
+            #expect(host.run() == .selectionWriteFailed)
+            #expect(host.triggerIsSelected,
+                    "a failed reply is ambiguous; conservative restoration belongs to the caller")
+            #expect(host.selectionWrites == 1)
+            #expect(host.posts == 0)
+            #expect(host.proofReads == 0)
+        }
+
+        @Test func anAlreadyChangedOriginalSelectionIsNeverOverwritten() {
+            let host = Host()
+            host.originalMatches = false
+            #expect(host.run() == .originalSelectionChanged)
+            #expect(host.selectionWrites == 0)
+            #expect(host.posts == 0)
+        }
+
+        @Test func anAlreadyInvalidContextDoesNotTouchTheHost() {
+            let host = Host()
+            host.focusMatches = false
+            #expect(host.run() == .contextChanged)
+            #expect(host.selectionWrites == 0)
+            #expect(host.proofReads == 0)
+            #expect(host.posts == 0)
+        }
+    }
+
+    @Suite("Accessibility selected-text transaction")
+    struct AccessibilitySelectedTextTransactionTests {
+        private final class Host {
+            var contextMatches = true
+            var originalMatches = true
+            var selectedProofMatches = true
+            var selected = false
+            var selectSucceeds = true
+            var selectionApplies = true
+            var writeSucceeds = true
+            var writeApplies = true
+            var writeIsConfirmed = true
+            var selectionWrites = 0
+            var textWrites = 0
+            var restorationChecks = 0
+            var restorations = 0
+            var caretWrites = 0
+            var text = "\\em"
+            var duringOriginalProof: (() -> Void)?
+            var duringSelectedProof: (() -> Void)?
+            var duringConfirmation: (() -> Void)?
+
+            func run() -> AccessibilitySelectedTextTransaction.Result {
+                AccessibilitySelectedTextTransaction.run(
+                    contextIsValid: { self.contextMatches },
+                    originalSelectionMatches: {
+                        self.duringOriginalProof?()
+                        return self.originalMatches
+                    },
+                    selectTrigger: {
+                        self.selectionWrites += 1
+                        self.selected = self.selectionApplies
+                        return self.selectSucceeds
+                    },
+                    selectedTriggerMatches: {
+                        self.duringSelectedProof?()
+                        return self.selected && self.selectedProofMatches
+                    },
+                    writeText: {
+                        self.textWrites += 1
+                        if self.writeApplies { self.text = "world" }
+                        return self.writeSucceeds
+                    },
+                    confirmText: {
+                        self.duringConfirmation?()
+                        return self.writeIsConfirmed && self.text == "world"
+                    },
+                    finishCaret: {
+                        self.caretWrites += 1
+                        self.selected = false
+                    },
+                    restoreSelection: {
+                        self.restorationChecks += 1
+                        // The production callback re-reads focus, exact range and exact text;
+                        // a context change revokes permission even for a selection-only write.
+                        if self.contextMatches && self.selected && self.text == "\\em" {
+                            self.restorations += 1
+                            self.selected = false
+                        }
+                    })
+            }
+
+            func type(_ character: String) {
+                text = selected ? character : text + character
+            }
+        }
+
+        @Test func successfulWriteIsConfirmedAndCollapsedExactlyOnce() {
+            let host = Host()
+            #expect(host.run() == .delivered)
+            #expect(host.selectionWrites == 1)
+            #expect(host.textWrites == 1)
+            #expect(host.caretWrites == 1)
+            #expect(host.restorationChecks == 0)
+        }
+
+        @Test func failedSelectionReplyRestoresBeforeTheNextTypedCharacter() {
+            let host = Host()
+            host.selectSucceeds = false
+            #expect(host.run() == .selectionUnconfirmed)
+            #expect(host.selectionWrites == 1)
+            #expect(host.restorations == 1)
+            #expect(host.textWrites == 0)
+            host.type("x")
+            #expect(host.text == "\\emx", "a selection-only failure must not eat the next keystroke")
+        }
+
+        @Test func failedSelectionProofRestoresWithoutAttemptingText() {
+            let host = Host()
+            host.selectedProofMatches = false
+            #expect(host.run() == .selectionUnconfirmed)
+            #expect(host.restorations == 1)
+            #expect(host.textWrites == 0)
+            #expect(host.caretWrites == 0)
+        }
+
+        @Test func anIgnoredSelectionSetterNeedsNoActualRestoration() {
+            let host = Host()
+            host.selectionApplies = false
+            #expect(host.run() == .selectionUnconfirmed)
+            #expect(host.restorationChecks == 1)
+            #expect(host.restorations == 0)
+            #expect(host.textWrites == 0)
+        }
+
+        @Test func failedOriginalProofNeverWritesOrRestoresSelection() {
+            let host = Host()
+            host.originalMatches = false
+            #expect(host.run() == .selectionUnconfirmed)
+            #expect(host.selectionWrites == 0)
+            #expect(host.restorationChecks == 0)
+            #expect(host.textWrites == 0)
+        }
+
+        @Test func contextChangedDuringOriginalProofNeverWritesOrRestoresSelection() {
+            let host = Host()
+            host.duringOriginalProof = { host.contextMatches = false }
+            #expect(host.run() == .selectionUnconfirmed)
+            #expect(host.selectionWrites == 0)
+            #expect(host.restorationChecks == 0)
+            #expect(host.textWrites == 0)
+        }
+
+        @Test func contextChangedDuringSelectedProofCannotWriteOrBlindlyRestore() {
+            let host = Host()
+            host.duringSelectedProof = { host.contextMatches = false }
+            #expect(host.run() == .selectionUnconfirmed)
+            #expect(host.textWrites == 0)
+            #expect(host.restorationChecks == 1)
+            #expect(host.restorations == 0)
+        }
+
+        @Test func aFailedTextSetterMayHaveWrittenAndNeverRestoresOrRetries() {
+            let host = Host()
+            host.writeSucceeds = false
+            #expect(host.run() == .textUnconfirmed)
+            #expect(host.text == "world")
+            #expect(host.textWrites == 1)
+            #expect(host.restorationChecks == 0)
+            #expect(host.caretWrites == 0)
+        }
+
+        @Test func aSuccessfulNoOpTextSetterIsAmbiguousAndNeverRestoresOrRetries() {
+            let host = Host()
+            host.writeApplies = false
+            #expect(host.run() == .textUnconfirmed)
+            #expect(host.textWrites == 1)
+            #expect(host.restorationChecks == 0)
+            #expect(host.caretWrites == 0)
+        }
+
+        @Test func anUnverifiableWriteNeverRestoresSelectionEvenWhenItDidApply() {
+            let host = Host()
+            host.writeIsConfirmed = false
+            #expect(host.run() == .textUnconfirmed)
+            #expect(host.textWrites == 1)
+            #expect(host.restorationChecks == 0)
+            #expect(host.caretWrites == 0)
+        }
+
+        @Test func focusMovedDuringConfirmedWriteDoesNotReceiveACaretWrite() {
+            let host = Host()
+            host.duringConfirmation = { host.contextMatches = false }
+            #expect(host.run() == .delivered)
+            #expect(host.textWrites == 1)
+            #expect(host.caretWrites == 0)
+            #expect(host.restorationChecks == 0)
+        }
     }
 
     // MARK: 5. Write verification
@@ -419,17 +946,131 @@ struct TextReplacementTests {
             )
         }
 
-        @Test func aNormalizedInsertionOfTheSameLengthStillCounts() {
-            // Hosts normalize what they store; the expected length delta still proves the edit landed.
+        @Test func anEqualLengthReplacementCannotTurnAnIgnoredWriteIntoSuccess() {
+            #expect(!AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email",
+                valueAfter: "hello \\email",
+                plan: .init(replacementRange: NSRange(location: 6, length: 6), caretLocation: 12),
+                replacement: "world!"),
+                "an unchanged field with a zero length delta is still an ignored write")
+        }
+
+        @Test func anAlreadyMatchingReplacementIsAnIdempotentDelivery() {
+            #expect(AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email",
+                valueAfter: "hello \\email",
+                plan: .init(replacementRange: NSRange(location: 6, length: 6), caretLocation: 12),
+                replacement: "\\email"))
+        }
+
+        @Test func aSameLengthCaseChangeDoesNotProveOurReplacement() {
+            #expect(!AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email",
+                valueAfter: "hello WORLD!",
+                plan: .init(replacementRange: NSRange(location: 6, length: 6), caretLocation: 12),
+                replacement: "world!"))
+        }
+
+        @Test func malformedWritePlansFailWithoutOverflowingOrMatchingUnrelatedText() {
+            for range in [
+                NSRange(location: -1, length: 6),
+                NSRange(location: 6, length: -1),
+                NSRange(location: NSNotFound, length: 6),
+                NSRange(location: Int.max - 2, length: 6),
+                NSRange(location: 6, length: Int.max),
+                NSRange(location: 6, length: 7)
+            ] {
+                #expect(!AccessibilityTextReplacement.writeLanded(
+                    valueBefore: "hello \\email", valueAfter: "hello world",
+                    plan: .init(replacementRange: range, caretLocation: 11), replacement: "world"))
+            }
+        }
+
+        @Test func anUnrelatedEditWithTheExpectedLengthDeltaIsNotOurReplacement() {
             #expect(
-                AccessibilityTextReplacement.writeLanded(
+                !AccessibilityTextReplacement.writeLanded(
                     valueBefore: "hello \\email",
                     valueAfter: "hello WORLD",
                     plan: Self.plan,
                     replacement: "world"
                 ),
-                "a normalized insertion of the same length still counts"
+                "the expected length delta alone cannot prove our insertion"
             )
+        }
+
+        @Test func anUnchangedTriggerContainingTheShorterReplacementPrefixIsNotDelivered() {
+            #expect(!AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email",
+                valueAfter: "hello \\email",
+                plan: Self.plan,
+                replacement: "\\em"))
+        }
+
+        @Test func aMatchingReplacementDoesNotHideChangesOutsideItsRange() {
+            let plan = AccessibilityTextReplacement.Plan(
+                replacementRange: NSRange(location: 6, length: 6), caretLocation: 11)
+            for after in ["HELLO world tail", "hello world FAIL", "hello world tail!"] {
+                #expect(!AccessibilityTextReplacement.writeLanded(
+                    valueBefore: "hello \\email tail", valueAfter: after,
+                    plan: plan, replacement: "world"))
+            }
+        }
+
+        @Test func canonicalUnicodeCompositionIsTheSameCompletedEdit() {
+            #expect(AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email tail",
+                valueAfter: "hello café tail",
+                plan: Self.plan,
+                replacement: "cafe\u{301}"))
+            #expect(AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email tail",
+                valueAfter: "hello cafe\u{301} tail",
+                plan: Self.plan,
+                replacement: "café"))
+        }
+
+        @Test func normalizedReplacementCaretUsesTheActualHostUTF16Length() {
+            #expect(AccessibilityTextReplacement.confirmedCaretLocation(
+                valueBefore: "hello \\email tail", valueAfter: "hello café tail",
+                plan: Self.plan, replacement: "cafe\u{301}") == 10)
+            #expect(AccessibilityTextReplacement.confirmedCaretLocation(
+                valueBefore: "hello \\email", valueAfter: "hello café",
+                plan: Self.plan, replacement: "cafe\u{301}") == 10)
+        }
+
+        @Test func normalizedPrefixAndReplacementStillUseThePreservedSuffixAnchor() {
+            #expect(AccessibilityTextReplacement.confirmedCaretLocation(
+                valueBefore: "e\u{301} \\em tail", valueAfter: "é café tail",
+                plan: .init(replacementRange: NSRange(location: 3, length: 3), caretLocation: 8),
+                replacement: "cafe\u{301}") == 6)
+        }
+
+        @Test func normalizedSuffixCannotSupplyAnExactCaretAnchor() {
+            #expect(AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email e\u{301}", valueAfter: "hello world é",
+                plan: Self.plan, replacement: "world"))
+            #expect(AccessibilityTextReplacement.confirmedCaretLocation(
+                valueBefore: "hello \\email e\u{301}", valueAfter: "hello world é",
+                plan: Self.plan, replacement: "world") == nil)
+        }
+
+        @Test func unconfirmedValueCannotAuthorizeAnyCaretPosition() {
+            #expect(AccessibilityTextReplacement.confirmedCaretLocation(
+                valueBefore: "hello \\email tail", valueAfter: "hello WRONG tail",
+                plan: Self.plan, replacement: "world") == nil)
+        }
+
+        @Test func lineEndingChangesAreNotSilentlyTreatedAsOurExactWrite() {
+            #expect(!AccessibilityTextReplacement.writeLanded(
+                valueBefore: "hello \\email", valueAfter: "hello one\r\ntwo",
+                plan: Self.plan, replacement: "one\ntwo"))
+        }
+
+        @Test func aRangeBisectingASurrogateCannotProveAWrite() {
+            #expect(!AccessibilityTextReplacement.writeLanded(
+                valueBefore: "🎉", valueAfter: "x",
+                plan: .init(replacementRange: NSRange(location: 1, length: 1), caretLocation: 2),
+                replacement: "x"))
         }
 
         @Test func anUnrelatedFieldValueIsNotADelivery() {
@@ -491,6 +1132,21 @@ struct TextReplacementTests {
                     == .useEvents,
                 "lagging Accessibility in Chromium keeps the working event path"
             )
+        }
+
+        @Test func anUnconfirmedWriteNeverFallsBackToASecondEdit() {
+            #expect(AccessibilityReplacementPolicy.action(
+                for: .attemptedUnconfirmed, provenance: .accessibilityConfirmed) == .abort)
+            #expect(AccessibilityReplacementPolicy.action(
+                for: .attemptedUnconfirmed, provenance: .localTracking) == .abort,
+                "local tracking cannot prove that an attempted AX write changed nothing")
+        }
+
+        @Test func aCancelledSelectionTransactionNeverFallsBackForEitherProvenance() {
+            #expect(AccessibilityReplacementPolicy.action(
+                for: .cancelledBeforeText, provenance: .accessibilityConfirmed) == .abort)
+            #expect(AccessibilityReplacementPolicy.action(
+                for: .cancelledBeforeText, provenance: .localTracking) == .abort)
         }
     }
 

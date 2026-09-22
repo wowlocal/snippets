@@ -527,6 +527,8 @@ nonisolated enum DiagnosticPasteStage: String, Sendable, CaseIterable {
     case preflight
     case eventPreparation = "event_preparation"
     case clipboardAcquisition = "clipboard_acquisition"
+    case selectionPreparation = "selection_preparation"
+    case selectionValidation = "selection_validation"
     case triggerDeletion = "trigger_deletion"
     case prePaste = "pre_paste"
     case confirmation
@@ -551,6 +553,52 @@ nonisolated enum DiagnosticPasteReason: String, Sendable, CaseIterable {
     case clipboardUnavailable = "clipboard_unavailable"
     case pasteboardSuperseded = "pasteboard_superseded"
     case confirmationTimedOut = "confirmation_timed_out"
+    case selectionUnavailable = "selection_unavailable"
+    case selectionChanged = "selection_changed"
+    case selectionWriteFailed = "selection_write_failed"
+    case targetUnavailable = "target_unavailable"
+    case triggerChanged = "trigger_changed"
+}
+
+nonisolated enum DiagnosticPasteTransport: String, Sendable, CaseIterable {
+    case insertionOnly = "insertion_only"
+    case selectionPaste = "selection_paste"
+    case backspacePaste = "backspace_paste"
+}
+
+nonisolated enum DiagnosticPasteSelection: String, Sendable, CaseIterable {
+    case unavailable
+    case verified
+    case rejected
+}
+
+nonisolated enum DiagnosticPasteSelectionRestoration: String, Sendable, CaseIterable {
+    case notNeeded = "not_needed"
+    case restored
+    case skippedContextChanged = "skipped_context_changed"
+    case failed
+}
+
+nonisolated enum DiagnosticPasteAccessibilityOutcome: String, Sendable, CaseIterable {
+    case unavailable
+    case delivered
+    case rejected
+    case ambiguous
+}
+
+/// Distinguishes a safely cancelled selection-only operation from an uncertain text
+/// write. No selection coordinates, field identity, or text are retained.
+nonisolated struct DiagnosticAccessibilityReplacementProgress: Sendable, Equatable {
+    var textWriteAttempted = false
+    var selectionRestoration: DiagnosticPasteSelectionRestoration = .notNeeded
+}
+
+/// Classifies only an interrupting event's process relationship. The source PID and
+/// application identity must never enter the diagnostic event or its serialized fields.
+nonisolated enum DiagnosticPasteInterruptionOrigin: String, Sendable, CaseIterable {
+    case unspecified
+    case ownProcess = "own_process"
+    case otherProcess = "other_process"
 }
 
 /// Content-free progress for a single aggregate paste record. Counts describe attempted
@@ -561,6 +609,12 @@ nonisolated struct DiagnosticPasteProgress: Sendable, Equatable {
     var plannedDeletes: Int = 0
     var deleteAttempts: Int = 0
     var pastePosted = false
+    // A nil transport preserves the complete progress schema of retained older builds.
+    var transport: DiagnosticPasteTransport? = nil
+    var selection: DiagnosticPasteSelection = .unavailable
+    var selectionRestoration: DiagnosticPasteSelectionRestoration = .notNeeded
+    var interruptionOrigin: DiagnosticPasteInterruptionOrigin? = nil
+    var accessibilityOutcome: DiagnosticPasteAccessibilityOutcome? = nil
 }
 
 nonisolated enum DiagnosticMetricKind: String, Codable, Sendable {
@@ -740,6 +794,12 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         axErrorCode: Int?,
         queryLength: Int
     )
+    /// A terminal direct Accessibility result; fallback attempts are reported with pasteDelivery.
+    case accessibilityReplacement(
+        outcome: DiagnosticPasteAccessibilityOutcome,
+        durationMilliseconds: Int64,
+        progress: DiagnosticAccessibilityReplacementProgress? = nil
+    )
     case pasteDelivery(
         outcome: DiagnosticPasteOutcome,
         restoration: DiagnosticPasteboardRestoration,
@@ -773,7 +833,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
              .cloudKitSyncEvent, .cloudKitSchedulerTransition: .cloudKit
         case .vaultAction, .secureReveal, .secureEditorTransition: .vault
         case .suggestionAnchor: .performance
-        case .expansionAccessibility, .pasteDelivery, .pasteboardRecovery, .securePaste: .integration
+        case .expansionAccessibility, .accessibilityReplacement,
+             .pasteDelivery, .pasteboardRecovery, .securePaste: .integration
         case .metricKit: .metricKit
         case .diagnosticsMaintenance, .diagnosticsManifest: .diagnostics
         }
@@ -802,6 +863,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .secureEditorTransition: "secure_editor_transition"
         case .suggestionAnchor: "suggestion_anchor"
         case .expansionAccessibility: "expansion_accessibility"
+        case .accessibilityReplacement: "accessibility_replacement"
         case .pasteDelivery: "paste_delivery"
         case .pasteboardRecovery: "pasteboard_recovery"
         case .securePaste: "secure_paste"
@@ -824,6 +886,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             .error
         case .expansionAccessibility:
             .debug
+        case .accessibilityReplacement(let outcome, _, _):
+            outcome == .delivered ? .info : .warning
         case .pasteDelivery(_, .pending, _, _, _), .pasteboardRecovery(.pending):
             .error
         case .pasteDelivery(let outcome, _, _, _, _):
@@ -1024,6 +1088,16 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             if let failure { fields["failure"] = .string(failure.rawValue) }
             if let axErrorCode { fields["ax_error_code"] = .integer(Int64(axErrorCode)) }
             return fields
+        case .accessibilityReplacement(let outcome, let duration, let progress):
+            var fields: [String: DiagnosticJSONValue] = [
+                "outcome": .string(outcome.rawValue),
+                "duration_ms": .integer(min(600_000, max(0, duration))),
+            ]
+            if let progress {
+                fields["text_write_attempted"] = .boolean(progress.textWriteAttempted)
+                fields["selection_restoration"] = .string(progress.selectionRestoration.rawValue)
+            }
+            return fields
         case .pasteDelivery(let outcome, let restoration, let duration, let hadFingerprint, let progress):
             var fields: [String: DiagnosticJSONValue] = [
                 "outcome": .string(outcome.rawValue),
@@ -1037,6 +1111,17 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
                 fields["planned_deletes"] = .integer(Int64(min(10_000, max(0, progress.plannedDeletes))))
                 fields["delete_attempts"] = .integer(Int64(min(10_000, max(0, progress.deleteAttempts))))
                 fields["paste_posted"] = .boolean(progress.pastePosted)
+                if let transport = progress.transport {
+                    fields["transport"] = .string(transport.rawValue)
+                    fields["selection"] = .string(progress.selection.rawValue)
+                    fields["selection_restoration"] = .string(progress.selectionRestoration.rawValue)
+                }
+                if let origin = progress.interruptionOrigin {
+                    fields["interruption_origin"] = .string(origin.rawValue)
+                }
+                if let outcome = progress.accessibilityOutcome {
+                    fields["ax_replacement_outcome"] = .string(outcome.rawValue)
+                }
             }
             return fields
         case .pasteboardRecovery(let outcome):

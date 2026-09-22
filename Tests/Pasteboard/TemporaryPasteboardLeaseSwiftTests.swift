@@ -92,7 +92,11 @@ struct TemporaryPasteboardLeaseSwiftTests {
             .string, NSPasteboard.PasteboardType("org.nspasteboard.TransientType"),
         ])
         #expect(pasteboard.items[0].string(forType: .string) == "snippet")
-        #expect(pasteboard.items[0].availableType(from: [.html, .rtf, .string]) == .string)
+        // This fake retains un-published NSPasteboardItems. AppKit's availableType lookup
+        // requires a published item on some macOS versions; the real named-board test below
+        // exercises that lookup. Here prove the actual representation contract directly.
+        #expect(pasteboard.items[0].data(forType: .html) == nil)
+        #expect(pasteboard.items[0].data(forType: .rtf) == nil)
         #expect(lease.isOwned)
     }
 

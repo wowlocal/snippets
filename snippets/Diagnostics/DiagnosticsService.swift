@@ -520,10 +520,15 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
                 "operation", "outcome", "state_before", "state_after", "query_length",
             ],
             optional: ["stage", "failure", "ax_error_code"]),
+        "accessibility_replacement": ExportEventSchema(
+            category: "integration", required: ["outcome", "duration_ms"],
+            optional: ["text_write_attempted", "selection_restoration"]),
         "paste_delivery": ExportEventSchema(
             category: "integration",
             required: ["outcome", "restoration", "duration_ms", "had_fingerprint"],
-            optional: ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted"]),
+            optional: ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
+                       "transport", "selection", "selection_restoration", "interruption_origin",
+                       "ax_replacement_outcome"]),
         "pasteboard_recovery": ExportEventSchema(
             category: "integration", required: ["outcome"]),
         "secure_paste": ExportEventSchema(
@@ -554,11 +559,12 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         "kind", "surface", "from_state", "to_state", "vault_state",
         "state_before", "state_after", "stage", "failure", "exported_at",
         "oldest_entry_at", "newest_entry_at", "endpoint", "restoration", "target", "transport",
+        "selection", "selection_restoration", "interruption_origin", "ax_replacement_outcome",
     ]
     private static let exportBooleanFields: Set<String> = [
         "sync_enabled", "full_resync", "keyword_truncated", "truncated",
         "submit_active", "generation_sealed", "stored_session_present", "available", "had_fingerprint",
-        "paste_posted",
+        "paste_posted", "text_write_attempted",
     ]
     private static let exportNumericFields: Set<String> = [
         "error_code", "attempt", "value", "conflict_copies", "keyword_collisions",
@@ -714,6 +720,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
               fieldNames.isSubset(of: schemaForEvent.requiredFields.union(schemaForEvent.optionalFields)),
               fields.allSatisfy({ validateExportField(key: $0.key, value: $0.value) }),
               validateCloudSignInFields(event: event, fields: fields),
+              validateAccessibilityReplacementFields(event: event, fields: fields),
               validatePasteDeliveryFields(event: event, fields: fields),
               validateSecurePasteFields(event: event, fields: fields)
         else { return nil }
@@ -723,6 +730,25 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             session: session,
             sequence: sequence.uint64Value,
             data: data)
+    }
+
+    private static func validateAccessibilityReplacementFields(event: String, fields: [String: Any]) -> Bool {
+        guard event == "accessibility_replacement" else { return true }
+        guard let outcome = fields["outcome"] as? String,
+              DiagnosticPasteAccessibilityOutcome(rawValue: outcome) != nil,
+              let duration = fields["duration_ms"] as? NSNumber,
+              (0...600_000).contains(duration.doubleValue),
+              duration.doubleValue.rounded(.towardZero) == duration.doubleValue
+        else { return false }
+        let progressFields: Set<String> = ["text_write_attempted", "selection_restoration"]
+        let fieldNames = Set(fields.keys)
+        if !progressFields.isDisjoint(with: fieldNames) {
+            guard progressFields.isSubset(of: fieldNames),
+                  let restoration = fields["selection_restoration"] as? String,
+                  DiagnosticPasteSelectionRestoration(rawValue: restoration) != nil
+            else { return false }
+        }
+        return true
     }
 
     private static func validatePasteDeliveryFields(event: String, fields: [String: Any]) -> Bool {
@@ -737,11 +763,34 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
         // Retained records from older builds have none of these fields. New progress
         // must be complete; accepting partial groups would conceal corrupt diagnostics.
         let progressFields: Set<String> = ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted"]
-        if progressFields.isDisjoint(with: fields.keys) { return true }
-        guard progressFields.isSubset(of: Set(fields.keys)),
+        let selectionFields: Set<String> = ["transport", "selection", "selection_restoration"]
+        let fieldNames = Set(fields.keys)
+        if progressFields.isDisjoint(with: fieldNames) {
+            return selectionFields.isDisjoint(with: fieldNames)
+                && fields["interruption_origin"] == nil && fields["ax_replacement_outcome"] == nil
+        }
+        guard progressFields.isSubset(of: fieldNames),
               let stage = fields["stage"] as? String, DiagnosticPasteStage(rawValue: stage) != nil,
               let reason = fields["reason"] as? String, DiagnosticPasteReason(rawValue: reason) != nil
         else { return false }
+        if !selectionFields.isDisjoint(with: fieldNames) {
+            guard selectionFields.isSubset(of: fieldNames),
+                  let transport = fields["transport"] as? String,
+                  DiagnosticPasteTransport(rawValue: transport) != nil,
+                  let selection = fields["selection"] as? String,
+                  DiagnosticPasteSelection(rawValue: selection) != nil,
+                  let restoration = fields["selection_restoration"] as? String,
+                  DiagnosticPasteSelectionRestoration(rawValue: restoration) != nil
+            else { return false }
+        }
+        if let origin = fields["interruption_origin"] {
+            guard let value = origin as? String, DiagnosticPasteInterruptionOrigin(rawValue: value) != nil
+            else { return false }
+        }
+        if let outcome = fields["ax_replacement_outcome"] {
+            guard let value = outcome as? String, DiagnosticPasteAccessibilityOutcome(rawValue: value) != nil
+            else { return false }
+        }
         return ["planned_deletes", "delete_attempts"].allSatisfy { key in
             guard let value = fields[key] as? NSNumber else { return false }
             return (0...10_000).contains(value.doubleValue)

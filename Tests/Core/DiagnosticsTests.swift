@@ -231,6 +231,51 @@ struct DiagnosticsTests {
         ])
     }
 
+    @Test func terminalAccessibilityReplacementRecordsOnlyClosedOutcomeAndBoundedTiming() throws {
+        for outcome in DiagnosticPasteAccessibilityOutcome.allCases {
+            let event = DiagnosticEvent.accessibilityReplacement(outcome: outcome, durationMilliseconds: .max)
+            let record = DiagnosticRecord(event: event, timestamp: "2026-09-22T10:00:00.000Z",
+                elapsedMilliseconds: 1, sessionIdentifier: "00000000-0000-4000-8000-000000000001", sequence: 1)
+            let object = try #require(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+            let fields = try #require(object["fields"] as? [String: Any])
+            #expect(object["event"] as? String == "accessibility_replacement")
+            #expect(object["category"] as? String == "integration")
+            #expect(Set(fields.keys) == ["outcome", "duration_ms"])
+            #expect(fields["outcome"] as? String == outcome.rawValue)
+            #expect(fields["duration_ms"] as? Int == 600_000)
+            #expect(event.defaultLevel == (outcome == .delivered ? .info : .warning))
+            #expect(!event.requiresSynchronousWrite)
+        }
+        #expect(DiagnosticEvent.accessibilityReplacement(outcome: .ambiguous,
+            durationMilliseconds: .min).fields["duration_ms"] == .integer(0))
+    }
+
+    @Test func accessibilityReplacementProgressContainsOnlyWriteAttemptAndClosedRestoration() throws {
+        for textWriteAttempted in [false, true] {
+            for restoration in DiagnosticPasteSelectionRestoration.allCases {
+                let event = DiagnosticEvent.accessibilityReplacement(
+                    outcome: .ambiguous, durationMilliseconds: 42,
+                    progress: .init(textWriteAttempted: textWriteAttempted,
+                        selectionRestoration: restoration))
+                let record = DiagnosticRecord(event: event, timestamp: "2026-09-22T10:00:00.000Z",
+                    elapsedMilliseconds: 1,
+                    sessionIdentifier: "00000000-0000-4000-8000-000000000001", sequence: 1)
+                let object = try #require(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+                let fields = try #require(object["fields"] as? [String: Any])
+                #expect(Set(fields.keys) == [
+                    "outcome", "duration_ms", "text_write_attempted", "selection_restoration",
+                ])
+                #expect(fields["text_write_attempted"] as? Bool == textWriteAttempted)
+                #expect(fields["selection_restoration"] as? String == restoration.rawValue)
+                #expect(!event.requiresSynchronousWrite)
+            }
+        }
+        let legacy = DiagnosticEvent.accessibilityReplacement(outcome: .rejected,
+            durationMilliseconds: 0)
+        #expect(legacy.fields["text_write_attempted"] == nil)
+        #expect(legacy.fields["selection_restoration"] == nil)
+    }
+
     @Test func pasteDiagnosticsContainOnlyClosedOutcomesAndBoundedTiming() throws {
         for outcome in DiagnosticPasteOutcome.allCases {
             for restoration in DiagnosticPasteboardRestoration.allCases {
@@ -294,6 +339,54 @@ struct DiagnosticsTests {
         #expect(delivered.fields["paste_posted"] == .boolean(true))
         #expect(delivered.fields["delete_attempts"] == .integer(7))
         #expect(delivered.fields["reason"] == .string("none"))
+    }
+
+    @Test func pasteSelectionProgressContainsOnlyClosedContentFreeFacts() throws {
+        for transport in DiagnosticPasteTransport.allCases {
+            for selection in DiagnosticPasteSelection.allCases {
+                for restoration in DiagnosticPasteSelectionRestoration.allCases {
+                    for origin in DiagnosticPasteInterruptionOrigin.allCases {
+                        let event = DiagnosticEvent.pasteDelivery(
+                            outcome: .interrupted, restoration: .superseded,
+                            durationMilliseconds: 30, hadFingerprint: true,
+                            progress: .init(stage: .selectionValidation, reason: .selectionChanged,
+                                transport: transport, selection: selection,
+                                selectionRestoration: restoration, interruptionOrigin: origin))
+                        let record = DiagnosticRecord(event: event, timestamp: "2026-09-22T10:00:00.000Z",
+                            elapsedMilliseconds: 1,
+                            sessionIdentifier: "00000000-0000-4000-8000-000000000001", sequence: 1)
+                        let object = try #require(
+                            JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+                        let fields = try #require(object["fields"] as? [String: Any])
+                        #expect(Set(fields.keys) == ["outcome", "restoration", "duration_ms", "had_fingerprint",
+                            "stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
+                            "transport", "selection", "selection_restoration", "interruption_origin"])
+                        #expect(fields["transport"] as? String == transport.rawValue)
+                        #expect(fields["selection"] as? String == selection.rawValue)
+                        #expect(fields["selection_restoration"] as? String == restoration.rawValue)
+                        #expect(fields["interruption_origin"] as? String == origin.rawValue)
+                        #expect(!event.requiresSynchronousWrite)
+                    }
+                }
+            }
+        }
+        let legacyProgress = DiagnosticEvent.pasteDelivery(
+            outcome: .interrupted, restoration: .notBorrowed, durationMilliseconds: 0,
+            hadFingerprint: false,
+            progress: .init(selection: .rejected, selectionRestoration: .failed))
+        #expect(legacyProgress.fields["transport"] == nil)
+        #expect(legacyProgress.fields["selection"] == nil)
+        #expect(legacyProgress.fields["selection_restoration"] == nil)
+        #expect(legacyProgress.fields["interruption_origin"] == nil)
+        #expect(legacyProgress.fields["ax_replacement_outcome"] == nil)
+        for outcome in DiagnosticPasteAccessibilityOutcome.allCases {
+            let event = DiagnosticEvent.pasteDelivery(
+                outcome: .interrupted, restoration: .notBorrowed, durationMilliseconds: 0,
+                hadFingerprint: false, progress: .init(accessibilityOutcome: outcome))
+            #expect(event.fields["ax_replacement_outcome"] == .string(outcome.rawValue))
+            #expect(Set(event.fields.keys) == ["outcome", "restoration", "duration_ms", "had_fingerprint",
+                "stage", "reason", "planned_deletes", "delete_attempts", "paste_posted", "ax_replacement_outcome"])
+        }
     }
 
     @Test func expansionAccessibilityPersistsOnlyClosedContentFreeFacts() throws {

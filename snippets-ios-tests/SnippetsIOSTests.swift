@@ -1924,6 +1924,82 @@ final class SnippetsIOSTests: XCTestCase {
         }
     }
 
+    func testAccessibilityReplacementDiagnosticsExportAndRejectUnsafeFields() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        for outcome in DiagnosticPasteAccessibilityOutcome.allCases {
+            let event = DiagnosticEvent.accessibilityReplacement(outcome: outcome, durationMilliseconds: 20)
+            service.emit(event, level: event.defaultLevel, synchronous: false)
+        }
+        for textWriteAttempted in [false, true] {
+            for restoration in DiagnosticPasteSelectionRestoration.allCases {
+                let event = DiagnosticEvent.accessibilityReplacement(outcome: .ambiguous,
+                    durationMilliseconds: 20,
+                    progress: .init(textWriteAttempted: textWriteAttempted,
+                        selectionRestoration: restoration))
+                service.emit(event, level: event.defaultLevel, synchronous: false)
+            }
+        }
+        let exportURL = rootURL.appendingPathComponent("accessibility-replacement-export.jsonl")
+        _ = try await service.export(to: exportURL)
+        let exported = try String(contentsOf: exportURL, encoding: .utf8)
+        XCTAssertTrue(exported.contains("\"event\":\"accessibility_replacement\""))
+        for outcome in DiagnosticPasteAccessibilityOutcome.allCases {
+            XCTAssertTrue(exported.contains("\"outcome\":\"\(outcome.rawValue)\""))
+        }
+        XCTAssertTrue(exported.contains("\"text_write_attempted\":true"))
+        XCTAssertTrue(exported.contains("\"text_write_attempted\":false"))
+        for restoration in DiagnosticPasteSelectionRestoration.allCases {
+            XCTAssertTrue(exported.contains("\"selection_restoration\":\"\(restoration.rawValue)\""))
+        }
+
+        let record = DiagnosticRecord(
+            event: .accessibilityReplacement(outcome: .ambiguous, durationMilliseconds: 20,
+                progress: .init(textWriteAttempted: true)),
+            timestamp: "2026-09-22T10:00:00.000Z", elapsedMilliseconds: 1,
+            sessionIdentifier: "00000000-0000-4000-8000-000000000001", sequence: 1)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        for variant in 0..<20 {
+            var object = original
+            var fields = try XCTUnwrap(object["fields"] as? [String: Any])
+            switch variant {
+            case 0: fields["outcome"] = "PRIVATE-BODY-SENTINEL"
+            case 1: fields["outcome"] = true
+            case 2: fields["duration_ms"] = true
+            case 3: fields["duration_ms"] = "20"
+            case 4: fields["duration_ms"] = -1
+            case 5: fields["duration_ms"] = 600_001
+            case 6: fields["duration_ms"] = 1.5
+            case 7: fields.removeValue(forKey: "outcome")
+            case 8: fields.removeValue(forKey: "duration_ms")
+            case 9: fields["body"] = "PRIVATE-BODY-SENTINEL"
+            case 10: fields["source_pid"] = 123
+            case 11: fields["text_write_attempted"] = "true"
+            case 12: fields["text_write_attempted"] = 1
+            case 13: fields["text_write_attempted"] = NSNull()
+            case 14: fields["selection_restoration"] = "PRIVATE-BODY-SENTINEL"
+            case 15: fields["selection_restoration"] = false
+            case 16: fields.removeValue(forKey: "text_write_attempted")
+            case 17: fields.removeValue(forKey: "selection_restoration")
+            case 18: fields["selected_text"] = "PRIVATE-BODY-SENTINEL"
+            default: fields["selection_location"] = 123
+            }
+            object["fields"] = fields
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            let injectedURL = SnippetStorageLocations.diagnosticsLogsFolderURL
+                .appendingPathComponent("snippets-accessibility-injected.jsonl")
+            try data.write(to: injectedURL)
+            let destination = rootURL.appendingPathComponent("rejected-accessibility-\(variant).jsonl")
+            do {
+                _ = try await service.export(to: destination)
+                XCTFail("Invalid Accessibility replacement diagnostics must be rejected")
+            } catch DiagnosticsExportError.corruptLog {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            }
+            try FileManager.default.removeItem(at: injectedURL)
+        }
+    }
+
     func testPasteDiagnosticsExportAndRejectUnexpectedFieldsAndTypes() async throws {
         let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
         // Legacy records remain exportable alongside complete new progress records.
@@ -1945,6 +2021,33 @@ final class SnippetsIOSTests: XCTestCase {
                 service.emit(event, level: event.defaultLevel, synchronous: false)
             }
         }
+        for transport in DiagnosticPasteTransport.allCases {
+            for selection in DiagnosticPasteSelection.allCases {
+                for restoration in DiagnosticPasteSelectionRestoration.allCases {
+                    for origin in DiagnosticPasteInterruptionOrigin.allCases {
+                        let event = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .superseded,
+                            durationMilliseconds: 30, hadFingerprint: true,
+                            progress: .init(stage: .selectionValidation, reason: .selectionChanged,
+                                transport: transport, selection: selection,
+                                selectionRestoration: restoration, interruptionOrigin: origin))
+                        service.emit(event, level: event.defaultLevel, synchronous: false)
+                    }
+                }
+            }
+        }
+        // Origin can be added to the previous progress schema independently of transport.
+        for origin in DiagnosticPasteInterruptionOrigin.allCases {
+            let event = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                durationMilliseconds: 1, hadFingerprint: false,
+                progress: .init(reason: .unmarkedKeyDown, interruptionOrigin: origin))
+            service.emit(event, level: event.defaultLevel, synchronous: false)
+        }
+        for outcome in DiagnosticPasteAccessibilityOutcome.allCases {
+            let event = DiagnosticEvent.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
+                durationMilliseconds: 1, hadFingerprint: false,
+                progress: .init(accessibilityOutcome: outcome))
+            service.emit(event, level: event.defaultLevel, synchronous: false)
+        }
         let exportedURL = rootURL.appendingPathComponent("paste-export.jsonl")
         _ = try await service.export(to: exportedURL)
         let exported = try String(contentsOf: exportedURL, encoding: .utf8)
@@ -1961,18 +2064,36 @@ final class SnippetsIOSTests: XCTestCase {
         }
         XCTAssertTrue(exported.contains("\"delete_attempts\":1"))
         XCTAssertTrue(exported.contains("\"paste_posted\":false"))
+        for transport in DiagnosticPasteTransport.allCases {
+            XCTAssertTrue(exported.contains("\"transport\":\"\(transport.rawValue)\""))
+        }
+        for selection in DiagnosticPasteSelection.allCases {
+            XCTAssertTrue(exported.contains("\"selection\":\"\(selection.rawValue)\""))
+        }
+        for restoration in DiagnosticPasteSelectionRestoration.allCases {
+            XCTAssertTrue(exported.contains("\"selection_restoration\":\"\(restoration.rawValue)\""))
+        }
+        for origin in DiagnosticPasteInterruptionOrigin.allCases {
+            XCTAssertTrue(exported.contains("\"interruption_origin\":\"\(origin.rawValue)\""))
+        }
+        for outcome in DiagnosticPasteAccessibilityOutcome.allCases {
+            XCTAssertTrue(exported.contains("\"ax_replacement_outcome\":\"\(outcome.rawValue)\""))
+        }
 
         let record = DiagnosticRecord(
             event: .pasteDelivery(outcome: .timedOut, restoration: .restored,
                 durationMilliseconds: 1200, hadFingerprint: false,
                 progress: .init(stage: .confirmation, reason: .confirmationTimedOut,
-                                plannedDeletes: 7, deleteAttempts: 7, pastePosted: true)),
+                    plannedDeletes: 7, deleteAttempts: 7, pastePosted: true,
+                    transport: .selectionPaste, selection: .verified,
+                    selectionRestoration: .notNeeded, interruptionOrigin: .otherProcess,
+                    accessibilityOutcome: .unavailable)),
             timestamp: "2026-09-15T10:00:00.000Z", elapsedMilliseconds: 1,
             sessionIdentifier: "00000000-0000-4000-8000-000000000001", sequence: 1)
         let original = try XCTUnwrap(
             JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
         // The new schema must remain fail-closed for extra fields, wrong types, and omissions.
-        for variant in 0..<14 {
+        for variant in 0..<31 {
             var object = original
             var fields = try XCTUnwrap(object["fields"] as? [String: Any])
             switch variant {
@@ -1989,7 +2110,35 @@ final class SnippetsIOSTests: XCTestCase {
             case 10: fields.removeValue(forKey: "reason")
             case 11: fields["planned_deletes"] = 1.5
             case 12: fields["outcome"] = "unknown"
-            default: fields["duration_ms"] = -1
+            case 13: fields["duration_ms"] = -1
+            case 14: fields["transport"] = "PRIVATE-APP-NAME"
+            case 15: fields["selection"] = "PRIVATE-BODY-SENTINEL"
+            case 16: fields["selection_restoration"] = "unknown"
+            case 17: fields["transport"] = true
+            case 18: fields["selection"] = 1
+            case 19: fields["selection_restoration"] = false
+            case 20: fields.removeValue(forKey: "transport")
+            case 21: fields.removeValue(forKey: "selection")
+            case 22: fields.removeValue(forKey: "selection_restoration")
+            case 23: fields["interruption_origin"] = "PRIVATE-PROCESS-IDENTIFIER"
+            case 24: fields["interruption_origin"] = 123
+            case 25:
+                for key in ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted"] {
+                    fields.removeValue(forKey: key)
+                }
+            case 26:
+                for key in ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
+                            "transport", "selection", "selection_restoration"] {
+                    fields.removeValue(forKey: key)
+                }
+            case 27: fields["source_pid"] = 123
+            case 28: fields["ax_replacement_outcome"] = "PRIVATE-BODY-SENTINEL"
+            case 29: fields["ax_replacement_outcome"] = true
+            default:
+                for key in ["stage", "reason", "planned_deletes", "delete_attempts", "paste_posted",
+                            "transport", "selection", "selection_restoration", "interruption_origin"] {
+                    fields.removeValue(forKey: key)
+                }
             }
             object["fields"] = fields
             var data = try JSONSerialization.data(withJSONObject: object)
