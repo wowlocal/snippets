@@ -38,6 +38,10 @@ final class ClipboardHistoryPanelController: NSObject,
     NSWindowDelegate
 {
     private let service: ClipboardHistoryService
+    private let searchPipeline: ClipboardHistorySearchPipeline
+    private(set) var isSearchPending = false
+    private var pendingSelectionAction: (() -> Void)?
+    private var searchInput: (query: String, entries: [ClipboardHistoryEntry])?
     private let presentActionsMenu: (NSMenu, NSView) -> Void
     private let panel: ClipboardHistoryPanel
     private let searchField = PickerSearchField()
@@ -83,12 +87,14 @@ final class ClipboardHistoryPanelController: NSObject,
 
     init(
         service: ClipboardHistoryService,
+        searchPipeline: ClipboardHistorySearchPipeline = ClipboardHistorySearchPipeline(),
         presentActionsMenu: @escaping (NSMenu, NSView) -> Void = { menu, anchor in
             menu.popUp(positioning: nil,
                 at: NSPoint(x: anchor.bounds.minX, y: anchor.bounds.maxY + 4), in: anchor)
         }
     ) {
         self.service = service
+        self.searchPipeline = searchPipeline
         self.presentActionsMenu = presentActionsMenu
         panel = ClipboardHistoryPanel(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 420),
@@ -157,6 +163,10 @@ final class ClipboardHistoryPanelController: NSObject,
         guard let dismissal = dismissalAction, !isEndingPresentation else { return }
         isEndingPresentation = true
         presentationGeneration += 1
+        searchPipeline.cancel(clearCache: true)
+        isSearchPending = false
+        pendingSelectionAction = nil
+        searchInput = nil
         let trackingMenu = activeActionsMenu
         activeActionsMenu = nil
         pendingMenuAction = nil
@@ -410,11 +420,50 @@ final class ClipboardHistoryPanelController: NSObject,
     }
 
     private func reloadEntries(preservingSelection: Bool) {
+        // Empty-query access only expires old entries and returns the current
+        // value array. Folding/scanning nonempty queries belongs to the worker.
+        let entries = service.search("")
+        let query = searchField.stringValue
+        if let input = searchInput, input.query == query, input.entries == entries {
+            // Persistence/status notifications must not cancel a fast Return that
+            // is already waiting for these exact results.
+            updateStatus()
+            updateSelection(resetPreviewScroll: false)
+            return
+        }
+        searchInput = (query, entries)
+        searchPipeline.cancel()
+        pendingSelectionAction = nil
+        if query.allSatisfy(\.isWhitespace) {
+            searchPipeline.cancel(clearCache: true)
+            isSearchPending = false
+            applyEntries(entries, preservingSelection: preservingSelection)
+            return
+        }
+        let presentation = presentationGeneration
+        isSearchPending = true
+        updateSelection(resetPreviewScroll: false)
+        searchPipeline.submit(query: query, entries: entries) { [weak self] response in
+            Task { @MainActor [weak self] in
+                guard let self, self.dismissalAction != nil, self.service.isEnabled,
+                      self.presentationGeneration == presentation,
+                      self.searchField.stringValue == query,
+                      self.searchPipeline.isCurrent(response.generation) else { return }
+                self.isSearchPending = false
+                self.applyEntries(response.entries, preservingSelection: preservingSelection)
+                let action = self.pendingSelectionAction
+                self.pendingSelectionAction = nil
+                action?()
+            }
+        }
+    }
+
+    private func applyEntries(_ entries: [ClipboardHistoryEntry], preservingSelection: Bool) {
         let selectedID = preservingSelection ? selectedEntry?.id : nil
         let previousRow = preservingSelection ? tableView.selectedRow : 0
         let previousPreviewID = selectedEntry?.id
         isReloading = true
-        items = service.search(searchField.stringValue)
+        items = entries
         tableView.reloadData()
         if !items.isEmpty {
             let row = selectedID.flatMap { id in items.firstIndex { $0.id == id } }
@@ -430,9 +479,13 @@ final class ClipboardHistoryPanelController: NSObject,
             ? "Your copied text will appear here.\nCopy something to get started."
             : "No matching clipboard entries."
         countLabel.stringValue = "\(items.count) \(items.count == 1 ? "item" : "items")"
+        updateStatus()
+        updateSelection(resetPreviewScroll: previousPreviewID != selectedEntry?.id)
+    }
+
+    private func updateStatus() {
         statusLabel.stringValue = service.statusMessage ?? ""
         statusLabel.isHidden = service.statusMessage == nil
-        updateSelection(resetPreviewScroll: previousPreviewID != selectedEntry?.id)
     }
 
     private var selectedEntry: ClipboardHistoryEntry? {
@@ -452,7 +505,7 @@ final class ClipboardHistoryPanelController: NSObject,
         primaryButton.title = copies ? "Copy ↩" : "Paste ↩"
         primaryButton.setAccessibilityLabel(copies ? "Copy selected clipboard entry" : "Paste selected clipboard entry")
         for button in [primaryButton, actionsButton] {
-            button.isEnabled = selected != nil
+            button.isEnabled = selected != nil && !isSearchPending
         }
     }
 
@@ -467,6 +520,12 @@ final class ClipboardHistoryPanelController: NSObject,
     @objc private func createSnippet() { finishSelection(using: createAction) }
 
     private func finishSelection(using action: ((ClipboardHistoryEntry) -> Void)?) {
+        if isSearchPending {
+            // A quick Return after typing belongs to the new results. Keep one
+            // intent instead of pasting a stale row or dropping the keystroke.
+            pendingSelectionAction = { [weak self] in self?.finishSelection(using: action) }
+            return
+        }
         guard let entry = selectedEntry, let action else {
             NSSound.beep()
             return
@@ -480,7 +539,7 @@ final class ClipboardHistoryPanelController: NSObject,
     }
 
     @objc private func deleteSelection() {
-        guard let selectedEntry else { return }
+        guard !isSearchPending, let selectedEntry else { return }
         service.delete(id: selectedEntry.id)
     }
 
@@ -493,7 +552,7 @@ final class ClipboardHistoryPanelController: NSObject,
         let context = selectedEntry.map {
             ActionsMenuContext(entryID: $0.id, presentationGeneration: presentationGeneration)
         }
-        let hasSelection = context != nil && panel.isVisible && dismissalAction != nil && service.isEnabled
+        let hasSelection = !isSearchPending && context != nil && panel.isVisible && dismissalAction != nil && service.isEnabled
         func add(
             _ title: String,
             command: ActionsMenuCommand,
@@ -525,6 +584,10 @@ final class ClipboardHistoryPanelController: NSObject,
     }
 
     @objc private func showActionsMenu() {
+        if isSearchPending {
+            pendingSelectionAction = { [weak self] in self?.showActionsMenu() }
+            return
+        }
         guard panel.isVisible, dismissalAction != nil, selectedEntry != nil,
               activeActionsMenu == nil else { return }
         let menu = makeActionsMenu()
@@ -676,9 +739,8 @@ final class ClipboardHistoryPanelController: NSObject,
             if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
             // Missing rows and held-key repeats still belong to the picker, but
             // must never fall through to a different app command or paste twice.
-            guard !event.isARepeat, items.indices.contains(row) else { return true }
-            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            performPrimaryAction()
+            guard !event.isARepeat else { return true }
+            selectResult(at: row)
             return true
         }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
@@ -706,6 +768,16 @@ final class ClipboardHistoryPanelController: NSObject,
             return true
         }
         return false
+    }
+
+    private func selectResult(at row: Int) {
+        if isSearchPending {
+            pendingSelectionAction = { [weak self] in self?.selectResult(at: row) }
+            return
+        }
+        guard items.indices.contains(row) else { return }
+        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        performPrimaryAction()
     }
 
     private func removeEventMonitors() {

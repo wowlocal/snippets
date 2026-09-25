@@ -6,6 +6,41 @@ import AppKit
 
 @MainActor
 final class SuggestionPanelKeyboardTests: XCTestCase {
+    func testSecurePickerHighlightsOnlyMaterializedRowsAndInvalidatesOnQueryChange() throws {
+        let controller = SuggestionPanelController()
+        let snippets = (0..<400).map { Snippet(name: "Project \($0)", keyword: "project.\($0)", content: "") }
+        func results(_ query: String) -> [SuggestionItem] {
+            snippets.map { snippet in
+                SuggestionItem(snippet: snippet, score: 1,
+                    highlightSource: .init(query: .init(query), name: .init(snippet.displayName),
+                                           keyword: .init(snippet.normalizedKeyword)))
+            }
+        }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        controller.showSecurePaste(items: results("pr"), anchorFocusedElement: nil, copiesToClipboard: true,
+            onSearch: results, onSelect: { _ in }, onCancel: { _ in })
+        defer { controller.dismissSecurePasteWithoutCallback() }
+        let window = try XCTUnwrap(NSApp.windows.first { !initialWindows.contains($0.windowNumber) && $0.isVisible })
+        let views = descendants(of: try XCTUnwrap(window.contentView))
+        let table = try XCTUnwrap(views.compactMap { $0 as? NSTableView }.first)
+        let search = try XCTUnwrap(views.compactMap { $0 as? NSSearchField }.first)
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(controller.items.count, 400, "All rows must remain available for scrolling and selection")
+        XCTAssertLessThan(controller.highlightBuildCount, 50, "Offscreen rows must not build highlight paths")
+        table.scrollRowToVisible(300)
+        table.layoutSubtreeIfNeeded()
+        let highlights = controller.matchHighlights(at: 300)
+        XCTAssertEqual(highlights.name, FuzzyMatch.score(query: "pr", target: snippets[300].displayName).matchedRanges)
+        let count = controller.highlightBuildCount
+        XCTAssertEqual(controller.matchHighlights(at: 300), highlights)
+        XCTAssertEqual(controller.highlightBuildCount, count)
+        search.stringValue = "ct"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        XCTAssertEqual(controller.matchHighlights(at: 300).name,
+                       FuzzyMatch.score(query: "ct", target: snippets[300].displayName).matchedRanges)
+        XCTAssertNotEqual(controller.matchHighlights(at: 300), highlights)
+    }
+
     func testExplicitFieldSelectionConsumesClickAndDoesNotBecomeKey() throws {
         let controller = SecurePasteFieldSelectionController()
         let initialWindows = Set(NSApp.windows.map(\.windowNumber))

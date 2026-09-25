@@ -1,5 +1,22 @@
 import Foundation
 
+nonisolated struct SuggestionHighlights: Equatable, Sendable {
+    let name: [NSRange]
+    let keyword: [NSRange]
+}
+
+nonisolated struct SuggestionHighlightSource: Equatable, Sendable {
+    let query: FuzzyMatch.PreparedQuery
+    let name: FuzzyMatch.PreparedTarget
+    let keyword: FuzzyMatch.PreparedTarget
+
+    func resolve(workspace: inout FuzzyMatch.Workspace) -> SuggestionHighlights {
+        SuggestionHighlights(
+            name: FuzzyMatch.score(query: query, target: name, workspace: &workspace).matchedRanges,
+            keyword: FuzzyMatch.score(query: query, target: keyword, workspace: &workspace).matchedRanges)
+    }
+}
+
 nonisolated struct SuggestionItem: Equatable, Sendable {
     let snippet: Snippet
     let isSecure: Bool
@@ -10,6 +27,7 @@ nonisolated struct SuggestionItem: Equatable, Sendable {
     let keywordRank: Int
     let bindingWeight: Double
     let frecency: Double
+    let highlightSource: SuggestionHighlightSource?
 
     init(
         snippet: Snippet,
@@ -19,7 +37,8 @@ nonisolated struct SuggestionItem: Equatable, Sendable {
         keywordMatchRanges: [NSRange] = [],
         keywordRank: Int = 0,
         bindingWeight: Double = 0,
-        frecency: Double = 0
+        frecency: Double = 0,
+        highlightSource: SuggestionHighlightSource? = nil
     ) {
         self.snippet = snippet
         self.isSecure = isSecure
@@ -29,6 +48,7 @@ nonisolated struct SuggestionItem: Equatable, Sendable {
         self.keywordRank = keywordRank
         self.bindingWeight = bindingWeight
         self.frecency = frecency
+        self.highlightSource = highlightSource
     }
 }
 

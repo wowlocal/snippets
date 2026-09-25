@@ -76,7 +76,7 @@ final class SnippetListViewController: UIViewController {
         searchPipeline.cancelPending()
         let searchText = searchController.searchBar.text ?? ""
 
-        let existingTagKeys = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
+        let existingTagKeys = environment.store.allTagKeys()
         activeTagKeys.formIntersection(existingTagKeys)
 
         let snippets = environment.store.snippetsSortedForDisplay()
@@ -115,7 +115,7 @@ final class SnippetListViewController: UIViewController {
 
     private func reloadSearchResults() {
         let searchText = searchController.searchBar.text ?? ""
-        let existingTagKeys = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
+        let existingTagKeys = environment.store.allTagKeys()
         activeTagKeys.formIntersection(existingTagKeys)
 
         let snippets = environment.store.snippetsSortedForDisplay()

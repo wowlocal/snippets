@@ -12,10 +12,14 @@ nonisolated struct FuzzyMatch {
         static let noMatch = Result(score: 0, matched: false, matchedRanges: [])
     }
 
-    struct PreparedQuery: Sendable {
+    struct PreparedQuery: Equatable, Sendable {
         fileprivate let characters: [Character]
         fileprivate let mask: ASCIIMask
         var isEmpty: Bool { characters.isEmpty }
+
+        func extends(_ previous: PreparedQuery) -> Bool {
+            characters.starts(with: previous.characters)
+        }
 
         init(_ text: String, locale: Locale = .current) {
             let normalized = normalize(text, locale: locale)
@@ -24,7 +28,7 @@ nonisolated struct FuzzyMatch {
         }
     }
 
-    struct PreparedTarget: Sendable {
+    struct PreparedTarget: Equatable, Sendable {
         fileprivate let characters: [Character]
         fileprivate let ranges: [NSRange]
         fileprivate let wordStarts: [Bool]
@@ -66,7 +70,7 @@ nonisolated struct FuzzyMatch {
         let parent: Int
     }
 
-    fileprivate struct ASCIIMask: Sendable {
+    fileprivate struct ASCIIMask: Equatable, Sendable {
         var low: UInt64 = 0
         var high: UInt64 = 0
 
@@ -95,17 +99,7 @@ nonisolated struct FuzzyMatch {
     ) -> Result {
         let pattern = query.characters
         guard !pattern.isEmpty else { return Result(score: 0, matched: true, matchedRanges: []) }
-        guard pattern.count <= target.characters.count,
-              target.mask.contains(query.mask) else { return .noMatch }
-
-        // A subsequence probe rejects wrong order/repetitions without scoring. Walk
-        // occurrence lists instead of scanning every suffix for every partial match.
-        var earliest = -1
-        for character in pattern {
-            guard let positions = target.positions[character],
-                  let index = positions.first(where: { $0 > earliest }) else { return .noMatch }
-            earliest = index
-        }
+        guard matches(query: query, target: target) else { return .noMatch }
 
         workspace.previous.removeAll(keepingCapacity: true)
         workspace.next.removeAll(keepingCapacity: true)
@@ -175,6 +169,32 @@ nonisolated struct FuzzyMatch {
         }
         ranges.reverse()
         return Result(score: best.score, matched: true, matchedRanges: ranges)
+    }
+
+    /// Library filtering needs only membership, not a score or highlight path.
+    /// This is also the rejection pass used by the ranked suggestion matcher.
+    static func matches(query: PreparedQuery, target: PreparedTarget) -> Bool {
+        guard query.characters.count <= target.characters.count,
+              target.mask.contains(query.mask) else { return false }
+        var earliest = -1
+        for character in query.characters {
+            guard let positions = target.positions[character],
+                  let index = positions.first(where: { $0 > earliest }) else { return false }
+            earliest = index
+        }
+        return true
+    }
+
+    /// Presence-only search over a pre-folded library field. Retains the existing
+    /// normalized String without allocating score/range/occurrence tables for it.
+    static func matches(query: PreparedQuery, foldedTarget: String) -> Bool {
+        if query.isEmpty { return true }
+        var next = 0
+        for character in foldedTarget where character == query.characters[next] {
+            next += 1
+            if next == query.characters.count { return true }
+        }
+        return false
     }
 
     private static func appendTrace(

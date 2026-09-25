@@ -50,7 +50,8 @@ extension ViewController {
                 activeTagKeys: tagFilterKeys
             )
         } else {
-            let evaluation = searchIndex.snapshot(for: sorted).evaluate(
+            let evaluation = searchIndex.evaluate(
+                in: sorted,
                 searchText: searchText,
                 activeTagKeys: tagFilterKeys
             )
@@ -301,7 +302,7 @@ extension ViewController {
         // filter the user is about to restore. The controlTextDidEndEditing
         // reload prunes once editing is done.
         guard !isEditingDetails else { return }
-        let existingKeys = Set(store.allTags().map { SnippetTagging.filterKey(for: $0) })
+        let existingKeys = store.allTagKeys()
         let pruned = activeTagFilterKeys.intersection(existingKeys)
         if pruned != activeTagFilterKeys {
             activeTagFilterKeys = pruned

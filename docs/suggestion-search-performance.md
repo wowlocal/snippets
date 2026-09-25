@@ -4,6 +4,10 @@ Follow-up to [the browser typing audit](expansion-performance-audit.md).
 Baseline: `71ae67330e01fa4c285b42c600857eb0b0cb0e65`, including the earlier AX observer
 and duplicate-render fixes. This change speeds up the CPU work for a **changed** query.
 
+The subsequent [library, clipboard, and picker update](library-search-performance.md)
+extends the work to the other search surfaces and adds lazy Command-Backslash highlights.
+The description and measurements below record the earlier expansion-only change.
+
 ## Ideas examined
 
 | Implementation | Relevant approach | Applied here |

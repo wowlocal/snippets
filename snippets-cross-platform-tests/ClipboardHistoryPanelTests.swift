@@ -6,6 +6,76 @@ import AppKit
 
 @MainActor
 final class ClipboardHistoryPanelTests: XCTestCase {
+    func testFastReturnWaitsForCurrentSearchAndDoesNotCopyStaleSelection() async throws {
+        let now = Date()
+        let old = ClipboardHistoryEntry(text: "Ghost", copiedAt: now)
+        let expected = ClipboardHistoryEntry(text: "Notes", copiedAt: now.addingTimeInterval(-1))
+        let fixture = await makeFixture(entries: [old, expected])
+        defer { fixture.cleanup() }
+        let worker = DispatchQueue(label: "ClipboardHistoryPanelTests.blockedSearch")
+        let gate = DispatchSemaphore(value: 0)
+        worker.async { gate.wait() }
+        defer { gate.signal() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service,
+            searchPipeline: ClipboardHistorySearchPipeline(queue: worker))
+        defer { controller.dismiss() }
+        let copied = expectation(description: "fresh selection delivered")
+        var copyCount = 0
+        controller.show(canPaste: false, onPaste: { _ in XCTFail("Unexpected paste") }, onCopy: {
+            XCTAssertEqual($0, expected)
+            XCTAssertFalse(controller.isVisible)
+            copyCount += 1
+            copied.fulfill()
+        }, onCreateSnippet: { _ in XCTFail("Unexpected create") }, onDismiss: { _ in })
+        let window = try pickerWindow(excluding: initialWindows)
+        let search = try XCTUnwrap(descendants(of: try XCTUnwrap(window.contentView)).compactMap { $0 as? NSSearchField }.first)
+        search.stringValue = "notes"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        XCTAssertTrue(controller.isSearchPending)
+        try sendKey(code: 36, characters: "\r", to: window)
+        XCTAssertEqual(copyCount, 0, "The keyboard handler must return while the search worker is blocked")
+        fixture.service.primaryAction = .copy
+        gate.signal()
+        await fulfillment(of: [copied], timeout: 2)
+        XCTAssertEqual(copyCount, 1)
+    }
+
+    func testDismissalAndReopeningDiscardPendingSearchAndAcceptance() async throws {
+        let fixture = await makeFixture(entries: [.init(text: "Ghost"), .init(text: "Notes")])
+        defer { fixture.cleanup() }
+        let worker = DispatchQueue(label: "ClipboardHistoryPanelTests.oldSession")
+        let gate = DispatchSemaphore(value: 0)
+        worker.async { gate.wait() }
+        defer { gate.signal() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service,
+            searchPipeline: ClipboardHistorySearchPipeline(queue: worker))
+        defer { controller.dismiss() }
+        func show() {
+            controller.show(canPaste: false, onPaste: { _ in XCTFail("Unexpected paste") },
+                onCopy: { _ in XCTFail("An old acceptance cannot act in a new presentation") },
+                onCreateSnippet: { _ in XCTFail("Unexpected create") }, onDismiss: { _ in })
+        }
+        show()
+        let window = try pickerWindow(excluding: initialWindows)
+        let views = descendants(of: try XCTUnwrap(window.contentView))
+        let search = try XCTUnwrap(views.compactMap { $0 as? NSSearchField }.first)
+        let table = try XCTUnwrap(views.compactMap { $0 as? NSTableView }.first)
+        search.stringValue = "notes"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        try sendKey(code: 36, characters: "\r", to: window)
+        controller.dismiss()
+        show()
+        gate.signal()
+        let drained = expectation(description: "worker drained")
+        worker.async { DispatchQueue.main.async { drained.fulfill() } }
+        await fulfillment(of: [drained], timeout: 2)
+        XCTAssertTrue(controller.isVisible)
+        XCTAssertEqual(table.numberOfRows, 2)
+        XCTAssertEqual(search.stringValue, "")
+    }
+
     func testCommandKDefersExplicitPasteUntilMenuClosesWithCopyPreference() async throws {
         let entry = ClipboardHistoryEntry(text: "Menu paste")
         let fixture = await makeFixture(entries: [entry])
@@ -71,6 +141,7 @@ final class ClipboardHistoryPanelTests: XCTestCase {
             .compactMap { $0 as? NSSearchField }.first)
         search.stringValue = "Searchable"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        await waitForClipboardSearch(controller)
         try sendKey(code: 40, characters: "k", modifiers: .command, to: window)
         XCTAssertTrue(controller.isVisible)
         XCTAssertEqual(search.stringValue, "Searchable")
@@ -228,6 +299,7 @@ final class ClipboardHistoryPanelTests: XCTestCase {
         let table = try XCTUnwrap(views.compactMap { $0 as? NSTableView }.first)
         search.stringValue = "needle"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        await waitForClipboardSearch(controller)
         XCTAssertEqual(table.numberOfRows, 10)
 
         let ninthCell = try XCTUnwrap(controller.tableView(table, viewFor: table.tableColumns.first, row: 8))
@@ -458,10 +530,12 @@ final class ClipboardHistoryPanelTests: XCTestCase {
 
         search.stringValue = "  alpha  "
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        await waitForClipboardSearch(controller)
         XCTAssertEqual(table.numberOfRows, 1)
         XCTAssertEqual(preview.string, selected.text)
         XCTAssertTrue(controller.isVisible, "Spaces in a query must not choose a result")
         try sendKey(code: 51, characters: "\u{7f}", modifiers: .command, to: window)
+        await waitForClipboardSearch(controller)
         XCTAssertEqual(table.numberOfRows, 0)
         XCTAssertEqual(preview.string, "")
         XCTAssertFalse(fixture.service.entries.contains { $0.id == selected.id })
@@ -586,5 +660,14 @@ nonisolated private struct PanelTestStorage: ClipboardHistoryPersisting {
     func load() throws -> [ClipboardHistoryEntry] { entries }
     func save(_ entries: [ClipboardHistoryEntry]) throws {}
     func clear() throws {}
+}
+@MainActor
+func waitForClipboardSearch(_ controller: ClipboardHistoryPanelController,
+                            file: StaticString = #filePath, line: UInt = #line) async {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while controller.isSearchPending, ContinuousClock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertFalse(controller.isSearchPending, "Search did not finish", file: file, line: line)
 }
 #endif

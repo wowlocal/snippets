@@ -83,6 +83,8 @@ struct FuzzyMatchTests {
                 let result = FuzzyMatch.score(query: preparedQuery, target: preparedTarget, workspace: &workspace)
                 let expected = optimal(query, target, locale: locale)
                 #expect(expected.contains(result), "query=\(query), target=\(target)")
+                #expect(FuzzyMatch.matches(query: preparedQuery, target: preparedTarget) == result.matched)
+                #expect(FuzzyMatch.matches(query: preparedQuery, foldedTarget: target) == result.matched)
                 let scoreOnly = FuzzyMatch.score(query: preparedQuery, target: preparedTarget,
                                                 includingRanges: false, workspace: &workspace)
                 #expect(scoreOnly.score == result.score && scoreOnly.matched == result.matched)
@@ -105,6 +107,8 @@ struct FuzzyMatchTests {
                                                  target: .init(target, locale: locale), workspace: &workspace)
                     #expect(optimal(query, target, locale: locale).contains(result),
                             "locale=\(localeID), query=\(query), target=\(target)")
+                    let folded = target.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+                    #expect(FuzzyMatch.matches(query: .init(query, locale: locale), foldedTarget: folded) == result.matched)
                 }
             }
         }

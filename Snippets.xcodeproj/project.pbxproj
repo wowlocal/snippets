@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		28F100000000000000000002 /* PreparedSubstringSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F100000000000000000003 /* PreparedSubstringSearch.swift */; };
 		270SPK012F53000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 270SPK022F53000000000002 /* Sparkle */; };
 		27C110052F53000000000005 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110022F53000000000002 /* main.swift */; };
 		27C110062F53000000000006 /* Snippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110032F53000000000003 /* Snippet.swift */; };
@@ -85,6 +86,7 @@
 		28D000000000000000000004 /* DiagnosticsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D000000000000000000003 /* DiagnosticsService.swift */; };
 		28D000000000000000000008 /* CocoaLumberjack in Frameworks */ = {isa = PBXBuildFile; productRef = 28D000000000000000000006 /* CocoaLumberjack */; };
 		28D000000000000000000009 /* CocoaLumberjack in Frameworks */ = {isa = PBXBuildFile; productRef = 28D000000000000000000007 /* CocoaLumberjack */; };
+		28F100000000000000000001 /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C110042F53000000000004 /* FuzzyMatch.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -132,6 +134,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		28F100000000000000000003 /* PreparedSubstringSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = snippets/Core/PreparedSubstringSearch.swift; sourceTree = SOURCE_ROOT; };
 		272782D72F41F9F1000B9989 /* Snippets.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Snippets.app; path = "Snippets Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110012F53000000000001 /* snippets-cli */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "snippets-cli"; sourceTree = BUILT_PRODUCTS_DIR; };
 		27C110022F53000000000002 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -376,6 +379,7 @@
 				28A10000000000000000000D /* SecretStore.swift */,
 				28A10000000000000000000E /* Snippet.swift */,
 				28A10000000000000000002A /* SnippetSearchIndex.swift */,
+				28F100000000000000000003 /* PreparedSubstringSearch.swift */,
 				28A10000000000000000000F /* SnippetCrypto.swift */,
 				28A100000000000000000010 /* SnippetDeepLink.swift */,
 				28A100000000000000000011 /* SnippetLibraryCodec.swift */,
@@ -712,6 +716,8 @@
 				28A20000000000000000000D /* SecretStore.swift in Sources */,
 				28A20000000000000000000E /* Snippet.swift in Sources */,
 				28A20000000000000000002A /* SnippetSearchIndex.swift in Sources */,
+				28F100000000000000000001 /* FuzzyMatch.swift in Sources */,
+				28F100000000000000000002 /* PreparedSubstringSearch.swift in Sources */,
 				28A20000000000000000000F /* SnippetCrypto.swift in Sources */,
 				28A200000000000000000010 /* SnippetDeepLink.swift in Sources */,
 				28A200000000000000000011 /* SnippetLibraryCodec.swift in Sources */,

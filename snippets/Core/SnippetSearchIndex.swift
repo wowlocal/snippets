@@ -1,11 +1,54 @@
 import Foundation
 
+/// Presentation work shared by the library, tag controls, and search callers.
+/// Owned by SnippetStore on its actor; unchanged arrays share their storage.
+nonisolated struct SnippetLibraryProjection {
+    struct Snapshot {
+        let sorted: [Snippet]
+        let tagUsage: [(tag: String, count: Int)]
+        let tags: [String]
+        let tagKeys: Set<String>
+    }
+
+    private var ordinary: [Snippet] = []
+    private var secure: [Snippet] = []
+    private var localeIdentifier: String?
+    private var cached: Snapshot?
+    private(set) var buildCount = 0
+
+    mutating func snapshot(ordinary: [Snippet], secure: [Snippet], locale: Locale = .current) -> Snapshot {
+        if let cached, self.ordinary == ordinary, self.secure == secure,
+           localeIdentifier == locale.identifier { return cached }
+        let combined = ordinary + secure
+        var canonicalTags: [String: String] = [:]
+        var counts: [String: Int] = [:]
+        for snippet in combined {
+            for tag in snippet.tags {
+                let key = SnippetTagging.filterKey(for: tag)
+                if canonicalTags[key] == nil { canonicalTags[key] = tag }
+                counts[key, default: 0] += 1
+            }
+        }
+        let usage = canonicalTags.sorted {
+            $0.value.compare($1.value, options: [.caseInsensitive], locale: locale) == .orderedAscending
+        }.map { (tag: $0.value, count: counts[$0.key] ?? 0) }
+        let result = Snapshot(sorted: SnippetDisplayOrder.sorted(combined), tagUsage: usage,
+                              tags: usage.map(\.tag), tagKeys: Set(canonicalTags.keys))
+        self.ordinary = ordinary
+        self.secure = secure
+        localeIdentifier = locale.identifier
+        cached = result
+        buildCount += 1
+        return result
+    }
+}
+
 /// An immutable, ordered projection of the library's searchable fields.
 ///
 /// Building a snapshot folds user text once. Evaluating subsequent queries only walks
 /// those already-normalized strings. The snapshot contains the `Snippet` values supplied
 /// by the caller, including secure-shell values, but it never asks a vault for plaintext.
-nonisolated struct SnippetSearchSnapshot: Sendable {
+nonisolated final class SnippetSearchSnapshot: Sendable {
     nonisolated struct Evaluation: Sendable {
         let searchMatches: [Snippet]
         let snippets: [Snippet]
@@ -27,7 +70,8 @@ nonisolated struct SnippetSearchSnapshot: Sendable {
 
     private struct NormalizedEntry: Sendable {
         let source: Source
-        let searchableFields: [String]
+        let searchableFields: [PreparedSubstringSearch.Field]
+        let fuzzyMetadata: [String]
         let tagKeys: Set<String>
         let estimatedBytes: Int
     }
@@ -45,6 +89,7 @@ nonisolated struct SnippetSearchSnapshot: Sendable {
     private let localeIdentifier: String
     private let maximumNormalizedBytes: Int
     private let entries: [Entry]
+    private let sourceSnippets: [Snippet]
     private let normalizedEntriesByID: [UUID: NormalizedEntry]
 
     private init(
@@ -54,6 +99,7 @@ nonisolated struct SnippetSearchSnapshot: Sendable {
         previous: SnippetSearchSnapshot?
     ) {
         localeIdentifier = locale.identifier
+        sourceSnippets = snippets
         self.maximumNormalizedBytes = maximumNormalizedBytes
         let canReusePrevious = previous?.localeIdentifier == localeIdentifier
             && previous?.maximumNormalizedBytes == maximumNormalizedBytes
@@ -83,14 +129,20 @@ nonisolated struct SnippetSearchSnapshot: Sendable {
                 let searchableFields = fields.map {
                     $0.folding(options: Self.foldingOptions, locale: locale)
                 }
+                // An unnamed snippet displays its first body line. Do not turn
+                // that fallback into fuzzy body search: only explicit metadata.
+                let fuzzyMetadata = (snippet.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? [] : [searchableFields[0]]) + [searchableFields[1]] + searchableFields.dropFirst(3)
                 let tagKeys = Set(snippet.tags.map(SnippetTagging.filterKey(for:)))
                 let entryBytes = Self.estimatedBytes(
                     searchableFields: searchableFields,
                     tagKeys: tagKeys
-                )
+                ) + 32 + fuzzyMetadata.reduce(0) { $0 + 32 + $1.utf8.count }
+                    + searchableFields.count * 64
                 let candidate = NormalizedEntry(
                     source: source,
-                    searchableFields: searchableFields,
+                    searchableFields: searchableFields.map(PreparedSubstringSearch.Field.init),
+                    fuzzyMetadata: fuzzyMetadata,
                     tagKeys: tagKeys,
                     estimatedBytes: entryBytes
                 )
@@ -138,69 +190,53 @@ nonisolated struct SnippetSearchSnapshot: Sendable {
         )
     }
 
-    func results(
-        searchText: String,
-        activeTagKeys: Set<String>
-    ) -> [Snippet] {
-        let query = Self.normalizedQuery(searchText, localeIdentifier: localeIdentifier)
-        return entries.compactMap { entry in
-            if let normalized = entry.normalized {
-                guard activeTagKeys.isSubset(of: normalized.tagKeys) else { return nil }
-                guard query.isEmpty || normalized.searchableFields.contains(where: {
-                    $0.contains(query)
-                }) else { return nil }
-            } else {
-                guard activeTagKeys.allSatisfy({ entry.snippet.hasTag(withKey: $0) }) else {
-                    return nil
-                }
-                guard query.isEmpty || Self.uncachedMatch(
-                    entry.snippet,
-                    query: query,
-                    localeIdentifier: localeIdentifier
-                ) else { return nil }
-            }
-            return entry.snippet
-        }
+    func results(searchText: String, activeTagKeys: Set<String>) -> [Snippet] {
+        evaluate(searchText: searchText, activeTagKeys: activeTagKeys).snippets
     }
 
-    func evaluate(
-        searchText: String,
-        activeTagKeys: Set<String>
-    ) -> Evaluation {
-        if activeTagKeys.isEmpty {
-            let matches = results(searchText: searchText, activeTagKeys: [])
-            return Evaluation(searchMatches: matches, snippets: matches)
-        }
-
+    func evaluate(searchText: String, activeTagKeys: Set<String>) -> Evaluation {
         let query = Self.normalizedQuery(searchText, localeIdentifier: localeIdentifier)
-        var searchMatches: [Snippet] = []
-        searchMatches.reserveCapacity(entries.count)
-        var matches: [Snippet] = []
-        matches.reserveCapacity(entries.count)
+        let prepared = FuzzyMatch.PreparedQuery(query, locale: Locale(identifier: localeIdentifier))
+        return evaluation(matching: matchingIndices(query: query, prepared: prepared, candidates: nil),
+                          activeTagKeys: activeTagKeys)
+    }
 
-        for entry in entries {
-            let matchesSearch: Bool
-            let matchesTags: Bool
+    fileprivate var entryCount: Int { entries.count }
+
+    fileprivate func matchingIndices(
+        query: String, prepared: FuzzyMatch.PreparedQuery, candidates: [Int]?
+    ) -> [Int] {
+        let literal = PreparedSubstringSearch.Query(query)
+        func matches(_ index: Int) -> Bool {
+            if query.isEmpty { return true }
+            let entry = entries[index]
             if let normalized = entry.normalized {
-                matchesSearch = query.isEmpty || normalized.searchableFields.contains(where: {
-                    $0.contains(query)
-                })
-                matchesTags = activeTagKeys.isSubset(of: normalized.tagKeys)
+                // Keep full-body substring search and extend only metadata with
+                // subsequence matching. Filtering preserves canonical list order.
+                let fields = normalized.searchableFields
+                return fields[0].contains(literal) || fields[1].contains(literal)
+                    || fields.dropFirst(3).contains { $0.contains(literal) }
+                    || normalized.fuzzyMetadata.contains { FuzzyMatch.matches(query: prepared, foldedTarget: $0) }
+                    || fields[2].contains(literal)
+            }
+            return Self.uncachedMatch(entry.snippet, query: query, prepared: prepared,
+                                      localeIdentifier: localeIdentifier)
+        }
+        if let candidates { return candidates.filter(matches) }
+        return entries.indices.filter(matches)
+    }
+
+    fileprivate func evaluation(matching indices: [Int], activeTagKeys: Set<String>) -> Evaluation {
+        let searchMatches = indices.map { entries[$0].snippet }
+        guard !activeTagKeys.isEmpty else { return Evaluation(searchMatches: searchMatches, snippets: searchMatches) }
+        let matches = indices.compactMap { index -> Snippet? in
+            let entry = entries[index]
+            if let normalized = entry.normalized {
+                guard activeTagKeys.isSubset(of: normalized.tagKeys) else { return nil }
             } else {
-                matchesSearch = query.isEmpty || Self.uncachedMatch(
-                    entry.snippet,
-                    query: query,
-                    localeIdentifier: localeIdentifier
-                )
-                matchesTags = activeTagKeys.allSatisfy {
-                    entry.snippet.hasTag(withKey: $0)
-                }
+                guard activeTagKeys.allSatisfy({ entry.snippet.hasTag(withKey: $0) }) else { return nil }
             }
-            guard matchesSearch else { continue }
-            searchMatches.append(entry.snippet)
-            if matchesTags {
-                matches.append(entry.snippet)
-            }
+            return entry.snippet
         }
         return Evaluation(searchMatches: searchMatches, snippets: matches)
     }
@@ -238,12 +274,13 @@ nonisolated struct SnippetSearchSnapshot: Sendable {
         guard locale.identifier == localeIdentifier,
               maximumNormalizedBytes == self.maximumNormalizedBytes,
               snippets.count == entries.count else { return false }
-        return zip(entries, snippets).allSatisfy { $0.snippet == $1 }
+        return sourceSnippets == snippets
     }
 
     private static func uncachedMatch(
         _ snippet: Snippet,
         query: String,
+        prepared: FuzzyMatch.PreparedQuery,
         localeIdentifier: String
     ) -> Bool {
         let locale = Locale(identifier: localeIdentifier)
@@ -252,8 +289,11 @@ nonisolated struct SnippetSearchSnapshot: Sendable {
             snippet.normalizedKeyword,
             snippet.content,
         ] + snippet.tags
-        return fields.contains {
-            $0.folding(options: foldingOptions, locale: locale).contains(query)
+        if fields.contains(where: { $0.folding(options: foldingOptions, locale: locale).contains(query) }) {
+            return true
+        }
+        return ([snippet.name, snippet.normalizedKeyword] + snippet.tags).contains {
+            FuzzyMatch.matches(query: prepared, foldedTarget: $0.folding(options: foldingOptions, locale: locale))
         }
     }
 
@@ -283,6 +323,14 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
         let lastSnapshotEntryBuildCount: Int
         let estimatedNormalizedBytes: Int
         let uncachedEntryCount: Int
+        let lastCandidateCount: Int
+    }
+
+    private struct Scan {
+        let snapshot: SnippetSearchSnapshot
+        let query: String
+        let prepared: FuzzyMatch.PreparedQuery
+        let matches: [Int]
     }
 
     private static let defaultMaximumNormalizedBytes = 16 * 1_024 * 1_024
@@ -296,6 +344,9 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
     private var lastSnapshotEntryBuildCount = 0
     private var nextRequestSequence: UInt64 = 0
     private var committedBuildSequence: UInt64 = 0
+    private var latestScan: Scan?
+    private var scanSequence: UInt64 = 0
+    private var lastCandidateCount = 0
 
     init(
         maximumNormalizedBytes: Int = SnippetSearchIndex.defaultMaximumNormalizedBytes,
@@ -311,8 +362,37 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
         activeTagKeys: Set<String>,
         locale: Locale = .current
     ) -> [Snippet] {
+        evaluate(in: snippets, searchText: searchText, activeTagKeys: activeTagKeys, locale: locale).snippets
+    }
+
+    func evaluate(
+        in snippets: [Snippet], searchText: String, activeTagKeys: Set<String>, locale: Locale = .current
+    ) -> SnippetSearchSnapshot.Evaluation {
         let snapshot = snapshot(for: snippets, locale: locale)
-        return snapshot.results(searchText: searchText, activeTagKeys: activeTagKeys)
+        let query = SnippetSearchSnapshot.normalizedQuery(searchText, locale: locale)
+        let prepared = FuzzyMatch.PreparedQuery(query, locale: locale)
+        lock.lock()
+        scanSequence &+= 1
+        let sequence = scanSequence
+        let previous = latestScan
+        lock.unlock()
+        // Narrow only a normalized prefix extension over this exact snapshot.
+        // Keep pre-tag matches so relaxing a tag filter cannot hide valid rows.
+        let candidates: [Int]?
+        if let previous, previous.snapshot === snapshot,
+           query.hasPrefix(previous.query), prepared.extends(previous.prepared) {
+            candidates = previous.matches
+        } else {
+            candidates = nil
+        }
+        let matches = snapshot.matchingIndices(query: query, prepared: prepared, candidates: candidates)
+        lock.lock()
+        if scanSequence == sequence, latestSnapshot === snapshot {
+            latestScan = Scan(snapshot: snapshot, query: query, prepared: prepared, matches: matches)
+            lastCandidateCount = candidates?.count ?? snapshot.entryCount
+        }
+        lock.unlock()
+        return snapshot.evaluation(matching: matches, activeTagKeys: activeTagKeys)
     }
 
     func snapshot(
@@ -355,6 +435,7 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
         normalizedEntryBuildCount += snapshot.normalizedEntryBuildCount
         if requestSequence >= committedBuildSequence {
             latestSnapshot = snapshot
+            latestScan = nil
             committedBuildSequence = requestSequence
             lastSnapshotEntryBuildCount = snapshot.normalizedEntryBuildCount
         }
@@ -370,7 +451,8 @@ nonisolated final class SnippetSearchIndex: @unchecked Sendable {
             normalizedEntryBuildCount: normalizedEntryBuildCount,
             lastSnapshotEntryBuildCount: lastSnapshotEntryBuildCount,
             estimatedNormalizedBytes: latestSnapshot?.estimatedNormalizedBytes ?? 0,
-            uncachedEntryCount: latestSnapshot?.uncachedEntryCount ?? 0
+            uncachedEntryCount: latestSnapshot?.uncachedEntryCount ?? 0,
+            lastCandidateCount: lastCandidateCount
         )
     }
 }
@@ -475,27 +557,12 @@ nonisolated final class SnippetSearchPipeline: @unchecked Sendable {
             stateLock.unlock()
 
             guard isCurrent(request.generation) else { continue }
-            let snapshot = index.snapshot(for: request.snippets, locale: request.locale)
-            let evaluation: SnippetSearchSnapshot.Evaluation
-            if request.includeSearchMatches {
-                evaluation = snapshot.evaluate(
-                    searchText: request.searchText,
-                    activeTagKeys: request.activeTagKeys
-                )
-            } else {
-                let matches = snapshot.results(
-                    searchText: request.searchText,
-                    activeTagKeys: request.activeTagKeys
-                )
-                evaluation = SnippetSearchSnapshot.Evaluation(
-                    searchMatches: [],
-                    snippets: matches
-                )
-            }
+            let evaluation = index.evaluate(in: request.snippets, searchText: request.searchText,
+                                            activeTagKeys: request.activeTagKeys, locale: request.locale)
             guard isCurrent(request.generation) else { continue }
             request.completion(Response(
                 generation: request.generation,
-                searchMatches: evaluation.searchMatches,
+                searchMatches: request.includeSearchMatches ? evaluation.searchMatches : [],
                 snippets: evaluation.snippets
             ))
         }

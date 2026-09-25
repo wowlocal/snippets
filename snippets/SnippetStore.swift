@@ -307,6 +307,7 @@ final class SnippetStore {
     }
 
     private(set) var snippets: [Snippet] = []
+    private var libraryProjection = SnippetLibraryProjection()
     /// An unreadable primary library was preserved out of the data path. While true,
     /// ordinary persistence and sync must not turn its apparent absence into a new
     /// empty library. A full file import or a valid restored primary clears this
@@ -841,29 +842,14 @@ final class SnippetStore {
     /// All distinct tags across snippets, deduped case-insensitively and
     /// sorted alphabetically for stable filter/completion UI.
     func allTags() -> [String] {
-        tagUsage().map(\.tag)
+        presentationSnapshot().tags
     }
+
+    func allTagKeys() -> Set<String> { presentationSnapshot().tagKeys }
 
     /// Distinct tags with the number of snippets using each, sorted alphabetically.
     func tagUsage() -> [(tag: String, count: Int)] {
-        var canonicalTags: [String: String] = [:]
-        var counts: [String: Int] = [:]
-
-        // Both stores: a tag used only by secure snippets must still appear in the
-        // filter bar, or filtering by it would show an empty list.
-        for snippet in snippets + (secureProvider?.secureShellsForDisplay() ?? []) {
-            for tag in snippet.tags {
-                let key = SnippetTagging.filterKey(for: tag)
-                if canonicalTags[key] == nil {
-                    canonicalTags[key] = tag
-                }
-                counts[key, default: 0] += 1
-            }
-        }
-
-        return canonicalTags
-            .sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }
-            .map { (tag: $0.value, count: counts[$0.key] ?? 0) }
+        presentationSnapshot().tagUsage
     }
 
     @discardableResult
@@ -892,8 +878,11 @@ final class SnippetStore {
     /// Sort only this presentation projection so storage, undo, and merge semantics do
     /// not churn while every platform still renders the same canonical order.
     func snippetsSortedForDisplay() -> [Snippet] {
-        let combined = snippets + (secureProvider?.secureShellsForDisplay() ?? [])
-        return SnippetDisplayOrder.sorted(combined)
+        presentationSnapshot().sorted
+    }
+
+    private func presentationSnapshot() -> SnippetLibraryProjection.Snapshot {
+        libraryProjection.snapshot(ordinary: snippets, secure: secureProvider?.secureShellsForDisplay() ?? [])
     }
 
     /// Whether this id belongs to a secure record rather than to `snippets`.

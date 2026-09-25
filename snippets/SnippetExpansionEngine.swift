@@ -2666,8 +2666,10 @@ final class SnippetExpansionEngine {
         var workspace = FuzzyMatch.Workspace()
         return snapshot.entries.compactMap { entry -> SuggestionItem? in
             let snippet = entry.snippet
-            let nameResult = FuzzyMatch.score(query: preparedQuery, target: entry.preparedName, workspace: &workspace)
-            let keywordResult = FuzzyMatch.score(query: preparedQuery, target: entry.preparedKeyword, workspace: &workspace)
+            let nameResult = FuzzyMatch.score(query: preparedQuery, target: entry.preparedName,
+                                             includingRanges: false, workspace: &workspace)
+            let keywordResult = FuzzyMatch.score(query: preparedQuery, target: entry.preparedKeyword,
+                                                includingRanges: false, workspace: &workspace)
             var tagMatched = false
             var tagScore = Int.min
             for tag in entry.preparedTags {
@@ -2683,15 +2685,15 @@ final class SnippetExpansionEngine {
                 snippet: snippet,
                 isSecure: entry.isSecure,
                 score: max(max(nameResult.score, keywordResult.score), tagScore),
-                nameMatchRanges: nameResult.matchedRanges,
-                keywordMatchRanges: keywordResult.matchedRanges,
                 keywordRank: SnippetFrecency.keywordRank(
                     foldedKeyword: entry.foldedKeyword,
                     foldedQuery: foldedQuery,
-                    hasKeywordMatchRanges: !keywordResult.matchedRanges.isEmpty
+                    hasKeywordMatchRanges: keywordResult.matched && !preparedQuery.isEmpty
                 ),
                 bindingWeight: binding[snippet.id] ?? 0,
-                frecency: frecency.value(for: snippet.id)
+                frecency: frecency.value(for: snippet.id),
+                highlightSource: SuggestionHighlightSource(
+                    query: preparedQuery, name: entry.preparedName, keyword: entry.preparedKeyword)
             )
         }
         .map { (key: rankingKey(for: $0, displayOrder: displayOrder), item: $0) }

@@ -43,6 +43,14 @@ History entries are distinct from snippets: insertion never invokes PlaceholderR
 sync, or snippet usage ranking. Creating a snippet uses the existing editor and focuses
 its keyword field. Search and list updates preserve a user-selected entry by identity.
 
+Nonempty searches run on a serial worker with a prepared, bounded in-memory index.
+New queries replace pending work, and results from an old query or closed panel cannot
+replace the current list. A quick Return or Command-number waits for the current search
+before selecting; changing the query cancels that pending selection. Search retains
+AND-of-words substring matching and original entry bytes for delivery. The prepared
+cache is released when the query is cleared or the panel closes. Reproduction and
+measurements are in [the search performance report](library-search-performance.md).
+
 ## Capture and storage
 
 `ClipboardHistoryService` owns polling, preferences, storage work, and lifecycle state.

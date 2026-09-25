@@ -192,7 +192,7 @@ final class SnippetSearchIndexTests: XCTestCase {
     }
 
     func testNormalizedPayloadIsBoundedAndOverflowStillSearchesCorrectly() {
-        let index = SnippetSearchIndex(maximumNormalizedBytes: 512)
+        let index = SnippetSearchIndex(maximumNormalizedBytes: 1_024)
         let small = Snippet(name: "Small", keyword: "small", content: "short")
         let oversized = Snippet(
             name: "Large",
@@ -209,7 +209,7 @@ final class SnippetSearchIndexTests: XCTestCase {
             ),
             [oversized]
         )
-        XCTAssertLessThanOrEqual(index.statistics.estimatedNormalizedBytes, 512)
+        XCTAssertLessThanOrEqual(index.statistics.estimatedNormalizedBytes, 1_024)
         XCTAssertEqual(index.statistics.uncachedEntryCount, 1)
 
         let builds = index.statistics.normalizedEntryBuildCount
@@ -227,6 +227,63 @@ final class SnippetSearchIndexTests: XCTestCase {
             builds,
             "an identical library must reuse its immutable bounded snapshot"
         )
+    }
+
+    func testFuzzyMetadataAndLiteralBodiesIncludingUncachedFallback() {
+        let name = Snippet(name: "Project Alpha", keyword: "", content: "")
+        let keyword = Snippet(name: "Shortcut", keyword: "project-alpha", content: "")
+        let tag = Snippet(name: "Tagged", keyword: "", content: "", tags: ["Project Alpha"])
+        let body = Snippet(name: "Body", keyword: "", content: "Project Alpha")
+        let unnamed = Snippet(name: "", keyword: "", content: "Project Alpha")
+        let snippets = [name, keyword, tag, body, unnamed]
+        for budget in [0, 1_000_000] {
+            let index = SnippetSearchIndex(maximumNormalizedBytes: budget)
+            XCTAssertEqual(index.results(in: snippets, searchText: "prjal", activeTagKeys: [], locale: locale),
+                           [name, keyword, tag])
+            XCTAssertEqual(index.results(in: snippets, searchText: "project", activeTagKeys: [], locale: locale), snippets)
+            XCTAssertTrue(index.results(in: snippets, searchText: "ajrp", activeTagKeys: [], locale: locale).isEmpty)
+        }
+    }
+
+    func testPrefixNarrowingRetainsUnfilteredMatchesAndInvalidatesOnEdits() {
+        let work = Snippet(name: "Alpha", keyword: "", content: "", tags: ["work"])
+        let home = Snippet(name: "Alpine", keyword: "", content: "", tags: ["home"])
+        var third = Snippet(name: "Beta", keyword: "", content: "")
+        var snippets = [work, home, third]
+        let index = SnippetSearchIndex()
+        XCTAssertEqual(index.results(in: snippets, searchText: "al", activeTagKeys: ["work"], locale: locale), [work])
+        XCTAssertEqual(index.statistics.lastCandidateCount, 3)
+        XCTAssertEqual(index.results(in: snippets, searchText: "alp", activeTagKeys: [], locale: locale), [work, home])
+        XCTAssertEqual(index.statistics.lastCandidateCount, 2)
+        XCTAssertEqual(index.results(in: snippets, searchText: "a", activeTagKeys: [], locale: locale), snippets)
+        XCTAssertEqual(index.statistics.lastCandidateCount, 3, "Backspace must reconsider excluded rows")
+        _ = index.results(in: snippets, searchText: "alp", activeTagKeys: [], locale: locale)
+        third.name = "Alpaca"
+        snippets[2] = third
+        XCTAssertEqual(index.results(in: snippets, searchText: "alpac", activeTagKeys: [], locale: locale), [third])
+        XCTAssertEqual(index.statistics.lastCandidateCount, 3, "An edit invalidates the candidate set")
+        XCTAssertEqual(index.results(in: snippets, searchText: "ine", activeTagKeys: [], locale: locale), [home])
+        XCTAssertEqual(index.statistics.lastCandidateCount, 3, "Replacement is not prefix extension")
+    }
+
+    func testPresentationProjectionCachesOrderAndTagsButReturnsCurrentPayload() {
+        var projection = SnippetLibraryProjection()
+        var first = Snippet(name: "Ordinary", keyword: "ordinary", content: "Before", tags: ["Work"])
+        let secure = Snippet(name: "Secure shell", keyword: "secure", content: "", tags: ["wörk"], isPinned: true)
+        let original = projection.snapshot(ordinary: [first], secure: [secure], locale: locale)
+        XCTAssertEqual(original.sorted, [secure, first])
+        XCTAssertEqual(original.tags, ["Work"])
+        XCTAssertEqual(original.tagUsage.map(\.count), [2])
+        XCTAssertEqual(original.tagKeys, ["work"])
+        _ = projection.snapshot(ordinary: [first], secure: [secure], locale: locale)
+        XCTAssertEqual(projection.buildCount, 1)
+        first.content = "After"
+        let edited = projection.snapshot(ordinary: [first], secure: [], locale: locale)
+        XCTAssertEqual(edited.sorted, [first])
+        XCTAssertEqual(edited.tagUsage.map(\.count), [1])
+        XCTAssertEqual(original.sorted.last?.content, "Before")
+        _ = projection.snapshot(ordinary: [first], secure: [], locale: Locale(identifier: "tr_TR"))
+        XCTAssertEqual(projection.buildCount, 3)
     }
 
     func testPipelineDropsQueuedStaleRequest() {

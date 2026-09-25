@@ -38,6 +38,7 @@ final class ClipboardHistoryMenuTrackingTests: XCTestCase {
             .compactMap { $0 as? NSSearchField }.first)
         search.stringValue = "menu fixture"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        await waitForClipboardSearch(controller)
         XCTAssertTrue(window.isKeyWindow)
 
         let probe = NativeMenuEscapeProbe(window: window)

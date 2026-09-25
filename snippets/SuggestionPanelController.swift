@@ -36,6 +36,9 @@ final class SuggestionPanelController: NSObject,
     private let emptyLabel = NSTextField(labelWithString: "No matching snippets")
     private var searchContainerHeightConstraint: NSLayoutConstraint!
     private(set) var items: [SuggestionItem] = []
+    private var highlightCache: [UUID: SuggestionHighlights] = [:]
+    private var highlightWorkspace = FuzzyMatch.Workspace()
+    private(set) var highlightBuildCount = 0
     private let maxVisible = 8
     private let singleLineRowHeight: CGFloat = 46
     private let wrappedNameRowHeight: CGFloat = 62
@@ -376,6 +379,8 @@ final class SuggestionPanelController: NSObject,
     ) {
         let previouslySelectedSnippetID = selectionWasUserDriven ? selectedSnippet()?.id : nil
         self.items = items
+        highlightCache.removeAll(keepingCapacity: true)
+        highlightBuildCount = 0
         tableView.reloadData()
 
         let count = items.count
@@ -515,6 +520,8 @@ final class SuggestionPanelController: NSObject,
         removeClickMonitors()
         panel.orderOut(nil)
         items = []
+        highlightCache.removeAll()
+        highlightWorkspace = FuzzyMatch.Workspace()
         // Keep the table in sync with the emptied data source; otherwise it still
         // believes it has rows and any row materialization while hidden (e.g. an
         // accessibility client walking the table) indexes past the empty array.
@@ -1371,17 +1378,35 @@ final class SuggestionPanelController: NSObject,
         }
 
         let item = items[row]
+        let highlights = matchHighlights(at: row)
         cell.configure(
             name: item.snippet.displayName,
             keyword: item.snippet.normalizedKeyword,
             tags: item.snippet.tags,
             isSecure: item.isSecure,
-            nameMatchRanges: item.nameMatchRanges,
-            keywordMatchRanges: item.keywordMatchRanges,
+            nameMatchRanges: highlights.name,
+            keywordMatchRanges: highlights.keyword,
             shortcut: presentationMode == .securePaste ? PickerQuickSelection.label(forRow: row) : nil,
             availableWidth: Self.panelWidth - horizontalCellPadding
         )
         return cell
+    }
+
+    /// NSTableView asks for cells as they enter its viewport. Keep the complete
+    /// ranked list for scrolling/keyboard selection, but resolve only requested
+    /// highlights. Clear on every result replacement, including metadata edits.
+    func matchHighlights(at row: Int) -> SuggestionHighlights {
+        guard items.indices.contains(row) else { return SuggestionHighlights(name: [], keyword: []) }
+        let item = items[row]
+        guard let source = item.highlightSource else {
+            return SuggestionHighlights(name: item.nameMatchRanges, keyword: item.keywordMatchRanges)
+        }
+        if let cached = highlightCache[item.snippet.id] { return cached }
+        let result = source.resolve(workspace: &highlightWorkspace)
+        if highlightCache.count >= 128 { highlightCache.removeAll(keepingCapacity: true) }
+        highlightCache[item.snippet.id] = result
+        highlightBuildCount += 1
+        return result
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {

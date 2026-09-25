@@ -136,7 +136,7 @@ final class PhoneLibraryViewController: UIViewController {
 
     func reload() {
         searchPipeline.cancelPending()
-        let existingTags = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
+        let existingTags = environment.store.allTagKeys()
         activeTagKeys.formIntersection(existingTags)
 
         let snippets = environment.store.snippetsSortedForDisplay()
@@ -158,7 +158,7 @@ final class PhoneLibraryViewController: UIViewController {
     }
 
     private func reloadSearchResults() {
-        let existingTags = Set(environment.store.allTags().map(SnippetTagging.filterKey(for:)))
+        let existingTags = environment.store.allTagKeys()
         activeTagKeys.formIntersection(existingTags)
 
         let snippets = environment.store.snippetsSortedForDisplay()
