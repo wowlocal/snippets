@@ -95,7 +95,7 @@ final class SnippetExpansionEngine {
     private var suggestionSessionGeneration: UInt = 0
     private var suggestionAXObserver: AXObserver?
     private var suggestionAXObserverSource: CFRunLoopSource?
-    private var suggestionAXObservedElements: [AXUIElement] = []
+    private var suggestionObserverRegistration: SuggestionObserverRegistration?
     private var suggestionObserverAllowsAutoExpand = false
     /// Non-nil only while LocalAuthentication is servicing an explicit secure
     /// suggestion. Its own activation/secure-input transitions must not invalidate
@@ -108,6 +108,7 @@ final class SnippetExpansionEngine {
     /// Frozen for the lifetime of one suggestion session so AX notifications
     /// cannot reshuffle rows under the user's fingers by changing frecency.
     private var suggestionFrecency: FrecencySnapshot = .empty
+    private let suggestionResultsUpdater = SuggestionResultsUpdater()
     /// The query the user had typed when they accepted from the panel, held
     /// only until `expand()` consumes it. Never set on an auto-expand path.
     private var pendingSelectionMemoryQuery: String?
@@ -1542,6 +1543,7 @@ final class SnippetExpansionEngine {
         pendingSpaceShortcutInputSourceID = nil
         suggestionObserverAllowsAutoExpand = false
         suggestionFrecency = usage.makeRankingSnapshot()
+        suggestionResultsUpdater.reset()
         pendingSelectionMemoryQuery = nil
 
         suggestionPanel.onSelect = { [weak self] snippet in
@@ -1587,8 +1589,9 @@ final class SnippetExpansionEngine {
     private func startSuggestionAccessibilityObserver(anchorFocusedElement: AXUIElement) {
         let sessionGeneration = suggestionSessionGeneration
         Task { @MainActor [weak self] in
-            // Register immediately after leaving the event-tap callback so AX
-            // setup can never delay delivery of the trigger key to the host.
+            // Leave the trigger's tap callback before bounded ancestor discovery.
+            // Notification registration itself must use the worker below: yielding
+            // a MainActor task alone would still stall subsequent key callbacks.
             await Task.yield()
             guard let self,
                   self.suggestionActive,
@@ -1638,77 +1641,56 @@ final class SnippetExpansionEngine {
             startingAt: anchorFocusedElement,
             axBudget: AXMessagingBudget(totalTimeoutSeconds: 0.1))
         let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        let notifications: [(CFString, DiagnosticExpansionAXStage)] = [
-            (kAXValueChangedNotification as CFString, .valueNotification),
-            (kAXSelectedTextChangedNotification as CFString, .selectionNotification),
-        ]
-        var registeredAny = false
-        var lastFailure: AXContextUnavailable?
-
-        for element in elements {
-            for (notification, stage) in notifications {
-                let result = AXObserverAddNotification(observer, element, notification, refcon)
-                if result == .success || result == .notificationAlreadyRegistered {
-                    registeredAny = true
-                } else {
-                    lastFailure = axUnavailable(stage: stage, error: result)
+        let handles = SuggestionObserverHandles(observer: observer, elements: elements, refcon: refcon)
+        let registration = SuggestionObserverRegistration(
+            count: elements.count * 2,
+            register: { handles.register($0) },
+            unregister: { handles.unregister($0) })
+        let sessionGeneration = suggestionSessionGeneration
+        suggestionObserverRegistration = registration
+        registration.start { [weak self] outcome in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.suggestionActive,
+                      self.suggestionSessionGeneration == sessionGeneration,
+                      self.suggestionObserverRegistration === registration else {
+                    registration.cancel()
+                    return
                 }
+                let failure = outcome.lastFailure.map {
+                    self.axUnavailable(
+                        stage: $0.index.isMultiple(of: 2) ? .valueNotification : .selectionNotification,
+                        error: $0.error)
+                }
+                if let failure {
+                    self.recordExpansionAccessibility(
+                        operation: .observerRegistration, outcome: .unavailable,
+                        stateBefore: self.suggestionContextState,
+                        stateAfter: self.suggestionContextState, unavailable: failure)
+                }
+                guard outcome.registeredAny else {
+                    self.stopSuggestionAccessibilityObserver()
+                    return
+                }
+                let source = AXObserverGetRunLoopSource(handles.observer)
+                self.suggestionAXObserver = handles.observer
+                self.suggestionAXObserverSource = source
+                CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+                self.recordExpansionAccessibility(
+                    operation: .observerRegistration, outcome: .observing,
+                    stateBefore: self.suggestionContextState,
+                    stateAfter: self.suggestionContextState, stage: .observerCreation)
             }
         }
-
-        guard registeredAny else {
-            recordExpansionAccessibility(
-                operation: .observerRegistration,
-                outcome: .unavailable,
-                stateBefore: suggestionContextState,
-                stateAfter: suggestionContextState,
-                unavailable: lastFailure ?? AXContextUnavailable(
-                    stage: .observerCreation,
-                    failure: .other,
-                    errorCode: nil))
-            return
-        }
-
-        // Some hosts expose only one of the two notifications, or expose it
-        // only on one level of the focused-element chain. The observer is
-        // still useful, but retain the rejected registration reason so an
-        // exported log explains why updates may be incomplete.
-        if let lastFailure {
-            recordExpansionAccessibility(
-                operation: .observerRegistration,
-                outcome: .unavailable,
-                stateBefore: suggestionContextState,
-                stateAfter: suggestionContextState,
-                unavailable: lastFailure)
-        }
-
-        let source = AXObserverGetRunLoopSource(observer)
-        suggestionAXObserver = observer
-        suggestionAXObserverSource = source
-        suggestionAXObservedElements = elements
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        recordExpansionAccessibility(
-            operation: .observerRegistration,
-            outcome: .observing,
-            stateBefore: suggestionContextState,
-            stateAfter: suggestionContextState,
-            stage: .observerCreation)
     }
 
     private func stopSuggestionAccessibilityObserver() {
         if let source = suggestionAXObserverSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
-        if let observer = suggestionAXObserver {
-            for element in suggestionAXObservedElements {
-                _ = AXObserverRemoveNotification(
-                    observer, element, kAXValueChangedNotification as CFString)
-                _ = AXObserverRemoveNotification(
-                    observer, element, kAXSelectedTextChangedNotification as CFString)
-            }
-        }
+        suggestionObserverRegistration?.cancel()
+        suggestionObserverRegistration = nil
         suggestionAXObserverSource = nil
-        suggestionAXObservedElements.removeAll()
         suggestionAXObserver = nil
     }
 
@@ -2250,6 +2232,7 @@ final class SnippetExpansionEngine {
 
     private func dismissSuggestions() {
         typedBuffer = ""
+        suggestionResultsUpdater.reset()
         // Before the guard: another path may have already cleared `suggestionActive`, and the timer
         // would then outlive the session it belongs to.
         stopSuggestionSecureInputWatchdog()
@@ -2753,6 +2736,21 @@ final class SnippetExpansionEngine {
     private func updateSuggestionResults(
         anchorFocusedElement: AXUIElement? = nil,
         axBudget: AXMessagingBudget? = nil
+    ) {
+        suggestionResultsUpdater.updateIfNeeded(
+            query: suggestionQuery,
+            ordinary: store.snippets,
+            secure: store.secureProvider?.secureShellsForDisplay() ?? []
+        ) {
+            renderSuggestionResults(
+                anchorFocusedElement: anchorFocusedElement,
+                axBudget: axBudget)
+        }
+    }
+
+    private func renderSuggestionResults(
+        anchorFocusedElement: AXUIElement?,
+        axBudget: AXMessagingBudget?
     ) {
         let snippets = enabledSnippetsForSuggestionDisplay()
         let displayOrder = Dictionary(
