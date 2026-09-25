@@ -16,38 +16,6 @@ private final class SuggestionPanel: NSPanel {
     }
 }
 
-struct SuggestionItem {
-    let snippet: Snippet
-    let isSecure: Bool
-    let score: Int
-    let nameMatchRanges: [NSRange]
-    let keywordMatchRanges: [NSRange]
-    /// Precomputed so the comparator never folds strings on the keystroke path.
-    let keywordRank: Int
-    let bindingWeight: Double
-    let frecency: Double
-
-    init(
-        snippet: Snippet,
-        isSecure: Bool = false,
-        score: Int,
-        nameMatchRanges: [NSRange] = [],
-        keywordMatchRanges: [NSRange] = [],
-        keywordRank: Int = 0,
-        bindingWeight: Double = 0,
-        frecency: Double = 0
-    ) {
-        self.snippet = snippet
-        self.isSecure = isSecure
-        self.score = score
-        self.nameMatchRanges = nameMatchRanges
-        self.keywordMatchRanges = keywordMatchRanges
-        self.keywordRank = keywordRank
-        self.bindingWeight = bindingWeight
-        self.frecency = frecency
-    }
-}
-
 @MainActor
 final class SuggestionPanelController: NSObject,
     NSTableViewDataSource,

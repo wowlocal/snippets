@@ -109,6 +109,7 @@ final class SnippetExpansionEngine {
     /// cannot reshuffle rows under the user's fingers by changing frecency.
     private var suggestionFrecency: FrecencySnapshot = .empty
     private let suggestionResultsUpdater = SuggestionResultsUpdater()
+    private let suggestionSearchIndex = SuggestionSearchIndex()
     /// The query the user had typed when they accepted from the panel, held
     /// only until `expand()` consumes it. Never set on an auto-expand path.
     private var pendingSelectionMemoryQuery: String?
@@ -308,6 +309,9 @@ final class SnippetExpansionEngine {
 
     func startIfNeeded() {
         if eventTap == nil {
+            // Pay initial metadata preparation before installing the keyboard tap,
+            // so the first backslash doesn't build the whole search index.
+            _ = suggestionSearchSnapshot()
             installEventTap()
         }
 
@@ -1077,17 +1081,12 @@ final class SnippetExpansionEngine {
         }
 
         let frecency = usage.makeRankingSnapshot()
-        let displayOrder = Dictionary(
-            uniqueKeysWithValues: snippets.enumerated().map { ($0.element.id, $0.offset) }
-        )
         let makeItems: (String) -> [SuggestionItem] = { [weak self] query in
             guard let self else { return [] }
             return self.securePasteSuggestionItems(
                 query: query,
-                snippets: snippets,
-                frecency: frecency,
-                displayOrder: displayOrder
-            )
+                snapshot: self.suggestionSearchSnapshot(),
+                frecency: frecency)
         }
 
         securePastePickerActive = true
@@ -2573,28 +2572,7 @@ final class SnippetExpansionEngine {
 
     /// Returns a snippet only if `query` exactly matches one keyword and no other keyword starts with `query`.
     private func unambiguousExactMatch(for query: String) -> Snippet? {
-        // The delete count for auto-expansion is derived from this query;
-        // multi-scalar graphemes make that count unreliable in web hosts.
-        guard !containsMultiScalarGrapheme(query) else { return nil }
-
-        let snippets = store.enabledSnippetsSorted()
-        let normalizedQuery = normalizedForSuggestionMatching(query)
-
-        var exactMatches: [Snippet] = []
-        var hasLongerPrefix = false
-        for snippet in snippets {
-            let keyword = normalizedForSuggestionMatching(snippet.normalizedKeyword)
-            guard !keyword.isEmpty else { continue }
-
-            if keyword == normalizedQuery {
-                exactMatches.append(snippet)
-            } else if keyword.hasPrefix(normalizedQuery) {
-                hasLongerPrefix = true
-            }
-        }
-
-        guard exactMatches.count == 1, !hasLongerPrefix else { return nil }
-        return exactMatches[0]
+        suggestionSearchSnapshot().unambiguousOrdinaryMatch(for: query)
     }
 
     private func autoExpandFromTypedBufferIfNeeded(typedCharacter: Character) -> Bool {
@@ -2645,11 +2623,12 @@ final class SnippetExpansionEngine {
 
     private func securePasteSuggestionItems(
         query rawQuery: String,
-        snippets: [Snippet],
-        frecency: FrecencySnapshot,
-        displayOrder: [UUID: Int]
+        snapshot: SuggestionSearchIndex.Snapshot,
+        frecency: FrecencySnapshot
     ) -> [SuggestionItem] {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snippets = snapshot.entries.map(\.snippet)
+        let displayOrder = snapshot.displayOrder
 
         if query.isEmpty {
             return snippets
@@ -2683,13 +2662,16 @@ final class SnippetExpansionEngine {
 
         let foldedQuery = SnippetFrecency.foldedForMatching(query)
         let binding = frecency.bindingTable(forQuery: query)
-        return snippets.compactMap { snippet -> SuggestionItem? in
-            let nameResult = FuzzyMatch.score(query: query, target: snippet.displayName)
-            let keywordResult = FuzzyMatch.score(query: query, target: snippet.normalizedKeyword)
+        let preparedQuery = FuzzyMatch.PreparedQuery(query, locale: snapshot.locale)
+        var workspace = FuzzyMatch.Workspace()
+        return snapshot.entries.compactMap { entry -> SuggestionItem? in
+            let snippet = entry.snippet
+            let nameResult = FuzzyMatch.score(query: preparedQuery, target: entry.preparedName, workspace: &workspace)
+            let keywordResult = FuzzyMatch.score(query: preparedQuery, target: entry.preparedKeyword, workspace: &workspace)
             var tagMatched = false
             var tagScore = Int.min
-            for tag in snippet.tags {
-                let result = FuzzyMatch.score(query: query, target: tag)
+            for tag in entry.preparedTags {
+                let result = FuzzyMatch.score(query: preparedQuery, target: tag, includingRanges: false, workspace: &workspace)
                 if result.matched {
                     tagMatched = true
                     tagScore = max(tagScore, result.score)
@@ -2699,12 +2681,12 @@ final class SnippetExpansionEngine {
             guard nameResult.matched || keywordResult.matched || tagMatched else { return nil }
             return SuggestionItem(
                 snippet: snippet,
-                isSecure: store.isSecure(snippet.id),
+                isSecure: entry.isSecure,
                 score: max(max(nameResult.score, keywordResult.score), tagScore),
                 nameMatchRanges: nameResult.matchedRanges,
                 keywordMatchRanges: keywordResult.matchedRanges,
                 keywordRank: SnippetFrecency.keywordRank(
-                    foldedKeyword: SnippetFrecency.foldedForMatching(snippet.normalizedKeyword),
+                    foldedKeyword: entry.foldedKeyword,
                     foldedQuery: foldedQuery,
                     hasKeywordMatchRanges: !keywordResult.matchedRanges.isEmpty
                 ),
@@ -2752,70 +2734,8 @@ final class SnippetExpansionEngine {
         anchorFocusedElement: AXUIElement?,
         axBudget: AXMessagingBudget?
     ) {
-        let snippets = enabledSnippetsForSuggestionDisplay()
-        let displayOrder = Dictionary(
-            uniqueKeysWithValues: snippets.enumerated().map { ($0.element.id, $0.offset) }
-        )
-
-        let scored: [SuggestionItem]
-        if suggestionQuery.isEmpty {
-            // Pinned first, then most used, then the library's own order. The
-            // cap is applied after ranking; it used to slice the first eight in
-            // creation order and present that as the top eight.
-            scored = snippets
-                .enumerated()
-                .sorted { lhs, rhs in
-                    SnippetFrecency.emptyQueryRanks(
-                        lhsPinned: lhs.element.isPinned,
-                        lhsFrecency: suggestionFrecency.value(for: lhs.element.id),
-                        lhsOrder: lhs.offset,
-                        rhsPinned: rhs.element.isPinned,
-                        rhsFrecency: suggestionFrecency.value(for: rhs.element.id),
-                        rhsOrder: rhs.offset
-                    )
-                }
-                .prefix(8)
-                .map {
-                    SuggestionItem(
-                        snippet: $0.element,
-                        isSecure: store.isSecure($0.element.id),
-                        score: 0,
-                        frecency: suggestionFrecency.value(for: $0.element.id)
-                    )
-                }
-        } else {
-            let foldedQuery = SnippetFrecency.foldedForMatching(suggestionQuery)
-            let binding = suggestionFrecency.bindingTable(forQuery: suggestionQuery)
-
-            scored = snippets.compactMap { snippet -> SuggestionItem? in
-                let nameResult = FuzzyMatch.score(query: suggestionQuery, target: snippet.displayName)
-                let keywordResult = FuzzyMatch.score(query: suggestionQuery, target: snippet.normalizedKeyword)
-                let best = max(nameResult.score, keywordResult.score)
-                let matched = nameResult.matched || keywordResult.matched
-                guard matched else { return nil }
-                return SuggestionItem(
-                    snippet: snippet,
-                    isSecure: store.isSecure(snippet.id),
-                    score: best,
-                    nameMatchRanges: nameResult.matchedRanges,
-                    keywordMatchRanges: keywordResult.matchedRanges,
-                    keywordRank: SnippetFrecency.keywordRank(
-                        foldedKeyword: SnippetFrecency.foldedForMatching(snippet.normalizedKeyword),
-                        foldedQuery: foldedQuery,
-                        hasKeywordMatchRanges: !keywordResult.matchedRanges.isEmpty
-                    ),
-                    bindingWeight: binding[snippet.id] ?? 0,
-                    frecency: suggestionFrecency.value(for: snippet.id)
-                )
-            }
-            // Decorate-sort-undecorate: each key is built once per element.
-            // Deriving it inside the sort closure would mean O(N log N)
-            // constructions, each retaining a String and a UUID.
-            .map { (key: rankingKey(for: $0, displayOrder: displayOrder), item: $0) }
-            .sorted { SnippetFrecency.ranks($0.key, before: $1.key) }
-            .prefix(8)
-            .map { $0.item }
-        }
+        let scored = SuggestionSearchIndex.suggestions(
+            query: suggestionQuery, snapshot: suggestionSearchSnapshot(), frecency: suggestionFrecency)
 
         if scored.isEmpty {
             suggestionPanel.hide()
@@ -2828,9 +2748,10 @@ final class SnippetExpansionEngine {
         }
     }
 
-    private func enabledSnippetsForSuggestionDisplay() -> [Snippet] {
-        store.snippetsSortedForDisplay()
-            .filter { $0.isEnabled && !$0.normalizedKeyword.isEmpty }
+    private func suggestionSearchSnapshot() -> SuggestionSearchIndex.Snapshot {
+        suggestionSearchIndex.snapshot(
+            ordinary: store.snippets,
+            secure: store.secureProvider?.secureShellsForDisplay() ?? [])
     }
 
     private func rankingKey(for item: SuggestionItem, displayOrder: [UUID: Int]) -> SnippetRankingKey {

@@ -3,6 +3,10 @@
 Baseline: `6ed85f0`. Symptom: quickly typing `\ghost` in a browser makes letters
 appear late, as if input is blocked. The browser and editor control were not identified.
 
+The subsequent [search optimization](suggestion-search-performance.md) addresses the
+fuzzy matching and exact-keyword work left open by this audit. Measurements and
+implementation descriptions below describe the earlier observer-only change.
+
 ## Findings
 
 ### 1. Observer registration blocks the keyboard's run loop
