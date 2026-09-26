@@ -248,13 +248,17 @@ abort immediately; only focus/metadata operations occur in this loop. Secure Pas
 stage diagnostics report the outcome and aggregate attempt count, so authentication
 success can be distinguished from handoff, preparation, and delivery failures.
 
-Container evidence alone permits only an AX-addressed native password-value or
-supported ordinary web-range write. A browser-backed password may use direct input
+Container evidence alone permits only an AX-addressed password-value or supported
+ordinary web-range write. A browser-backed password may use direct input
 only after the concrete password field itself becomes the exact keyboard-focused AX
 object. A container that remains focused is insufficient, even after explicit field
-selection. There is never a fallback after a plaintext-bearing attempt. Hosts that
-cannot supply the necessary evidence remain unsupported. Password values are never
-read during resolution or delivery.
+selection. If the user explicitly selected the exact password field, its original
+container still owns focus, and `AXValue` is writable, preparation can instead choose
+one whole-value AX write to that field. This does not require keyboard routing and
+does not permit automatic discovery to substitute for the user's choice. The binding
+is revalidated immediately before writing. There is never a fallback after a
+plaintext-bearing attempt, and AX acceptance remains an unconfirmed result. Password
+values are never read during resolution or delivery.
 
 Regression coverage lives in `Tests/AX/AXMessagingBudgetSwiftTests.swift`, which
 exercises the shipping resolver with a metadata-only adapter, including ambiguous
@@ -282,6 +286,13 @@ plaintext-bearing transport while the captured PID and AX focus are freshly conf
   it does not silently select all or overwrite other text in a partially filled field.
   Neither AXValue writability nor range-readback capabilities are required. The route
   is selected before materializing the secure body and is not a retry after an AX write.
+- When a browser exposes only container focus, an explicitly selected password field
+  may instead use writable `AXValue`. Like native password filling, this replaces the
+  entire field. It never types into an unconfirmed keyboard target. Chromium updates
+  its input-event-driven model for this operation; WebKit may only update the DOM value.
+  Because the app cannot verify a password without reading it, the result remains
+  `attemptedAmbiguous`, with the existing check-before-retry feedback. No automatic
+  retry, keyboard fallback, or success usage count follows an accepted setter.
 - An eligible ordinary browser field uses the capability-gated, readback-verified range operation
   described below.
 - Any content selected from Secure Paste for another native or custom text surface uses
@@ -313,8 +324,29 @@ Accessibility-authorized terminal and leave the fixture focused until it exits.
 On macOS 27, the isolated WKWebView reproducer accepted `AXValue` with AX error 0 and
 changed the DOM value without dispatching an `input` event; `AXReplaceRangeWithText`
 had the same event-model limitation. Unicode input updated both the DOM and the model.
-This is why web passwords do not reuse the ordinary range/readback transport, and why
-the production path never reads a password back to claim success.
+This is why focused web passwords prefer Unicode input and never reuse the ordinary
+range/readback transport. The production path never reads a password back to claim
+success.
+
+The 2026-09-26 Battle.net failure occurred before any delivery: `handoff` accepted the
+original container, while `preparation` required concrete keyboard focus and stopped
+with `field_focus_pending`. The keyboard-only web-password policy came from commit
+`72c848d`, before the destination-overlay changes. Battle.net's installed browser is
+Chromium Embedded Framework. Unlike WebKit, Chromium's
+[addressed input setter](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/modules/accessibility/ax_node_object.cc)
+dispatches input and change events. A disposable Chromium page verified both its DOM
+value and input-event-backed model after an AXValue write with container focus.
+That supports the explicit-field compatibility route; it does not prove every
+embedded browser or login form accepts it.
+
+Run `node scripts/test-secure-paste-chromium.mjs` for that GUI regression (Node 22+,
+installed Google Chrome, Accessibility permission). It starts a temporary Chrome
+profile on a local synthetic page and removes it afterward. The shipping policy and
+target resolver check container-focus filling, Unicode/long content, preservation of
+the focused keyboard route, refusal when a bystander gains focus, and refusal without
+explicit selection. Page-side checks require one input event, the expected form model,
+and an untouched bystander. No real browser profile, snippets, vault or login form is
+used. The separate WKWebView fixture continues to cover input-event-driven insertion.
 
 When a secure snippet requires Local Authentication, a non-password destination that
 did not already own Secure Event Input at capture waits for authentication's temporary

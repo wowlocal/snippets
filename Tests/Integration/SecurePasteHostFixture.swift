@@ -43,6 +43,8 @@ private func secureField(in root: AXUIElement) -> AXUIElement? {
 }
 
 private func runDriver(sample: Sample, web: Bool) -> Bool {
+    // Initialize AppKit before consulting NSWorkspace's foreground application.
+    _ = NSApplication.shared
     let parentPID = getppid()
     // Do not turn this test helper into a general-purpose password injector.
     guard let parent = NSRunningApplication(processIdentifier: parentPID),
@@ -51,6 +53,8 @@ private func runDriver(sample: Sample, web: Bool) -> Bool {
     let app = AXUIElementCreateApplication(parentPID)
     guard let windows = attribute(app, "AXWindows") as? [AXUIElement],
           windows.contains(where: { attribute($0, "AXTitle") as? String == fixtureTitle }) else { return false }
+    _ = parent.activate()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
     var field: AXUIElement?
     for _ in 0..<40 {
         field = secureField(in: app)
@@ -60,7 +64,7 @@ private func runDriver(sample: Sample, web: Bool) -> Bool {
     guard let field else { return false }
     let strategy = SecurePasteDeliveryPolicy.strategy(targetIsSecureTextField: true,
         valueIsSettable: true, targetIsInsideWebArea: web, targetHasEligibleWebTextRole: true,
-        webRangeReplacementIsAvailable: true)
+        webRangeReplacementIsAvailable: true, webPasswordFocus: .confirmedField)
     let focused = attribute(app, "AXFocusedUIElement")
     let exactFocus = focused.map { CFEqual($0, field) } ?? false
     if sample.movesFocus { return !exactFocus }

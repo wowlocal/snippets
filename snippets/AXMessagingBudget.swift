@@ -179,9 +179,12 @@ final class AXMessagingBudget {
 /// A password field's current value is intentionally never read. That rules out the
 /// ordinary read/modify/write insertion path and also means a failed write must not be
 /// followed by a second strategy: the first call may have landed even if its reply was
-/// lost. Native secure fields retain whole-value replacement. A browser-backed secure
-/// field instead needs the keyboard input path: AXValue can acknowledge the setter
-/// without updating the form's input-event-driven model. Ordinary web fields retain an
+/// lost. Native secure fields retain whole-value replacement. A focused browser password
+/// uses keyboard input: WebKit's AXValue can acknowledge the setter without updating the
+/// form's input-event-driven model. An explicitly selected browser password that only
+/// exposes container focus may use its addressed setter instead. Chromium dispatches
+/// input/change for that setter; other hosts may not, so delivery stays unconfirmed.
+/// Ordinary web fields retain an
 /// explicitly advertised, range-scoped browser operation. Other captured text surfaces
 /// uses one PID-bound Unicode keyboard event instead of trusting an unverifiable
 /// `AXSelectedText` success. This is based only on target capabilities; secure and
@@ -200,16 +203,30 @@ nonisolated enum SecurePasteDeliveryPolicy {
         case unavailable
     }
 
+    enum WebPasswordFocus: CaseIterable {
+        case confirmedField
+        // Only after fresh validation of the user's exact hit, window and container.
+        case explicitFieldWithContainerFocus
+        case unconfirmed
+    }
+
     static func strategy(
         targetIsSecureTextField: Bool,
         valueIsSettable: Bool,
         targetIsInsideWebArea: Bool,
         targetHasEligibleWebTextRole: Bool,
-        webRangeReplacementIsAvailable: Bool
+        webRangeReplacementIsAvailable: Bool,
+        webPasswordFocus: WebPasswordFocus = .unconfirmed
     ) -> Strategy {
         if targetIsSecureTextField {
             if targetIsInsideWebArea {
-                return targetHasEligibleWebTextRole ? .typeSecureUnicode : .unavailable
+                guard targetHasEligibleWebTextRole else { return .unavailable }
+                switch webPasswordFocus {
+                case .confirmedField: return .typeSecureUnicode
+                case .explicitFieldWithContainerFocus:
+                    return valueIsSettable ? .replaceSecureValue : .unavailable
+                case .unconfirmed: return .unavailable
+                }
             }
             return valueIsSettable ? .replaceSecureValue : .unavailable
         }

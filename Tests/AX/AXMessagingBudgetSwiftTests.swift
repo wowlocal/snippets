@@ -379,17 +379,39 @@ struct AXMessagingBudgetSwiftTests {
         ) == .unavailable)
     }
 
-    @Test("web passwords use input events even when AXValue advertises success",
+    @Test("focused web passwords use input events even when AXValue advertises success",
           arguments: [true, false], [true, false])
     func secureWebPasteDoesNotDependOnAXWrites(valueSettable: Bool, rangeAvailable: Bool) {
         #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: true, valueIsSettable: valueSettable,
             targetIsInsideWebArea: true, targetHasEligibleWebTextRole: true,
-            webRangeReplacementIsAvailable: rangeAvailable) == .typeSecureUnicode)
+            webRangeReplacementIsAvailable: rangeAvailable,
+            webPasswordFocus: .confirmedField) == .typeSecureUnicode)
         #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: true, valueIsSettable: valueSettable,
             targetIsInsideWebArea: true, targetHasEligibleWebTextRole: false,
-            webRangeReplacementIsAvailable: rangeAvailable) == .unavailable)
+            webRangeReplacementIsAvailable: rangeAvailable,
+            webPasswordFocus: .confirmedField) == .unavailable)
+    }
+
+    @Test("explicit web passwords with container focus use only an addressed writable setter",
+          arguments: [true, false], [true, false])
+    func explicitWebPasswordUsesAddressedValue(writable: Bool, eligibleRole: Bool) {
+        #expect(SecurePasteDeliveryPolicy.strategy(
+            targetIsSecureTextField: true, valueIsSettable: writable,
+            targetIsInsideWebArea: true, targetHasEligibleWebTextRole: eligibleRole,
+            webRangeReplacementIsAvailable: false,
+            webPasswordFocus: .explicitFieldWithContainerFocus)
+            == (writable && eligibleRole ? .replaceSecureValue : .unavailable))
+    }
+
+    @Test("a web password without confirmed focus or an explicit hit cannot write",
+          arguments: [true, false])
+    func unconfirmedWebPasswordCannotWrite(writable: Bool) {
+        #expect(SecurePasteDeliveryPolicy.strategy(
+            targetIsSecureTextField: true, valueIsSettable: writable,
+            targetIsInsideWebArea: true, targetHasEligibleWebTextRole: true,
+            webRangeReplacementIsAvailable: true) == .unavailable)
     }
 
     @Test("container evidence never substitutes for keyboard focus in a web password",

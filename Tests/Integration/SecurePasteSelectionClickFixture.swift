@@ -44,7 +44,14 @@ private final class SelectionClickFixture: NSObject, NSApplicationDelegate {
                 let base = SelectionHostView(frame: NSRect(origin: .zero, size: frame.size))
                 host.contentView = base
                 host.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+                _ = NSRunningApplication.current.activate()
+                // A command-line GUI fixture may not activate itself on macOS 27.
+                // An external client can request activation of this exact fixture,
+                // just as the real Secure Paste picker returns focus to its host.
+                let activator = Process()
+                activator.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+                activator.arguments = ["--activate-fixture"]
+                try activator.run()
                 try await Task.sleep(for: .milliseconds(300))
 
                 for scenario in Scenario.allCases {
@@ -121,6 +128,15 @@ private final class SelectionClickFixture: NSObject, NSApplicationDelegate {
 @main
 private struct Main {
     @MainActor static func main() {
+        if CommandLine.arguments.dropFirst() == ["--activate-fixture"] {
+            _ = NSApplication.shared
+            guard let parent = NSRunningApplication(processIdentifier: getppid()),
+                  parent.executableURL?.resolvingSymlinksInPath()
+                    == URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+            else { exit(2) }
+            _ = parent.activate()
+            return
+        }
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else {
             print("This opt-in GUI test requires Accessibility access for the invoking terminal.")
             exit(2)

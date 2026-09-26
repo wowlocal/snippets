@@ -947,8 +947,8 @@ final class SnippetExpansionEngine {
         guard validation == .valid else { reason = diagnosticReason(validation); return nil }
         reason = .unsupportedTarget
         // A container alone may authorize only an addressed AX operation. Secure
-        // web input may be captured here, but preparation and delivery must later
-        // prove that the concrete field (not just this container) owns the keyboard.
+        // web input may be captured here. Direct keyboard input still needs concrete
+        // field focus; an explicit choice may instead use an addressed password setter.
         if secure && !elementIsInsideWebArea(field, axBudget: budget) {
             guard attributeIsSettable(kAXValueAttribute as CFString, on: field, axBudget: budget)
             else { return nil }
@@ -4845,7 +4845,23 @@ final class SnippetExpansionEngine {
             return nil
         }
         let targetIsInsideWebArea = ancestry == true
-        let valueIsSettable = targetIsSecureTextField && !targetIsInsideWebArea && attributeIsSettable(
+        let webPasswordFocus: SecurePasteDeliveryPolicy.WebPasswordFocus
+        if targetIsSecureTextField && targetIsInsideWebArea {
+            if currentFocusMatches(target.textElement, axBudget: budget) {
+                webPasswordFocus = .confirmedField
+            } else if target.containerBinding?.explicitPoint != nil {
+                // The fresh validation above binds this exact field to the user's
+                // click and permits only its original container to retain focus.
+                webPasswordFocus = .explicitFieldWithContainerFocus
+            } else {
+                webPasswordFocus = .unconfirmed
+            }
+        } else {
+            webPasswordFocus = .unconfirmed
+        }
+        let needsValueSetter = targetIsSecureTextField
+            && (!targetIsInsideWebArea || webPasswordFocus == .explicitFieldWithContainerFocus)
+        let valueIsSettable = needsValueSetter && attributeIsSettable(
             kAXValueAttribute as CFString, on: target.textElement, axBudget: budget)
         let targetHasEligibleWebTextRole = targetIsInsideWebArea
             && SecurePasteDeliveryPolicy.isEligibleWebTextRole(role)
@@ -4863,7 +4879,8 @@ final class SnippetExpansionEngine {
             valueIsSettable: valueIsSettable,
             targetIsInsideWebArea: targetIsInsideWebArea,
             targetHasEligibleWebTextRole: targetHasEligibleWebTextRole,
-            webRangeReplacementIsAvailable: webRangeReplacementIsAvailable
+            webRangeReplacementIsAvailable: webRangeReplacementIsAvailable,
+            webPasswordFocus: webPasswordFocus
         ) {
         case .replaceSecureValue:
             return .replaceSecureValue
@@ -4903,6 +4920,9 @@ final class SnippetExpansionEngine {
             guard target.containerBinding == nil else { return nil }
             return .typeUnicode
         case .unavailable:
+            if targetIsSecureTextField && targetIsInsideWebArea && webPasswordFocus == .unconfirmed {
+                reason = .fieldFocusPending
+            }
             return nil
         }
     }

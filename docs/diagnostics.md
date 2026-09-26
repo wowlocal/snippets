@@ -217,7 +217,8 @@ raw errors enter this group, and it adds no synchronous disk writes or per-poll 
 Stale controls, changed windows/ancestry, a different
 concrete focused control, and a changed hit target remain terminal refusals.
 `delivery` is emitted only if the delivery function was reached. AX success for a
-native password-value write is `ambiguous` with reason `ax_write_unconfirmed`, even
+password-value write (native, or an explicitly selected web password with container
+focus) is `ambiguous` with reason `ax_write_unconfirmed`, even
 with `ax_error_code: 0`: API acceptance is not delivery proof. Browser-password Unicode
 delivery is also `ambiguous`, with `direct_input_unconfirmed`, because keyboard posting
 has no host acknowledgement and password values are never read. Normal keyboard dispatch
