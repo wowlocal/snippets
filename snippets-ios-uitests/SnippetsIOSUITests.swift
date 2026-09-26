@@ -413,16 +413,16 @@ final class SnippetsIOSUITests: XCTestCase {
         app.swipeDown()
         retainScreenshot(named: "ipad-02-placeholder-preview")
 
-        let more = app.buttons["More"].firstMatch
-        if more.exists {
-            more.tap()
-            let shortcuts = app.buttons["Keyboard Shortcuts"]
-            if shortcuts.waitForExistence(timeout: 2) {
-                shortcuts.tap()
-                XCTAssertTrue(app.otherElements["shortcut-panel"].waitForExistence(timeout: 3))
-                retainScreenshot(named: "ipad-03-keyboard-shortcuts")
-            }
-        }
+        // Both columns expose More. The library menu is the leftmost one;
+        // the editor menu has no Keyboard Shortcuts action.
+        let more = try XCTUnwrap(app.buttons.matching(identifier: "More")
+            .allElementsBoundByIndex.min { $0.frame.minX < $1.frame.minX })
+        more.tap()
+        let shortcuts = app.buttons["Keyboard Shortcuts"]
+        XCTAssertTrue(shortcuts.waitForExistence(timeout: 3))
+        shortcuts.tap()
+        XCTAssertTrue(app.otherElements["shortcut-panel"].waitForExistence(timeout: 3))
+        retainScreenshot(named: "ipad-03-keyboard-shortcuts")
     }
 
     private func populateEditor(
