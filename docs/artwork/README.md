@@ -6,7 +6,7 @@ edges, thickness, studio lighting, and soft shadows. This is an editorial compos
 not an Xcode view-hierarchy dump or a different mode of the app.
 The studio uses three broad area lights, a neutral environment fill, a transparent
 shadow catcher, and restrained reflections so the interface stays legible.
-Both Mac compositions, the inline illustration, and the consent preview have transparent PNG canvases
+The Mac composition, the inline illustration, and the consent preview have transparent PNG canvases
 and light captions, designed to blend into GitHub's dark README background.
 The Mac, inline, and iPad assets use distinct dark-asset filenames so their URLs
 are distinct from the earlier light artwork and screenshots.
@@ -70,7 +70,7 @@ edges keep the studio lights from creating a bright outline against the dark pag
 Mac UI labels, controls, and content are otherwise preserved.
 For inline insertion, the native suggestion view is preserved as a high-resolution texture;
 the fictional surrounding message and result are typeset for the illustration.
-The original Mac screenshot is retained here as the source texture for both compositions.
+The original Mac screenshot is retained here as the source texture for the layered composition.
 
 ## Render
 
@@ -99,3 +99,9 @@ The layer coordinates correspond to the committed captures; update those coordin
 when replacing a screenshot with a different window size or layout.
 
 The renderer does not launch Snippets, read its storage, or connect to CloudKit.
+
+The committed screenshots and source textures are compressed losslessly after
+capture or rendering. PNG optimization changes only the compressed pixel stream,
+preserving all original metadata chunks; JPEG optimization preserves metadata and
+decoded pixels. Dimensions and decoded RGBA pixels were checked against the original
+files. The generated hero retains its original provenance-bearing file unchanged.

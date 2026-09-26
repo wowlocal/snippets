@@ -232,21 +232,6 @@ def render_mac():
         bpy.ops.wm.save_as_mainfile(filepath=str(options.output/'macos-layers.blend'))
     bpy.ops.render.render(write_still=True)
 
-def render_front():
-    scene,camera=setup()
-    camera.location=(0,0,21)
-    camera.rotation_euler=(0,0,0)
-    image=bpy.data.images.load(str(ROOT/'docs/images/macos-library.jpg'),check_existing=True)
-    screen_layer(image,'Native Mac workspace',(0,0,*image.size),.1)
-    for obj in list(scene.objects):
-        if obj.type=='MESH' and obj.name!='Plane': obj.location.y-=.65
-    label(camera,'A place for everything\nyou keep looking up.',-5.65,4.75,1.08,(.87,.92,.97))
-    label(camera,'SEARCH  /  TAGS  /  PINS  /  YOUR OWN KEYWORDS',-5.60,2.84,.25,(.38,.43,.51),'Medium')
-    label(camera,'SNIPPETS FOR MAC',-5.60,-5.65,.26,(.48,.54,.63))
-    label(camera,'One library for your everyday information.',-5.60,-6.03,.23,(.28,.34,.43),'Regular')
-    scene.render.filepath=str(options.output/'macos-overview-dark-2.png')
-    bpy.ops.render.render(write_still=True)
-
 def render_inline():
     # A flat before/after composition: the interaction must read at README size.
     # Keep the production suggestion view as a texture; typeset only the fictional
@@ -390,7 +375,6 @@ def render_consent():
 
 if options.only in ('mac','all'):
     render_mac()
-    render_front()
 if options.only in ('inline','all'):
     render_inline()
 if options.only in ('consent','all'):
