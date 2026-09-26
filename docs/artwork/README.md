@@ -8,7 +8,7 @@ The studio uses three broad area lights, a neutral environment fill, a transpare
 shadow catcher, and restrained reflections so the interface stays legible.
 Both Mac compositions, the inline illustration, and the consent preview have transparent PNG canvases
 and light captions, designed to blend into GitHub's dark README background.
-The Mac, inline, and iPad assets use explicit `-dark.png` filenames so their URLs
+The Mac, inline, and iPad assets use distinct dark-asset filenames so their URLs
 are distinct from the earlier light artwork and screenshots.
 
 The inline illustration uses a flat before/after layout for readability: the native
@@ -58,7 +58,10 @@ It uses an orthographic camera and unlit colors, without perspective or raised l
   information, not app controls.
 
 The renderer covers the pointer in empty Mac title-bar chrome using a neighboring
-piece of that same chrome. Mac UI labels, controls, and content are otherwise preserved.
+piece of that same chrome. The Mac window texture is inset by two source pixels and clipped to its rounded
+outline to remove the white JPEG fringe outside the native corners. Matte graphite
+edges keep the studio lights from creating a bright outline against the dark page.
+Mac UI labels, controls, and content are otherwise preserved.
 For inline insertion, the native suggestion view is preserved as a high-resolution texture;
 the fictional surrounding message and result are typeset for the illustration.
 The original Mac screenshot is retained here as the source texture for both compositions.

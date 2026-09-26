@@ -155,8 +155,10 @@ def rounded_surface(name, width, height, radius, z, texture=None, uv=(0, 0, 1, 1
 
 
 def body(name, width, height, center, z, radius=.12, thickness=.06):
-    mat = material(name + ' graphite edge', (.065,.067,.075), .28)
-    mat.node_tree.nodes.get('Principled BSDF').inputs['Metallic'].default_value = .3
+    mat = material(name + ' graphite edge', (.065,.067,.075), .65)
+    shader = mat.node_tree.nodes.get('Principled BSDF')
+    shader.inputs['Metallic'].default_value = .1
+    shader.inputs['Specular IOR Level'].default_value = .15
     obj = rounded_surface(name, width, height, radius, z, mat=mat, center=center)
     solid = obj.modifiers.new('Physical thickness', 'SOLIDIFY')
     solid.thickness = thickness
@@ -170,9 +172,14 @@ def body(name, width, height, center, z, radius=.12, thickness=.06):
 def screen_layer(image, name, crop, z, thickness=.06):
     sw, sh = image.size
     x0, y0, x1, y1 = crop
+    if name == 'Native Mac workspace':
+        # The JPEG includes white pixels outside the native rounded window.
+        # Inset its perimeter and match the window radius instead of mapping
+        # that white corner fringe onto the graphite mesh.
+        x0, y0, x1, y1 = x0+2, y0+2, x1-2, y1-2
     width, height = (x1-x0)/100, (y1-y0)/100
     center = ((x0+x1-sw)/200, (sh-y0-y1)/200)
-    radius = min(.13, width/4, height/4)
+    radius = min(.24 if name == 'Native Mac workspace' else .13, width/4, height/4)
     body(name + ' backing', width, height, center, z, radius, thickness)
     return rounded_surface(name, width, height, radius, z+.006, texture=image,
         uv=(x0/sw,1-y1/sh,x1/sw,1-y0/sh),center=center)
@@ -219,7 +226,7 @@ def render_mac():
     label(camera,'LINKS  /  PASSWORDS  /  NOTES  /  API TOKENS',-5.60,2.84,.25,(.38,.43,.51),'Medium')
     label(camera,'NATIVE macOS',-5.60,-5.65,.26,(.48,.54,.63),'Semibold')
     label(camera,'Actual interface · layers separated for illustration',-5.60,-6.03,.23,(.28,.34,.43),'Regular')
-    scene.render.filepath=str(options.output/'macos-layers-dark.png')
+    scene.render.filepath=str(options.output/'macos-layers-dark-2.png')
     if options.save_blend:
         bpy.ops.file.pack_all()
         bpy.ops.wm.save_as_mainfile(filepath=str(options.output/'macos-layers.blend'))
@@ -237,7 +244,7 @@ def render_front():
     label(camera,'SEARCH  /  TAGS  /  PINS  /  YOUR OWN KEYWORDS',-5.60,2.84,.25,(.38,.43,.51),'Medium')
     label(camera,'SNIPPETS FOR MAC',-5.60,-5.65,.26,(.48,.54,.63))
     label(camera,'One library for your everyday information.',-5.60,-6.03,.23,(.28,.34,.43),'Regular')
-    scene.render.filepath=str(options.output/'macos-overview-dark.png')
+    scene.render.filepath=str(options.output/'macos-overview-dark-2.png')
     bpy.ops.render.render(write_still=True)
 
 def render_inline():

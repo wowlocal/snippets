@@ -51,8 +51,8 @@ marked Secure**; ordinary entries and secure metadata remain readable in local s
 ### The Mac is where it all comes together
 
 <p align="center">
-  <img src="docs/images/macos-overview-dark.png" width="49%" alt="Native Mac library with saved meeting links, contact details, notes, tags, and keywords">
-  <img src="docs/images/macos-layers-dark.png" width="49%" alt="3D composition of the actual Mac interface, with the selected entry, editor, keyword, and tags lifted into separate layers">
+  <img src="docs/images/macos-overview-dark-2.png" width="49%" alt="Native Mac library with saved meeting links, contact details, notes, tags, and keywords">
+  <img src="docs/images/macos-layers-dark-2.png" width="49%" alt="3D composition of the actual Mac interface, with the selected entry, editor, keyword, and tags lifted into separate layers">
 </p>
 
 Find a saved link, keep a private credential close, or reuse a whole message. A native
