@@ -209,6 +209,101 @@ struct SecurePasteContainerTargetTests {
     }
 }
 
+@Suite("Secure Paste field selection overlay")
+@MainActor
+struct SecurePasteFieldSelectionOverlayTests {
+    private func fixture() -> (NSWindow, SecurePasteFieldSelectionView) {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 365, height: 529),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = SecurePasteFieldSelectionView(frame: NSRect(x: 0, y: 0, width: 365, height: 529))
+        window.contentView = view
+        view.layoutSubtreeIfNeeded()
+        return (window, view)
+    }
+
+    private func event(_ type: NSEvent.EventType, at point: NSPoint, in window: NSWindow) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                          windowNumber: window.windowNumber, context: nil,
+                          eventNumber: 0, clickCount: 1, pressure: 1)!
+    }
+
+    @Test("hover only previews; the actual click supplies a fresh destination")
+    func hoverDoesNotSelect() async throws {
+        let (window, view) = fixture()
+        defer { window.close() }
+        let field = NSRect(x: 30, y: 250, width: 300, height: 40)
+        var previews = 0
+        var clicked: CGPoint?
+        view.previewField = { _ in previews += 1; return field }
+        view.onClick = { clicked = $0 }
+        view.updatePreview(at: NSPoint(x: 50, y: 270))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(previews == 1)
+        #expect(view.highlightedField == field)
+        #expect(clicked == nil)
+        let click = NSPoint(x: 180, y: 400)
+        view.mouseDown(with: event(.leftMouseDown, at: click, in: window))
+        let screenPoint = window.convertPoint(toScreen: click)
+        #expect(clicked == CGPoint(x: screenPoint.x, y: NSScreen.screens[0].frame.maxY - screenPoint.y))
+        #expect(view.highlightedField == nil)
+    }
+
+    @Test("cancellation drops pending metadata reads and invalid rectangles cannot highlight")
+    func cancelledAndInvalidPreview() async throws {
+        let (window, view) = fixture()
+        defer { window.close() }
+        var previews = 0
+        view.previewField = { _ in previews += 1; return NSRect(x: 20, y: 200, width: 500, height: 30) }
+        view.updatePreview(at: NSPoint(x: 50, y: 210))
+        view.cancelPreview()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(previews == 0)
+        view.updatePreview(at: NSPoint(x: 50, y: 210))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(previews == 1)
+        #expect(view.highlightedField == nil)
+        view.previewField = { _ in
+            view.cancelPreview() // A reentrant cancellation must win over a completed probe.
+            return NSRect(x: 20, y: 200, width: 100, height: 30)
+        }
+        view.updatePreview(at: NSPoint(x: 50, y: 210))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(view.highlightedField == nil)
+        view.previewField = nil
+    }
+
+    @Test("instruction pixels cannot select the covered field; drag and cancel stay local")
+    func instructionInteraction() {
+        let (window, view) = fixture()
+        defer { window.close() }
+        var selections = 0
+        var cancellations = 0
+        view.onClick = { _ in selections += 1 }
+        view.onCancel = { cancellations += 1 }
+        let startFrame = view.instructionFrame
+        let point = NSPoint(x: startFrame.minX + 20, y: startFrame.maxY - 20)
+        view.mouseDown(with: event(.leftMouseDown, at: point, in: window))
+        #expect(selections == 0)
+        let card = view.hitTest(point)!
+        #expect(card !== view)
+        card.mouseDown(with: event(.leftMouseDown, at: point, in: window))
+        let dragged = NSPoint(x: point.x + 500, y: point.y + 500)
+        card.mouseDragged(with: event(.leftMouseDragged, at: dragged, in: window))
+        card.mouseUp(with: event(.leftMouseUp, at: dragged, in: window))
+        view.layoutSubtreeIfNeeded()
+        #expect(view.instructionFrame != startFrame)
+        #expect(view.bounds.contains(view.instructionFrame))
+        let cancelPoint = NSPoint(x: view.instructionFrame.maxX - 22, y: view.instructionFrame.maxY - 20)
+        let button = view.hitTest(cancelPoint) as? NSButton
+        #expect(button != nil)
+        button?.performClick(nil)
+        #expect(cancellations == 1)
+        #expect(selections == 0)
+    }
+}
+
 @Suite("Accessibility messaging budget")
 @MainActor
 struct AXMessagingBudgetSwiftTests {

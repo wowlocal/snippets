@@ -246,6 +246,12 @@ final class SecurePasteFieldSelectionController {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
             self.activationObserver = nil
         }
+        if let view = panel?.contentView as? SecurePasteFieldSelectionView {
+            view.cancelPreview()
+            view.previewField = nil
+            view.onClick = nil
+            view.onCancel = nil
+        }
         panel?.orderOut(nil)
         panel = nil
         let callback = onDismiss
@@ -254,6 +260,7 @@ final class SecurePasteFieldSelectionController {
     }
 
     func show(frame: NSRect, targetPID: pid_t,
+              previewField: @escaping (CGPoint) -> NSRect? = { _ in nil },
               onDismiss: @escaping () -> Void = {}, onSelection: @escaping (CGPoint) -> Void) {
         cancel()
         let generation = generation
@@ -265,9 +272,15 @@ final class SecurePasteFieldSelectionController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
+        panel.acceptsMouseMovedEvents = true
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.fullScreenAuxiliary, .ignoresCycle]
-        let view = FieldSelectionView(frame: NSRect(origin: .zero, size: frame.size))
+        let view = SecurePasteFieldSelectionView(frame: NSRect(origin: .zero, size: frame.size))
+        view.previewField = previewField
+        view.onCancel = { [weak self] in
+            guard let self, self.generation == generation else { return }
+            self.cancel()
+        }
         view.onClick = { [weak self] point in
             guard let self, self.generation == generation, self.isVisible else { return }
             self.cancel()
@@ -286,8 +299,10 @@ final class SecurePasteFieldSelectionController {
         self.expiration = expiration
         DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: expiration)
         panel.orderFrontRegardless()
+        view.layoutSubtreeIfNeeded()
+        view.updatePreview(at: panel.mouseLocationOutsideOfEventStream)
         NSAccessibility.post(element: view, notification: .announcementRequested, userInfo: [
-            .announcement: "Click the destination field for Secure Paste. Command backslash cancels.",
+            .announcement: "Secure Paste. Snippets can’t confirm the active field. Move over a text field to highlight it, then click to choose it. Drag the instruction card if it covers a field. Command backslash cancels.",
             .priority: NSAccessibilityPriorityLevel.high.rawValue,
         ])
     }
@@ -299,44 +314,227 @@ private final class FieldSelectionPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// The highlight is a disposable preview, never authority for insertion. The click
+/// callback always performs a fresh capture, even when a preview is visible.
 @MainActor
-private final class FieldSelectionView: NSView {
+final class SecurePasteFieldSelectionView: NSView {
     var onClick: ((CGPoint) -> Void)?
+    var onCancel: (() -> Void)?
+    var previewField: ((CGPoint) -> NSRect?)?
+    private(set) var highlightedField: NSRect?
+    private let instruction = FieldSelectionInstructionView(frame: .zero)
+    private var instructionOrigin: NSPoint?
+    private var hoverWork: DispatchWorkItem?
+    private var hoverGeneration = 0
+    private var pointerTracking: NSTrackingArea?
+    var instructionFrame: NSRect { instruction.frame }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        let label = NSTextField(wrappingLabelWithString:
-            "Click the destination field\n⌘\\ cancels Secure Paste")
-        label.alignment = .center
-        label.font = .systemFont(ofSize: 14, weight: .semibold)
-        label.textColor = .white
-        label.backgroundColor = .black.withAlphaComponent(0.85)
-        label.drawsBackground = true
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -24),
-        ])
+        instruction.onCancel = { [weak self] in self?.onCancel?() }
+        instruction.onDrag = { [weak self] delta in
+            guard let self else { return }
+            self.cancelPreview()
+            self.instructionOrigin = NSPoint(x: self.instruction.frame.minX + delta.x,
+                                              y: self.instruction.frame.minY + delta.y)
+            self.needsLayout = true
+        }
+        addSubview(instruction)
         setAccessibilityLabel("Select the destination field for Secure Paste")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        let size = instruction.preferredSize(width: min(332, max(0, bounds.width - 32)))
+        let proposed = instructionOrigin ?? NSPoint(x: (bounds.width - size.width) / 2, y: 16)
+        instruction.frame = NSRect(
+            x: min(max(8, proposed.x), max(8, bounds.width - size.width - 8)),
+            y: min(max(8, proposed.y), max(8, bounds.height - size.height - 8)),
+            width: size.width, height: size.height)
+        window?.invalidateCursorRects(for: self)
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else { return nil }
+        if instruction.frame.contains(point) { return super.hitTest(point) }
+        return self
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .crosshair)
+        addCursorRect(instruction.frame, cursor: .openHand)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(tracking)
+        pointerTracking = tracking
+    }
+
+    override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
+    override func mouseMoved(with event: NSEvent) {
+        updatePreview(at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseExited(with event: NSEvent) { cancelPreview() }
+
+    func cancelPreview() {
+        hoverGeneration += 1
+        hoverWork?.cancel()
+        hoverWork = nil
+        highlightedField = nil
+        needsDisplay = true
+    }
+
+    func updatePreview(at localPoint: NSPoint) {
+        let previousHighlight = highlightedField
+        cancelPreview()
+        guard bounds.contains(localPoint), !instruction.frame.contains(localPoint),
+              let point = accessibilityPoint(localPoint) else { return }
+        // Avoid flicker while moving inside the same field; the next probe still
+        // replaces this hint and a click never uses it as targeting evidence.
+        highlightedField = previousHighlight.flatMap { $0.contains(localPoint) ? $0 : nil }
+        let generation = hoverGeneration
+        // Coalesce mouse movement before sending bounded metadata-only AX requests.
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.hoverGeneration == generation else { return }
+            self.hoverWork = nil
+            self.highlightedField = nil
+            self.needsDisplay = true
+            guard let frame = self.previewField?(point),
+                  self.hoverGeneration == generation,
+                  frame.origin.x.isFinite, frame.origin.y.isFinite,
+                  frame.width.isFinite, frame.height.isFinite,
+                  frame.width > 0, frame.height > 0,
+                  self.bounds.contains(frame), frame.contains(localPoint) else { return }
+            self.highlightedField = frame
+            self.needsDisplay = true
+        }
+        hoverWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.controlAccentColor.withAlphaComponent(0.08).setFill()
-        bounds.fill()
+        // Keep the form readable. The outer outline identifies the target window;
+        // only the text control under the pointer receives a strong highlight.
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1.5, dy: 1.5),
+                                   xRadius: 12, yRadius: 12)
+        NSColor.controlAccentColor.withAlphaComponent(0.45).setStroke()
+        outline.lineWidth = 2
+        outline.stroke()
+        if let highlightedField {
+            let field = NSBezierPath(roundedRect: highlightedField.insetBy(dx: -3, dy: -3),
+                                     xRadius: 7, yRadius: 7)
+            NSColor.controlAccentColor.withAlphaComponent(0.18).setStroke()
+            field.lineWidth = 8
+            field.stroke()
+            NSColor.controlAccentColor.setStroke()
+            field.lineWidth = 2
+            field.stroke()
+        }
     }
+
     override func mouseDown(with event: NSEvent) {
-        guard let window, let primaryScreen = NSScreen.screens.first else { return }
         let localPoint = convert(event.locationInWindow, from: nil)
-        // Instruction pixels obscure the host; clicking them cannot establish
-        // user intent for a control hidden underneath the banner.
-        guard !subviews.contains(where: { $0.frame.contains(localPoint) }) else { return }
-        let point = window.convertPoint(toScreen: event.locationInWindow)
-        onClick?(CGPoint(x: point.x, y: primaryScreen.frame.maxY - point.y))
+        // Neither the instruction card nor a stale hover preview authorizes a hit
+        // on the host beneath it. Only this fresh click is sent to the resolver.
+        guard bounds.contains(localPoint), !instruction.frame.contains(localPoint),
+              let point = accessibilityPoint(localPoint) else { return }
+        cancelPreview()
+        onClick?(point)
     }
+
+    private func accessibilityPoint(_ localPoint: NSPoint) -> CGPoint? {
+        guard let window, let primaryScreen = NSScreen.screens.first else { return nil }
+        let point = window.convertPoint(toScreen: convert(localPoint, to: nil))
+        return CGPoint(x: point.x, y: primaryScreen.frame.maxY - point.y)
+    }
+}
+
+@MainActor
+private final class FieldSelectionInstructionView: NSVisualEffectView {
+    var onCancel: (() -> Void)?
+    var onDrag: ((NSPoint) -> Void)?
+    private var dragPoint: NSPoint?
+    private let heading = NSTextField(labelWithString: "Secure Paste")
+    private let shortcut = NSTextField(labelWithString: "⌘\\")
+    private let title = NSTextField(wrappingLabelWithString: "Click the field to paste into")
+    private let detail = NSTextField(wrappingLabelWithString: "Snippets can’t confirm the active field.")
+    private let cancelButton = NSButton()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        material = .popover
+        blendingMode = .behindWindow
+        state = .active
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 0.5
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        toolTip = "Drag this card to move it away from a field."
+        heading.font = .systemFont(ofSize: 11, weight: .medium)
+        heading.textColor = .labelColor
+        shortcut.font = .systemFont(ofSize: 11)
+        shortcut.textColor = .labelColor
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        detail.font = .systemFont(ofSize: 11)
+        detail.textColor = .labelColor
+        cancelButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Cancel Secure Paste")
+        cancelButton.imagePosition = .imageOnly
+        cancelButton.isBordered = false
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelSelection)
+        cancelButton.setAccessibilityLabel("Cancel Secure Paste")
+        cancelButton.toolTip = "Cancel Secure Paste (⌘\\)"
+        for view in [heading, shortcut, title, detail, cancelButton] { addSubview(view) }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    func preferredSize(width: CGFloat) -> NSSize {
+        NSSize(width: width, height: 12 + 16 + 8
+            + textHeight(title, width: width) + 4 + textHeight(detail, width: width) + 12)
+    }
+
+    private func textHeight(_ label: NSTextField, width: CGFloat) -> CGFloat {
+        ceil(label.cell?.cellSize(forBounds:
+            NSRect(x: 0, y: 0, width: max(1, width - 24), height: 1_000)).height ?? 18)
+    }
+
+    override func layout() {
+        super.layout()
+        heading.frame = NSRect(x: 12, y: bounds.height - 28, width: bounds.width - 88, height: 16)
+        shortcut.frame = NSRect(x: bounds.width - 63, y: bounds.height - 28, width: 26, height: 16)
+        cancelButton.frame = NSRect(x: bounds.width - 34, y: bounds.height - 32, width: 24, height: 24)
+        let titleHeight = textHeight(title, width: bounds.width)
+        title.frame = NSRect(x: 12, y: bounds.height - 36 - titleHeight,
+                            width: bounds.width - 24, height: titleHeight)
+        detail.frame = NSRect(x: 12, y: 12, width: bounds.width - 24,
+                             height: textHeight(detail, width: bounds.width))
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // NSView hit testing receives a point in the superview's coordinates.
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        return cancelButton.frame.contains(local) ? cancelButton : self
+    }
+
+    override func resetCursorRects() { addCursorRect(cancelButton.frame, cursor: .arrow) }
+    override func mouseDown(with event: NSEvent) { dragPoint = event.locationInWindow }
+    override func mouseDragged(with event: NSEvent) {
+        guard let previous = dragPoint else { return }
+        dragPoint = event.locationInWindow
+        onDrag?(NSPoint(x: event.locationInWindow.x - previous.x,
+                       y: event.locationInWindow.y - previous.y))
+    }
+    override func mouseUp(with event: NSEvent) { dragPoint = nil }
+    @objc private func cancelSelection() { onCancel?() }
 }

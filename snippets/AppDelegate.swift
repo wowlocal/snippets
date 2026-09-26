@@ -1223,6 +1223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         securePasteFieldSelection.cancel()
         if case .chooseField(let context) = destination {
             securePasteFieldSelection.show(frame: context.frame, targetPID: context.targetPID,
+                previewField: { [weak self] point in
+                    self?.expansionEngine.previewSecurePasteField(in: context, at: point)
+                },
                 onDismiss: { [weak self] in self?.suppressMainWindowForColdServicePicker = false }
             ) { [weak self] point in
                 guard let self else { return }

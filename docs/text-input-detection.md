@@ -195,12 +195,36 @@ accepts only a uniquely focused, enabled standard text control. Failed reads,
 cycles, or exhausted limits cannot establish uniqueness. It never infers the
 destination from a single password field, labels, values, or an app bundle ID.
 
-When no field can be proven focused, a nonactivating overlay asks the user to click
-the destination field. The click is consumed by Snippets, not delivered to the
-underlying page. An application-scoped AX hit test identifies the selected control.
+When no field can be proven focused, a nonactivating overlay explains that Snippets
+cannot confirm the active field and asks the user to click the destination field.
+The explanation also appears in the accessibility announcement. A visible caret or
+focus ring in the host can coexist with missing Accessibility focus evidence.
+The form stays unobscured by a full-window tint: a thin outline identifies the
+window, and a stronger outline previews the eligible text field under the pointer.
+Hover probes are metadata-only, coalesced after 80 ms of pointer inactivity, limited
+to 50 ms, and never logged. The preview neither retains a target nor authorizes a
+write; clicking always runs the original full destination capture again. Leaving
+or cancelling selection clears the hint and any pending probe.
+
+A compact instruction card sits near the bottom of the window, has a Cancel button,
+and can be dragged within the window to uncover a field. Clicking or dragging the
+card never selects the host control underneath it. The click on a field is consumed
+by Snippets, not delivered to the underlying page. An application-scoped AX hit test
+identifies the selected control.
 `⌘\` again cancels; switching applications or waiting 30 seconds also cancels.
 No snippet has been selected or decrypted at this stage. An empty, fully inspected
 container retains the ordinary Copy picker action.
+
+In a local Battle.net login investigation on 2026-09-26, the active application
+owned keyboard focus but reported `AXWebArea` as its focused element and
+`AXFocused=false` on the password field. Repeated reads after activation, an
+application-scoped hit-tested click, and Tab/Shift-Tab navigation did not expose
+the field as focused. Focus-change notifications did not identify it either.
+`AXManualAccessibility` returned `attributeUnsupported` and
+`AXEnhancedUserInterface` returned `notImplemented`. These observations support
+retaining explicit selection for this host; they do not establish that every
+version behaves this way. No password values were read or entered. Do not bypass
+focus validation based on the host name or the presence of a single password field.
 
 The captured binding includes the exact control, container, window and window
 frame, plus the explicitly selected position when applicable. After the picker and

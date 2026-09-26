@@ -891,18 +891,33 @@ final class SnippetExpansionEngine {
     ) -> SecurePasteTarget? {
         let startedAt = ContinuousClock.now
         var reason = DiagnosticSecurePasteReason.unavailable
-        let target = captureExplicitSecurePasteTargetImpl(in: context, at: point, reason: &reason)
+        let target = captureExplicitSecurePasteTargetImpl(in: context, at: point,
+            budget: AXMessagingBudget(), reason: &reason)
         recordSecurePaste(stage: .selection, outcome: target == nil ? .failed : .succeeded,
                           target: target, reason: target == nil ? reason : .none, startedAt: startedAt)
         return target
     }
 
+    /// Hover is only a visual hint. Use the same metadata checks as an explicit
+    /// choice, with a short deadline and no diagnostic events or retained target.
+    /// The actual click must capture and validate its destination again.
+    func previewSecurePasteField(
+        in context: SecurePasteFieldSelection, at point: CGPoint
+    ) -> NSRect? {
+        let budget = AXMessagingBudget(totalTimeoutSeconds: 0.05, perMessageTimeoutSeconds: 0.05)
+        var reason = DiagnosticSecurePasteReason.unavailable
+        guard let target = captureExplicitSecurePasteTargetImpl(in: context, at: point,
+                  budget: budget, reason: &reason),
+              let frame = securePasteWindowFrame(target.textElement, budget: budget),
+              budget.canContinue, context.frame.contains(frame) else { return nil }
+        return frame.offsetBy(dx: -context.frame.minX, dy: -context.frame.minY)
+    }
+
     private func captureExplicitSecurePasteTargetImpl(
         in context: SecurePasteFieldSelection, at point: CGPoint,
-        reason: inout DiagnosticSecurePasteReason
+        budget: AXMessagingBudget, reason: inout DiagnosticSecurePasteReason
     ) -> SecurePasteTarget? {
         guard !isPreparingForTermination, accessibilityGranted else { return nil }
-        let budget = AXMessagingBudget()
         guard currentFocusMatches(context.root, axBudget: budget) else {
             reason = budget.canContinue ? .focusChanged : .budgetExhausted
             return nil
