@@ -207,12 +207,15 @@ final class TransientScreenMessageController {
                 equalTo: messageContent.trailingAnchor,
                 constant: -Self.horizontalPadding
             ),
+            // Keep the text at its intrinsic height when the panel's minimum
+            // height adds space; stretching a label leaves its text top-aligned.
+            messageStack.centerYAnchor.constraint(equalTo: messageContent.centerYAnchor),
             messageStack.topAnchor.constraint(
-                equalTo: messageContent.topAnchor,
+                greaterThanOrEqualTo: messageContent.topAnchor,
                 constant: Self.verticalPadding
             ),
             messageStack.bottomAnchor.constraint(
-                equalTo: messageContent.bottomAnchor,
+                lessThanOrEqualTo: messageContent.bottomAnchor,
                 constant: -Self.verticalPadding
             ),
             label.widthAnchor.constraint(lessThanOrEqualTo: messageStack.widthAnchor),
