@@ -768,15 +768,17 @@ final class SnippetsIOSTests: XCTestCase {
 
         XCTAssertTrue(hosted.controller.handleReturnBeforeSystemBehavior())
         XCTAssertTrue(waitUntil { pasteboard.secureWriteCount == 1 })
+        // The child list owns a separate toast. Return-copy feedback belongs
+        // to the split controller's directly installed status surface.
         let toast = try XCTUnwrap(
-            hosted.controller.view.descendant(withAccessibilityIdentifier: "app-toast")
+            hosted.controller.view.subviews.first { $0.accessibilityIdentifier == "app-toast" }
         )
         let message = try XCTUnwrap(
-            hosted.controller.view.descendant(withAccessibilityIdentifier: "app-toast-message")
+            toast.descendant(withAccessibilityIdentifier: "app-toast-message")
                 as? UILabel
         )
         XCTAssertTrue(toast is UIVisualEffectView)
-        XCTAssertFalse(toast.isHidden)
+        XCTAssertTrue(waitUntil { !toast.isHidden })
         XCTAssertEqual(
             message.text,
             "Copied “Secure”. Secure clipboard expires in 60 seconds."
