@@ -96,7 +96,6 @@ final class SnippetRowCellView: NSTableCellView {
     private let contentPreviewLabel = NSTextField(labelWithString: "")
     private let tagDotsStack = NSStackView()
     private var status = SnippetRowStatus.unconfigured
-    private var hasActiveSelection = false
     private var renderedTagState: (tags: [String], muted: Bool)?
     private static let maxVisibleTagDots = 6
 
@@ -145,42 +144,51 @@ final class SnippetRowCellView: NSTableCellView {
         tagDotsStack.setContentHuggingPriority(.required, for: .horizontal)
         tagDotsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let topRowSpacer = NSView()
-        topRowSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
-
-        let topRow = NSStackView(views: [nameLabel, topRowSpacer, tagDotsStack])
-        topRow.orientation = .horizontal
-        topRow.spacing = 6
-        topRow.alignment = .centerY
-
-        let bottomRowSpacer = NSView()
-        bottomRowSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
-
-        let bottomRow = NSStackView(views: [contentPreviewLabel, bottomRowSpacer, keywordLabel])
-        bottomRow.orientation = .horizontal
-        bottomRow.spacing = 6
-        bottomRow.alignment = .firstBaseline
-
-        let labelsStack = NSStackView(views: [topRow, bottomRow])
-        labelsStack.orientation = .vertical
-        labelsStack.spacing = 2
-        labelsStack.alignment = .leading
-        topRow.widthAnchor.constraint(equalTo: labelsStack.widthAnchor).isActive = true
-        bottomRow.widthAnchor.constraint(equalTo: labelsStack.widthAnchor).isActive = true
-
-        let rootStack = NSStackView(views: [dotView, pinView, labelsStack])
-        rootStack.orientation = .horizontal
-        rootStack.spacing = 8
-        rootStack.alignment = .centerY
-        rootStack.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(rootStack)
+        // Reserve one indicator column and two fixed text lines. Keeping the
+        // preview in the layout even when hidden makes every row share baselines.
+        let indicatorContainer = NSView()
+        let labelsContainer = NSView()
+        for field in [nameLabel, contentPreviewLabel, keywordLabel] {
+            field.translatesAutoresizingMaskIntoConstraints = false
+            field.usesSingleLineMode = true
+            field.maximumNumberOfLines = 1
+            field.setContentHuggingPriority(.required, for: .vertical)
+            field.setContentCompressionResistancePriority(.required, for: .vertical)
+            labelsContainer.addSubview(field)
+        }
+        tagDotsStack.translatesAutoresizingMaskIntoConstraints = false
+        labelsContainer.addSubview(tagDotsStack)
+        indicatorContainer.addSubview(dotView)
+        indicatorContainer.addSubview(pinView)
+        for view in [indicatorContainer, labelsContainer] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
 
         NSLayoutConstraint.activate([
-            rootStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            rootStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            rootStack.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            rootStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
+            indicatorContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            indicatorContainer.widthAnchor.constraint(equalToConstant: 10),
+            indicatorContainer.heightAnchor.constraint(equalToConstant: 10),
+            indicatorContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
+            dotView.centerXAnchor.constraint(equalTo: indicatorContainer.centerXAnchor),
+            dotView.centerYAnchor.constraint(equalTo: indicatorContainer.centerYAnchor),
+            pinView.centerXAnchor.constraint(equalTo: indicatorContainer.centerXAnchor),
+            pinView.centerYAnchor.constraint(equalTo: indicatorContainer.centerYAnchor),
+
+            labelsContainer.leadingAnchor.constraint(equalTo: indicatorContainer.trailingAnchor, constant: 8),
+            labelsContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            labelsContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
+            nameLabel.leadingAnchor.constraint(equalTo: labelsContainer.leadingAnchor),
+            nameLabel.topAnchor.constraint(equalTo: labelsContainer.topAnchor),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: tagDotsStack.leadingAnchor, constant: -6),
+            tagDotsStack.trailingAnchor.constraint(equalTo: labelsContainer.trailingAnchor),
+            tagDotsStack.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            contentPreviewLabel.leadingAnchor.constraint(equalTo: labelsContainer.leadingAnchor),
+            contentPreviewLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 2),
+            contentPreviewLabel.bottomAnchor.constraint(equalTo: labelsContainer.bottomAnchor),
+            contentPreviewLabel.trailingAnchor.constraint(lessThanOrEqualTo: keywordLabel.leadingAnchor, constant: -8),
+            keywordLabel.trailingAnchor.constraint(equalTo: labelsContainer.trailingAnchor),
+            keywordLabel.firstBaselineAnchor.constraint(equalTo: contentPreviewLabel.firstBaselineAnchor),
         ])
     }
 
@@ -252,29 +260,14 @@ final class SnippetRowCellView: NSTableCellView {
     }
 
     private func applyTextColors() {
-        if hasActiveSelection {
-            let selectedText = NSColor.alternateSelectedControlTextColor
-            nameLabel.textColor = selectedText
-            keywordLabel.textColor = selectedText
-            contentPreviewLabel.textColor = selectedText
-            dotView.color = selectedText.withAlphaComponent(status.isEnabled ? 1 : 0.55)
-            pinView.contentTintColor = selectedText
-        } else {
-            nameLabel.textColor = status.isEnabled ? .labelColor : LibraryRowAppearance.previewText
-            keywordLabel.textColor = status.isEnabled && !status.hasKeyword
-                ? LibraryRowAppearance.warningText : LibraryRowAppearance.keywordText
-            contentPreviewLabel.textColor = LibraryRowAppearance.previewText
-            dotView.color = status.isEnabled
-                ? (status.hasKeyword ? LibraryRowAppearance.enabledIndicator : LibraryRowAppearance.warningText)
-                : status.dotColor
-            pinView.contentTintColor = .systemYellow
-        }
-    }
-
-    func updateSelectionAppearance(isActive: Bool) {
-        guard hasActiveSelection != isActive else { return }
-        hasActiveSelection = isActive
-        applyTextColors()
+        nameLabel.textColor = status.isEnabled ? .labelColor : LibraryRowAppearance.previewText
+        keywordLabel.textColor = status.isEnabled && !status.hasKeyword
+            ? LibraryRowAppearance.warningText : LibraryRowAppearance.keywordText
+        contentPreviewLabel.textColor = LibraryRowAppearance.previewText
+        dotView.color = status.isEnabled
+            ? (status.hasKeyword ? LibraryRowAppearance.enabledIndicator : LibraryRowAppearance.warningText)
+            : status.dotColor
+        pinView.contentTintColor = .systemYellow
     }
 }
 
@@ -442,9 +435,6 @@ class SnippetTableRowView: NSTableRowView {
             usesLibraryAppearance: usesLibraryAppearance,
             isEmphasized: isEmphasized
         )
-        for cell in subviews.compactMap({ $0 as? SnippetRowCellView }) {
-            cell.updateSelectionAppearance(isActive: isSelected && isEmphasized)
-        }
     }
 }
 
