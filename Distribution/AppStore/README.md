@@ -40,3 +40,10 @@ asc metadata validate \
 `asc web privacy apply` changes the privacy draft but never publishes it.
 Publishing the privacy declaration and submitting the app for review are
 intentional, separate actions and must not be folded into routine metadata sync.
+
+## Release automation
+
+See [the iOS/iPadOS release workflow](../../docs/ios-release.md) for versioning,
+retained archives, immutable build/release tags, metadata sync, review and publication.
+[Agent prompts](../../docs/prompts/ios-release.md) cover end-to-end submission,
+publication, browser-only steps and recovery.

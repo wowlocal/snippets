@@ -307,6 +307,26 @@ an old `Vault/audit.json` if its privacy-preserving migration failed. Legacy aud
 migration may retain only timestamp, outcome, and the approved keyword; it must discard
 caller paths and PIDs. More operational detail lives in `docs/diagnostics.md`.
 
+## App Store release automation
+
+For iPhone/iPad releases, read `docs/ios-release.md` and
+`skills/release-snippets-ios/SKILL.md`. Ready-to-run agent prompts, including browser
+handoff and interrupted-operation recovery, live in `docs/prompts/ios-release.md`.
+
+- iPhone and iPad share one universal binary. iOS versions are independent of macOS;
+  use `scripts/project-version.py ios --set X.Y.Z`. `Distribution/BumpVersion` edits
+  only the macOS target.
+- `scripts/testflight-ios.sh` preserves the validated archive/dSYM, IPA and source
+  receipt before uploading. Uploads require a clean tree. Do not bypass that with a
+  dirty-source tag or infer an old binary's source from the current HEAD.
+- `scripts/app-store-ios.sh` handles preparation, review submission, manual release
+  and immutable `ios/build/X.Y.Z-N` / `ios/vX.Y.Z` tags. The latter is created only
+  after Apple reports publication. Use the recorded build, without rebuilding.
+- Prefer API/CLI automation; use the agent's browser for actual web-only blockers.
+  An instruction to build or improve release tooling does not request a live release.
+- Verify tooling changes with `python3 scripts/test-ios-release.py`; its Apple calls
+  are fake and its Git repositories are temporary. Preserve that isolation.
+
 ## Installing on a connected iPhone or iPad
 
 Use a Release build when the goal is to see the same Production library as the Mac app.

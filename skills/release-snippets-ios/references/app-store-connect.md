@@ -134,39 +134,22 @@ asc_snippets versions attach-build \
   --output json
 ```
 
-4. Confirm `versions view --include-build` reports the intended build and `PREPARE_FOR_SUBMISSION`. Preview the high-level flow:
+4. For builds recorded by the new workflow, use the resumable submission command:
 
 ```sh
-asc_snippets review submit \
-  --app "$ASC_APP_ID" \
-  --version-id "$version_id" \
-  --build "$build_id" \
-  --platform IOS \
-  --dry-run \
-  --output json
+./scripts/app-store-ios.sh submit --version "$release_version" --build "$build_number"
 ```
 
-5. Submit deterministically. Reuse a single existing `READY_FOR_REVIEW` draft that already contains the target version; otherwise create one, add the version item, verify the relationship, and submit it:
+It validates readiness, reuses a single matching draft, verifies all its items, and
+submits it. For historical builds without a trustworthy receipt, use the explicit
+`asc review submissions-list`, `review items list`, `review submissions-create`,
+`review items add`, and `review submissions-submit` commands after checking their
+current `--help`. Resolve every ID from Apple, reuse an existing matching draft, and
+verify that its only item is the intended app version before submitting. Do not invent
+a source receipt or tag for an old binary.
 
-```sh
-asc_snippets review submissions-create \
-  --app "$ASC_APP_ID" \
-  --platform IOS \
-  --output json
-
-asc_snippets review items add \
-  --submission "$new_submission_id" \
-  --item-type appStoreVersions \
-  --item-id "$version_id" \
-  --output json
-
-asc_snippets review submissions-submit \
-  --id "$new_submission_id" \
-  --confirm \
-  --output json
-```
-
-The high-level `review submit` wrapper may create the draft and item before an eventual-consistency validation fails. After any error, query submissions and items before retrying. If the draft already contains the target version, submit that draft directly instead of creating another.
+5. If a mutation fails, query submissions and items before retrying. The draft or item
+may already exist despite a lost response.
 
 6. Verify `versions view --include-build --include-submission` reports the intended build and `WAITING_FOR_REVIEW`. Recheck TestFlight distribution if public beta availability must remain active.
 

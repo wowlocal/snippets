@@ -41,13 +41,14 @@ Options:
   --build-number <n>      Use an explicit positive integer CFBundleVersion.
                           Default: the project value or the next unused value, whichever is newer.
   --marketing-version <v> Archive and upload with this CFBundleShortVersionString
-                          without editing the project. Use only to replace a build
-                          on an existing App Store version.
+                          without editing the project. Normally set the iOS target
+                          version with scripts/project-version.py ios --set X.Y.Z.
   --uses-non-exempt-encryption <true|false>
                           Record the confirmed export-compliance answer after upload.
   --skip-tests            Skip Core, macOS build, and iPhone/iPad simulator tests.
-  --allow-dirty           Allow --upload from a dirty Git worktree.
-  --keep-artifacts        Keep temporary archive, IPA, and validation files after success.
+  --allow-dirty           Allow a local archive from a dirty worktree (never upload/tag it).
+  --keep-artifacts        Also keep temporary derived data and validation files after success.
+                          Archive, dSYM, IPA, and release receipt are always retained.
   --config <path>         Override the local App Store Connect environment file.
   -h, --help              Show this help.
 
@@ -60,6 +61,11 @@ The script never reads a private key from the repository. Expected local configu
   ~/.config/snippets/app-store-connect.env
 
 Install the App Store Connect CLI once with: brew install asc
+
+Permanent artifacts: ~/.local/share/snippets/releases/ios/<version>/<build>/
+Override with SNIPPETS_IOS_RELEASES_DIR. Every clean processed upload gets an annotated
+local ios/build/<version>-<build> tag. Push explicitly with app-store-ios.sh push-tags.
+Recover a timed-out upload with app-store-ios.sh reconcile; never blindly re-upload.
 
 The build is App Store eligible. It is not marked TestFlight Internal Only, so the same
 binary may later be used for external TestFlight or an App Store submission.
@@ -98,53 +104,7 @@ function cleanup() {
     fi
 }
 
-function validate_private_file() {
-    local path="$1"
-    local description="$2"
-    local owner
-    local mode
-
-    [ -f "$path" ] || fail "$description not found: $path"
-    owner="$(stat -f '%Su' "$path")"
-    mode="$(stat -f '%OLp' "$path")"
-    [ "$owner" = "$(id -un)" ] || fail "$description must be owned by the current user"
-    if (( (8#$mode & 8#077) != 0 )); then
-        fail "$description has unsafe permissions $mode; expected 600 or stricter"
-    fi
-}
-
-function load_configuration() {
-    validate_private_file "$CONFIG_FILE" "App Store Connect configuration"
-    set -a
-    # shellcheck disable=SC1090
-    source "$CONFIG_FILE"
-    set +a
-
-    : "${ASC_KEY_ID:?Missing ASC_KEY_ID in $CONFIG_FILE}"
-    : "${ASC_ISSUER_ID:?Missing ASC_ISSUER_ID in $CONFIG_FILE}"
-    : "${ASC_PRIVATE_KEY_PATH:?Missing ASC_PRIVATE_KEY_PATH in $CONFIG_FILE}"
-    : "${ASC_APP_ID:?Missing ASC_APP_ID in $CONFIG_FILE}"
-    : "${ASC_BUNDLE_ID:?Missing ASC_BUNDLE_ID in $CONFIG_FILE}"
-
-    validate_private_file "$ASC_PRIVATE_KEY_PATH" "App Store Connect private key"
-    ASC_KEY_PATH="$ASC_PRIVATE_KEY_PATH"
-    export ASC_KEY_PATH
-    [ "$ASC_BUNDLE_ID" = "$EXPECTED_BUNDLE_IDENTIFIER" ] \
-        || fail "Configured bundle ID is $ASC_BUNDLE_ID, expected $EXPECTED_BUNDLE_IDENTIFIER"
-    [[ "$ASC_APP_ID" =~ ^[0-9]+$ ]] || fail "ASC_APP_ID must be the numeric Apple ID"
-}
-
-function asc_cli() {
-    env \
-        -u HTTP_PROXY \
-        -u HTTPS_PROXY \
-        -u ALL_PROXY \
-        -u http_proxy \
-        -u https_proxy \
-        -u all_proxy \
-        ASC_STRICT_AUTH=true \
-        asc "$@"
-}
+source "$PROJECT_DIR/scripts/lib/asc-common.sh"
 
 function verify_app_record() {
     local app_json
@@ -229,8 +189,8 @@ function verify_worktree() {
     local status
     status="$(git -C "$PROJECT_DIR" status --porcelain)"
     if [ -n "$status" ]; then
-        if [ "$ACTION" = "upload" ] && [ "$ALLOW_DIRTY" -eq 0 ]; then
-            fail "Git worktree is dirty; commit changes or pass --allow-dirty explicitly"
+        if [ "$ACTION" = "upload" ] || [ "$ALLOW_DIRTY" -eq 0 ]; then
+            fail "Git worktree is dirty; commit changes (local archive only: --allow-dirty)"
         fi
         warn "Building from a dirty Git worktree"
     fi
@@ -639,7 +599,7 @@ function load_processed_build() {
     [ -n "$BUILD_RESOURCE_ID" ] || fail "Could not resolve the processed build in App Store Connect"
     [ "$state" = "VALID" ] || fail "App Store Connect processing ended with state ${state:-unknown}"
     BUILD_USES_NON_EXEMPT_ENCRYPTION="$(jq -r \
-        '.data.attributes.usesNonExemptEncryption // "unset"' <<<"$response")"
+        '.data.attributes.usesNonExemptEncryption | if . == null then "unset" else . end' <<<"$response")"
     if [ "$BUILD_USES_NON_EXEMPT_ENCRYPTION" = "unset" ] \
         && [ -n "$USES_NON_EXEMPT_ENCRYPTION" ]; then
         info "Recording the confirmed export-compliance answer"
@@ -787,6 +747,7 @@ require_command stat
 require_command openssl
 require_command base64
 require_command install
+require_command python3
 
 load_configuration
 verify_app_record
@@ -800,11 +761,23 @@ if [ "$ACTION" = "check" ]; then
 fi
 
 verify_worktree
+SOURCE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+SOURCE_DIRTY=0
+[ -z "$(git -C "$PROJECT_DIR" status --porcelain)" ] || SOURCE_DIRTY=1
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/snippets-testflight.XXXXXX")"
 trap cleanup EXIT
 run_preflight_tests
 archive_and_export
 verify_exported_ipa
+
+# Preserve the exact validated binary and its source before any network mutation.
+record_args=(record --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
+    --archive "$ARCHIVE_PATH" --ipa "$IPA_PATH" --commit "$SOURCE_COMMIT")
+[ "$SOURCE_DIRTY" -eq 0 ] || record_args+=(--dirty)
+[ "$SKIP_TESTS" -eq 0 ] || record_args+=(--skip-tests)
+RELEASE_DIR="$(python3 "$PROJECT_DIR/scripts/lib/ios_release.py" "${record_args[@]}")"
+IPA_PATH="$RELEASE_DIR/Snippets.ipa"
+success "Archive, dSYM, IPA and receipt retained: $RELEASE_DIR"
 
 if [ "$ACTION" = "archive" ]; then
     validate_with_apple
@@ -813,8 +786,12 @@ if [ "$ACTION" = "archive" ]; then
     exit 0
 fi
 
+python3 "$PROJECT_DIR/scripts/lib/ios_release.py" mark-uploading \
+    --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
 upload_to_apple
 load_processed_build
+python3 "$PROJECT_DIR/scripts/lib/ios_release.py" reconcile \
+    --version "$MARKETING_VERSION" --build "$BUILD_NUMBER"
 if [ -n "$GROUP_NAME" ]; then
     add_build_to_group
 fi

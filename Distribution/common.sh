@@ -88,7 +88,7 @@ SCHEME="Snippets"
 # read_version — prints the current MARKETING_VERSION from the project file
 function read_version() {
     local ver
-    ver=$(grep 'MARKETING_VERSION' "$PBXPROJ" | head -1 | sed -E 's/.*= ([^;]+);/\1/')
+    ver=$(python3 "$PROJECT_DIR/scripts/project-version.py" macos | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
     if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         red_text
         echo "Could not read valid version from project: $ver" >&2
