@@ -96,6 +96,7 @@ final class SnippetRowCellView: NSTableCellView {
     private let contentPreviewLabel = NSTextField(labelWithString: "")
     private let tagDotsStack = NSStackView()
     private var status = SnippetRowStatus.unconfigured
+    private var hasActiveSelection = false
     private var renderedTagState: (tags: [String], muted: Bool)?
     private static let maxVisibleTagDots = 6
 
@@ -251,9 +252,29 @@ final class SnippetRowCellView: NSTableCellView {
     }
 
     private func applyTextColors() {
-        nameLabel.textColor = status.nameColor
-        keywordLabel.textColor = status.keywordColor
-        contentPreviewLabel.textColor = status.previewColor
+        if hasActiveSelection {
+            let selectedText = NSColor.alternateSelectedControlTextColor
+            nameLabel.textColor = selectedText
+            keywordLabel.textColor = selectedText
+            contentPreviewLabel.textColor = selectedText
+            dotView.color = selectedText.withAlphaComponent(status.isEnabled ? 1 : 0.55)
+            pinView.contentTintColor = selectedText
+        } else {
+            nameLabel.textColor = status.isEnabled ? .labelColor : LibraryRowAppearance.previewText
+            keywordLabel.textColor = status.isEnabled && !status.hasKeyword
+                ? LibraryRowAppearance.warningText : LibraryRowAppearance.keywordText
+            contentPreviewLabel.textColor = LibraryRowAppearance.previewText
+            dotView.color = status.isEnabled
+                ? (status.hasKeyword ? LibraryRowAppearance.enabledIndicator : LibraryRowAppearance.warningText)
+                : status.dotColor
+            pinView.contentTintColor = .systemYellow
+        }
+    }
+
+    func updateSelectionAppearance(isActive: Bool) {
+        guard hasActiveSelection != isActive else { return }
+        hasActiveSelection = isActive
+        applyTextColors()
     }
 }
 
@@ -280,9 +301,16 @@ class SnippetTableRowView: NSTableRowView {
 
     var hoverHighlightOpacity: CGFloat { 1 }
 
+    var usesLibraryAppearance: Bool { true }
+
     override var isEmphasized: Bool {
-        get { false }
-        set {}
+        get {
+            guard usesLibraryAppearance, let window, window.isKeyWindow,
+                  let table = superview as? NSTableView,
+                  let responder = window.firstResponder as? NSView else { return false }
+            return responder === table || responder.isDescendant(of: table)
+        }
+        set { updateHighlight() }
     }
 
     /// With `selectionHighlightStyle = .none` AppKit has no selection of its own to
@@ -312,6 +340,9 @@ class SnippetTableRowView: NSTableRowView {
             name: NSWindow.didResignKeyNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(windowDidUpdate(_:)),
+            name: NSWindow.didUpdateNotification, object: nil)
     }
 
     @available(*, unavailable)
@@ -335,6 +366,7 @@ class SnippetTableRowView: NSTableRowView {
             horizontalInset: highlightHorizontalInset,
             verticalInset: highlightVerticalInset
         )
+        updateHighlight()
     }
 
     override func updateTrackingAreas() {
@@ -385,6 +417,11 @@ class SnippetTableRowView: NSTableRowView {
         updateHighlight()
     }
 
+    @objc private func windowDidUpdate(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        updateHighlight()
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
         // The layer-backed highlight subview paints this without the jagged legacy
         // `NSBezierPath.stroke()` edge.
@@ -401,8 +438,13 @@ class SnippetTableRowView: NSTableRowView {
         highlightView.update(
             isSelected: isSelected,
             isHovering: isHovering,
-            drawsSelectionBorder: windowIsActive || drawsSelectionBorderWhenWindowInactive
+            drawsSelectionBorder: windowIsActive || drawsSelectionBorderWhenWindowInactive,
+            usesLibraryAppearance: usesLibraryAppearance,
+            isEmphasized: isEmphasized
         )
+        for cell in subviews.compactMap({ $0 as? SnippetRowCellView }) {
+            cell.updateSelectionAppearance(isActive: isSelected && isEmphasized)
+        }
     }
 }
 
@@ -413,6 +455,7 @@ class SnippetTableRowView: NSTableRowView {
 /// paint the unemphasized grey bar — a flat opaque smear across translucent glass.
 /// The table runs `selectionHighlightStyle = .none` and this view paints instead.
 final class SuggestionTableRowView: SnippetTableRowView {
+    override var usesLibraryAppearance: Bool { false }
     override var drawsSelectionBorderWhenWindowInactive: Bool { true }
     override var hoverHighlightOpacity: CGFloat { 0.35 }
 
