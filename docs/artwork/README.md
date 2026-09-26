@@ -104,6 +104,4 @@ The committed screenshots and source textures are compressed losslessly after
 capture or rendering. PNG optimization changes only the compressed pixel stream,
 preserving all original metadata chunks; JPEG optimization preserves metadata and
 decoded pixels. Dimensions and decoded RGBA pixels were checked against the original
-files. Embedded metadata is retained, including the generated artwork's provenance
-chunks. The same lossless pass covers the repository's App Store screenshots,
-marketing images, and macOS and Android icon assets.
+files. The generated hero retains its original provenance-bearing file unchanged.
