@@ -151,7 +151,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Constructed eagerly, unlike the engine: it is cheap, it holds no resources, and
     /// having it here means the translation between the stores and the wire format is
     /// exercised by the app's own object graph rather than only by tests.
-    lazy var syncLibrary = SnippetLibraryBridge(store: store, secureStore: secureStore)
+    lazy var syncLibrary = SnippetLibraryBridge(
+        store: store, secureStore: secureStore,
+        flushPendingEditorEdits: {
+            for controller in NSApp.windows.compactMap({ $0.contentViewController as? ViewController }) {
+                try controller.flushPendingSecureEditForSync()
+            }
+        })
     lazy var backendSelection = SyncBackendSelectionStore()
     lazy var cloudBootstrap = SnippetsCloudAccountBootstrap(selection: backendSelection)
 

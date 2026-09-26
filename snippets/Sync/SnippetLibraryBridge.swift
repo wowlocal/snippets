@@ -27,6 +27,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     private let lockTimeout: TimeInterval
     private let metadataURL: URL
     private let temporaryDirectory: URL
+    private let flushPendingEditorEdits: () throws -> Void
     private var metadataCache: SyncBase?
 
     private struct ApplyResult {
@@ -48,13 +49,15 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         secureStore: SecureSnippetStore,
         lockTimeout: TimeInterval = 2.0,
         metadataURL: URL = SnippetStorageLocations.syncLibraryMetadataFileURL,
-        temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL
+        temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL,
+        flushPendingEditorEdits: @escaping () throws -> Void = {}
     ) {
         self.store = store
         self.secureStore = secureStore
         self.lockTimeout = lockTimeout
         self.metadataURL = metadataURL
         self.temporaryDirectory = temporaryDirectory
+        self.flushPendingEditorEdits = flushPendingEditorEdits
     }
 
     func activateProtocolLocations(_ locations: SyncProtocolLocations) {
@@ -86,6 +89,9 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 recoveryContext: .localLibraryQuarantine)
         }
         do {
+            // Secure edits may still live in the macOS editor's debounce. They must
+            // join the durable primary state before either projection or remote CAS.
+            try flushPendingEditorEdits()
             try store.flushPendingWritesForSync()
         } catch {
             // Journal desired/offered state is allowed to outlive the process. It may not
@@ -94,7 +100,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
             // accepted change. Stop before metadata, journal, sealing, or transport.
             throw SyncEngineFailure(
                 reason: .localLibraryQuarantined,
-                detail: "the latest ordinary snippet edits could not be made durable; "
+                detail: "the latest snippet edits could not be made durable; "
                     + "sync stopped before offering them to iCloud")
         }
 
@@ -726,11 +732,12 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         // so an unflushed in-memory edit would be invisible to it and then land on top
         // of the merged result a fraction of a second later.
         do {
+            try flushPendingEditorEdits()
             try store.flushPendingWritesForSync()
         } catch {
             throw SyncEngineFailure(
                 reason: .localLibraryQuarantined,
-                detail: "the latest ordinary snippet edits could not be made durable; "
+                detail: "the latest snippet edits could not be made durable; "
                     + "sync stopped before applying iCloud changes")
         }
 
@@ -1337,13 +1344,27 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         // Suppress their independent callbacks and publish one explicitly remote change:
         // UI still refreshes, but the outbound debounce must not replay a round merely
         // because this round applied what it just fetched.
+        let previousSecureRecords = Dictionary(uniqueKeysWithValues:
+            Set(outcome.value.changedIDs).compactMap { id in
+                secureStore.record(id).map { (id, $0) }
+            })
         store.reloadAfterExternalWrite(notifyChange: false)
         secureStore.reload(notifyChange: false)
+        // An echo may advance protocol clocks without changing anything displayed.
+        // Refresh the list, but keep the active field editor (including unfinished
+        // keyword whitespace and selection) when metadata and sealed body agree.
+        let editorChangedIDs = Set(outcome.value.changedIDs).filter { id in
+            guard let before = previousSecureRecords[id],
+                  let after = secureStore.record(id) else { return true }
+            return before.name != after.name || before.keyword != after.keyword
+                || before.tags != after.tags || before.isEnabled != after.isEnabled
+                || before.isPinned != after.isPinned || before.sealed != after.sealed
+        }
         // Keep exact affected IDs process-local so UI can preserve a revealed editor
         // when this batch only changed other snippets.
         store.coordinatedReloadDidFinish(
             .remoteSync,
-            changedIDs: Set(outcome.value.changedIDs))
+            changedIDs: editorChangedIDs)
         return ApplyOutcome(
             changedIDs: outcome.value.changedIDs,
             deferredIDs: Set(guarded.deferredIDs)

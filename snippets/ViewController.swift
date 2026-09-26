@@ -304,6 +304,7 @@ final class ViewController: NSViewController {
     /// The debounce for secure content edits, mirroring `SnippetStore`'s own.
     var pendingSecureEdit: Snippet?
     var secureEditWorkItem: DispatchWorkItem?
+    var isFlushingSecureEdit = false
 
     /// A private undo manager for the content editor.
     ///
@@ -593,7 +594,10 @@ final class ViewController: NSViewController {
             // focus is precisely when a keyword moves, and the suggestion chips
             // are filtered against this on that same keystroke.
             rebuildEnabledKeywordKeys()
-            if source == .local && isEditingDetails {
+            // Vault saves synchronously publish an external change. Rebinding in
+            // our own save would replace the active field editor and its selection,
+            // and can expose the old body between metadata and content writes.
+            if isFlushingSecureEdit || (source == .local && isEditingDetails) {
                 scheduleEditorListReload()
                 return
             }

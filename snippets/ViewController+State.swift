@@ -998,40 +998,52 @@ extension ViewController {
     /// Must run before anything reads the vault from disk — committing the editor,
     /// promoting, demoting, quitting — or that reader sees the pre-edit record.
     func flushPendingSecureEdit() {
-        secureEditWorkItem?.cancel()
-        secureEditWorkItem = nil
-        guard let snippet = pendingSecureEdit else { return }
-        pendingSecureEdit = nil
-
-        guard let app = NSApp.delegate as? AppDelegate else { return }
-        let secureStore = app.secureStore
-
         do {
-            // Only when something actually moved. Typing in the body changes no
-            // metadata, and an unconditional write there was most of the storm.
-            if let record = secureStore.record(snippet.id),
-               record.name != snippet.name
-                   || record.keyword != snippet.normalizedKeyword
-                   || record.tags != snippet.tags
-                   || record.isEnabled != snippet.isEnabled {
-                try secureStore.updateMetadata(
-                    id: snippet.id,
-                    name: snippet.name,
-                    keyword: snippet.keyword,
-                    tags: snippet.tags,
-                    isEnabled: snippet.isEnabled)
-            }
-
-            // The latch, not a string comparison: content is written back only if this
-            // editor is currently displaying the real decrypted text for this exact
-            // record.
-            if secureContentEditableForID == snippet.id,
-               (try? secureStore.content(for: snippet.id)) != snippet.content {
-                try secureStore.setContent(snippet.content, for: snippet.id)
-            }
+            try flushPendingSecureEditForSync()
         } catch {
             importExportMessage = "Could not save the secure snippet: \(error)"
         }
+    }
+
+    /// Sync must stop if a draft cannot be saved; reading the old vault would turn
+    /// unsaved UI text into an apparently authoritative older remote generation.
+    func flushPendingSecureEditForSync() throws {
+        secureEditWorkItem?.cancel()
+        secureEditWorkItem = nil
+        guard let snippet = pendingSecureEdit else { return }
+
+        guard let secureStore = store.secureProvider as? SecureSnippetStore else {
+            throw SecureSnippetStore.Failure.noSuchRecord
+        }
+        guard !isFlushingSecureEdit else { return }
+        isFlushingSecureEdit = true
+        defer { isFlushingSecureEdit = false }
+        guard secureStore.record(snippet.id) != nil else {
+            throw SecureSnippetStore.Failure.noSuchRecord
+        }
+        // Only when something actually moved. Typing in the body changes no
+        // metadata, and an unconditional write there was most of the storm.
+        if let record = secureStore.record(snippet.id),
+           record.name != snippet.name
+               || record.keyword != snippet.normalizedKeyword
+               || record.tags != snippet.tags
+               || record.isEnabled != snippet.isEnabled {
+            try secureStore.updateMetadata(
+                id: snippet.id,
+                name: snippet.name,
+                keyword: snippet.keyword,
+                tags: snippet.tags,
+                isEnabled: snippet.isEnabled)
+        }
+
+        // The latch, not a string comparison: content is written back only if this
+        // editor is currently displaying the real decrypted text for this exact
+        // record.
+        if secureContentEditableForID == snippet.id,
+           (try? secureStore.content(for: snippet.id)) != snippet.content {
+            try secureStore.setContent(snippet.content, for: snippet.id)
+        }
+        pendingSecureEdit = nil
     }
 
     /// Stands in for the text while the vault is locked.
