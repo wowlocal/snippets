@@ -385,10 +385,13 @@ enum LibraryRowAppearance {
     }
 
     static func fill(isSelected: Bool, isEmphasized: Bool, isDark: Bool) -> NSColor {
-        if isSelected && isEmphasized { return .selectedContentBackgroundColor }
         if isSelected {
-            // A neutral selection remains visible when focus moves to the editor.
-            return NSColor(white: isDark ? 0.27 : 0.87, alpha: 1)
+            // Focus changes only the strength of the neutral selection fill.
+            // Keep the brightest dark fill at 0.27 for readable secondary text.
+            let white: CGFloat = isDark
+                ? (isEmphasized ? 0.27 : 0.24)
+                : (isEmphasized ? 0.84 : 0.88)
+            return NSColor(white: white, alpha: 1)
         }
         return (isDark ? NSColor.white : NSColor.black).withAlphaComponent(
             LiquidGlassDesign.prefersHighContrastHighlight ? 0.07 : 0.025)
@@ -472,10 +475,10 @@ final class RowHighlightView: NSView {
         layer?.backgroundColor = resolvedCGColor(fillColor)
 
         if isSelected && drawsSelectionBorder {
-            let strokeColor: NSColor = usesLibraryAppearance && isEmphasized
-                ? .keyboardFocusIndicatorColor
-                : (usesLibraryAppearance && LiquidGlassDesign.prefersHighContrastHighlight
-                    ? .labelColor : LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark))
+            // Selection keeps its quiet neutral edge. Keyboard focus changes
+            // the library fill, never the outline or the row's text colors.
+            let strokeColor: NSColor = usesLibraryAppearance && LiquidGlassDesign.prefersHighContrastHighlight
+                ? .labelColor : LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark)
             layer?.borderWidth = usesLibraryAppearance && LiquidGlassDesign.prefersHighContrastHighlight
                 ? 2 : LiquidGlassDesign.Metrics.hairlineWidth
             layer?.borderColor = resolvedCGColor(strokeColor)
@@ -747,7 +750,7 @@ final class EditorInputSurface: NSView {
         guard role == .input else { return }
         refreshFocus()
         let highContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        let width: CGFloat = hasEditorFocus || highContrast ? 2 : 1
+        let width: CGFloat = highContrast ? 2 : 1
         let strokeRadius = max(0, cornerRadius - width / 2)
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: width / 2, dy: width / 2),
             xRadius: strokeRadius, yRadius: strokeRadius)
@@ -756,7 +759,13 @@ final class EditorInputSurface: NSView {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let border = highContrast ? NSColor.labelColor
             : (isDark ? NSColor.white : NSColor.black).withAlphaComponent(0.10)
-        (hasEditorFocus ? NSColor.controlAccentColor : border).setStroke()
+        // Large editors need a visible focus cue without a heavy saturated frame.
+        // Preserve the stronger system accent for Increase Contrast.
+        let neutral = NSColor(white: isDark ? 0.55 : 0.45, alpha: 1)
+        let focusColor = highContrast ? NSColor.controlAccentColor
+            : (NSColor.controlAccentColor.blended(withFraction: 0.5, of: neutral)
+                ?? NSColor.controlAccentColor)
+        (hasEditorFocus ? focusColor : border).setStroke()
         path.lineWidth = width
         path.stroke()
     }
