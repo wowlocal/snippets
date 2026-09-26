@@ -770,9 +770,7 @@ extension ViewController {
         secureDemoteStrip.setViews([secureDemoteLabel, NSView(), demoteCancel, demoteConfirm], in: .leading)
         secureDemoteStrip.isHidden = true
 
-        let snippetContainer = NSView()
-        snippetContainer.translatesAutoresizingMaskIntoConstraints = false
-        configureEditorSurface(snippetContainer, backgroundColor: .textBackgroundColor)
+        let snippetContainer = EditorInputSurface()
 
         let snippetScrollView = NSScrollView()
         snippetScrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -999,7 +997,7 @@ extension ViewController {
             snippetScrollView.bottomAnchor.constraint(equalTo: snippetContainer.bottomAnchor)
         ])
 
-        keywordPrefixLabel.font = .monospacedSystemFont(ofSize: 16, weight: .medium)
+        keywordPrefixLabel.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         keywordPrefixLabel.textColor = .tertiaryLabelColor
         keywordPrefixLabel.setContentHuggingPriority(.required, for: .horizontal)
         keywordPrefixLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -1073,9 +1071,8 @@ extension ViewController {
         enabledCheckbox.action = #selector(enabledStateChanged)
         enabledCheckbox.setContentHuggingPriority(.required, for: .horizontal)
 
-        let previewContainer = NSView()
-        previewContainer.translatesAutoresizingMaskIntoConstraints = false
-        configureEditorSurface(previewContainer, backgroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.08))
+        let previewContainer = EditorInputSurface(role: .preview)
+        previewValueField.textColor = .secondaryLabelColor
 
         previewValueField.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
         previewValueField.lineBreakMode = .byCharWrapping
@@ -1098,28 +1095,9 @@ extension ViewController {
 
         previewSectionStack.isHidden = true
 
-        // A plain constrained row is intentional here. NSStackView sizes an
-        // empty NSTextField from its cell's intrinsic width; once the warning
-        // became an in-field overlay that let the field collapse around the
-        // symbol. Pinning both edges makes the field own all remaining width,
-        // with or without text.
-        let keywordRow = NSView()
-        keywordRow.translatesAutoresizingMaskIntoConstraints = false
-        keywordPrefixLabel.translatesAutoresizingMaskIntoConstraints = false
-        keywordField.translatesAutoresizingMaskIntoConstraints = false
-        keywordRow.addSubview(keywordPrefixLabel)
-        keywordRow.addSubview(keywordField)
-        NSLayoutConstraint.activate([
-            keywordPrefixLabel.leadingAnchor.constraint(equalTo: keywordRow.leadingAnchor),
-            keywordPrefixLabel.firstBaselineAnchor.constraint(
-                equalTo: keywordField.firstBaselineAnchor),
-            keywordField.leadingAnchor.constraint(
-                equalTo: keywordPrefixLabel.trailingAnchor,
-                constant: 2),
-            keywordField.trailingAnchor.constraint(equalTo: keywordRow.trailingAnchor),
-            keywordField.topAnchor.constraint(equalTo: keywordRow.topAnchor),
-            keywordField.bottomAnchor.constraint(equalTo: keywordRow.bottomAnchor),
-        ])
+        let keywordRow = EditorInputSurface.wrapping(keywordField, prefix: keywordPrefixLabel)
+        let nameRow = EditorInputSurface.wrapping(nameField)
+        let tagsRow = EditorInputSurface.wrapping(tagsField)
 
         // Content leads: it is the only field a snippet cannot do without, and
         // the keyword follows because it is the only one that makes it fire.
@@ -1152,10 +1130,10 @@ extension ViewController {
             title: "Keyword",
             fields: [keywordRow]
         )
-        let nameSection = EditorFormSection(title: "Name", fields: [nameField])
+        let nameSection = EditorFormSection(title: "Name", fields: [nameRow])
         let tagsSection = EditorFormSection(
             title: "Tags",
-            fields: [tagsField, editorSuggestedTagsFlow],
+            fields: [tagsRow, editorSuggestedTagsFlow],
             fieldSpacing: 6
         )
         // No label of its own — the checkbox states a property rather than
