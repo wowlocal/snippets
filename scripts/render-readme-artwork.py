@@ -16,7 +16,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--output', type=Path, default=ROOT / 'docs/images')
 parser.add_argument('--samples', type=int, default=64)
 parser.add_argument('--width', type=int, default=1800)
-parser.add_argument('--only', choices=['mac', 'inline', 'all'], default='all')
+parser.add_argument('--only', choices=['mac', 'inline', 'consent', 'all'], default='all')
 parser.add_argument('--save-blend', action='store_true', help='Also export portable Blender scenes')
 options = parser.parse_args(args)
 options.output.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,7 @@ def setup():
     scene.render.resolution_y = round(options.width * 1.02)
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = 'PNG'
-    scene.render.image_settings.color_mode = 'RGB'
+    scene.render.image_settings.color_mode = 'RGBA'
     scene.view_settings.view_transform = 'Standard'
     scene.view_settings.look = 'None'
     # A neutral studio environment opens the shadows; broad softboxes give the
@@ -52,14 +52,14 @@ def setup():
     background = scene.world.node_tree.nodes.get('Background')
     background.inputs['Color'].default_value = (.97, .98, 1, 1)
     background.inputs['Strength'].default_value = .65
-    scene.render.film_transparent = False
-    floor = material('Porcelain', (.64, .65, .67), 1)
+    # Let the README's dark page show through rather than baking in a white card.
+    scene.render.film_transparent = True
+    floor = material('Shadow catcher', (.5, .5, .5), 1)
     floor_shader = floor.node_tree.nodes.get('Principled BSDF')
     floor_shader.inputs['Specular IOR Level'].default_value = .08
-    floor_shader.inputs['Emission Color'].default_value = (.64, .65, .67, 1)
-    floor_shader.inputs['Emission Strength'].default_value = .06
     bpy.ops.mesh.primitive_plane_add(size=200, location=(0, 0, -1.0))
     bpy.context.object.data.materials.append(floor)
+    bpy.context.object.is_shadow_catcher = True
     for name, loc, power, size in [
             ('Key softbox', (-5, 2, 10), 1000, 8),
             ('Edge softbox', (6, 3, 7), 700, 6),
@@ -215,10 +215,10 @@ def render_mac():
     offset = camera.rotation_euler.to_quaternion() @ Vector((.25,-1.3,0))
     for obj in list(scene.objects):
         if obj.type=='MESH' and obj.name!='Plane': obj.location += offset
-    label(camera,'Your library.\nWithin reach.',-5.65,4.75,1.08,(.022,.028,.043))
-    label(camera,'LINKS  /  PASSWORDS  /  NOTES  /  API TOKENS',-5.60,2.84,.25,(.22,.23,.32),'Medium')
-    label(camera,'NATIVE macOS',-5.60,-5.65,.26,(.15,.17,.23),'Semibold')
-    label(camera,'Actual interface · layers separated for illustration',-5.60,-6.03,.23,(.32,.34,.40),'Regular')
+    label(camera,'Your library.\nWithin reach.',-5.65,4.75,1.08,(.87,.92,.97))
+    label(camera,'LINKS  /  PASSWORDS  /  NOTES  /  API TOKENS',-5.60,2.84,.25,(.38,.43,.51),'Medium')
+    label(camera,'NATIVE macOS',-5.60,-5.65,.26,(.48,.54,.63),'Semibold')
+    label(camera,'Actual interface · layers separated for illustration',-5.60,-6.03,.23,(.28,.34,.43),'Regular')
     scene.render.filepath=str(options.output/'macos-layers.png')
     if options.save_blend:
         bpy.ops.file.pack_all()
@@ -233,10 +233,10 @@ def render_front():
     screen_layer(image,'Native Mac workspace',(0,0,*image.size),.1)
     for obj in list(scene.objects):
         if obj.type=='MESH' and obj.name!='Plane': obj.location.y-=.65
-    label(camera,'A place for everything\nyou keep looking up.',-5.65,4.75,1.08,(.022,.028,.043))
-    label(camera,'SEARCH  /  TAGS  /  PINS  /  YOUR OWN KEYWORDS',-5.60,2.84,.25,(.22,.23,.32),'Medium')
-    label(camera,'SNIPPETS FOR MAC',-5.60,-5.65,.26,(.15,.17,.23))
-    label(camera,'One library for your everyday information.',-5.60,-6.03,.23,(.32,.34,.40),'Regular')
+    label(camera,'A place for everything\nyou keep looking up.',-5.65,4.75,1.08,(.87,.92,.97))
+    label(camera,'SEARCH  /  TAGS  /  PINS  /  YOUR OWN KEYWORDS',-5.60,2.84,.25,(.38,.43,.51),'Medium')
+    label(camera,'SNIPPETS FOR MAC',-5.60,-5.65,.26,(.48,.54,.63))
+    label(camera,'One library for your everyday information.',-5.60,-6.03,.23,(.28,.34,.43),'Regular')
     scene.render.filepath=str(options.output/'macos-overview.png')
     bpy.ops.render.render(write_still=True)
 
@@ -269,13 +269,11 @@ def render_inline():
         mat.node_tree.links.new(emission.outputs[0], output.inputs['Surface'])
         return mat
 
-    rounded_surface('Paper', 18.2, 11, 0, -.1,
-                    mat=flat_material('Paper', '#f5f6f8'))
-    field = flat_material('Illustrative message field', '#2a303e')
+    field = flat_material('Illustrative message field', '#171e29')
     for x in (-4.15, 4.15):
         rounded_surface('Message', 7.9, 5.5, .24, 0, mat=field, center=(x, -.75))
 
-    ink, muted = color('#1b2332'), color('#6b7280')
+    ink, muted = color('#f0f6fc'), color('#9ba8b9')
     text, accent = color('#eef0f6'), color('#b4adff')
     label(camera, 'Your saved links. Right where you type.', -8.10, 4.15, 1.14, ink)
     label(camera, 'Find a suggestion. Press Return. Keep typing.', -8.08, 3.40, .54, muted, 'Regular')
@@ -311,8 +309,82 @@ def render_inline():
     scene.render.filepath = str(options.output/'inline-insertion.png')
     bpy.ops.render.render(write_still=True)
 
+
+def render_consent():
+    # AppKit's 4× layer export keeps the native text crisp but omits the system
+    # glass button surfaces. Restore those two regions from the native window
+    # capture, preserving their production positions, labels, and appearance.
+    scene, camera = setup()
+    for obj in list(scene.objects):
+        if obj != camera:
+            bpy.data.objects.remove(obj, do_unlink=True)
+    scene.render.resolution_y = round(options.width * 2 / 3)
+    scene.cycles.use_denoising = False
+    camera.location = (0, 0, 20)
+    camera.rotation_euler = (0, 0, 0)
+    camera.data.ortho_scale = 19.2
+
+    def flat(name, channels):
+        mat = bpy.data.materials.new(name)
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        nodes.clear()
+        emission = nodes.new('ShaderNodeEmission')
+        linear = [v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4
+                  for v in channels]
+        emission.inputs['Color'].default_value = (*linear, 1)
+        output = nodes.new('ShaderNodeOutputMaterial')
+        mat.node_tree.links.new(emission.outputs[0], output.inputs['Surface'])
+        return mat
+
+    def unlit_texture(obj, backing=None):
+        mat = obj.data.materials[0]
+        nodes, links = mat.node_tree.nodes, mat.node_tree.links
+        texture = next(node for node in nodes if node.type == 'TEX_IMAGE')
+        emission = nodes.new('ShaderNodeEmission')
+        color = texture.outputs['Color']
+        if backing:
+            # Composite native alpha directly in the shader so flat backgrounds
+            # stay noise-free; transparent rays would add Monte Carlo grain.
+            mix = nodes.new('ShaderNodeMixRGB')
+            links.new(texture.outputs['Alpha'], mix.inputs[0])
+            mix.inputs[1].default_value = (*backing, 1)
+            links.new(color, mix.inputs[2])
+            color = mix.outputs[0]
+        links.new(color, emission.inputs['Color'])
+        links.new(emission.outputs[0], nodes.get('Material Output').inputs['Surface'])
+
+    # A neutral dark frame replaces the screen-dependent glass backdrop. The
+    # 22 pt corner radius and 1 pt border follow the production consent window.
+    border = flat('Consent border', (88/255, 94/255, 102/255))
+    backing = flat('Consent dark backing', (43/255, 46/255, 50/255))
+    rounded_surface('Consent frame', 19.2, 12.8, .88, 0, mat=border)
+    content = bpy.data.images.load(str(ROOT/'docs/artwork/sources/consent-content.png'), check_existing=True)
+    native = rounded_surface('Native consent content', 19.12, 12.72, .84, .002,
+        texture=content, uv=(4/1920, 4/1280, 1916/1920, 1276/1280))
+    backing_color = next(node for node in backing.node_tree.nodes
+                         if node.type == 'EMISSION').inputs['Color'].default_value[:3]
+    unlit_texture(native, backing=backing_color)
+
+    controls = bpy.data.images.load(str(ROOT/'docs/artwork/sources/consent-controls.jpg'), check_existing=True)
+    sw, sh = controls.size
+    for name, crop in [('Deny', (520, 566, 712, 630)), ('Reveal', (728, 566, 948, 630))]:
+        x0, y0, x1, y1 = crop
+        # The source has a 36 px window-shadow inset and is captured at 2×.
+        width, height = (x1-x0)/50, (y1-y0)/50
+        center = ((x0+x1-1032)/100, (712-y0-y1)/100)
+        button = rounded_surface('Native '+name+' button', width, height, .24, .003,
+            texture=controls, uv=(x0/sw, 1-y1/sh, x1/sw, 1-y0/sh), center=center)
+        unlit_texture(button)
+
+    scene.render.filepath = str(options.output/'cli-secure-consent.png')
+    bpy.ops.render.render(write_still=True)
+
+
 if options.only in ('mac','all'):
     render_mac()
     render_front()
 if options.only in ('inline','all'):
     render_inline()
+if options.only in ('consent','all'):
+    render_consent()

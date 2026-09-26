@@ -4,8 +4,10 @@ The README uses actual native UI as screenshot textures in a small Blender scene
 The Mac perspective image separates visual regions into physical layers with rounded
 edges, thickness, studio lighting, and soft shadows. This is an editorial composition,
 not an Xcode view-hierarchy dump or a different mode of the app.
-The studio uses three broad area lights, a neutral environment fill, a matte floor,
-and restrained reflections so the interface stays legible.
+The studio uses three broad area lights, a neutral environment fill, a transparent
+shadow catcher, and restrained reflections so the interface stays legible.
+Both Mac compositions, the inline illustration, and the consent preview have transparent PNG canvases
+and light captions, designed to blend into GitHub's dark README background.
 
 The inline illustration uses a flat before/after layout for readability: the native
 suggestion view sits under a keyword, followed by the message with the saved link.
@@ -28,14 +30,19 @@ It uses an orthographic camera and unlit colors, without perspective or raised l
   backdrop; labels, selection, and layout are rendered by the production UI classes.
 - `../images/ipad-landscape-*.png`: direct, full-resolution 2752 × 2064 captures
   from the native iPad app on an isolated iPad Pro simulator. A documentation-only
-  copy of the existing screenshot UI test used landscape orientation and eight
+  copy of the existing screenshot UI test used dark mode, landscape orientation, and eight
   fictional entries. The capture test passed. ImageIO normalized the PNG orientation
   metadata for consistent browser display; no frame, background, or UI redesign was
   added. The main repository's app and test sources were not changed.
-- `../images/cli-secure-consent.jpg`: the production AppKit consent-window UI from
+- `../images/cli-secure-consent.png`: the production AppKit consent-window UI from
   `ControlServer.swift`, instantiated in an isolated preview with fictional snippet
-  metadata and a Terminal caller example. This preview displays the real UI layout;
-  it does not start the IPC server, read a vault, authenticate, or reveal a secret.
+  metadata and a Terminal caller example. `sources/consent-content.png` is a 4×
+  native layer export; AppKit omits system glass button surfaces from that export,
+  so the renderer restores only those two regions from the 2× native window capture
+  in `sources/consent-controls.jpg`. It places the native content on a neutral dark
+  frame with the production corner radius and border, preserving the UI layout.
+  The final 1920 × 1280 PNG is displayed at 480 CSS pixels wide. No IPC server,
+  vault read, authentication, or secret reveal is involved in the preview.
 - `../images/macos-clipboard-history.png`: a 4× AppKit export (2720 × 1680) of
   the native `ClipboardHistoryPanelController`, running with the production history service
   and eight fictional entries in an isolated AppKit preview. The fixture injects
@@ -68,7 +75,10 @@ From the repository root:
   --output docs/images --width 1800 --samples 64
 ```
 
-Use `--only mac` or `--only inline` for a faster iteration. Add `--save-blend` to
+Use `--only mac`, `--only inline`, or `--only consent` for a faster iteration.
+The consent image was rendered with `--only consent --width 1920 --samples 64`;
+the Mac and inline compositions use `--width 1800 --samples 96`.
+Add `--save-blend` to
 export a portable, texture-packed Mac scene alongside the PNG. The generated `.blend`
 file is optional and is not needed to view the README.
 

@@ -259,10 +259,10 @@ For example, ask your agent:
 > before continuing. Do not include the token in your response.
 
 <p align="center">
-  <img src="docs/images/cli-secure-consent.jpg" width="516" alt="Native Mac approval prompt for Atlas API token, showing snippets-cli reveal atlas-token, the requesting Terminal app, and Deny and Reveal buttons">
+  <img src="docs/images/cli-secure-consent.png" width="480" alt="Native Mac approval prompt for Atlas API token, showing snippets-cli reveal atlas-token, the requesting Terminal app, and Deny and Reveal buttons">
 </p>
 
-*The native macOS approval window, shown with fictional demo metadata.*
+*Native macOS approval UI, composed from an isolated preview with fictional demo metadata.*
 
 1. The agent finds a secure entry by its metadata or known keyword.
 2. `snippets-cli reveal atlas-token` asks the running Mac app for access.
