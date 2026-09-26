@@ -750,6 +750,16 @@ extension ViewController {
         snippetHeaderRow.alignment = .centerY
         snippetHeaderRow.spacing = 6
 
+        secureCaptionLabel.stringValue = "Secure snippet · Insert from the suggestion list"
+        let secureHelp =
+            "Type \\, select this snippet, and authenticate to insert it. "
+            + "Typing its full keyword won’t expand it automatically.\n\n"
+            + "Its text is encrypted and excluded from exports and share links. "
+            + "Its name, keyword, and tags remain readable.\n\n"
+            + "After unlocking, hover over the editor to reveal and edit the text. "
+            + "Moving away hides it without locking the vault."
+        secureCaptionLabel.toolTip = secureHelp
+        secureCaptionLabel.setAccessibilityHelp(secureHelp)
         secureCaptionLabel.font = .systemFont(ofSize: 11)
         secureCaptionLabel.textColor = .tertiaryLabelColor
         secureCaptionLabel.isHidden = true
