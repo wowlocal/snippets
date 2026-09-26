@@ -183,8 +183,10 @@ The required fields are `stage`, `outcome`, `target`, `transport`, `reason`, `at
 (0–16), and `duration_ms` (0–600,000). Optional `ax_error_code` is a signed 32-bit
 numeric AX result; authentication errors include only `error_family` and `error_code`.
 Target categories are `unresolved`, `focused`, `descendant`, and `explicit`. Transport
-is `none`, `secure_value`, `secure_unicode`, `web_range`, or `unicode`. `secure_unicode`
-identifies the browser-password keyboard-input route. These are closed enums, never
+is `none`, `secure_value`, `secure_unicode`, `secure_click_unicode`, `web_range`, or
+`unicode`. `secure_unicode` identifies a browser password with concrete keyboard
+focus; `secure_click_unicode` identifies Unicode input prepared by a fresh click on
+an explicitly selected password field whose host reports only container focus. These are closed enums, never
 application names, AX descriptions, window titles, identifiers, geometry, field
 contents, or snippet identities. The export validator also rejects unknown enum
 values, invalid bounds, and unpaired error fields. These low-frequency outcomes
@@ -217,9 +219,10 @@ raw errors enter this group, and it adds no synchronous disk writes or per-poll 
 Stale controls, changed windows/ancestry, a different
 concrete focused control, and a changed hit target remain terminal refusals.
 `delivery` is emitted only if the delivery function was reached. AX success for a
-password-value write (native, or an explicitly selected web password with container
-focus) is `ambiguous` with reason `ax_write_unconfirmed`, even
-with `ax_error_code: 0`: API acceptance is not delivery proof. Browser-password Unicode
+native password-value write is `ambiguous` with reason `ax_write_unconfirmed`, even
+with `ax_error_code: 0`: API acceptance is not delivery proof. Older builds also
+attempted this setter for explicitly selected web passwords; their logs remain
+exportable. The current web-password route does not attempt that setter. Browser-password Unicode
 delivery is also `ambiguous`, with `direct_input_unconfirmed`, because keyboard posting
 has no host acknowledgement and password values are never read. Normal keyboard dispatch
 does not show a warning HUD or beep; this diagnostic uncertainty does not mean a failure

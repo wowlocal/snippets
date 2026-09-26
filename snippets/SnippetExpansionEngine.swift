@@ -246,10 +246,13 @@ final class SnippetExpansionEngine {
         case replaceWebRange(SecurePasteWebPreparation)
         case typeUnicode
         case typeSecureUnicode
+        case clickThenTypeSecureUnicode
+        case typeSecureUnicodeAfterClick(ContinuousClock.Instant, windowNumber: Int)
 
         var usesDirectInput: Bool {
             switch self {
-            case .typeUnicode, .typeSecureUnicode: true
+            case .typeUnicode, .typeSecureUnicode, .clickThenTypeSecureUnicode,
+                 .typeSecureUnicodeAfterClick: true
             default: false
             }
         }
@@ -279,7 +282,7 @@ final class SnippetExpansionEngine {
     fileprivate struct SecurePasteContainerBinding {
         let context: SecurePasteFieldSelection
         /// nil means the descendant positively reported keyboard focus.
-        let explicitPoint: CGPoint?
+        let explicitPoint: SecurePasteScreenPoint?
     }
 
     enum SecurePasteTargetCapture {
@@ -887,7 +890,7 @@ final class SnippetExpansionEngine {
 
     /// Called only after the user clicks our destination-selection overlay.
     func captureExplicitSecurePasteTarget(
-        in context: SecurePasteFieldSelection, at point: CGPoint
+        in context: SecurePasteFieldSelection, at point: SecurePasteScreenPoint
     ) -> SecurePasteTarget? {
         let startedAt = ContinuousClock.now
         var reason = DiagnosticSecurePasteReason.unavailable
@@ -902,7 +905,7 @@ final class SnippetExpansionEngine {
     /// choice, with a short deadline and no diagnostic events or retained target.
     /// The actual click must capture and validate its destination again.
     func previewSecurePasteField(
-        in context: SecurePasteFieldSelection, at point: CGPoint
+        in context: SecurePasteFieldSelection, at point: SecurePasteScreenPoint
     ) -> NSRect? {
         let budget = AXMessagingBudget(totalTimeoutSeconds: 0.05, perMessageTimeoutSeconds: 0.05)
         var reason = DiagnosticSecurePasteReason.unavailable
@@ -914,7 +917,7 @@ final class SnippetExpansionEngine {
     }
 
     private func captureExplicitSecurePasteTargetImpl(
-        in context: SecurePasteFieldSelection, at point: CGPoint,
+        in context: SecurePasteFieldSelection, at point: SecurePasteScreenPoint,
         budget: AXMessagingBudget, reason: inout DiagnosticSecurePasteReason
     ) -> SecurePasteTarget? {
         guard !isPreparingForTermination, accessibilityGranted else { return nil }
@@ -934,7 +937,7 @@ final class SnippetExpansionEngine {
 
     private func makeContainerSecurePasteTarget(
         _ field: AXUIElement, context: SecurePasteFieldSelection,
-        explicitPoint: CGPoint?, budget: AXMessagingBudget, reason: inout DiagnosticSecurePasteReason
+        explicitPoint: SecurePasteScreenPoint?, budget: AXMessagingBudget, reason: inout DiagnosticSecurePasteReason
     ) -> SecurePasteTarget? {
         let secure = stringAttribute(of: field, attribute: kAXSubroleAttribute as CFString,
                                      axBudget: budget) == (kAXSecureTextFieldSubrole as String)
@@ -946,9 +949,8 @@ final class SnippetExpansionEngine {
         let validation = securePasteTargetValidation(target, budget: budget)
         guard validation == .valid else { reason = diagnosticReason(validation); return nil }
         reason = .unsupportedTarget
-        // A container alone may authorize only an addressed AX operation. Secure
-        // web input may be captured here. Direct keyboard input still needs concrete
-        // field focus; an explicit choice may instead use an addressed password setter.
+        // A container alone cannot authorize keyboard input. A captured web field
+        // needs concrete focus, or an explicit choice reasserted by a fresh click.
         if secure && !elementIsInsideWebArea(field, axBudget: budget) {
             guard attributeIsSettable(kAXValueAttribute as CFString, on: field, axBudget: budget)
             else { return nil }
@@ -962,12 +964,13 @@ final class SnippetExpansionEngine {
     }
 
     private func securePasteHitTest(
-        _ point: CGPoint, context: SecurePasteFieldSelection, budget: AXMessagingBudget
+        _ point: SecurePasteScreenPoint, context: SecurePasteFieldSelection, budget: AXMessagingBudget
     ) -> AXUIElement? {
         let application = AXUIElementCreateApplication(context.targetPID)
         guard budget.bind(application) else { return nil }
         var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit)
+        guard AXUIElementCopyElementAtPosition(application,
+                Float(point.accessibility.x), Float(point.accessibility.y), &hit)
                 == .success, budget.canContinue else { return nil }
         return hit
     }
@@ -1228,7 +1231,7 @@ final class SnippetExpansionEngine {
             statusText = "\(snippet.displayName) is empty — nothing to paste."
             return .failedBeforeAttempt
         }
-        guard let preparation = prepareSecurePasteDeliveryTarget(target) else {
+        guard let preparation = await prepareSecurePasteDeliveryTarget(target) else {
             statusText = "The target field did not accept Secure Paste."
             return .failedBeforeAttempt
         }
@@ -1321,15 +1324,15 @@ final class SnippetExpansionEngine {
             return .failedBeforeAttempt
         }
 
-        // Authentication is over. Delivery below is synchronous, so there is no queued
-        // delete count or later paste event for a real keystroke to race with.
+        // Authentication is over. Any content-free click preparation still happens
+        // before materializing the body; plaintext delivery itself stays synchronous.
         if secureSuggestionAuthenticationTargetPID == target.targetPID {
             secureSuggestionAuthenticationTargetPID = nil
         }
 
         // Establish the exact transport and capture only non-secret range metadata
         // before materializing the authenticated bytes as a Swift String.
-        guard let preparation = prepareSecurePasteDeliveryTarget(target) else {
+        guard let preparation = await prepareSecurePasteDeliveryTarget(target) else {
             statusText = "Authentication succeeded, but the target field did not accept Secure Paste."
             return .failedBeforeAttempt
         }
@@ -4788,10 +4791,13 @@ final class SnippetExpansionEngine {
     /// delivery never falls through to a second plaintext-bearing strategy.
     private func prepareSecurePasteDeliveryTarget(
         _ target: SecurePasteTarget
-    ) -> SecurePasteDeliveryPreparation? {
+    ) async -> SecurePasteDeliveryPreparation? {
         let startedAt = ContinuousClock.now
         var reason = DiagnosticSecurePasteReason.unsupportedTarget
-        let preparation = prepareSecurePasteDeliveryTargetImpl(target, reason: &reason)
+        var preparation = prepareSecurePasteDeliveryTargetImpl(target, reason: &reason)
+        if case .clickThenTypeSecureUnicode = preparation {
+            preparation = await prepareExplicitSecurePasteClick(target, reason: &reason)
+        }
         recordSecurePaste(stage: .preparation, outcome: preparation == nil ? .failed : .succeeded,
             target: target, transport: diagnosticTransport(preparation),
             reason: preparation == nil ? reason : .none, startedAt: startedAt)
@@ -4804,6 +4810,7 @@ final class SnippetExpansionEngine {
         case .replaceWebRange: .webRange
         case .typeUnicode: .unicode
         case .typeSecureUnicode: .secureUnicode
+        case .clickThenTypeSecureUnicode, .typeSecureUnicodeAfterClick: .secureClickUnicode
         case nil: .none
         }
     }
@@ -4859,8 +4866,7 @@ final class SnippetExpansionEngine {
         } else {
             webPasswordFocus = .unconfirmed
         }
-        let needsValueSetter = targetIsSecureTextField
-            && (!targetIsInsideWebArea || webPasswordFocus == .explicitFieldWithContainerFocus)
+        let needsValueSetter = targetIsSecureTextField && !targetIsInsideWebArea
         let valueIsSettable = needsValueSetter && attributeIsSettable(
             kAXValueAttribute as CFString, on: target.textElement, axBudget: budget)
         let targetHasEligibleWebTextRole = targetIsInsideWebArea
@@ -4891,6 +4897,9 @@ final class SnippetExpansionEngine {
                 exactFieldHasKeyboardFocus: currentFocusMatches(target.textElement, axBudget: budget)
             ) else { reason = .fieldFocusPending; return nil }
             return .typeSecureUnicode
+        case .clickThenTypeSecureUnicode:
+            guard CGPreflightPostEventAccess() else { reason = .permissionRequired; return nil }
+            return .clickThenTypeSecureUnicode
         case .replaceWebRange:
             guard let fieldUTF16Count = integerAttribute(
                 of: target.textElement,
@@ -4927,6 +4936,62 @@ final class SnippetExpansionEngine {
         }
     }
 
+    /// Reassert the user's exact choice only after the picker/authentication has
+    /// finished. No secure body is materialized here and no AX value setter is attempted.
+    private func prepareExplicitSecurePasteClick(
+        _ target: SecurePasteTarget, reason: inout DiagnosticSecurePasteReason
+    ) async -> SecurePasteDeliveryPreparation? {
+        reason = .hitTargetChanged
+        let budget = AXMessagingBudget()
+        guard !Task.isCancelled,
+              securePasteTargetValidation(target, budget: budget) == .valid,
+              let point = visibleExplicitSecurePasteClickTarget(target, budget: budget),
+              let events = SecurePasteDirectInputPolicy.makeClickEvents(
+                target: point, eventTag: SnippetSyntheticEvent.tag) else { return nil }
+        let clickedAt = ContinuousClock.now
+        // WindowServer must route the content-free click: a mouse event posted
+        // only to a PID may never reach its window. Plaintext remains PID-bound.
+        events.mouseDown.post(tap: .cghidEventTap)
+        events.mouseUp.post(tap: .cghidEventTap)
+        // Let the host handle its click before checking for redirected focus,
+        // navigation or a replaced control. This is not a plaintext-bearing retry.
+        try? await Task.sleep(for: .milliseconds(50))
+        guard !Task.isCancelled else { reason = .cancelled; return nil }
+        let confirmation = AXMessagingBudget()
+        let validation = securePasteTargetValidation(target, budget: confirmation)
+        guard validation == .valid else { reason = diagnosticReason(validation); return nil }
+        guard visibleExplicitSecurePasteClickTarget(target, budget: confirmation)?.windowNumber == point.windowNumber else { return nil }
+        return .typeSecureUnicodeAfterClick(clickedAt, windowNumber: point.windowNumber)
+    }
+
+    /// The app-scoped hit test in target validation identifies the exact field.
+    /// The system-wide hit additionally refuses another window covering that point.
+    private func visibleExplicitSecurePasteClickTarget(
+        _ target: SecurePasteTarget, budget: AXMessagingBudget
+    ) -> SecurePasteDirectInputPolicy.ClickTarget? {
+        guard target.isSecureTextField, let binding = target.containerBinding,
+              let point = binding.explicitPoint, let screen = NSScreen.screens.first else { return nil }
+        // Selection already converted AppKit coordinates to AX/CG coordinates.
+        // Flipping again can click a link elsewhere in this same window.
+        let cgPoint = point.accessibility
+        let system = AXUIElementCreateSystemWide()
+        var hit: AXUIElement?
+        guard budget.bind(system),
+              AXUIElementCopyElementAtPosition(system, Float(cgPoint.x), Float(cgPoint.y), &hit) == .success,
+              let hit, processIdentifier(of: hit) == target.targetPID,
+              CFEqual(hit, binding.context.window)
+                || elementAttribute(of: hit, attribute: kAXWindowAttribute as CFString,
+                                    axBudget: budget).map({ CFEqual($0, binding.context.window) }) == true,
+              budget.canContinue else { return nil }
+        let expected = CGRect(x: binding.context.frame.minX,
+            y: screen.frame.maxY - binding.context.frame.maxY,
+            width: binding.context.frame.width, height: binding.context.frame.height)
+        guard let clickTarget = SecurePasteDirectInputPolicy.visibleClickTarget(
+            at: point, targetPID: target.targetPID, expectedWindowFrame: expected), budget.canContinue
+        else { return nil }
+        return clickTarget
+    }
+
     /// Sends exactly the transport selected before plaintext materialization. An ordinary
     /// browser request is confirmed only after bounded range/count readback. Password
     /// setters remain unconfirmed even when AX accepts them. Direct input is one
@@ -4960,6 +5025,24 @@ final class SnippetExpansionEngine {
         }
 
         switch preparation {
+        case .clickThenTypeSecureUnicode:
+            // An unresolved preparation can never authorize text delivery.
+            reason = .fieldFocusPending
+            return .failedBeforeAttempt
+        case .typeSecureUnicodeAfterClick(let clickedAt, let windowNumber):
+            reason = .focusChanged
+            guard !Task.isCancelled, CGPreflightPostEventAccess(),
+                  let events = SecurePasteDirectInputPolicy.makeEvents(
+                    text: text, eventTag: SnippetSyntheticEvent.tag),
+                  visibleExplicitSecurePasteClickTarget(target, budget: budget)?.windowNumber == windowNumber,
+                  securePasteTargetValidation(target, budget: budget) == .valid,
+                  SecurePasteDirectInputPolicy.clickIsFresh(issuedAt: clickedAt)
+            else { return .failedBeforeAttempt }
+            events.keyDown.postToPid(target.targetPID)
+            events.keyUp.postToPid(target.targetPID)
+            outcome = .ambiguous
+            reason = .directInputUnconfirmed
+            return .dispatchedUnconfirmed
         case .replaceSecureValue:
             if target.containerBinding != nil,
                !attributeIsSettable(kAXValueAttribute as CFString,

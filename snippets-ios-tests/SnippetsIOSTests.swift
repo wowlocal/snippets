@@ -1950,6 +1950,7 @@ final class SnippetsIOSTests: XCTestCase {
             XCTAssertTrue(exported.contains("\"transport\":\"\(transport.rawValue)\""))
         }
         XCTAssertTrue(exported.contains("\"reason\":\"ax_write_unconfirmed\""))
+        XCTAssertTrue(exported.contains("\"transport\":\"secure_click_unicode\""))
         let failure = DiagnosticFailure(NSError(domain: NSCocoaErrorDomain, code: 42,
             userInfo: [NSLocalizedDescriptionKey: "PRIVATE-PASSWORD-SENTINEL"]))
         let event = DiagnosticEvent.securePaste(stage: .authentication, outcome: .failed,

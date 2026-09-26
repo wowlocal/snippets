@@ -182,8 +182,8 @@ final class AXMessagingBudget {
 /// lost. Native secure fields retain whole-value replacement. A focused browser password
 /// uses keyboard input: WebKit's AXValue can acknowledge the setter without updating the
 /// form's input-event-driven model. An explicitly selected browser password that only
-/// exposes container focus may use its addressed setter instead. Chromium dispatches
-/// input/change for that setter; other hosts may not, so delivery stays unconfirmed.
+/// exposes container focus needs a fresh, hit-tested click before keyboard input.
+/// Embedded hosts can advertise writable AXValue and silently ignore the setter.
 /// Ordinary web fields retain an
 /// explicitly advertised, range-scoped browser operation. Other captured text surfaces
 /// uses one PID-bound Unicode keyboard event instead of trusting an unverifiable
@@ -198,6 +198,7 @@ nonisolated enum SecurePasteDeliveryPolicy {
     enum Strategy: Equatable {
         case replaceSecureValue
         case typeSecureUnicode
+        case clickThenTypeSecureUnicode
         case replaceWebRange
         case typeUnicode
         case unavailable
@@ -224,7 +225,7 @@ nonisolated enum SecurePasteDeliveryPolicy {
                 switch webPasswordFocus {
                 case .confirmedField: return .typeSecureUnicode
                 case .explicitFieldWithContainerFocus:
-                    return valueIsSettable ? .replaceSecureValue : .unavailable
+                    return .clickThenTypeSecureUnicode
                 case .unconfirmed: return .unavailable
                 }
             }
@@ -256,8 +257,8 @@ nonisolated enum SecurePasteDeliveryPolicy {
     }
 
     /// Container evidence can address an AX write but cannot route a keyboard event.
-    /// Secure web input therefore always needs the concrete field to own focus, even
-    /// if an explicit selection or descendant search originally found it.
+    /// Keyboard input without a fresh explicit click needs concrete field focus,
+    /// even if a descendant search originally found it.
     static func permitsDirectInput(
         isSecureWebField: Bool, hasContainerBinding: Bool, exactFieldHasKeyboardFocus: Bool
     ) -> Bool {
@@ -363,6 +364,22 @@ nonisolated enum SecurePasteAuthenticationHandoffPolicy {
     }
 }
 
+/// A screen point shared by AX hit testing and CGEvent dispatch. Both APIs use
+/// top-left screen coordinates. Only AppKit view/window boundaries flip the Y axis.
+nonisolated struct SecurePasteScreenPoint: Equatable {
+    let accessibility: CGPoint
+
+    init(accessibility: CGPoint) { self.accessibility = accessibility }
+
+    init(appKit: CGPoint, primaryScreenMaxY: CGFloat) {
+        accessibility = CGPoint(x: appKit.x, y: primaryScreenMaxY - appKit.y)
+    }
+
+    func appKit(primaryScreenMaxY: CGFloat) -> CGPoint {
+        CGPoint(x: accessibility.x, y: primaryScreenMaxY - accessibility.y)
+    }
+}
+
 /// Safety and event construction for direct input from the Secure Paste picker.
 ///
 /// A single event avoids partial multi-event delivery and gives hosts one Unicode text
@@ -385,6 +402,61 @@ nonisolated enum SecurePasteDirectInputPolicy {
     struct Events {
         let keyDown: CGEvent
         let keyUp: CGEvent
+    }
+
+    struct ClickEvents {
+        let mouseDown: CGEvent
+        let mouseUp: CGEvent
+    }
+
+    struct ClickTarget {
+        let point: SecurePasteScreenPoint
+        let windowNumber: Int
+        let windowFrame: CGRect // Same coordinate system as point.
+    }
+
+    @MainActor static func visibleClickTarget(
+        at point: SecurePasteScreenPoint, targetPID: pid_t, expectedWindowFrame: CGRect
+    ) -> ClickTarget? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let appKitPoint = point.appKit(primaryScreenMaxY: screen.frame.maxY)
+        let number = NSWindow.windowNumber(at: appKitPoint, belowWindowWithWindowNumber: 0)
+        guard number > 0,
+              let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(number)) as? [[String: Any]],
+              info.count == 1, let window = info.first,
+              (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == targetPID,
+              let bounds = window[kCGWindowBounds as String] as? [String: Any],
+              let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+              abs(frame.minX - expectedWindowFrame.minX) <= 1,
+              abs(frame.minY - expectedWindowFrame.minY) <= 1,
+              abs(frame.width - expectedWindowFrame.width) <= 1,
+              abs(frame.height - expectedWindowFrame.height) <= 1 else { return nil }
+        return ClickTarget(point: point, windowNumber: number, windowFrame: frame)
+    }
+
+    static func clickIsFresh(issuedAt: ContinuousClock.Instant,
+                             now: ContinuousClock.Instant = ContinuousClock.now) -> Bool {
+        let age = issuedAt.duration(to: now)
+        return age >= .zero && age <= .milliseconds(250)
+    }
+
+    static func makeClickEvents(target: ClickTarget, eventTag: Int64) -> ClickEvents? {
+        let point = target.point.accessibility
+        let frame = target.windowFrame
+        guard point.x.isFinite, point.y.isFinite, target.windowNumber > 0,
+              frame.minX.isFinite, frame.minY.isFinite, frame.width.isFinite, frame.height.isFinite,
+              frame.contains(point) else { return nil }
+        guard let source = CGEventSource(stateID: .privateState),
+              let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                                 mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                               mouseCursorPosition: point, mouseButton: .left) else { return nil }
+        for event in [down, up] {
+            event.flags = []
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
+            event.setIntegerValueField(.eventSourceUserData, value: eventTag)
+        }
+        return ClickEvents(mouseDown: down, mouseUp: up)
     }
 
     static func validation(of text: String) -> Validation {

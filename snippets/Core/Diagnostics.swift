@@ -426,6 +426,7 @@ nonisolated enum DiagnosticSecurePasteTransport: String, Codable, Sendable, Case
     case none
     case secureValue = "secure_value"
     case secureUnicode = "secure_unicode"
+    case secureClickUnicode = "secure_click_unicode"
     case webRange = "web_range"
     case unicode
 }

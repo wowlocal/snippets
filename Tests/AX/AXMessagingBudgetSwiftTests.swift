@@ -235,7 +235,7 @@ struct SecurePasteFieldSelectionOverlayTests {
         defer { window.close() }
         let field = NSRect(x: 30, y: 250, width: 300, height: 40)
         var previews = 0
-        var clicked: CGPoint?
+        var clicked: SecurePasteScreenPoint?
         view.previewField = { _ in previews += 1; return field }
         view.onClick = { clicked = $0 }
         view.updatePreview(at: NSPoint(x: 50, y: 270))
@@ -246,7 +246,7 @@ struct SecurePasteFieldSelectionOverlayTests {
         let click = NSPoint(x: 180, y: 400)
         view.mouseDown(with: event(.leftMouseDown, at: click, in: window))
         let screenPoint = window.convertPoint(toScreen: click)
-        #expect(clicked == CGPoint(x: screenPoint.x, y: NSScreen.screens[0].frame.maxY - screenPoint.y))
+        #expect(clicked?.accessibility == CGPoint(x: screenPoint.x, y: NSScreen.screens[0].frame.maxY - screenPoint.y))
         #expect(view.highlightedField == nil)
     }
 
@@ -272,6 +272,32 @@ struct SecurePasteFieldSelectionOverlayTests {
         try await Task.sleep(for: .milliseconds(150))
         #expect(view.highlightedField == nil)
         view.previewField = nil
+    }
+
+    @Test("the selected field and dispatched mouse events use the same screen point")
+    func selectionToClickCoordinates() throws {
+        let (window, view) = fixture()
+        defer { window.close() }
+        let primaryMaxY = NSScreen.screens[0].frame.maxY
+        // An off-screen window also exercises negative coordinates; using the
+        // middle of a display would hide an accidental second Y-axis flip.
+        let local = NSPoint(x: 180, y: 400)
+        let appKit = window.convertPoint(toScreen: local)
+        let expected = CGPoint(x: appKit.x, y: primaryMaxY - appKit.y)
+        var selected: SecurePasteScreenPoint?
+        view.onClick = { selected = $0 }
+        view.mouseDown(with: event(.leftMouseDown, at: local, in: window))
+        let point = try #require(selected)
+        #expect(point.accessibility == expected)
+        #expect(point.appKit(primaryScreenMaxY: primaryMaxY) == appKit)
+        let events = try #require(SecurePasteDirectInputPolicy.makeClickEvents(
+            target: .init(point: point, windowNumber: window.windowNumber,
+                windowFrame: CGRect(x: window.frame.minX, y: primaryMaxY - window.frame.maxY,
+                                    width: window.frame.width, height: window.frame.height)),
+            eventTag: 123))
+        // No events are posted to the user's desktop by this unit test.
+        #expect(events.mouseDown.location == expected)
+        #expect(events.mouseUp.location == expected)
     }
 
     @Test("instruction pixels cannot select the covered field; drag and cancel stay local")
@@ -394,15 +420,46 @@ struct AXMessagingBudgetSwiftTests {
             webPasswordFocus: .confirmedField) == .unavailable)
     }
 
-    @Test("explicit web passwords with container focus use only an addressed writable setter",
+    @Test("explicit web passwords with container focus require a click before typing",
           arguments: [true, false], [true, false])
-    func explicitWebPasswordUsesAddressedValue(writable: Bool, eligibleRole: Bool) {
+    func explicitWebPasswordRequiresClick(writable: Bool, eligibleRole: Bool) {
         #expect(SecurePasteDeliveryPolicy.strategy(
             targetIsSecureTextField: true, valueIsSettable: writable,
             targetIsInsideWebArea: true, targetHasEligibleWebTextRole: eligibleRole,
             webRangeReplacementIsAvailable: false,
             webPasswordFocus: .explicitFieldWithContainerFocus)
-            == (writable && eligibleRole ? .replaceSecureValue : .unavailable))
+            == (eligibleRole ? .clickThenTypeSecureUnicode : .unavailable))
+    }
+
+    @Test("the explicit click has no modifiers or text and refuses invalid coordinates")
+    func explicitClickEvents() throws {
+        let events = try #require(SecurePasteDirectInputPolicy.makeClickEvents(
+            target: .init(point: .init(accessibility: CGPoint(x: 50, y: 60)), windowNumber: 10,
+                          windowFrame: CGRect(x: 0, y: 0, width: 100, height: 100)), eventTag: 123))
+        #expect(events.mouseDown.type == .leftMouseDown)
+        #expect(events.mouseUp.type == .leftMouseUp)
+        for event in [events.mouseDown, events.mouseUp] {
+            #expect(event.location == CGPoint(x: 50, y: 60))
+            #expect(event.flags.isEmpty)
+            #expect(event.getIntegerValueField(.mouseEventClickState) == 1)
+            #expect(event.getIntegerValueField(.eventSourceUserData) == 123)
+            var length = 0
+            event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length,
+                                           unicodeString: nil)
+            #expect(length == 0)
+        }
+        #expect(SecurePasteDirectInputPolicy.makeClickEvents(
+            target: .init(point: .init(accessibility: CGPoint(x: Double.nan, y: 60)), windowNumber: 10,
+                          windowFrame: CGRect(x: 0, y: 0, width: 100, height: 100)), eventTag: 123) == nil)
+    }
+
+    @Test("explicit click permission expires before another delayed delivery")
+    func explicitClickExpires() {
+        let issued = ContinuousClock.now
+        #expect(SecurePasteDirectInputPolicy.clickIsFresh(issuedAt: issued, now: issued))
+        #expect(SecurePasteDirectInputPolicy.clickIsFresh(issuedAt: issued, now: issued.advanced(by: .milliseconds(250))))
+        #expect(!SecurePasteDirectInputPolicy.clickIsFresh(issuedAt: issued, now: issued.advanced(by: .milliseconds(251))))
+        #expect(!SecurePasteDirectInputPolicy.clickIsFresh(issuedAt: issued, now: issued.advanced(by: .milliseconds(-1))))
     }
 
     @Test("a web password without confirmed focus or an explicit hit cannot write",

@@ -227,7 +227,7 @@ enum SecurePasteFocusHandoff {
     }
 }
 
-/// An explicit choice authorizes an AX-addressed write, never blind keyboard input.
+/// An explicit choice binds one control and its screen point for fresh validation.
 /// The window stays non-key so it does not steal the host's keyboard focus.
 @MainActor
 final class SecurePasteFieldSelectionController {
@@ -260,8 +260,8 @@ final class SecurePasteFieldSelectionController {
     }
 
     func show(frame: NSRect, targetPID: pid_t,
-              previewField: @escaping (CGPoint) -> NSRect? = { _ in nil },
-              onDismiss: @escaping () -> Void = {}, onSelection: @escaping (CGPoint) -> Void) {
+              previewField: @escaping (SecurePasteScreenPoint) -> NSRect? = { _ in nil },
+              onDismiss: @escaping () -> Void = {}, onSelection: @escaping (SecurePasteScreenPoint) -> Void) {
         cancel()
         let generation = generation
         self.onDismiss = onDismiss
@@ -321,9 +321,9 @@ private final class FieldSelectionPanel: NSPanel {
 /// callback always performs a fresh capture, even when a preview is visible.
 @MainActor
 final class SecurePasteFieldSelectionView: NSView {
-    var onClick: ((CGPoint) -> Void)?
+    var onClick: ((SecurePasteScreenPoint) -> Void)?
     var onCancel: (() -> Void)?
-    var previewField: ((CGPoint) -> NSRect?)?
+    var previewField: ((SecurePasteScreenPoint) -> NSRect?)?
     private(set) var highlightedField: NSRect?
     private let instruction = FieldSelectionInstructionView(frame: .zero)
     private var instructionOrigin: NSPoint?
@@ -453,10 +453,10 @@ final class SecurePasteFieldSelectionView: NSView {
         onClick?(point)
     }
 
-    private func accessibilityPoint(_ localPoint: NSPoint) -> CGPoint? {
+    private func accessibilityPoint(_ localPoint: NSPoint) -> SecurePasteScreenPoint? {
         guard let window, let primaryScreen = NSScreen.screens.first else { return nil }
         let point = window.convertPoint(toScreen: convert(localPoint, to: nil))
-        return CGPoint(x: point.x, y: primaryScreen.frame.maxY - point.y)
+        return SecurePasteScreenPoint(appKit: point, primaryScreenMaxY: primaryScreen.frame.maxY)
     }
 }
 

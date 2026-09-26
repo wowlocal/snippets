@@ -61,8 +61,9 @@ private struct Main {
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { exit(15) }
 
-        let budget = AXMessagingBudget()
-        let validation = SecurePasteTargetResolver.validation(
+        func validate() -> SecurePasteTargetResolver.Validation {
+            let budget = AXMessagingBudget()
+            return SecurePasteTargetResolver.validation(
             field: field, root: root, window: window, wasSecure: true,
             explicit: mode != "no-explicit", canContinue: { budget.canContinue },
             metadata: { candidate in
@@ -86,6 +87,8 @@ private struct Main {
                     &hit) == .success else { return nil }
                 return hit
             })
+        }
+        let validation = validate()
         if mode == "bystander" || mode == "no-explicit" {
             guard validation == (mode == "bystander" ? .focusChanged : .fieldFocusPending)
             else { exit(6) }
@@ -105,13 +108,41 @@ private struct Main {
             webRangeReplacementIsAvailable: false,
             webPasswordFocus: exactFocus ? .confirmedField : .explicitFieldWithContainerFocus)
         switch strategy {
-        case .replaceSecureValue:
-            guard !exactFocus else { exit(10) }
-            let result = AXMessagingBudget().setAttributeValue(of: field,
-                attribute: "AXValue" as CFString, value: sample as CFString)
-            guard result == .success,
-                  SecurePasteDeliveryPolicy.secureValueWriteResult(result) == .attemptedAmbiguous
+        case .clickThenTypeSecureUnicode:
+            guard !exactFocus, CGPreflightPostEventAccess(),
+                  let position = read(field, "AXPosition"), let size = read(field, "AXSize"),
+                  let windowPosition = read(window, "AXPosition"), let windowSize = read(window, "AXSize") else { exit(10) }
+            var point = CGPoint.zero, origin = CGPoint.zero
+            var dimensions = CGSize.zero, windowDimensions = CGSize.zero
+            guard AXValueGetValue(position as! AXValue, .cgPoint, &point),
+                  AXValueGetValue(size as! AXValue, .cgSize, &dimensions),
+                  AXValueGetValue(windowPosition as! AXValue, .cgPoint, &origin),
+                  AXValueGetValue(windowSize as! AXValue, .cgSize, &windowDimensions) else { exit(10) }
+            point.x += dimensions.width / 4
+            point.y += dimensions.height / 2
+            let system = AXUIElementCreateSystemWide()
+            AXUIElementSetMessagingTimeout(system, 0.2)
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &hit) == .success,
+                  let hit, CFEqual(hit, field),
+                  let clickTarget = SecurePasteDirectInputPolicy.visibleClickTarget(at: .init(accessibility: point),
+                    targetPID: pid, expectedWindowFrame: CGRect(origin: origin, size: windowDimensions)),
+                  let click = SecurePasteDirectInputPolicy.makeClickEvents(target: clickTarget, eventTag: 123)
+            else { exit(10) }
+            let clickedAt = ContinuousClock.now
+            click.mouseDown.post(tap: .cghidEventTap)
+            click.mouseUp.post(tap: .cghidEventTap)
+            Thread.sleep(forTimeInterval: 0.05)
+            let afterClick = validate()
+            if mode == "redirect" {
+                guard afterClick == .focusChanged else { exit(11) }
+                return
+            }
+            guard afterClick == .valid, SecurePasteDirectInputPolicy.clickIsFresh(issuedAt: clickedAt),
+                  let input = SecurePasteDirectInputPolicy.makeEvents(text: sample, eventTag: 123)
             else { exit(11) }
+            input.keyDown.postToPid(pid)
+            input.keyUp.postToPid(pid)
         case .typeSecureUnicode:
             guard exactFocus, CGPreflightPostEventAccess(),
                   let events = SecurePasteDirectInputPolicy.makeEvents(text: sample, eventTag: 123)

@@ -104,6 +104,11 @@ struct DiagnosticsTests {
             #expect(event.fields["reason"] == .string("ax_write_unconfirmed"))
             #expect(event.defaultLevel == .warning)
         }
+        let clicked = DiagnosticEvent.securePaste(stage: .delivery, outcome: .ambiguous,
+            target: .explicit, transport: .secureClickUnicode, reason: .directInputUnconfirmed,
+            attempts: 1, durationMilliseconds: 60, axErrorCode: nil, failure: nil)
+        #expect(clicked.fields["transport"] == .string("secure_click_unicode"))
+        #expect(clicked.fields["ax_error_code"] == nil)
     }
 
     @Test func cloudSignInRecordsAreBoundedAndExcludeAuthenticationErrorPayloads() throws {

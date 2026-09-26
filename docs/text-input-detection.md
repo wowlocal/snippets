@@ -248,17 +248,27 @@ abort immediately; only focus/metadata operations occur in this loop. Secure Pas
 stage diagnostics report the outcome and aggregate attempt count, so authentication
 success can be distinguished from handoff, preparation, and delivery failures.
 
-Container evidence alone permits only an AX-addressed password-value or supported
-ordinary web-range write. A browser-backed password may use direct input
-only after the concrete password field itself becomes the exact keyboard-focused AX
-object. A container that remains focused is insufficient, even after explicit field
-selection. If the user explicitly selected the exact password field, its original
-container still owns focus, and `AXValue` is writable, preparation can instead choose
-one whole-value AX write to that field. This does not require keyboard routing and
-does not permit automatic discovery to substitute for the user's choice. The binding
-is revalidated immediately before writing. There is never a fallback after a
-plaintext-bearing attempt, and AX acceptance remains an unconfirmed result. Password
-values are never read during resolution or delivery.
+Container evidence alone permits an addressed ordinary web-range write, but cannot
+route keyboard input. A web password with concrete AX keyboard focus uses Unicode
+input. When an explicitly selected password still exposes only its original
+container as focused, Snippets first reasserts the user's choice with one content-free
+mouse click at the bound screen point. It revalidates the field and app, checks that
+the original window is topmost at that point through both system AX and WindowServer,
+and then posts the click through WindowServer. Posting mouse events to a PID alone
+does not reliably route them to that app's window. After 50 ms, it rechecks the field,
+window and keyboard-owning app before sending the one PID-bound Unicode input. The
+click receipt expires after 250 ms, and a changed concrete focus or destination aborts.
+There is no automatic click retry and no fallback after a plaintext-bearing attempt.
+Password values are never read during resolution or delivery.
+
+`SecurePasteScreenPoint` keeps the selected point in AX/Core Graphics screen
+coordinates, whose origin is at the top left. AppKit coordinates are converted only
+at the view and window-query boundaries. Do not flip the stored point again before
+hit testing or CGEvent creation: the initial experimental click route did this and
+could activate another control in the same window (including Battle.net's support
+link). Window-identity checks alone cannot detect a wrong point within that window.
+The regression test carries the overlay's actual selected point into the shipping
+mouse-event builder and checks both event locations, including negative coordinates.
 
 Regression coverage lives in `Tests/AX/AXMessagingBudgetSwiftTests.swift`, which
 exercises the shipping resolver with a metadata-only adapter, including ambiguous
@@ -287,12 +297,11 @@ plaintext-bearing transport while the captured PID and AX focus are freshly conf
   Neither AXValue writability nor range-readback capabilities are required. The route
   is selected before materializing the secure body and is not a retry after an AX write.
 - When a browser exposes only container focus, an explicitly selected password field
-  may instead use writable `AXValue`. Like native password filling, this replaces the
-  entire field. It never types into an unconfirmed keyboard target. Chromium updates
-  its input-event-driven model for this operation; WebKit may only update the DOM value.
-  Because the app cannot verify a password without reading it, the result remains
-  `attemptedAmbiguous`, with the existing check-before-retry feedback. No automatic
-  retry, keyboard fallback, or success usage count follows an accepted setter.
+  uses the click-then-Unicode preparation described above. An advertised writable
+  `AXValue` is insufficient: some embedded hosts acknowledge that operation without
+  applying it. This route clicks at the user's chosen position and types at the
+  resulting caret; it does not select all or replace the whole field. Dispatch remains
+  unconfirmed, with no fallback, automatic retry, or success usage count.
 - An eligible ordinary browser field uses the capability-gated, readback-verified range operation
   described below.
 - Any content selected from Secure Paste for another native or custom text surface uses
@@ -300,8 +309,9 @@ plaintext-bearing transport while the captured PID and AX focus are freshly conf
   to the captured PID. The decision takes no application bundle ID and therefore has no
   terminal-emulator allow-list.
 
-The direct-input route revalidates the frontmost PID, both captured AX element PIDs, and
-the exact focused AX object immediately before posting. It refuses C0/C1 control
+Direct input revalidates the frontmost PID and captured AX element PIDs immediately
+before posting. It requires either exact field focus or the freshly clicked explicit
+field with unchanged container focus described above. It refuses C0/C1 control
 characters, including Return, newline, Tab, Escape, and NUL, and never adds Return. It
 also refuses payloads above 16,384 UTF-16 units. There is one attempt with no AX,
 pasteboard, or event retry: Core Graphics acknowledges neither host consumption nor PTY
@@ -328,16 +338,24 @@ This is why focused web passwords prefer Unicode input and never reuse the ordin
 range/readback transport. The production path never reads a password back to claim
 success.
 
-The 2026-09-26 Battle.net failure occurred before any delivery: `handoff` accepted the
-original container, while `preparation` required concrete keyboard focus and stopped
-with `field_focus_pending`. The keyboard-only web-password policy came from commit
-`72c848d`, before the destination-overlay changes. Battle.net's installed browser is
-Chromium Embedded Framework. Unlike WebKit, Chromium's
-[addressed input setter](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/modules/accessibility/ax_node_object.cc)
-dispatches input and change events. A disposable Chromium page verified both its DOM
-value and input-event-backed model after an AXValue write with container focus.
-That supports the explicit-field compatibility route; it does not prove every
-embedded browser or login form accepts it.
+The first 2026-09-26 Battle.net failure occurred before any delivery: `handoff`
+accepted the original container, while `preparation` required concrete keyboard
+focus and stopped with `field_focus_pending`. The keyboard-only web-password policy
+came from commit `72c848d`, before the destination-overlay changes. An addressed
+`AXValue` compatibility attempt then returned AX error 0 while the user still saw an
+empty field. A Chromium fixture had updated its DOM and input-event model with the
+same setter, so that result did not transfer to this embedded host. The click route
+addresses both limitations without attempting an AX write first.
+
+Run `bash scripts/test-secure-paste-broken-ax.sh` to reproduce a host that reports
+container focus, ignores `AXFocused` changes, and acknowledges `AXValue` without
+changing the password. The separate-process fixture verifies Unicode input after the
+shipping click, an unchanged bystander field, and refusal of control characters. It
+uses only synthetic text. `node scripts/test-secure-paste-chromium.mjs` additionally
+checks the browser's input-event-backed model, concrete focus moving to another
+control after a click, and refusal without an explicit field choice. These fixtures
+do not establish that Battle.net consumes the Unicode payload; a real-host check
+remains necessary and must not submit a login form.
 
 Run `node scripts/test-secure-paste-chromium.mjs` for that GUI regression (Node 22+,
 installed Google Chrome, Accessibility permission). It starts a temporary Chrome

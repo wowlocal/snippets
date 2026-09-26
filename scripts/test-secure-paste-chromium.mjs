@@ -81,19 +81,20 @@ try {
     await delay(700);
     for (const [mode, length] of [
         ['container', 'short'], ['container', 'long'], ['focused', 'short'],
-        ['bystander', 'short'], ['no-explicit', 'short'],
+        ['bystander', 'short'], ['no-explicit', 'short'], ['redirect', 'short'],
     ]) {
         const text = length === 'long' ? 'synthetic-'.repeat(16) : 'synthetic-😀';
         await evaluate(`password.value='old';other.value='';model='old';events=0;
             password.focus();password.setSelectionRange(0,3);
-            ${mode === 'focused' ? '' : mode === 'bystander' ? 'other.focus();' : 'password.blur();'}`);
+            ${mode === 'focused' ? '' : mode === 'bystander' ? 'other.focus();' : 'password.blur();'}
+            ${mode === 'redirect' ? "password.addEventListener('focus',()=>other.focus(),{once:true});" : ''}`);
         await delay(300);
         const result = spawnSync(driver, [String(browser.pid), fixture, mode, length],
             { stdio: 'inherit', timeout: 10_000 });
         if (result.status !== 0) throw new Error(`AX driver failed for ${mode} (${result.status})`);
         await delay(300);
-        const refused = mode === 'bystander' || mode === 'no-explicit';
-        const expected = JSON.stringify(refused ? 'old' : text);
+        const refused = mode === 'bystander' || mode === 'no-explicit' || mode === 'redirect';
+        const expected = JSON.stringify(refused ? 'old' : mode === 'container' ? 'old' + text : text);
         const matches = await evaluate(`password.value===${expected} && model===${expected}
             && other.value==='' && events===${refused ? 0 : 1}`);
         if (!matches) throw new Error(`Form model or bystander changed unexpectedly for ${mode}`);
@@ -103,7 +104,7 @@ try {
     socket?.close();
     if (browser && browser.exitCode === null) {
         browser.kill('SIGTERM');
-        for (let attempt = 0; attempt < 30 && browser.exitCode === null; attempt++) await delay(100);
+        for (let attempt = 0; attempt < 30 && browser.exitCode === null && browser.signalCode === null; attempt++) await delay(100);
         if (browser.exitCode === null && browser.signalCode === null) browser.kill('SIGKILL');
     }
     await rm(directory, { recursive: true, force: true });
