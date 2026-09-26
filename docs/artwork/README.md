@@ -53,7 +53,13 @@ It uses an orthographic camera and unlit colors, without perspective or raised l
   history, or Keychain. Like the inline view export, it uses AppKit's opaque
   appearance instead of the live glass backdrop. It is displayed at 680 CSS pixels
   wide, preserving sharp text on high-density displays.
-- iPhone images come from the existing English App Store screenshot set.
+- `../images/iphone-library-dark.png` and `../images/iphone-editor-dark.png`:
+  direct 1320 × 2868 portrait captures from the native iPhone app on an isolated
+  iPhone 17 Pro Max simulator in dark mode. A temporary copy of the screenshot UI
+  test creates seven fictional entries, captures the library, then opens Meeting
+  notes with its resolved placeholder preview and no keyboard. The test uses
+  `--ui-testing-reset`, temporary storage, and disabled sync. The PNGs have no added
+  frame or background; the app and test sources in the main checkout are unchanged.
 - `../images/readme-hero.png`: generated brand artwork. It depicts categories of
   information, not app controls.
 

@@ -407,19 +407,16 @@ pinned section make quick retrieval easy. The editor separates **Content** and
 **Details**, with a mode control that follows the keyboard, live keyword help, tags,
 secure conversion, and an expandable placeholder preview.
 
+<p align="center">
+  <img src="docs/images/iphone-library-dark.png" width="36%" alt="Native iPhone companion in dark mode, with saved meeting links, contact details, travel notes, search, and tag filters">
+  <img src="docs/images/iphone-editor-dark.png" width="36%" alt="Native iPhone editor in dark mode, showing meeting notes with a date placeholder and its expanded resolved preview">
+</p>
+
+*Browse your saved information, then edit reusable text with a live placeholder preview.*
+
 Both use native UIKit, document import, system sharing for ordinary entries, encrypted
 backups, and reviewed incoming links. Cross-app use on iPad and iPhone is explicit
 copy and paste; system-wide `\keyword` expansion is a Mac feature.
-
-<details>
-<summary>See the iPhone companion</summary>
-
-<p align="center">
-  <img src="Distribution/AppStore/screenshots/en-US/iphone-6.9/01-library.png" width="31%" alt="iPhone companion library with search, tags, and quick copy">
-  <img src="Distribution/AppStore/screenshots/en-US/iphone-6.9/02-editor.png" width="31%" alt="iPhone editor for small changes on the go">
-</p>
-
-</details>
 
 ## Import, share, and take your data with you
 
