@@ -68,7 +68,13 @@ final class AppEnvironment {
         #endif
         diagnostics = DiagnosticsService.shared
         store = SnippetStore(configuration: .iOS)
+        #if DEBUG
+        // UI fixtures already isolate files and disable sync. Isolate their keys
+        // too: unsigned simulator builds cannot use the app's shared access group.
+        self.keychain = keychain ?? KeychainSecretStore(inMemory: isUITestReset)
+        #else
         self.keychain = keychain ?? KeychainSecretStore()
+        #endif
         let keychain = self.keychain
         backendSelection = SyncBackendSelectionStore(
             keychain: cloudCredentialStore,

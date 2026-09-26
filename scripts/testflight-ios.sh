@@ -251,6 +251,7 @@ function run_preflight_tests() {
         -configuration Debug \
         -destination "platform=iOS Simulator,id=$iphone_id" \
         -derivedDataPath "$WORK_DIR/iphone-tests-derived" \
+        -parallel-testing-enabled NO \
         CODE_SIGNING_ALLOWED=NO \
         -quiet \
         test
@@ -262,6 +263,7 @@ function run_preflight_tests() {
         -configuration Debug \
         -destination "platform=iOS Simulator,id=$ipad_id" \
         -derivedDataPath "$WORK_DIR/ipad-tests-derived" \
+        -parallel-testing-enabled NO \
         CODE_SIGNING_ALLOWED=NO \
         -quiet \
         test
