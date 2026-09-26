@@ -7,8 +7,7 @@ final class SnippetListViewController: UIViewController {
     private let environment: AppEnvironment
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let tagFilterBar = SidebarTagFilterView()
-    private let footerView = UIView()
-    private let statusLabel = UILabel()
+    private let toastPresenter = AppToastPresenter()
     private let emptyView = EmptyLibraryView()
     private let searchController = UISearchController(searchResultsController: nil)
     private var tagBarHeightConstraint: NSLayoutConstraint?
@@ -16,7 +15,6 @@ final class SnippetListViewController: UIViewController {
     private var visibleSnippets: [Snippet] = []
     private var activeTagKeys = Set<String>()
     private var selectedID: UUID?
-    private var statusWorkItem: DispatchWorkItem?
     private var syncObservation: UUID?
     private let searchIndex = SnippetSearchIndex()
     private lazy var searchPipeline = SnippetSearchPipeline(index: searchIndex)
@@ -52,9 +50,9 @@ final class SnippetListViewController: UIViewController {
         configureSearch()
         configureToolbar()
         configureTags()
-        configureFooter()
         configureTable()
         configureEmptyView()
+        toastPresenter.install(in: view)
         syncObservation = environment.syncCoordinator.addStateObserver { [weak self] _ in
             // Rebuild the menu so its subtitle follows Syncing / Last synced / error
             // transitions even while this long-lived split-view controller stays open.
@@ -174,19 +172,7 @@ final class SnippetListViewController: UIViewController {
     }
 
     func showStatus(_ message: String) {
-        statusWorkItem?.cancel()
-        statusLabel.text = message
-        statusLabel.isHidden = false
-        let workItem = DispatchWorkItem { [weak self] in
-            UIView.animate(withDuration: 0.2) {
-                self?.statusLabel.alpha = 0
-            } completion: { _ in
-                self?.statusLabel.isHidden = true
-                self?.statusLabel.alpha = 1
-            }
-        }
-        statusWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
+        toastPresenter.show(message: message, duration: 3)
     }
 
 
@@ -327,29 +313,6 @@ final class SnippetListViewController: UIViewController {
         ])
     }
 
-    private func configureFooter() {
-        footerView.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = AppTheme.scaledFont(size: 11, textStyle: .caption1)
-        statusLabel.adjustsFontForContentSizeCategory = true
-        statusLabel.textColor = .secondaryLabel
-        statusLabel.textAlignment = .right
-        statusLabel.numberOfLines = 1
-        statusLabel.isHidden = true
-
-        footerView.addSubview(statusLabel)
-        view.addSubview(footerView)
-        NSLayoutConstraint.activate([
-            footerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            footerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            footerView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            footerView.heightAnchor.constraint(equalToConstant: 42),
-            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: footerView.leadingAnchor, constant: 12),
-            statusLabel.trailingAnchor.constraint(equalTo: footerView.trailingAnchor, constant: -12),
-            statusLabel.centerYAnchor.constraint(equalTo: footerView.centerYAnchor),
-        ])
-    }
-
     private func configureTable() {
         tableView.translatesAutoresizingMaskIntoConstraints = false
         tableView.delegate = self
@@ -361,12 +324,12 @@ final class SnippetListViewController: UIViewController {
         tableView.keyboardDismissMode = .onDrag
         tableView.register(SnippetListCell.self, forCellReuseIdentifier: SnippetListCell.reuseIdentifier)
         tableView.accessibilityIdentifier = "snippet-list"
-        view.insertSubview(tableFadeContainer, belowSubview: footerView)
+        view.addSubview(tableFadeContainer)
         NSLayoutConstraint.activate([
             tableFadeContainer.topAnchor.constraint(equalTo: tagFilterBar.bottomAnchor),
             tableFadeContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tableFadeContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableFadeContainer.bottomAnchor.constraint(equalTo: footerView.topAnchor),
+            tableFadeContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
         ])
     }
 
