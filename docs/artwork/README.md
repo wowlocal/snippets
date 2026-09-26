@@ -8,6 +8,8 @@ The studio uses three broad area lights, a neutral environment fill, a transpare
 shadow catcher, and restrained reflections so the interface stays legible.
 Both Mac compositions, the inline illustration, and the consent preview have transparent PNG canvases
 and light captions, designed to blend into GitHub's dark README background.
+The Mac, inline, and iPad assets use explicit `-dark.png` filenames so their URLs
+are distinct from the earlier light artwork and screenshots.
 
 The inline illustration uses a flat before/after layout for readability: the native
 suggestion view sits under a keyword, followed by the message with the saved link.
@@ -28,7 +30,7 @@ It uses an orthographic camera and unlit colors, without perspective or raised l
   this asset instead of enlarging a crop from the window screenshot. AppKit's view
   export uses its opaque appearance rather than the screen compositor's live glass
   backdrop; labels, selection, and layout are rendered by the production UI classes.
-- `../images/ipad-landscape-*.png`: direct, full-resolution 2752 × 2064 captures
+- `../images/ipad-landscape-*-dark.png`: direct, full-resolution 2752 × 2064 captures
   from the native iPad app on an isolated iPad Pro simulator. A documentation-only
   copy of the existing screenshot UI test used dark mode, landscape orientation, and eight
   fictional entries. The capture test passed. ImageIO normalized the PNG orientation

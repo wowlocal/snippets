@@ -51,8 +51,8 @@ marked Secure**; ordinary entries and secure metadata remain readable in local s
 ### The Mac is where it all comes together
 
 <p align="center">
-  <img src="docs/images/macos-overview.png" width="49%" alt="Native Mac library with saved meeting links, contact details, notes, tags, and keywords">
-  <img src="docs/images/macos-layers.png" width="49%" alt="3D composition of the actual Mac interface, with the selected entry, editor, keyword, and tags lifted into separate layers">
+  <img src="docs/images/macos-overview-dark.png" width="49%" alt="Native Mac library with saved meeting links, contact details, notes, tags, and keywords">
+  <img src="docs/images/macos-layers-dark.png" width="49%" alt="3D composition of the actual Mac interface, with the selected entry, editor, keyword, and tags lifted into separate layers">
 </p>
 
 Find a saved link, keep a private credential close, or reuse a whole message. A native
@@ -66,7 +66,7 @@ UI layers for illustration. [Artwork source and rendering instructions](docs/art
 ### A proper workspace on iPad
 
 <p align="center">
-  <img src="docs/images/ipad-landscape-workspace.png" width="100%" alt="Native iPad app in landscape, showing saved links, contact details, notes, and the Project Atlas brief in a split-view editor">
+  <img src="docs/images/ipad-landscape-workspace-dark.png" width="100%" alt="Native iPad app in landscape, showing saved links, contact details, notes, and the Project Atlas brief in a split-view editor">
 </p>
 
 The iPad app gives your library room to work: a split view, a full editor, hardware
@@ -136,7 +136,7 @@ Their bodies never enter library search, even while a secure editor is unlocked.
 ### Insert without switching apps
 
 <p align="center">
-  <img src="docs/images/inline-insertion.png" width="100%" alt="Before and after Mac inline insertion: type backslash me, choose Meeting room in the native suggestion panel, then press Return to replace the keyword with the saved meeting link">
+  <img src="docs/images/inline-insertion-dark.png" width="100%" alt="Before and after Mac inline insertion: type backslash me, choose Meeting room in the native suggestion panel, then press Return to replace the keyword with the saved meeting link">
 </p>
 
 *The native suggestion view in an illustrative message; all content is fictional.*
@@ -381,7 +381,7 @@ The Mac editor offers placeholder completion after `{`. Ordinary entries have a
 rendered preview; secure bodies are kept out of ordinary preview surfaces.
 
 <p align="center">
-  <img src="docs/images/ipad-landscape-placeholders.png" width="100%" alt="Native iPad landscape editor showing meeting notes with date placeholders and a resolved preview underneath">
+  <img src="docs/images/ipad-landscape-placeholders-dark.png" width="100%" alt="Native iPad landscape editor showing meeting notes with date placeholders and a resolved preview underneath">
 </p>
 
 *On iPad, the editor shows the saved template and its resolved preview together.*
@@ -397,7 +397,7 @@ placeholder preview, or authenticate to work with a secure entry.
 <details>
 <summary>See the iPad keyboard shortcut reference</summary>
 
-<img src="docs/images/ipad-landscape-shortcuts.png" width="100%" alt="Native iPad landscape app with its keyboard shortcut reference open over the library and editor">
+<img src="docs/images/ipad-landscape-shortcuts-dark.png" width="100%" alt="Native iPad landscape app with its keyboard shortcut reference open over the library and editor">
 
 </details>
 

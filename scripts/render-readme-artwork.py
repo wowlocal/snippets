@@ -219,7 +219,7 @@ def render_mac():
     label(camera,'LINKS  /  PASSWORDS  /  NOTES  /  API TOKENS',-5.60,2.84,.25,(.38,.43,.51),'Medium')
     label(camera,'NATIVE macOS',-5.60,-5.65,.26,(.48,.54,.63),'Semibold')
     label(camera,'Actual interface · layers separated for illustration',-5.60,-6.03,.23,(.28,.34,.43),'Regular')
-    scene.render.filepath=str(options.output/'macos-layers.png')
+    scene.render.filepath=str(options.output/'macos-layers-dark.png')
     if options.save_blend:
         bpy.ops.file.pack_all()
         bpy.ops.wm.save_as_mainfile(filepath=str(options.output/'macos-layers.blend'))
@@ -237,7 +237,7 @@ def render_front():
     label(camera,'SEARCH  /  TAGS  /  PINS  /  YOUR OWN KEYWORDS',-5.60,2.84,.25,(.38,.43,.51),'Medium')
     label(camera,'SNIPPETS FOR MAC',-5.60,-5.65,.26,(.48,.54,.63))
     label(camera,'One library for your everyday information.',-5.60,-6.03,.23,(.28,.34,.43),'Regular')
-    scene.render.filepath=str(options.output/'macos-overview.png')
+    scene.render.filepath=str(options.output/'macos-overview-dark.png')
     bpy.ops.render.render(write_still=True)
 
 def render_inline():
@@ -306,7 +306,7 @@ def render_inline():
     label(camera, 'The saved link replaces your keyword.', .65, -2.76, .46, color('#aeb6c7'), 'Regular')
     label(camera, 'macOS INLINE INSERTION', -8.08, -4.23, .38, ink)
     label(camera, 'Native suggestion view · Illustrative message with fictional content', -8.08, -4.78, .37, muted, 'Regular')
-    scene.render.filepath = str(options.output/'inline-insertion.png')
+    scene.render.filepath = str(options.output/'inline-insertion-dark.png')
     bpy.ops.render.render(write_still=True)
 
 
