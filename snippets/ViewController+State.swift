@@ -141,7 +141,15 @@ extension ViewController {
                 && editingSnippetID == selectedSnippetID
                 && searchMatches.contains { $0.id == selectedSnippetID }
             if !keepEditingHiddenSnippet && !keepSnippetDroppedByOwnTags {
-                self.selectedSnippetID = newSnippets.first?.id
+                if store.snippetForDisplay(id: selectedSnippetID) == nil,
+                   let deletedRow = visibleSnippets.firstIndex(where: { $0.id == selectedSnippetID }),
+                   !newSnippets.isEmpty {
+                    // Keep deletion at the same list position: select the next
+                    // row, or the previous row when the last entry was deleted.
+                    self.selectedSnippetID = newSnippets[min(deletedRow, newSnippets.count - 1)].id
+                } else {
+                    self.selectedSnippetID = newSnippets.first?.id
+                }
             }
         }
 
