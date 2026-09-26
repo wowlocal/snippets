@@ -604,3 +604,153 @@ private final class ScrollFadeMaskContainerView: NSView {
         appliedMaskState = maskState
     }
 }
+
+
+/// Shared form surface: editable controls keep AppKit editing and tokenization,
+/// while their surrounding fill, border and keyboard focus use one vocabulary.
+/// Colors resolve at drawing time, including appearance and accessibility changes.
+final class EditorInputSurface: NSView {
+    enum Role { case input, preview }
+    static var inputBackgroundColor: NSColor { NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(white: 0.21, alpha: 1) : NSColor(white: 1, alpha: 1)
+        } }
+    private let role: Role
+    private let cornerRadius: CGFloat
+    private var hasEditorFocus = false
+
+    init(role: Role = .input, cornerRadius: CGFloat = 12) {
+        self.role = role
+        self.cornerRadius = cornerRadius
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = cornerRadius
+        layer?.masksToBounds = true
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshFocus),
+            name: NSWindow.didUpdateNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshFocus),
+            name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshFocus),
+            name: NSWindow.didResignKeyNotification, object: nil)
+        for notification in [NSControl.textDidBeginEditingNotification,
+                             NSControl.textDidEndEditingNotification,
+                             NSText.didBeginEditingNotification,
+                             NSText.didEndEditingNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(editorFocusDidChange),
+                name: notification, object: nil)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(self,
+            selector: #selector(refreshAppearance),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    @objc private func refreshAppearance() { needsDisplay = true }
+
+    @objc private func editorFocusDidChange() {
+        // End-editing can arrive before AppKit has attached the shared field editor
+        // to the next field. Resolve focus after that transition has completed.
+        DispatchQueue.main.async { [weak self] in self?.refreshFocus() }
+    }
+
+    @objc private func refreshFocus() {
+        let focused: Bool
+        if role == .input, window?.isKeyWindow == true,
+           let responder = window?.firstResponder as? NSView {
+            // NSTextField uses a shared field editor; it need not be our descendant.
+            focused = responder.isDescendant(of: self) || containsFieldEditor(responder)
+        } else { focused = false }
+        guard focused != hasEditorFocus else { return }
+        hasEditorFocus = focused
+        needsDisplay = true
+    }
+
+    private func containsFieldEditor(_ responder: NSView) -> Bool {
+        func visit(_ view: NSView) -> Bool {
+            if let field = view as? NSTextField, field.currentEditor() === responder { return true }
+            return view.subviews.contains(where: visit)
+        }
+        return subviews.contains(where: visit)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard role == .input else { return }
+        refreshFocus()
+        let highContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let width: CGFloat = hasEditorFocus || highContrast ? 2 : 1
+        let strokeRadius = max(0, cornerRadius - width / 2)
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: width / 2, dy: width / 2),
+            xRadius: strokeRadius, yRadius: strokeRadius)
+        Self.inputBackgroundColor.setFill()
+        path.fill()
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let border = highContrast ? NSColor.labelColor
+            : (isDark ? NSColor.white : NSColor.black).withAlphaComponent(0.10)
+        (hasEditorFocus ? NSColor.controlAccentColor : border).setStroke()
+        path.lineWidth = width
+        path.stroke()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // The padded part of a single-line surface is also an input target.
+        func editableField(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable, field.isEnabled { return field }
+            return view.subviews.lazy.compactMap { editableField(in: $0) }.first
+        }
+        if let field = editableField(in: self) {
+            window?.makeFirstResponder(field)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
+    /// Padding belongs to the surface, so native field-editor geometry and the
+    /// keyword warning accessory keep working without custom text-cell drawing.
+    static func wrapping(_ field: NSTextField, prefix: NSTextField? = nil) -> NSView {
+        field.isBezeled = false
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.textColor = .textColor
+        let surface = EditorInputSurface(cornerRadius: 6)
+        let horizontalInset: CGFloat = 12
+        field.translatesAutoresizingMaskIntoConstraints = false
+        // A minimum-height stack stretched the 16pt borderless cell to 22pt.
+        // AppKit draws text and tokens at the cell's top, leaving extra space below.
+        // Keep the native cell height and center it inside the padded surface.
+        field.setContentHuggingPriority(.required, for: .vertical)
+        field.setContentCompressionResistancePriority(.required, for: .vertical)
+        surface.addSubview(field)
+        NSLayoutConstraint.activate([
+            field.centerYAnchor.constraint(equalTo: surface.centerYAnchor),
+            field.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -horizontalInset),
+            surface.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            surface.heightAnchor.constraint(equalTo: field.heightAnchor, constant: 16),
+        ])
+        if let prefix {
+            prefix.translatesAutoresizingMaskIntoConstraints = false
+            surface.addSubview(prefix)
+            NSLayoutConstraint.activate([
+                prefix.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: horizontalInset),
+                prefix.firstBaselineAnchor.constraint(equalTo: field.firstBaselineAnchor),
+                field.leadingAnchor.constraint(equalTo: prefix.trailingAnchor, constant: 3),
+            ])
+        } else {
+            field.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: horizontalInset).isActive = true
+        }
+        return surface
+    }
+}

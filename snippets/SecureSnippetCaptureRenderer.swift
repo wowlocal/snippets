@@ -505,7 +505,7 @@ final class SecureSnippetCaptureRenderer {
     private func resolvedBackgroundColor() -> NSColor {
         var resolved = NSColor.white
         textView.effectiveAppearance.performAsCurrentDrawingAppearance {
-            resolved = NSColor.textBackgroundColor.usingColorSpace(.sRGB) ?? .white
+            resolved = EditorInputSurface.inputBackgroundColor.usingColorSpace(.sRGB) ?? .white
         }
         return resolved
     }
