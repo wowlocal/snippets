@@ -93,6 +93,7 @@ class Workflow(unittest.TestCase):
         self.summary = dict(errors=0, warnings=0, blocking=0)
         self.fail_after_add = False
         self.version_exists = True
+        self.view_version = "1.2.3"
         self.enter(patch.object(release, "asc", self.asc))
         self.enter(contextlib.redirect_stdout(io.StringIO()))
 
@@ -109,10 +110,13 @@ class Workflow(unittest.TestCase):
         if command == ("builds", "list"):
             return {"data": [{"id": "build1", "attributes": {"processingState": "VALID", "expired": False}}]}
         if command == ("versions", "list"):
-            return {"data": [{"id": "version1"}] if self.version_exists else []}
+            return {"data": [{"id": "version1", "attributes": {
+                "appStoreState": self.state, "releaseType": "MANUAL"},
+                "relationships": {"build": {"links": {"related": "unused"}}}}
+                ] if self.version_exists else []}
         if command == ("versions", "view"):
-            return {"data": {"id": "version1", "attributes": {"appStoreState": self.state, "releaseType": "MANUAL"},
-                             "relationships": {"build": {"data": {"id": self.attached} if self.attached else None}}}}
+            return {"id": "version1", "versionString": self.view_version, "platform": "IOS",
+                    "state": self.state, "buildId": self.attached}
         if args[0] == "validate":
             return {"summary": self.summary}
         if command == ("versions", "create"):
@@ -154,6 +158,21 @@ class Workflow(unittest.TestCase):
 
     def test_git_is_confined_to_the_temporary_repository(self):
         self.assertEqual(Path(release.git("rev-parse", "--show-toplevel")).resolve(), self.root.resolve())
+
+    def test_cli_summary_preserves_release_policy_and_resolves_attached_build(self):
+        r = self.processed()
+        version = r.version()
+        self.assertEqual(version["attributes"]["releaseType"], "MANUAL")
+        self.assertEqual(version["relationships"]["build"]["data"]["id"], "build1")
+        self.attached = None
+        self.assertIsNone(r.version()["relationships"]["build"]["data"])
+
+    def test_cli_summary_for_another_version_cannot_authorize_submission(self):
+        r = self.processed()
+        self.view_version = "9.9.9"
+        with self.assertRaisesRegex(ValueError, "summary identity mismatch"):
+            r.submit()
+        self.assertFalse(any(c[0] == "review" for c in self.calls))
 
     def test_prepare_creates_once_and_reattaches_exact_build(self):
         r = self.processed()

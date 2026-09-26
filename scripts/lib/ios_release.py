@@ -163,7 +163,16 @@ class Release:
         if not versions:
             require(not required, "App Store version does not exist; run prepare")
             return None
-        return asc("versions", "view", "--version-id", versions[0]["id"], "--include-build")["data"]
+        version = versions[0]
+        # asc 3.7 `view` emits a summary, not an API resource under `data`.
+        # Keep releaseType/state from list and use the summary's attached build.
+        view = asc("versions", "view", "--version-id", version["id"], "--include-build")
+        require(view.get("id") == version["id"] and view.get("versionString") == r["version"]
+                and view.get("platform") == "IOS", "App Store version summary identity mismatch")
+        build_id = view.get("buildId")
+        version.setdefault("relationships", {})["build"] = {
+            "data": {"type": "builds", "id": build_id} if build_id else None}
+        return version
 
     def attached(self, version):
         require((version.get("relationships", {}).get("build", {}).get("data") or {}).get("id")
