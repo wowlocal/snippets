@@ -356,6 +356,45 @@ private final class FloatingPanelContentView: NSView {
     }
 }
 
+/// Opaque text colors stay readable over both the sidebar and its selected row.
+/// Keep this palette local to the library; floating pickers have different materials.
+enum LibraryRowAppearance {
+    private static func adaptive(dark: CGFloat, light: CGFloat) -> NSColor {
+        NSColor(name: nil) { appearance in
+            switch appearance.bestMatch(from: [.accessibilityHighContrastDarkAqua,
+                .accessibilityHighContrastAqua, .darkAqua, .aqua]) {
+            case .accessibilityHighContrastDarkAqua: return NSColor(white: 0.9, alpha: 1)
+            case .accessibilityHighContrastAqua: return NSColor(white: 0.2, alpha: 1)
+            case .darkAqua: return NSColor(white: dark, alpha: 1)
+            default: return NSColor(white: light, alpha: 1)
+            }
+        }
+    }
+
+    static let previewText = adaptive(dark: 0.70, light: 0.35)
+    static let keywordText = adaptive(dark: 0.78, light: 0.26)
+    static let warningText = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .systemOrange : NSColor(srgbRed: 0.60, green: 0.28, blue: 0, alpha: 1)
+    }
+    static let enabledIndicator = NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return dark
+            ? NSColor(srgbRed: 0.40, green: 0.69, blue: 0.51, alpha: 1)
+            : NSColor(srgbRed: 0.19, green: 0.48, blue: 0.30, alpha: 1)
+    }
+
+    static func fill(isSelected: Bool, isEmphasized: Bool, isDark: Bool) -> NSColor {
+        if isSelected && isEmphasized { return .selectedContentBackgroundColor }
+        if isSelected {
+            // A neutral selection remains visible when focus moves to the editor.
+            return NSColor(white: isDark ? 0.27 : 0.87, alpha: 1)
+        }
+        return (isDark ? NSColor.white : NSColor.black).withAlphaComponent(
+            LiquidGlassDesign.prefersHighContrastHighlight ? 0.07 : 0.025)
+    }
+}
+
 /// Layer-backed row highlight shared by the library, search overlay, and floating
 /// suggestion panel.
 ///
@@ -368,6 +407,8 @@ final class RowHighlightView: NSView {
     private(set) var isSelected = false
     private(set) var isHovering = false
     private(set) var drawsSelectionBorder = true
+    private var usesLibraryAppearance = false
+    private var isEmphasized = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -376,7 +417,14 @@ final class RowHighlightView: NSView {
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
         isHidden = true
+        NSWorkspace.shared.notificationCenter.addObserver(self,
+            selector: #selector(refreshAppearance),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
     }
+
+    deinit { NSWorkspace.shared.notificationCenter.removeObserver(self) }
+
+    @objc private func refreshAppearance() { applyStyle() }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
@@ -395,14 +443,20 @@ final class RowHighlightView: NSView {
     func update(
         isSelected: Bool,
         isHovering: Bool,
-        drawsSelectionBorder: Bool = true
+        drawsSelectionBorder: Bool = true,
+        usesLibraryAppearance: Bool = false,
+        isEmphasized: Bool = false
     ) {
         guard self.isSelected != isSelected
             || self.isHovering != isHovering
-            || self.drawsSelectionBorder != drawsSelectionBorder else { return }
+            || self.drawsSelectionBorder != drawsSelectionBorder
+            || self.usesLibraryAppearance != usesLibraryAppearance
+            || self.isEmphasized != isEmphasized else { return }
         self.isSelected = isSelected
         self.isHovering = isHovering
         self.drawsSelectionBorder = drawsSelectionBorder
+        self.usesLibraryAppearance = usesLibraryAppearance
+        self.isEmphasized = isEmphasized
         applyStyle()
     }
 
@@ -412,15 +466,18 @@ final class RowHighlightView: NSView {
         guard isVisible else { return }
 
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let fillColor = LiquidGlassDesign.rowHighlightFillColor(
-            isSelected: isSelected,
-            isDark: isDark
-        )
+        let fillColor = usesLibraryAppearance
+            ? LibraryRowAppearance.fill(isSelected: isSelected, isEmphasized: isEmphasized, isDark: isDark)
+            : LiquidGlassDesign.rowHighlightFillColor(isSelected: isSelected, isDark: isDark)
         layer?.backgroundColor = resolvedCGColor(fillColor)
 
         if isSelected && drawsSelectionBorder {
-            let strokeColor = LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark)
-            layer?.borderWidth = LiquidGlassDesign.Metrics.hairlineWidth
+            let strokeColor: NSColor = usesLibraryAppearance && isEmphasized
+                ? .keyboardFocusIndicatorColor
+                : (usesLibraryAppearance && LiquidGlassDesign.prefersHighContrastHighlight
+                    ? .labelColor : LiquidGlassDesign.rowHighlightStrokeColor(isDark: isDark))
+            layer?.borderWidth = usesLibraryAppearance && LiquidGlassDesign.prefersHighContrastHighlight
+                ? 2 : LiquidGlassDesign.Metrics.hairlineWidth
             layer?.borderColor = resolvedCGColor(strokeColor)
         } else {
             layer?.borderWidth = 0

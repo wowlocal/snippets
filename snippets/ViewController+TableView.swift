@@ -3,6 +3,13 @@ import AppKit
 final class SnippetListTableView: NSTableView {
     var contextMenuProvider: ((Int) -> NSMenu?)?
 
+    override func mouseDown(with event: NSEvent) {
+        // The custom selection uses `.none`; explicitly transfer keyboard focus
+        // so a clicked row is emphasized and arrow keys navigate this list.
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let row = row(at: point)
