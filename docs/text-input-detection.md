@@ -201,6 +201,9 @@ The explanation also appears in the accessibility announcement. A visible caret 
 focus ring in the host can coexist with missing Accessibility focus evidence.
 The form stays unobscured by a full-window tint: a thin outline identifies the
 window, and a stronger outline previews the eligible text field under the pointer.
+The panel retains a 1%-opaque backing: WindowServer passes clicks through fully
+transparent pixels before AppKit hit testing runs. This backing is required even
+when the field outline itself is visible, since its interior is otherwise clear.
 Hover probes are metadata-only, coalesced after 80 ms of pointer inactivity, limited
 to 50 ms, and never logged. The preview neither retains a target nor authorizes a
 write; clicking always runs the original full destination capture again. Leaving
@@ -259,6 +262,12 @@ focus, traversal failures and destination changes across authentication. Manual
 checks should use synthetic text in native password controls, browser forms and
 embedded web views, including multiple password fields and navigation while the
 picker/authentication UI is open. Do not submit test login forms.
+
+Run `./scripts/test-secure-paste-selection.sh` for the opt-in WindowServer click
+regression. It uses only a disposable synthetic window and checks unhighlighted
+field interiors, highlighted interiors, and the Cancel button. It verifies exactly
+one selection or cancellation and zero clicks reaching the underlying host. Direct
+`mouseDown` unit tests alone cannot detect transparent-window click-through.
 
 `⌘\` never moves secure content through the pasteboard. It chooses exactly one
 plaintext-bearing transport while the captured PID and AX focus are freshly confirmed:

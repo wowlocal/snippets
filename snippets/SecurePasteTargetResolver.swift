@@ -269,7 +269,10 @@ final class SecurePasteFieldSelectionController {
                                         backing: .buffered, defer: true)
         panel.level = .floating
         panel.isOpaque = false
-        panel.backgroundColor = .clear
+        // WindowServer passes clicks through zero-alpha pixels before NSView hit
+        // testing runs. Keep a nearly invisible backing across the whole window,
+        // including the unpainted interior of a highlighted text field.
+        panel.backgroundColor = .black.withAlphaComponent(0.01)
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.acceptsMouseMovedEvents = true
