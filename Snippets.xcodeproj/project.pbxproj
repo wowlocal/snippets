@@ -1047,7 +1047,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "snippets-ios/Snippets-iOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 125;
+				CURRENT_PROJECT_VERSION = 126;
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "snippets-ios/Info-iOS.plist";
@@ -1059,7 +1059,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.3.123;
+				MARKETING_VERSION = 1.3.124;
 				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets.debug;
 				PRODUCT_NAME = Snippets;
 				REGISTER_APP_GROUPS = YES;
@@ -1088,7 +1088,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "snippets-ios/Snippets-iOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 125;
+				CURRENT_PROJECT_VERSION = 126;
 				DEVELOPMENT_TEAM = H8QG3CBM96;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "snippets-ios/Info-iOS.plist";
@@ -1100,7 +1100,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.3.123;
+				MARKETING_VERSION = 1.3.124;
 				PRODUCT_BUNDLE_IDENTIFIER = com.khm.snippets;
 				PRODUCT_NAME = Snippets;
 				REGISTER_APP_GROUPS = YES;
