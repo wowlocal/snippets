@@ -75,10 +75,13 @@ nonisolated final class SuggestionObserverRegistration: @unchecked Sendable {
 nonisolated struct SuggestionObserverHandles: @unchecked Sendable {
     let observer: AXObserver
     let elements: [AXUIElement]
-    let refcon: UnsafeMutableRawPointer
+    // Registration may finish after engine teardown. Its C refcon must survive
+    // the late successful add and every cancellation removal on this worker.
+    let callbackContext: SnippetExpansionCallbackContext
 
     func register(_ index: Int) -> AXError {
-        AXObserverAddNotification(observer, elements[index / 2], notification(index), refcon)
+        AXObserverAddNotification(observer, elements[index / 2], notification(index),
+                                  Unmanaged.passUnretained(callbackContext).toOpaque())
     }
 
     func unregister(_ index: Int) {

@@ -47,7 +47,7 @@ final class SuggestionPanelKeyboardTests: XCTestCase {
         let frame = NSRect(x: 200, y: 200, width: 360, height: 260)
         var selectedPoints: [CGPoint] = []
         controller.show(frame: frame, targetPID: ProcessInfo.processInfo.processIdentifier,
-                        onSelection: { selectedPoints.append($0) })
+                        onSelection: { selectedPoints.append($0.accessibility) })
         defer { controller.cancel() }
         let overlay = try XCTUnwrap(NSApp.windows.first {
             !initialWindows.contains($0.windowNumber) && $0.isVisible
@@ -55,18 +55,24 @@ final class SuggestionPanelKeyboardTests: XCTestCase {
         XCTAssertFalse(overlay.canBecomeKey)
         XCTAssertFalse(overlay.canBecomeMain)
         let content = try XCTUnwrap(overlay.contentView)
+        content.layoutSubtreeIfNeeded()
+        // Click the destination area, above the draggable instruction card.
+        let clickPoint = NSPoint(x: 100, y: content.bounds.maxY - 20)
+        let selectionView = try XCTUnwrap(content as? SecurePasteFieldSelectionView)
+        XCTAssertFalse(selectionView.instructionFrame.contains(clickPoint))
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
-            location: NSPoint(x: 100, y: 80), modifierFlags: [], timestamp: 0,
+            location: clickPoint, modifierFlags: [], timestamp: 0,
             windowNumber: overlay.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
         content.mouseDown(with: event)
         XCTAssertEqual(selectedPoints.count, 1)
         XCTAssertFalse(controller.isVisible)
         let screen = try XCTUnwrap(NSScreen.screens.first)
-        XCTAssertEqual(selectedPoints.first, CGPoint(x: 300, y: screen.frame.maxY - 280))
+        XCTAssertEqual(selectedPoints.first,
+                       CGPoint(x: frame.minX + clickPoint.x, y: screen.frame.maxY - frame.minY - clickPoint.y))
 
         // A queued click on an old overlay must not select into a new session.
         controller.show(frame: frame, targetPID: ProcessInfo.processInfo.processIdentifier,
-                        onSelection: { selectedPoints.append($0) })
+                        onSelection: { selectedPoints.append($0.accessibility) })
         content.mouseDown(with: event)
         XCTAssertEqual(selectedPoints.count, 1)
         XCTAssertTrue(controller.isVisible)

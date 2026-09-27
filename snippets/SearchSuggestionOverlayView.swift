@@ -1,10 +1,14 @@
 import AppKit
 
 final class SearchSuggestionOverlayView: NSView {
+    private let scrollView = NSScrollView()
+    private let documentView = SearchSuggestionDocumentView()
     private let stackView = NSStackView()
     private var rowViews: [SearchSuggestionRowView] = []
     private var snippets: [Snippet] = []
     private var selectedIndex: Int?
+    private var lastViewportSize = NSSize.zero
+    private var isSelectionScrollScheduled = false
     private let maxVisibleRows = 8
     private let rowHeight: CGFloat = 58
     private let verticalInset: CGFloat = 6
@@ -29,7 +33,17 @@ final class SearchSuggestionOverlayView: NSView {
         contentView.translatesAutoresizingMaskIntoConstraints = false
         contentView.wantsLayer = true
         contentView.layer?.masksToBounds = true
-        contentView.addSubview(stackView)
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
+        documentView.translatesAutoresizingMaskIntoConstraints = false
+        documentView.addSubview(stackView)
+        scrollView.documentView = documentView
+        contentView.addSubview(scrollView)
 
         let surface = LiquidGlassDesign.makeTransientSurface(
             containing: contentView,
@@ -45,15 +59,31 @@ final class SearchSuggestionOverlayView: NSView {
             surface.topAnchor.constraint(equalTo: topAnchor),
             surface.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            stackView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: verticalInset)
+            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            documentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+            stackView.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: documentView.topAnchor, constant: verticalInset),
+            stackView.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -verticalInset)
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        let viewportSize = scrollView.contentView.bounds.size
+        if viewportSize != lastViewportSize {
+            lastViewportSize = viewportSize
+            scheduleSelectedRowScroll()
+        }
     }
 
     func update(snippets: [Snippet], selectedSnippetID: UUID?) {
@@ -132,6 +162,26 @@ final class SearchSuggestionOverlayView: NSView {
         guard snippets.indices.contains(row) else { return }
         selectedIndex = row
         updateSelection()
+        scheduleSelectedRowScroll()
+    }
+
+    private func scheduleSelectedRowScroll() {
+        guard !isSelectionScrollScheduled else { return }
+        isSelectionScrollScheduled = true
+        // Selection can be refreshed during the main window's layout. Wait
+        // until AppKit has applied the panel's final height before scrolling.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            layoutSubtreeIfNeeded()
+            scrollSelectedRowToVisible()
+            isSelectionScrollScheduled = false
+        }
+    }
+
+    private func scrollSelectedRowToVisible() {
+        guard let selectedIndex, rowViews.indices.contains(selectedIndex) else { return }
+        let rowView = rowViews[selectedIndex]
+        rowView.scrollToVisible(rowView.bounds)
     }
 
     private func updateSelection() {
@@ -139,6 +189,10 @@ final class SearchSuggestionOverlayView: NSView {
             rowView.isSelected = index == selectedIndex
         }
     }
+}
+
+private final class SearchSuggestionDocumentView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 private final class SearchSuggestionRowView: NSView {

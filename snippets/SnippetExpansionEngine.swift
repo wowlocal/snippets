@@ -2,6 +2,15 @@ import AppKit
 import Carbon.HIToolbox
 import Foundation
 
+/// C APIs do not retain their refcon. The engine owns this context until main-run-loop
+/// detachment; AX registration handles also own it until worker cleanup finishes.
+/// A weak load fails as soon as engine teardown starts, even if its isolated deinit
+/// is still queued behind an already-delivered callback on the main actor.
+@MainActor
+final class SnippetExpansionCallbackContext {
+    fileprivate(set) weak var engine: SnippetExpansionEngine?
+}
+
 @MainActor
 final class SnippetExpansionEngine {
     typealias SecureSnippetContentResolver = @MainActor (
@@ -38,7 +47,8 @@ final class SnippetExpansionEngine {
 
     private let store: SnippetStore
     private let usage: SnippetUsageStore
-    private var eventTap: CFMachPort?
+    let callbackContext = SnippetExpansionCallbackContext()
+    private(set) var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var localMonitor: Any?
     private var globalMouseMonitor: Any?
@@ -307,7 +317,31 @@ final class SnippetExpansionEngine {
     init(store: SnippetStore, usage: SnippetUsageStore) {
         self.store = store
         self.usage = usage
+        callbackContext.engine = self
         refreshAccessibilityStatus(prompt: false)
+    }
+
+    isolated deinit {
+        // A worker weak-load can perform the last release. Keep teardown serialized
+        // with the C callbacks and retain their context until both sources detach.
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+            CFMachPortInvalidate(eventTap)
+        }
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        if let suggestionAXObserverSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), suggestionAXObserverSource, .commonModes)
+        }
+        suggestionObserverRegistration?.cancel()
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+        if let workspaceActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver)
+        }
+        suggestionSecureInputWatchdog?.invalidate()
+        pasteboardRestoreRetryWorkItem?.cancel()
     }
 
     func startIfNeeded() {
@@ -392,9 +426,7 @@ final class SnippetExpansionEngine {
     /// Install a CGEvent tap so we can intercept (suppress) keys like TAB
     /// while the suggestion overlay is active.
     private func installEventTap() {
-        // Store a raw pointer to self for the C callback. The tap lives as
-        // long as the engine, so the unretained reference is safe.
-        let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        let refcon = Unmanaged.passUnretained(callbackContext).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -405,26 +437,7 @@ final class SnippetExpansionEngine {
                     | (1 << CGEventType.keyUp.rawValue)
             ),
             callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
-                guard let refcon else { return Unmanaged.passUnretained(event) }
-                let engine = Unmanaged<SnippetExpansionEngine>.fromOpaque(refcon).takeUnretainedValue()
-
-                // macOS disables the tap if the callback stalls (timeout) or on
-                // user-input protection; without re-enabling here the tap stays
-                // dead until app restart and expansion silently stops.
-                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                    engine.reenableEventTap()
-                    return Unmanaged.passUnretained(event)
-                }
-                if type == .keyUp {
-                    return engine.handleEventTapKeyUp(event) ? nil : Unmanaged.passUnretained(event)
-                }
-                guard type == .keyDown else { return Unmanaged.passUnretained(event) }
-
-                // Must dispatch to main actor synchronously — we need the
-                // return value now to decide whether to suppress the event.
-                // CGEvent tap callbacks run on the run loop thread (main).
-                let consumed = engine.handleEventTap(event)
-                return consumed ? nil : Unmanaged.passUnretained(event)
+                SnippetExpansionEngine.eventTapCallback(type: type, event: event, refcon: refcon)
             },
             userInfo: refcon
         ) else { return }
@@ -434,6 +447,28 @@ final class SnippetExpansionEngine {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    /// Both C sources run on the main run loop. Promote the weak reference only
+    /// here, so a live engine is retained for the entire synchronous callback.
+    nonisolated static func eventTapCallback(
+        type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?
+    ) -> Unmanaged<CGEvent>? {
+        guard let refcon else { return Unmanaged.passUnretained(event) }
+        let context = Unmanaged<SnippetExpansionCallbackContext>.fromOpaque(refcon).takeUnretainedValue()
+        return MainActor.assumeIsolated {
+            guard let engine = context.engine else { return Unmanaged.passUnretained(event) }
+            // macOS disables a stalled/protected tap; re-enable it on notification.
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                engine.reenableEventTap()
+                return Unmanaged.passUnretained(event)
+            }
+            if type == .keyUp {
+                return engine.handleEventTapKeyUp(event) ? nil : Unmanaged.passUnretained(event)
+            }
+            guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+            return engine.handleEventTap(event) ? nil : Unmanaged.passUnretained(event)
+        }
     }
 
     /// Called from the CGEvent tap callback on the main thread when macOS
@@ -519,6 +554,7 @@ final class SnippetExpansionEngine {
         finishPendingPasteboardOwnership(schedulingRetryOnFailure: true)
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
             if let source = runLoopSource {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             }
@@ -1637,11 +1673,7 @@ final class SnippetExpansionEngine {
         let creationResult = AXObserverCreate(
             pid,
             { _, _, notification, refcon in
-                guard let refcon else { return }
-                let engine = Unmanaged<SnippetExpansionEngine>
-                    .fromOpaque(refcon)
-                    .takeUnretainedValue()
-                engine.receiveSuggestionAccessibilityNotification(notification)
+                SnippetExpansionEngine.suggestionAccessibilityCallback(notification: notification, refcon: refcon)
             },
             &observer)
         guard creationResult == .success, let observer else {
@@ -1657,8 +1689,8 @@ final class SnippetExpansionEngine {
         let elements = focusedTextContextCandidates(
             startingAt: anchorFocusedElement,
             axBudget: AXMessagingBudget(totalTimeoutSeconds: 0.1))
-        let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        let handles = SuggestionObserverHandles(observer: observer, elements: elements, refcon: refcon)
+        let handles = SuggestionObserverHandles(
+            observer: observer, elements: elements, callbackContext: callbackContext)
         let registration = SuggestionObserverRegistration(
             count: elements.count * 2,
             register: { handles.register($0) },
@@ -1714,9 +1746,14 @@ final class SnippetExpansionEngine {
     /// AXObserver's source is installed on the main run loop, matching the
     /// event tap. Keep the C callback itself nonisolated and make that invariant
     /// explicit at the actor boundary.
-    nonisolated private func receiveSuggestionAccessibilityNotification(_ notification: CFString) {
+    nonisolated static func suggestionAccessibilityCallback(
+        notification: CFString, refcon: UnsafeMutableRawPointer?
+    ) {
+        guard let refcon else { return }
+        let context = Unmanaged<SnippetExpansionCallbackContext>.fromOpaque(refcon).takeUnretainedValue()
         MainActor.assumeIsolated {
-            handleSuggestionAccessibilityNotification(notification)
+            guard let engine = context.engine else { return }
+            engine.handleSuggestionAccessibilityNotification(notification)
         }
     }
 
