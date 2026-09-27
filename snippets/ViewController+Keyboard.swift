@@ -85,10 +85,7 @@ extension ViewController {
         }
 
         if flags == [.command] && key == UInt16(kVK_ANSI_F) {
-            moveFocus(to: searchField)
-            DispatchQueue.main.async { [weak self] in
-                self?.updateSearchSuggestionOverlay()
-            }
+            focusToolbarSearch()
             return nil
         }
 

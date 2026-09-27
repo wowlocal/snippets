@@ -132,6 +132,21 @@ extension ViewController: NSToolbarDelegate {
         }
     }
 
+    func focusToolbarSearch() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = view.window else { return }
+
+            // A compact NSSearchToolbarItem hides its field. Let AppKit expand
+            // it before requesting focus, which refuses hidden responders.
+            let item = window.toolbar?.items
+                .compactMap { $0 as? NSSearchToolbarItem }
+                .first { $0.searchField === self.searchField }
+            item?.beginSearchInteraction()
+            moveFocus(to: searchField)
+            updateSearchSuggestionOverlay()
+        }
+    }
+
     private func configureToolbarSearchField() {
         // "snippets" was the second redundant naming of the same thing on one
         // control: it is an NSSearchField, with a magnifier inside it, in an app
