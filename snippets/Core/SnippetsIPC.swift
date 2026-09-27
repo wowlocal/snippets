@@ -57,6 +57,26 @@ nonisolated enum SnippetsIPC {
         /// Purely informational, shown in the consent prompt so the user can recognise
         /// what they are approving. Never trusted for any decision.
         var invocation: String?
+        var secureAdd: SecureAdd?
+    }
+
+    /// Input only: never reflected into responses or diagnostics.
+    struct SecureAdd: Codable, Sendable {
+        static let maximumBodyBytes = 256 * 1024
+        var name: String
+        var keyword: String
+        var body: Data
+        var tags: [String]
+        var isEnabled: Bool
+        var isPinned: Bool
+
+        var isValid: Bool {
+            !Snippet.sanitizedKeyword(keyword).isEmpty
+                && keyword.utf8.count <= 256 && name.utf8.count <= 1024
+                && tags.count <= 64 && tags.allSatisfy { $0.utf8.count <= 256 }
+                && !body.isEmpty && body.count <= Self.maximumBodyBytes
+                && String(data: body, encoding: .utf8) != nil
+        }
     }
 
     struct Response: Codable, Sendable {
@@ -66,6 +86,7 @@ nonisolated enum SnippetsIPC {
         var message: String?
         var secureCount: Int?
         var unlocked: Bool?
+        var createdID: UUID?
 
         enum Status: String, Codable, Sendable {
             case ok
@@ -90,6 +111,7 @@ nonisolated enum SnippetsIPC {
         static let ping = "ping"
         static let status = "status"
         static let reveal = "reveal"
+        static let addSecure = "add-secure"
     }
 
     /// Exit codes the CLI reports. Distinct values so a script can tell "you said no"
@@ -292,6 +314,7 @@ nonisolated enum UnixSocket {
 
             if let newline = scratch[0..<count].firstIndex(of: 0x0A) {
                 buffer.append(contentsOf: scratch[0..<newline])
+                guard buffer.count <= limit else { throw Failure.malformed }
                 break
             }
             buffer.append(contentsOf: scratch[0..<count])

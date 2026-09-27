@@ -165,10 +165,14 @@ final class ControlServer: NSObject {
     private var revealInFlight = false
     private var activeRevealPrompt: ActiveRevealPrompt?
 
+    private let prepareSecureCreation: () throws -> Void
+
     init(session: VaultSession, secureStore: SecureSnippetStore,
+         prepareSecureCreation: @escaping () throws -> Void = {},
          socketURL: URL = SnippetsIPC.socketURL()) {
         self.session = session
         self.secureStore = secureStore
+        self.prepareSecureCreation = prepareSecureCreation
         self.socketURL = socketURL
         super.init()
     }
@@ -298,6 +302,12 @@ final class ControlServer: NSObject {
                 secureCount: secureStore.count,
                 unlocked: session.state.isUnlocked)
 
+        case SnippetsIPC.Command.addSecure:
+            guard let input = request.secureAdd, input.isValid else {
+                return .failure(.refused, "invalid secure snippet input")
+            }
+            return await addSecure(input, peer: peer)
+
         case SnippetsIPC.Command.reveal:
             return await reveal(
                 keyword: request.keyword ?? "",
@@ -307,6 +317,47 @@ final class ControlServer: NSObject {
         default:
             return .failure(.unsupported, "unknown command \"\(request.command)\"")
         }
+    }
+
+    private func addSecure(_ input: SnippetsIPC.SecureAdd, peer: PeerIdentity) async -> SnippetsIPC.Response {
+        guard secureStore.document != nil else {
+            return .failure(.locked, "set up Secure Snippets in the app first")
+        }
+        guard !revealInFlight, allowanceRemains() else {
+            return .failure(.refused, "another secure request is pending or the rate limit was reached")
+        }
+        let previousApp = NSWorkspace.shared.frontmostApplication
+        revealInFlight = true
+        defer {
+            revealInFlight = false
+            restoreForegroundApplication(previousApp)
+        }
+        // The preview carries metadata only, never the submitted body.
+        let shell = Snippet(name: input.name, keyword: input.keyword, content: "")
+        guard case .approved = await confirm(shell: shell, invocation: nil, peer: peer, saving: true) else {
+            return .failure(.denied, "the request was not approved")
+        }
+        do {
+            let id = try await session.withOneUseAuthentication(
+                reason: "Save secure snippet for \(peer.applicationName)"
+            ) {
+                try commitSecureCreation(input)
+            }
+            return SnippetsIPC.Response(status: .ok, createdID: id)
+        } catch is VaultSession.Failure {
+            return .failure(.locked, "the vault could not be unlocked")
+        } catch {
+            // Never reflect arbitrary errors, input, or ciphertext back into a log.
+            return .failure(.error, "could not save secure snippet; check for a duplicate keyword or unavailable vault")
+        }
+    }
+
+    /// Called within one-use authentication, with no suspension between flushing
+    /// editor intent and checking durable cross-store keyword uniqueness.
+    func commitSecureCreation(_ input: SnippetsIPC.SecureAdd) throws -> UUID {
+        try prepareSecureCreation()
+        return try secureStore.addSecure(name: input.name, keyword: input.keyword, body: input.body,
+            tags: input.tags, isEnabled: input.isEnabled, isPinned: input.isPinned)
     }
 
     // MARK: - Reveal
@@ -407,11 +458,12 @@ final class ControlServer: NSObject {
     private func confirm(
         shell: Snippet,
         invocation: String?,
-        peer: PeerIdentity
+        peer: PeerIdentity,
+        saving: Bool = false
     ) async -> RevealConsent {
         return await withCheckedContinuation { continuation in
             let window = makeRevealConsentWindow(
-                shell: shell, invocation: invocation, peer: peer)
+                shell: shell, invocation: invocation, peer: peer, saving: saving)
 
             activeRevealPrompt = ActiveRevealPrompt(
                 window: window, continuation: continuation, timeoutTask: nil)
@@ -439,7 +491,8 @@ final class ControlServer: NSObject {
     private func makeRevealConsentWindow(
         shell: Snippet,
         invocation: String?,
-        peer: PeerIdentity
+        peer: PeerIdentity,
+        saving: Bool = false
     ) -> NSWindow {
         let surfaceSize = NSSize(width: 480, height: 320)
         let shadowInset: CGFloat = 18
@@ -451,7 +504,7 @@ final class ControlServer: NSObject {
             styleMask: [.borderless],
             backing: .buffered,
             defer: true)
-        window.title = "Reveal secure snippet?"
+        window.title = saving ? "Save secure snippet?" : "Reveal secure snippet?"
         window.level = .modalPanel
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.isOpaque = false
@@ -465,7 +518,7 @@ final class ControlServer: NSObject {
         window.animationBehavior = .utilityWindow
 
         let title = makePromptLabel(
-            "Reveal secure snippet?", font: .systemFont(ofSize: 20, weight: .semibold))
+            saving ? "Save secure snippet?" : "Reveal secure snippet?", font: .systemFont(ofSize: 20, weight: .semibold))
         let subtitle = makePromptLabel(
             "Requested by \(peer.applicationName)",
             font: .systemFont(ofSize: 13, weight: .regular),
@@ -510,7 +563,7 @@ final class ControlServer: NSObject {
         snippetName.toolTip = shell.displayName
 
         let safeInvocation = promptSingleLine(
-            invocation, fallback: "snippets-cli reveal \(shell.normalizedKeyword)")
+            invocation, fallback: saving ? "snippets-cli add --secure --keyword \(shell.normalizedKeyword) --content -" : "snippets-cli reveal \(shell.normalizedKeyword)")
         let command = makePromptLabel(
             safeInvocation,
             font: .monospacedSystemFont(ofSize: 11.5, weight: .regular),
@@ -573,7 +626,7 @@ final class ControlServer: NSObject {
         warningIcon.contentTintColor = .systemOrange
         warningIcon.setAccessibilityElement(false)
         let warningText = makePromptLabel(
-            "The command will receive the plaintext. Touch ID or your Mac password is required next; logs or other tools may capture the result.",
+            saving ? "Save the submitted text encrypted in your vault. Existing entries will not be replaced. Touch ID or your Mac password is required next." : "The command will receive the plaintext. Touch ID or your Mac password is required next; logs or other tools may capture the result.",
             font: .systemFont(ofSize: 12, weight: .regular),
             color: .secondaryLabelColor,
             wrapping: true)
@@ -593,7 +646,7 @@ final class ControlServer: NSObject {
         denyButton.toolTip = "Deny the request (Escape)"
 
         let revealButton = NSButton(
-            title: "Reveal", target: self, action: #selector(approveRevealPrompt(_:)))
+            title: saving ? "Save" : "Reveal", target: self, action: #selector(approveRevealPrompt(_:)))
         LiquidGlassDesign.configureActionButton(revealButton, symbolName: "lock.open.fill")
         // Deliberately no Return equivalent: disclosure always requires selecting the
         // affirmative control, while Escape remains a quick safe answer.

@@ -822,6 +822,39 @@ final class SecureSnippetStore: SecureSnippetProviding {
         return text
     }
 
+    /// Creates ciphertext directly; the body never enters the ordinary library or
+    /// its backups. Check both stores under their shared lock to prevent collisions.
+    func addSecure(name: String, keyword: String, body: Data, tags: [String],
+                   isEnabled: Bool, isPinned: Bool) throws -> UUID {
+        let document = try requireDocument()
+        let keyword = Snippet.sanitizedKeyword(keyword)
+        guard !keyword.isEmpty, String(data: body, encoding: .utf8) != nil else {
+            throw Failure.invalidUTF8
+        }
+        let id = UUID()
+        let outcome = try runTransaction { contents in
+            guard var vault = contents.vault,
+                  vault.kid == document.kid, vault.vaultSalt == document.vaultSalt else {
+                throw Failure.setupChanged
+            }
+            let key = SnippetTagging.filterKey(for: keyword)
+            guard !(contents.snippets + vault.records.map(\.shell)).contains(where: {
+                SnippetTagging.filterKey(for: $0.normalizedKeyword) == key
+            }) else { throw Failure.transaction("keyword already exists") }
+            let ring = try self.keyring(vault)
+            let timestamp = self.now()
+            let sealed = try SnippetCrypto.seal(body, for: self.context(for: id, in: vault), keyring: ring)
+            vault.records.append(VaultRecord(
+                id: id, name: name, keyword: keyword,
+                tags: SnippetTagging.normalizedTags(tags), isEnabled: isEnabled, isPinned: isPinned,
+                createdAt: timestamp, updatedAt: timestamp, hlc: self.clock.send(),
+                contentHash: SnippetCrypto.contentHash(of: body, keyring: ring), sealed: sealed))
+            contents.vault = vault
+        }
+        adopt(outcome)
+        return id
+    }
+
     func setContent(_ content: String, for id: UUID) throws {
         let document = try requireDocument()
         guard document.record(id) != nil else { throw Failure.noSuchRecord }

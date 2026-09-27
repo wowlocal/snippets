@@ -243,7 +243,16 @@ snippets-cli update dashboard --add-tags daily
 snippets-cli add --keyword handoff --name "Project handoff" \
   --content - --tags work < handoff.txt
 
-# Discover secure entries by metadata, then request a secret you created in the app.
+# Create an encrypted entry (requires the updated app and CLI).
+# Body is read privately, never printed in the JSON receipt.
+snippets-cli add --secure --keyword atlas-token --name "Atlas API token" \
+  --content - --tags work < token.txt
+# Or choose another explicit secure source:
+snippets-cli add --secure --keyword atlas-token --content-file token.txt
+snippets-cli add --secure --keyword atlas-token --content-fd 3 3< token.txt
+snippets-cli add --secure --keyword atlas-token --prompt
+
+# Discover secure entries by metadata, then request a secret.
 snippets-cli secure-status
 snippets-cli search "Atlas API token"
 snippets-cli reveal atlas-token
@@ -283,7 +292,32 @@ read the returned value, so its own output and transcript handling matter.
 
 Data commands return JSON; successful `reveal` deliberately returns the raw text.
 Errors go to stderr with a nonzero exit code. Run `snippets-cli help` for all flags.
-Create and edit secure entries in the app: CLI `add` creates an **ordinary** entry.
+`add --secure` asks the running app to create an encrypted entry after
+approval and fresh authentication. Set up Secure Snippets in the app first. It accepts
+non-empty UTF-8 up to 256 KiB, rejects duplicate keywords across both stores, and returns
+only the ID, keyword and `secure: true`. This receipt confirms a durable **local** save,
+not cloud delivery. The running app refreshes its merged list and schedules sync when
+enabled. Offline changes remain in the vault and are rediscovered after restart; the
+vault need not remain unlocked for encrypted upload. Check the app's sync status for
+cloud confirmation. A lost CLI response can leave a successfully created entry: inspect
+its keyword before retrying; creation never replaces an existing keyword.
+
+Choose exactly one source: `--stdin` (or `--content -`), `--content-file PATH`,
+`--content-fd N`, or `--prompt`. Pipe/file/fd sources preserve whitespace and newlines;
+`--prompt` reads one line from the controlling terminal with echo disabled, removes the
+Enter terminator, and restores echo on cancellation. Interactive stdin is refused.
+Files, including redirected stdin and inherited regular files, must belong to you and
+have no group/other permission bits (normally `0600`). `--content-file` refuses symlinks,
+directories and devices; use an inherited pipe for process substitution. Missing,
+conflicting or insecure sources fail without creating an ordinary entry. Literal
+`--content SECRET` and environment-variable secret inputs are not supported for secure
+creation. Metadata (name, keyword and tags) is public.
+The body never enters the ordinary library, temporary files, command arguments or the
+receipt. The CLI verifies the receiving app's signature before sending it.
+
+Install the app and its bundled CLI together before using `--secure`: older CLIs
+ignored unknown flags. Plain `add` still creates an **ordinary** entry; editing existing
+secure entries remains an in-app operation.
 
 Ordinary library reads and writes work with the Mac app closed. With the app running,
 file changes are merged into its library. When sync is enabled, CLI mutations share a

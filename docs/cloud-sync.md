@@ -383,7 +383,7 @@ at `reveal` rather than saying "not found", which would send someone off to recr
 secret they already have. `list` includes secure snippets as content-free shells, so
 their keywords cannot be accidentally reused.
 
-**Verification is one-directional today.** The app checks who is calling it; the CLI does
+**For `reveal`, verification is one-directional.** The app checks who is calling it; the CLI does
 not check who answered. A same-uid process can unlink the socket and rebind it, then return
 a string of its own choosing to `snippets-cli reveal` — the CLI prints it and exits 0. No
 secret is disclosed (the attacker supplies a value, never obtains one), and the same
@@ -391,6 +391,15 @@ attacker has cheaper routes to the identical outcome: `SNIPPETS_SUPPORT_DIR` is 
 runtime, and `/usr/local/bin/snippets-cli` is an unprivileged symlink when that directory is
 user-writable. Worth knowing before anyone pipes `$(snippets-cli reveal …)` into something
 that matters.
+
+`add --secure` uses the same approval and one-use authentication flow
+with a Save prompt. Before reading any input source or sending a body, this command verifies the
+server's audit-token identity, Apple signing anchor, team and app identifier. It refuses
+unknown peers, older servers, duplicate keywords, and a vault that has not been set up.
+The input body (non-empty UTF-8, at most 256 KiB) travels only over the local socket and
+is sealed directly under the shared library lock. Neither `snippets.json` nor the
+success receipt receives plaintext. Metadata remains public. Install the updated app
+and bundled CLI together: older CLI builds ignored unknown flags.
 
 The server checks the caller's audit token (`LOCAL_PEERTOKEN`, not `LOCAL_PEERPID` — pids
 are reused) and its code signature against the team identifier. **That proves which
@@ -909,3 +918,23 @@ server's `nativeAuth` API. This replaces the unshipped browser/OIDC login descri
 [`server/ADR/0004-conventional-account-login.md`](../server/ADR/0004-conventional-account-login.md).
 Device proof of the library key still protects approval and recovery replacement. Recovery-kit
 deferral allows sync and leaves a Settings reminder. CloudKit authentication is unchanged.
+
+
+### Secure CLI input verification
+
+The source options and file permission requirements are documented in the README.
+The shipping input reader is tested with synthetic data, temporary files and disposable
+PTYs. No test should read the operator's library or keychain:
+
+```sh
+xcrun swiftc snippets-cli/SecureInput.swift Tests/Harnesses/SecureInputHarness.swift \
+  -o /tmp/snippets-secure-input-harness
+python3 scripts/test-secure-input.py /tmp/snippets-secure-input-harness
+python3 scripts/test-secure-cli.py /path/to/built/snippets-cli
+```
+
+The first verifies exact bytes, pipe/file/fd reads, UTF-8 and size bounds, unsafe files,
+missing TTY, hidden prompt, and echo restoration after success, overflow and Ctrl-C.
+The second verifies CLI source selection and that every source sends zero bytes to an
+untrusted socket peer. Secure creation/storage tests are `SecureCLIAddTests` in the
+macOS and iOS test targets; IPC validation lives in `SecureAddIPCTests`.

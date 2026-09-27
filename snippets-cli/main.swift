@@ -1,4 +1,6 @@
 import Foundation
+import Security
+import Darwin
 
 // MARK: - Storage
 
@@ -268,6 +270,67 @@ private func cmdReveal(keyword: String) {
     }
 }
 
+/// Authenticate the receiving app before transmitting any secret. A socket path
+/// alone is not identity: another same-user process could replace a stale socket.
+private func isTrustedApp(_ descriptor: Int32) -> Bool {
+    var token = audit_token_t()
+    var size = socklen_t(MemoryLayout<audit_token_t>.size)
+    guard withUnsafeMutablePointer(to: &token, {
+        getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, $0, &size) == 0
+    }) else { return false }
+    let bytes = withUnsafeBytes(of: token) { Data($0) }
+    var code: SecCode?
+    guard SecCodeCopyGuestWithAttributes(nil,
+        [kSecGuestAttributeAudit: bytes] as CFDictionary, [], &code) == errSecSuccess,
+        let code else { return false }
+    let rule = "anchor apple generic and certificate leaf[subject.OU] = \"H8QG3CBM96\" and (identifier \"com.khm.snippets\" or identifier \"com.khm.snippets.debug\")"
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(rule as CFString, [], &requirement) == errSecSuccess,
+          let requirement else { return false }
+    return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+}
+
+private func cmdAddSecure(name: String, keyword: String, tags: [String], enabled: Bool, pinned: Bool, source: SecureInput) {
+    var input = SnippetsIPC.SecureAdd(name: name, keyword: keyword, body: Data([0x61]),
+        tags: tags, isEnabled: enabled, isPinned: pinned)
+    guard input.isValid else { fail("invalid secure snippet metadata") }
+    let descriptor: Int32
+    do {
+        descriptor = try UnixSocket.connect(to: SnippetsIPC.socketURL(), timeout: SnippetsIPC.revealSocketTimeout)
+    } catch {
+        fail("Open Snippets and try again.", code: SnippetsIPC.ExitCode.appNotRunning.rawValue)
+    }
+    defer { close(descriptor) }
+    guard isTrustedApp(descriptor) else { fail("the receiving process is not a trusted Snippets app") }
+    do {
+        var body = try source.read(maximumBytes: SnippetsIPC.SecureAdd.maximumBodyBytes)
+        defer { body.resetBytes(in: 0..<body.count) }
+        input.body = body
+        guard input.isValid else { fail("secure content must be non-empty UTF-8, at most 256 KiB") }
+        // Never send CommandLine.arguments: content is never in argv, and a fixed
+        // invocation keeps future argument additions out of the app's prompt.
+        try UnixSocket.send(SnippetsIPC.Request(command: SnippetsIPC.Command.addSecure, secureAdd: input), on: descriptor)
+        let response = try UnixSocket.receive(SnippetsIPC.Response.self, on: descriptor)
+        guard response.v == SnippetsIPC.protocolVersion else {
+            fail("update the app and CLI together", code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+        }
+        switch response.status {
+        case .ok:
+            guard let id = response.createdID else { fail("missing creation receipt; check secure-status before retrying") }
+            struct Receipt: Encodable { let id: UUID; let secure: Bool; let keyword: String }
+            printJSON(Receipt(id: id, secure: true, keyword: Snippet.sanitizedKeyword(keyword)))
+        case .denied: fail("the request was not approved", code: SnippetsIPC.ExitCode.denied.rawValue)
+        case .locked: fail("unlock or set up Secure Snippets in the app", code: SnippetsIPC.ExitCode.locked.rawValue)
+        case .unsupported: fail("update the app and CLI together", code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+        default: fail("secure creation failed; check for a duplicate keyword or unavailable vault")
+        }
+    } catch let error as SecureInput.Failure {
+        fail(error.description)
+    } catch {
+        fail("secure creation could not be confirmed; check the library before retrying")
+    }
+}
+
 private func cmdSecureStatus() {
     struct Status: Encodable {
         let appRunning: Bool
@@ -527,6 +590,14 @@ private func usage() -> Never {
       add --keyword <kw>             Add a new snippet
           --name <name>
           --content <text>|-         (use - to read content from stdin)
+          --secure                   Encrypted creation through the running app; requires
+                                     approval and authentication. Never echoes text.
+          --stdin                    Secure input from pipe/stdin (same as --content -)
+          --content-file <path>      Secure input from a private regular file (0600)
+          --content-fd <number>      Secure input from an inherited pipe/private file
+          --prompt                   Secure input from /dev/tty with echo disabled
+                                     Choose exactly one source with --secure.
+                                     UTF-8, at most 256 KiB; prompt reads one line.
           --tags <a,b,c>             Comma-separated tags
           --disabled
           --pinned
@@ -605,7 +676,9 @@ case "tags":
 case "add":
     var name    = ""
     var keyword = ""
-    var content = ""
+    var contentArgument: String?
+    var secure = args.contains("--secure")
+    var secureSource: SecureInput?
     var tags: [String] = []
     var enabled = true
     var pinned  = false
@@ -617,18 +690,48 @@ case "add":
         case "--keyword":
             keyword = nextArg(args, after: i, flag: "--keyword"); i += 1
         case "--content":
-            content = readContent(from: nextArg(args, after: i, flag: "--content")); i += 1
+            guard contentArgument == nil else { fail("--content may only be specified once") }
+            contentArgument = nextArg(args, after: i, flag: "--content"); i += 1
+        case "--stdin", "--prompt", "--content-file", "--content-fd":
+            guard secureSource == nil else { fail("choose exactly one secure input source") }
+            switch args[i] {
+            case "--stdin": secureSource = .standardInput
+            case "--prompt": secureSource = .prompt
+            case "--content-file":
+                secureSource = .file(nextArg(args, after: i, flag: "--content-file")); i += 1
+            default:
+                guard let fd = Int32(nextArg(args, after: i, flag: "--content-fd")), fd >= 0 else {
+                    fail("--content-fd requires a non-negative descriptor number")
+                }
+                secureSource = .descriptor(fd); i += 1
+            }
         case "--tags":
             tags = parseTags(nextArg(args, after: i, flag: "--tags")); i += 1
+        case "--secure": secure = true
         case "--disabled": enabled = false
         case "--pinned":   pinned  = true
-        default: break
+        default: fail("unknown add option; run snippets-cli help")
         }
         i += 1
     }
-    cmdAdd(name: name, keyword: keyword, content: content, tags: tags, enabled: enabled, pinned: pinned)
+    if secure {
+        if let contentArgument {
+            guard contentArgument == "-" else { fail("secure content cannot be passed as an argument; use an input source") }
+            guard secureSource == nil else { fail("choose exactly one secure input source") }
+            secureSource = .standardInput
+        }
+        guard let source = secureSource else { fail("--secure requires --stdin, --content -, --content-file, --content-fd or --prompt") }
+        cmdAddSecure(name: name, keyword: keyword, tags: tags, enabled: enabled, pinned: pinned, source: source)
+    } else {
+        guard secureSource == nil else { fail("secure input options require --secure") }
+        cmdAdd(name: name, keyword: keyword, content: readContent(from: contentArgument ?? ""),
+               tags: tags, enabled: enabled, pinned: pinned)
+    }
 
 case "update":
+    guard !args.contains(where: { ["--secure", "--stdin", "--content-file", "--content-fd", "--prompt"].contains($0) }) else {
+        fail("secure CLI input is supported for add only; edit existing secure entries in the app")
+    }
     guard args.count >= 2 else { fail("update requires a keyword or UUID argument") }
     let target = args[1]
     var name:       String?   = nil
@@ -658,7 +761,7 @@ case "update":
         case "--disabled": enabled = false
         case "--pinned":   pinned  = true
         case "--unpinned": pinned  = false
-        default: break
+        default: fail("unknown update option; run snippets-cli help")
         }
         i += 1
     }

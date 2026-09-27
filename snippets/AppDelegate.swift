@@ -144,7 +144,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     lazy var secureStore = SecureSnippetStore(session: vaultSession, deviceID: store.deviceID)
     /// Answers `snippets-cli`. Started unconditionally: `status` has to work whether or
     /// not a vault exists, and the socket is how the CLI discovers the app is running.
-    private lazy var controlServer = ControlServer(session: vaultSession, secureStore: secureStore)
+    private lazy var controlServer = ControlServer(
+        session: vaultSession, secureStore: secureStore,
+        prepareSecureCreation: { [weak self] in
+            guard let self else { throw CocoaError(.userCancelled) }
+            for controller in NSApp.windows.compactMap({ $0.contentViewController as? ViewController }) {
+                try controller.flushPendingSecureEditForSync()
+            }
+            try self.store.flushPendingWritesForSync()
+        })
 
     /// Presents both stores to the sync engine as one library.
     ///
