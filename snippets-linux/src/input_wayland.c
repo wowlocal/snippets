@@ -24,7 +24,7 @@ struct snip_input {
     struct zwp_virtual_keyboard_v1 *keyboard;
     uint32_t seat_name, manager_name;
     unsigned seats, managers;
-    int failed, keymap;
+    int failed, keymap, keyboard_capability;
 };
 static int64_t now_ms(void) {
     struct timespec value;
@@ -38,7 +38,9 @@ static int64_t deadline_after(int milliseconds) {
 static int admitted(snip_check check, void *context) { return check && check(context); }
 static void capabilities(void *data, struct wl_seat *seat, uint32_t caps) {
     (void)seat;
-    if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD)) ((struct snip_input *)data)->failed = 1;
+    struct snip_input *owner = data;
+    owner->keyboard_capability = !!(caps & WL_SEAT_CAPABILITY_KEYBOARD);
+    if (!owner->keyboard_capability) owner->failed = 1;
 }
 static const struct wl_seat_listener seat_listener = { .capabilities = capabilities };
 static void global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
@@ -129,7 +131,8 @@ struct snip_input *snip_input_open_fd(int fd, snip_check check, void *context, i
     struct snip_input *owner = calloc(1, sizeof(*owner));
     if (!owner) { close(fd); *status = 3; return NULL; }
     owner->display = wl_display_connect_to_fd(fd);
-    if (!owner->display) { close(fd); free(owner); *status = 3; return NULL; }
+    /* libwayland owns fd even when connecting fails. */
+    if (!owner->display) { free(owner); *status = 3; return NULL; }
     owner->registry = wl_display_get_registry(owner->display);
     if (!owner->registry) { *status = 3; snip_input_close(owner); return NULL; }
     wl_registry_add_listener(owner->registry, &registry_listener, owner);
@@ -141,7 +144,10 @@ struct snip_input *snip_input_open_fd(int fd, snip_check check, void *context, i
     owner->keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(owner->manager, owner->seat);
     if (!owner->keyboard) { *status = 3; snip_input_close(owner); return NULL; }
     *status = synchronize(owner, check, context);
-    if (*status) { snip_input_close(owner); return NULL; }
+    if (*status || !owner->keyboard_capability) {
+        if (!*status) *status = 3;
+        snip_input_close(owner); return NULL;
+    }
     return owner;
 }
 struct snip_input *snip_input_open(snip_check check, void *context, int *status) {

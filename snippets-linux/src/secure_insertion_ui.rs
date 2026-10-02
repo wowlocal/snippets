@@ -2,6 +2,45 @@
 //! armed only after exact record admission; ordinary focus loss still cancels.
 use super::*;
 use crate::secure_insertion::{Authorization, wayland::Native};
+#[path = "secure_insertion_clipboard.rs"]
+mod clipboard;
+fn review_dialog(
+    application: &str,
+    has_passphrase: bool,
+    has_recovery: bool,
+) -> (adw::AlertDialog, gtk::PasswordEntry, gtk::CheckButton) {
+    let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let entry = gtk::PasswordEntry::builder()
+        .show_peek_icon(false)
+        .hexpand(true)
+        .build();
+    entry.update_property(&[gtk::accessible::Property::Label(
+        "Fresh vault credential for secure insertion",
+    )]);
+    let recovery = gtk::CheckButton::with_label("Use vault recovery key");
+    recovery.set_active(!has_passphrase);
+    recovery.set_sensitive(has_passphrase && has_recovery);
+    fields.append(&label(
+        "Authenticate this insertion with your vault passphrase or recovery key.",
+    ));
+    fields.append(&entry);
+    fields.append(&recovery);
+    let dialog = adw::AlertDialog::builder()
+        .heading("Insert Saved Secure Text?")
+        .body(format!("Destination: {application}\n\nThe saved text will be typed without using the clipboard. Line breaks and tabs are keyboard input and may trigger actions in the destination. Keep the original window focused until insertion finishes. A focus change or desktop lock stops further input when detected. A stopped insertion can leave a prefix; check the destination before trying again."))
+        .extra_child(&fields)
+        .build();
+    dialog.set_body_use_markup(false);
+    dialog.add_responses(&[("cancel", "Cancel"), ("insert", "Authenticate and Insert")]);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.set_response_enabled("insert", false);
+    let changed = dialog.clone();
+    entry.connect_changed(move |entry| {
+        changed.set_response_enabled("insert", draft_recovery::usable(entry));
+    });
+    (dialog, entry, recovery)
+}
 impl Workspace {
     pub(super) fn cancel_insertion(&self) {
         if let Some(auth) = self.insertion_authorization.borrow_mut().take() {
@@ -81,22 +120,7 @@ impl Workspace {
                 let application=worker(move ||described.application_label().ok_or(Error("The original window is no longer available."))).await?;
                 this.insertion_ready(generation,&authorization)?;
                 if !target.is_fresh(){return Err(Error("Select the secure snippet from the picker again to refresh its destination."));}
-                let fields=gtk::Box::new(gtk::Orientation::Vertical,8);
-                let entry=gtk::PasswordEntry::builder().show_peek_icon(false).hexpand(true).build();
-                entry.update_property(&[gtk::accessible::Property::Label("Fresh vault credential for secure insertion")]);
-                let recovery=gtk::CheckButton::with_label("Use vault recovery key");
-                recovery.set_active(document.wrap_pass.is_none());
-                recovery.set_sensitive(document.wrap_pass.is_some() && document.wrap_recovery.is_some());
-                fields.append(&label("Authenticate this insertion with your vault passphrase or recovery key."));
-                fields.append(&entry);fields.append(&recovery);
-                let dialog=adw::AlertDialog::builder().heading("Insert Saved Secure Text?")
-                    .body(format!("Destination: {application}\n\nThe saved text will be typed into the original window without using the clipboard. Line breaks and tabs are keyboard input and may trigger actions in the destination. Changing windows or locking the desktop stops insertion. A stopped insertion can leave a prefix; check the destination before trying again."))
-                    .extra_child(&fields).build();
-                dialog.set_body_use_markup(false);
-                dialog.add_responses(&[("cancel","Cancel"),("insert","Authenticate and Insert")]);
-                dialog.set_default_response(Some("cancel"));dialog.set_close_response("cancel");
-                dialog.set_response_enabled("insert",false);
-                let changed=dialog.clone();entry.connect_changed(move |entry|changed.set_response_enabled("insert",draft_recovery::usable(entry)));
+                let (dialog,entry,recovery)=review_dialog(&application,document.wrap_pass.is_some(),document.wrap_recovery.is_some());
                 *this.insertion_dialog.borrow_mut()=Some((dialog.clone(),entry.clone()));
                 let response=dialog.choose_future(Some(&this.window)).await;
                 this.insertion_dialog.borrow_mut().take();
@@ -104,16 +128,20 @@ impl Workspace {
                 let password=draft_recovery::take_secret(&entry)?;
                 this.insertion_ready(generation,&authorization)?;
                 let use_recovery=recovery.is_active();let checked=authorization.clone();
-                let authentication=worker(move || {
+                let root=this.library.root.clone();
+                let prepared=worker(move || {
                     checked.validate()?;
-                    let result=document.authenticate(&password,use_recovery)?;
-                    checked.validate()?;Ok(result)
+                    let authentication=document.authenticate(&password,use_recovery)?;
+                    drop(password);
+                    checked.validate()?;
+                    Vault::prepare_saved_insertion(root,document,authentication,record,checked)
                 }).await?;
                 this.insertion_ready(generation,&authorization)?;
-                let prepared=this.vault.borrow_mut().prepare_insertion(&this.library,authentication,vault_generation,record,authorization.clone())?;
+                if this.vault.borrow().generation()!=vault_generation {
+                    return Err(Error("The vault changed during insertion authentication."));
+                }
                 let clipboard=if prepared.needs_clipboard(){
-                    let value=this.window.clipboard().read_text_future().await.map_err(|_|Error("The clipboard placeholder could not be read."))?;
-                    Zeroizing::new(value.map(|s|s.to_string()).unwrap_or_default())
+                    clipboard::read(&this.window.clipboard(),&authorization).await?
                 }else{Zeroizing::new(String::new())};
                 this.insertion_ready(generation,&authorization)?;
                 if !target.is_fresh(){return Err(Error("The original destination expired. Open the picker again."));}
@@ -145,5 +173,35 @@ impl Workspace {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires a graphical display; constructs only the review dialog and never sends input"]
+    fn native_insertion_review_bounds_credentials_and_keeps_cancel_as_default() {
+        adw::init().expect("graphical display");
+        let (dialog, entry, recovery) = review_dialog("Public <destination>", true, true);
+        assert!(!dialog.is_body_use_markup());
+        assert_eq!(dialog.default_response().as_deref(), Some("cancel"));
+        assert_eq!(dialog.close_response(), "cancel");
+        assert!(!dialog.is_response_enabled("insert"));
+        assert!(!entry.shows_peek_icon());
+        assert!(!recovery.is_active() && recovery.is_sensitive());
+        entry.set_text("Public fictional credential");
+        assert!(dialog.is_response_enabled("insert"));
+        assert_eq!(
+            &*draft_recovery::take_secret(&entry).unwrap(),
+            "Public fictional credential"
+        );
+        assert!(!draft_recovery::usable(&entry) && !dialog.is_response_enabled("insert"));
+        entry.set_text(&"X".repeat(4097));
+        assert!(!dialog.is_response_enabled("insert"));
+        assert!(draft_recovery::take_secret(&entry).is_err());
+        assert!(!draft_recovery::usable(&entry));
+        let (_, _, recovery) = review_dialog("Public recovery-only destination", false, true);
+        assert!(recovery.is_active() && !recovery.is_sensitive());
     }
 }

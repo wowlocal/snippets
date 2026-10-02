@@ -14,6 +14,9 @@ Missing own vault stamps/hashes in archived records can be recovered only after
 explicit source-vault authentication. Raw v1 carriers remain strict.
 Live legacy-record repair and unreferenced-image cleanup,
 inline expansion and live desktop verification remain unfinished.
+Freshly authenticated secure insertion is now wired to the picker and native
+virtual keyboard. Its core checks pass; live focus, credential-dialog and
+receiving-application verification remain unfinished.
 
 ## Architecture
 
@@ -207,7 +210,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement is wired; unreferenced images remain pending; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery dialog compiles but display initialization is unavailable; live keyboard/reveal workflow remains open |
-| Secure delivery and transfers | Native portable encrypted-backup export/import with authenticated codec and encrypted redo | Fresh vault authentication, metadata encryption, preserved record seals and exact snapshot checks pass; direct insertion without clipboard exposure, legacy seal repair and fuller editing/accessibility review remain pending |
+| Secure delivery and transfers | Native portable encrypted-backup export/import plus fresh-authenticated direct virtual-keyboard insertion | Authenticated transfers, insertion core, native XKB, source revocation and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field validation, legacy seal repair and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent child deletions and unknown versions remain separate review boundaries; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live UI/HTTPS/keyring verification remains pending |
@@ -1938,3 +1941,76 @@ opaque and prevent deletion/cleanup. The recovery startup gate reaches the expli
 authenticated data owner without exposing mixed primary files; its combined live
 graphical/account workflow still needs verification. These
 obligations remain part of the full port.
+
+## Freshly authenticated secure insertion
+
+The picker now retains its ephemeral original-window destination when opening a
+secure entry. The vault workspace offers an explicit **Insert into Original
+Window…** action for an enabled saved record, after any draft has been saved or
+discarded. The review names only the destination application, explains Return/Tab
+behavior and possible partial delivery, defaults to Cancel, and collects fresh
+vault passphrase/recovery credentials in a bounded password field. It never
+displays the saved body. This authentication does not install or extend the
+editor's unlocked session.
+
+`src/vault_insertion.rs` creates an independent worker-owned vault, compares the
+whole saved document with the reviewed snapshot, takes the ordinary library
+lock and checks primary readiness, then admits the exact enabled record. Both
+the record seal and keyed content hash are authenticated. An absent legacy
+hash is a refusal, not an unauthenticated repair. Credentials are dropped after
+derivation; the fresh key lives only through preparation. No GTK object or
+cached editor session crosses to that worker.
+
+`src/secure_insertion.rs` consumes a non-cloneable prepared plaintext owner.
+Its cancellation token binds the unlocked desktop observation epoch and fixed
+two-minute wall and suspend-aware deadlines. The encrypted source proof binds
+the fixed `Vault/vault.json` file's inode/device, size, timestamps and SHA-256.
+It refuses final-component links and hard links, compares a full bounded read
+before/after delivery, and rechecks file metadata between input units. These
+checks do not prove immunity to every hostile ancestor-path substitution or
+noncooperating concurrent writer.
+
+Placeholder expansion uses a wipeable one-pass buffer with a 256 KiB bound.
+The original body is dropped before native I/O. Only templates containing
+`{clipboard}` read the clipboard; `src/secure_insertion_clipboard.rs` requests
+text MIME types and reads bounded GIO-stream chunks under one two-second
+deadline. Authorization is checked while awaiting each future; revocation or
+timeout drops the future and cancels its native operation. Core tests use only
+fictional memory streams and stalled futures, never the user's clipboard.
+GTK/GLib, font/input libraries and the receiving compositor can retain their
+own copies; owned Rust buffers do not grant universal memory-erasure guarantees.
+
+`src/secure_insertion_wayland.rs` and `src/input_wayland.c` implement the native
+virtual-keyboard backend from the minimal declarations in
+`data/virtual-keyboard-v1.xml`. No clipboard interface is used by this transport.
+The compositor connection must have the same user and match the active Hyprland
+instance PID and Wayland socket reported by `hyprctl -j instances`. The owner
+requires exactly one seat and manager plus a confirmed keyboard capability.
+XKB maps are limited to 240 scalar positions per batch and are sent through
+anonymous memfd descriptors sealed against writes/growth/shrinkage. Key requests
+pair down/up and wait through bounded consent-checked libwayland synchronization.
+Cancellation drops queued input without flushing it during cleanup. The
+Wayland FD is handed off exactly once, including connection failure, as required
+by the [libwayland client API](https://wayland.freedesktop.org/docs/html/apb.html).
+
+CRLF and CR normalize to one Return, Tab remains a Tab, and other control
+characters fail before the keyboard backend begins. The resolved text must fit
+256 KiB. There is no automatic retry after partial input and no clipboard
+fallback. Destination focus/process is revalidated around native I/O, but the
+[virtual-keyboard protocol](https://wayland.app/protocols/virtual-keyboard-unstable-v1)
+delivers to keyboard focus rather than an atomically addressed application.
+A focus race can therefore route a prefix to another window; a compositor
+acknowledgement also does not prove that a destination field accepted the text.
+
+The core suite covers Unicode/multiple maps, normalization, refusal before
+input, changed/replaced/linked files, cancellation, lock cycles, fixed deadlines,
+actual saved disabled/legacy records, and an unchanged selected record after a
+different record changes. Native XKB decoding is exercised without a display.
+The private reference compositor in `tests/reference/input-wayland.c` builds
+with strict C warnings and independently checks sealed map FDs, decoded Unicode,
+map changes, paired keys, cancellation without a cleanup flush, and stalled
+handshakes. Its runtime assertions remain unverified here: `wl_client_create`
+fails with `EPERM` before the private protocol handshake. The dedicated GTK
+review fixture also stops at display initialization, before creating widgets or
+collecting credentials. Live insertion, focus races and receiving-field behavior
+remain part of the unfinished full port.

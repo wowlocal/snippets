@@ -10,11 +10,11 @@ and an encrypted vault workspace; [the full desktop port remains in development]
 On Omarchy, install missing build and native runtime packages:
 
 ```sh
-omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode wayland wayland-protocols pkgconf base-devel
+omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode wayland wayland-protocols libxkbcommon pkgconf base-devel
 ```
 
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
-libqrencode 4.1+, Wayland and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
+libqrencode 4.1+, Wayland, libxkbcommon and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
 are locked in `Cargo.lock`. The GUI links to the installed native GTK libraries.
 The CLI and storage model also build without GTK or libsecret using `--no-default-features`.
 
@@ -574,8 +574,45 @@ draft intact. Quit waits for the recovery worker to release its credentials.
 This native dialog is compiled and its core checks pass; live display verification
 remains open. Drafts are retained in memory, not across application restarts.
 
-Direct secure insertion remains unfinished. Archived records from a different
-vault use the separately authenticated saved-history restoration flow described above.
+Archived records from a different vault use the separately authenticated
+saved-history restoration flow described above.
+
+### Insert saved secure text
+
+Open the picker from the destination application and select an enabled secure
+entry. Its vault window retains the original destination for two minutes and
+offers **Insert into Original Window…**. Save or discard an unsaved draft first.
+Review the destination application and supply a fresh vault passphrase or
+recovery key for this insertion, even if the editor is already unlocked.
+This authentication does not unlock or extend the editor's reveal session.
+
+The backend types Unicode through the compositor's native virtual keyboard.
+It writes no clipboard selection, sends no body in subprocess arguments, and
+uses anonymous sealed memory descriptors for XKB maps. `{clipboard}` is read
+only when requested by the saved template; its text transfer is limited to
+256 KiB and two seconds. Placeholder resolution is one pass, and the resolved
+text must also fit 256 KiB. CRLF and CR become one Return; tabs become Tab.
+Other control characters are rejected before keyboard input. Returns and tabs
+can submit forms, execute commands or move focus in the receiving application.
+
+Keep the original application focused while input is sent. Cancellation, a
+desktop lock, unavailable lock observation, a changed file or an expired request
+stops further input when detected. The authentication and destination expire
+after two minutes, including sleep. Interrupted delivery may leave a prefix;
+there is no clipboard fallback or automatic retry. Compositor synchronization
+does not prove that the receiving application accepted the intended text.
+
+Wayland virtual-keyboard input follows keyboard focus. Destination checks cannot
+make focus and delivery atomic, so a focus race can route a prefix into a newly
+focused window. Saved-file checks also do not claim protection against every
+hostile ancestor-path change or noncooperating concurrent writer. These limits
+must be included in live desktop validation. Legacy entries without an
+authenticated content hash refuse direct insertion until a separate repair.
+
+The native UI and backend compile; core, native XKB decoding, cancellation and
+bounded in-memory GIO-stream checks pass. Live credential-dialog and receiving
+application verification remain open. The private Wayland-server fixture builds
+but cannot create its test client in the current restricted environment (`EPERM`).
 
 ## Local clipboard history
 
@@ -700,6 +737,10 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1
+cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib secure_insertion::wayland::protocol_tests::private_input_protocol -- --ignored --test-threads=1
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib secure_ui::insertion::tests::native_insertion_review -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib account_ui::tests::native_account -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \

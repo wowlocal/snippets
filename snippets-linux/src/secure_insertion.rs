@@ -168,17 +168,24 @@ impl Prepared {
         std::str::from_utf8(&self.body).is_ok_and(|text| text.contains("{clipboard}"))
     }
     pub(crate) fn deliver<B: Backend>(self, backend: &mut B, clipboard: &str) -> Result<usize> {
+        let Self {
+            source,
+            body,
+            authorization,
+        } = self;
+        authorization.validate()?;
         let text = crate::placeholders::resolve_sensitive_at(
-            std::str::from_utf8(&self.body).map_err(|_| UNSUPPORTED)?,
+            std::str::from_utf8(&body).map_err(|_| UNSUPPORTED)?,
             clipboard,
             chrono::Local::now(),
         )?;
+        drop(body);
         validate_text(&text)?;
         let guard = || {
-            self.authorization.validate()?;
-            self.source.validate()
+            authorization.validate()?;
+            source.validate()
         };
-        self.source.authenticate_current()?;
+        source.authenticate_current()?;
         guard()?;
         backend.begin(&guard)?;
         let mut chars = text.chars().peekable();
@@ -211,7 +218,7 @@ impl Prepared {
             }
         }
         guard()?;
-        self.source.authenticate_current()?;
+        source.authenticate_current()?;
         Ok(entered)
     }
 }

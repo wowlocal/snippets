@@ -108,6 +108,20 @@ impl Backend for Native {
     }
     fn install(&mut self, map: &[u8], guard: &dyn Fn() -> Result<()>) -> Result<()> {
         self.validate(guard)?;
+        let owner = self.connection.as_ref().ok_or(UNAVAILABLE)?;
+        owner.install(map, &|| self.validate(guard))?;
+        self.validate(guard)
+    }
+    fn key(&mut self, code: u32, guard: &dyn Fn() -> Result<()>) -> Result<()> {
+        self.validate(guard)?;
+        let owner = self.connection.as_ref().ok_or(UNAVAILABLE)?;
+        owner.key(code, &|| self.validate(guard))?;
+        self.validate(guard)
+    }
+}
+impl Connection {
+    fn install(&self, map: &[u8], guard: &dyn Fn() -> Result<()>) -> Result<()> {
+        guard()?;
         if !valid_keymap(map) {
             return Err(UNAVAILABLE);
         }
@@ -127,12 +141,10 @@ impl Backend for Native {
         if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) } < 0 {
             return Err(UNAVAILABLE);
         }
-        let owner = self.connection.as_ref().ok_or(UNAVAILABLE)?;
-        let checked = || self.validate(guard);
-        let mut context = Check(&checked);
+        let mut context = Check(guard);
         let status = unsafe {
             snip_input_keymap(
-                owner.0.as_ptr(),
+                self.0.as_ptr(),
                 file.as_raw_fd(),
                 map.len() as u32,
                 check,
@@ -140,25 +152,25 @@ impl Backend for Native {
             )
         };
         outcome(status)?;
-        self.validate(guard)
+        guard()
     }
-    fn key(&mut self, code: u32, guard: &dyn Fn() -> Result<()>) -> Result<()> {
-        self.validate(guard)?;
-        let owner = self.connection.as_ref().ok_or(UNAVAILABLE)?;
-        let checked = || self.validate(guard);
-        let mut context = Check(&checked);
+    fn key(&self, code: u32, guard: &dyn Fn() -> Result<()>) -> Result<()> {
+        let mut context = Check(guard);
         let status = unsafe {
             snip_input_key(
-                owner.0.as_ptr(),
+                self.0.as_ptr(),
                 code,
                 check,
                 (&mut context as *mut Check<'_>).cast(),
             )
         };
         outcome(status)?;
-        self.validate(guard)
+        guard()
     }
 }
+#[cfg(test)]
+#[path = "secure_insertion_wayland_tests.rs"]
+mod protocol_tests;
 pub(super) fn valid_keymap(map: &[u8]) -> bool {
     map.len() <= 65536
         && map.last() == Some(&0)
@@ -168,14 +180,78 @@ pub(super) fn valid_keymap(map: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    unsafe extern "C" {
+        fn xkb_context_new(flags: u32) -> *mut c_void;
+        fn xkb_context_unref(context: *mut c_void);
+        fn xkb_keymap_new_from_string(
+            context: *mut c_void,
+            map: *const libc::c_char,
+            format: u32,
+            flags: u32,
+        ) -> *mut c_void;
+        fn xkb_keymap_unref(map: *mut c_void);
+        fn xkb_keymap_key_get_syms_by_level(
+            map: *mut c_void,
+            key: u32,
+            layout: u32,
+            level: u32,
+            symbols: *mut *const u32,
+        ) -> c_int;
+        fn xkb_keysym_to_utf32(symbol: u32) -> u32;
+    }
+    struct ParsedMap {
+        context: *mut c_void,
+        map: *mut c_void,
+    }
+    impl Drop for ParsedMap {
+        fn drop(&mut self) {
+            unsafe {
+                xkb_keymap_unref(self.map);
+                xkb_context_unref(self.context);
+            }
+        }
+    }
     #[test]
     fn generated_unicode_maps_are_accepted_by_native_xkb_without_a_display() {
-        let values = "aAZя中🙂\t\n\u{301}"
+        let values = "aAZéя中🙂\t\n\u{301}"
             .chars()
             .map(|c| c as u32)
             .collect::<Vec<_>>();
         let map = Keymap::new(&values).unwrap();
         assert!(valid_keymap(&map.bytes));
+        let context = unsafe { xkb_context_new(0) };
+        assert!(!context.is_null());
+        let decoded =
+            unsafe { xkb_keymap_new_from_string(context, map.bytes.as_ptr().cast(), 1, 0) };
+        if decoded.is_null() {
+            unsafe {
+                xkb_context_unref(context);
+            }
+            panic!("fictional Unicode map could not be decoded");
+        }
+        let decoded = ParsedMap {
+            context,
+            map: decoded,
+        };
+        for (index, &expected) in values.iter().enumerate() {
+            let mut symbols = std::ptr::null();
+            let count = unsafe {
+                xkb_keymap_key_get_syms_by_level(decoded.map, index as u32 + 9, 0, 0, &mut symbols)
+            };
+            assert_eq!(count, 1);
+            assert!(!symbols.is_null());
+            let scalar = unsafe { xkb_keysym_to_utf32(*symbols) };
+            // Native XKB returns carriage return for the independently checked
+            // Return keysym; the application normalizes source LF/CR to Return.
+            assert_eq!(
+                scalar,
+                if expected == '\n' as u32 {
+                    '\r' as u32
+                } else {
+                    expected
+                }
+            );
+        }
         assert!(!valid_keymap(b"Public invalid XKB map\0"));
         assert!(!valid_keymap(b"Public unterminated map"));
     }

@@ -426,6 +426,14 @@ impl Workspace {
             {
                 this.cancel_draft_recovery();
             }
+            if this
+                .insertion_authorization
+                .borrow()
+                .as_ref()
+                .is_some_and(|authorization| authorization.validate().is_err())
+            {
+                this.cancel_insertion();
+            }
             glib::ControlFlow::Continue
         });
         let weak = Rc::downgrade(&this);
@@ -532,10 +540,12 @@ impl Workspace {
             Ok(changed) => {
                 self.reading_failed.set(false);
                 if changed {
+                    self.cancel_insertion();
                     self.refresh();
                 }
             }
             Err(error) => {
+                self.cancel_insertion();
                 if !self.reading_failed.replace(true) {
                     self.toast(&error.to_string());
                 }

@@ -199,7 +199,8 @@ struct snip_control *snip_control_open_fd(int fd, snip_check check, void *contex
     struct snip_control *owner = calloc(1, sizeof(*owner));
     if (!owner) { close(fd); *status = 3; return NULL; }
     owner->display = wl_display_connect_to_fd(fd);
-    if (!owner->display) { close(fd); free(owner); *status = 3; return NULL; }
+    /* libwayland owns fd even when connecting fails. */
+    if (!owner->display) { free(owner); *status = 3; return NULL; }
     owner->registry = wl_display_get_registry(owner->display);
     if (!owner->registry) { *status = 3; snip_control_close(owner); return NULL; }
     wl_registry_add_listener(owner->registry, &registry_listener, owner);
