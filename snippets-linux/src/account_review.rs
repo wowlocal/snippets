@@ -100,6 +100,9 @@ pub struct Review {
     target_image: Vec<u8>,
 }
 impl Review {
+    pub(crate) fn vault_recovery_header(&self) -> Result<Option<crate::vault::RecoveryHeader>> {
+        Ok(self.snapshot.vault_recovery_header()?)
+    }
     pub fn summary(&self) -> Summary {
         self.receipt.summary
     }

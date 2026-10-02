@@ -9,6 +9,7 @@ pub(super) struct Data {
     pub saved: BTreeMap<Uuid, Envelope>,
     pub preservation: BTreeMap<Uuid, (Envelope, Vec<Envelope>)>,
     pub history: Vec<RestorationGeneration>,
+    pub links: Vec<(Uuid, Uuid)>,
 }
 fn crypto_failure(error: crate::materializer::Failure) -> Failure {
     Failure::Primary(error.into())
@@ -180,5 +181,72 @@ pub(super) fn resolve(archived: &Journal, keys: Option<&Keyring<'_>>) -> Result<
         saved,
         preservation,
         history,
+        links: archived.preservation_links(),
+    })
+}
+
+pub(super) fn rekey(data: Data, old: &Keyring<'_>, current: &Keyring<'_>) -> Result<Data> {
+    let records = data
+        .saved
+        .values()
+        .chain(data.preservation.values().map(|(source, _)| source))
+        .chain(data.preservation.values().flat_map(|(_, copies)| copies))
+        .chain(data.history.iter().flat_map(|g| g.targets.values()))
+        .chain(
+            data.history
+                .iter()
+                .flat_map(|g| &g.sources)
+                .map(|(source, _)| source),
+        )
+        .chain(
+            data.history
+                .iter()
+                .flat_map(|g| &g.sources)
+                .flat_map(|(_, copies)| copies),
+        )
+        .collect::<Vec<_>>();
+    let mapping =
+        crate::materializer::Rekey::prepare(&records, old, current).map_err(crypto_failure)?;
+    let translated = |e: &Envelope| mapping.record(e).map_err(crypto_failure);
+    let copies = |copies: &[Envelope]| copies.iter().map(translated).collect::<Result<Vec<_>>>();
+    let saved = data
+        .saved
+        .values()
+        .map(|e| Ok((mapping.id(e.id), translated(e)?)))
+        .collect::<Result<_>>()?;
+    let preservation = data
+        .preservation
+        .into_iter()
+        .map(|(id, (source, originals))| {
+            Ok((mapping.id(id), (translated(&source)?, copies(&originals)?)))
+        })
+        .collect::<Result<_>>()?;
+    let history = data
+        .history
+        .into_iter()
+        .map(|frame| {
+            Ok(RestorationGeneration {
+                targets: frame
+                    .targets
+                    .values()
+                    .map(|e| Ok((mapping.id(e.id), translated(e)?)))
+                    .collect::<Result<_>>()?,
+                sources: frame
+                    .sources
+                    .into_iter()
+                    .map(|(source, originals)| Ok((translated(&source)?, copies(&originals)?)))
+                    .collect::<Result<_>>()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(Data {
+        saved,
+        preservation,
+        history,
+        links: data
+            .links
+            .into_iter()
+            .map(|(a, b)| (mapping.id(a), mapping.id(b)))
+            .collect(),
     })
 }

@@ -9,6 +9,8 @@ use crate::{
 
 #[path = "history_restore_deleted_tests.rs"]
 mod deleted_participants;
+#[path = "history_restore_foreign_tests.rs"]
+mod foreign;
 
 fn restored_setup() -> Setup {
     let mut s = setup();

@@ -199,7 +199,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
-| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; foreign vaults and capacity management remain pending; live native GTK/keyring/PAM verification remains unavailable |
+| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; core foreign-vault graph re-encryption | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; native foreign-vault authentication, legacy header selection and capacity management remain pending; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery dialog compiles but display initialization is unavailable; live keyboard/reveal workflow remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import with authenticated codec and encrypted redo | Fresh vault authentication, metadata encryption, preserved record seals and exact snapshot checks pass; direct insertion without clipboard exposure, archived foreign-vault restoration and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
@@ -243,9 +243,18 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-02
 
+- The foreign-vault core additions pass targeted library selections: `foreign`
+  (21 tests), `materializer::rekey::tests` (3), `vault_header` (9) and
+  `vault::recovery_header::tests` (3). The owner matrix covers normal and queued
+  nested conflict graphs across six commit/restart paths, distinct original
+  nonce snapshots, current lost replies and strict-CAS delivery through settlement.
+  Both all-target Clippy configurations pass with warnings denied, and formatting
+  passes. Complete filtered suites and Release/install checks listed below
+  precede these core additions and have not been repeated for this checkpoint.
 - The new native account/recovery UI and serialized worker pass all-target compilation
-  and Clippy with warnings denied. The current filtered default library run passes
-  671 tests, with sixteen explicitly ignored and 37 excluded (Cloud HTTP module,
+  and Clippy with warnings denied. The last complete filtered default library run,
+  before the foreign-vault core additions, passed
+  682 tests, with sixteen explicitly ignored and 37 excluded (Cloud HTTP module,
   five key-store TLS fixtures and native PAM module). This is a restricted-context
   check, not a green full-suite run. It includes new queue/quit-barrier and lost-UI-reply
   ownership tests, offline saved-deployment/interrupted-lineage checks, control-plane
@@ -442,11 +451,11 @@ new unsaved draft. Its native dialog still needs live display verification.
   raw deletion stays closed; valid losing
   evidence cannot bypass a damaged current secure body, unknown carrier versions,
   reserved occupants, stale files or another child's unapproved deletion.
-- The corresponding filtered build without desktop features passes 638 library
+- The corresponding last complete filtered build without desktop features passed 649 library
   tests, with two ignored and 34 excluded (Cloud HTTP module and key-store TLS
   fixtures). The current 23 process/core and one helper-protocol tests also pass.
-- Release GUI, CLI and private owner-auth helper compile with the locked Cargo dependencies.
-  Two consecutive installs of the current artifacts into an isolated temporary
+- Release GUI, CLI and private owner-auth helper compiled with the locked Cargo dependencies
+  at the retained-vault-header milestone. Two consecutive installs of those artifacts into an isolated temporary
   prefix pass: all three executables match the Release outputs, executable modes
   are preserved, existing support files survive, the helper stays private, and
   a fresh temporary CLI library stays empty without sync, vault, backup-recovery
@@ -1376,11 +1385,17 @@ target snapshot can therefore preserve both conflicting bodies with new CAS fact
 Existing lost-ACK packets and inbound pages remain in the old encrypted image,
 not the new data plane. The checkpoint uses the Linux-only binary schema.
 
-The handover owner's closed schema-2 Secret Service archive keeps at most eight
+The handover owner's closed schema-3 Secret Service archive keeps at most eight
 review entries and 128 KiB; it refuses capacity exhaustion without evicting old
 capabilities. The entry retains exact old LibraryKey, Bootstrap, PairingRecipient,
 SpaceCreation and KeyMutation slot values, the verified new key/presentation,
-per-install checkpoint material and the ACR2 receipt. Old capabilities remain in
+per-install checkpoint material and the ACR2 receipt. New entries also retain the
+vault identity, KDF parameters and encrypted passphrase/recovery/CLI key wraps from
+the exact reviewed primary snapshot. The separately bounded 16 KiB header omits
+records and unrelated catalogue metadata. It contains no root key or credential,
+has no Debug/public serialization interface, and remains solely in protected
+Secret Service history. Changing or removing the current vault cannot substitute
+its wraps for that saved header. Old capabilities remain in
 protected history after their active slots change. Staging retains both encrypted
 images without publishing; a durable pending entry records explicit consent before
 the journal changes. Restart recognizes the exact published image or rechecks the
@@ -1391,8 +1406,34 @@ creation and data-key use stay fenced while activation is pending. All target
 slots are reread before the completed receipt removes that fence. A lost final
 reply resumes without republishing, and recovery-presentation status is refreshed
 against the server before returning success. Entries have exact pending, completed
-or cancelled phases. Authenticated schema-1 archives migrate when the next transition
-is saved; their capabilities and receipts remain retained.
+or cancelled phases. Authenticated schema-1 and schema-2 archives migrate when the
+next transition is saved; their capabilities and receipts remain retained and
+their missing vault headers remain explicitly absent. Restoration must obtain an
+explicit old header for those legacy archives instead of guessing from the current
+vault. Absent headers have no serialized field, so migration does not add empty
+capability fields to a legacy archive already at its byte limit. Header selection
+is bound to the complete protected history generation and
+transition, not just the vault identity. Aggregate and per-header bounds refuse
+before retained image publication or consent; malformed headers fence admission.
+Temporary-owner tests cover all seven interrupted key-slot writes/deletes before
+and after success, completion/cancellation after later vault edits, legacy
+migration, stale selection, damaged headers and capacity refusal.
+
+The core restoration API now consumes an independently authenticated source-vault
+owner bound to that exact history selection and a fresh current-vault owner. The
+source owner expires after 120 seconds measured against suspend-aware uptime and
+wall time, with no idle refresh. Authentication is revalidated after its KDF and
+after the key borrow. Preparation authenticates every secure body and known v1
+losing variant before translating the complete archived graph. It derives new
+copy UUIDs, authenticated-data identities, keyed hashes and provenance consistently
+across original C0, selected C1, nested copies and ordered generations. Repeated
+originals reuse the same translated seal; distinct original nonce snapshots remain
+distinct. Current journal offers, CAS versions and lost-reply packets remain exact.
+The ordinary encrypted redo path resumes without either vault key; restoration
+retains data only, never previous-cloud acknowledgements or capabilities. Unknown
+variants, invalid hashes and occupied derived identities refuse the whole proposal.
+Native source-authentication controls, explicit old-header selection for legacy
+archives, legacy seal repair and multiple source-vault ownership remain unfinished.
 
 Commit, resume and cancellation consume a fresh single-use local authorization
 permit bound to the purpose, library scope, archive generation and exact retained
@@ -1430,7 +1471,7 @@ new locally authorized retry; a lost final receipt is inspected without replay.
 Current credentials need not exist or decode. No server operation or verified
 data-plane key is returned. The native worker drops its selected transport; the UI
 clears selection and disables data/key controls. Fresh reconnect and selection
-own subsequent live verification/review. The closed schema-2 `completed` phase
+own subsequent live verification/review. The closed schema-3 `completed` phase
 records local activation, not current server access. Unpublished transitions still
 use offline cancellation; restoring an advanced/foreign frozen state is separate.
 

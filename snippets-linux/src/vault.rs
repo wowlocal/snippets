@@ -130,6 +130,10 @@ pub struct Document {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+#[path = "vault_recovery_header.rs"]
+mod recovery_header;
+pub(crate) use recovery_header::MAX_HEADER_BYTES;
+pub use recovery_header::{RecoveryHeader, RecoveryOwner};
 impl Document {
     pub fn decode(data: &[u8]) -> Result<Self> {
         if data.len() > model::MAX_FILE_BYTES {

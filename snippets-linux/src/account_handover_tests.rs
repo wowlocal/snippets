@@ -20,6 +20,9 @@ mod history_inspection;
 #[path = "history_restore_owner_tests.rs"]
 mod restoration;
 
+#[path = "account_vault_header_tests.rs"]
+mod vault_headers;
+
 impl receiver::Remote for FakeRemote {
     fn preflight(&mut self) -> receiver::RemoteResult<receiver::Observation> {
         crate::key_store::Remote::preflight(self).map_err(|_| cloud::Failure::InvalidResponse)?;
@@ -628,7 +631,7 @@ fn complete_history_limits_are_checked_before_staging_or_overwriting_any_capabil
             };
             source.insert("pairingRecipient".into(), Value::Null);
             let empty = object([
-                ("schema", Value::Int(2)),
+                ("schema", Value::Int(3)),
                 ("generation", Value::Int(1)),
                 ("entries", Value::Array(vec![value.clone()])),
             ])
@@ -661,7 +664,7 @@ fn complete_history_limits_are_checked_before_staging_or_overwriting_any_capabil
                 .collect()
         };
         let bytes = object([
-            ("schema", Value::Int(2)),
+            ("schema", Value::Int(3)),
             ("generation", Value::Int(1)),
             ("entries", Value::Array(entries)),
         ])
@@ -687,7 +690,7 @@ fn malformed_handover_schema_fences_normal_admission_without_changing_keys() {
         let mut s = setup();
         let review = prepare(&mut s).unwrap();
         let mut value = object([
-            ("schema", Value::Int(2)),
+            ("schema", Value::Int(3)),
             ("generation", Value::Int(1)),
             ("entries", Value::Array(vec![review.entry.value().unwrap()])),
         ]);
@@ -699,7 +702,7 @@ fn malformed_handover_schema_fences_normal_admission_without_changing_keys() {
                 archive.insert("unexpected".into(), Value::Bool(true));
             }
             1 => {
-                archive.insert("schema".into(), Value::Int(3));
+                archive.insert("schema".into(), Value::Int(4));
             }
             2 => {
                 archive.insert("generation".into(), Value::Int(0));
@@ -1108,6 +1111,7 @@ fn schema_one_pending_transition_is_authenticated_and_upgrades_without_losing_ca
                     unreachable!()
                 };
                 entry.remove("phase");
+                entry.remove("vaultHeader");
                 entry.insert("completed".into(), Value::Bool(false));
             }
             o.replace(
@@ -1128,7 +1132,7 @@ fn schema_one_pending_transition_is_authenticated_and_upgrades_without_losing_ca
     assert_complete(&mut s);
     let bytes = s.backend.memory.slot(Slot::AccountReview).unwrap();
     let value = canonical::parse(&bytes).unwrap();
-    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 2);
+    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 3);
 }
 
 #[cfg(feature = "desktop")]

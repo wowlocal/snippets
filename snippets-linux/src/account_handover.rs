@@ -100,6 +100,7 @@ struct Entry {
     target_bootstrap: Zeroizing<Vec<u8>>,
     checkpoint: Zeroizing<Vec<u8>>,
     account_hash: Option<[u8; 32]>,
+    vault_header: Option<crate::vault::RecoveryHeader>,
 }
 impl Entry {
     fn installed(&self) -> Result<Installed> {
@@ -155,7 +156,7 @@ impl Entry {
                 })
                 .collect(),
         );
-        Ok(object([
+        let mut value = object([
             (
                 "phase",
                 Value::text(if self.completed {
@@ -182,21 +183,44 @@ impl Entry {
                 self.account_hash
                     .map_or(Value::Null, |v| Value::text(STANDARD.encode(v))),
             ),
-        ]))
+            (
+                "vaultHeader",
+                self.vault_header
+                    .as_ref()
+                    .map(|header| {
+                        header
+                            .encode_secret()
+                            .map(|bytes| Value::text(STANDARD.encode(bytes)))
+                    })
+                    .transpose()?
+                    .unwrap_or(Value::Null),
+            ),
+        ]);
+        // Omission means no retained header. Do not inflate a full legacy
+        // archive merely to encode an absent capability during migration.
+        if self.vault_header.is_none() {
+            let Value::Object(ref mut fields) = value else {
+                unreachable!()
+            };
+            fields.remove("vaultHeader");
+        }
+        Ok(value)
     }
     fn parse(root: &Path, value: &Value, schema: i64) -> Result<Self> {
-        let fields = exact(
-            value,
-            &[
-                if schema == 1 { "completed" } else { "phase" },
-                "receipt",
-                "source",
-                "targetKey",
-                "targetBootstrap",
-                "checkpoint",
-                "accountHash",
-            ],
-        )?;
+        let mut names = vec![
+            if schema == 1 { "completed" } else { "phase" },
+            "receipt",
+            "source",
+            "targetKey",
+            "targetBootstrap",
+            "checkpoint",
+            "accountHash",
+        ];
+        let has_header = schema >= 3 && value.as_object()?.contains_key("vaultHeader");
+        if has_header {
+            names.push("vaultHeader");
+        }
+        let fields = exact(value, &names)?;
         let source_values = exact(
             &fields["source"],
             &[
@@ -241,6 +265,15 @@ impl Entry {
             )?,
             checkpoint: decode64(fields["checkpoint"].as_text()?, 64)?,
             account_hash: optional(&fields["accountHash"], |v| array(v.as_text()?))?,
+            vault_header: if has_header {
+                optional(&fields["vaultHeader"], |v| {
+                    let bytes = decode64(v.as_text()?, crate::vault::MAX_HEADER_BYTES)?;
+                    crate::vault::RecoveryHeader::decode_secret(&bytes)
+                        .map_err(super::Failure::from)
+                })?
+            } else {
+                None
+            },
         };
         entry.validate()?;
         Ok(entry)
@@ -294,6 +327,21 @@ struct Archive {
     snapshot: Option<Zeroizing<Vec<u8>>>,
 }
 impl Archive {
+    fn selected(&self, selection: &super::restoration::Selection) -> Result<&Entry> {
+        let snapshot = self.snapshot.as_deref().ok_or(Failure::Unavailable)?;
+        if Sha256::digest(snapshot).as_slice() != selection.history_hash {
+            return Err(Failure::Changed);
+        }
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.receipt.transition_id() == selection.transition)
+            .ok_or(Failure::Unavailable)?;
+        if !entry.completed && !entry.cancelled {
+            return Err(super::Failure::Busy.into());
+        }
+        Ok(entry)
+    }
     fn load<B: Backend>(owner: &mut Locked<'_, B>) -> Result<Self> {
         let snapshot = owner.read(Slot::AccountReview)?;
         let mut archive = Self {
@@ -307,7 +355,7 @@ impl Archive {
             let entries = fields["entries"].as_array()?;
             archive.generation = fields["generation"].as_int()?;
             let schema = fields["schema"].as_int()?;
-            if !matches!(schema, 1 | 2)
+            if !matches!(schema, 1..=3)
                 || archive.generation < 1
                 || entries.is_empty()
                 || entries.len() > MAX_ENTRIES
@@ -364,7 +412,7 @@ impl Archive {
             fields.insert("phase".into(), Value::text("completed"));
         }
         let bytes = object([
-            ("schema", Value::Int(2)),
+            ("schema", Value::Int(3)),
             ("generation", Value::Int(generation)),
             ("entries", Value::Array(values)),
         ])
@@ -475,18 +523,7 @@ pub(super) fn saved_local_state_locked<B: Backend>(
     selection: &super::restoration::Selection,
 ) -> Result<(crate::journal::Journal, KeyBinding)> {
     let archive = Archive::load(owner)?;
-    let snapshot = archive.snapshot.as_deref().ok_or(Failure::Unavailable)?;
-    if Sha256::digest(snapshot).as_slice() != selection.history_hash {
-        return Err(Failure::Changed);
-    }
-    let entry = archive
-        .entries
-        .iter()
-        .find(|e| e.receipt.transition_id() == selection.transition)
-        .ok_or(Failure::Unavailable)?;
-    if !entry.completed && !entry.cancelled {
-        return Err(super::Failure::Busy.into());
-    }
+    let entry = archive.selected(selection)?;
     let installed = entry.installed()?;
     let scope = installed.binding.checkpoint_scope();
     let key =
@@ -509,6 +546,13 @@ pub(super) fn saved_local_state_locked<B: Backend>(
         journal.retained_local_state_locked(&entry.receipt)?,
         installed.binding,
     ))
+}
+pub(super) fn saved_vault_header_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    selection: &super::restoration::Selection,
+) -> Result<Option<crate::vault::RecoveryHeader>> {
+    let archive = Archive::load(owner)?;
+    Ok(archive.selected(selection)?.vault_header.clone())
 }
 /// Remove exact promoted recovery-code copies before the active presentation's
 /// saved-code receipt. Original source capabilities and encrypted images stay.
@@ -940,6 +984,7 @@ pub(super) fn prepare_locked<B: Backend, R: super::Remote + receiver::Remote>(
         target_bootstrap,
         checkpoint,
         account_hash,
+        vault_header: journal.vault_recovery_header()?,
     };
     entry.validate()?;
     archive.encoded(Some(&entry))?;

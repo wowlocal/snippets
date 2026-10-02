@@ -20,6 +20,9 @@ pub enum Failure {
     ContentHashMismatch,
 }
 pub type Result<T> = std::result::Result<T, Failure>;
+#[path = "materializer_rekey.rs"]
+mod rekey;
+pub(crate) use rekey::Rekey;
 impl From<Error> for Failure {
     fn from(_: Error) -> Self {
         Self::MalformedVariant
@@ -195,6 +198,13 @@ fn stamp(envelope: &Envelope, keys: &Keyring<'_>, require: bool) -> Result<()> {
 }
 /// Authentication is required even for an already stamped incoming C1.
 pub fn authenticate(envelope: &Envelope, keys: &Keyring<'_>, require_stamp: bool) -> Result<()> {
+    authenticated_body(envelope, keys, require_stamp).map(|_| ())
+}
+fn authenticated_body(
+    envelope: &Envelope,
+    keys: &Keyring<'_>,
+    require_stamp: bool,
+) -> Result<Zeroizing<Vec<u8>>> {
     merge::validate(envelope)?;
     if envelope.deleted || !envelope.secure {
         return Err(Failure::IncompatibleVault);
@@ -207,7 +217,8 @@ pub fn authenticate(envelope: &Envelope, keys: &Keyring<'_>, require_stamp: bool
         .and_then(|v| v.as_text().ok())
         .ok_or(Failure::IncompatibleVault)?;
     let body = keys.open(&fields.content, envelope.id)?;
-    keys.verify(&body, expected)
+    keys.verify(&body, expected)?;
+    Ok(body)
 }
 fn authenticate_variant(variant: &SecureVariant, keys: &Keyring<'_>) -> Result<Zeroizing<Vec<u8>>> {
     if variant

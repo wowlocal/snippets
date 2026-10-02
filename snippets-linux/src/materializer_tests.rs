@@ -9,7 +9,7 @@ fn document() -> Document {
 fn key() -> RootKey {
     RootKey::from_bytes(&[0x11; 32]).unwrap()
 }
-fn source(document: &Document, name: &str) -> Envelope {
+pub(super) fn source(document: &Document, name: &str) -> Envelope {
     let record = &document.records[0];
     let mut fields = Fields::from_snippet(&record.metadata.shell());
     fields.name = name.into();

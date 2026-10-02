@@ -167,6 +167,14 @@ pub(crate) struct Snapshot {
     vault: Option<Zeroizing<Vec<u8>>>,
 }
 impl Snapshot {
+    pub(crate) fn vault_recovery_header(&self) -> Result<Option<crate::vault::RecoveryHeader>> {
+        self.vault
+            .as_ref()
+            .map(|bytes| {
+                crate::vault::RecoveryHeader::retain(&Document::decode(bytes)?).map_err(Into::into)
+            })
+            .transpose()
+    }
     /// A protected account-review receipt binds the complete file generation,
     /// including vault wraps and JSON whitespace, without retaining plaintext.
     pub(crate) fn review_fingerprint(&self) -> [u8; 32] {

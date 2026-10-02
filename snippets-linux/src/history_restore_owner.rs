@@ -104,8 +104,30 @@ fn require_inputs<B: Backend>(
 pub fn prepare<B: Backend>(
     store: &mut Store<B>,
     selection: Selection,
-    mut vault: Option<&mut Vault>,
+    vault: Option<&mut Vault>,
 ) -> Result<Review> {
+    prepare_inner(store, selection, vault, None)
+}
+pub fn prepare_foreign<B: Backend>(
+    store: &mut Store<B>,
+    selection: Selection,
+    vault: &mut Vault,
+    source: Source,
+) -> Result<Review> {
+    prepare_inner(store, selection, Some(vault), Some(source))
+}
+fn prepare_inner<B: Backend>(
+    store: &mut Store<B>,
+    selection: Selection,
+    mut vault: Option<&mut Vault>,
+    source_vault: Option<Source>,
+) -> Result<Review> {
+    if source_vault.as_ref().is_some_and(|source| {
+        source.selection.history_hash != selection.history_hash
+            || source.selection.transition != selection.transition
+    }) {
+        return Err(Failure::Changed);
+    }
     store.transaction_with(|owner| {
         let archive = Archive::load(owner)?;
         archive.ensure_capacity()?;
@@ -188,14 +210,28 @@ pub fn prepare<B: Backend>(
                     .as_deref_mut()
                     .expect("unlocked")
                     .with_restoration_keys_locked(&library, |keys| {
-                        planning::prepare_with_keys(
-                            &saved,
-                            &source.journal,
-                            &snapshot.records,
-                            stamp,
-                            updated_at,
-                            Some(keys),
-                        )
+                        if let Some(foreign) = &source_vault {
+                            foreign.vault.with_keys(|old| {
+                                planning::prepare_foreign(
+                                    &saved,
+                                    &source.journal,
+                                    &snapshot.records,
+                                    stamp,
+                                    updated_at,
+                                    old,
+                                    keys,
+                                )
+                            })?
+                        } else {
+                            planning::prepare_with_keys(
+                                &saved,
+                                &source.journal,
+                                &snapshot.records,
+                                stamp,
+                                updated_at,
+                                Some(keys),
+                            )
+                        }
                     })??
             } else {
                 planning::prepare_with_keys(

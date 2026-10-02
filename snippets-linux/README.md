@@ -80,6 +80,13 @@ separate protected history before the switch is explicitly reviewed.
 An initialized library's candidate can now be obtained through trusted-device
 pairing and kept separately until the switch is explicitly confirmed.
 
+New switch history also retains the vault's encrypted key wraps in Secret Service,
+without saving its catalogue records or unrelated metadata. These wraps remain
+available if the current vault is later replaced. Older history can lack them;
+the core can now authenticate the saved source vault independently and re-encrypt
+archived secure conflict graphs into the current vault. Native source-authentication
+controls and an explicit old-header workflow for legacy history remain pending.
+
 The Rust core now implements the existing encrypted Cloud wire format and native
 HTTPS transport, with independent cryptographic/Swift number-format fixtures and
 local HTTP integration tests. Three-way merge and an encrypted journal kernel
@@ -124,7 +131,8 @@ separate **Receive Cloud Changes** action remains available. Saved local changes
 have native restoration controls, including archived nested conflict groups and
 deleted/missing archived participants, restoration beside current pending groups
 and ordered archived generations.
-Restoring archived secure records into a different vault remains pending. Startup stays offline unless automatic
+The native workflow for restoring archived secure records into a different vault
+remains pending. Startup stays offline unless automatic
 sync was explicitly enabled for a verified saved library.
 
 ## Account and library recovery

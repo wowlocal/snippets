@@ -81,6 +81,47 @@ impl Selection {
     }
 }
 
+/// One-use source vault authority bound to the exact selected protected history.
+/// Only ciphertext plans leave preparation; keys never enter the review or WAL.
+pub struct Source {
+    selection: Selection,
+    vault: crate::vault::RecoveryOwner,
+}
+pub fn authenticate_source<B: Backend>(
+    store: &mut Store<B>,
+    selection: &Selection,
+    credential: &str,
+    recovery: bool,
+) -> Result<Source> {
+    let header = saved_vault_header(store, selection)?.ok_or(Failure::Unavailable)?;
+    let vault = header.authenticate_for_restoration(credential, recovery)?;
+    // A KDF can outlive a history change. Revalidate its complete selection.
+    if saved_vault_header(store, selection)?.as_ref() != Some(&header) {
+        return Err(Failure::Changed);
+    }
+    Ok(Source {
+        selection: selection.clone(),
+        vault,
+    })
+}
+
+/// Retained wraps from the exact reviewed primary snapshot. Legacy history
+/// returns None; the current vault must never stand in for a missing old header.
+pub fn saved_vault_header<B: Backend>(
+    store: &mut Store<B>,
+    selection: &Selection,
+) -> Result<Option<crate::vault::RecoveryHeader>> {
+    store.transaction_with(|owner| {
+        handover::require_idle(owner)?;
+        handover::saved_vault_header_locked(owner, selection).map_err(|error| match error {
+            handover::Failure::Key(error) => Failure::Key(error),
+            handover::Failure::Journal(error) => Failure::History(error),
+            handover::Failure::Unavailable => Failure::Unavailable,
+            _ => Failure::Changed,
+        })
+    })
+}
+
 #[path = "history_restore_archive.rs"]
 mod archive;
 #[path = "history_restore_owner.rs"]
@@ -88,7 +129,7 @@ mod owner;
 #[cfg(test)]
 pub(crate) use owner::apply_inner as apply_with_fault;
 pub use owner::{
-    ResumeReview, Review, apply, cancel, prepare, prepare_resume_authorization,
+    ResumeReview, Review, apply, cancel, prepare, prepare_foreign, prepare_resume_authorization,
     prepare_resume_review, resume,
 };
 

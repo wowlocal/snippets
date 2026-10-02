@@ -39,6 +39,21 @@ pub(super) fn prepare(
 ) -> Result<Plan> {
     prepare_with_keys(archived, current, physical, stamp, updated_at, None)
 }
+pub(super) fn prepare_foreign(
+    archived: &Journal,
+    current: &Journal,
+    physical: &BTreeMap<Uuid, Envelope>,
+    stamp: Hlc,
+    updated_at: f64,
+    old: &crate::materializer::Keyring<'_>,
+    keys: &crate::materializer::Keyring<'_>,
+) -> Result<Plan> {
+    if current.primary_intent.is_some() || !updated_at.is_finite() || stamp.device() == "00000000" {
+        return Err(Failure::Changed);
+    }
+    let data = data::rekey(data::resolve(archived, Some(old))?, old, keys)?;
+    prepare_data(data, current, physical, stamp, updated_at)
+}
 pub(super) fn prepare_with_keys(
     archived: &Journal,
     current: &Journal,
@@ -50,11 +65,30 @@ pub(super) fn prepare_with_keys(
     if current.primary_intent.is_some() || !updated_at.is_finite() || stamp.device() == "00000000" {
         return Err(Failure::Changed);
     }
+    prepare_data(
+        data::resolve(archived, keys)?,
+        current,
+        physical,
+        stamp,
+        updated_at,
+    )
+}
+fn prepare_data(
+    data: data::Data,
+    current: &Journal,
+    physical: &BTreeMap<Uuid, Envelope>,
+    stamp: Hlc,
+    updated_at: f64,
+) -> Result<Plan> {
+    if current.primary_intent.is_some() || !updated_at.is_finite() || stamp.device() == "00000000" {
+        return Err(Failure::Changed);
+    }
     let data::Data {
         saved,
         preservation,
         history,
-    } = data::resolve(archived, keys)?;
+        links: archived_links,
+    } = data;
     if saved
         .values()
         .chain(physical.values())
@@ -90,7 +124,7 @@ pub(super) fn prepare_with_keys(
     }
     selected.extend(plan.history.iter().flat_map(|g| g.targets.keys().copied()));
     let mut links: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
-    for (a, b) in archived.preservation_links().into_iter().chain(
+    for (a, b) in archived_links.into_iter().chain(
         preservation
             .values()
             .flat_map(|(source, copies)| copies.iter().map(|copy| (source.id, copy.id))),
