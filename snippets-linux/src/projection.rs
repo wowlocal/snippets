@@ -264,6 +264,23 @@ pub fn current(
 pub fn exact_secure_echo(envelope: &Envelope, record: &Record, kid: &str) -> Result<bool> {
     Ok(exact_secure(envelope, record, kid)? && record.hlc.as_ref() == Some(&envelope.hlc))
 }
+/// Legacy own records predate the vault stamp. Only an absent stamp can be
+/// supplied for comparison with an already saved primary; no body is repaired.
+/// Conflict-copy admission still independently requires its original stamp.
+pub fn exact_legacy_unstamped_secure_echo(
+    envelope: &Envelope,
+    record: &Record,
+    kid: &str,
+) -> Result<bool> {
+    if envelope.extensions.contains_key("vaultKID") {
+        return Ok(false);
+    }
+    let mut stamped = envelope.clone();
+    stamped
+        .extensions
+        .insert("vaultKID".into(), Value::text(kid));
+    exact_secure_echo(&stamped, record, kid)
+}
 pub fn vault_record(
     envelope: &Envelope,
     existing: Option<&Record>,

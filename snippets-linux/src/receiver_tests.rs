@@ -656,6 +656,65 @@ fn remote_tombstone_stays_queued_until_deletion_review_exists() {
 }
 
 #[test]
+fn legacy_secure_echo_receives_while_locked_and_keeps_exact_remote_cas_generation() {
+    for missing_hash in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let library = Library::open(temporary.path().into()).unwrap();
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
+        let mut document =
+            crate::vault::Document::decode(&serde_json::to_vec(&fixture["document"]).unwrap())
+                .unwrap();
+        document.records[0].hlc = Some(Hlc::parse("100000000000-0000-11111111").unwrap());
+        if missing_hash {
+            document.records[0].content_hash.clear();
+        }
+        fs::create_dir(temporary.path().join("Vault")).unwrap();
+        let before = document.encode().unwrap();
+        crate::model::atomic_write(&temporary.path().join("Vault/vault.json"), &before).unwrap();
+        let mut incoming = crate::projection::current(
+            &[],
+            Some(&document),
+            "11111111",
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap()
+        .into_values()
+        .next()
+        .unwrap();
+        incoming.extensions.remove("vaultKID");
+        let original = incoming.encode().unwrap();
+        let remote = record(&incoming, "legacy");
+        let version = record(&incoming, "legacy").into_parts().1;
+        let progress = receive_page(&library, vec![remote], "legacy", true, false);
+        assert_eq!(progress.status, Status::Current);
+        assert_eq!(progress.applied_records, 1);
+        assert_eq!(
+            fs::read(temporary.path().join("Vault/vault.json")).unwrap(),
+            before
+        );
+        let checkpoint = load(&library);
+        let confirmed = checkpoint.journal.confirmed(incoming.id).unwrap();
+        assert!(confirmed.envelope.encode().unwrap() == original);
+        assert!(confirmed.record_version == version);
+        assert!(!checkpoint.journal.inbox.has_pending_page());
+        assert!(checkpoint.journal.inbox.applied_cursor == Some(cursor("legacy")));
+        assert_eq!(checkpoint.journal.pending().unwrap().len(), 1);
+        let desired = checkpoint.journal.pending().unwrap().remove(0);
+        assert_eq!(
+            desired.extensions["vaultKID"].as_text().unwrap(),
+            document.kid
+        );
+        assert_eq!(
+            desired.fields.as_ref().unwrap().content,
+            incoming.fields.as_ref().unwrap().content
+        );
+        assert!(library.read().unwrap().0.is_empty());
+    }
+}
+
+#[test]
 fn secure_record_without_local_vault_remains_pending_without_creating_keys() {
     let temp = tempfile::tempdir().unwrap();
     let library = Library::open(temp.path().into()).unwrap();

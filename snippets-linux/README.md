@@ -113,7 +113,16 @@ Explicit previous-vault authentication can also recover missing own vault stamps
 or content hashes in archived records. The original encrypted body and its UUID
 must authenticate before current metadata is derived. Existing invalid metadata,
 incomplete raw conflict snapshots and edited copies masquerading as originals
-are refused. Normal live-record and wire validation stay strict.
+are refused. Present invalid live-record and wire metadata stay strict.
+
+Legacy own secure wire records without a vault stamp can be recognized as exact
+saved echoes while the vault is locked. Changed or absent unstamped bodies still
+stop ordinary receiving. The primary apply core can authenticate them against
+the current vault key and required content hash, preserving the incoming sealed
+bytes and journal evidence. Native fresh-vault authentication for continuing
+receiving/sync still needs to be connected; unlocking the separate editor does
+not yet supply its key to the account worker. Conflict copies and original v1
+snapshots continue to require their stamps and hashes.
 
 The Rust core now implements the existing encrypted Cloud wire format and native
 HTTPS transport, with independent cryptographic/Swift number-format fixtures and

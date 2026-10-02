@@ -6,6 +6,8 @@ use crate::{
     vault::{self, Vault},
 };
 use std::os::unix::fs::symlink;
+#[path = "primary_legacy_tests.rs"]
+mod legacy;
 fn scope() -> Scope {
     Scope {
         membership: Binding::from_checkpoint([0x33; 32]),

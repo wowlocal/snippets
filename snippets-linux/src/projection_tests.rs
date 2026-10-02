@@ -83,6 +83,68 @@ fn secure_apply_project_keeps_wire_dates_keyed_hash_and_sealed_bytes_without_a_k
     );
 }
 #[test]
+fn legacy_unstamped_echo_supplies_only_absent_scope_for_exact_primary_comparison() {
+    let (source, document) = secure();
+    let record = &document.records[0];
+    assert!(!exact_legacy_unstamped_secure_echo(&source, record, &document.kid).unwrap());
+    let mut legacy = source.clone();
+    legacy.extensions.remove("vaultKID");
+    let encoded = legacy.encode().unwrap();
+    assert!(exact_legacy_unstamped_secure_echo(&legacy, record, &document.kid).unwrap());
+    assert!(legacy.encode().unwrap() == encoded);
+    for changed in 0..15 {
+        let mut incoming = legacy.clone();
+        match changed {
+            0 => incoming.id = Uuid::from_u128(999),
+            1 => incoming.secure = false,
+            2 => {
+                incoming.deleted = true;
+                incoming.fields = None;
+            }
+            3 => incoming.hlc = Hlc::foreign(0xffff_0000_0000),
+            4 => incoming.fields.as_mut().unwrap().content.push(b' '),
+            5 => incoming.fields.as_mut().unwrap().name.push('x'),
+            6 => incoming.fields.as_mut().unwrap().keyword.push('x'),
+            7 => incoming
+                .fields
+                .as_mut()
+                .unwrap()
+                .tags
+                .push("Public changed tag".into()),
+            8 => incoming.fields.as_mut().unwrap().is_enabled ^= true,
+            9 => incoming.fields.as_mut().unwrap().is_pinned ^= true,
+            10 => incoming.fields.as_mut().unwrap().created_at += 1.0,
+            11 => incoming.fields.as_mut().unwrap().updated_at += 1.0,
+            12 => {
+                incoming.extensions.remove("vaultContentHash");
+            }
+            13 => {
+                incoming
+                    .extensions
+                    .insert("vaultContentHash".into(), Value::text("00".repeat(16)));
+            }
+            14 => {
+                incoming.extensions.insert(
+                    format!("{}v9.public", merge::CONFLICT_PREFIX),
+                    Value::Bool(true),
+                );
+            }
+            _ => unreachable!(),
+        }
+        assert!(!exact_legacy_unstamped_secure_echo(&incoming, record, &document.kid).unwrap());
+    }
+    for stamp in [
+        Value::text(&document.kid),
+        Value::text("Public wrong stamp"),
+        Value::Bool(true),
+    ] {
+        let mut incoming = legacy.clone();
+        incoming.extensions.insert("vaultKID".into(), stamp);
+        assert!(!exact_legacy_unstamped_secure_echo(&incoming, record, &document.kid).unwrap());
+    }
+}
+
+#[test]
 fn local_edit_outranks_backward_dates_and_preserves_all_unknown_knowledge() {
     let e = plain();
     let mut snippet = e.snippet().unwrap().unwrap();

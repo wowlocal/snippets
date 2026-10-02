@@ -627,6 +627,7 @@ fn prepare_impl(
                 defer = true;
             }
             if e.secure {
+                let mut legacy_echo = false;
                 if let Some(vault) = &contents.vault {
                     if e.extensions
                         .get("vaultKID")
@@ -637,10 +638,18 @@ fn prepare_impl(
                         incompatible = true;
                     }
                     let existing = vault.records.iter().find(|r| r.metadata.id == e.id);
+                    legacy_echo = !e.extensions.contains_key(merge::COPY_PROVENANCE)
+                        && existing
+                            .map(|r| {
+                                projection::exact_legacy_unstamped_secure_echo(e, r, &vault.kid)
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
                     let exact = existing
                         .map(|r| projection::exact_secure_echo(e, r, &vault.kid))
                         .transpose()?
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        || legacy_echo;
                     let resolved_echo = resolutions
                         .iter()
                         .find(|r| r.source_id == e.id)
@@ -660,9 +669,16 @@ fn prepare_impl(
                     defer = true;
                 }
                 if !e.deleted
+                    && !legacy_echo
                     && let Some(keys) = keys
                 {
-                    materializer::authenticate(e, keys, true)?;
+                    // Own unstamped bodies still require the current key, AAD
+                    // and keyed hash. Copies and raw v1 originals stay stamped.
+                    materializer::authenticate(
+                        e,
+                        keys,
+                        e.extensions.contains_key(merge::COPY_PROVENANCE),
+                    )?;
                 }
             }
             for variant in variants {

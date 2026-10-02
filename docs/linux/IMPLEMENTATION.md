@@ -13,8 +13,10 @@ archives containing bodies from several source vaults.
 Missing own vault stamps/hashes in archived records can be recovered only after
 explicit source-vault authentication. Raw v1 carriers remain strict.
 Saved legacy records with missing own content hashes now have an explicit native
-repair action using fresh vault authentication. Legacy incoming wire-stamp
-admission, unreferenced-image cleanup and live desktop verification remain
+repair action using fresh vault authentication. Incoming legacy own echoes can
+be recognized without a key, and the primary core authenticates changed own
+unstamped bodies. Native authenticated receiving/sync continuation,
+unreferenced-image cleanup and live desktop verification remain
 unfinished. Ordinary inline expansion now has a native
 Wayland owner and opt-in GTK settings; live receiving-field verification is open.
 Freshly authenticated secure insertion is now wired to the picker and native
@@ -222,7 +224,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement is wired; unreferenced images remain pending; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
-| Secure delivery and transfers | Native portable encrypted-backup export/import plus fresh-authenticated direct virtual-keyboard insertion | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field validation, legacy incoming wire-stamp admission and fuller editing/accessibility review remain pending |
+| Secure delivery and transfers | Native portable encrypted-backup export/import plus fresh-authenticated direct virtual-keyboard insertion | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field validation, native authenticated sync continuation and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent child deletions and unknown versions remain separate review boundaries; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live UI/HTTPS/keyring verification remains pending |
@@ -261,6 +263,25 @@ locked host. Full interactive setup, recovery, password-change and reveal testin
 still needs an unlocked session. Foreign vault replacement preserves the old
 encrypted draft; explicit previous/current authentication can now reseal it as a
 new unsaved draft. Its native dialog still needs live display verification.
+
+## Verification on 2026-10-03
+
+- Legacy own wire-stamp admission adds seven isolated tests: one projection
+  comparison matrix, five primary authentication/publication tests and one
+  encrypted receiver/CAS test. Default regressions pass for primary (34 plus
+  one ignored child-process fixture), receiver (24), projection (10), secure
+  materialization (17), merge (20) and sync/scheduling (28).
+  Headless primary (34 plus one ignored fixture), receiver (24) and projection
+  (10) also pass, as do CLI/core (23) and the private helper process test (1).
+  The earlier `legacy_` selection passed 30 tests plus one ignored review fixture,
+  including archived foreign-vault metadata recovery and saved legacy hash repair.
+  All use temporary libraries or public fixtures, without live desktop providers.
+  The account worker's native authenticated sync continuation remains unfinished.
+  All-target Clippy passes with warnings denied in default and headless builds,
+  and formatting passes. Apple targets and sources are unchanged.
+  All three release executables build. Two temporary installs verify exact binary
+  bytes/modes, preserve a sentinel in the prefix and open only an empty isolated
+  CLI library without creating vault, sync, clipboard-history or IME state.
 
 ## Verification on 2026-10-02
 
@@ -1849,7 +1870,7 @@ clear selected transport afterward and require fresh reconnect/selection before
 sync. Review, vault-password and computer-password dialogs cancel on focus loss,
 known lock or dismissal. Incompatible copy units and new keyword collisions fail closed
 pending separate group/collision review. Saved legacy hash repair is wired to a
-separate freshly authenticated native action. Legacy incoming wire-stamp admission,
+separate freshly authenticated native action. Native authenticated sync continuation,
 unreferenced-image cleanup and live combined verification remain unfinished.
 
 Durable consent binds the target account/deployment so a legitimate reconnect
@@ -1960,8 +1981,8 @@ now be explicitly retired through Library Recovery History; active admission and
 unfinished requests remain protected. Combined live GTK/keyring/HTTPS verification
 remains outstanding.
 
-This kernel is not a complete sync engine. It still needs legacy incoming
-wire-stamp admission, conflict-owned absent/deleted-copy recovery, account/rekey
+This kernel is not a complete sync engine. It still needs native fresh-vault
+authentication for receiving/sync, conflict-owned absent/deleted-copy recovery, account/rekey
 reconciliation and complete secure conflict recovery. Library-key activation
 and bidirectional/receive/send cycles are wired to explicit account-window actions;
 verified opt-in automatic startup and scheduling now share that same owner. Unknown variant versions stay
@@ -2045,6 +2066,35 @@ review fixture also stops at display initialization, before creating widgets or
 collecting credentials. Live insertion, focus races and receiving-field behavior
 remain part of the unfinished full port.
 
+## Legacy own wire-stamp admission
+
+`projection::exact_legacy_unstamped_secure_echo` supplies a missing own stamp only
+for comparison with an existing primary record. It reuses the established primary
+field, ciphertext, hash, HLC and reserved-extension comparisons and does not alter
+the incoming envelope. A present wrong or malformed stamp is never replaced.
+The primary boundary admits only an exact own legacy echo without keys, including
+an old primary and echo both lacking their own hash. Changed metadata, ciphertext,
+hash, HLC or original snapshots do not get that exception.
+
+For changed or absent own unstamped records, `primary::prepare_authenticated`
+requires the current vault owner, AES-GCM authentication against that vault's
+salt/kid and the incoming record UUID, and the supplied keyed content hash. It
+cannot infer a missing hash or replace an invalid one. Incoming conflict copies,
+held copy intent, C0 evidence and raw v1 originals retain their required stamps
+and hashes. Connected preservation units still apply or defer together.
+
+The exact incoming envelope remains in the journal with its original ciphertext
+and version evidence. The normal primary projection can later publish a distinct
+stamped local revision; it does not rewrite the incoming envelope or original
+offers/CAS. Encrypted full-file redo preserves the verified after-image through
+each interrupted publication phase and keeps the pre-WAL cancellation boundary.
+
+The ordinary receiver uses the locked preparation path. Exact echoes pass, while
+changed unstamped bodies and protected conflict materialization remain held until
+a separate native authenticated continuation is connected. The account worker
+does not borrow the editor's unlocked key. This native continuation is required
+for the full port; the authenticated core API alone does not complete it.
+
 ## Explicit saved legacy hash repair
 
 **Repair Legacy Entry…** is available for a selected saved entry with an empty
@@ -2053,7 +2103,7 @@ is required even if the editor is already unlocked. It verifies the saved AES-GC
 body against the exact current vault, record UUID and salt, and verifies every
 current v1 conflict original with its required stamp, hash and original AAD.
 Present invalid metadata, unknown reserved versions and malformed carriers refuse
-the operation. Missing incoming wire stamps remain a separate admission boundary.
+the operation. Incoming own missing stamps use the separate admission rule above.
 
 Before requesting credentials, the worker captures the complete bounded vault
 image and its regular-file identity, single-link status, timestamps and full
