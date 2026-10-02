@@ -35,6 +35,8 @@ and observes session locks off the GTK thread. `src/crypto.rs`, `src/vault.rs`, 
 `src/clock.rs` implement encrypted bodies, bounded owner sessions, durable vault
 edits and logical clocks. `src/secure_ui.rs` owns the native vault workspace;
 `src/protected_editor.rs` keeps drafts encrypted without a GTK text buffer.
+`src/protected_edit.rs` supplies grapheme-aware editing, offset-only selection
+and the same encryption boundary in desktop and headless tests.
 `src/draft_recovery_ui.rs` recovers a retained draft after a foreign vault
 replacement. The current vault must already be unlocked; a worker separately
 authenticates the captured previous wraps and the current wraps with passphrase
@@ -267,6 +269,17 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Protected selection/editing passes thirteen core checks in both feature
+  configurations, plus all 45 vault regressions in each configuration and 24
+  core/helper integration tests. Two new checks use the production encryption
+  boundary with an authenticated fictional vault and temporary files; selection
+  leaves ciphertext unchanged, replacements stay in the draft until Save and
+  failed/locked edits preserve the exact draft. Clippy passes for all targets
+  with warnings denied in both configurations; formatting and all three release
+  binaries pass. Two temporary-prefix installs verify binary bytes/modes and
+  preserve unrelated files. The extended native secure lifecycle smoke stops
+  at GTK initialization before creating widgets. Mouse/keyboard, font scaling,
+  input-method and assistive-technology validation remain open.
 - Reviewed unused recovery-file cleanup adds eleven isolated owner checks and a
   separate ignored GTK control fixture. Selected regressions pass 43 default
   library tests, 29 headless library tests and 24 core/helper integration tests.
@@ -2069,6 +2082,52 @@ opaque and prevent deletion/cleanup. The recovery startup gate reaches the expli
 authenticated data owner without exposing mixed primary files; its combined live
 graphical/account workflow still needs verification. These
 obligations remain part of the full port.
+
+## Protected body selection and editing
+
+The protected body editor supports Shift selection with character/word arrows,
+Home/End and document boundaries, Ctrl+A, primary-button caret placement,
+Shift-click and dragging within the editor. Typing or deleting replaces the exact
+forward/backward selection. Control with arrows or Backspace/Delete moves/removes
+Unicode words. Navigation and removal use complete extended grapheme clusters,
+including combining marks, emoji modifiers/joins, flags and CRLF. Up/Down keeps
+a preferred grapheme column across short logical lines; visual wrapping and
+bidirectional drawing use Pango. The keyboard arrows retain logical text order.
+Replacing selected bytes accounts for the removed range before enforcing the
+256-KiB limit. Edits that join adjacent clusters leave the caret at a valid
+complete boundary. Invalid UTF-8, interior grapheme offsets, NUL or oversized
+replacement refuse the whole edit.
+
+`src/protected_edit.rs` owns only offset selection and ephemeral zeroing buffers.
+Its production `apply_draft` boundary authenticates the current encrypted draft
+through the existing vault owner and re-encrypts a changed body before replacing
+the retained draft. Navigation, selection and byte-identical replacements do not
+alter ciphertext or dirty state. Failed edits and locked vaults keep the original
+encrypted draft. Existing vault session/deployment checks, explicit Save, CAS,
+draft recovery and passphrase transitions retain their owning boundaries. No new
+key cache, draft file or plaintext undo history is introduced.
+
+The GTK owner admits input only while allowed, revealed, editable and in its
+active window. Hiding collapses the selection; load, recovery and discard reset
+it. IME input keeps the existing private/password hints. Mouse hit testing and
+rendering use the same widget Pango context, font and wrapping width. Transient
+layouts are cleared before release, and selection highlights use Pango's visual
+ranges for each line. Only the primary button creates a local selection; no
+clipboard provider, drag payload or accessible text value is installed. Static
+accessible instructions explain the keys, Shift+Tab and Escape without exposing
+body text. Native font/input/compositor copies remain outside the owned Rust
+buffer erasure guarantee.
+
+Thirteen display-independent tests cover whole graphemes, reversed/extended
+selection, logical line boundaries and preferred columns, word operations,
+pointer trailing scalar counts, changed cluster boundaries, exact size limits,
+unchanged/no-op edits and invalid offsets. Two of these use an authenticated
+public fictional vault through the actual production encryption boundary;
+they verify unchanged ciphertext for selection, replacement confined to the
+draft until Save and refusal while locked. The existing ignored native secure
+lifecycle fixture now also exercises selecting and replacing the body. Live
+mouse/keyboard/font scaling, input-method and assistive-technology validation,
+plus further editing work, remain part of the full port.
 
 ## Freshly authenticated secure insertion
 

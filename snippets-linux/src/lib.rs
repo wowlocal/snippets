@@ -31,6 +31,8 @@ mod pairing_ui_state;
 pub mod placeholders;
 pub mod primary;
 pub mod projection;
+#[cfg(any(test, feature = "desktop"))]
+mod protected_edit;
 #[cfg(feature = "desktop")]
 mod protected_editor;
 pub mod receiver;

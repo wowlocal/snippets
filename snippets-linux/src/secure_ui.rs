@@ -206,7 +206,7 @@ impl Workspace {
         fields.append(&toolbar);
         let editor = ProtectedEditor::new(vault.clone());
         fields.append(&editor.area);
-        fields.append(&label("Reveal hides when this window loses focus. Protected content has no copy, drag, text undo or plaintext export."));
+        fields.append(&label("Select with Shift+arrows or the mouse; Ctrl+A selects all. Reveal hides when this window loses focus. Protected content cannot be copied, dragged to another app, undone or exported as plaintext."));
         let this = Rc::new(Self {
             window,
             library,
@@ -1161,6 +1161,20 @@ mod tests {
                 == "Fictional edit: Fictional secret 🦀\n".as_bytes()
         );
         assert!(!library.path().exists());
+        workspace.editor.fixture_select_all().unwrap();
+        assert!(!workspace.editor.is_dirty());
+        workspace
+            .editor
+            .fixture_edit("Replacement public fixture 👩🏽‍💻\r\n")
+            .unwrap();
+        workspace
+            .editor
+            .save(&library, workspace.editor.metadata().unwrap())
+            .unwrap();
+        assert!(
+            workspace.vault.borrow_mut().body(id).unwrap().as_slice()
+                == "Replacement public fixture 👩🏽‍💻\r\n".as_bytes()
+        );
         workspace.editor.fixture_edit("Unsaved ").unwrap();
         workspace.lock();
         assert!(workspace.is_dirty() && workspace.editor.metadata().is_some());

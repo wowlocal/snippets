@@ -588,12 +588,25 @@ files stop publication; an uncertain save requires rereading the entry. Existing
 invalid hashes or vault stamps are refused. The native dialog still needs live
 display verification.
 
-The body editor retains ciphertext rather than a GTK text buffer. It currently
-supports typed Unicode, keyboard caret movement, Backspace/Delete, newlines and
-tabs; it has no text selection, clipboard operations, drag, text undo, or body
-extraction through accessibility. Revealed pixels can still be captured by the
-desktop, and input methods/font libraries are outside Rust's memory-erasure
-guarantees. Rendering uses transient Pango layouts and zeroes owned Rust buffers.
+The body editor retains ciphertext rather than a GTK text buffer. Use Shift with
+arrows, Home/End or Ctrl+Home/End to select; Ctrl+A selects the whole body. Click
+to place the caret, Shift-click to extend a selection, or drag inside the editor.
+Typing, Backspace or Delete replaces/removes the selected range. Ctrl+Left/Right
+moves by words; Ctrl+Backspace/Delete removes words. Character movement and
+deletion keep combining characters, emoji sequences, flags and CRLF together.
+Up/Down keeps the preferred character column across short logical lines. Newlines
+and tabs can be typed; Shift+Tab leaves the editor and Escape hides content.
+
+Selection stores only offsets and does not mark the draft dirty or change its
+ciphertext. Body changes are encrypted before they become retained editor state;
+Save remains explicit. There are no clipboard operations, external text drag,
+text undo or body extraction through accessibility. Accessible instructions
+describe the keyboard controls without exposing the body. Revealed pixels can
+still be captured by the desktop, and input methods/font libraries are outside
+Rust's memory-erasure guarantees. Rendering and pointer hit testing use transient
+Pango layouts from the same widget context; owned Rust buffers are zeroed.
+The new editing core passes isolated checks; actual keyboard, mouse, font scaling
+and assistive-technology behavior still need live verification.
 
 Sessions expire after five idle minutes or thirty minutes overall, including
 computer sleep. Backgrounding hides revealed content. A desktop lock, unavailable
