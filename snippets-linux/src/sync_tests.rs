@@ -224,6 +224,7 @@ fn owner<'a>(
         wire_key: key,
         wire_salt: &SALT,
         device: Some("11111111"),
+        vault_keys: None,
         validate_session: guard,
     }
 }
@@ -237,6 +238,68 @@ fn load(library: &Library) -> Checkpoint {
 }
 fn run(library: &Library, peer: &mut Peer, limits: Limits) -> receiver::Result<Progress> {
     owner(library, &key(), &scope(), &|| Ok(())).synchronize(peer, limits)
+}
+
+#[test]
+fn a_borrowed_current_vault_key_continues_a_saved_page_then_sends_and_checks_the_final_feed() {
+    let (temporary, library, mut peer) = setup();
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
+    let mut document =
+        crate::vault::Document::decode(&serde_json::to_vec(&fixture["document"]).unwrap()).unwrap();
+    document.records[0].hlc = Some(crate::clock::Hlc::parse("100000000000-0000-11111111").unwrap());
+    let mut incoming = crate::projection::current(
+        &[],
+        Some(&document),
+        "11111111",
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap()
+    .into_values()
+    .next()
+    .unwrap();
+    incoming.extensions.remove("vaultKID");
+    document.records.clear();
+    fs::create_dir(temporary.path().join("Vault")).unwrap();
+    crate::model::atomic_write(
+        &temporary.path().join("Vault/vault.json"),
+        &document.encode().unwrap(),
+    )
+    .unwrap();
+    write_primary(
+        &library,
+        &[envelope(1, "Public local authenticated sync fixture", 1000)],
+    );
+    peer.server.add(&incoming);
+    assert_eq!(
+        run(&library, &mut peer, Limits::DEFAULT).unwrap().status,
+        Status::Receiving(receiver::Status::VaultLocked)
+    );
+    assert_eq!(peer.calls, vec![Call::Fetch]);
+    let root = RootKey::from_bytes(&[0x11; 32]).unwrap();
+    let keys = crate::materializer::Keyring::new(&root, &document).unwrap();
+    let wire_key = key();
+    let binding = scope();
+    let mut authenticated = owner(&library, &wire_key, &binding, &|| Ok(()));
+    authenticated.vault_keys = Some(&keys);
+    let result = authenticated
+        .synchronize(&mut peer, Limits::DEFAULT)
+        .unwrap();
+    assert_eq!(result.status, Status::Current);
+    // The verified unstamped import projects a separate stamped local revision.
+    assert_eq!(result.accepted, 2);
+    assert_eq!(peer.calls, vec![Call::Fetch, Call::Submit, Call::Fetch]);
+    assert_eq!(peer.server.records.len(), 2);
+    assert!(load(&library).journal.outbound.is_none());
+    let saved = crate::vault::read_document(temporary.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.records[0].sealed.text().as_bytes(),
+        incoming.fields.as_ref().unwrap().content.as_slice()
+    );
+    assert!(keys.matches(&saved));
 }
 
 #[test]

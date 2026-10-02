@@ -307,6 +307,23 @@ pub struct Authentication {
     key: RootKey,
     identity: Identity,
 }
+#[cfg(feature = "desktop")]
+impl Authentication {
+    /// Borrow a verified current-vault key for one worker-owned data cycle.
+    /// This does not create, install or touch a reveal/editor session.
+    pub(crate) fn sync_keyring<'a>(
+        &'a self,
+        document: &'a Document,
+    ) -> Result<crate::materializer::Keyring<'a>> {
+        if self.identity != document.identity() {
+            return Err(Error(
+                "The current vault changed during synchronization authentication.",
+            ));
+        }
+        crate::materializer::Keyring::new(&self.key, document)
+            .map_err(|_| Error("The current vault could not authorize synchronization."))
+    }
+}
 pub struct PreparedVault {
     document: Document,
     key: RootKey,

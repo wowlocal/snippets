@@ -69,7 +69,11 @@ impl From<journal::Failure> for Failure {
 }
 impl From<primary::Failure> for Failure {
     fn from(value: primary::Failure) -> Self {
-        Self::Primary(value)
+        if value == primary::Failure::AuthorizationExpired {
+            Self::SessionChanged
+        } else {
+            Self::Primary(value)
+        }
     }
 }
 impl From<crate::model::Error> for Failure {
@@ -108,9 +112,43 @@ pub struct Owner<'a> {
     pub wire_salt: &'a [u8; 32],
     /// Native callers reserve the installation clock only after admission.
     pub device: Option<&'a str>,
+    /// Borrowed only for an explicitly authenticated, revocable bounded cycle.
+    pub vault_keys: Option<&'a crate::materializer::Keyring<'a>>,
     pub validate_session: &'a dyn Fn() -> Result<()>,
 }
 impl Owner<'_> {
+    pub(crate) fn prepare_primary(
+        &self,
+        journal: &crate::journal::Journal,
+        device: &str,
+        outcome: &crate::merge::Outcome,
+        expected: &primary::ReadSet,
+    ) -> Result<primary::Prepared> {
+        (self.validate_session)()?;
+        let result = if let Some(keys) = self.vault_keys {
+            primary::prepare_authenticated(
+                self.library,
+                journal,
+                device,
+                std::slice::from_ref(outcome),
+                expected,
+                keys,
+            )
+        } else {
+            primary::prepare(
+                self.library,
+                journal,
+                device,
+                std::slice::from_ref(outcome),
+                expected,
+            )
+        };
+        (self.validate_session)()?;
+        Ok(result?)
+    }
+    pub(crate) fn check_publication(&self) -> primary::Result<()> {
+        (self.validate_session)().map_err(|_| primary::Failure::AuthorizationExpired)
+    }
     pub(crate) fn verify(&self, observation: &Observation) -> Result<()> {
         if &observation.scope != self.scope || observation.feed.key_epoch != self.key_epoch {
             return Err(Failure::ScopeReview);
@@ -335,13 +373,8 @@ impl Owner<'_> {
                 }
                 let expected =
                     primary::preservation_read_set(std::slice::from_ref(&outcome), &current)?;
-                let prepared = primary::prepare(
-                    self.library,
-                    &checkpoint.journal,
-                    &device,
-                    std::slice::from_ref(&outcome),
-                    &expected,
-                )?;
+                let prepared =
+                    self.prepare_primary(&checkpoint.journal, &device, &outcome, &expected)?;
                 let status = if !prepared.incompatible_ids.is_empty() {
                     Some(Status::IncompatibleVault)
                 } else if !prepared.deferred_ids.is_empty() {
@@ -360,12 +393,13 @@ impl Owner<'_> {
                     return Ok(progress);
                 }
                 (self.validate_session)()?;
-                match primary::commit(
+                match primary::commit_checked(
                     self.library,
                     &mut checkpoint,
                     self.checkpoint_key,
                     self.checkpoint_salt,
                     prepared,
+                    &|| self.check_publication(),
                 ) {
                     Err(primary::Failure::StalePrimary) => {
                         progress.status = Status::PrimaryChanged;

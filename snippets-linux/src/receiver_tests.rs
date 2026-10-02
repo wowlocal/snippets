@@ -9,6 +9,8 @@ use crate::{
 };
 use std::{cell::Cell, collections::VecDeque, fs};
 use uuid::Uuid;
+#[path = "receiver_secure_tests.rs"]
+mod secure;
 
 const SALT: [u8; 32] = [0x66; 32];
 fn key() -> RootKey {
@@ -114,6 +116,7 @@ fn owner<'a>(
         wire_key: key,
         wire_salt: &SALT,
         device: Some("11111111"),
+        vault_keys: None,
         validate_session: guard,
     }
 }

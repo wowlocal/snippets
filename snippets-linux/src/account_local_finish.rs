@@ -131,6 +131,7 @@ fn prove_locked<B: Backend>(
         wire_key: &key,
         wire_salt: &salt,
         device: None,
+        vault_keys: None,
         validate_session: &guard,
     };
     if !journal.account_review_published_local_locked(&entry.receipt)? {

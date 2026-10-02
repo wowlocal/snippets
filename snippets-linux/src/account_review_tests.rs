@@ -66,6 +66,7 @@ fn owner<'a>(
         wire_key: key,
         wire_salt: &fixtures::SALT,
         device: Some("11111111"),
+        vault_keys: None,
         validate_session: guard,
     }
 }

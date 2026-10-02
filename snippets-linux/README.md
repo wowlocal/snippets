@@ -119,9 +119,9 @@ Legacy own secure wire records without a vault stamp can be recognized as exact
 saved echoes while the vault is locked. Changed or absent unstamped bodies still
 stop ordinary receiving. The primary apply core can authenticate them against
 the current vault key and required content hash, preserving the incoming sealed
-bytes and journal evidence. Native fresh-vault authentication for continuing
-receiving/sync still needs to be connected; unlocking the separate editor does
-not yet supply its key to the account worker. Conflict copies and original v1
+bytes and journal evidence. **Verify Vault and Sync…** connects fresh current-vault
+authentication to one bounded receiving/sending cycle. The editor's unlocked key
+is not used by the account worker. Conflict copies and original v1
 snapshots continue to require their stamps and hashes.
 
 The Rust core now implements the existing encrypted Cloud wire format and native
@@ -184,6 +184,22 @@ worker ownership; quit remains unavailable during an in-flight operation or whil
 a session or pairing response needs secure storage. **Retry Secure Storage**
 retains that response before another account operation can proceed. Key operations
 check that live credentials still match the committed account and token generation.
+
+If encrypted incoming records or secure conflicts stop ordinary sync, choose
+**Verify Vault and Sync…** after selecting and verifying the library. Enter the
+current vault's passphrase or recovery key. The worker captures the exact vault
+file and actual library/key epoch before asking for credentials, verifies them
+afresh, and borrows the resulting key for that single bounded sync cycle. It does
+not unlock or extend the editor session. The dialog defaults to Cancel and clears
+its field; focus loss, hiding, desktop lock, cancellation or the two-minute deadline
+revoke the operation. Account, library-switch, snapshot and deletion reviews still
+apply. A saved page or conflict response resumes with its original encrypted bytes
+and CAS version. Cancelling before the write journal preserves current primary
+files; cancellation after journal publication retains the encrypted redo for normal
+recovery. Saved automatic scheduling pauses until the request/cycle releases its
+key; ordinary and automatic cycles continue without borrowing an editor key.
+The native dialog and combined live keyring/HTTPS workflow still need a graphical
+end-to-end check.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and

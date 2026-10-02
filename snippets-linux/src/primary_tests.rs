@@ -6,6 +6,8 @@ use crate::{
     vault::{self, Vault},
 };
 use std::os::unix::fs::symlink;
+#[path = "primary_authorization_tests.rs"]
+mod authorization;
 #[path = "primary_legacy_tests.rs"]
 mod legacy;
 fn scope() -> Scope {

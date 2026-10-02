@@ -32,6 +32,7 @@ pub enum Failure {
     IncompatibleVault,
     VaultLocked,
     ReservedCollision,
+    AuthorizationExpired,
     Storage,
 }
 pub type Result<T> = std::result::Result<T, Failure>;
@@ -627,7 +628,7 @@ fn prepare_impl(
                 defer = true;
             }
             if e.secure {
-                let mut legacy_echo = false;
+                let mut own_echo = false;
                 if let Some(vault) = &contents.vault {
                     if e.extensions
                         .get("vaultKID")
@@ -638,7 +639,7 @@ fn prepare_impl(
                         incompatible = true;
                     }
                     let existing = vault.records.iter().find(|r| r.metadata.id == e.id);
-                    legacy_echo = !e.extensions.contains_key(merge::COPY_PROVENANCE)
+                    let legacy_echo = !e.extensions.contains_key(merge::COPY_PROVENANCE)
                         && existing
                             .map(|r| {
                                 projection::exact_legacy_unstamped_secure_echo(e, r, &vault.kid)
@@ -650,6 +651,7 @@ fn prepare_impl(
                         .transpose()?
                         .unwrap_or(false)
                         || legacy_echo;
+                    own_echo = !e.extensions.contains_key(merge::COPY_PROVENANCE) && exact;
                     let resolved_echo = resolutions
                         .iter()
                         .find(|r| r.source_id == e.id)
@@ -669,7 +671,7 @@ fn prepare_impl(
                     defer = true;
                 }
                 if !e.deleted
-                    && !legacy_echo
+                    && !own_echo
                     && let Some(keys) = keys
                 {
                     // Own unstamped bodies still require the current key, AAD
@@ -829,7 +831,28 @@ fn commit_with_fault(
     prepared: Prepared,
     fault: Option<u8>,
 ) -> Result<()> {
-    commit_impl(library, checkpoint, key, salt, prepared, None, fault)
+    commit_impl(
+        library,
+        checkpoint,
+        key,
+        salt,
+        prepared,
+        None,
+        fault,
+        &|| Ok(()),
+    )
+}
+pub(crate) fn commit_checked(
+    library: &Library,
+    checkpoint: &mut Checkpoint,
+    key: &RootKey,
+    salt: &[u8; 32],
+    prepared: Prepared,
+    validate: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    commit_impl(
+        library, checkpoint, key, salt, prepared, None, None, validate,
+    )
 }
 /// The decision/receipt and its primary images share one WAL publication.
 /// Only the owning review boundary may provide a staged journal.
@@ -842,6 +865,28 @@ pub(crate) fn commit_staged(
     next: Journal,
     fault: Option<u8>,
 ) -> Result<()> {
+    commit_staged_checked(
+        library,
+        checkpoint,
+        key,
+        salt,
+        prepared,
+        next,
+        fault,
+        &|| Ok(()),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_staged_checked(
+    library: &Library,
+    checkpoint: &mut Checkpoint,
+    key: &RootKey,
+    salt: &[u8; 32],
+    prepared: Prepared,
+    next: Journal,
+    fault: Option<u8>,
+    validate: &dyn Fn() -> Result<()>,
+) -> Result<()> {
     if next.scope() != checkpoint.journal.scope()
         || (checkpoint.journal.key_epoch.is_some()
             && next.key_epoch != checkpoint.journal.key_epoch)
@@ -850,7 +895,16 @@ pub(crate) fn commit_staged(
     {
         return Err(Failure::InvalidState);
     }
-    commit_impl(library, checkpoint, key, salt, prepared, Some(next), fault)
+    commit_impl(
+        library,
+        checkpoint,
+        key,
+        salt,
+        prepared,
+        Some(next),
+        fault,
+        validate,
+    )
 }
 #[allow(clippy::too_many_arguments)]
 fn commit_impl(
@@ -861,7 +915,9 @@ fn commit_impl(
     prepared: Prepared,
     staged: Option<Journal>,
     fault: Option<u8>,
+    validate: &dyn Fn() -> Result<()>,
 ) -> Result<()> {
+    validate()?;
     if prepared.changed_ids.is_empty() {
         return if staged.is_none() {
             Ok(())
@@ -870,6 +926,7 @@ fn commit_impl(
         };
     }
     let _guard = library.lock().map_err(|_| Failure::Storage)?;
+    validate()?;
     require_ready(&library.root)?;
     let current = read_contents(&library.root)?;
     if current.plain_bytes != prepared.intent.before_plain
@@ -882,14 +939,19 @@ fn commit_impl(
     }
     let next = staged.unwrap_or_else(|| checkpoint.journal.clone());
     let next = stage_prepared(next, &prepared)?;
+    validate()?;
     // Also establishes an authenticated no-intent baseline for the very first
     // transaction, so even a pre-WAL marker interruption is recoverable.
     checkpoint.journal.primary_epoch = Some(prepared.intent.nonce);
     checkpoint.save_locked(library, key, salt)?;
+    validate()?;
     // The marker is written first. A crash before the encrypted WAL is published
     // is an authenticated no-intent recovery; no primary write has begun yet.
     write_marker(library, &prepared.intent.nonce)?;
     if fault == Some(0) {
+        return Err(Failure::RecoveryRequired);
+    }
+    if validate().is_err() {
         return Err(Failure::RecoveryRequired);
     }
     checkpoint.journal = next;
@@ -897,7 +959,15 @@ fn commit_impl(
     if fault == Some(1) {
         return Err(Failure::RecoveryRequired);
     }
-    finish_locked(library, checkpoint, key, salt, fault)
+    finish_checked_locked(library, checkpoint, key, salt, fault, validate, true).map_err(
+        |failure| {
+            if failure == Failure::AuthorizationExpired {
+                Failure::RecoveryRequired
+            } else {
+                failure
+            }
+        },
+    )
 }
 fn stage_prepared(mut next: Journal, prepared: &Prepared) -> Result<Journal> {
     for intent in prepared.held.values() {

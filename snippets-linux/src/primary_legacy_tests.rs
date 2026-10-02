@@ -59,6 +59,30 @@ fn expected(library: &Library, checkpoint: &Checkpoint, id: Uuid) -> ReadSet {
 }
 
 #[test]
+fn stamped_exact_own_echo_with_no_hash_also_passes_the_authenticated_path() {
+    let (_temporary, library, document, mut checkpoint, incoming) = setup(false, true);
+    let expected = expected(&library, &checkpoint, incoming.id);
+    let before = fs::read(library.root.join("Vault/vault.json")).unwrap();
+    let root = RootKey::from_bytes(&[0x11; 32]).unwrap();
+    let prepared = prepare_authenticated(
+        &library,
+        &checkpoint.journal,
+        "11111111",
+        &[outcome(incoming.clone())],
+        &expected,
+        &Keyring::new(&root, &document).unwrap(),
+    )
+    .unwrap();
+    assert!(prepared.deferred_ids.is_empty() && prepared.incompatible_ids.is_empty());
+    assert!(prepared.projected[&incoming.id].encode().unwrap() == incoming.encode().unwrap());
+    commit(&library, &mut checkpoint, &key(), &SALT, prepared).unwrap();
+    assert_eq!(
+        fs::read(library.root.join("Vault/vault.json")).unwrap(),
+        before
+    );
+}
+
+#[test]
 fn legacy_exact_own_echo_needs_no_key_even_when_both_hashes_are_absent() {
     for missing_hash in [false, true] {
         for with_key in [false, true] {

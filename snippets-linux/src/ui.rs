@@ -572,6 +572,10 @@ impl App {
             .borrow()
             .as_ref()
             .is_none_or(|history| history.prepare_quit());
+        // Revoke foreground credentials even when a busy worker postpones quit.
+        if let Some(account) = self.account.borrow().as_ref() {
+            account.cancel_sensitive();
+        }
         let account_idle = self
             .account_worker
             .borrow()

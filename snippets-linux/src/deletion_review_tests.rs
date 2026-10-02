@@ -31,6 +31,7 @@ fn owner<'a>(
         wire_key: key,
         wire_salt: &SALT,
         device: Some("11111111"),
+        vault_keys: None,
         validate_session: guard,
     }
 }

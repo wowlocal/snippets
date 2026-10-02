@@ -30,6 +30,8 @@ pub(crate) mod restoration_task;
 
 #[path = "account_history_removal.rs"]
 pub(crate) mod history_removal;
+#[path = "account_vault_sync.rs"]
+pub(crate) mod vault_sync;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {
@@ -430,6 +432,13 @@ pub(crate) enum Command {
     Receive,
     Send,
     Sync,
+    PrepareVaultSync(vault_sync::Authorization),
+    CancelVaultSync,
+    ContinueVaultSync {
+        token: uuid::Uuid,
+        credential: Zeroizing<String>,
+        recovery: bool,
+    },
     PrepareSnapshotReview,
     ResumeSnapshotReview(uuid::Uuid),
     PrepareDeletionReview,
@@ -463,6 +472,9 @@ impl Command {
             Self::Inspect
                 | Self::InspectHistory
                 | Self::Sync
+                | Self::PrepareVaultSync(_)
+                | Self::CancelVaultSync
+                | Self::ContinueVaultSync { .. }
                 | Self::Receive
                 | Self::Send
                 | Self::PrepareDisclosure
@@ -546,6 +558,10 @@ pub(crate) enum Reply {
     Received(receiver::Progress),
     Sent(sender::Progress),
     Synchronized(data_sync::Progress),
+    VaultSync {
+        token: uuid::Uuid,
+        methods: vault_sync::Methods,
+    },
     SnapshotReview {
         token: uuid::Uuid,
         summary: snapshot_review::Summary,
@@ -854,7 +870,10 @@ impl Handle {
     pub(crate) fn request(&self, command: Command) -> Result<mpsc::Receiver<Result<Reply>>> {
         let (response, receiver) = mpsc::sync_channel(1);
         self.in_flight.fetch_add(1, Ordering::SeqCst);
-        self.control.cancel_quit();
+        // Async cancellation cleanup is not a new foreground continuation.
+        if !matches!(&command, Command::CancelVaultSync) {
+            self.control.cancel_quit();
+        }
         self.control.pause();
         if self.sender.send(Task { command, response }).is_err() {
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
@@ -953,6 +972,7 @@ struct Owner {
     pending: Option<Pending>,
     snapshot_review: Option<(uuid::Uuid, Box<snapshot_review::Review>)>,
     deletion_review: Option<(uuid::Uuid, Box<deletion_review::Review>)>,
+    vault_sync: Option<vault_sync::Request>,
     handover_review: Option<(uuid::Uuid, Box<handover::Review>)>,
     creation_review: Option<(uuid::Uuid, creation::NewIntent)>,
     restoration: restoration_task::Retained,
@@ -966,6 +986,7 @@ enum DataAction {
     Receive,
     Send,
     Sync,
+    PrepareVaultSync(vault_sync::Authorization),
     PrepareSnapshotReview,
     ResumeSnapshotReview(Box<snapshot_review::Review>),
     PrepareDeletionReview,
@@ -979,6 +1000,7 @@ enum DataReply {
     Reply(Box<Reply>),
     Review(Box<snapshot_review::Review>),
     DeletionReview(Box<deletion_review::Review>),
+    VaultSync(Box<vault_sync::Request>),
 }
 enum PairingAction {
     Begin,
@@ -999,6 +1021,7 @@ impl Owner {
             pending: None,
             snapshot_review: None,
             deletion_review: None,
+            vault_sync: None,
             handover_review: None,
             creation_review: None,
             restoration: restoration_task::Retained::default(),
@@ -1039,7 +1062,7 @@ impl Owner {
             self.disable_automatic()?;
         }
         let result = self.handle(command);
-        if keep && self.pending.is_none() {
+        if keep && self.pending.is_none() && self.vault_sync.is_none() {
             self.control.resume();
         }
         result
@@ -1347,7 +1370,18 @@ impl Owner {
         action: DataAction,
         ticket: Option<&Ticket>,
     ) -> Result<Reply> {
-        let check = || ticket.map_or(Ok(()), Ticket::validate);
+        self.data_action_with_vault(action, ticket, None)
+    }
+    fn data_action_with_vault(
+        &mut self,
+        action: DataAction,
+        ticket: Option<&Ticket>,
+        authenticated: Option<&vault_sync::Authenticated>,
+    ) -> Result<Reply> {
+        let check = || -> Result<()> {
+            ticket.map_or(Ok(()), Ticket::validate)?;
+            authenticated.map_or(Ok(()), vault_sync::Authenticated::validate)
+        };
         check()?;
         self.check_owner()?;
         let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
@@ -1380,6 +1414,9 @@ impl Owner {
                 .map_err(|_| Failure::InvalidState)?;
             let scope = key.binding().checkpoint_scope();
             let epoch = key.binding().key_epoch();
+            if let Some(authenticated) = authenticated {
+                authenticated.bind(&scope, epoch)?;
+            }
             let locked = std::cell::RefCell::new(locked);
             let guard = || {
                 check().map_err(|_| receiver::Failure::SessionChanged)?;
@@ -1392,6 +1429,9 @@ impl Owner {
             // Hold the credential owner lock for the whole bounded cycle;
             // primary's common file lock is held only for local transactions.
             key.with_wire_key(|wire_key, wire_salt| {
+                let vault_keys = authenticated
+                    .map(vault_sync::Authenticated::keys)
+                    .transpose()?;
                 let owner = receiver::Owner {
                     library: &library,
                     scope: &scope,
@@ -1401,9 +1441,16 @@ impl Owner {
                     wire_key,
                     wire_salt,
                     device: None,
+                    vault_keys: vault_keys.as_ref(),
                     validate_session: &guard,
                 };
                 match action {
+                    DataAction::PrepareVaultSync(authorization) => {
+                        check()?;
+                        vault_sync::Request::capture(&self.root, &scope, epoch, authorization)
+                            .map(Box::new)
+                            .map(DataReply::VaultSync)
+                    }
                     DataAction::Sync => owner
                         .synchronize(transport, data_sync::Limits::DEFAULT)
                         .map(Reply::Synchronized)
@@ -1466,6 +1513,11 @@ impl Owner {
                 let summary = review.summary();
                 self.deletion_review = Some((token, review));
                 Ok(Reply::DeletionReview { token, summary })
+            }
+            DataReply::VaultSync(request) => {
+                let (token, methods) = request.presentation();
+                self.vault_sync = Some(*request);
+                Ok(Reply::VaultSync { token, methods })
             }
         }
     }
@@ -1531,6 +1583,12 @@ impl Owner {
         .map(Some)
     }
     fn handle(&mut self, command: Command) -> Result<Reply> {
+        if !matches!(&command, Command::ContinueVaultSync { .. }) {
+            self.vault_sync = None;
+        }
+        if matches!(&command, Command::CancelVaultSync) {
+            return Ok(Reply::Saved);
+        }
         if !matches!(&command, Command::CreateNewLibrary(_)) {
             self.creation_review = None;
         }
@@ -2000,6 +2058,19 @@ impl Owner {
             Command::Receive => self.data_action(DataAction::Receive),
             Command::Send => self.data_action(DataAction::Send),
             Command::Sync => self.data_action(DataAction::Sync),
+            Command::PrepareVaultSync(authorization) => {
+                self.data_action(DataAction::PrepareVaultSync(authorization))
+            }
+            Command::CancelVaultSync => Ok(Reply::Saved),
+            Command::ContinueVaultSync {
+                token,
+                credential,
+                recovery,
+            } => {
+                let request = self.vault_sync.take().ok_or(Failure::InvalidState)?;
+                let authenticated = request.authenticate(token, credential, recovery)?;
+                self.data_action_with_vault(DataAction::Sync, None, Some(&authenticated))
+            }
             Command::PrepareSnapshotReview => self.data_action(DataAction::PrepareSnapshotReview),
             Command::ResumeSnapshotReview(token) => {
                 let (retained, review) =
@@ -2379,6 +2450,93 @@ fn key_session_failure(value: auth_store::Failure) -> key_store::Failure {
 mod tests {
     use super::*;
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
+    #[test]
+    fn vault_sync_cleanup_preserves_the_quit_fence_until_an_explicit_foreground_action() {
+        let worker = Handle::spawn(|_| (Ok(Reply::Saved), false)).unwrap();
+        worker.prepare_quit();
+        assert!(worker.control.quitting());
+        let cleaned = worker.request(Command::CancelVaultSync).unwrap();
+        assert!(matches!(
+            cleaned.recv_timeout(DEADLINE).unwrap(),
+            Ok(Reply::Saved)
+        ));
+        assert!(worker.control.quitting() && worker.control.is_paused());
+        let explicit = worker.request(Command::Sync).unwrap();
+        assert!(matches!(
+            explicit.recv_timeout(DEADLINE).unwrap(),
+            Ok(Reply::Saved)
+        ));
+        assert!(!worker.control.quitting());
+    }
+
+    #[test]
+    fn cancelled_or_mismatched_vault_sync_requests_are_consumed_before_automatic_admission_resumes()
+    {
+        for cancel in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let target = public_target();
+            Preference::on(temporary.path(), &target).unwrap();
+            let preference = Preference::read(temporary.path()).unwrap();
+            let fixture: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
+            let document =
+                crate::vault::Document::decode(&serde_json::to_vec(&fixture["document"]).unwrap())
+                    .unwrap();
+            std::fs::create_dir(temporary.path().join("Vault")).unwrap();
+            crate::model::atomic_write(
+                &temporary.path().join("Vault/vault.json"),
+                &document.encode().unwrap(),
+            )
+            .unwrap();
+            let authorization = vault_sync::Authorization::new(
+                crate::desktop::SessionWitness::test(crate::desktop::SessionState::Unlocked, 1),
+            )
+            .unwrap();
+            assert!(Command::PrepareVaultSync(authorization.clone()).keeps_automatic());
+            let request = vault_sync::Request::capture(
+                temporary.path(),
+                &target.binding().checkpoint_scope(),
+                1,
+                authorization,
+            )
+            .unwrap();
+            let control = Control::new();
+            let mut owner = Owner::new(temporary.path().into(), control.clone());
+            owner.vault_sync = Some(request);
+            control.pause();
+            assert!(control.is_paused());
+            let command = if cancel {
+                Command::CancelVaultSync
+            } else {
+                Command::ContinueVaultSync {
+                    token: uuid::Uuid::new_v4(),
+                    credential: Zeroizing::new("Public mismatched token fixture".into()),
+                    recovery: false,
+                }
+            };
+            let reply = owner.handle_scheduled(command);
+            assert_eq!(reply.is_ok(), cancel);
+            assert!(owner.vault_sync.is_none() && !control.is_paused());
+            assert!(owner.store.is_none() && owner.transport.is_none() && owner.client.is_none());
+            assert!(Preference::read(temporary.path()).unwrap() == preference);
+            assert!(!temporary.path().join("Sync").exists());
+            // Cancellation is idempotent and does not initialize a native owner.
+            assert!(matches!(
+                owner.handle_scheduled(Command::CancelVaultSync),
+                Ok(Reply::Saved)
+            ));
+            assert!(matches!(
+                owner.handle_scheduled(Command::ContinueVaultSync {
+                    token: uuid::Uuid::new_v4(),
+                    credential: Zeroizing::new("Public replay fixture".into()),
+                    recovery: false
+                }),
+                Err(Failure::InvalidState)
+            ));
+            assert!(owner.store.is_none());
+        }
+    }
 
     #[test]
     fn queued_work_prevents_quit_until_every_operation_finishes() {

@@ -244,13 +244,7 @@ impl Owner<'_> {
             secure_unit |= e.secure || !variants.is_empty();
         }
         let expected = primary::preservation_read_set(std::slice::from_ref(outcome), current)?;
-        let prepared = primary::prepare(
-            self.library,
-            &checkpoint.journal,
-            device,
-            std::slice::from_ref(outcome),
-            &expected,
-        )?;
+        let prepared = self.prepare_primary(&checkpoint.journal, device, outcome, &expected)?;
         let status = if !prepared.incompatible_ids.is_empty() {
             Some(Status::IncompatibleVault)
         } else if !prepared.deferred_ids.is_empty() {
@@ -269,7 +263,7 @@ impl Owner<'_> {
         }
         (self.validate_session)()?;
         let result = if let Some(next) = staged {
-            primary::commit_staged(
+            primary::commit_staged_checked(
                 self.library,
                 checkpoint,
                 self.checkpoint_key,
@@ -277,14 +271,16 @@ impl Owner<'_> {
                 prepared,
                 next,
                 None,
+                &|| self.check_publication(),
             )
         } else {
-            primary::commit(
+            primary::commit_checked(
                 self.library,
                 checkpoint,
                 self.checkpoint_key,
                 self.checkpoint_salt,
                 prepared,
+                &|| self.check_publication(),
             )
         };
         match result {

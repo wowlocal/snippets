@@ -34,6 +34,8 @@ mod history_removal_view;
 
 #[path = "restoration_ui.rs"]
 mod restoration_view;
+#[path = "vault_sync_ui.rs"]
+mod vault_sync_view;
 
 fn label(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
@@ -291,6 +293,8 @@ pub(crate) struct AccountWindow {
     password_dialog: RefCell<Option<(adw::AlertDialog, gtk::PasswordEntry)>>,
     restoration_dialog: RefCell<Option<(adw::AlertDialog, Vec<gtk::PasswordEntry>)>>,
     restoration_preparation: RefCell<Option<crate::account_worker::restoration_task::Preparation>>,
+    vault_sync_authorization: RefCell<Option<crate::account_worker::vault_sync::Authorization>>,
+    vault_sync_dialog: RefCell<Option<(adw::AlertDialog, gtk::PasswordEntry)>>,
     restoration_file_choice: RefCell<
         Option<(
             gtk::gio::Cancellable,
@@ -312,6 +316,7 @@ pub(crate) struct AccountWindow {
     creation_status: gtk::Label,
     library_panel: gtk::Box,
     sync: gtk::Button,
+    vault_sync: gtk::Button,
     receive: gtk::Button,
     send: gtk::Button,
     review_snapshot: gtk::Button,
@@ -554,6 +559,12 @@ impl AccountWindow {
         sync.add_css_class("suggested-action");
         sync.set_sensitive(false);
         library_panel.append(&sync);
+        let vault_sync = gtk::Button::with_label("Verify Vault and Sync…");
+        vault_sync.set_sensitive(false);
+        sync.bind_property("sensitive", &vault_sync, "sensitive")
+            .sync_create()
+            .build();
+        library_panel.append(&vault_sync);
         let receive = gtk::Button::with_label("Receive Cloud Changes");
         receive.set_sensitive(false);
         library_panel.append(&receive);
@@ -676,6 +687,8 @@ impl AccountWindow {
             password_dialog: RefCell::new(None),
             restoration_dialog: RefCell::new(None),
             restoration_preparation: RefCell::new(None),
+            vault_sync_authorization: RefCell::new(None),
+            vault_sync_dialog: RefCell::new(None),
             restoration_file_choice: RefCell::new(None),
             snapshot_dialog: RefCell::new(None),
             history_dialog: RefCell::new(None),
@@ -692,6 +705,7 @@ impl AccountWindow {
             creation_status,
             library_panel,
             sync,
+            vault_sync,
             receive,
             send: send_changes,
             review_snapshot,
@@ -898,6 +912,12 @@ impl AccountWindow {
             }
         });
         let weak = Rc::downgrade(&this);
+        this.vault_sync.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.verify_vault_sync();
+            }
+        });
+        let weak = Rc::downgrade(&this);
         this.switch_review.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
                 match secret(&this.switch_recovery) {
@@ -1010,7 +1030,8 @@ impl AccountWindow {
             let active_secret = this.view.visible()
                 || this.authorization.borrow().is_some()
                 || this.password_dialog.borrow().is_some()
-                || this.restoration_preparation.borrow().is_some();
+                || this.restoration_preparation.borrow().is_some()
+                || this.vault_sync_authorization.borrow().is_some();
             let expired = this.view.expired()
                 || this
                     .authorization
@@ -1019,6 +1040,11 @@ impl AccountWindow {
                     .is_some_and(|r| r.check().is_err())
                 || this
                     .restoration_preparation
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|r| r.validate().is_err())
+                || this
+                    .vault_sync_authorization
                     .borrow()
                     .as_ref()
                     .is_some_and(|r| r.validate().is_err());
@@ -1211,7 +1237,8 @@ impl AccountWindow {
             this.update_automatic();
         });
     }
-    fn cancel_sensitive(&self) {
+    pub(crate) fn cancel_sensitive(&self) {
+        self.cancel_vault_sync();
         self.gate.borrow_mut().cancel();
         self.generation.set(self.generation.get().wrapping_add(1));
         self.authorization.borrow_mut().take();
@@ -1401,6 +1428,7 @@ impl AccountWindow {
                 };
                 self.status.set_label(message);
             },
+            Reply::VaultSync {..} => self.status.set_label("Verify the current vault to continue synchronization."),
             Reply::Received(progress)=>{
                 use crate::receiver::Status;
                 self.review_snapshot.set_visible(progress.status == Status::SnapshotReview);

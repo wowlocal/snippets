@@ -12,6 +12,8 @@ use crate::{
 use std::{cell::Cell, fs};
 use uuid::Uuid;
 const SALT: [u8; 32] = [0x66; 32];
+#[path = "sender_secure_tests.rs"]
+mod secure;
 fn key() -> RootKey {
     RootKey::from_bytes(&[0x55; 32]).unwrap()
 }
@@ -57,6 +59,7 @@ fn owner<'a>(
         wire_key: key,
         wire_salt: &SALT,
         device: Some("11111111"),
+        vault_keys: None,
         validate_session: guard,
     }
 }

@@ -478,6 +478,7 @@ pub(super) fn history_locked<B: Backend>(
             wire_key: &key,
             wire_salt: &salt,
             device: None,
+            vault_keys: None,
             validate_session: &|| Ok(()),
         };
         let source = Installed::decode(
@@ -597,6 +598,7 @@ pub(super) fn validate_removal_images_locked<B: Backend>(
         wire_key: &key,
         wire_salt: &salt,
         device: None,
+        vault_keys: None,
         validate_session: &|| Ok(()),
     };
     journal
@@ -628,6 +630,7 @@ pub(super) fn saved_local_state_locked<B: Backend>(
         wire_key: &key,
         wire_salt: &salt,
         device: None,
+        vault_keys: None,
         validate_session: &|| Ok(()),
     };
     Ok((
@@ -782,6 +785,7 @@ fn cancel_archive<B: Backend>(
         wire_key: &key,
         wire_salt: &salt,
         device: None,
+        vault_keys: None,
         validate_session: &guard,
     };
     if !journal.account_review_unpublished(&entry.receipt)? {
@@ -1059,6 +1063,7 @@ pub(super) fn prepare_locked<B: Backend, R: super::Remote + receiver::Remote>(
             wire_key,
             wire_salt,
             device: None,
+            vault_keys: None,
             validate_session: &guard,
         }
         .prepare_account_review(remote, previous)
@@ -1144,6 +1149,7 @@ fn journal_action<B: Backend, R: receiver::Remote>(
             wire_key,
             wire_salt,
             device: None,
+            vault_keys: None,
             validate_session: &guard,
         };
         match action {

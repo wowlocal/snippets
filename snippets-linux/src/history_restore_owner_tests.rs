@@ -137,6 +137,7 @@ fn with_fixture<T>(
         wire_key: &wire_key,
         wire_salt: &crate::snapshot_review::tests::SALT,
         device: Some("11111111"),
+        vault_keys: None,
         validate_session: &|| Ok(()),
     };
     run(&owner, server)
