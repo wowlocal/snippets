@@ -1,0 +1,82 @@
+[package]
+name = "snippets-linux"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+description = "Native GTK desktop client for Snippets on Omarchy"
+default-run = "snippets"
+
+[features]
+default = ["desktop"]
+desktop = ["dep:gtk", "dep:adw", "dep:pangocairo", "secret-service", "local-auth"]
+secret-service = []
+local-auth = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+ryu = "1"
+url = "2"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+unicode-segmentation = "1"
+unicode-normalization = "0.1"
+unicode-casefold = "0.2"
+tempfile = "3"
+libc = "0.2"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.9"
+clap = { version = "4", features = ["derive"] }
+aes-gcm = { version = "0.11", features = ["zeroize"] }
+hkdf = "0.13"
+hmac = { version = "0.13", features = ["zeroize"] }
+sha2 = { version = "0.11", features = ["zeroize"] }
+pbkdf2 = "0.13"
+getrandom = "0.4"
+base64 = "0.22"
+zeroize = "1"
+p256 = { version = "0.14", default-features = false, features = ["ecdh", "std"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"], optional = true }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"], optional = true }
+pangocairo = { version = "0.22", optional = true }
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"
+
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+[[bin]]
+name = "snippets"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "snippets-cli"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "snippets-owner-auth"
+path = "src/bin/owner_auth.rs"
+required-features = ["local-auth"]
+
+[profile.dev]
+debug = 0
+
+# Keep native KDF kernels representative in debug builds too. Derivation still
+# runs off the GTK thread; this never changes protocol iteration counts.
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.release]
+strip = true

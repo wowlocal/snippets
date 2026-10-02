@@ -1,0 +1,37 @@
+{
+  "comment": "Public fictional fixture generated independently with Python cryptography/OpenSSL. Fixed keys/nonces are test data only.",
+  "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "recoveryMaterialHex": "66666666666666666666666666666666",
+  "passphrase": "Café public fixture",
+  "plaintext": "Fictional secret 🦀\n",
+  "document": {
+    "schemaVersion": 1,
+    "kid": "public-interop-fixture",
+    "vaultSalt": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+    "kdf": {
+      "alg": "pbkdf2-hmac-sha512",
+      "iterations": 600000,
+      "saltP": "VVVVVVVVVVVVVVVVVVVVVQ"
+    },
+    "wrapPass": "v1.MzMzMzMzMzMzMzMz.8YBgOf5ULbqJOX166EDuIFWvGLIcDm7IX_G8nknrMTiLjeKJ9K2oHmFm-ZKcaB543ojBeJ3wB_WW8SPXTC0aTSE77c35A0c_oFA-A35BLhaKOtVEi92IB4SnQmG5hwjWj9nVe5lseICz1bExQgYC5i034TGaC2RoVEmd6X6lAa9zEbMNgPPhd36oTAeEA2gSo2RtzS9vNjR-sCgrjwBCz4MYfeY5OUuaoEolb4IdzUWURVDr3MdlwU82hS4fzeVIGOK59WfCF3eUmqsGQElWVoPNQc3rybdr7W5gu-TRFiLrYt9qkLMfEvzDxxbj8dV0-7Xgx2H-RtBMLflAuZtsOLycAtWcc8hu9pPfnulzwNM",
+    "wrapRecovery": "v1.d3d3d3d3d3d3d3d3.q9VnpqUWHKlSBnGIMe3nNALPo_xGhdcGePqVoo7Rzv5H05iaPciTq1aQvLfe2Zt9w8jTIsZyOM5-Dp4wQJoBWj8_stesqveYcuOGCp0VWgjqW2UOfkSL0Sw2KMPCGZEUEXek_8XiLQr1wjRK70ijnSeH-hUTNjGWr8cDPJJ6IJzlLeHRjJ4QGfa1_9C2y6QRfQtajYgs9VG5RKRQDyPLC6SlSOIP_ugvx9X4eTr2TgieJFBiz6lEOxtSNA4hEUA3JKkpmEGgMiumAAv7lbFkbjUrwFAUbBOBllxAbpnA4f_oMeZgmzxs1iDDwytzTtf6o4iglrre4lQ_ppOtUMwvca6s40UbUOTNEJfhfTo6C3s",
+    "wrapCLI": null,
+    "records": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "name": "Interop fixture",
+        "keyword": "interop",
+        "tags": [
+          "fixture"
+        ],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": "2026-09-30T10:00:00.000Z",
+        "updatedAt": "2026-09-30T10:01:00.000Z",
+        "hlc": "019f1a3d4880-0000-1234abcd",
+        "contentHash": "9536abd4a3609b9f098e9e2d91a42622",
+        "sealed": "v1.RERERERERERERERE.K-8W8X30tL1P8MmtwhFpDBSqdJ2c4PXQhcjKhFAlp4IMEuSjTtrGuGt1nDGMZbCJnz9CSd6cBVL5vlm7HBAoZN4r8ezjBM-gV3pRD2lSGUwmYyXLALxoFHX1KlqzOOvgLUBrGOQaWQC-mSQRUpi16jeEIsBhO6yR4xF1x8mdZ10IGvQLOZM-gfRlRCT5c-gArLkk85yNi4zTgCCbUHPxbglAyoxfJnncwRxZ0ITX1pJd35_evcTR9CRYRZaqG7d3GSbrP9vjOYkVsRCrv3w1h9MDjveTWi94OLypLOpIXHW31Dj2TD3blQ7DvMR8MTpwedbU8BikuPtL8uhE8nYPBaJ4D3BzQI9zYdbULGZgJls"
+      }
+    ]
+  }
+}

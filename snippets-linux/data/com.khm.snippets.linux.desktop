@@ -1,0 +1,28 @@
+[Desktop Entry]
+Type=Application
+Name=Snippets
+Comment=Your personal library of links, notes, and reusable text
+Exec=snippets
+Icon=com.khm.snippets.linux
+Terminal=false
+Categories=Utility;
+Keywords=snippets;notes;clipboard;text;links;
+StartupNotify=true
+StartupWMClass=com.khm.snippets.linux
+Actions=Picker;New;Capture;History;
+
+[Desktop Action Picker]
+Name=Find and Paste a Snippet
+Exec=snippets --picker
+
+[Desktop Action New]
+Name=New Snippet
+Exec=snippets --new
+
+[Desktop Action Capture]
+Name=Capture Clipboard
+Exec=snippets --capture
+
+[Desktop Action History]
+Name=Clipboard History
+Exec=snippets --clipboard-history

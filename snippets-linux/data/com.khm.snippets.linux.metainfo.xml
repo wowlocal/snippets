@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.khm.snippets.linux</id>
+  <name>Snippets</name>
+  <summary>Your library of links, notes, and reusable text</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="com.khm"><name>Snippets contributors</name></developer>
+  <description>
+    <p>A native GTK desktop app for Omarchy. Search and organize a local library,
+    edit snippets, resolve date and clipboard placeholders, and use a keyboard
+    picker to paste into the original Hyprland window.</p>
+    <p>Import and export ordinary entries in the portable Snippets JSON format.</p>
+  </description>
+  <launchable type="desktop-id">com.khm.snippets.linux.desktop</launchable>
+  <url type="homepage">https://github.com/wowlocal/snippets</url>
+  <content_rating type="oars-1.1"/>
+  <releases><release version="0.1.0" date="2026-09-30"/></releases>
+</component>
