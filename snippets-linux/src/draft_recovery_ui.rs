@@ -115,9 +115,10 @@ impl Workspace {
         }
     }
     pub fn prepare_quit(&self) -> bool {
+        self.cancel_legacy_repair();
         self.cancel_draft_recovery();
         self.cancel_insertion();
-        !self.draft_worker.get() && !self.insertion_worker.get()
+        !self.draft_worker.get() && !self.insertion_worker.get() && !self.repair_worker.get()
     }
     pub(super) fn recover_draft(self: &Rc<Self>) {
         if self.busy.get() || !self.desktop_allowed() || !self.editor.is_foreign() {

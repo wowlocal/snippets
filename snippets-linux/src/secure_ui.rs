@@ -20,6 +20,8 @@ use zeroize::Zeroizing;
 mod draft_recovery;
 #[path = "secure_insertion_ui.rs"]
 mod insertion;
+#[path = "legacy_repair_ui.rs"]
+mod legacy_repair;
 
 async fn worker<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T> + Send + 'static,
@@ -83,6 +85,10 @@ pub struct Workspace {
     insertion_dialog: RefCell<Option<(adw::AlertDialog, gtk::PasswordEntry)>>,
     insertion_worker: Cell<bool>,
     insertion_armed: Cell<bool>,
+    repair: gtk::Button,
+    repair_authorization: RefCell<Option<crate::vault::legacy_repair::Authorization>>,
+    repair_dialog: RefCell<Option<(adw::AlertDialog, gtk::PasswordEntry)>>,
+    repair_worker: Cell<bool>,
 }
 impl Workspace {
     pub fn new(application: &adw::Application, library: &Library) -> Result<Rc<Self>> {
@@ -182,6 +188,8 @@ impl Workspace {
             "Authenticate and insert the saved secure snippet into the original window",
         )]);
         let save = gtk::Button::with_label("Save");
+        let repair = gtk::Button::with_label("Repair Legacy Entry…");
+        repair.set_visible(false);
         let discard = gtk::Button::with_label("Discard / Reload");
         let delete = gtk::Button::from_icon_name("user-trash-symbolic");
         delete.set_tooltip_text(Some("Delete secure snippet"));
@@ -191,6 +199,7 @@ impl Workspace {
             &discard.clone().upcast(),
             &delete.clone().upcast(),
             &insert.clone().upcast(),
+            &repair.clone().upcast(),
         ] {
             toolbar.append(widget);
         }
@@ -233,6 +242,10 @@ impl Workspace {
             insertion_dialog: RefCell::new(None),
             insertion_worker: Cell::new(false),
             insertion_armed: Cell::new(false),
+            repair,
+            repair_authorization: RefCell::new(None),
+            repair_dialog: RefCell::new(None),
+            repair_worker: Cell::new(false),
         });
         let weak = Rc::downgrade(&this);
         this.query.connect_search_changed(move |_| {
@@ -361,10 +374,17 @@ impl Workspace {
             }
         });
         let weak = Rc::downgrade(&this);
+        this.repair.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.repair_legacy();
+            }
+        });
+        let weak = Rc::downgrade(&this);
         this.window.connect_is_active_notify(move |window| {
             if let Some(this) = weak.upgrade() {
                 if !window.is_active() {
                     this.cancel_draft_recovery();
+                    this.cancel_legacy_repair();
                     if !this.insertion_armed.get() {
                         this.cancel_insertion();
                         this.generation.set(this.generation.get().wrapping_add(1));
@@ -434,6 +454,14 @@ impl Workspace {
             {
                 this.cancel_insertion();
             }
+            if this
+                .repair_authorization
+                .borrow()
+                .as_ref()
+                .is_some_and(|authorization| authorization.validate().is_err())
+            {
+                this.cancel_legacy_repair();
+            }
             glib::ControlFlow::Continue
         });
         let weak = Rc::downgrade(&this);
@@ -453,6 +481,7 @@ impl Workspace {
         self.overlay.add_toast(adw::Toast::new(message));
     }
     pub fn lock(&self) {
+        self.cancel_legacy_repair();
         self.cancel_insertion();
         self.cancel_draft_recovery();
         self.generation.set(self.generation.get().wrapping_add(1));
@@ -475,6 +504,19 @@ impl Workspace {
         let unlocked = self.vault.borrow_mut().is_unlocked() && self.desktop_allowed();
         let foreign = self.editor.is_foreign();
         let editable = unlocked && !foreign && !self.busy.get();
+        let legacy = self
+            .selected
+            .get()
+            .and_then(|id| self.vault.borrow().record(id))
+            .is_some_and(|record| record.content_hash.is_empty());
+        self.repair.set_visible(legacy);
+        self.repair.set_sensitive(
+            legacy
+                && !self.busy.get()
+                && !self.is_dirty()
+                && self.desktop_allowed()
+                && self.window.is_active(),
+        );
         let destination = self
             .insertion_target
             .borrow()
@@ -541,11 +583,13 @@ impl Workspace {
                 self.reading_failed.set(false);
                 if changed {
                     self.cancel_insertion();
+                    self.cancel_legacy_repair();
                     self.refresh();
                 }
             }
             Err(error) => {
                 self.cancel_insertion();
+                self.cancel_legacy_repair();
                 if !self.reading_failed.replace(true) {
                     self.toast(&error.to_string());
                 }
@@ -618,6 +662,7 @@ impl Workspace {
         self.loading.set(false);
     }
     fn select(&self, id: Option<Uuid>) {
+        self.cancel_legacy_repair();
         self.selected.set(id);
         self.editor.discard();
         self.dirty.set(false);
@@ -649,7 +694,7 @@ impl Workspace {
         self.dirty.get() || self.editor.is_dirty()
     }
     pub fn save(&self) -> bool {
-        if self.draft_worker.get() || self.insertion_worker.get() {
+        if self.draft_worker.get() || self.insertion_worker.get() || self.repair_worker.get() {
             self.toast("Wait for the secure operation to stop before saving.");
             return false;
         }
@@ -738,6 +783,10 @@ impl Workspace {
         });
     }
     fn delete(self: &Rc<Self>) {
+        if self.busy.get() {
+            self.toast("Wait for the secure operation to stop before deleting.");
+            return;
+        }
         if self.editor.metadata().is_none() {
             self.toast("Unlock and choose a saved secure snippet first.");
             return;

@@ -241,6 +241,26 @@ fn authenticate_variant(variant: &SecureVariant, keys: &Keyring<'_>) -> Result<Z
     keys.verify(&body, expected)?;
     Ok(body)
 }
+/// Verify preserved raw v1 originals without generating C0 copies or new seals.
+/// The owning operation supplies its revocation check around every decryption.
+#[cfg(any(test, feature = "desktop"))]
+pub(crate) fn authenticate_carriers(
+    envelope: &Envelope,
+    keys: &Keyring<'_>,
+    check: &dyn Fn() -> crate::model::Result<()>,
+) -> Result<()> {
+    merge::validate(envelope)?;
+    if merge::has_unknown_version(envelope) {
+        return Err(Failure::MalformedVariant);
+    }
+    for variant in merge::secure_variants(envelope)? {
+        check().map_err(|_| Failure::IncompatibleVault)?;
+        let body = authenticate_variant(&variant, keys)?;
+        drop(body);
+        check().map_err(|_| Failure::IncompatibleVault)?;
+    }
+    Ok(())
+}
 pub(crate) fn copy_display_name(variant: &SecureVariant) -> Result<String> {
     let source = &variant.fields;
     // The Swift secure materializer uses the supplied metadata name verbatim,

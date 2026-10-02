@@ -12,8 +12,10 @@ vaults, including explicitly selected old files for legacy switch history and
 archives containing bodies from several source vaults.
 Missing own vault stamps/hashes in archived records can be recovered only after
 explicit source-vault authentication. Raw v1 carriers remain strict.
-Live legacy-record repair, unreferenced-image cleanup and live desktop
-verification remain unfinished. Ordinary inline expansion now has a native
+Saved legacy records with missing own content hashes now have an explicit native
+repair action using fresh vault authentication. Legacy incoming wire-stamp
+admission, unreferenced-image cleanup and live desktop verification remain
+unfinished. Ordinary inline expansion now has a native
 Wayland owner and opt-in GTK settings; live receiving-field verification is open.
 Freshly authenticated secure insertion is now wired to the picker and native
 virtual keyboard. Its core checks pass; live focus, credential-dialog and
@@ -45,6 +47,15 @@ The dialog clears both fields on cancellation, focus loss, lock or expiry;
 authorization lasts at most 120 seconds with wall and suspend-aware clocks.
 Quit cancels and waits for the worker. Recovery does not extend the live vault's
 idle deadline, persist a draft or restore archived foreign-vault records.
+`src/vault_legacy_repair.rs` verifies an exact saved record's missing own hash
+with fresh passphrase/recovery authentication; `src/legacy_repair_ui.rs` owns its
+native review. The source file is captured before credentials. Authentication
+opens the saved seal and verifies all current v1 originals without resealing
+them. The reply contains only the computed hash and encrypted before-image.
+Publication changes only the selected raw JSON record's hash and HLC, under the
+common nonblocking lock and a final source/readiness/cancellation check. Clean
+encrypted drafts can adopt that saved ancestor without opening their bodies or
+extending the editor session. Existing invalid hashes/stamps remain refusals.
 `src/backup.rs` implements the portable Apple schema-1 encrypted-backup codec.
 `src/backup_export.rs` captures both saved primary files under their common lock,
 uses fresh one-use vault authentication without an editor session, seals metadata
@@ -210,8 +221,8 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement is wired; unreferenced images remain pending; live native GTK/keyring/PAM verification remains unavailable |
-| Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery dialog compiles but display initialization is unavailable; live keyboard/reveal workflow remains open |
-| Secure delivery and transfers | Native portable encrypted-backup export/import plus fresh-authenticated direct virtual-keyboard insertion | Authenticated transfers, insertion core, native XKB, source revocation and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field validation, legacy seal repair and fuller editing/accessibility review remain pending |
+| Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
+| Secure delivery and transfers | Native portable encrypted-backup export/import plus fresh-authenticated direct virtual-keyboard insertion | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field validation, legacy incoming wire-stamp admission and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent child deletions and unknown versions remain separate review boundaries; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live UI/HTTPS/keyring verification remains pending |
@@ -253,6 +264,21 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-02
 
+- Explicit saved legacy hash repair passes 13 isolated tests in each of the
+  default and headless configurations;
+  its native review fixture is separately ignored. Vault regressions (44), secure
+  materialization (17), direct insertion (9 plus one ignored private compositor
+  fixture), CLI/core (23) and the private helper process test (1) pass. The native
+  repair review fixture stops at GTK display initialization before constructing
+  widgets or collecting credentials. The live dialog and receiving application
+  still require graphical validation.
+  All-target Clippy passes with warnings denied in default and headless builds;
+  formatting passes. No live library, clipboard, PAM or keyring was accessed.
+  All three release executables build. Two installs into a temporary prefix with
+  spaces preserve an existing sentinel and verify exact executable bytes/modes,
+  version commands and an empty isolated CLI library without creating vault,
+  sync, clipboard-history or inline-expansion state. Desktop/AppStream validation
+  and shell syntax checks pass.
 - Before explicit file selection was added, the foreign-vault core additions
   passed targeted library selections: `foreign`
   (21 tests), `materializer::rekey::tests` (3), `vault_header` (9) and
@@ -1822,7 +1848,8 @@ already published WAL must finish. Native actions run in the serialized worker,
 clear selected transport afterward and require fresh reconnect/selection before
 sync. Review, vault-password and computer-password dialogs cancel on focus loss,
 known lock or dismissal. Incompatible copy units and new keyword collisions fail closed
-pending separate group/collision review. Live legacy hash repair,
+pending separate group/collision review. Saved legacy hash repair is wired to a
+separate freshly authenticated native action. Legacy incoming wire-stamp admission,
 unreferenced-image cleanup and live combined verification remain unfinished.
 
 Durable consent binds the target account/deployment so a legitimate reconnect
@@ -1933,8 +1960,8 @@ now be explicitly retired through Library Recovery History; active admission and
 unfinished requests remain protected. Combined live GTK/keyring/HTTPS verification
 remains outstanding.
 
-This kernel is not a complete sync engine. It still needs live legacy secure hash/stamp
-repair, conflict-owned absent/deleted-copy recovery, account/rekey
+This kernel is not a complete sync engine. It still needs legacy incoming
+wire-stamp admission, conflict-owned absent/deleted-copy recovery, account/rekey
 reconciliation and complete secure conflict recovery. Library-key activation
 and bidirectional/receive/send cycles are wired to explicit account-window actions;
 verified opt-in automatic startup and scheduling now share that same owner. Unknown variant versions stay
@@ -2017,6 +2044,47 @@ fails with `EPERM` before the private protocol handshake. The dedicated GTK
 review fixture also stops at display initialization, before creating widgets or
 collecting credentials. Live insertion, focus races and receiving-field behavior
 remain part of the unfinished full port.
+
+## Explicit saved legacy hash repair
+
+**Repair Legacy Entry…** is available for a selected saved entry with an empty
+own `contentHash` and no unsaved changes. Fresh passphrase/recovery authentication
+is required even if the editor is already unlocked. It verifies the saved AES-GCM
+body against the exact current vault, record UUID and salt, and verifies every
+current v1 conflict original with its required stamp, hash and original AAD.
+Present invalid metadata, unknown reserved versions and malformed carriers refuse
+the operation. Missing incoming wire stamps remain a separate admission boundary.
+
+Before requesting credentials, the worker captures the complete bounded vault
+image and its regular-file identity, single-link status, timestamps and full
+digest under the common nonblocking library lock. It refuses ordinary ID
+collisions and primary recovery fences. The source is rechecked after fresh
+authentication, before clock reservation and immediately before atomic rename.
+The two-minute wall and suspend-aware deadline, observed unlocked desktop epoch
+and permanent cancellation token are also rechecked around these boundaries.
+Focus loss, selection/file changes, lock and quit revoke the native authorization;
+quit waits for a worker that may still own credentials or key material.
+
+Only the selected original JSON record's `contentHash` and `hlc` are replaced.
+Other JSON values, absent fields, nanosecond dates, raw keywords/tags, sealed
+ciphertext, opaque original snapshots and other records survive without model
+normalization. JSON whitespace and key order can change. The private temporary
+file is synced before rename and the vault directory afterward. Cancellation
+after clock reservation may leave an unused clock revision. An uncertain final
+directory sync requires rereading the saved record; publication is never retried
+automatically. This operation writes no sync checkpoint, offers or journal.
+
+The prepared worker reply has no plaintext or key. Authentication neither
+installs nor extends an editor session. A clean encrypted draft can adopt the
+exact newly saved ancestor without decrypting its body; a stale draft cannot.
+Tests use temporary libraries, public independent crypto fixtures and fictional
+desktop witnesses. They cover unchanged encrypted bodies and raw JSON values,
+passphrase/recovery authentication, raw v1 originals, wrong hashes/stamps/keys,
+file replacement before authentication and at final publication, aliases,
+ordinary collisions, recovery fences, busy locks, cancellation after temporary
+fsync, expired authorization, lost replies and clean-draft adoption. A repaired
+entry then passes the separate fresh direct-insertion admission. The native
+review fixture remains unverified on a live display.
 
 ## Native ordinary inline expansion
 

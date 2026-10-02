@@ -328,6 +328,21 @@ impl ProtectedEditor {
     pub fn is_dirty(&self) -> bool {
         self.dirty.get()
     }
+    pub(crate) fn accept_legacy_repair(
+        &self,
+        receipt: &crate::vault::legacy_repair::Receipt,
+    ) -> Result<()> {
+        if self.is_dirty() {
+            return Err(Error(
+                "The encrypted draft changed during metadata repair. Reload the saved entry before editing.",
+            ));
+        }
+        if let Some(draft) = self.draft.borrow_mut().as_mut() {
+            receipt.adopt(&mut self.vault.borrow_mut(), draft)?;
+        }
+        self.reveal(false);
+        Ok(())
+    }
     pub fn metadata(&self) -> Option<Metadata> {
         self.draft.borrow().as_ref().map(|d| d.metadata.clone())
     }

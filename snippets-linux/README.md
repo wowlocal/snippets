@@ -544,6 +544,16 @@ use the ordinary editor's autosave or undo. Closing hides and locks the secure
 window, retaining the encrypted draft until it is saved or explicitly discarded.
 Quit asks you to unlock and save or discard a remaining draft before exiting.
 
+For a saved legacy entry without a content hash, choose **Repair Legacy Entry…**
+with no unsaved changes. Enter its vault passphrase or recovery key again. The
+app verifies the encrypted body and any preserved conflict originals, then saves
+the missing hash with a new logical revision. Other JSON values and the encrypted
+body are preserved. This action also works while the vault is locked and does
+not unlock the editor. Cancellation, focus loss, desktop lock, expiry or changed
+files stop publication; an uncertain save requires rereading the entry. Existing
+invalid hashes or vault stamps are refused. The native dialog still needs live
+display verification.
+
 The body editor retains ciphertext rather than a GTK text buffer. It currently
 supports typed Unicode, keyboard caret movement, Backspace/Delete, newlines and
 tabs; it has no text selection, clipboard operations, drag, text undo, or body
@@ -641,7 +651,8 @@ make focus and delivery atomic, so a focus race can route a prefix into a newly
 focused window. Saved-file checks also do not claim protection against every
 hostile ancestor-path change or noncooperating concurrent writer. These limits
 must be included in live desktop validation. Legacy entries without an
-authenticated content hash refuse direct insertion until a separate repair.
+authenticated content hash refuse direct insertion until **Repair Legacy Entry…**
+verifies and saves that metadata with fresh vault authentication.
 
 The native UI and backend compile; core, native XKB decoding, cancellation and
 bounded in-memory GIO-stream checks pass. Live credential-dialog and receiving
@@ -766,6 +777,8 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
   --lib secure_ui::tests::native_secure_lifecycle -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib secure_ui::draft_recovery::tests::native_recovery -- --ignored --test-threads=1
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib secure_ui::legacy_repair::tests::native_legacy_repair -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib ui::history::tests::native_disabled_history -- --ignored --test-threads=1
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.

@@ -137,6 +137,9 @@ pub use recovery_header::{RecoveryHeader, RecoveryOwner};
 #[path = "vault_insertion.rs"]
 #[cfg(any(test, feature = "desktop"))]
 mod insertion;
+#[path = "vault_legacy_repair.rs"]
+#[cfg(any(test, feature = "desktop"))]
+pub(crate) mod legacy_repair;
 impl Document {
     pub fn decode(data: &[u8]) -> Result<Self> {
         if data.len() > model::MAX_FILE_BYTES {

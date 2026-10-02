@@ -112,14 +112,14 @@ impl Source {
         source.validate()?;
         Ok((source, bytes))
     }
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let metadata = fs::symlink_metadata(&self.path).map_err(|_| CHANGED)?;
         if metadata.file_type().is_symlink() || identity(&metadata)? != self.identity {
             return Err(CHANGED);
         }
         Ok(())
     }
-    fn authenticate_current(&self) -> Result<()> {
+    pub(crate) fn authenticate_current(&self) -> Result<()> {
         self.validate()?;
         let mut file = OpenOptions::new()
             .read(true)
