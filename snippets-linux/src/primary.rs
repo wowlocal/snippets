@@ -296,6 +296,7 @@ pub struct Prepared {
     authenticated: Vec<Envelope>,
     held: BTreeMap<Uuid, Envelope>,
     release_targets: BTreeMap<Uuid, Envelope>,
+    deferred_deletion_sources: BTreeSet<Uuid>,
     administrative: bool,
     primary_changed: bool,
     history: Vec<([u8; 16], crate::journal::RestorationGeneration)>,
@@ -316,7 +317,9 @@ impl Prepared {
         if !reviewed.deletion_approved(target)? {
             return Err(Failure::InvalidState);
         }
-        if source.can_release_deletion_source(target.id) {
+        if source.can_release_deletion_source(target.id)
+            && !self.deferred_deletion_sources.contains(&target.id)
+        {
             self.release_targets.insert(target.id, target.clone());
         }
         Ok(())
@@ -541,6 +544,7 @@ fn prepare_impl(
         authenticated: Vec::new(),
         held: BTreeMap::new(),
         release_targets: journal.release_targets(&primary)?,
+        deferred_deletion_sources: BTreeSet::new(),
         administrative,
         primary_changed: false,
         history: history::prepare(historical, &primary, expected, keys)?,
@@ -725,7 +729,7 @@ fn prepare_impl(
         prepared.held.extend(group.held);
     }
     if let Some(group) = deletion {
-        group.attach(&mut prepared);
+        group.attach(&mut prepared, journal)?;
     }
     validate_keywords(
         &contents.snippets,

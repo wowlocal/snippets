@@ -505,7 +505,13 @@ impl Owner<'_> {
                 review
                     .live
                     .as_ref()
-                    .map(|live| next.deletion_repair(review.id, &review.snapshot.records, live))
+                    .map(|live| {
+                        if let Some(group) = &group {
+                            group.repair(&next, &review.snapshot.records, live)
+                        } else {
+                            next.deletion_repair(review.id, &review.snapshot.records, live)
+                        }
+                    })
                     .transpose()?
                     .flatten()
             } else {
@@ -569,9 +575,9 @@ impl Owner<'_> {
             // replace its separately unresolved local intent with an ancestor.
             if original.deleted
                 || (merge::has_unresolved(Some(&original))
-                    && !group.as_ref().is_some_and(|group| {
-                        group.sources().iter().any(|source| *source == original)
-                    }))
+                    && !group
+                        .as_ref()
+                        .is_some_and(|group| group.sources().contains(&original)))
             {
                 return Err(Failure::PreservationRequired);
             }
@@ -723,6 +729,15 @@ impl Owner<'_> {
                     next.retire_deleted_prerequisite(e, version)?;
                 }
                 next.record_confirmed(e.clone(), version.clone())?;
+                if choice == Choice::Delete && group.is_some() {
+                    // The authenticated current group is staged only when its
+                    // primary WAL is published. An equal received tombstone
+                    // can therefore consume the unowned ordinary approval
+                    // before that group exists. This exact reviewed decision
+                    // still needs consent for its post-original source send;
+                    // it is not a source acknowledgement.
+                    next.approve_deletion(&target, review.live.clone())?;
+                }
                 if matches!(review.source, Source::Inbound(..)) {
                     next.inbox.acknowledge_record()?;
                 } else {

@@ -47,6 +47,30 @@ impl DeletionGroup {
     pub(crate) fn sources(&self) -> &[Envelope] {
         &self.sources
     }
+    fn dependencies(&self) -> Vec<(Envelope, Vec<Envelope>)> {
+        self.sources
+            .iter()
+            .map(|source| {
+                let copies = self
+                    .originals()
+                    .values()
+                    .filter(|copy| {
+                        merge::provenance(copy).is_some_and(|p| p.source_id == source.id)
+                    })
+                    .cloned()
+                    .collect();
+                (source.clone(), copies)
+            })
+            .collect()
+    }
+    pub(crate) fn repair(
+        &self,
+        journal: &Journal,
+        current: &BTreeMap<Uuid, Envelope>,
+        retained: &Envelope,
+    ) -> journal::Result<Option<crate::journal::PreservationRepair>> {
+        journal.deletion_repair_with_sources(self.id, current, retained, &self.dependencies())
+    }
     pub(crate) fn tombstone(&self, live: &Envelope, stamp: crate::clock::Hlc) -> Result<Envelope> {
         if !self
             .sources
@@ -141,6 +165,9 @@ impl DeletionGroup {
                 if !merge::matching_provenance(current, p.source_id, &p.fingerprint) {
                     return Err(Failure::ReservedCollision);
                 }
+                if current.secure {
+                    materializer::authenticate(current, keys, true)?;
+                }
             }
         }
         Ok(())
@@ -149,8 +176,55 @@ impl DeletionGroup {
         id == self.id
             && current.is_some_and(|current| self.sources.iter().any(|source| source == current))
     }
-    pub(super) fn attach(&self, prepared: &mut Prepared) {
+    pub(super) fn attach(&self, prepared: &mut Prepared, journal: &Journal) -> Result<()> {
+        let active = journal.preservation_data();
         for source in &self.sources {
+            if journal.can_release_deletion_source(source.id)
+                && let Some((old, copies)) = active.get(&source.id)
+                && !old.deleted
+                && prepared
+                    .release_targets
+                    .get(&source.id)
+                    .is_none_or(|e| !e.deleted)
+                && (source != old
+                    || prepared
+                        .dependencies
+                        .iter()
+                        .filter(|(e, _)| e.id == source.id)
+                        .flat_map(|(_, originals)| originals)
+                        .any(|copy| copies.iter().all(|old| old.id != copy.id)))
+            {
+                // New raw carriers belong to the later authenticated frame.
+                // Finish the active source's own original body first, without
+                // replacing any previously offered or fixed release target.
+                let mut carriers = BTreeMap::new();
+                for variant in merge::secure_variants(old)? {
+                    if !copies.iter().any(|copy| copy.id == variant.copy_id) {
+                        return Err(Failure::InvalidState);
+                    }
+                    carriers.insert(
+                        variant.extension_key.clone(),
+                        old.extensions[&variant.extension_key].clone(),
+                    );
+                }
+                let resolved = merge::resolve(old, &carriers).ok_or(Failure::InvalidState)?;
+                if merge::has_unresolved(Some(&resolved)) {
+                    return Err(Failure::InvalidState);
+                }
+                prepared.release_targets.insert(source.id, resolved);
+                // Consent for this newer decision belongs behind its newly
+                // authenticated originals, never to the earlier active edge.
+                prepared.deferred_deletion_sources.insert(source.id);
+            }
+            // Outcomes own selected delivery intent, which may be a tombstone.
+            // The preservation edge owns the authenticated live carrier data,
+            // including held versions added by those outcomes. Mixing the
+            // tombstone into that edge would discard its raw prerequisites.
+            for (staged, _) in &mut prepared.dependencies {
+                if staged.id == source.id {
+                    *staged = source.clone();
+                }
+            }
             let copies = self
                 .originals()
                 .values()
@@ -162,5 +236,6 @@ impl DeletionGroup {
         prepared
             .authenticated
             .extend(self.originals().values().cloned());
+        Ok(())
     }
 }

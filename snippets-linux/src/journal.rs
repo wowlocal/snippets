@@ -1208,15 +1208,26 @@ impl Journal {
             if current.contains_key(id) || !candidate.known_absence(*id) {
                 continue;
             }
-            if let Some(target) = candidate
+            let targets = candidate
                 .entries
                 .get(id)
                 .map(|entry| &entry.desired)
-                .or_else(|| candidate.delivery.get(id))
-                && target.deleted
-                && candidate.deletion_approved(target)?
-            {
-                reviewed_deleted.insert(*id);
+                .into_iter()
+                .chain(candidate.delivery.get(id))
+                .chain(
+                    candidate
+                        .generations
+                        .iter()
+                        .filter_map(|g| g.targets.get(id)),
+                );
+            for target in targets {
+                if target.deleted && candidate.deletion_approved(target)? {
+                    // A received equal tombstone can consume ordinary intent.
+                    // An earlier repair may still release C1 while this exact
+                    // approved final deletion waits in an ordered generation.
+                    reviewed_deleted.insert(*id);
+                    break;
+                }
             }
         }
         for (source_id, edge) in &mut candidate.dependencies {

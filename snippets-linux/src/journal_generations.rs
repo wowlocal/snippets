@@ -166,6 +166,19 @@ impl Journal {
         current: &BTreeMap<Uuid, Envelope>,
         retained: &Envelope,
     ) -> Result<Option<PreservationRepair>> {
+        self.deletion_repair_with_sources(id, current, retained, &[])
+    }
+    /// Data-only current additions authenticated by the deletion-group owner.
+    /// They enter the future repair frame; current offers, snapshots and ACKs
+    /// remain unchanged. Primary preparation authenticates the complete frame
+    /// again before it can be published in the reviewed WAL.
+    pub(crate) fn deletion_repair_with_sources(
+        &self,
+        id: Uuid,
+        current: &BTreeMap<Uuid, Envelope>,
+        retained: &Envelope,
+        additions: &[(Envelope, Vec<Envelope>)],
+    ) -> Result<Option<PreservationRepair>> {
         codec::validate(self)?;
         if !self.dependencies.values().any(|edge| {
             edge.requirements
@@ -189,16 +202,54 @@ impl Journal {
             requires_vault |= e.secure || !merge::secure_variants(e)?.is_empty();
         }
         let mut frame = frames.into_iter().next().ok_or(Failure::InvalidState)?;
+        for (source, copies) in additions {
+            if source.deleted || merge::has_unknown_version(source) {
+                return Err(Failure::InvalidState);
+            }
+            merge::validate(source)?;
+            if let Some((old, originals)) =
+                frame.sources.iter_mut().find(|(e, _)| e.id == source.id)
+            {
+                let mut selected = source.clone();
+                for (key, value) in &old.extensions {
+                    if key.starts_with(merge::CONFLICT_PREFIX) {
+                        insert_exact(&mut selected.extensions, key, value)?;
+                    }
+                }
+                merge::validate(&selected)?;
+                *old = selected;
+                for copy in copies {
+                    if let Some(existing) = originals.iter().find(|e| e.id == copy.id) {
+                        if existing != copy {
+                            return Err(Failure::InvalidState);
+                        }
+                    } else {
+                        originals.push(copy.clone());
+                    }
+                }
+            } else {
+                frame.sources.push((source.clone(), copies.clone()));
+            }
+        }
+        requires_vault |= frame.sources.iter().any(|(source, copies)| {
+            source.secure
+                || merge::has_unresolved(Some(source))
+                || copies.iter().any(|copy| copy.secure)
+        });
         frame.targets.clear();
-        for (source, _) in &frame.sources {
-            let target = self
-                .local_intent(source.id, current.get(&source.id))?
-                .or_else(|| {
-                    self.entry(source.id)
-                        .filter(|_| self.known_absence(source.id))
-                        .map(|e| &e.desired)
-                })
-                .or_else(|| (source.id == id).then_some(retained))
+        for (source, originals) in &frame.sources {
+            let target = additions
+                .iter()
+                .find(|(e, _)| e.id == source.id)
+                .map(|(e, _)| e)
+                .or(self
+                    .local_intent(source.id, current.get(&source.id))?
+                    .or_else(|| {
+                        self.entry(source.id)
+                            .filter(|_| self.known_absence(source.id))
+                            .map(|e| &e.desired)
+                    })
+                    .or_else(|| (source.id == id).then_some(retained)))
                 .ok_or(Failure::InvalidState)?;
             if target.deleted
                 && (!self.known_absence(target.id) || !self.deletion_approved(target)?)
@@ -206,9 +257,10 @@ impl Journal {
                 return Err(Failure::InvalidState);
             }
             let mut target = target.clone();
-            // Earlier frames already retain every known original. Strip only
-            // those exact carriers from this FUTURE delivery target; primary
-            // and current intent stay unchanged until actual acknowledgements.
+            // This frame retains the old originals plus the authenticated
+            // current additions. Strip only exact v1 carriers with originals
+            // in this FUTURE frame; current files and transport owners stay.
+            let variants = merge::secure_variants(source)?;
             let keys: Vec<_> = target
                 .extensions
                 .keys()
@@ -217,7 +269,15 @@ impl Journal {
                 .collect();
             for key in keys {
                 let value = &target.extensions[&key];
-                let known = self
+                let known = variants.iter().any(|variant| {
+                    variant.extension_key == key
+                        && source.extensions.get(&key) == Some(value)
+                        && originals.iter().any(|copy| {
+                            !copy.deleted
+                                && copy.id == variant.copy_id
+                                && merge::matching_provenance(copy, source.id, &variant.fingerprint)
+                        })
+                }) || self
                     .dependencies
                     .iter()
                     .chain(self.generations.iter().flat_map(|g| &g.dependencies))

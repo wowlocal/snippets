@@ -5,13 +5,10 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
-This intermediate checkpoint includes unfinished authenticated deletion-group
-recovery for selected sources that retain unresolved conflict carriers. Its latest
-focused run passed two tests and failed the WAL/delivery matrix: deleting an
-unstaged current source after an incoming remote deletion remains blocked with
-`PreservationRequired` after one submitted batch. This path is work in progress;
-the complete test, Clippy, Release and installer results below describe the
-preceding source-recovery milestone and have not been rerun for this checkpoint.
+Current v1 conflict-carrier recovery uses an authenticated grouped decision,
+immutable originals and one encrypted primary redo. Foreign-vault archives,
+protected capacity management, inline expansion and live desktop verification
+remain unfinished.
 
 ## Architecture
 
@@ -206,7 +203,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery dialog compiles but display initialization is unavailable; live keyboard/reveal workflow remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import with authenticated codec and encrypted redo | Fresh vault authentication, metadata encryption, preserved record seals and exact snapshot checks pass; direct insertion without clipboard exposure, archived foreign-vault restoration and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
-| Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, reviewed materialization of missing secure originals for selected copies and sources with resolved selected intent, disabled preservation of distinct held source versions, explicit missing-copy counts, remote prerequisite deletion repair, exact current originals/offers, ordered later intent, complete encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, original versus later nonces, retained receipt ordering, C1 preservation, corruption, reserved collisions, vault identity and expired-session checks pass; selected unresolved carriers and independently unresolved or unapproved missing child intent still need group recovery; live password-dialog verification remains open |
+| Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent child deletions and unknown versions remain separate review boundaries; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; combined live UI/HTTPS/keyring verification, capacity management remains pending |
 | Library-switch pairing | Separate bounded Secret Service candidate history, request/check/cancel, retained private drafts and claims, fresh authority verification, native public QR/copy and subsequent reviewed activation | Twenty desktop tests (nineteen without desktop features) cover interruption, response ownership, expiry, scope/account changes, capacity/schema/generation refusal, old-key preservation, exact authorized handover and review-only reuse of retained claims across changed pins/accounts; native GTK and private-keyring attempts stop before window/keyring creation |
 | Empty-target first keys | Separate bounded Secret Service candidate history, exact key/envelope before POST, owner-only native create/resume, fresh server reconciliation and reviewed activation | Twenty-seven desktop tests (twenty-six without desktop features) cover writes, races, restart, scope/account/schema/capacity refusal, old-key preservation, reviewed reuse across changed pins/accounts and offline completion/retirement of promoted recovery-code copies; combined live workflow remains unverified |
@@ -248,7 +245,7 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 - The new native account/recovery UI and serialized worker pass all-target compilation
   and Clippy with warnings denied. The current filtered default library run passes
-  659 tests, with sixteen explicitly ignored and 37 excluded (Cloud HTTP module,
+  671 tests, with sixteen explicitly ignored and 37 excluded (Cloud HTTP module,
   five key-store TLS fixtures and native PAM module). This is a restricted-context
   check, not a green full-suite run. It includes new queue/quit-barrier and lost-UI-reply
   ownership tests, offline saved-deployment/interrupted-lineage checks, control-plane
@@ -427,11 +424,25 @@ new unsaved draft. Its native dialog still needs live display verification.
   C1 behind its exact original C0, and materialize queued originals beside a real
   lost-reply source request. Current packet bytes/CAS, confirmed versions, old
   nonces and queued targets remain exact. Source and companion UUID collisions,
-  damaged keyed hashes, stale checkpoints and selected unresolved carriers refuse
-  without partial primary or journal changes. Secure held bodies decrypt only
+  damaged keyed hashes and stale checkpoints refuse without partial primary or
+  journal changes. Secure held bodies decrypt only
   under their new copy identities; deletion finishes after actual original/source
   acknowledgements.
-- The corresponding filtered build without desktop features passes 626 library
+- Twelve additional current-group checks cover staged and unstaged v1 sources,
+  local absence and received deletion, both choices and five WAL interruption
+  boundaries (48 matrix cases). A confirmed tombstone cannot count as the required
+  post-original source receipt. Matching edited secure C1 stays in the files while
+  its exact C0 is sent first. Nested current and missing journal-only C1 retain
+  their own original grandchildren. An earlier accepted request with a lost reply
+  keeps its exact wire/CAS and originals ahead of the new group. Repair of an
+  already accepted copy includes new raw carriers on both it and its parent,
+  preserves old transport owners and completes the chosen final deletion after
+  real repair acknowledgements. A newer source decision cannot use an unoffered
+  earlier source release to delete before its new originals are saved. Generic
+  raw deletion stays closed; valid losing
+  evidence cannot bypass a damaged current secure body, unknown carrier versions,
+  reserved occupants, stale files or another child's unapproved deletion.
+- The corresponding filtered build without desktop features passes 638 library
   tests, with two ignored and 34 excluded (Cloud HTTP module and key-store TLS
   fixtures). The current 23 process/core and one helper-protocol tests also pass.
 - Release GUI, CLI and private owner-auth helper compile with the locked Cargo dependencies.
@@ -1160,12 +1171,11 @@ images, with unchanged vault headers. The key borrow checks expiry again after
 validation and never changes the idle deadline. The native worker authenticates
 an ephemeral owner off the GTK thread from an explicitly entered passphrase or
 recovery key, consumes the review token once, and drops that owner after commit.
-Missing whole primary files and selected records with unresolved carriers cannot
-use this path. Complete ordinary conflict
+Missing whole primary files cannot use this path. Complete ordinary conflict
 groups retain their existing originals/offers while the reviewed absence decision
 waits in the ordered journal. Vault documents, wraps and root identity are never
-created or replaced. Selected unresolved-carrier recovery still needs its separate
-group recovery path.
+created or replaced. Current raw v1 carriers use the authenticated grouped path
+below; unknown carrier versions remain opaque and refuse deletion.
 
 A selected secure copy whose original has never been materialized can now be
 reviewed from its exact retained carrier. The dialog shows the eventual copy's
@@ -1188,8 +1198,8 @@ snapshot. The native dialog counts missing originals to restore and held source
 versions to preserve as disabled copies. Both choices authenticate the connected
 graphs and all additional secure source bodies with the matching bounded vault
 owner. A missing original becomes an explicit primary outcome, using later live
-local intent when available; independent unresolved intent or an unapproved child
-tombstone refuses the operation. Distinct held source bodies get their own copy
+local intent when available; an unapproved independent child tombstone refuses
+the operation. Distinct held source bodies get their own copy
 UUIDs, with secure ciphertext resealed under those UUIDs. Existing edited companions
 retain C1 in the files while C0 stays immutable in the delivery graph. The full
 read-set includes original and companion identities. All data and the source
@@ -1197,7 +1207,24 @@ decision publish in the same encrypted WAL without retaining a vault key.
 An absent source's carrier can retire only after its exact original's actual
 acceptance and a valid local deletion decision. The source still needs its own
 actual acknowledgement; old source offers, queued targets and CAS remain exact.
-Selected intent that itself contains unresolved carriers is still refused.
+Selected intent with current v1 carriers now retains its entire connected current
+unit. Preparation authenticates each source's own secure body and losing variants,
+uses exact saved C0s and seals missing originals once. Present edited C1 and absent
+journal-only C1 are explicit intent, separate from those originals; nested raw
+sources retain their grandchildren. Only this typed group can cross the primary
+raw-source deletion guard, for the exact selected source; generic envelope and
+primary deletion remain closed. Local consent binds the complete raw ancestor.
+Received equal tombstones do not consume post-original source consent before the
+new graph is staged. Raw source data, originals, selected targets, consent and
+positional receive/send progress share the encrypted primary WAL, and published
+redo finishes without a vault key. An accepted-copy repair includes additional
+current source data and exact originals in its future frame, while old offered
+or fixed releases remain unchanged. New carrier evidence cannot hold an earlier
+source release hostage or be stripped without an authenticated original owner.
+An absent source's exact approved final deletion may wait behind a live repair
+release; carrier retirement still needs real C0 acceptance and every source needs
+its own actual acknowledgement. Unknown versions and other records' deletion
+intent never inherit this source's permission.
 
 A remotely deleted materialized original requires review even beside absent or
 newer local content. An actual saved send receipt for that UUID must finish first;

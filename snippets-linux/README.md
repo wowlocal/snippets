@@ -66,8 +66,8 @@ synchronization is implemented; complete conflict-owned deletion recovery remain
 changes can now be reviewed and restored from library-switch history.
 Remote deletion of materialized conflict originals can now be reviewed while
 retaining original requests and later local edits. Protected repairs require the
-matching vault's passphrase or recovery key. Missing originals and unresolved
-conflict carriers still need further recovery support.
+matching vault's passphrase or recovery key. Missing originals and known current
+conflict carriers can be recovered together through an authenticated group review.
 
 The account-review journal and its durable key owner preserve encrypted previous
 state, local intent and old key/recovery/pairing capabilities across an explicitly
@@ -378,13 +378,17 @@ copy whose original was never created can now be reviewed from its retained
 conflict metadata. Both choices ask for the matching vault and authenticate the
 whole connected group before preparing that original. Existing originals and
 requests retain their exact bytes; the chosen later version waits behind them.
-An absent source with resolved retained intent can also recover missing originals.
+An absent source can also recover missing originals.
 The dialog lists how many originals will be restored and how many distinct held
 source versions will become disabled copies. Both choices require the matching
 vault; existing copy edits stay intact while their originals synchronize first.
-Missing whole library/vault files, selected intent that still carries unresolved
-conflict evidence, and independently unresolved or unapproved missing child intent
-require separate recovery; this action cannot approve a mass deletion.
+For known current conflict evidence, the review also counts original versions to
+preserve. It authenticates the selected source and its connected copies, including
+edited or missing copies with further conflicts. Originals keep their saved
+encrypted form, and copy edits stay separate while synchronization completes in
+order. Missing whole library/vault files and unknown conflict versions require
+separate recovery. A child's independent deletion needs its own confirmation;
+this action cannot approve a mass deletion.
 
 Restoring a protected conflict copy asks for the matching vault's passphrase or
 recovery key. One bounded vault session verifies the latest sealed body and every
