@@ -4,6 +4,9 @@ use super::*;
 use crate::account_review;
 
 fn legacy_archive(saved: &mut Saved, mask: u8) {
+    rewrite_archive(saved, |journal| journal.test_omit_vault_metadata(mask));
+}
+pub(super) fn rewrite_archive(saved: &mut Saved, mut transform: impl FnMut(&mut Journal)) {
     saved
         .setup
         .store
@@ -24,7 +27,7 @@ fn legacy_archive(saved: &mut Saved, mask: u8) {
                     account_review::image_path(&directory, &entry.receipt.transition_id(), kind);
                 let bytes = account_review::read_image(&path).unwrap().unwrap();
                 let mut checkpoint = Checkpoint::from_encrypted(bytes, &key, &salt, scope).unwrap();
-                checkpoint.journal.test_omit_vault_metadata(mask);
+                transform(&mut checkpoint.journal);
                 let bytes = Checkpoint::seal_journal(&checkpoint.journal, &key, &salt).unwrap();
                 crate::model::atomic_write(&path, &bytes).unwrap();
                 receipt[hash_range].copy_from_slice(&Sha256::digest(&bytes));

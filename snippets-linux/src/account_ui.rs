@@ -1465,6 +1465,7 @@ impl AccountWindow {
             Reply::RestorationReview {..} => self.status.set_label("Review the saved changes before authorizing restoration."),
             Reply::RestorationAuthentication {..} => self.status.set_label("Unlock the vaults to review the saved secure changes."),
             Reply::RestorationFile {..} => self.status.set_label("Previous vault file selected. Unlock it to review the saved changes."),
+            Reply::RestorationFiles {..} => self.status.set_label("Vault files selected. Unlock each source to review all saved changes."),
             Reply::Restored {failure,cancelled} => {
                 self.create_another.set_sensitive(false);
                 self.clear_pairing(); self.clear_candidate_pairing(); self.selected_role.set(None);

@@ -45,7 +45,7 @@ pub(super) fn prepare_foreign(
     physical: &BTreeMap<Uuid, Envelope>,
     stamp: Hlc,
     updated_at: f64,
-    old: &crate::materializer::Keyring<'_>,
+    old: &[&crate::materializer::Keyring<'_>],
     keys: &crate::materializer::Keyring<'_>,
 ) -> Result<Plan> {
     if current.primary_intent.is_some() || !updated_at.is_finite() || stamp.device() == "00000000" {

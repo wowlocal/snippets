@@ -99,11 +99,29 @@ pub struct SourceFile {
     selection: Selection,
     proof: Proof,
     kind: Kind,
+    primary_scope: bool,
 }
 pub fn inspect_source_file<B: Backend>(
     store: &mut Store<B>,
     selection: &Selection,
     path: &Path,
+) -> Result<SourceFile> {
+    inspect_file(store, selection, path, true)
+}
+/// Explicit additional source. Its ownership must be proved against archived
+/// AAD/bodies during whole-graph preparation, never inferred from this file.
+pub fn inspect_additional_source_file<B: Backend>(
+    store: &mut Store<B>,
+    selection: &Selection,
+    path: &Path,
+) -> Result<SourceFile> {
+    inspect_file(store, selection, path, false)
+}
+fn inspect_file<B: Backend>(
+    store: &mut Store<B>,
+    selection: &Selection,
+    path: &Path,
+    primary_scope: bool,
 ) -> Result<SourceFile> {
     let retained = saved_vault_header(store, selection)?;
     let (proof, bytes) = read(path)?;
@@ -111,9 +129,10 @@ pub fn inspect_source_file<B: Backend>(
         Kind::Backup
     } else {
         let document = Document::decode(&bytes).map_err(|_| Failure::SourceFile)?;
-        if retained
-            .as_ref()
-            .is_some_and(|header| !header.same_key_scope(&document))
+        if primary_scope
+            && retained
+                .as_ref()
+                .is_some_and(|header| !header.same_key_scope(&document))
         {
             return Err(Failure::Changed);
         }
@@ -128,6 +147,7 @@ pub fn inspect_source_file<B: Backend>(
         selection: selection.clone(),
         proof,
         kind,
+        primary_scope,
     })
 }
 impl SourceFile {
@@ -175,9 +195,10 @@ impl SourceFile {
                     .map_err(|_| Failure::BackupAuthentication)?;
                 let (_, document, key) = opened.into_parts();
                 let document = document.ok_or(Failure::SourceFile)?;
-                if retained
-                    .as_ref()
-                    .is_some_and(|header| !header.same_key_scope(&document))
+                if self.primary_scope
+                    && retained
+                        .as_ref()
+                        .is_some_and(|header| !header.same_key_scope(&document))
                 {
                     return Err(Failure::Changed);
                 }

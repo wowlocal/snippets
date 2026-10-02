@@ -76,6 +76,20 @@ pub(crate) struct Credentials {
     pub(crate) current: Credential,
     pub(crate) previous: Option<Credential>,
 }
+pub(crate) struct MultipleCredentials {
+    pub(crate) current: Credential,
+    pub(crate) retained: Option<Credential>,
+    pub(crate) files: Vec<Credential>,
+}
+#[derive(Clone, Copy)]
+pub(crate) struct FileMethods {
+    pub(crate) methods: Methods,
+    pub(crate) backup: bool,
+}
+pub(crate) struct MultipleAuthentication {
+    pub(crate) base: Authentication,
+    pub(crate) files: Vec<FileMethods>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Methods {
     pub(crate) passphrase: bool,
@@ -228,12 +242,7 @@ pub(crate) fn prepare_with_file<B: Backend>(
                 )
             };
             preparation.validate()?;
-            let source = authenticated.map_err(|error| match error {
-                restoration::Failure::Key(key_store::Failure::InvalidState) => {
-                    Failure::PreviousVaultAuthentication
-                }
-                other => other.into(),
-            })?;
+            let source = authenticated.map_err(previous_failure)?;
             preparation.validate()?;
             restoration::prepare_foreign(store, selection, &mut current, source)
         } else {
@@ -259,6 +268,14 @@ pub(crate) fn prepare_with_file<B: Backend>(
         preparation,
         rekeyed,
     }))
+}
+fn previous_failure(error: restoration::Failure) -> Failure {
+    match error {
+        restoration::Failure::Key(key_store::Failure::InvalidState) => {
+            Failure::PreviousVaultAuthentication
+        }
+        other => other.into(),
+    }
 }
 
 pub(crate) struct SelectedFile {
@@ -314,6 +331,7 @@ impl SelectedFile {
 #[derive(Default)]
 pub(crate) struct Retained {
     file: Option<SelectedFile>,
+    files: Option<SelectedFiles>,
     reviewed: Option<Reviewed>,
 }
 impl Retained {
@@ -327,6 +345,9 @@ impl Retained {
         if !matches!(command, Command::PrepareRestoration { .. }) {
             self.file = None;
         }
+        if !matches!(command, Command::PrepareMultipleRestoration { .. }) {
+            self.files = None;
+        }
     }
     pub(crate) fn inspect<B: Backend>(
         &mut self,
@@ -336,6 +357,7 @@ impl Retained {
         preparation: Preparation,
     ) -> Result<Reply> {
         self.file = None;
+        self.files = None;
         self.reviewed = None;
         let (selected, methods) = SelectedFile::inspect(store, selection, path, preparation)?;
         let token = selected.token();
@@ -351,6 +373,7 @@ impl Retained {
         source_file: Option<uuid::Uuid>,
     ) -> Result<Reply> {
         self.reviewed = None;
+        self.files = None;
         let selected = self.file.take();
         preparation.validate()?;
         let file = match source_file {
@@ -376,6 +399,121 @@ impl Retained {
             .ok_or(Failure::InvalidState)?
             .consume(token)
     }
+    pub(crate) fn inspect_multiple<B: Backend>(
+        &mut self,
+        store: &mut Store<B>,
+        selection: &restoration::Selection,
+        paths: &[std::path::PathBuf],
+        preparation: Preparation,
+    ) -> Result<Reply> {
+        self.file = None;
+        self.files = None;
+        self.reviewed = None;
+        preparation.validate()?;
+        if paths.is_empty() || paths.len() > 8 {
+            return Err(Failure::InvalidState);
+        }
+        let mut files = Vec::with_capacity(paths.len());
+        let mut hints = Vec::with_capacity(paths.len());
+        for path in paths {
+            preparation.validate()?;
+            let file = restoration::inspect_additional_source_file(store, selection, path)?;
+            hints.push(FileMethods {
+                methods: Methods {
+                    passphrase: file.has_passphrase(),
+                    recovery: file.has_recovery(),
+                },
+                backup: file.is_backup(),
+            });
+            files.push(file);
+        }
+        let base = methods(store, selection)?;
+        preparation.validate()?;
+        for file in &files {
+            file.validate(store)?;
+            preparation.validate()?;
+        }
+        let token = uuid::Uuid::new_v4();
+        self.files = Some(SelectedFiles {
+            token,
+            files,
+            preparation,
+        });
+        Ok(Reply::RestorationFiles {
+            token,
+            methods: MultipleAuthentication { base, files: hints },
+        })
+    }
+    pub(crate) fn prepare_multiple<B: Backend>(
+        &mut self,
+        store: &mut Store<B>,
+        selection: restoration::Selection,
+        credentials: MultipleCredentials,
+        preparation: Preparation,
+        source_files: uuid::Uuid,
+    ) -> Result<Reply> {
+        self.file = None;
+        self.reviewed = None;
+        let selected = self.files.take().ok_or(Failure::InvalidState)?;
+        preparation.validate()?;
+        selected.preparation.validate()?;
+        if selected.token != source_files
+            || selected.files.len() != credentials.files.len()
+            || selected.files.len() + usize::from(credentials.retained.is_some()) > 8
+            || selected
+                .files
+                .iter()
+                .any(|file| !file.matches_selection(&selection))
+        {
+            return Err(Failure::InvalidState);
+        }
+        credentials.current.validate()?;
+        for credential in credentials.retained.iter().chain(&credentials.files) {
+            credential.validate()?;
+        }
+        let root = store.transaction(|owner| Ok(owner.root().to_path_buf()))?;
+        let mut current = unlock_current(&root, &credentials.current, &|| preparation.validate())?;
+        let mut sources = Vec::with_capacity(selected.files.len() + 1);
+        if let Some(credential) = credentials.retained {
+            preparation.validate()?;
+            sources.push(
+                restoration::authenticate_source(
+                    store,
+                    &selection,
+                    &credential.value,
+                    credential.recovery,
+                )
+                .map_err(previous_failure)?,
+            );
+        }
+        for (file, credential) in selected.files.into_iter().zip(credentials.files) {
+            preparation.validate()?;
+            selected.preparation.validate()?;
+            sources.push(
+                file.authenticate(store, &credential.value, credential.recovery)
+                    .map_err(previous_failure)?,
+            );
+            preparation.validate()?;
+        }
+        selected.preparation.validate()?;
+        let review = restoration::prepare_multiple(store, selection, &mut current, sources)?;
+        selected.preparation.validate()?;
+        preparation.validate()?;
+        let reviewed = Reviewed {
+            token: uuid::Uuid::new_v4(),
+            review: Box::new(review),
+            preparation,
+            rekeyed: true,
+        };
+        let reply = reviewed.reply()?;
+        self.reviewed = Some(reviewed);
+        Ok(reply)
+    }
+}
+struct SelectedFiles {
+    token: uuid::Uuid,
+    files: Vec<restoration::SourceFile>,
+    preparation: Preparation,
 }
 
 #[cfg(test)]

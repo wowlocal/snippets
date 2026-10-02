@@ -10,12 +10,12 @@ use crate::{
 fn lease() -> task::Preparation {
     task::Preparation::new(SessionWitness::test(SessionState::Unlocked, 1)).unwrap()
 }
-struct Observation {
+pub(super) struct Observation {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Observation {
-    fn start() -> (task::Preparation, Self) {
+    pub(super) fn start() -> (task::Preparation, Self) {
         let witness = SessionWitness::test(SessionState::Unlocked, 1);
         let preparation = task::Preparation::new(witness.clone()).unwrap();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

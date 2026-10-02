@@ -97,6 +97,18 @@ tests. A failed preparation consumes the selected-file token, so choosing the
 source again is required before retrying; unrelated commands discard it as well.
 Backup credentials use a password without offering a recovery-key option.
 
+For saved changes spanning several vaults, choose **Choose Several Vault Files…**.
+Select their vault JSON files or encrypted backups, then enter each password or
+recovery key in its labelled field. You can also unlock the vault retained in
+recovery history; leave that option off if you selected the same vault as a file.
+At most eight source vaults can be used for one review. Each body must authenticate
+with exactly one supplied vault, even when vaults share the same kid. Missing or
+duplicate ownership refuses the whole restoration. All selected files must stay
+unchanged until confirmation; after durable consent completion needs no source
+file or live vault key. Failed preparation consumes the complete file-selection
+ticket. These paths have isolated core and production-retention coverage; live
+verification of the native picker and inputs remains pending.
+
 Explicit previous-vault authentication can also recover missing own vault stamps
 or content hashes in archived records. The original encrypted body and its UUID
 must authenticate before current metadata is derived. Existing invalid metadata,
@@ -305,8 +317,7 @@ and 128 KiB; encrypted file images share the existing 32-file/512-MiB budget, wi
 no automatic eviction. Pending restoration generations are also capped at eight;
 capacity exhaustion preserves the existing queue. Restoring multiple saved generations
 also uses this budget; a proposal that cannot fit changes no library files or keys.
-Capacity management and archives spanning multiple previous vaults remain
-unfinished. The combined native
+Capacity management remains unfinished. The combined native
 GTK/keyring/PAM workflow still needs live verification.
 
 **Create New Cloud Library…** explicitly creates an

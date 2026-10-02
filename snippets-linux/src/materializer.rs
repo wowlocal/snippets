@@ -25,7 +25,7 @@ mod rekey;
 pub(crate) use rekey::Rekey;
 #[path = "materializer_archived.rs"]
 mod archived;
-pub(crate) use archived::Archived;
+pub(crate) use archived::ArchivedKeys;
 impl From<Error> for Failure {
     fn from(_: Error) -> Self {
         Self::MalformedVariant

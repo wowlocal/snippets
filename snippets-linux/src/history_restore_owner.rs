@@ -33,7 +33,7 @@ pub struct Review {
     device: String,
     source_image: Vec<u8>,
     target_image: Vec<u8>,
-    external: Option<source_file::Proof>,
+    external: Vec<source_file::Proof>,
 }
 impl Review {
     pub fn saved_library(&self) -> history::SavedLibrary {
@@ -107,7 +107,7 @@ pub fn prepare<B: Backend>(
     selection: Selection,
     vault: Option<&mut Vault>,
 ) -> Result<Review> {
-    prepare_inner(store, selection, vault, None)
+    prepare_inner(store, selection, vault, Vec::new())
 }
 pub fn prepare_foreign<B: Backend>(
     store: &mut Store<B>,
@@ -115,24 +115,37 @@ pub fn prepare_foreign<B: Backend>(
     vault: &mut Vault,
     source: Source,
 ) -> Result<Review> {
-    prepare_inner(store, selection, Some(vault), Some(source))
+    prepare_multiple(store, selection, vault, vec![source])
+}
+/// Consume every explicitly authenticated source as one whole-archive decision.
+pub fn prepare_multiple<B: Backend>(
+    store: &mut Store<B>,
+    selection: Selection,
+    vault: &mut Vault,
+    sources: Vec<Source>,
+) -> Result<Review> {
+    if sources.is_empty() || sources.len() > 8 {
+        return Err(Failure::Unavailable);
+    }
+    prepare_inner(store, selection, Some(vault), sources)
 }
 fn prepare_inner<B: Backend>(
     store: &mut Store<B>,
     selection: Selection,
     mut vault: Option<&mut Vault>,
-    source_vault: Option<Source>,
+    source_vault: Vec<Source>,
 ) -> Result<Review> {
-    if source_vault.as_ref().is_some_and(|source| {
+    if source_vault.iter().any(|source| {
         source.selection.history_hash != selection.history_hash
             || source.selection.transition != selection.transition
     }) {
         return Err(Failure::Changed);
     }
     let external = source_vault
-        .as_ref()
-        .and_then(|source| source.external.clone());
-    if let Some(file) = &external {
+        .iter()
+        .filter_map(|source| source.external.clone())
+        .collect::<Vec<_>>();
+    for file in &external {
         file.validate()?;
     }
     store.transaction_with(|owner| {
@@ -217,8 +230,12 @@ fn prepare_inner<B: Backend>(
                     .as_deref_mut()
                     .expect("unlocked")
                     .with_restoration_keys_locked(&library, |keys| {
-                        if let Some(foreign) = &source_vault {
-                            foreign.vault.with_keys(|old| {
+                        if !source_vault.is_empty() {
+                            let owners = source_vault
+                                .iter()
+                                .map(|source| &source.vault)
+                                .collect::<Vec<_>>();
+                            crate::vault::RecoveryOwner::with_many_keys(&owners, |old| {
                                 planning::prepare_foreign(
                                     &saved,
                                     &source.journal,
@@ -329,7 +346,7 @@ fn prepare_inner<B: Backend>(
         {
             return Err(Failure::Changed);
         }
-        if let Some(file) = &external {
+        for file in &external {
             file.validate()?;
         }
         Ok(Review {
@@ -357,7 +374,7 @@ pub(crate) fn apply_inner<B: Backend>(
     fault: Option<u8>,
 ) -> Result<()> {
     store.transaction_with(|owner| {
-        if let Some(file) = &review.external {
+        for file in &review.external {
             file.validate()?;
         }
         let lease = permit.consume(&review.authorization_target()?)?;
@@ -405,7 +422,7 @@ pub(crate) fn apply_inner<B: Backend>(
         if fault == Some(6) {
             return Err(primary::Failure::Storage.into());
         }
-        if let Some(file) = &review.external {
+        for file in &review.external {
             file.validate()?;
         }
         owner.replace(

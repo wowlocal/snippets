@@ -125,3 +125,45 @@ fn recovery_owner_expires_across_suspension_and_wall_changes_before_borrowing_a_
             .is_err()
     );
 }
+
+#[test]
+fn all_source_owners_are_bounded_before_any_multi_key_operation() {
+    let header = RecoveryHeader::retain(&document()).unwrap();
+    let first = header
+        .backup_owner(
+            RootKey::from_bytes(&[0x11; 32]).unwrap(),
+            crate::clock::uptime().unwrap(),
+            std::time::SystemTime::now(),
+        )
+        .unwrap();
+    let mut second = header
+        .backup_owner(
+            RootKey::from_bytes(&[0x11; 32]).unwrap(),
+            crate::clock::uptime().unwrap(),
+            std::time::SystemTime::now(),
+        )
+        .unwrap();
+    assert_eq!(
+        RecoveryOwner::with_many_keys(&[&first, &second], |keys| keys.len()).unwrap(),
+        2
+    );
+    second.wall -= Duration::from_secs(121);
+    assert!(
+        RecoveryOwner::with_many_keys(&[&first, &second], |_| panic!(
+            "A later expired source must refuse every key borrow"
+        ))
+        .is_err()
+    );
+    assert!(
+        RecoveryOwner::with_many_keys(&[], |_| panic!(
+            "Missing source owners must refuse borrowing"
+        ))
+        .is_err()
+    );
+    assert!(
+        RecoveryOwner::with_many_keys(&[&first; 9], |_| panic!(
+            "Too many source owners must refuse borrowing"
+        ))
+        .is_err()
+    );
+}

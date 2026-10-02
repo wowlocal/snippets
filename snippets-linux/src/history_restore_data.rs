@@ -15,25 +15,34 @@ fn crypto_failure(error: crate::materializer::Failure) -> Failure {
     Failure::Primary(error.into())
 }
 pub(super) fn resolve(archived: &Journal, keys: Option<&Keyring<'_>>) -> Result<Data> {
-    resolve_inner(archived, keys, false)
+    resolve_inner(archived, keys, None)
 }
-pub(super) fn resolve_archived(archived: &Journal, keys: &Keyring<'_>) -> Result<Data> {
-    resolve_inner(archived, Some(keys), true)
+pub(super) fn resolve_archived(archived: &Journal, keys: &[&Keyring<'_>]) -> Result<Data> {
+    resolve_inner(archived, None, Some(keys))
 }
 fn evidence(
     sources: &[Envelope],
-    keys: &Keyring<'_>,
+    keys: Option<&Keyring<'_>>,
     originals: &BTreeMap<Uuid, Envelope>,
-    archived: bool,
+    archived: Option<&[&Keyring<'_>]>,
 ) -> Result<Evidence> {
-    if archived {
-        crate::materializer::Archived::new(keys).evidence(sources, originals)
+    if let Some(keys) = archived {
+        crate::materializer::ArchivedKeys::new(keys)
+            .and_then(|keys| keys.evidence(sources, originals))
     } else {
-        Evidence::prepare(sources, keys, originals)
+        Evidence::prepare(
+            sources,
+            keys.ok_or(primary::Failure::VaultLocked)?,
+            originals,
+        )
     }
     .map_err(crypto_failure)
 }
-fn resolve_inner(archived: &Journal, keys: Option<&Keyring<'_>>, legacy: bool) -> Result<Data> {
+fn resolve_inner(
+    archived: &Journal,
+    keys: Option<&Keyring<'_>>,
+    legacy: Option<&[&Keyring<'_>]>,
+) -> Result<Data> {
     if archived.primary_intent.is_some() {
         return Err(Failure::Changed);
     }
@@ -67,7 +76,6 @@ fn resolve_inner(archived: &Journal, keys: Option<&Keyring<'_>>, legacy: bool) -
             .iter()
             .any(|v| !v.is_empty())
         {
-            let keys = keys.ok_or(primary::Failure::VaultLocked)?;
             // Exact retained C0 nonces win after authentication. A genuinely
             // missing C0 is sealed once here, before it becomes selected intent.
             let evidence = evidence(&sources, keys, &originals, legacy)?;
@@ -171,7 +179,6 @@ fn resolve_inner(archived: &Journal, keys: Option<&Keyring<'_>>, legacy: bool) -
         if merge::secure_variants(&source)?.is_empty() {
             continue;
         }
-        let keys = keys.ok_or(primary::Failure::VaultLocked)?;
         let (_, copies) = preservation
             .entry(id)
             .or_insert_with(|| (source.clone(), Vec::new()));
@@ -203,7 +210,7 @@ fn resolve_inner(archived: &Journal, keys: Option<&Keyring<'_>>, legacy: bool) -
     })
 }
 
-pub(super) fn rekey(data: Data, old: &Keyring<'_>, current: &Keyring<'_>) -> Result<Data> {
+pub(super) fn rekey(data: Data, old: &[&Keyring<'_>], current: &Keyring<'_>) -> Result<Data> {
     let records = data
         .saved
         .values()
@@ -223,7 +230,7 @@ pub(super) fn rekey(data: Data, old: &Keyring<'_>, current: &Keyring<'_>) -> Res
                 .flat_map(|(_, copies)| copies),
         )
         .collect::<Vec<_>>();
-    let mapping = crate::materializer::Rekey::prepare_archived(&records, old, current)
+    let mapping = crate::materializer::Rekey::prepare_archived_many(&records, old, current)
         .map_err(crypto_failure)?;
     let translated = |e: &Envelope| mapping.record(e).map_err(crypto_failure);
     let copies = |copies: &[Envelope]| copies.iter().map(translated).collect::<Result<Vec<_>>>();

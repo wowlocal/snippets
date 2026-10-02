@@ -358,6 +358,17 @@ pub(crate) enum Command {
         path: PathBuf,
         preparation: restoration_task::Preparation,
     },
+    InspectRestorationFiles {
+        selection: restoration::Selection,
+        paths: Vec<PathBuf>,
+        preparation: restoration_task::Preparation,
+    },
+    PrepareMultipleRestoration {
+        selection: restoration::Selection,
+        credentials: restoration_task::MultipleCredentials,
+        preparation: restoration_task::Preparation,
+        source_files: uuid::Uuid,
+    },
     CommitRestoration {
         token: uuid::Uuid,
         permit: local_auth::Permit,
@@ -473,6 +484,10 @@ pub(crate) enum Reply {
     RestorationFile {
         token: uuid::Uuid,
         methods: restoration_task::Authentication,
+    },
+    RestorationFiles {
+        token: uuid::Uuid,
+        methods: restoration_task::MultipleAuthentication,
     },
     RestorationReview {
         saved: key_store::history::SavedLibrary,
@@ -1559,6 +1574,36 @@ impl Owner {
                     failure,
                     cancelled: false,
                 })
+            }
+            Command::InspectRestorationFiles {
+                selection,
+                paths,
+                preparation,
+            } => {
+                preparation.validate()?;
+                self.ensure_store(false)?;
+                self.restoration.inspect_multiple(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                    &selection,
+                    &paths,
+                    preparation,
+                )
+            }
+            Command::PrepareMultipleRestoration {
+                selection,
+                credentials,
+                preparation,
+                source_files,
+            } => {
+                preparation.validate()?;
+                self.ensure_store(false)?;
+                self.restoration.prepare_multiple(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                    selection,
+                    credentials,
+                    preparation,
+                    source_files,
+                )
             }
             Command::PrepareRestorationResume(cancel) => {
                 self.ensure_store(false)?;

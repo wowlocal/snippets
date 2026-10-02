@@ -155,8 +155,7 @@ impl Journal {
     /// UUIDs, sealed bodies and offer/receipt generations stay exact.
     #[cfg(test)]
     pub(crate) fn test_omit_vault_metadata(&mut self, mask: u8) {
-        assert!(self.outbound.is_none() && self.primary_intent.is_none());
-        fn own(e: &mut Envelope, mask: u8) {
+        self.test_transform_own_records(|e| {
             if e.secure {
                 if mask & 1 != 0 {
                     e.extensions.remove("vaultKID");
@@ -165,19 +164,23 @@ impl Journal {
                     e.extensions.remove("vaultContentHash");
                 }
             }
-        }
-        fn graph(graph: &mut BTreeMap<Uuid, Dependency>, mask: u8) {
+        });
+    }
+    #[cfg(test)]
+    pub(crate) fn test_transform_own_records(&mut self, mut own: impl FnMut(&mut Envelope)) {
+        assert!(self.outbound.is_none() && self.primary_intent.is_none());
+        fn graph(graph: &mut BTreeMap<Uuid, Dependency>, own: &mut impl FnMut(&mut Envelope)) {
             for edge in graph.values_mut() {
-                own(&mut edge.source, mask);
+                own(&mut edge.source);
                 if let Some(offer) = &mut edge.source_offered {
-                    own(&mut offer.envelope, mask);
+                    own(&mut offer.envelope);
                 }
                 for requirement in edge.requirements.values_mut() {
                     if let Some(e) = &mut requirement.snapshot {
-                        own(e, mask);
+                        own(e);
                     }
                     if let Some(offer) = &mut requirement.offered {
-                        own(&mut offer.envelope, mask);
+                        own(&mut offer.envelope);
                     }
                 }
             }
@@ -187,12 +190,12 @@ impl Journal {
             .values_mut()
             .chain(self.delivery.values_mut())
         {
-            own(e, mask);
+            own(e);
         }
         for entry in self.entries.values_mut() {
-            own(&mut entry.desired, mask);
+            own(&mut entry.desired);
             if let Some(offer) = &mut entry.offered {
-                own(&mut offer.envelope, mask);
+                own(&mut offer.envelope);
             }
             if let ReviewAncestor::Reviewed {
                 primary,
@@ -200,19 +203,19 @@ impl Journal {
             } = &mut entry.review
             {
                 for e in primary.iter_mut().chain(previous_merge) {
-                    own(e, mask);
+                    own(e);
                 }
             }
         }
         for confirmed in self.confirmed.values_mut() {
-            own(&mut confirmed.envelope, mask);
+            own(&mut confirmed.envelope);
         }
-        graph(&mut self.dependencies, mask);
+        graph(&mut self.dependencies, &mut own);
         for generation in &mut self.generations {
             for e in generation.targets.values_mut() {
-                own(e, mask);
+                own(e);
             }
-            graph(&mut generation.dependencies, mask);
+            graph(&mut generation.dependencies, &mut own);
         }
     }
 

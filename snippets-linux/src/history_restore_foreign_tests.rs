@@ -22,6 +22,9 @@ mod external_source;
 #[path = "history_restore_legacy_tests.rs"]
 mod legacy_metadata;
 
+#[path = "history_restore_multiple_tests.rs"]
+mod multiple_vaults;
+
 struct Saved {
     setup: Setup,
     current: Document,

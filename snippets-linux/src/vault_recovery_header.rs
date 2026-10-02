@@ -18,6 +18,28 @@ pub struct RecoveryOwner {
     wall: std::time::SystemTime,
 }
 impl RecoveryOwner {
+    pub(crate) fn with_many_keys<T>(
+        owners: &[&Self],
+        operation: impl FnOnce(&[&crate::materializer::Keyring<'_>]) -> T,
+    ) -> Result<T> {
+        if owners.is_empty() || owners.len() > 8 {
+            return Err(UNREADABLE);
+        }
+        let mut keys = Vec::with_capacity(owners.len());
+        for owner in owners {
+            owner.validate()?;
+            keys.push(
+                crate::materializer::Keyring::new(&owner.authentication.key, &owner.document)
+                    .map_err(|_| UNREADABLE)?,
+            );
+        }
+        let references = keys.iter().collect::<Vec<_>>();
+        let result = operation(&references);
+        for owner in owners {
+            owner.validate()?;
+        }
+        Ok(result)
+    }
     fn validate(&self) -> Result<()> {
         let now = crate::clock::uptime().ok_or(EXPIRED)?;
         self.validate_at(now, std::time::SystemTime::now())
@@ -32,6 +54,7 @@ impl RecoveryOwner {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn with_keys<T>(
         &self,
         operation: impl FnOnce(&crate::materializer::Keyring<'_>) -> T,

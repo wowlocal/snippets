@@ -2,7 +2,8 @@
 //! ciphertext preparation. Neither vault authentication authorizes a write.
 use super::*;
 use crate::account_worker::restoration_task::{
-    Authentication, Credential, Credentials, Methods, Preparation,
+    Authentication, Credential, Credentials, Methods, MultipleAuthentication, MultipleCredentials,
+    Preparation,
 };
 use crate::local_auth;
 
@@ -151,6 +152,114 @@ enum CredentialChoice {
     Cancel,
     Verify(Credentials),
     File,
+    Files,
+}
+struct MultipleFields {
+    base: Fields,
+    files: Vec<(gtk::PasswordEntry, gtk::CheckButton)>,
+}
+impl MultipleFields {
+    fn new(methods: MultipleAuthentication, paths: &[std::path::PathBuf]) -> Self {
+        let base = Fields::new(methods.base);
+        base.use_previous
+            .set_label(Some("Also unlock the vault retained in recovery history"));
+        base.use_previous.set_active(false);
+        if methods.files.len() == 8 {
+            base.use_previous.set_sensitive(false);
+        }
+        let files = methods
+            .files
+            .into_iter()
+            .enumerate()
+            .map(|(index, methods)| {
+                let name = paths
+                    .get(index)
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_default();
+                credential(
+                    &base.content,
+                    &format!(
+                        "Vault file {}: {} — {}",
+                        index + 1,
+                        name,
+                        if methods.backup {
+                            "backup password"
+                        } else {
+                            "passphrase or recovery key"
+                        }
+                    ),
+                    methods.methods,
+                )
+            })
+            .collect();
+        Self { base, files }
+    }
+    fn passwords(&self) -> Vec<gtk::PasswordEntry> {
+        [&self.base.current, &self.base.previous]
+            .into_iter()
+            .chain(self.files.iter().map(|(input, _)| input))
+            .cloned()
+            .collect()
+    }
+    fn bind(&self, dialog: &adw::AlertDialog) {
+        dialog.set_response_enabled("unlock", false);
+        for input in self.passwords() {
+            let update = self.updater(dialog);
+            input.connect_changed(move |_| update());
+        }
+        let update = self.updater(dialog);
+        self.base.use_previous.connect_toggled(move |_| update());
+    }
+    fn updater(&self, dialog: &adw::AlertDialog) -> impl Fn() + use<> {
+        let dialog = dialog.downgrade();
+        let current = self.base.current.downgrade();
+        let previous = self.base.previous.downgrade();
+        let retained = self.base.use_previous.downgrade();
+        let files = self
+            .files
+            .iter()
+            .map(|(input, _)| input.downgrade())
+            .collect::<Vec<_>>();
+        move || {
+            if let (Some(dialog), Some(current), Some(previous), Some(retained)) = (
+                dialog.upgrade(),
+                current.upgrade(),
+                previous.upgrade(),
+                retained.upgrade(),
+            ) {
+                dialog.set_response_enabled(
+                    "unlock",
+                    usable(&current)
+                        && (!retained.is_active() || usable(&previous))
+                        && files
+                            .iter()
+                            .all(|input| input.upgrade().is_some_and(|input| usable(&input)))
+                        && files.len() + usize::from(retained.is_active()) <= 8,
+                );
+            }
+        }
+    }
+    fn take(&self) -> Result<MultipleCredentials> {
+        let base = self.base.take();
+        // Read and clear every input before returning any validation error.
+        let files = self
+            .files
+            .iter()
+            .map(|(input, mode)| {
+                secret(input).map(|value| Credential {
+                    value,
+                    recovery: mode.is_active(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let base = base?;
+        Ok(MultipleCredentials {
+            current: base.current,
+            retained: base.previous,
+            files: files.into_iter().collect::<Result<_>>()?,
+        })
+    }
 }
 
 impl AccountWindow {
@@ -173,6 +282,7 @@ impl AccountWindow {
         dialog.add_responses(&[
             ("back", "Cancel"),
             ("file", "Choose Previous Vault File…"),
+            ("files", "Choose Several Vault Files…"),
             ("unlock", "Verify Saved Changes"),
         ]);
         dialog.set_default_response(Some("back"));
@@ -192,12 +302,25 @@ impl AccountWindow {
         if response == "file" {
             return Ok(CredentialChoice::File);
         }
+        if response == "files" {
+            return Ok(CredentialChoice::Files);
+        }
         if response != "unlock" {
             return Ok(CredentialChoice::Cancel);
         }
         credentials.map(CredentialChoice::Verify)
     }
     async fn previous_vault_file(&self, generation: u64) -> Result<Option<std::path::PathBuf>> {
+        Ok(self
+            .previous_vault_files(generation, false)
+            .await?
+            .and_then(|files| files.into_iter().next()))
+    }
+    async fn previous_vault_files(
+        &self,
+        generation: u64,
+        multiple: bool,
+    ) -> Result<Option<Vec<std::path::PathBuf>>> {
         // A portal is allowed to take focus only during this key-free phase.
         self.gate.borrow_mut().cancel();
         if let Some(preparation) = self.restoration_preparation.borrow_mut().take() {
@@ -215,12 +338,23 @@ impl AccountWindow {
         let cancellation = gtk::gio::Cancellable::new();
         *self.restoration_file_choice.borrow_mut() = Some((cancellation.clone(), guard.clone()));
         let (send, receive) = mpsc::sync_channel(1);
-        dialog.open(Some(&self.window), Some(&cancellation), move |result| {
-            let _ = send.send(result);
-        });
+        if multiple {
+            dialog.open_multiple(Some(&self.window), Some(&cancellation), move |result| {
+                let files = result.ok().and_then(|files| {
+                    (0..files.n_items())
+                        .map(|index| files.item(index).and_downcast::<gtk::gio::File>())
+                        .collect::<Option<Vec<_>>>()
+                });
+                let _ = send.send(files);
+            });
+        } else {
+            dialog.open(Some(&self.window), Some(&cancellation), move |result| {
+                let _ = send.send(result.ok().map(|file| vec![file]));
+            });
+        }
         let choice = loop {
             match receive.try_recv() {
-                Ok(result) => break result.ok(),
+                Ok(result) => break result,
                 Err(mpsc::TryRecvError::Disconnected) => break None,
                 Err(mpsc::TryRecvError::Empty) => {
                     if generation != self.generation.get() || guard.validate().is_err() {
@@ -245,12 +379,58 @@ impl AccountWindow {
             return Ok(None);
         }
         guard.validate()?;
-        let Some(file) = choice else {
+        let Some(files) = choice else {
             return Ok(None);
         };
-        file.path()
+        if files.is_empty() || files.len() > 8 {
+            return Err(Failure::InvalidState);
+        }
+        files
+            .into_iter()
+            .map(|file| {
+                file.path()
+                    .ok_or(Failure::Restoration(restoration::Failure::SourceFile))
+            })
+            .collect::<Result<Vec<_>>>()
             .map(Some)
-            .ok_or(Failure::Restoration(restoration::Failure::SourceFile))
+    }
+    async fn multiple_vault_credentials(
+        &self,
+        methods: MultipleAuthentication,
+        paths: &[std::path::PathBuf],
+        generation: u64,
+        preparation: &Preparation,
+    ) -> Result<Option<MultipleCredentials>> {
+        preparation.validate()?;
+        if generation != self.generation.get() || !self.window.is_active() {
+            return Ok(None);
+        }
+        let fields = MultipleFields::new(methods, paths);
+        let inputs = gtk::ScrolledWindow::builder()
+            .child(&fields.base.content)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .min_content_height(240)
+            .max_content_height(420)
+            .propagate_natural_height(true)
+            .build();
+        let dialog = adw::AlertDialog::builder()
+            .heading("Unlock the Saved Vaults")
+            .body("Unlock every vault used by the saved changes. You can also use the vault retained in recovery history; leave that option off if you selected the same vault as a file. All restored secure changes will use the current vault. Review the result before applying it.")
+            .extra_child(&inputs).build();
+        dialog.add_responses(&[("back", "Cancel"), ("unlock", "Verify All Saved Changes")]);
+        dialog.set_default_response(Some("back"));
+        dialog.set_close_response("back");
+        fields.bind(&dialog);
+        *self.restoration_dialog.borrow_mut() = Some((dialog.clone(), fields.passwords()));
+        let response = dialog.choose_future(Some(&self.window)).await;
+        self.restoration_dialog.borrow_mut().take();
+        let credentials = fields.take();
+        if response != "unlock" || generation != self.generation.get() || !self.window.is_active() {
+            return Ok(None);
+        }
+        preparation.validate()?;
+        credentials.map(Some)
     }
     fn new_restoration_preparation(&self) -> Result<Preparation> {
         Preparation::new(
@@ -322,6 +502,20 @@ impl AccountWindow {
                                     }).await? else { return Err(Failure::InvalidState); };
                                     selected_file = Some(token);
                                     methods = next;
+                                }
+                                CredentialChoice::Files => {
+                                    let Some(paths) = this.previous_vault_files(generation, true).await? else { return Ok(None); };
+                                    let fresh = this.new_restoration_preparation()?;
+                                    *this.restoration_preparation.borrow_mut() = Some(fresh.clone());
+                                    preparation = Some(fresh.clone());
+                                    let Reply::RestorationFiles { token, methods } = this.execute(Command::InspectRestorationFiles {
+                                        selection: selection.clone(), paths: paths.clone(), preparation: fresh.clone(),
+                                    }).await? else { return Err(Failure::InvalidState); };
+                                    let Some(credentials) = this.multiple_vault_credentials(methods, &paths, generation, &fresh).await? else { return Ok(None); };
+                                    this.status.set_label("Verifying all saved vaults and secure changes…");
+                                    break this.execute(Command::PrepareMultipleRestoration {
+                                        selection, credentials, preparation: fresh, source_files: token,
+                                    }).await?;
                                 }
                             }
                         }
@@ -466,6 +660,90 @@ mod tests {
         window.cancel_sensitive();
         assert!(picker.is_cancelled() && guard.validate().is_err());
         assert!(window.restoration_file_choice.borrow().is_none());
+        let multiple = MultipleFields::new(
+            MultipleAuthentication {
+                base: Authentication {
+                    current: Methods {
+                        passphrase: true,
+                        recovery: true,
+                    },
+                    previous: Some(Methods {
+                        passphrase: true,
+                        recovery: true,
+                    }),
+                    previous_suggested: true,
+                    previous_backup: false,
+                },
+                files: vec![
+                    crate::account_worker::restoration_task::FileMethods {
+                        methods: Methods {
+                            passphrase: true,
+                            recovery: false,
+                        },
+                        backup: true,
+                    },
+                    crate::account_worker::restoration_task::FileMethods {
+                        methods: Methods {
+                            passphrase: true,
+                            recovery: true,
+                        },
+                        backup: false,
+                    },
+                ],
+            },
+            &[],
+        );
+        let dialog = adw::AlertDialog::new(Some("Public multi-vault fixture"), None);
+        dialog.add_responses(&[("unlock", "Verify")]);
+        multiple.bind(&dialog);
+        multiple.base.current.set_text("Public current password");
+        multiple.files[0].0.set_text("Public backup password");
+        assert!(!dialog.is_response_enabled("unlock"));
+        multiple.files[1].0.set_text("Public extra recovery key");
+        multiple.files[1].1.set_active(true);
+        assert!(dialog.is_response_enabled("unlock") && !multiple.files[0].1.is_visible());
+        multiple.base.use_previous.set_active(true);
+        assert!(!dialog.is_response_enabled("unlock"));
+        multiple
+            .base
+            .previous
+            .set_text("Public retained-vault password");
+        assert!(dialog.is_response_enabled("unlock"));
+        let values = multiple.take().unwrap();
+        assert!(
+            values.retained.is_some()
+                && values.files.len() == 2
+                && values.files[1].recovery
+                && !values.files[0].recovery
+        );
+        assert!(
+            multiple
+                .passwords()
+                .iter()
+                .all(|input| input.text().is_empty())
+        );
+        for input in multiple.passwords() {
+            input.set_text("Public cancellation secret");
+        }
+        *window.restoration_dialog.borrow_mut() = Some((dialog.clone(), multiple.passwords()));
+        window.cancel_sensitive();
+        assert!(
+            multiple
+                .passwords()
+                .iter()
+                .all(|input| input.text().is_empty())
+        );
+        for input in multiple.passwords() {
+            input.set_text("Public valid secret");
+        }
+        multiple.files[0].0.set_text(&"x".repeat(4097));
+        assert!(
+            multiple.take().is_err()
+                && multiple
+                    .passwords()
+                    .iter()
+                    .all(|input| input.text().is_empty())
+        );
         window.window.close();
         parent.close();
     }

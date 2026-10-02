@@ -111,7 +111,7 @@ pub fn authenticate_source<B: Backend>(
 
 #[path = "history_restore_source_file.rs"]
 mod source_file;
-pub use source_file::{SourceFile, inspect_source_file};
+pub use source_file::{SourceFile, inspect_additional_source_file, inspect_source_file};
 
 /// Retained wraps from the exact reviewed primary snapshot. Legacy history
 /// returns None; the current vault must never stand in for a missing old header.
@@ -137,8 +137,8 @@ mod owner;
 #[cfg(test)]
 pub(crate) use owner::apply_inner as apply_with_fault;
 pub use owner::{
-    ResumeReview, Review, apply, cancel, prepare, prepare_foreign, prepare_resume_authorization,
-    prepare_resume_review, resume,
+    ResumeReview, Review, apply, cancel, prepare, prepare_foreign, prepare_multiple,
+    prepare_resume_authorization, prepare_resume_review, resume,
 };
 
 pub(super) fn history_locked<B: Backend>(

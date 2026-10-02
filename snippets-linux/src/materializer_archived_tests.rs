@@ -2,6 +2,9 @@
 use super::*;
 use crate::clock::Hlc;
 
+#[path = "materializer_multiple_tests.rs"]
+mod multiple;
+
 fn document() -> Document {
     let value: serde_json::Value =
         serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();

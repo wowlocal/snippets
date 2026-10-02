@@ -6,6 +6,83 @@ use super::*;
 pub(crate) struct Archived<'a, 'b> {
     keys: &'a Keyring<'b>,
 }
+/// Borrowed only inside all bounded source owners. A stamp is a candidate hint;
+/// exactly one authenticated AAD/body/hash owner is required for every body.
+pub(crate) struct ArchivedKeys<'a, 'b> {
+    pub(super) keys: &'a [&'a Keyring<'b>],
+}
+impl<'a, 'b> ArchivedKeys<'a, 'b> {
+    pub(crate) fn new(keys: &'a [&'a Keyring<'b>]) -> Result<Self> {
+        if keys.is_empty() || keys.len() > 8 {
+            return Err(Failure::IncompatibleVault);
+        }
+        Ok(Self { keys })
+    }
+    pub(super) fn body(&self, source: &Envelope) -> Result<(usize, Zeroizing<Vec<u8>>)> {
+        let mut result = None;
+        for (index, keys) in self.keys.iter().enumerate() {
+            if let Ok(body) = Archived::new(keys).body(source) {
+                if result.is_some() {
+                    return Err(Failure::IncompatibleVault);
+                }
+                result = Some((index, body));
+            }
+        }
+        result.ok_or(Failure::IncompatibleVault)
+    }
+    pub(super) fn variant(&self, variant: &SecureVariant) -> Result<(usize, Zeroizing<Vec<u8>>)> {
+        let mut result = None;
+        for (index, keys) in self.keys.iter().enumerate() {
+            if let Ok(body) = authenticate_variant(variant, keys) {
+                if result.is_some() {
+                    return Err(Failure::IncompatibleVault);
+                }
+                result = Some((index, body));
+            }
+        }
+        result.ok_or(Failure::IncompatibleVault)
+    }
+    pub(super) fn hash(&self, index: usize, body: &[u8]) -> String {
+        Archived::new(self.keys[index]).hash(body)
+    }
+    pub(crate) fn evidence(
+        &self,
+        sources: &[Envelope],
+        frozen: &BTreeMap<Uuid, Envelope>,
+    ) -> Result<Evidence> {
+        let mut copies = BTreeMap::new();
+        for source in sources {
+            merge::validate(source)?;
+            for variant in merge::secure_variants(source)? {
+                if copies.contains_key(&variant.copy_id) {
+                    return Err(Failure::IdentifierCollision);
+                }
+                let (index, original) = self.variant(&variant)?;
+                let copy = if let Some(copy) = frozen.get(&variant.copy_id) {
+                    let (_, body) = self.body(copy)?;
+                    validate_evidence_fields(copy, &variant)?;
+                    if copy.extensions.keys().any(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "vaultKID" | "vaultContentHash" | merge::COPY_PROVENANCE
+                        )
+                    }) {
+                        return Err(Failure::MalformedVariant);
+                    }
+                    // The exact C0 may have been sealed by another explicitly
+                    // authenticated vault. Its own hash was checked with that
+                    // key; compare its body with the original using one key.
+                    self.keys[index].verify(&body, &self.hash(index, &original))?;
+                    copy.clone()
+                } else {
+                    make_copy(&variant, self.keys[index])?
+                };
+                copies.insert(copy.id, copy);
+            }
+        }
+        Ok(Evidence { copies })
+    }
+}
 
 #[cfg(test)]
 #[path = "materializer_archived_tests.rs"]
@@ -32,45 +109,12 @@ impl<'a, 'b> Archived<'a, 'b> {
     pub(super) fn hash(&self, body: &[u8]) -> String {
         crypto::content_hash(body, self.keys.key, &self.keys.salt)
     }
+    #[cfg(test)]
     pub(crate) fn evidence(
         &self,
         sources: &[Envelope],
         frozen: &BTreeMap<Uuid, Envelope>,
     ) -> Result<Evidence> {
-        let mut copies = BTreeMap::new();
-        for source in sources {
-            merge::validate(source)?;
-            for variant in merge::secure_variants(source)? {
-                if copies.contains_key(&variant.copy_id) {
-                    return Err(Failure::IdentifierCollision);
-                }
-                // Raw v1 snapshots retain their complete, canonical shape and
-                // exact original fingerprint. No field is injected into them.
-                let copy = if let Some(copy) = frozen.get(&variant.copy_id) {
-                    let original = authenticate_variant(&variant, self.keys)?;
-                    let body = self.body(copy)?;
-                    validate_evidence_fields(copy, &variant)?;
-                    if copy.extensions.keys().any(|key| {
-                        !matches!(
-                            key.as_str(),
-                            "vaultKID" | "vaultContentHash" | merge::COPY_PROVENANCE
-                        )
-                    }) || copy.extensions.get("vaultContentHash").is_some_and(|hash| {
-                        Some(hash) != variant.source_extensions.get("vaultContentHash")
-                    }) {
-                        return Err(Failure::MalformedVariant);
-                    }
-                    // Without a retained hash, even a valid same-provenance C1
-                    // must not impersonate C0. Compare both authenticated bodies
-                    // through the existing constant-time keyed-hash validator.
-                    self.keys.verify(&body, &self.hash(&original))?;
-                    copy.clone()
-                } else {
-                    make_copy(&variant, self.keys)?
-                };
-                copies.insert(copy.id, copy);
-            }
-        }
-        Ok(Evidence { copies })
+        ArchivedKeys::new(&[self.keys])?.evidence(sources, frozen)
     }
 }
