@@ -68,6 +68,8 @@ pub struct Workspace {
     status: gtk::Label,
     unlock: gtk::Button,
     reveal: gtk::ToggleButton,
+    undo: gtk::Button,
+    redo: gtk::Button,
     dirty: Cell<bool>,
     loading: Cell<bool>,
     busy: Cell<bool>,
@@ -182,6 +184,12 @@ impl Workspace {
         fields.append(&toggles);
         let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let reveal = gtk::ToggleButton::with_label("Reveal to Edit");
+        let undo = gtk::Button::from_icon_name("edit-undo-symbolic");
+        undo.set_tooltip_text(Some("Undo protected body edit (Ctrl+Z)"));
+        undo.update_property(&[gtk::accessible::Property::Label("Undo protected body edit")]);
+        let redo = gtk::Button::from_icon_name("edit-redo-symbolic");
+        redo.set_tooltip_text(Some("Redo protected body edit (Ctrl+Shift+Z)"));
+        redo.update_property(&[gtk::accessible::Property::Label("Redo protected body edit")]);
         let insert = gtk::Button::with_label("Insert into Original Window…");
         insert.set_visible(false);
         insert.update_property(&[gtk::accessible::Property::Label(
@@ -195,6 +203,8 @@ impl Workspace {
         delete.set_tooltip_text(Some("Delete secure snippet"));
         for widget in [
             &reveal.clone().upcast::<gtk::Widget>(),
+            &undo.clone().upcast(),
+            &redo.clone().upcast(),
             &save.clone().upcast(),
             &discard.clone().upcast(),
             &delete.clone().upcast(),
@@ -206,7 +216,7 @@ impl Workspace {
         fields.append(&toolbar);
         let editor = ProtectedEditor::new(vault.clone());
         fields.append(&editor.area);
-        fields.append(&label("Select with Shift+arrows or the mouse; Ctrl+A selects all. Reveal hides when this window loses focus. Protected content cannot be copied, dragged to another app, undone or exported as plaintext."));
+        fields.append(&label("Select with Shift+arrows or the mouse; Ctrl+A selects all. Ctrl+Z / Ctrl+Shift+Z undoes or redoes body edits. Reveal hides when this window loses focus. Protected content cannot be copied, dragged to another app or exported as plaintext."));
         let this = Rc::new(Self {
             window,
             library,
@@ -225,6 +235,8 @@ impl Workspace {
             status,
             unlock,
             reveal,
+            undo,
+            redo,
             dirty: Cell::new(false),
             loading: Cell::new(false),
             busy: Cell::new(false),
@@ -296,12 +308,15 @@ impl Workspace {
             if let Some(this) = weak.upgrade() {
                 match result {
                     Ok(()) => {
-                        if this.editor.is_dirty() {
-                            this.status.set_label("Unsaved encrypted draft");
-                        }
+                        this.status.set_label(if this.is_dirty() {
+                            "Unsaved encrypted draft"
+                        } else {
+                            "No unsaved changes"
+                        });
                     }
                     Err(error) => this.toast(&error.to_string()),
                 }
+                this.update();
             }
         });
         let weak = Rc::downgrade(&this);
@@ -311,8 +326,17 @@ impl Workspace {
                 if toggle.is_active() {
                     this.editor.area.grab_focus();
                 }
+                this.update();
             }
         });
+        for (button, redo) in [(&this.undo, false), (&this.redo, true)] {
+            let weak = Rc::downgrade(&this);
+            button.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.editor.undo(redo);
+                }
+            });
+        }
         let weak = Rc::downgrade(&this);
         this.unlock.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
@@ -537,6 +561,10 @@ impl Workspace {
                 }),
         );
         self.editor.allow(editable);
+        self.undo
+            .set_sensitive(editable && self.editor.can_undo(false));
+        self.redo
+            .set_sensitive(editable && self.editor.can_undo(true));
         self.reveal
             .set_sensitive(editable && self.editor.metadata().is_some());
         self.draft_recovery.set_visible(foreign);
@@ -737,7 +765,7 @@ impl Workspace {
         if !self.window.is_active() {
             return false;
         }
-        match name { "new" => self.new_entry(), "save" => { self.save(); }, "search" => { self.query.grab_focus(); }, "copy" | "capture" | "undo" | "redo" | "export" | "import" | "picker" => self.toast("Use the library window for this action. Protected bodies cannot be copied or exported as plaintext."), _ => return false }
+        match name { "new" => self.new_entry(), "save" => { self.save(); }, "search" => { self.query.grab_focus(); }, "undo" | "redo" => self.editor.undo(name == "redo"), "copy" | "capture" | "export" | "import" | "picker" => self.toast("Use the library window for this action. Protected bodies cannot be copied or exported as plaintext."), _ => return false }
         true
     }
     fn new_entry(self: &Rc<Self>) {
@@ -1167,6 +1195,10 @@ mod tests {
             .editor
             .fixture_edit("Replacement public fixture 👩🏽‍💻\r\n")
             .unwrap();
+        workspace.editor.fixture_undo(false).unwrap();
+        assert!(!workspace.editor.is_dirty());
+        workspace.editor.fixture_undo(true).unwrap();
+        assert!(workspace.editor.is_dirty());
         workspace
             .editor
             .save(&library, workspace.editor.metadata().unwrap())

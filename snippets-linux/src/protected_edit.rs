@@ -4,6 +4,10 @@ use crate::model::{Error, MAX_BODY_BYTES, Result};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use zeroize::Zeroizing;
+#[path = "protected_edit_history.rs"]
+mod history;
+#[cfg(feature = "desktop")]
+pub(crate) use history::History;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Selection {

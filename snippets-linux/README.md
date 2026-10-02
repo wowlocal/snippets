@@ -599,8 +599,16 @@ and tabs can be typed; Shift+Tab leaves the editor and Escape hides content.
 
 Selection stores only offsets and does not mark the draft dirty or change its
 ciphertext. Body changes are encrypted before they become retained editor state;
-Save remains explicit. There are no clipboard operations, external text drag,
-text undo or body extraction through accessibility. Accessible instructions
+Save remains explicit. Ctrl+Z undoes a body edit; Ctrl+Shift+Z or Ctrl+Y redoes it.
+The toolbar also has body Undo/Redo buttons. History keeps at most 64 encrypted
+versions and 8 MiB of body ciphertext in memory. It survives hiding and locking,
+but using it requires the same unlocked, revealed draft. Save keeps the history;
+undoing after Save creates an unsaved body change without reverting current
+metadata or its saved-record conflict check. A new body edit discards Redo;
+navigation and unchanged edits keep it. Discard, loading another entry and
+completed previous-vault recovery clear history. A verified passphrase change
+preserves it. There are no clipboard operations, external text drag,
+plaintext undo history or body extraction through accessibility. Accessible instructions
 describe the keyboard controls without exposing the body. Revealed pixels can
 still be captured by the desktop, and input methods/font libraries are outside
 Rust's memory-erasure guarantees. Rendering and pointer hit testing use transient

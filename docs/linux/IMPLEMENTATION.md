@@ -269,6 +269,17 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Encrypted body Undo/Redo adds fifteen isolated checks: thirteen history-owner
+  tests plus two snapshot-authentication tests. Selected regressions pass 73
+  library tests in each feature configuration and 24 core/helper integration
+  tests. Temporary fictional vaults cover selection/body round trips, dirty Save
+  markers, current metadata/CAS, concurrent writes, branch/no-op/failure behavior,
+  lock/unlock, owner/root/image changes, count/byte bounds, typed passphrase rewrap,
+  resets, bad offsets, revision exhaustion and corrupted/wrong-AAD/key snapshots.
+  Clippy passes with warnings denied for all targets in both configurations;
+  formatting, three release executables and two temporary-prefix installs pass.
+  The extended native secure lifecycle smoke stops at GTK initialization before
+  widget creation. Live shortcuts, buttons, focus and accessibility remain open.
 - Protected selection/editing passes thirteen core checks in both feature
   configurations, plus all 45 vault regressions in each configuration and 24
   core/helper integration tests. Two new checks use the production encryption
@@ -2073,9 +2084,9 @@ now be explicitly retired through Library Recovery History; active admission and
 unfinished requests remain protected. Combined live GTK/keyring/HTTPS verification
 remains outstanding.
 
-This kernel is not a complete sync engine. It still needs native fresh-vault
-authentication for receiving/sync, conflict-owned absent/deleted-copy recovery, account/rekey
-reconciliation and complete secure conflict recovery. Library-key activation
+This kernel is not a complete sync engine. Native fresh-vault authentication
+now supplies one bounded receiving/sending cycle. Fuller conflict-owned absent/deleted-copy recovery, account/rekey
+reconciliation and complete secure conflict recovery remain open. Library-key activation
 and bidirectional/receive/send cycles are wired to explicit account-window actions;
 verified opt-in automatic startup and scheduling now share that same owner. Unknown variant versions stay
 opaque and prevent deletion/cleanup. The recovery startup gate reaches the explicit
@@ -2128,6 +2139,44 @@ draft until Save and refusal while locked. The existing ignored native secure
 lifecycle fixture now also exercises selecting and replacing the body. Live
 mouse/keyboard/font scaling, input-method and assistive-technology validation,
 plus further editing work, remain part of the full port.
+
+### Encrypted body Undo/Redo
+
+`src/protected_edit_history.rs` retains at most 64 edit frames and 8 MiB of
+encrypted body text, shared across Undo and Redo. Frames contain a draft seal,
+offset selection and volatile revision counter; they contain no record metadata,
+saved-record CAS, key or plaintext. The owner's root, full vault identity and
+record ID are retained once in a private binding. The current ciphertext image
+is pinned so an unexpected draft replacement cannot silently inherit history.
+None of this history is serialized, logged or written to disk.
+
+`src/vault_edit_history.rs` authenticates both the current draft and the selected
+frame with the existing live vault owner, validates both selections, and replaces
+only the retained body seal after all checks pass. The current metadata and
+latest saved-record CAS stay in place. Undo after Save therefore creates new
+unsaved intent against the latest saved ancestor; it cannot revive an older
+CAS or overwrite a concurrent saved record. A private revision marker tracks
+the latest Save point. Returning to that point clears body dirty state, while
+public metadata edits retain their separate dirty state.
+
+Each changed body edit records one step and discards Redo; movement, selection,
+byte-identical edits and refused edits leave both queues intact. The oldest
+available steps are pruned when count/byte limits are reached; the current body
+is kept. Locked or replaced vaults, another entry/root, invalid selections and
+changed/tampered ciphertext refuse application before either queue is changed.
+Hiding and locking retain only the encrypted history. Load, new-entry creation,
+discard, read-only ephemeral display and successful foreign-draft recovery reset
+it. A typed `DraftRewrap` from the existing authenticated passphrase-change
+owner can update the binding without changing any body seal. An unrecognized
+identity replacement cannot do that.
+
+The protected editor owns Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y while its body has focus;
+its native toolbar supplies accessible body Undo/Redo buttons. Existing app-level
+Undo/Redo actions route to the active secure workspace's body owner. Admission
+requires allowed, editable, revealed content in the active window; locked,
+hidden, foreign or busy owners cannot apply history. The GTK native text undo
+system never receives the body. Live key/button/focus and assistive-technology
+verification remains part of the full port.
 
 ## Freshly authenticated secure insertion
 

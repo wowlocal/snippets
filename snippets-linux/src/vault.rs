@@ -348,6 +348,11 @@ pub struct EncryptedDraft {
     identity: Identity,
     sealed: Sealed,
 }
+#[cfg(any(test, feature = "desktop"))]
+#[path = "vault_edit_history.rs"]
+mod edit_history;
+#[cfg(any(test, feature = "desktop"))]
+pub(crate) use edit_history::{EditBinding, EncryptedEdit};
 /// Worker inputs and outputs contain only encrypted bodies and key wraps.
 /// They intentionally have no Debug or general serialization implementation.
 pub struct DraftRecoveryRequest {

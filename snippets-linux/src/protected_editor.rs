@@ -1,4 +1,4 @@
-//! A secure body never enters a GtkTextBuffer, native selection, undo stack, or the
+//! A secure body never enters a GtkTextBuffer, native selection, GTK undo stack, or the
 //! accessible text interface. Retained editor state consists only of ciphertext.
 //! Cairo/Pango and the compositor necessarily see transient revealed pixels;
 //! this is not screenshot prevention or a claim about third-party memory erasure.
@@ -88,6 +88,7 @@ pub struct ProtectedEditor {
     pub area: gtk::DrawingArea,
     vault: Rc<RefCell<Vault>>,
     draft: RefCell<Option<EncryptedDraft>>,
+    history: RefCell<protected_edit::History>,
     selection: Cell<Selection>,
     viewport: Cell<f64>,
     dirty: Cell<bool>,
@@ -110,7 +111,7 @@ impl ProtectedEditor {
             "Protected content. Reveal to edit. Copy and text extraction are disabled.",
         )]);
         area.update_property(&[gtk::accessible::Property::Description(
-            "Shift with arrow keys selects text. Control+A selects all. Control with Left/Right or Backspace/Delete moves or removes words. Shift+Tab leaves the editor. Escape hides content.",
+            "Shift with arrow keys selects text. Control+A selects all. Control with Left/Right or Backspace/Delete moves or removes words. Control+Z undoes a body edit; Control+Shift+Z or Control+Y redoes it. Shift+Tab leaves the editor. Escape hides content.",
         )]);
         let im = gtk::IMContextSimple::new();
         im.set_client_widget(Some(&area));
@@ -120,6 +121,7 @@ impl ProtectedEditor {
             area,
             vault,
             draft: RefCell::new(None),
+            history: RefCell::new(protected_edit::History::default()),
             selection: Cell::new(Selection::default()),
             viewport: Cell::new(0.0),
             dirty: Cell::new(false),
@@ -199,6 +201,10 @@ impl ProtectedEditor {
             let control = mods.contains(gdk::ModifierType::CONTROL_MASK);
             let extend = mods.contains(gdk::ModifierType::SHIFT_MASK);
             if mods.intersects(gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK) {
+                return glib::Propagation::Stop;
+            }
+            if control && matches!(key, gdk::Key::z | gdk::Key::Z | gdk::Key::y | gdk::Key::Y) {
+                this.undo(extend || matches!(key, gdk::Key::y | gdk::Key::Y));
                 return glib::Propagation::Stop;
             }
             if control && matches!(key, gdk::Key::a | gdk::Key::A) {
@@ -322,7 +328,8 @@ impl ProtectedEditor {
         let draft = draft
             .as_mut()
             .ok_or(Error("Choose a secure snippet first."))?;
-        let outcome = protected_edit::apply_draft(
+        let mut history = self.history.borrow_mut();
+        let outcome = history.edit(
             &mut self.vault.borrow_mut(),
             draft,
             self.selection.get(),
@@ -330,10 +337,42 @@ impl ProtectedEditor {
             insertion,
             extend,
         )?;
-        if outcome.changed {
-            self.dirty.set(true);
-        }
+        self.dirty.set(history.is_dirty());
         self.selection.set(outcome.selection);
+        Ok(())
+    }
+    pub fn can_undo(&self, redo: bool) -> bool {
+        self.authorized()
+            && self.revealed.get()
+            && self.editable.get()
+            && self.history.borrow().can_step(redo)
+    }
+    pub fn undo(&self, redo: bool) {
+        if !self.authorized() || !self.revealed.get() || !self.editable.get() {
+            return;
+        }
+        self.im.reset();
+        let result = self.apply_history(redo);
+        self.area.queue_draw();
+        if let Some(notify) = self.notify.borrow().as_ref() {
+            notify(result);
+        }
+    }
+    fn apply_history(&self, redo: bool) -> Result<()> {
+        let mut draft = self.draft.borrow_mut();
+        let draft = draft
+            .as_mut()
+            .ok_or(Error("Choose a secure snippet first."))?;
+        let mut history = self.history.borrow_mut();
+        if let Some(selection) = history.step(
+            &mut self.vault.borrow_mut(),
+            draft,
+            self.selection.get(),
+            redo,
+        )? {
+            self.selection.set(selection);
+            self.dirty.set(history.is_dirty());
+        }
         Ok(())
     }
     fn place_pointer(&self, x: f64, y: f64, extend: bool) {
@@ -386,6 +425,10 @@ impl ProtectedEditor {
     #[cfg(test)]
     pub(crate) fn fixture_select_all(&self) -> Result<()> {
         self.apply(Edit::SelectAll, "", false)
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_undo(&self, redo: bool) -> Result<()> {
+        self.apply_history(redo)
     }
     pub fn allow(&self, value: bool) {
         self.allowed.set(value);
@@ -451,6 +494,7 @@ impl ProtectedEditor {
         )?;
         self.selection.set(Selection::default());
         self.viewport.set(0.0);
+        self.history.borrow_mut().reset(false);
         self.dirty.set(true);
         self.reveal(false);
         Ok(())
@@ -463,6 +507,8 @@ impl ProtectedEditor {
             .ok_or(Error("This secure entry no longer exists."))?;
         let draft = vault.protect_draft(expected.metadata.clone(), &body, Some(expected))?;
         *self.draft.borrow_mut() = Some(draft);
+        self.history.borrow_mut().reset(true);
+        self.editable.set(true);
         self.selection.set(Selection::default());
         self.viewport.set(0.0);
         self.dirty.set(false);
@@ -475,6 +521,8 @@ impl ProtectedEditor {
             b"",
             None,
         )?);
+        self.history.borrow_mut().reset(false);
+        self.editable.set(true);
         self.selection.set(Selection::default());
         self.viewport.set(0.0);
         self.dirty.set(true);
@@ -487,6 +535,7 @@ impl ProtectedEditor {
             bytes,
             None,
         )?);
+        self.history.borrow_mut().reset(true);
         self.selection.set(Selection::default());
         self.viewport.set(0.0);
         self.dirty.set(false);
@@ -496,6 +545,7 @@ impl ProtectedEditor {
     }
     pub fn discard(&self) {
         self.draft.borrow_mut().take();
+        self.history.borrow_mut().reset(true);
         self.selection.set(Selection::default());
         self.viewport.set(0.0);
         self.dirty.set(false);
@@ -514,6 +564,7 @@ impl ProtectedEditor {
             .ok_or(Error("Reload the secure snippet before continuing."))?;
         draft.metadata = saved.metadata.clone();
         draft.expected = Some(saved);
+        self.history.borrow_mut().mark_saved();
         self.dirty.set(false);
         Ok(())
     }
@@ -532,7 +583,9 @@ impl ProtectedEditor {
     }
     pub fn rewrap(&self, transition: &crate::vault::DraftRewrap) -> Result<()> {
         if let Some(draft) = self.draft.borrow_mut().as_mut() {
-            self.vault.borrow_mut().rebind_draft(draft, transition)?;
+            self.history
+                .borrow_mut()
+                .rewrap(&mut self.vault.borrow_mut(), draft, transition)?;
         }
         Ok(())
     }

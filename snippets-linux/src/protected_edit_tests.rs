@@ -344,7 +344,7 @@ fn editing_that_joins_adjacent_graphemes_leaves_a_valid_complete_caret() {
     assert!(body(outcome).as_slice() == b"\r\n");
 }
 
-fn vault_fixture() -> (
+pub(super) fn vault_fixture() -> (
     tempfile::TempDir,
     crate::model::Library,
     crate::vault::Vault,
