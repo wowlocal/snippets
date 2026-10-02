@@ -155,10 +155,10 @@ impl Failure {
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::HistoryRemoval(_) => {
-                "The saved entry or its encrypted files changed, or an operation is still unfinished. Open Library Recovery History to review or finish removal."
+                "The saved recovery data changed, its format is unavailable, or an operation is still unfinished. Open Library Recovery History to review or finish removal."
             }
             Self::Secret(secret_store::Failure::HistoryMaintenanceRequired) => {
-                "Finish the saved history removal in Library Recovery History before continuing."
+                "Finish the saved history removal or file cleanup in Library Recovery History before continuing."
             }
             Self::Automatic(auto_sync::Failure::ScopeChanged) => {
                 "The saved automatic-sync account or library changed. Reconnect and review it before enabling automatic sync again."
@@ -364,6 +364,7 @@ pub(crate) enum Command {
         selection: Option<capacity::Selection>,
         preparation: restoration_task::Preparation,
     },
+    PrepareRecoveryFileCleanup(restoration_task::Preparation),
     CommitHistoryRemoval {
         token: uuid::Uuid,
         permit: local_auth::Permit,
@@ -517,6 +518,8 @@ pub(crate) enum Reply {
         target: local_auth::Target,
     },
     HistoryRemoved,
+    RecoveryFilesCleaned,
+    NoUnusedRecoveryFiles,
     RestorationAuthentication(restoration_task::Authentication),
     RestorationFile {
         token: uuid::Uuid,
@@ -1613,6 +1616,14 @@ impl Owner {
         self.restoration.keep_for(&command);
         self.history_removal.keep_for(&command);
         match command {
+            Command::PrepareRecoveryFileCleanup(preparation) => {
+                preparation.validate()?;
+                self.ensure_store(false)?;
+                self.history_removal.prepare_cleanup(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                    preparation,
+                )
+            }
             Command::PrepareHistoryRemoval {
                 selection,
                 preparation,
@@ -1627,13 +1638,18 @@ impl Owner {
             }
             Command::CommitHistoryRemoval { token, permit } => {
                 let review = self.history_removal.consume(token)?;
+                let cleanup = review.summary().section == capacity::Section::UnusedImages;
                 capacity::apply(
                     self.store.as_mut().ok_or(Failure::InvalidState)?,
                     review,
                     permit,
                 )
                 .map_err(Failure::HistoryRemoval)?;
-                Ok(Reply::HistoryRemoved)
+                Ok(if cleanup {
+                    Reply::RecoveryFilesCleaned
+                } else {
+                    Reply::HistoryRemoved
+                })
             }
             Command::Automatic(true) => self.enable_automatic(),
             Command::Automatic(false) => unreachable!(),

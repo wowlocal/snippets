@@ -355,9 +355,18 @@ deleting its authenticated encrypted files. After an interruption, choose
 **Review and Finish…** with fresh local authentication. Other key/account operations
 wait for completion. Empty archives keep their generation, so freeing the final
 entry never resets stale-request protection. Unknown, replaced, linked or shared
-recovery files are refused. Unreferenced image cleanup remains unfinished.
-The combined native GTK/keyring/PAM workflow
-still needs live verification.
+recovery files are refused.
+
+**Review Cleanup…** separately reviews unused encrypted recovery files that have
+no reference in any validated saved history. The review shows file counts and
+sizes and warns that they may contain the only historical copy; save anything
+you still need first. Fresh computer authentication saves consent before deleting
+the exact reviewed files. Current files, keys, the sync journal and saved history
+remain unchanged. Files created after review stay for another review. Missing,
+changed, linked or unknown-format files and unreadable history refuse a new
+cleanup. After interruption, **Review and Finish…** resumes saved consent with
+fresh authentication. The combined native GTK/keyring/PAM workflow still needs
+live verification.
 
 **Create New Cloud Library…** explicitly creates an
 empty library in the displayed account and server. The worker saves its original

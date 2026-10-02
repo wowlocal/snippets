@@ -80,6 +80,7 @@ pub(super) fn content(
     restore: Rc<dyn Fn(Selection)>,
     finish: Rc<dyn Fn(bool)>,
     remove: Rc<dyn Fn(Option<crate::key_store::capacity::Selection>)>,
+    cleanup: Rc<dyn Fn()>,
 ) -> gtk::Box {
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     layout.append(&adw::HeaderBar::new());
@@ -95,9 +96,16 @@ pub(super) fn content(
     intro.set_xalign(0.0);
     panel.append(&intro);
     if history.maintenance.is_some() {
-        let pending = adw::PreferencesGroup::builder().title("History Removal Needs Finishing").description("A reviewed removal was saved. Finish it before changing library keys or restoring saved changes.").build();
+        let unused = history.maintenance.as_ref().is_some_and(|summary| {
+            summary.section == crate::key_store::capacity::Section::UnusedImages
+        });
+        let pending = adw::PreferencesGroup::builder().title(if unused { "Recovery File Cleanup Needs Finishing" } else { "History Removal Needs Finishing" }).description("A reviewed removal was saved. Finish it before changing library keys or restoring saved changes.").build();
         let action = adw::ActionRow::builder()
-            .title("Finish Saved Removal")
+            .title(if unused {
+                "Finish Recovery File Cleanup"
+            } else {
+                "Finish Saved Removal"
+            })
             .build();
         let button = gtk::Button::with_label("Review and Finish…");
         let remove = remove.clone();
@@ -105,6 +113,18 @@ pub(super) fn content(
         action.add_suffix(&button);
         pending.add(&action);
         panel.append(&pending);
+    }
+    if history.maintenance.is_none() && history.active.is_some() && !history.creations_unavailable {
+        let unused = adw::PreferencesGroup::builder().title("Unused Recovery Files").description("Interrupted operations can leave encrypted files outside saved history. Review them before deciding whether to discard them.").build();
+        let action = adw::ActionRow::builder()
+            .title("Review Unused Recovery Files")
+            .subtitle("Saved history and unfinished operations stay protected.")
+            .build();
+        let button = gtk::Button::with_label("Review Cleanup…");
+        button.connect_clicked(move |_| cleanup());
+        action.add_suffix(&button);
+        unused.add(&action);
+        panel.append(&unused);
     }
     let current = adw::PreferencesGroup::builder()
         .title("Current Library Key")
@@ -438,4 +458,86 @@ pub(super) fn content(
             .build(),
     );
     layout
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        cloud::{Binding, ServerURL},
+        key_store::{
+            KeyBinding,
+            capacity::{Section, Summary},
+        },
+    };
+    use std::cell::Cell;
+    fn button(widget: &gtk::Widget, label: &str) -> Option<gtk::Button> {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>()
+            && button.label().as_deref() == Some(label)
+        {
+            return Some(button.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if let Some(button) = button(&widget, label) {
+                return Some(button);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+    #[test]
+    #[ignore = "requires a graphical display; public catalogue and callbacks only, no keyring/PAM/network or file removal"]
+    fn native_history_cleanup_controls_respect_saved_consent_and_empty_key_state() {
+        adw::init().expect("graphical display");
+        let mut history = Catalog::default();
+        let calls = Rc::new(Cell::new(0));
+        let cleanup: Rc<dyn Fn()> = {
+            let calls = calls.clone();
+            Rc::new(move || calls.set(calls.get() + 1))
+        };
+        let content_for = |history: &Catalog| {
+            content(
+                history,
+                Rc::new(|_| {}),
+                Rc::new(|_| {}),
+                Rc::new(|_| {}),
+                cleanup.clone(),
+            )
+        };
+        let panel = content_for(&history);
+        assert!(button(panel.upcast_ref(), "Review Cleanup…").is_none());
+        let binding = KeyBinding::new(
+            ServerURL::parse("https://public.example.test").unwrap(),
+            uuid::Uuid::from_u128(1),
+            uuid::Uuid::from_u128(2),
+            (
+                Binding::from_checkpoint([3; 32]),
+                Binding::from_checkpoint([4; 32]),
+            ),
+            1,
+        )
+        .unwrap();
+        history.active = Some(SavedLibrary::new(&binding));
+        let panel = content_for(&history);
+        button(panel.upcast_ref(), "Review Cleanup…")
+            .unwrap()
+            .emit_clicked();
+        assert_eq!(calls.get(), 1);
+        history.creations_unavailable = true;
+        let panel = content_for(&history);
+        assert!(button(panel.upcast_ref(), "Review Cleanup…").is_none());
+        history.creations_unavailable = false;
+        history.maintenance = Some(Summary {
+            libraries: vec![SavedLibrary::new(&binding)],
+            section: Section::UnusedImages,
+            entry: 0,
+            protected_bytes: 0,
+            encrypted_images: 1,
+            encrypted_bytes: 32,
+        });
+        let panel = content_for(&history);
+        assert!(button(panel.upcast_ref(), "Review Cleanup…").is_none());
+        assert!(button(panel.upcast_ref(), "Review and Finish…").is_some());
+    }
 }

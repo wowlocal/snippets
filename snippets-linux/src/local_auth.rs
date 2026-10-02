@@ -44,6 +44,8 @@ pub enum Purpose {
     CancelSavedChanges,
     RemoveSavedHistory,
     ResumeHistoryRemoval,
+    RemoveUnusedRecoveryFiles,
+    ResumeRecoveryFileCleanup,
 }
 /// A closed owning-boundary target, including exact saved intent/version bytes.
 /// Fingerprints/bindings never enter logs or serialization.

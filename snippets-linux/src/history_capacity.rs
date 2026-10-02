@@ -4,8 +4,11 @@ use super::*;
 use crate::local_auth::{AuthorizationLease, Permit, Purpose, Target};
 use crate::model::Library;
 
+#[path = "history_cleanup.rs"]
+mod cleanup;
 #[path = "history_capacity_files.rs"]
 mod files;
+pub use cleanup::CleanupReview;
 #[cfg(test)]
 #[path = "history_capacity_tests.rs"]
 mod tests;
@@ -17,6 +20,7 @@ pub enum Section {
     FirstKeys,
     Restorations,
     Creations,
+    UnusedImages,
 }
 impl Section {
     fn text(self) -> &'static str {
@@ -26,6 +30,7 @@ impl Section {
             Self::FirstKeys => "firstKeys",
             Self::Restorations => "restorations",
             Self::Creations => "creations",
+            Self::UnusedImages => "unusedImages",
         }
     }
     fn parse(value: &Value) -> Result<Self> {
@@ -35,6 +40,7 @@ impl Section {
             "firstKeys" => Ok(Self::FirstKeys),
             "restorations" => Ok(Self::Restorations),
             "creations" => Ok(Self::Creations),
+            "unusedImages" => Ok(Self::UnusedImages),
             _ => Err(Failure::InvalidState),
         }
     }
@@ -45,6 +51,7 @@ impl Section {
             Self::FirstKeys => Slot::BootstrapCandidate,
             Self::Restorations => Slot::HistoryRestore,
             Self::Creations => Slot::SpaceCreation,
+            Self::UnusedImages => Slot::HistoryMaintenance,
         }
     }
     fn schema(self) -> i64 {
@@ -164,6 +171,7 @@ fn document<B: Backend>(owner: &mut Locked<'_, B>, section: Section) -> Result<D
         Section::FirstKeys => initial_candidate::removal_document_locked(owner),
         Section::Restorations => restoration::removal_document_locked(owner),
         Section::Creations => crate::auth_store::creation::removal_document_locked(owner),
+        Section::UnusedImages => Err(Failure::InvalidState),
     }
 }
 /// Owning candidate codecs decide whether a creation receipt still supports an
@@ -329,6 +337,7 @@ impl Intent {
             .try_into()
             .map_err(|_| Failure::InvalidState)?;
         if fields["schema"].as_int()? != 1
+            || selection.section == Section::UnusedImages
             || libraries.len()
                 != if matches!(selection.section, Section::Switches | Section::Restorations) {
                     2
@@ -387,26 +396,50 @@ impl Intent {
         )?)
     }
 }
-pub struct Review {
+pub struct RetirementReview {
     intent: Intent,
     resume: bool,
 }
+pub enum Review {
+    Retirement(RetirementReview),
+    Cleanup(CleanupReview),
+}
 impl Review {
     pub fn summary(&self) -> Summary {
-        self.intent.summary.clone()
+        match self {
+            Self::Retirement(review) => review.intent.summary.clone(),
+            Self::Cleanup(review) => review.summary(),
+        }
     }
     pub fn authorization_target(&self) -> Result<Target> {
-        self.intent.target(if self.resume {
-            Purpose::ResumeHistoryRemoval
-        } else {
-            Purpose::RemoveSavedHistory
-        })
+        match self {
+            Self::Retirement(review) => review.intent.target(if review.resume {
+                Purpose::ResumeHistoryRemoval
+            } else {
+                Purpose::RemoveSavedHistory
+            }),
+            Self::Cleanup(review) => review.authorization_target(),
+        }
     }
+}
+fn cleanup_pending(bytes: &[u8]) -> Result<bool> {
+    Ok(canonical::parse(bytes)?
+        .as_object()?
+        .get("schema")
+        .ok_or(Failure::InvalidState)?
+        .as_int()?
+        == 2)
 }
 pub(super) fn pending_locked<B: Backend>(owner: &mut Locked<'_, B>) -> Result<Option<Summary>> {
     owner
         .read(Slot::HistoryMaintenance)?
-        .map(|bytes| Intent::parse(&bytes).map(|intent| intent.summary))
+        .map(|bytes| {
+            if cleanup_pending(&bytes)? {
+                cleanup::pending_summary(&bytes)
+            } else {
+                Intent::parse(&bytes).map(|intent| intent.summary)
+            }
+        })
         .transpose()
 }
 pub fn prepare<B: Backend>(store: &mut Store<B>, selection: Selection) -> Result<Review> {
@@ -460,7 +493,7 @@ pub fn prepare<B: Backend>(store: &mut Store<B>, selection: Selection) -> Result
             encrypted_images: proofs.len(),
             encrypted_bytes: proofs.iter().map(files::Proof::length).sum(),
         };
-        Ok(Review {
+        Ok(Review::Retirement(RetirementReview {
             intent: Intent {
                 libraries: doc.rows[selection.index].libraries.clone(),
                 binding: installed.binding,
@@ -473,7 +506,7 @@ pub fn prepare<B: Backend>(store: &mut Store<B>, selection: Selection) -> Result
                 summary,
             },
             resume: false,
-        })
+        }))
     })
 }
 pub fn prepare_resume<B: Backend>(store: &mut Store<B>) -> Result<Review> {
@@ -481,15 +514,21 @@ pub fn prepare_resume<B: Backend>(store: &mut Store<B>) -> Result<Review> {
         let bytes = owner
             .read(Slot::HistoryMaintenance)?
             .ok_or(Failure::RecoveryUnavailable)?;
+        if cleanup_pending(&bytes)? {
+            return cleanup::resume_locked(owner, &bytes).map(Review::Cleanup);
+        }
         let intent = Intent::parse(&bytes)?;
         let library = Library::prepare(owner.root().into())?;
         let _guard = library.lock()?;
         verify(owner, &library, &intent)?;
-        Ok(Review {
+        Ok(Review::Retirement(RetirementReview {
             intent,
             resume: true,
-        })
+        }))
     })
+}
+pub fn prepare_cleanup<B: Backend>(store: &mut Store<B>) -> Result<Option<Review>> {
+    cleanup::prepare(store).map(|review| review.map(Review::Cleanup))
 }
 fn verify<B: Backend>(owner: &mut Locked<'_, B>, library: &Library, intent: &Intent) -> Result<()> {
     if ready(owner, library)?.binding != intent.binding || frame(owner)? != intent.frame {
@@ -576,6 +615,10 @@ fn apply_inner<B: Backend>(
     fault: Option<u8>,
 ) -> Result<()> {
     let lease = permit.consume(&review.authorization_target()?)?;
+    let review = match review {
+        Review::Cleanup(review) => return cleanup::apply(store, review, &lease, fault),
+        Review::Retirement(review) => review,
+    };
     store.history_transaction_with(|owner| {
         let library = Library::prepare(owner.root().into())?;
         let _guard = library.lock()?;

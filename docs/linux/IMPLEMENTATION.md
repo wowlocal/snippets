@@ -16,8 +16,8 @@ Saved legacy records with missing own content hashes now have an explicit native
 repair action using fresh vault authentication. Incoming legacy own echoes can
 be recognized without a key, and the primary core authenticates changed own
 unstamped bodies. Native fresh current-vault authentication now supplies one
-bounded receiving/sending cycle. Unreferenced-image cleanup and live desktop verification remain
-unfinished. Ordinary inline expansion now has a native
+bounded receiving/sending cycle. Unreferenced recovery files now have an explicit
+reviewed cleanup action; live desktop verification remains unfinished. Ordinary inline expansion now has a native
 Wayland owner and opt-in GTK settings; live receiving-field verification is open.
 Freshly authenticated secure insertion is now wired to the picker and native
 virtual keyboard. Its core checks pass; live focus, credential-dialog and
@@ -130,8 +130,9 @@ Restoration can queue new ordinary and matching-vault generations behind current
 conflict-owned groups without changing their offers or proofs, and restores an
 archive's pending generations in order. Terminal protected history can now be
 explicitly retired through reviewed, resumable local authorization. Unreferenced
-image cleanup and remaining conflict-owned deletion recovery
-remain unfinished.
+encrypted recovery files can also be explicitly reviewed and discarded, with
+durable consent and interrupted completion. Remaining conflict-owned deletion
+recovery and live combined verification remain unfinished.
 `src/bootstrap.rs` implements portable key bundles, pairing/recovery cryptography
 and library-action authority. `src/cloud_bootstrap.rs` adds scope-bound authority
 and recovery reads plus the server's atomic first-key bootstrap operation.
@@ -222,7 +223,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
-| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement is wired; unreferenced images remain pending; live native GTK/keyring/PAM verification remains unavailable |
+| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field and authenticated-sync validation plus fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
@@ -266,6 +267,17 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Reviewed unused recovery-file cleanup adds eleven isolated owner checks and a
+  separate ignored GTK control fixture. Selected regressions pass 43 default
+  library tests, 29 headless library tests and 24 core/helper integration tests.
+  These cover cleanup, retained history, catalogue inspection and native worker
+  admission using fictional accounts, temporary roots and memory providers.
+  Clippy passes with warnings denied for all targets in both configurations;
+  formatting passes and all three release executables build. Two isolated
+  temporary-prefix installs verify exact binary bytes/modes and preserve unrelated
+  files. The explicit GTK control fixture stops at display initialization before
+  its assertions; no keyring, PAM, network or actual cleanup is attempted there.
+  Live combined desktop/keyring/PAM validation remains open.
 - Fresh native current-vault authentication adds fourteen isolated checks plus
   a separate ignored GTK dialog fixture. Passphrase/recovery, exact source
   replacement, wrong credentials/tokens/bounds, desktop revocation, saved-page
@@ -1743,8 +1755,8 @@ refused, and appending after retirement uses the saved generation rather than st
 Isolated tests cover all four archives, a full eight-entry candidate archive, all five
 durable interruption boundaries, ambiguous before/after Secret Service writes, unchanged
 current files/keys/journal, shared references, stale frames, replaced/linked files and the
-production native retention owner. Live GTK/keyring/PAM verification remains outstanding,
-as does unreferenced-image cleanup. Standalone creation receipts use the same reviewed
+production native retention owner. Live GTK/keyring/PAM verification remains outstanding.
+Unreferenced recovery files have their own reviewed cleanup flow below. Standalone creation receipts use the same reviewed
 retirement protocol, described below.
 
 Standalone creation history participates as a fifth protected section. Its owning
@@ -1782,6 +1794,56 @@ retirement after the response is authenticated and stored as Ready. These fixtur
 use temporary roots, fictional accounts, memory providers and the fixture auth gate;
 they do not contact a real server, keyring or PAM service. Live desktop verification
 remains outstanding.
+
+### Explicit cleanup of unused recovery files
+
+**Library Recovery History… → Review Cleanup…** prepares a bounded review of
+unreferenced encrypted source/target files under `Sync/Reviews/`. Inspection and
+capacity exhaustion never delete files. The native warning explains that a file
+may contain the only historical copy and asks the user to save any needed recovery
+material first. Initial removal and interrupted completion have separate fresh
+computer-authentication purposes. Current library files, active keys, the live
+journal and every protected history entry remain unchanged; this action does not
+contact a server or reveal bodies or keys.
+
+`src/history_cleanup.rs` validates all five protected archives through their
+owning typed loaders before collecting references. Every switch/restoration row
+protects both files belonging to its nonce, including rows that cannot be retired.
+Unknown or malformed history refuses cleanup. A pending transition, restoration,
+primary intent or backup recovery also refuses preparation. The review pins the
+whole archive snapshots, active key/checkpoint owner and actual library binding.
+Only canonical, nonzero lowercase nonce names ending in `.source` or `.target`
+can be selected. Files must be regular, singly linked, bounded and carry known
+SCJ1 framing. Framing classifies an explicitly discarded old image; it does not
+authenticate its encrypted body, whose old key may no longer be retained.
+Unknown formats, names, directories and linked inputs refuse the review.
+
+Preparation records descriptor/path identity and a streaming SHA-256 hash using
+a 64-KiB buffer. The existing directory limits remain 32 files and 512 MiB total,
+with the existing per-image bound. Before removing anything, authorization saves
+schema-2 cleanup consent in the existing protected `HistoryMaintenance` slot.
+Schema-1 history-retirement intents stay readable. Ordinary key/account operations
+remain fenced while either intent exists. The exact selected list is frozen;
+files created afterward stay for a separate review. A missing selected file
+refuses initial consent but is accepted when finishing already saved consent.
+
+The owner checks all remaining files before any unlink, checks each file again,
+and syncs the directory before clearing consent. Replaced files or changed
+archives/keys stop completion without widening the selection. **Review and
+Finish…** requires a new purpose-bound permit after interruption. The existing
+serialized worker, one-use review token and two-minute preparation guard revoke
+unsaved reviews on cancellation, focus loss, desktop lock or unrelated work.
+File removal uses common cooperative locks and exact identity/hash checks; it
+does not provide atomic compare-and-unlink against a hostile writer or universal
+ancestor-symlink protection.
+
+Isolated tests cover complete and partial unused image sets, all deletion and
+directory-sync interruption boundaries, ambiguous consent writes/deletes,
+replacement/tampering/links, archive and checkpoint-key changes, missing files,
+unknown framing, malformed consent, full directory capacity, later new images,
+fresh-purpose authentication and production worker token consumption. All use
+fictional credentials, temporary roots and memory providers. Native controls
+have a separate GTK fixture; the combined desktop/keyring/PAM flow remains open.
 
 `src/history_restore.rs` binds an opaque history selection to the exact protected
 switch document and transition. It authenticates both old encrypted images and
@@ -1888,7 +1950,7 @@ sync. Review, vault-password and computer-password dialogs cancel on focus loss,
 known lock or dismissal. Incompatible copy units and new keyword collisions fail closed
 pending separate group/collision review. Saved legacy hash repair is wired to a
 separate freshly authenticated native action. Native authenticated sync continuation
-is wired; unreferenced-image cleanup and live combined verification remain unfinished.
+is wired; reviewed unreferenced-image cleanup is wired and live combined verification remains unfinished.
 
 Durable consent binds the target account/deployment so a legitimate reconnect
 can refresh token generations. Each network boundary still checks the caller's

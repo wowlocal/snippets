@@ -1496,6 +1496,8 @@ impl AccountWindow {
             Reply::RestorationReview {..} => self.status.set_label("Review the saved changes before authorizing restoration."),
             Reply::HistoryRemovalReview {..} => self.status.set_label("Review the saved copy before authorizing removal."),
             Reply::HistoryRemoved => self.status.set_label("The selected history entry and its encrypted recovery files were removed."),
+            Reply::RecoveryFilesCleaned => self.status.set_label("The reviewed unused recovery files were removed. Saved history, current records and keys were kept."),
+            Reply::NoUnusedRecoveryFiles => self.status.set_label("No unused recovery files were found. Saved history was kept."),
             Reply::RestorationAuthentication {..} => self.status.set_label("Unlock the vaults to review the saved secure changes."),
             Reply::RestorationFile {..} => self.status.set_label("Previous vault file selected. Unlock it to review the saved changes."),
             Reply::RestorationFiles {..} => self.status.set_label("Vault files selected. Unlock each source to review all saved changes."),
@@ -1592,7 +1594,9 @@ impl AccountWindow {
                 | Purpose::ResumeSavedChanges
                 | Purpose::CancelSavedChanges
                 | Purpose::RemoveSavedHistory
-                | Purpose::ResumeHistoryRemoval => false,
+                | Purpose::ResumeHistoryRemoval
+                | Purpose::RemoveUnusedRecoveryFiles
+                | Purpose::ResumeRecoveryFileCleanup => false,
             });
         self.mutation_authorize.set_sensitive(allowed);
     }
@@ -2116,14 +2120,27 @@ impl AccountWindow {
                         .title("Library Recovery History")
                         .content_width(620)
                         .content_height(640)
-                        .child(&history_view::content(&history, restore, finish, {
-                            let weak = Rc::downgrade(&this);
-                            Rc::new(move |selection| {
-                                if let Some(this) = weak.upgrade() {
-                                    this.remove_saved_history(selection);
-                                }
-                            })
-                        }))
+                        .child(&history_view::content(
+                            &history,
+                            restore,
+                            finish,
+                            {
+                                let weak = Rc::downgrade(&this);
+                                Rc::new(move |selection| {
+                                    if let Some(this) = weak.upgrade() {
+                                        this.remove_saved_history(selection);
+                                    }
+                                })
+                            },
+                            {
+                                let weak = Rc::downgrade(&this);
+                                Rc::new(move || {
+                                    if let Some(this) = weak.upgrade() {
+                                        this.cleanup_recovery_files();
+                                    }
+                                })
+                            },
+                        ))
                         .build();
                     let weak = Rc::downgrade(&this);
                     dialog.connect_closed(move |_| {
@@ -2394,6 +2411,8 @@ impl AccountWindow {
                 Purpose::CancelSavedChanges => "Authorize Restoration Cancellation",
                 Purpose::RemoveSavedHistory => "Authorize History Removal",
                 Purpose::ResumeHistoryRemoval => "Authorize History Removal Completion",
+                Purpose::RemoveUnusedRecoveryFiles => "Authorize Recovery File Cleanup",
+                Purpose::ResumeRecoveryFileCleanup => "Authorize Recovery File Cleanup Completion",
             })
             .body(match purpose {
                 Purpose::RevealRecovery => "Enter your computer login password to show this library's pending recovery code.",
@@ -2407,6 +2426,8 @@ impl AccountWindow {
                 Purpose::CancelSavedChanges => "Enter your computer login password to cancel a saved restoration before its file update starts. All saved versions remain available.",
                 Purpose::RemoveSavedHistory => "Enter your computer login password to permanently remove the reviewed saved entry and its encrypted recovery files.",
                 Purpose::ResumeHistoryRemoval => "Enter your computer login password to finish the saved removal of this history entry and its encrypted recovery files.",
+                Purpose::RemoveUnusedRecoveryFiles => "Enter your computer login password to discard the reviewed encrypted recovery files that no saved history references. Their previous contents may have no other copy. Saved history, current files and active keys are kept.",
+                Purpose::ResumeRecoveryFileCleanup => "Enter your computer login password to finish only the saved recovery-file cleanup. Newly created files and saved history are kept.",
             })
             .extra_child(&password)
             .build();

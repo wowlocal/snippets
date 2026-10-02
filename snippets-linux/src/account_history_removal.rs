@@ -29,6 +29,23 @@ impl Retained {
             None => capacity::prepare_resume(store),
         }
         .map_err(Failure::HistoryRemoval)?;
+        self.retain(review, preparation)
+    }
+    pub(crate) fn prepare_cleanup<B: Backend>(
+        &mut self,
+        store: &mut Store<B>,
+        preparation: Preparation,
+    ) -> Result<Reply> {
+        self.reviewed = None;
+        preparation.validate()?;
+        let review = capacity::prepare_cleanup(store).map_err(Failure::HistoryRemoval)?;
+        preparation.validate()?;
+        match review {
+            Some(review) => self.retain(review, preparation),
+            None => Ok(Reply::NoUnusedRecoveryFiles),
+        }
+    }
+    fn retain(&mut self, review: capacity::Review, preparation: Preparation) -> Result<Reply> {
         preparation.validate()?;
         let summary = review.summary();
         let target = review

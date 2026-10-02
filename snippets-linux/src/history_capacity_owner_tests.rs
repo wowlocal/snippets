@@ -1,6 +1,8 @@
 //! Actual terminal archives, encrypted files and production removal owners.
 use super::*;
 use crate::key_store::{capacity, history, restoration as restore};
+#[path = "history_cleanup_owner_tests.rs"]
+mod cleanup;
 
 fn finished_switch() -> Setup {
     let mut s = setup();
