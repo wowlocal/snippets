@@ -415,7 +415,7 @@ struct Session {
 }
 enum AuthenticatedApply<'a> {
     Restoration(&'a [crate::journal::RestorationGeneration]),
-    DeletionKeep(Uuid),
+    DeletionDecision(Uuid),
     DeletionRepair(&'a crate::journal::PreservationRepair),
 }
 
@@ -642,6 +642,32 @@ impl Vault {
     ) -> crate::primary::Result<crate::primary::Prepared> {
         self.prepare_restoration_apply(library, journal, device, outcomes, expected, &[])
     }
+    /// Caller holds the common library lock. Borrow only within bounded offline
+    /// preparation; reload without re-locking, and never refresh session idle.
+    pub(crate) fn with_restoration_keys_locked<T>(
+        &mut self,
+        library: &Library,
+        prepare: impl FnOnce(&crate::materializer::Keyring<'_>) -> T,
+    ) -> crate::primary::Result<T> {
+        self.same_root(library)?;
+        self.reload_locked()?;
+        if !self.is_unlocked() {
+            return Err(crate::primary::Failure::VaultLocked);
+        }
+        let document = self
+            .document
+            .as_ref()
+            .ok_or(crate::primary::Failure::IncompatibleVault)?;
+        let keys = crate::materializer::Keyring::new(
+            &self.session.as_ref().expect("unlocked").key,
+            document,
+        )?;
+        let result = prepare(&keys);
+        if !self.is_unlocked() {
+            return Err(crate::primary::Failure::VaultLocked);
+        }
+        Ok(result)
+    }
     pub(crate) fn prepare_restoration_apply(
         &mut self,
         library: &Library,
@@ -660,7 +686,7 @@ impl Vault {
             AuthenticatedApply::Restoration(history),
         )
     }
-    pub(crate) fn prepare_deletion_keep(
+    pub(crate) fn prepare_deletion_apply(
         &mut self,
         library: &Library,
         journal: &crate::journal::Journal,
@@ -675,7 +701,7 @@ impl Vault {
             device,
             outcomes,
             expected,
-            AuthenticatedApply::DeletionKeep(id),
+            AuthenticatedApply::DeletionDecision(id),
         )
     }
     pub(crate) fn prepare_deletion_repair(
@@ -720,7 +746,7 @@ impl Vault {
         )?;
         let (history, repair, reviewed_id) = match purpose {
             AuthenticatedApply::Restoration(history) => (history, None, None),
-            AuthenticatedApply::DeletionKeep(id) => (&[][..], None, Some(id)),
+            AuthenticatedApply::DeletionDecision(id) => (&[][..], None, Some(id)),
             AuthenticatedApply::DeletionRepair(repair) => {
                 (&[][..], Some(repair), Some(repair.id()))
             }
@@ -1084,6 +1110,44 @@ mod tests {
         assert!(vault.session.is_none() && !temp.path().join("Sync").exists());
     }
     #[test]
+    fn restoration_data_borrow_keeps_idle_deadline_and_rejects_expired_or_replaced_keys() {
+        let (temp, library, mut vault) = setup();
+        let used = vault.session.as_ref().unwrap().used;
+        vault.test_now = Some(used + IDLE_TIMEOUT - Duration::from_secs(1));
+        let guard = library.lock().unwrap();
+        assert!(
+            vault
+                .with_restoration_keys_locked(&library, |_| true)
+                .unwrap()
+        );
+        assert_eq!(vault.session.as_ref().unwrap().used, used);
+        vault.test_now = Some(used + IDLE_TIMEOUT);
+        assert!(matches!(
+            vault.with_restoration_keys_locked(&library, |_| panic!(
+                "Expired key must not be borrowed"
+            )),
+            Err(crate::primary::Failure::VaultLocked)
+        ));
+        drop(guard);
+        assert!(vault.session.is_none() && !temp.path().join("Sync").exists());
+        let (_temp, library, mut vault) = setup();
+        let mut replacement = fixture();
+        replacement.wrap_pass = replacement.wrap_recovery.clone();
+        model::atomic_write(
+            &library.root.join("Vault/vault.json"),
+            &replacement.encode().unwrap(),
+        )
+        .unwrap();
+        let _guard = library.lock().unwrap();
+        assert!(matches!(
+            vault.with_restoration_keys_locked(&library, |_| panic!(
+                "Replaced key must not be borrowed"
+            )),
+            Err(crate::primary::Failure::VaultLocked)
+        ));
+        assert!(vault.session.is_none());
+    }
+    #[test]
     fn deletion_keep_borrow_does_not_extend_idle_and_expired_owner_refuses_the_review() {
         let (temp, library, mut vault) = setup();
         let used = vault.session.as_ref().unwrap().used;
@@ -1093,7 +1157,7 @@ mod tests {
             dataset: crate::cloud::Binding::from_checkpoint([0x44; 32]),
         });
         let plan = vault
-            .prepare_deletion_keep(
+            .prepare_deletion_apply(
                 &library,
                 &journal,
                 "11111111",
@@ -1106,7 +1170,7 @@ mod tests {
         assert_eq!(vault.session.as_ref().unwrap().used, used);
         vault.test_now = Some(used + IDLE_TIMEOUT);
         assert!(matches!(
-            vault.prepare_deletion_keep(
+            vault.prepare_deletion_apply(
                 &library,
                 &journal,
                 "11111111",

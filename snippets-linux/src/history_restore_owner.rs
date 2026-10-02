@@ -104,7 +104,7 @@ fn require_inputs<B: Backend>(
 pub fn prepare<B: Backend>(
     store: &mut Store<B>,
     selection: Selection,
-    vault: Option<&mut Vault>,
+    mut vault: Option<&mut Vault>,
 ) -> Result<Review> {
     store.transaction_with(|owner| {
         let archive = Archive::load(owner)?;
@@ -154,7 +154,7 @@ pub fn prepare<B: Backend>(
             let saved_knowledge = saved.projection_knowledge();
             let saved_generations = saved.restoration_generations()?;
             let current_knowledge = source.journal.projection_knowledge();
-            let floor = saved
+            let envelopes = saved
                 .projected()
                 .values()
                 .chain(saved_knowledge.values())
@@ -173,17 +173,40 @@ pub fn prepare<B: Backend>(
                         .flat_map(|g| &g.sources)
                         .flat_map(|(_, copies)| copies),
                 )
-                .map(|e| &e.hlc)
-                .max();
-            let stamp = crate::clock::stamp(owner.root(), floor, now)?;
+                .collect::<Vec<_>>();
+            let mut floor = None;
+            for e in envelopes {
+                floor = floor.max(Some(e.hlc.clone()));
+                for variant in merge::secure_variants(e)? {
+                    floor = floor.max(Some(variant.source_hlc));
+                }
+            }
+            let stamp = crate::clock::stamp(owner.root(), floor.as_ref(), now)?;
             let updated_at = wall.as_secs_f64() - 978_307_200.0;
-            let plan = planning::prepare(
-                &saved,
-                &source.journal,
-                &snapshot.records,
-                stamp,
-                updated_at,
-            )?;
+            let plan = if vault.as_deref_mut().is_some_and(Vault::is_unlocked) {
+                vault
+                    .as_deref_mut()
+                    .expect("unlocked")
+                    .with_restoration_keys_locked(&library, |keys| {
+                        planning::prepare_with_keys(
+                            &saved,
+                            &source.journal,
+                            &snapshot.records,
+                            stamp,
+                            updated_at,
+                            Some(keys),
+                        )
+                    })??
+            } else {
+                planning::prepare_with_keys(
+                    &saved,
+                    &source.journal,
+                    &snapshot.records,
+                    stamp,
+                    updated_at,
+                    None,
+                )?
+            };
             (source, snapshot, plan, device, saved_binding)
         };
         let secure = plan.outcomes.iter().any(|o| {

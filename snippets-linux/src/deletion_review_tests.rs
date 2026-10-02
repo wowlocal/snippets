@@ -8,6 +8,8 @@ use crate::{
     snapshot_review::tests::{SALT, Server, cursor, envelope, feed, key, scope, write_primary},
 };
 use std::{cell::Cell, fs};
+#[path = "deletion_missing_tests.rs"]
+mod missing_originals;
 #[path = "deletion_preservation_tests.rs"]
 mod preservation;
 fn owner<'a>(

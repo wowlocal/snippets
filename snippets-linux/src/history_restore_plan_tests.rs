@@ -322,3 +322,138 @@ fn restored_fields_with_only_a_later_local_timestamp_are_already_current() {
         Err(Failure::Unavailable)
     ));
 }
+
+fn plain_group() -> (Envelope, Envelope, Envelope) {
+    let outcome = merge::merge(
+        None,
+        Some(&envelope(1, "Public archived loser", 1)),
+        Some(&envelope(1, "Public archived root", 2)),
+    )
+    .unwrap();
+    let source = outcome.survivor.unwrap();
+    let original = outcome.conflict_copies[0].clone();
+    let mut edit = original.clone();
+    edit.hlc = Hlc::foreign(20);
+    edit.fields.as_mut().unwrap().content = zeroize::Zeroizing::new(b"Public archived C1".to_vec());
+    (source, original, edit)
+}
+
+#[test]
+fn archived_deleted_copy_restores_live_original_and_preserves_a_new_current_edit() {
+    let (source, original, _) = plain_group();
+    let deleted = original
+        .tombstone(Hlc::foreign(30), "22222222".into(), true)
+        .unwrap();
+    let mut archived = archive(&[source.clone(), deleted]);
+    archived
+        .stage_conflict(&source, std::slice::from_ref(&original))
+        .unwrap();
+    let mut live = original.clone();
+    live.hlc = Hlc::foreign(40);
+    live.fields.as_mut().unwrap().content =
+        zeroize::Zeroizing::new(b"Public new current copy".to_vec());
+    let plan = prepare(
+        &archived,
+        &journal(1),
+        &map(&[source.clone(), live]),
+        stamp(),
+        15.0,
+    )
+    .unwrap();
+    assert_eq!(plan.summary.restored_records, 2);
+    assert_eq!(plan.summary.preserved_versions, 1);
+    let restored = &plan.next.entry(original.id).unwrap().desired;
+    assert!(
+        !restored.deleted
+            && restored.fields.as_ref().unwrap().content
+                == original.fields.as_ref().unwrap().content
+    );
+    assert!(restored.hlc == stamp());
+    assert!(
+        plan.outcomes
+            .iter()
+            .flat_map(|o| &o.conflict_copies)
+            .any(|e| e.fields.as_ref().unwrap().content.as_slice() == b"Public new current copy")
+    );
+    assert!(plan.next.deletion_approvals.is_empty());
+}
+
+#[test]
+fn deleted_source_uses_retained_live_source_without_replaying_the_tombstone() {
+    let (source, original, _) = plain_group();
+    let deleted = source
+        .tombstone(Hlc::foreign(30), "22222222".into(), true)
+        .unwrap();
+    let mut archived = archive(&[deleted, original.clone()]);
+    archived
+        .stage_conflict(&source, std::slice::from_ref(&original))
+        .unwrap();
+    let plan = prepare(&archived, &journal(1), &BTreeMap::new(), stamp(), 15.0).unwrap();
+    assert_eq!(plan.summary.restored_records, 2);
+    let restored = &plan.next.entry(source.id).unwrap().desired;
+    assert!(restored.fields.as_ref().unwrap().content == source.fields.as_ref().unwrap().content);
+    assert!(restored.hlc == stamp() && !restored.deleted);
+    assert!(plan.next.deletion_approvals.is_empty());
+}
+
+#[test]
+fn tombstone_parent_with_no_live_source_restores_only_its_retained_live_copy() {
+    let (source, original, _) = plain_group();
+    let deleted = source
+        .tombstone(Hlc::foreign(30), "22222222".into(), true)
+        .unwrap();
+    let mut archived = archive(std::slice::from_ref(&deleted));
+    archived
+        .stage_conflict(&deleted, std::slice::from_ref(&original))
+        .unwrap();
+    let current = envelope(1, "Public current parent must stay", 40);
+    let plan = prepare(
+        &archived,
+        &journal(1),
+        &map(std::slice::from_ref(&current)),
+        stamp(),
+        15.0,
+    )
+    .unwrap();
+    assert_eq!(plan.summary.restored_records, 1);
+    assert!(plan.next.entry(source.id).is_none());
+    assert_eq!(plan.outcomes[0].survivor.as_ref().unwrap().id, original.id);
+    assert!(plan.history.is_empty());
+}
+
+#[test]
+fn deleted_nested_copy_prefers_its_retained_c1_source_beside_the_parent_c0() {
+    let (source, original, edit) = plain_group();
+    let nested = merge::merge(None, Some(&original), Some(&edit)).unwrap();
+    let selected = nested.survivor.unwrap();
+    let leaf = nested.conflict_copies[0].clone();
+    let deleted = selected
+        .tombstone(Hlc::foreign(30), "22222222".into(), true)
+        .unwrap();
+    let mut archived = archive(&[source.clone(), deleted, leaf.clone()]);
+    archived
+        .stage_conflict(&source, std::slice::from_ref(&original))
+        .unwrap();
+    archived
+        .stage_conflict(&selected, std::slice::from_ref(&leaf))
+        .unwrap();
+    let plan = prepare(&archived, &journal(1), &BTreeMap::new(), stamp(), 15.0).unwrap();
+    assert_eq!(plan.summary.restored_records, 3);
+    assert!(
+        plan.next
+            .entry(selected.id)
+            .unwrap()
+            .desired
+            .fields
+            .as_ref()
+            .unwrap()
+            .content
+            == selected.fields.as_ref().unwrap().content
+    );
+    let parent = plan
+        .outcomes
+        .iter()
+        .find(|o| o.survivor.as_ref().unwrap().id == source.id)
+        .unwrap();
+    assert!(parent.conflict_copies.iter().any(|e| e == &original));
+}

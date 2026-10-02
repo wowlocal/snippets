@@ -3,6 +3,9 @@ use super::*;
 use crate::{clock::Hlc, journal::Journal, merge, wire::Envelope};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "history_restore_data.rs"]
+mod data;
+
 pub(super) struct Plan {
     pub outcomes: Vec<merge::Outcome>,
     pub expected: primary::ReadSet,
@@ -26,32 +29,7 @@ fn equivalent(a: &Envelope, b: &Envelope) -> bool {
     };
     a.deleted == b.deleted && a.secure == b.secure && fields_match && a.extensions == b.extensions
 }
-/// Latest held desire wins over an unchanged archived primary; confirmed
-/// tombstones are not restored as local deletion intent. Frozen remote transport
-/// objects are deliberately not inputs to the current journal.
-fn saved_records(archived: &Journal) -> Result<BTreeMap<Uuid, Envelope>> {
-    if archived.primary_intent.is_some() {
-        return Err(Failure::Changed);
-    }
-    let mut saved = archived.projected().clone();
-    for (id, envelope) in archived.projection_knowledge() {
-        if let Some(entry) = archived.entry(id) {
-            saved.insert(id, entry.desired.clone());
-        } else {
-            saved.entry(id).or_insert(envelope);
-        }
-    }
-    for generation in archived.restoration_generations()? {
-        for (id, envelope) in generation.targets {
-            saved.entry(id).or_insert(envelope);
-        }
-    }
-    for envelope in saved.values() {
-        merge::validate(envelope)?;
-    }
-    saved.retain(|_, envelope| !envelope.deleted);
-    Ok(saved)
-}
+#[cfg(test)]
 pub(super) fn prepare(
     archived: &Journal,
     current: &Journal,
@@ -59,15 +37,24 @@ pub(super) fn prepare(
     stamp: Hlc,
     updated_at: f64,
 ) -> Result<Plan> {
+    prepare_with_keys(archived, current, physical, stamp, updated_at, None)
+}
+pub(super) fn prepare_with_keys(
+    archived: &Journal,
+    current: &Journal,
+    physical: &BTreeMap<Uuid, Envelope>,
+    stamp: Hlc,
+    updated_at: f64,
+    keys: Option<&crate::materializer::Keyring<'_>>,
+) -> Result<Plan> {
     if current.primary_intent.is_some() || !updated_at.is_finite() || stamp.device() == "00000000" {
         return Err(Failure::Changed);
     }
-    let saved = saved_records(archived)?;
-    let history = if archived.has_queued_generations() {
-        archived.restoration_generations()?
-    } else {
-        Vec::new()
-    };
+    let data::Data {
+        saved,
+        preservation,
+        history,
+    } = data::resolve(archived, keys)?;
     if saved
         .values()
         .chain(physical.values())
@@ -102,9 +89,12 @@ pub(super) fn prepare(
         }
     }
     selected.extend(plan.history.iter().flat_map(|g| g.targets.keys().copied()));
-    let preservation = archived.preservation_data();
     let mut links: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
-    for (a, b) in archived.preservation_links() {
+    for (a, b) in archived.preservation_links().into_iter().chain(
+        preservation
+            .values()
+            .flat_map(|(source, copies)| copies.iter().map(|copy| (source.id, copy.id))),
+    ) {
         links.entry(a).or_default().insert(b);
         links.entry(b).or_default().insert(a);
     }
@@ -116,14 +106,6 @@ pub(super) fn prepare(
                     queue.push_back(*next);
                 }
             }
-        }
-    }
-    for id in &selected {
-        if !saved.contains_key(id)
-            && (archived.entry(*id).is_some_and(|e| e.desired.deleted)
-                || archived.projected().get(id).is_some_and(|e| e.deleted))
-        {
-            return Err(Failure::PreservationRequired);
         }
     }
     for generation in &plan.history {

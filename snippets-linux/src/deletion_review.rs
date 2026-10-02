@@ -96,6 +96,7 @@ pub struct Review {
     live: Option<Envelope>,
     source: Source,
     repair: Option<crate::journal::PreservationRepair>,
+    materialize: bool,
     summary: Summary,
 }
 impl Review {
@@ -190,6 +191,13 @@ fn candidate(
             return Ok((e.id, Source::Local));
         }
     }
+    for variant in journal.unmaterialized_variants()? {
+        if !snapshot.records.contains_key(&variant.copy_id)
+            && !journal.known_absence(variant.copy_id)
+        {
+            return Ok((variant.copy_id, Source::Local));
+        }
+    }
     // Preserve a prepared tombstone's original wire bytes and generation.
     if let Some(packet) = &journal.outbound
         && packet.receipts.is_none()
@@ -234,20 +242,37 @@ impl Owner<'_> {
         };
         let (id, source) = candidate(&checkpoint.journal, &snapshot, self)?;
         let live = retained_live(&checkpoint.journal, snapshot.records.get(&id), id).cloned();
-        if (checkpoint.journal.dependency_owns(id)
-            && !checkpoint.journal.preservation_materialized(id)?)
+        let materialize = checkpoint.journal.dependency_owns(id)
+            && !checkpoint.journal.preservation_materialized(id)?;
+        let variant = checkpoint
+            .journal
+            .unmaterialized_variants()?
+            .into_iter()
+            .find(|v| v.copy_id == id);
+        if (materialize && checkpoint.journal.is_preservation_source(id))
             || live
                 .as_ref()
                 .is_some_and(|e| merge::has_unresolved(Some(e)))
         {
             return Err(Failure::PreservationRequired);
         }
+        if let Some(variant) = &variant
+            && snapshot.records.get(&id).is_some_and(|e| {
+                !merge::matching_provenance(e, variant.source_id, &variant.fingerprint)
+            })
+        {
+            return Err(primary::Failure::ReservedCollision.into());
+        }
         if matches!(source, Source::Local)
-            && live.as_ref().is_none_or(|e| !snapshot.has_file(e.secure))
+            && live.as_ref().map_or_else(
+                || variant.is_none() || !snapshot.has_file(true),
+                |e| !snapshot.has_file(e.secure),
+            )
         {
             return Err(Failure::MissingFile);
         }
-        let repair = if matches!(source, Source::Inbound(..) | Source::Outbound(..))
+        let repair = if !materialize
+            && matches!(source, Source::Inbound(..) | Source::Outbound(..))
             && let Some(retained) = &live
         {
             checkpoint
@@ -263,10 +288,23 @@ impl Owner<'_> {
             _ => Kind::CloudDeletion,
         };
         let fields = live.as_ref().and_then(|e| e.fields.as_ref());
+        let copy_name = variant
+            .as_ref()
+            .map(crate::materializer::copy_display_name)
+            .transpose()
+            .map_err(primary::Failure::from)?;
         let secure = live.as_ref().map_or_else(
-            || match &source {
-                Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => e.secure,
-                _ => false,
+            || {
+                if variant.is_some() {
+                    true
+                } else {
+                    match &source {
+                        Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => {
+                            e.secure
+                        }
+                        _ => false,
+                    }
+                }
             },
             |e| e.secure,
         );
@@ -274,17 +312,19 @@ impl Owner<'_> {
             kind,
             name: fields
                 .map(|f| f.name.clone())
+                .or(copy_name)
                 .unwrap_or_else(|| "Deleted snippet".into()),
             keyword: fields.map(|f| f.keyword.clone()).unwrap_or_default(),
             secure,
-            can_keep: live.is_some() && (!secure || snapshot.has_file(true)),
-            keep_requires_vault: repair_requires_vault
+            can_keep: (live.is_some() || variant.is_some()) && (!secure || snapshot.has_file(true)),
+            keep_requires_vault: materialize
+                || repair_requires_vault
                 || live.as_ref().is_some_and(|e| {
                     e.secure
                         && (e.extensions.contains_key(merge::COPY_PROVENANCE)
                             || !e.extensions.contains_key("vaultKID"))
                 }),
-            delete_requires_vault: repair_requires_vault,
+            delete_requires_vault: materialize || repair_requires_vault,
         };
         let after = self.review_preflight(remote)?;
         if after.feed != observed.feed {
@@ -300,6 +340,7 @@ impl Owner<'_> {
             live,
             source,
             repair,
+            materialize,
             summary,
         })
     }
@@ -334,7 +375,7 @@ impl Owner<'_> {
         remote: &mut impl Remote,
         mut review: Review,
         choice: Choice,
-        vault: Option<&mut crate::vault::Vault>,
+        mut vault: Option<&mut crate::vault::Vault>,
         fault: Option<u8>,
     ) -> Result<Kind> {
         if review.root != self.library.root || review.checkpoint.journal.scope() != self.scope {
@@ -363,6 +404,26 @@ impl Owner<'_> {
         }
         let mut next = review.checkpoint.journal.clone();
         next.key_epoch = Some(self.key_epoch);
+        if review.materialize {
+            let vault = vault.as_deref_mut().ok_or(Failure::VaultLocked)?;
+            let _guard = self.library.lock().map_err(|_| journal::Failure::Storage)?;
+            next = vault.with_restoration_keys_locked(self.library, |keys| {
+                next.materialize_preservation(review.id, keys)
+            })??;
+            if review.live.is_none() {
+                review.live = next.preservation_original(review.id).cloned();
+            }
+            review.repair = if matches!(review.source, Source::Inbound(..) | Source::Outbound(..)) {
+                review
+                    .live
+                    .as_ref()
+                    .map(|live| next.deletion_repair(review.id, &review.snapshot.records, live))
+                    .transpose()?
+                    .flatten()
+            } else {
+                None
+            };
+        }
         if review
             .repair
             .as_ref()
@@ -418,7 +479,7 @@ impl Owner<'_> {
             if let Some(vault) = vault {
                 vault.prepare_deletion_repair(
                     self.library,
-                    &review.checkpoint.journal,
+                    &next,
                     &review.device,
                     &[outcome],
                     &expected,
@@ -427,7 +488,7 @@ impl Owner<'_> {
             } else {
                 primary::prepare_deletion_repair(
                     self.library,
-                    &review.checkpoint.journal,
+                    &next,
                     &review.device,
                     &[outcome],
                     &expected,
@@ -435,25 +496,19 @@ impl Owner<'_> {
                     None,
                 )?
             }
-        } else if choice == Choice::Keep
+        } else if (choice == Choice::Keep || review.materialize)
             && let Some(vault) = vault
         {
-            vault.prepare_deletion_keep(
+            vault.prepare_deletion_apply(
                 self.library,
-                &review.checkpoint.journal,
+                &next,
                 &review.device,
                 &[outcome],
                 &expected,
                 review.id,
             )?
         } else {
-            primary::prepare(
-                self.library,
-                &review.checkpoint.journal,
-                &review.device,
-                &[outcome],
-                &expected,
-            )?
+            primary::prepare(self.library, &next, &review.device, &[outcome], &expected)?
         };
         if !prepared.matches_snapshot(&review.snapshot) {
             return Err(Failure::Changed);
@@ -547,19 +602,33 @@ impl Owner<'_> {
             Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => Some(e),
             Source::Local => None,
         };
-        let floor = known
+        let frames = journal.preservation_generations(review.id)?;
+        let envelopes = known
             .values()
             .chain(journal.projected().values())
             .chain(review.snapshot.records.values())
             .chain(review.live.as_ref())
             .chain(deletion)
-            .map(|e| &e.hlc)
-            .max();
+            .chain(frames.iter().flat_map(|g| g.targets.values()))
+            .chain(frames.iter().flat_map(|g| &g.sources).map(|(e, _)| e))
+            .chain(
+                frames
+                    .iter()
+                    .flat_map(|g| &g.sources)
+                    .flat_map(|(_, copies)| copies),
+            );
+        let mut floor = None;
+        for e in envelopes {
+            floor = floor.max(Some(e.hlc.clone()));
+            for variant in merge::secure_variants(e).map_err(|_| Failure::PreservationRequired)? {
+                floor = floor.max(Some(variant.source_hlc));
+            }
+        }
         let _guard = self.library.lock().map_err(|_| journal::Failure::Storage)?;
         primary::require_ready(&self.library.root)?;
         Ok(crate::clock::stamp(
             &self.library.root,
-            floor,
+            floor.as_ref(),
             chrono::Utc::now().timestamp_millis().max(0) as u64,
         )?)
     }

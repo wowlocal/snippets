@@ -11,6 +11,88 @@ fn owned(dependencies: &BTreeMap<Uuid, Dependency>) -> BTreeSet<Uuid> {
         .collect()
 }
 impl Journal {
+    /// Missing carrier originals only. This exposes sealed data for preparation,
+    /// never permission to infer a receipt, overwrite C1 or recreate a file.
+    pub(crate) fn unmaterialized_variants(&self) -> Result<Vec<merge::SecureVariant>> {
+        codec::validate(self)?;
+        let mut result = Vec::new();
+        for edge in self.dependencies.values().chain(
+            self.generations
+                .iter()
+                .flat_map(|g| g.dependencies.values()),
+        ) {
+            for variant in merge::secure_variants(&edge.source)? {
+                if edge
+                    .requirements
+                    .get(&variant.fingerprint)
+                    .is_some_and(|r| r.snapshot.is_none())
+                {
+                    result.push(variant);
+                }
+            }
+        }
+        Ok(result)
+    }
+    /// Bounded vault preparation fills only missing immutable snapshots in the
+    /// selected component. The clone has no authority until the primary WAL is
+    /// committed by the reviewed owner. Every current offer/CAS/receipt, target,
+    /// queue nonce, acceptance and deletion permit remains with its old owner.
+    pub(crate) fn materialize_preservation(
+        &self,
+        id: Uuid,
+        keys: &crate::materializer::Keyring<'_>,
+    ) -> crate::primary::Result<Self> {
+        codec::validate(self)?;
+        let affected = self.preservation_component_ids(id);
+        let mut next = self.clone();
+        for graph in std::iter::once(&mut next.dependencies)
+            .chain(next.generations.iter_mut().map(|g| &mut g.dependencies))
+        {
+            let sources: Vec<_> = graph
+                .iter()
+                .filter(|(id, _)| affected.contains(id))
+                .map(|(_, edge)| edge.source.clone())
+                .collect();
+            let originals = graph
+                .iter()
+                .filter(|(id, _)| affected.contains(id))
+                .flat_map(|(_, edge)| edge.requirements.values())
+                .filter_map(|r| r.snapshot.as_ref().map(|e| (e.id, e.clone())))
+                .collect();
+            let evidence = crate::materializer::Evidence::prepare(&sources, keys, &originals)?;
+            for (source, edge) in graph.iter_mut().filter(|(id, _)| affected.contains(id)) {
+                for r in edge
+                    .requirements
+                    .values_mut()
+                    .filter(|r| r.snapshot.is_none())
+                {
+                    let copy = evidence
+                        .copies()
+                        .get(&r.copy_id)
+                        .ok_or(crate::primary::Failure::InvalidState)?;
+                    if !merge::matching_provenance(copy, *source, &r.fingerprint) {
+                        return Err(crate::primary::Failure::ReservedCollision);
+                    }
+                    r.snapshot = Some(copy.clone());
+                }
+            }
+        }
+        codec::validate(&next)?;
+        crate::materializer::authenticate_generations(&next.preservation_generations(id)?, keys)?;
+        Ok(next)
+    }
+    pub(crate) fn preservation_original(&self, id: Uuid) -> Option<&Envelope> {
+        self.dependencies
+            .values()
+            .chain(
+                self.generations
+                    .iter()
+                    .flat_map(|g| g.dependencies.values()),
+            )
+            .flat_map(|edge| edge.requirements.values())
+            .filter(|r| r.copy_id == id)
+            .find_map(|r| r.snapshot.as_ref())
+    }
     /// A reviewed absence may wait behind complete saved originals. Missing
     /// evidence still needs the vault/materialization owner; this never infers
     /// copy acceptance from the current record or its provenance.
@@ -70,6 +152,13 @@ impl Journal {
                     .flat_map(|g| g.dependencies.values()),
             )
             .any(|edge| edge.requirements.values().any(|r| r.copy_id == id))
+    }
+    pub(crate) fn is_preservation_source(&self, id: Uuid) -> bool {
+        self.dependencies.contains_key(&id)
+            || self
+                .generations
+                .iter()
+                .any(|g| g.dependencies.contains_key(&id))
     }
     pub(crate) fn deletion_repair(
         &self,

@@ -122,7 +122,8 @@ in one encrypted checkpoint, applies records in server order, and resumes retain
 pages after a crash. Native **Sync Now** coordinates receiving and sending; the
 separate **Receive Cloud Changes** action remains available. Saved local changes
 have native restoration controls, including archived nested conflict groups and
-restoration beside current pending groups and ordered archived generations.
+deleted/missing archived participants, restoration beside current pending groups
+and ordered archived generations.
 Restoring archived secure records into a different vault remains pending. Startup stays offline unless automatic
 sync was explicitly enabled for a verified saved library.
 
@@ -247,6 +248,12 @@ copies remain separate from later edits, including encrypted copies. Subsequent
 sync saves nested versions before the original copy, confirms the parent, then
 sends the edited copy. Historical acknowledgements and CAS versions are not reused.
 When current conflict groups are still pending, their original sends finish first.
+Deleted or missing archived conflict copies can be restored from retained live
+versions. If a deleted parent has no retained body, its live copies are restored
+while the current parent stays in place. Missing encrypted originals are created
+from authenticated saved conflict data after unlocking the matching vault. Newer
+current edits are kept as disabled copies. Existing authorized deletion requests
+finish before the new restored version; archived deletions are never sent again.
 Restored changes wait in the encrypted journal and survive a restart. Each version
 uses fresh acknowledgements and the current server version when it becomes eligible.
 An archive's pending generations return in their saved order, including exact
@@ -258,14 +265,14 @@ before the final file update. Old server acknowledgements and offers are discard
 update starts and keeps later local edits and every retained image. After the file
 update begins, finish it instead. Reconnect and select a library before syncing
 restored records. A changed journal or unrecognized file generation remains halted.
-Restoration refuses incompatible vaults and historically deleted conflict participants;
+Restoration refuses incompatible vaults and unrelated occupants of reserved copy identifiers;
 it never applies an ordinary-only subset of a secure restoration. Conflicting
 keywords require a separate review. Restoration history is bounded to eight receipts
 and 128 KiB; encrypted file images share the existing 32-file/512-MiB budget, with
 no automatic eviction. Pending restoration generations are also capped at eight;
 capacity exhaustion preserves the existing queue. Restoring multiple saved generations
 also uses this budget; a proposal that cannot fit changes no library files or keys.
-Capacity management, recovery of deleted conflict copies, and restoration of
+Capacity management and restoration of
 archived secure records into a different vault remain unfinished. The combined native GTK/keyring/PAM
 workflow still needs live verification.
 
@@ -366,10 +373,14 @@ copy deletions; deleting a source that was never offered does not reupload its
 enabled body. Restoring a queued deletion cancels only its unsent tombstone; an
 authorized request with an unknown outcome keeps its original bytes and CAS.
 A compatible vault restores
-the retained sealed body without revealing it or replacing key material. Missing
-whole library/vault files, missing preservation originals, and secure records
-that still carry unresolved conflict evidence
-require separate recovery; this action cannot approve a mass deletion.
+the retained sealed body without revealing it or replacing key material. A secure
+copy whose original was never created can now be reviewed from its retained
+conflict metadata. Both choices ask for the matching vault and authenticate the
+whole connected group before preparing that original. Existing originals and
+requests retain their exact bytes; the chosen later version waits behind them.
+Missing whole library/vault files, selected sources with missing originals, and
+secure records that still carry unresolved conflict evidence require separate
+recovery; this action cannot approve a mass deletion.
 
 Restoring a protected conflict copy asks for the matching vault's passphrase or
 recovery key. One bounded vault session verifies the latest sealed body and every

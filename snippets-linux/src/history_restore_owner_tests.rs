@@ -7,6 +7,9 @@ use crate::{
     snapshot_review::tests::{envelope, write_primary},
 };
 
+#[path = "history_restore_deleted_tests.rs"]
+mod deleted_participants;
+
 fn restored_setup() -> Setup {
     let mut s = setup();
     let reviewed = prepare(&mut s).unwrap();

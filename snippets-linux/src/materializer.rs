@@ -227,7 +227,7 @@ fn authenticate_variant(variant: &SecureVariant, keys: &Keyring<'_>) -> Result<Z
     keys.verify(&body, expected)?;
     Ok(body)
 }
-fn copy_fields(variant: &SecureVariant) -> Result<Fields> {
+pub(crate) fn copy_display_name(variant: &SecureVariant) -> Result<String> {
     let source = &variant.fields;
     // The Swift secure materializer uses the supplied metadata name verbatim,
     // never a preview of decrypted content, including for whitespace-only names.
@@ -242,8 +242,15 @@ fn copy_fields(variant: &SecureVariant) -> Result<Fields> {
     }
     let date = chrono::DateTime::from_timestamp(unix.floor() as i64, 0)
         .ok_or(Failure::MalformedVariant)?;
+    Ok(format!(
+        "{display} (conflict {} UTC)",
+        date.format("%Y-%m-%d %H:%M")
+    ))
+}
+fn copy_fields(variant: &SecureVariant) -> Result<Fields> {
+    let source = &variant.fields;
     let mut fields = source.clone();
-    fields.name = format!("{display} (conflict {} UTC)", date.format("%Y-%m-%d %H:%M"));
+    fields.name = copy_display_name(variant)?;
     fields.keyword.clear();
     fields.tags = model::normalize_tags(source.tags.iter().cloned().chain(["conflict".into()]));
     fields.is_enabled = false;
