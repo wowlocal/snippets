@@ -283,6 +283,7 @@ impl SelectedFile {
         });
         access.previous_suggested = true;
         access.previous_backup = file.is_backup();
+        preparation.validate()?;
         let selected = Self {
             token: uuid::Uuid::new_v4(),
             file,
@@ -305,6 +306,75 @@ impl SelectedFile {
         }
         self.file.validate(store)?;
         Ok(self.file)
+    }
+}
+
+/// Serialized worker retention. Tokens are consumed even by a failed attempt;
+/// neither roots nor credentials survive a preparation call.
+#[derive(Default)]
+pub(crate) struct Retained {
+    file: Option<SelectedFile>,
+    reviewed: Option<Reviewed>,
+}
+impl Retained {
+    pub(crate) fn keep_for(&mut self, command: &Command) {
+        if !matches!(
+            command,
+            Command::CommitRestoration { .. } | Command::Authenticate { .. }
+        ) {
+            self.reviewed = None;
+        }
+        if !matches!(command, Command::PrepareRestoration { .. }) {
+            self.file = None;
+        }
+    }
+    pub(crate) fn inspect<B: Backend>(
+        &mut self,
+        store: &mut Store<B>,
+        selection: &restoration::Selection,
+        path: &Path,
+        preparation: Preparation,
+    ) -> Result<Reply> {
+        self.file = None;
+        self.reviewed = None;
+        let (selected, methods) = SelectedFile::inspect(store, selection, path, preparation)?;
+        let token = selected.token();
+        self.file = Some(selected);
+        Ok(Reply::RestorationFile { token, methods })
+    }
+    pub(crate) fn prepare<B: Backend>(
+        &mut self,
+        store: &mut Store<B>,
+        selection: restoration::Selection,
+        credentials: Option<Credentials>,
+        preparation: Preparation,
+        source_file: Option<uuid::Uuid>,
+    ) -> Result<Reply> {
+        self.reviewed = None;
+        let selected = self.file.take();
+        preparation.validate()?;
+        let file = match source_file {
+            Some(token) => Some(
+                selected
+                    .ok_or(Failure::InvalidState)?
+                    .consume(store, token, &selection)?,
+            ),
+            None => None,
+        };
+        match prepare_with_file(store, selection, credentials, preparation, file)? {
+            Outcome::Authentication(methods) => Ok(Reply::RestorationAuthentication(methods)),
+            Outcome::Reviewed(reviewed) => {
+                let reply = reviewed.reply()?;
+                self.reviewed = Some(reviewed);
+                Ok(reply)
+            }
+        }
+    }
+    pub(crate) fn consume(&mut self, token: uuid::Uuid) -> Result<restoration::Review> {
+        self.reviewed
+            .take()
+            .ok_or(Failure::InvalidState)?
+            .consume(token)
     }
 }
 

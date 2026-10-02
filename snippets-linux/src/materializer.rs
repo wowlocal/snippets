@@ -23,6 +23,9 @@ pub type Result<T> = std::result::Result<T, Failure>;
 #[path = "materializer_rekey.rs"]
 mod rekey;
 pub(crate) use rekey::Rekey;
+#[path = "materializer_archived.rs"]
+mod archived;
+pub(crate) use archived::Archived;
 impl From<Error> for Failure {
     fn from(_: Error) -> Self {
         Self::MalformedVariant
@@ -303,6 +306,15 @@ pub fn validate_evidence(
     keys: &Keyring<'_>,
 ) -> Result<()> {
     authenticate(copy, keys, true)?;
+    if copy.extensions.len() != 3
+        || copy.extensions.get("vaultContentHash")
+            != variant.source_extensions.get("vaultContentHash")
+    {
+        return Err(Failure::MalformedVariant);
+    }
+    validate_evidence_fields(copy, variant)
+}
+fn validate_evidence_fields(copy: &Envelope, variant: &SecureVariant) -> Result<()> {
     let fields = copy.fields.as_ref().ok_or(Failure::MalformedVariant)?;
     let expected = copy_fields(variant)?;
     if copy.id != variant.copy_id
@@ -310,9 +322,6 @@ pub fn validate_evidence(
         || !merge::matching_provenance(copy, variant.source_id, &variant.fingerprint)
         || copy.hlc != variant.source_hlc
         || copy.origin != variant.source_origin
-        || copy.extensions.len() != 3
-        || copy.extensions.get("vaultContentHash")
-            != variant.source_extensions.get("vaultContentHash")
         || fields.name != expected.name
         || !fields.keyword.is_empty()
         || model::normalize_tags(fields.tags.clone()) != expected.tags

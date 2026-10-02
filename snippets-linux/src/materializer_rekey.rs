@@ -14,6 +14,7 @@ struct Body {
 struct Translator<'a, 'b> {
     old: &'a Keyring<'b>,
     new: &'a Keyring<'b>,
+    archived: bool,
     // Only ciphertext and keyed hashes are retained. Metadata changes do not
     // introduce different nonces for the same original body/record identity.
     bodies: BTreeMap<(Uuid, String, String), Body>,
@@ -23,17 +24,20 @@ impl Translator<'_, '_> {
         let mut target = source.clone();
         target.id = id;
         if source.secure {
-            let body = authenticated_body(source, self.old, true)?;
+            let body = if self.archived {
+                Archived::new(self.old).body(source)?
+            } else {
+                authenticated_body(source, self.old, true)?
+            };
             let fields = source.fields.as_ref().ok_or(Failure::MalformedVariant)?;
             let sealed = std::str::from_utf8(&fields.content)
                 .map_err(|_| Failure::MalformedVariant)?
                 .to_owned();
-            let hash = source
-                .extensions
-                .get("vaultContentHash")
-                .ok_or(Failure::IncompatibleVault)?
-                .as_text()?
-                .to_owned();
+            let hash = match source.extensions.get("vaultContentHash") {
+                Some(hash) => hash.as_text()?.to_owned(),
+                None if self.archived => Archived::new(self.old).hash(&body),
+                None => return Err(Failure::IncompatibleVault),
+            };
             let entry = self.bodies.entry((id, sealed, hash));
             let converted = match entry {
                 std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
@@ -65,10 +69,26 @@ impl Translator<'_, '_> {
     }
 }
 impl Rekey {
+    #[cfg(test)]
     pub(crate) fn prepare(
         records: &[&Envelope],
         old: &Keyring<'_>,
         new: &Keyring<'_>,
+    ) -> Result<Self> {
+        Self::prepare_inner(records, old, new, false)
+    }
+    pub(crate) fn prepare_archived(
+        records: &[&Envelope],
+        old: &Keyring<'_>,
+        new: &Keyring<'_>,
+    ) -> Result<Self> {
+        Self::prepare_inner(records, old, new, true)
+    }
+    fn prepare_inner(
+        records: &[&Envelope],
+        old: &Keyring<'_>,
+        new: &Keyring<'_>,
+        archived: bool,
     ) -> Result<Self> {
         let mut roles = BTreeMap::<Uuid, Option<merge::Provenance>>::new();
         let mut variants = BTreeMap::<Uuid, SecureVariant>::new();
@@ -94,7 +114,11 @@ impl Rekey {
             }
             roles.insert(record.id, provenance);
             if record.secure {
-                authenticate(record, old, true)?;
+                if archived {
+                    Archived::new(old).body(record)?;
+                } else {
+                    authenticate(record, old, true)?;
+                }
             }
             for variant in merge::secure_variants(record)? {
                 authenticate_variant(&variant, old)?;
@@ -143,6 +167,7 @@ impl Rekey {
         let mut translator = Translator {
             old,
             new,
+            archived,
             bodies: BTreeMap::new(),
         };
         let mut converted_variants = BTreeMap::<Uuid, (String, Value, merge::Provenance)>::new();

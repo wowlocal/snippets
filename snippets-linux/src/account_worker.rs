@@ -915,8 +915,7 @@ struct Owner {
     deletion_review: Option<(uuid::Uuid, Box<deletion_review::Review>)>,
     handover_review: Option<(uuid::Uuid, Box<handover::Review>)>,
     creation_review: Option<(uuid::Uuid, creation::NewIntent)>,
-    restoration_review: Option<restoration_task::Reviewed>,
-    restoration_file: Option<restoration_task::SelectedFile>,
+    restoration: restoration_task::Retained,
     control: Arc<Control>,
     preference: Option<Preference>,
     schedule: Option<Schedule>,
@@ -961,8 +960,7 @@ impl Owner {
             deletion_review: None,
             handover_review: None,
             creation_review: None,
-            restoration_review: None,
-            restoration_file: None,
+            restoration: restoration_task::Retained::default(),
             control,
             preference: None,
             schedule: None,
@@ -1512,15 +1510,7 @@ impl Owner {
         ) {
             self.handover_review = None;
         }
-        if !matches!(
-            &command,
-            Command::CommitRestoration { .. } | Command::Authenticate { .. }
-        ) {
-            self.restoration_review = None;
-        }
-        if !matches!(&command, Command::PrepareRestoration { .. }) {
-            self.restoration_file = None;
-        }
+        self.restoration.keep_for(&command);
         match command {
             Command::Automatic(true) => self.enable_automatic(),
             Command::Automatic(false) => unreachable!(),
@@ -1532,38 +1522,13 @@ impl Owner {
             } => {
                 preparation.validate()?;
                 self.ensure_store(false)?;
-                let file = match source_file {
-                    Some(token) => Some(
-                        self.restoration_file
-                            .take()
-                            .ok_or(Failure::InvalidState)?
-                            .consume(
-                                self.store.as_mut().ok_or(Failure::InvalidState)?,
-                                token,
-                                &selection,
-                            )?,
-                    ),
-                    None => {
-                        self.restoration_file = None;
-                        None
-                    }
-                };
-                match restoration_task::prepare_with_file(
+                self.restoration.prepare(
                     self.store.as_mut().ok_or(Failure::InvalidState)?,
                     selection,
                     credentials,
                     preparation,
-                    file,
-                )? {
-                    restoration_task::Outcome::Authentication(methods) => {
-                        Ok(Reply::RestorationAuthentication(methods))
-                    }
-                    restoration_task::Outcome::Reviewed(reviewed) => {
-                        let reply = reviewed.reply()?;
-                        self.restoration_review = Some(reviewed);
-                        Ok(reply)
-                    }
-                }
+                    source_file,
+                )
             }
             Command::InspectRestorationFile {
                 selection,
@@ -1572,22 +1537,15 @@ impl Owner {
             } => {
                 preparation.validate()?;
                 self.ensure_store(false)?;
-                let (selected, methods) = restoration_task::SelectedFile::inspect(
+                self.restoration.inspect(
                     self.store.as_mut().ok_or(Failure::InvalidState)?,
                     &selection,
                     &path,
                     preparation,
-                )?;
-                let token = selected.token();
-                self.restoration_file = Some(selected);
-                Ok(Reply::RestorationFile { token, methods })
+                )
             }
             Command::CommitRestoration { token, permit } => {
-                let review = self
-                    .restoration_review
-                    .take()
-                    .ok_or(Failure::InvalidState)?
-                    .consume(token)?;
+                let review = self.restoration.consume(token)?;
                 self.transport = None;
                 self.selected = None;
                 let failure = restoration::apply(

@@ -30,6 +30,7 @@ fn credential(
     let mode = gtk::CheckButton::with_label("Use recovery key");
     mode.set_active(!methods.passphrase);
     mode.set_sensitive(methods.passphrase && methods.recovery);
+    mode.set_visible(methods.recovery);
     fields.append(&input);
     fields.append(&mode);
     (input, mode)
@@ -441,6 +442,30 @@ mod tests {
         assert!(fields.current.text().is_empty() && fields.previous.text().is_empty());
         assert!(preparation.validate().is_err() && window.restoration_dialog.borrow().is_none());
         assert!(window.restoration_preparation.borrow().is_none() && window.worker.prepare_quit());
+        let backup = Fields::new(Authentication {
+            current: Methods {
+                passphrase: true,
+                recovery: false,
+            },
+            previous: Some(Methods {
+                passphrase: true,
+                recovery: false,
+            }),
+            previous_suggested: true,
+            previous_backup: true,
+        });
+        assert!(!backup.previous_mode.is_active() && !backup.previous_mode.is_visible());
+        backup.current.set_text("Public current vault password");
+        backup.previous.set_text("Public previous backup password");
+        let values = backup.take().unwrap();
+        assert!(!values.current.recovery && !values.previous.unwrap().recovery);
+        assert!(backup.current.text().is_empty() && backup.previous.text().is_empty());
+        let picker = gtk::gio::Cancellable::new();
+        let guard = Preparation::new(SessionWitness::test(SessionState::Unlocked, 1)).unwrap();
+        *window.restoration_file_choice.borrow_mut() = Some((picker.clone(), guard.clone()));
+        window.cancel_sensitive();
+        assert!(picker.is_cancelled() && guard.validate().is_err());
+        assert!(window.restoration_file_choice.borrow().is_none());
         window.window.close();
         parent.close();
     }

@@ -51,7 +51,7 @@ pub(super) fn prepare_foreign(
     if current.primary_intent.is_some() || !updated_at.is_finite() || stamp.device() == "00000000" {
         return Err(Failure::Changed);
     }
-    let data = data::rekey(data::resolve(archived, Some(old))?, old, keys)?;
+    let data = data::rekey(data::resolve_archived(archived, old)?, old, keys)?;
     prepare_data(data, current, physical, stamp, updated_at)
 }
 pub(super) fn prepare_with_keys(

@@ -19,6 +19,9 @@ mod desktop_workflow;
 #[path = "history_restore_source_file_tests.rs"]
 mod external_source;
 
+#[path = "history_restore_legacy_tests.rs"]
+mod legacy_metadata;
+
 struct Saved {
     setup: Setup,
     current: Document,

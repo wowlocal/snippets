@@ -151,6 +151,71 @@ fn same(a: &Envelope, b: &Envelope) -> Result<bool> {
     Ok(a.hash()? == b.hash()?)
 }
 impl Journal {
+    /// Fictional historical-client fixtures only. Raw carrier fingerprints,
+    /// UUIDs, sealed bodies and offer/receipt generations stay exact.
+    #[cfg(test)]
+    pub(crate) fn test_omit_vault_metadata(&mut self, mask: u8) {
+        assert!(self.outbound.is_none() && self.primary_intent.is_none());
+        fn own(e: &mut Envelope, mask: u8) {
+            if e.secure {
+                if mask & 1 != 0 {
+                    e.extensions.remove("vaultKID");
+                }
+                if mask & 2 != 0 {
+                    e.extensions.remove("vaultContentHash");
+                }
+            }
+        }
+        fn graph(graph: &mut BTreeMap<Uuid, Dependency>, mask: u8) {
+            for edge in graph.values_mut() {
+                own(&mut edge.source, mask);
+                if let Some(offer) = &mut edge.source_offered {
+                    own(&mut offer.envelope, mask);
+                }
+                for requirement in edge.requirements.values_mut() {
+                    if let Some(e) = &mut requirement.snapshot {
+                        own(e, mask);
+                    }
+                    if let Some(offer) = &mut requirement.offered {
+                        own(&mut offer.envelope, mask);
+                    }
+                }
+            }
+        }
+        for e in self
+            .projected
+            .values_mut()
+            .chain(self.delivery.values_mut())
+        {
+            own(e, mask);
+        }
+        for entry in self.entries.values_mut() {
+            own(&mut entry.desired, mask);
+            if let Some(offer) = &mut entry.offered {
+                own(&mut offer.envelope, mask);
+            }
+            if let ReviewAncestor::Reviewed {
+                primary,
+                previous_merge,
+            } = &mut entry.review
+            {
+                for e in primary.iter_mut().chain(previous_merge) {
+                    own(e, mask);
+                }
+            }
+        }
+        for confirmed in self.confirmed.values_mut() {
+            own(&mut confirmed.envelope, mask);
+        }
+        graph(&mut self.dependencies, mask);
+        for generation in &mut self.generations {
+            for e in generation.targets.values_mut() {
+                own(e, mask);
+            }
+            graph(&mut generation.dependencies, mask);
+        }
+    }
+
     /// Frozen local restoration may add intent and preservation dependencies,
     /// but cannot import historical server acceptance, permissions or packets.
     pub(crate) fn preserves_transport_state(&self, next: &Self) -> bool {

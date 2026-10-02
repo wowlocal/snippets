@@ -92,6 +92,16 @@ its records are not imported. The file and selected history must remain unchange
 until confirmation. After durable consent, interrupted restoration can finish
 without that file or either vault key. Live verification of these native dialogs
 remains pending.
+The same serialized retention controller is used by the app and isolated worker
+tests. A failed preparation consumes the selected-file token, so choosing the
+source again is required before retrying; unrelated commands discard it as well.
+Backup credentials use a password without offering a recovery-key option.
+
+Explicit previous-vault authentication can also recover missing own vault stamps
+or content hashes in archived records. The original encrypted body and its UUID
+must authenticate before current metadata is derived. Existing invalid metadata,
+incomplete raw conflict snapshots and edited copies masquerading as originals
+are refused. Normal live-record and wire validation stay strict.
 
 The Rust core now implements the existing encrypted Cloud wire format and native
 HTTPS transport, with independent cryptographic/Swift number-format fixtures and
@@ -295,8 +305,8 @@ and 128 KiB; encrypted file images share the existing 32-file/512-MiB budget, wi
 no automatic eviction. Pending restoration generations are also capped at eight;
 capacity exhaustion preserves the existing queue. Restoring multiple saved generations
 also uses this budget; a proposal that cannot fit changes no library files or keys.
-Capacity management, previous-vault header selection for older saved states and
-archives spanning multiple previous vaults remain unfinished. The combined native
+Capacity management and archives spanning multiple previous vaults remain
+unfinished. The combined native
 GTK/keyring/PAM workflow still needs live verification.
 
 **Create New Cloud Library…** explicitly creates an

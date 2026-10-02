@@ -15,6 +15,25 @@ fn crypto_failure(error: crate::materializer::Failure) -> Failure {
     Failure::Primary(error.into())
 }
 pub(super) fn resolve(archived: &Journal, keys: Option<&Keyring<'_>>) -> Result<Data> {
+    resolve_inner(archived, keys, false)
+}
+pub(super) fn resolve_archived(archived: &Journal, keys: &Keyring<'_>) -> Result<Data> {
+    resolve_inner(archived, Some(keys), true)
+}
+fn evidence(
+    sources: &[Envelope],
+    keys: &Keyring<'_>,
+    originals: &BTreeMap<Uuid, Envelope>,
+    archived: bool,
+) -> Result<Evidence> {
+    if archived {
+        crate::materializer::Archived::new(keys).evidence(sources, originals)
+    } else {
+        Evidence::prepare(sources, keys, originals)
+    }
+    .map_err(crypto_failure)
+}
+fn resolve_inner(archived: &Journal, keys: Option<&Keyring<'_>>, legacy: bool) -> Result<Data> {
     if archived.primary_intent.is_some() {
         return Err(Failure::Changed);
     }
@@ -51,7 +70,7 @@ pub(super) fn resolve(archived: &Journal, keys: Option<&Keyring<'_>>) -> Result<
             let keys = keys.ok_or(primary::Failure::VaultLocked)?;
             // Exact retained C0 nonces win after authentication. A genuinely
             // missing C0 is sealed once here, before it becomes selected intent.
-            let evidence = Evidence::prepare(&sources, keys, &originals).map_err(crypto_failure)?;
+            let evidence = evidence(&sources, keys, &originals, legacy)?;
             for (id, copy) in evidence.copies() {
                 let parent = merge::provenance(copy)
                     .ok_or(Failure::PreservationRequired)?
@@ -157,8 +176,7 @@ pub(super) fn resolve(archived: &Journal, keys: Option<&Keyring<'_>>) -> Result<
             .entry(id)
             .or_insert_with(|| (source.clone(), Vec::new()));
         let frozen = copies.iter().map(|c| (c.id, c.clone())).collect();
-        let evidence = Evidence::prepare(std::slice::from_ref(&source), keys, &frozen)
-            .map_err(crypto_failure)?;
+        let evidence = evidence(std::slice::from_ref(&source), keys, &frozen, legacy)?;
         for (copy_id, copy) in evidence.copies() {
             if !copies.iter().any(|c| c.id == *copy_id) {
                 copies.push(copy.clone());
@@ -205,8 +223,8 @@ pub(super) fn rekey(data: Data, old: &Keyring<'_>, current: &Keyring<'_>) -> Res
                 .flat_map(|(_, copies)| copies),
         )
         .collect::<Vec<_>>();
-    let mapping =
-        crate::materializer::Rekey::prepare(&records, old, current).map_err(crypto_failure)?;
+    let mapping = crate::materializer::Rekey::prepare_archived(&records, old, current)
+        .map_err(crypto_failure)?;
     let translated = |e: &Envelope| mapping.record(e).map_err(crypto_failure);
     let copies = |copies: &[Envelope]| copies.iter().map(translated).collect::<Result<Vec<_>>>();
     let saved = data

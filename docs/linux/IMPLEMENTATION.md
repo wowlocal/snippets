@@ -9,7 +9,9 @@ Current v1 conflict-carrier recovery uses an authenticated grouped decision,
 immutable originals and one encrypted primary redo. Foreign-vault current-v1
 graphs can now be re-encrypted with independently authenticated source/current
 vaults, including explicitly selected old files for legacy switch history.
-Legacy seal repair, multiple source-vault ownership, protected capacity management,
+Missing own vault stamps/hashes in archived records can be recovered only after
+explicit source-vault authentication. Raw v1 carriers remain strict.
+Live legacy-record repair, multiple source-vault ownership, protected capacity management,
 inline expansion and live desktop verification remain unfinished.
 
 ## Architecture
@@ -201,7 +203,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
-| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; legacy seal repair, multiple source-vault ownership and capacity management remain pending; live native GTK/keyring/PAM verification remains unavailable |
+| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata in archives | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers are refused; multiple source-vault ownership and capacity management remain pending; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery dialog compiles but display initialization is unavailable; live keyboard/reveal workflow remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import with authenticated codec and encrypted redo | Fresh vault authentication, metadata encryption, preserved record seals and exact snapshot checks pass; direct insertion without clipboard exposure, legacy seal repair and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
@@ -255,7 +257,8 @@ new unsaved draft. Its native dialog still needs live display verification.
   passes. The default filtered suite below includes these core additions and
   the native worker integration.
   The worker-specific selections also pass: three preparation/session tests and
-  four owner tests, including four serialized normal/queued and WAL restart
+  six owner tests, including twelve serialized saved-header/JSON/backup,
+  normal/queued and WAL restart
   paths. Its synthetic desktop observer polls independently like the production
   monitor while keeping both preparation deadlines fixed. A current loopback
   HTTP attempt fails at socket bind with
@@ -264,14 +267,30 @@ new unsaved draft. Its native dialog still needs live display verification.
   including 24 JSON/backup, normal/queued and uninterrupted/five-fault recovery
   paths. They also cover identical-byte replacement, removal, content changes,
   final-component symlinks, special/oversized/invalid inputs, wrong vaults and backup passwords,
-  superseded history and retained-scope mismatch. The four native worker owner
-  tests pass (10.20 seconds), including the new selected-file token/history/file
+  superseded history and retained-scope mismatch. The six native worker owner
+  tests pass (48.79 seconds), including selected-file token/history/file
   binding, cancelled preparation, backup-specific methods and ciphertext-only
-  review without primary or capability writes. Live native portal testing is
-  still pending. The full filtered-suite counts below precede these file additions.
+  review without primary or capability writes. The serialized worker uses the
+  production retention controller for all twelve header/JSON/backup delivery
+  paths, drops the completion reply and removes selected files before key-free
+  restart completion. Extra ordinary and secure records in the selected source
+  are never imported. Failed preparation and unrelated commands consume cached
+  tickets; cancellation during the final method probe cannot return a file token.
+  Live native portal testing is still pending. Both filtered suites below include
+  these source-file and native retention additions; those full filtered runs
+  preceded the archived-metadata additions described next.
+- The archived own-metadata tests pass for absent stamp, absent hash and both
+  fields absent. Four materializer tests cover wrong root/UUID, present invalid
+  fields, exact original roles, distinct nonces, edited C1 and incomplete raw v1
+  carriers. An isolated encrypted-owner matrix passes all 36 combinations of
+  missing fields, normal/queued generations and uninterrupted/interrupted redo
+  (233.57 seconds). It preserves exact current outbound/CAS and protected
+  capabilities, authenticates every translated frame with the strict current
+  materializer and verifies original-before-selected delivery without live vault
+  keys. Full filtered suites have not been rerun after this addition.
 - The new native account/recovery UI and serialized worker pass all-target compilation
   and Clippy with warnings denied. The last filtered default library run passes
-  694 tests, with seventeen explicitly ignored and 37 excluded (Cloud HTTP module,
+  701 tests in 335.24 seconds, with seventeen explicitly ignored and 37 excluded (Cloud HTTP module,
   five key-store TLS fixtures and native PAM module). This is a restricted-context
   check, not a green full-suite run. It includes new queue/quit-barrier and lost-UI-reply
   ownership tests, offline saved-deployment/interrupted-lineage checks, control-plane
@@ -468,9 +487,10 @@ new unsaved draft. Its native dialog still needs live display verification.
   raw deletion stays closed; valid losing
   evidence cannot bypass a damaged current secure body, unknown carrier versions,
   reserved occupants, stale files or another child's unapproved deletion.
-- The last corresponding filtered build without desktop features passes 655 library
+- The last corresponding filtered build without desktop features passes 659 library
   tests, with two ignored and 34 excluded (Cloud HTTP module and key-store TLS
-  fixtures). The current 23 process/core and one helper-protocol tests also pass.
+  fixtures), in 317.06 seconds. The current 23 process/core and one helper-protocol
+  tests also pass.
 - Release GUI, CLI and private owner-auth helper compile with the locked Cargo dependencies.
   Two consecutive installs of the current artifacts into an isolated temporary
   prefix pass: all three executables match the Release outputs, executable modes
@@ -1460,13 +1480,26 @@ a review can be returned or consumed. Both fields clear on submission, hiding th
 previous-vault input or cancellation. Focus loss, closing, lock, unavailable/stale
 session observations and suspend/wall-time expiry invalidate the lease permanently.
 The ciphertext review has its own opaque token; applying it still requires the
-fresh purpose-bound computer-password permit. Tests cover four serialized normal/
-queued and uninterrupted/interrupted deliveries, lost UI replies and key-free
+fresh purpose-bound computer-password permit. One retention controller owns the
+file and review tokens in production and the isolated worker tests, and consumes
+them even when preparation fails. Tests cover twelve serialized saved-header/
+JSON/backup, normal/queued and uninterrupted/interrupted deliveries, lost UI replies and key-free
 completion, wrong credentials, stale selections, oversized inputs, revoked
 reviews, token mismatch, cancellation during protected history reads and a desktop
 epoch change during current-vault derivation. The native input/cancellation fixture
 was explicitly attempted but GTK initialization failed before any window or input
-was created. Legacy seal repair and multiple source-vault ownership remain unfinished.
+was created. Multiple source-vault ownership remains unfinished.
+
+Explicit previous-vault authentication also permits absent own `vaultKID` and/or
+`vaultContentHash` in archived records. AES-GCM must authenticate the original
+root/salt/kid/record-UUID AAD before those fields are derived for the current vault.
+A present invalid field is refused. Frozen C0 copies must retain their exact role
+and metadata, and their authenticated body must match the raw original; a valid
+edited C1 cannot stand in for a hashless C0. Raw v1 carriers keep their complete
+canonical fields, original fingerprints and UUIDs until the authenticated graph
+is translated. Incomplete or malformed carriers are refused. This path does not
+repair live wire records or relax the normal materializer. Ordered generations
+retain distinct original nonces, and durable encrypted redo needs no live keys.
 
 Legacy switch history without retained wraps can now use an explicitly selected
 previous `vault.json` or `.snippetsbackup`. Inspection retains only encrypted
@@ -1485,7 +1518,11 @@ key-free chooser phase may temporarily yield focus; lock, closing, stale session
 observations and its fixed two-minute deadline cancel it. A fresh preparation
 starts after local file selection and focus return. Source/current password and
 review phases retain their normal focus cancellation. The file workflow compiles
-and has isolated core coverage; live portal and combined keyring/PAM verification
+and has isolated core and serialized worker coverage. Backup input hides the
+unavailable recovery-key option. The native fixture also covers clearing both
+backup/current passwords and cancelling the key-free chooser's guard and
+Cancellable, but currently stops at GTK initialization before creating a window.
+Live portal and combined keyring/PAM verification
 remain pending.
 
 Commit, resume and cancellation consume a fresh single-use local authorization
@@ -1655,7 +1692,7 @@ already published WAL must finish. Native actions run in the serialized worker,
 clear selected transport afterward and require fresh reconnect/selection before
 sync. Review, vault-password and computer-password dialogs cancel on focus loss,
 known lock or dismissal. Incompatible copy units and new keyword collisions fail closed
-pending separate group/collision review. Legacy hash repair, multiple source-vault ownership,
+pending separate group/collision review. Live legacy hash repair, multiple source-vault ownership,
 capacity management and live combined verification remain unfinished.
 
 Durable consent binds the target account/deployment so a legitimate reconnect
@@ -1764,7 +1801,7 @@ halts new creation without evicting older intents; capacity management remains
 pending. Combined live GTK/keyring/HTTPS
 verification remains outstanding.
 
-This kernel is not a complete sync engine. It still needs legacy secure hash/stamp
+This kernel is not a complete sync engine. It still needs live legacy secure hash/stamp
 repair, conflict-owned absent/deleted-copy recovery, account/rekey
 reconciliation and complete secure conflict recovery. Library-key activation
 and bidirectional/receive/send cycles are wired to explicit account-window actions;
