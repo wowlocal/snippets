@@ -381,6 +381,24 @@ impl Library {
         Self::lock_root(&self.root)
     }
     pub(crate) fn lock_root(root: &Path) -> Result<File> {
+        let file = Self::open_lock(root)?;
+        file.lock()
+            .map_err(|_| Error("The library lock is unavailable."))?;
+        Ok(file)
+    }
+    /// Short-lived input preparation must never wait with a fresh vault key.
+    #[cfg(any(test, feature = "desktop"))]
+    pub(crate) fn try_lock(&self) -> Result<File> {
+        let file = Self::open_lock(&self.root)?;
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => Error(
+                "The library is busy. Try the action again after the current operation finishes.",
+            ),
+            std::fs::TryLockError::Error(_) => Error("The library lock is unavailable."),
+        })?;
+        Ok(file)
+    }
+    fn open_lock(root: &Path) -> Result<File> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -394,7 +412,6 @@ impl Library {
             return Err(Error("The library lock is invalid."));
         }
         file.set_permissions(fs::Permissions::from_mode(0o600))
-            .and_then(|_| file.lock())
             .map_err(|_| Error("The library lock is unavailable."))?;
         Ok(file)
     }

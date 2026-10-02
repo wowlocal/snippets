@@ -14,12 +14,14 @@ impl Vault {
     ) -> Result<Prepared> {
         authorization.validate()?;
         let library = Library::prepare(root)?;
-        let mut owner = Self::open(&library)?;
+        let _guard = library.try_lock()?;
+        authorization.validate()?;
+        let mut owner = Self::open_locked(&library)?;
         if owner.document.as_ref() != Some(&expected_document) {
             return Err(EXPIRED);
         }
         let generation = owner.generation();
-        owner.prepare_insertion(
+        owner.prepare_insertion_locked(
             &library,
             authentication,
             generation,
@@ -27,7 +29,22 @@ impl Vault {
             authorization,
         )
     }
-    pub(crate) fn prepare_insertion(
+    #[cfg(test)]
+    fn prepare_insertion(
+        &mut self,
+        library: &Library,
+        authentication: Authentication,
+        generation: u64,
+        expected: Record,
+        authorization: Authorization,
+    ) -> Result<Prepared> {
+        authorization.validate()?;
+        self.same_root(library)?;
+        let _guard = library.try_lock()?;
+        self.prepare_insertion_locked(library, authentication, generation, expected, authorization)
+    }
+    /// The single nonblocking lock covers document admission through decryption.
+    fn prepare_insertion_locked(
         &mut self,
         library: &Library,
         authentication: Authentication,
@@ -38,7 +55,6 @@ impl Vault {
         authorization.validate()?;
         self.same_root(library)?;
         let expected_document = self.document.clone().ok_or(UNREADABLE)?;
-        let _guard = library.lock()?;
         crate::primary::require_ready(&library.root).map_err(|_| EXPIRED)?;
         self.reload_locked()?;
         let document = self.document.as_ref().ok_or(UNREADABLE)?;
@@ -178,5 +194,58 @@ mod tests {
                 assert!(!prepared.needs_clipboard());
             }
         }
+    }
+
+    #[test]
+    fn insertion_worker_refuses_a_busy_library_before_the_lock_is_released() {
+        let (_temp, library, mut vault) = super::super::tests::setup();
+        let document = vault.document.clone().unwrap();
+        let record = document.records[0].clone();
+        let authentication = Authentication {
+            key: RootKey::from_bytes(&[0x11; 32]).unwrap(),
+            identity: document.identity(),
+        };
+        vault.lock();
+        let guard = library.lock().unwrap();
+        let root = library.root.clone();
+        let authorization = authorization();
+        let (reply, received) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = Vault::prepare_saved_insertion(
+                root,
+                document,
+                authentication,
+                record,
+                authorization,
+            );
+            let _ = reply.send(result);
+        });
+        let result = received.recv_timeout(Duration::from_secs(1));
+        // A regression must fail instead of leaving a worker indefinitely stuck.
+        drop(guard);
+        worker.join().unwrap();
+        assert!(matches!(
+            result,
+            Ok(Err(Error(
+                "The library is busy. Try the action again after the current operation finishes."
+            )))
+        ));
+        assert!(!vault.is_unlocked());
+        let document = vault.document.clone().unwrap();
+        let record = document.records[0].clone();
+        let authentication = Authentication {
+            key: RootKey::from_bytes(&[0x11; 32]).unwrap(),
+            identity: document.identity(),
+        };
+        assert!(
+            Vault::prepare_saved_insertion(
+                library.root.clone(),
+                document,
+                authentication,
+                record,
+                self::authorization(),
+            )
+            .is_ok()
+        );
     }
 }

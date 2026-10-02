@@ -1955,7 +1955,9 @@ editor's unlocked session.
 
 `src/vault_insertion.rs` creates an independent worker-owned vault, compares the
 whole saved document with the reviewed snapshot, takes the ordinary library
-lock and checks primary readiness, then admits the exact enabled record. Both
+lock with one nonblocking attempt and checks primary readiness, then admits the
+exact enabled record while retaining that lock through decryption. A busy
+library returns immediately instead of keeping the fresh key in a lock wait. Both
 the record seal and keyed content hash are authenticated. An absent legacy
 hash is a refusal, not an unauthenticated repair. Credentials are dropped after
 derivation; the fresh key lives only through preparation. No GTK object or

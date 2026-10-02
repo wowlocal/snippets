@@ -585,6 +585,8 @@ offers **Insert into Original Window…**. Save or discard an unsaved draft firs
 Review the destination application and supply a fresh vault passphrase or
 recovery key for this insertion, even if the editor is already unlocked.
 This authentication does not unlock or extend the editor's reveal session.
+If another library operation holds the process lock, insertion returns
+immediately; retry after that operation finishes.
 
 The backend types Unicode through the compositor's native virtual keyboard.
 It writes no clipboard selection, sends no body in subprocess arguments, and

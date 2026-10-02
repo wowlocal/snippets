@@ -458,6 +458,11 @@ pub(crate) fn read_document_locked(root: &Path) -> Result<Option<Document>> {
 }
 impl Vault {
     pub fn open(library: &Library) -> Result<Self> {
+        let _guard = library.lock()?;
+        Self::open_locked(library)
+    }
+    /// Caller holds this root's common process lock.
+    fn open_locked(library: &Library) -> Result<Self> {
         let mut vault = Self {
             root: library.root.clone(),
             document: None,
@@ -466,7 +471,7 @@ impl Vault {
             #[cfg(test)]
             test_now: None,
         };
-        vault.reload()?;
+        vault.reload_locked()?;
         Ok(vault)
     }
     pub fn generation(&self) -> u64 {
