@@ -24,6 +24,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[path = "account_restoration.rs"]
+pub(crate) mod restoration_task;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {
     Secret(secret_store::Failure),
@@ -37,6 +40,7 @@ pub(crate) enum Failure {
     Handover(handover::Failure),
     Restoration(restoration::Failure),
     VaultAuthentication,
+    PreviousVaultAuthentication,
     InvalidState,
     RetentionRequired,
     WorkerStopped,
@@ -153,13 +157,16 @@ impl Failure {
             Self::VaultAuthentication => {
                 "The vault could not be unlocked. Check its passphrase or recovery key and try again."
             }
+            Self::PreviousVaultAuthentication => {
+                "The previous vault could not be unlocked. Check its passphrase or recovery key and review the saved changes again."
+            }
             Self::Restoration(restoration::Failure::Primary(
                 crate::primary::Failure::VaultLocked,
             )) => "Unlock the matching vault before restoring saved secure changes.",
             Self::Restoration(restoration::Failure::Primary(
                 crate::primary::Failure::IncompatibleVault,
             )) => {
-                "These changes belong to a different vault. Restore its matching vault backup first."
+                "These changes belong to a different vault. Review them using the previous vault's passphrase or recovery key. Older saved states may require its matching vault backup."
             }
             Self::Restoration(
                 restoration::Failure::RetentionFull
@@ -170,6 +177,12 @@ impl Failure {
             }
             Self::Restoration(restoration::Failure::Unavailable) => {
                 "No saved changes are available for this action."
+            }
+            Self::Restoration(restoration::Failure::SourceFile) => {
+                "Choose a regular previous vault.json file or a Snippets encrypted backup containing its vault. Changed or unreadable files need a new selection."
+            }
+            Self::Restoration(restoration::Failure::BackupAuthentication) => {
+                "The previous vault backup could not be authenticated. Check its backup password and choose the file again."
             }
             Self::Restoration(_) => {
                 "The saved state or current library changed, or restoration needs recovery. Open Library Recovery History to review it again."
@@ -336,7 +349,14 @@ pub(crate) enum Command {
     InspectHistory,
     PrepareRestoration {
         selection: restoration::Selection,
-        credential: Option<(Zeroizing<String>, bool)>,
+        credentials: Option<restoration_task::Credentials>,
+        preparation: restoration_task::Preparation,
+        source_file: Option<uuid::Uuid>,
+    },
+    InspectRestorationFile {
+        selection: restoration::Selection,
+        path: PathBuf,
+        preparation: restoration_task::Preparation,
     },
     CommitRestoration {
         token: uuid::Uuid,
@@ -449,12 +469,18 @@ impl Automatic {
 pub(crate) enum Reply {
     Automatic(Automatic),
     History(key_store::history::Catalog),
+    RestorationAuthentication(restoration_task::Authentication),
+    RestorationFile {
+        token: uuid::Uuid,
+        methods: restoration_task::Authentication,
+    },
     RestorationReview {
         saved: key_store::history::SavedLibrary,
         current: key_store::history::SavedLibrary,
         token: Option<uuid::Uuid>,
         summary: restoration::Summary,
         target: local_auth::Target,
+        rekeyed: bool,
     },
     Restored {
         failure: Option<Failure>,
@@ -889,7 +915,8 @@ struct Owner {
     deletion_review: Option<(uuid::Uuid, Box<deletion_review::Review>)>,
     handover_review: Option<(uuid::Uuid, Box<handover::Review>)>,
     creation_review: Option<(uuid::Uuid, creation::NewIntent)>,
-    restoration_review: Option<(uuid::Uuid, Box<restoration::Review>)>,
+    restoration_review: Option<restoration_task::Reviewed>,
+    restoration_file: Option<restoration_task::SelectedFile>,
     control: Arc<Control>,
     preference: Option<Preference>,
     schedule: Option<Schedule>,
@@ -935,6 +962,7 @@ impl Owner {
             handover_review: None,
             creation_review: None,
             restoration_review: None,
+            restoration_file: None,
             control,
             preference: None,
             schedule: None,
@@ -1452,20 +1480,15 @@ impl Owner {
         let Some((credential, recovery)) = credential else {
             return Ok(None);
         };
-        let library = crate::model::Library::prepare(self.root.clone())
-            .map_err(|_| Failure::VaultAuthentication)?;
-        let document = crate::vault::read_document(&self.root)
-            .map_err(|_| Failure::VaultAuthentication)?
-            .ok_or(Failure::VaultAuthentication)?;
-        let authentication = document
-            .authenticate(&credential, recovery)
-            .map_err(|_| Failure::VaultAuthentication)?;
-        let mut vault =
-            crate::vault::Vault::open(&library).map_err(|_| Failure::VaultAuthentication)?;
-        vault
-            .finish_authentication(authentication, vault.generation())
-            .map_err(|_| Failure::VaultAuthentication)?;
-        Ok(Some(vault))
+        restoration_task::unlock_current(
+            &self.root,
+            &restoration_task::Credential {
+                value: credential,
+                recovery,
+            },
+            &|| Ok(()),
+        )
+        .map(Some)
     }
     fn handle(&mut self, command: Command) -> Result<Reply> {
         if !matches!(&command, Command::CreateNewLibrary(_)) {
@@ -1495,44 +1518,81 @@ impl Owner {
         ) {
             self.restoration_review = None;
         }
+        if !matches!(&command, Command::PrepareRestoration { .. }) {
+            self.restoration_file = None;
+        }
         match command {
             Command::Automatic(true) => self.enable_automatic(),
             Command::Automatic(false) => unreachable!(),
             Command::PrepareRestoration {
                 selection,
-                credential,
+                credentials,
+                preparation,
+                source_file,
             } => {
+                preparation.validate()?;
                 self.ensure_store(false)?;
-                let mut vault = self.review_vault(credential)?;
-                let reviewed = restoration::prepare(
+                let file = match source_file {
+                    Some(token) => Some(
+                        self.restoration_file
+                            .take()
+                            .ok_or(Failure::InvalidState)?
+                            .consume(
+                                self.store.as_mut().ok_or(Failure::InvalidState)?,
+                                token,
+                                &selection,
+                            )?,
+                    ),
+                    None => {
+                        self.restoration_file = None;
+                        None
+                    }
+                };
+                match restoration_task::prepare_with_file(
                     self.store.as_mut().ok_or(Failure::InvalidState)?,
                     selection,
-                    vault.as_mut(),
+                    credentials,
+                    preparation,
+                    file,
+                )? {
+                    restoration_task::Outcome::Authentication(methods) => {
+                        Ok(Reply::RestorationAuthentication(methods))
+                    }
+                    restoration_task::Outcome::Reviewed(reviewed) => {
+                        let reply = reviewed.reply()?;
+                        self.restoration_review = Some(reviewed);
+                        Ok(reply)
+                    }
+                }
+            }
+            Command::InspectRestorationFile {
+                selection,
+                path,
+                preparation,
+            } => {
+                preparation.validate()?;
+                self.ensure_store(false)?;
+                let (selected, methods) = restoration_task::SelectedFile::inspect(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                    &selection,
+                    &path,
+                    preparation,
                 )?;
-                let token = uuid::Uuid::new_v4();
-                let reply = Reply::RestorationReview {
-                    saved: reviewed.saved_library(),
-                    current: reviewed.current_library(),
-                    token: Some(token),
-                    summary: reviewed.summary(),
-                    target: reviewed.authorization_target()?,
-                };
-                self.restoration_review = Some((token, Box::new(reviewed)));
-                Ok(reply)
+                let token = selected.token();
+                self.restoration_file = Some(selected);
+                Ok(Reply::RestorationFile { token, methods })
             }
             Command::CommitRestoration { token, permit } => {
-                let (expected, review) = self
+                let review = self
                     .restoration_review
                     .take()
-                    .ok_or(Failure::InvalidState)?;
-                if token != expected {
-                    return Err(Failure::InvalidState);
-                }
+                    .ok_or(Failure::InvalidState)?
+                    .consume(token)?;
                 self.transport = None;
                 self.selected = None;
                 let failure = restoration::apply(
                     self.store.as_mut().ok_or(Failure::InvalidState)?,
-                    *review,
+                    review,
                     permit,
                 )
                 .err()
@@ -1554,6 +1614,7 @@ impl Owner {
                     target: review.target,
                     saved: review.saved,
                     current: review.current,
+                    rekeyed: false,
                 })
             }
             Command::FinishRestoration { cancel, permit } => {

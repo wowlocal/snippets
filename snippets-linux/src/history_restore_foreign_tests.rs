@@ -12,6 +12,13 @@ use crate::{
 use std::collections::BTreeMap;
 const CURRENT_PASSPHRASE: &str = "Public current vault passphrase";
 
+#[cfg(feature = "desktop")]
+#[path = "account_restoration_owner_tests.rs"]
+mod desktop_workflow;
+
+#[path = "history_restore_source_file_tests.rs"]
+mod external_source;
+
 struct Saved {
     setup: Setup,
     current: Document,

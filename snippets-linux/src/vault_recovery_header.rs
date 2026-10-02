@@ -131,6 +131,9 @@ impl RecoveryHeader {
     pub fn has_recovery(&self) -> bool {
         self.identity.recovery.is_some()
     }
+    pub(crate) fn same_key_scope(&self, document: &Document) -> bool {
+        self.identity.kid == document.kid && self.identity.salt == document.vault_salt
+    }
     /// A fresh owner authenticates independently; no session key is copied.
     pub fn authenticate(&self, text: &str, recovery: bool) -> Result<Authentication> {
         if text.len() > 4096 {
@@ -147,6 +150,24 @@ impl RecoveryHeader {
         let wall = std::time::SystemTime::now();
         let owner = RecoveryOwner {
             authentication: self.authenticate(text, recovery)?,
+            document: self.document(),
+            started,
+            wall,
+        };
+        owner.validate()?;
+        Ok(owner)
+    }
+    pub(crate) fn backup_owner(
+        &self,
+        key: RootKey,
+        started: Duration,
+        wall: std::time::SystemTime,
+    ) -> Result<RecoveryOwner> {
+        let owner = RecoveryOwner {
+            authentication: Authentication {
+                key,
+                identity: self.identity.clone(),
+            },
             document: self.document(),
             started,
             wall,

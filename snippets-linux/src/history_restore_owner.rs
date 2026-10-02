@@ -33,6 +33,7 @@ pub struct Review {
     device: String,
     source_image: Vec<u8>,
     target_image: Vec<u8>,
+    external: Option<source_file::Proof>,
 }
 impl Review {
     pub fn saved_library(&self) -> history::SavedLibrary {
@@ -127,6 +128,12 @@ fn prepare_inner<B: Backend>(
             || source.selection.transition != selection.transition
     }) {
         return Err(Failure::Changed);
+    }
+    let external = source_vault
+        .as_ref()
+        .and_then(|source| source.external.clone());
+    if let Some(file) = &external {
+        file.validate()?;
     }
     store.transaction_with(|owner| {
         let archive = Archive::load(owner)?;
@@ -322,6 +329,9 @@ fn prepare_inner<B: Backend>(
         {
             return Err(Failure::Changed);
         }
+        if let Some(file) = &external {
+            file.validate()?;
+        }
         Ok(Review {
             entry,
             source,
@@ -332,6 +342,7 @@ fn prepare_inner<B: Backend>(
             device,
             source_image,
             target_image,
+            external,
         })
     })
 }
@@ -346,6 +357,9 @@ pub(crate) fn apply_inner<B: Backend>(
     fault: Option<u8>,
 ) -> Result<()> {
     store.transaction_with(|owner| {
+        if let Some(file) = &review.external {
+            file.validate()?;
+        }
         let lease = permit.consume(&review.authorization_target()?)?;
         let archive = Archive::load(owner)?;
         if archive.snapshot != review.archive_snapshot || archive.pending().is_some() {
@@ -390,6 +404,9 @@ pub(crate) fn apply_inner<B: Backend>(
         }
         if fault == Some(6) {
             return Err(primary::Failure::Storage.into());
+        }
+        if let Some(file) = &review.external {
+            file.validate()?;
         }
         owner.replace(
             Slot::HistoryRestore,

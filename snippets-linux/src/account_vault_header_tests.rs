@@ -22,7 +22,7 @@ fn select(s: &mut Setup) -> restore::Selection {
         .selection
         .clone()
 }
-fn rewrite_legacy(s: &mut Setup, schema: i64) {
+pub(super) fn rewrite_legacy(s: &mut Setup, schema: i64) {
     s.store
         .transaction(|owner| {
             let before = owner.read(Slot::AccountReview)?.unwrap();

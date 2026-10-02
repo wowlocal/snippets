@@ -13,6 +13,8 @@ pub enum Failure {
     Unavailable,
     PreservationRequired,
     RetentionFull,
+    SourceFile,
+    BackupAuthentication,
 }
 pub type Result<T> = std::result::Result<T, Failure>;
 impl From<super::Failure> for Failure {
@@ -86,6 +88,7 @@ impl Selection {
 pub struct Source {
     selection: Selection,
     vault: crate::vault::RecoveryOwner,
+    external: Option<source_file::Proof>,
 }
 pub fn authenticate_source<B: Backend>(
     store: &mut Store<B>,
@@ -102,8 +105,13 @@ pub fn authenticate_source<B: Backend>(
     Ok(Source {
         selection: selection.clone(),
         vault,
+        external: None,
     })
 }
+
+#[path = "history_restore_source_file.rs"]
+mod source_file;
+pub use source_file::{SourceFile, inspect_source_file};
 
 /// Retained wraps from the exact reviewed primary snapshot. Legacy history
 /// returns None; the current vault must never stand in for a missing old header.

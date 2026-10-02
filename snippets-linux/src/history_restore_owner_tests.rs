@@ -1247,6 +1247,7 @@ fn lost_native_reply_keeps_durable_restore_ownership_without_a_volatile_quit_bar
                             target: review.target,
                             saved: review.saved,
                             current: review.current,
+                            rekeyed: false,
                         })
                         .map_err(AccountFailure::from)
                 }

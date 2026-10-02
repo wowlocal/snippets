@@ -29,6 +29,9 @@ use zeroize::Zeroizing;
 #[path = "recovery_history_ui.rs"]
 mod history_view;
 
+#[path = "restoration_ui.rs"]
+mod restoration_view;
+
 fn label(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
@@ -283,6 +286,14 @@ pub(crate) struct AccountWindow {
     gate: RefCell<Gate>,
     authorization: RefCell<Option<Request>>,
     password_dialog: RefCell<Option<(adw::AlertDialog, gtk::PasswordEntry)>>,
+    restoration_dialog: RefCell<Option<(adw::AlertDialog, Vec<gtk::PasswordEntry>)>>,
+    restoration_preparation: RefCell<Option<crate::account_worker::restoration_task::Preparation>>,
+    restoration_file_choice: RefCell<
+        Option<(
+            gtk::gio::Cancellable,
+            crate::account_worker::restoration_task::Preparation,
+        )>,
+    >,
     snapshot_dialog: RefCell<Option<adw::AlertDialog>>,
     history_dialog: RefCell<Option<adw::Dialog>>,
     view: Rc<RecoveryView>,
@@ -660,6 +671,9 @@ impl AccountWindow {
             gate: RefCell::new(Gate::new()),
             authorization: RefCell::new(None),
             password_dialog: RefCell::new(None),
+            restoration_dialog: RefCell::new(None),
+            restoration_preparation: RefCell::new(None),
+            restoration_file_choice: RefCell::new(None),
             snapshot_dialog: RefCell::new(None),
             history_dialog: RefCell::new(None),
             view,
@@ -959,7 +973,9 @@ impl AccountWindow {
         this.window.connect_is_active_notify(move |window| {
             if let Some(this) = weak.upgrade() {
                 this.gate.borrow_mut().set_foreground(window.is_active());
-                if !window.is_active() {
+                // The native file chooser can own focus only after all passwords,
+                // preparation keys and write authorization have been relinquished.
+                if !window.is_active() && this.restoration_file_choice.borrow().is_none() {
                     this.cancel_sensitive();
                 }
             }
@@ -978,15 +994,31 @@ impl AccountWindow {
                 return glib::ControlFlow::Break;
             };
             this.update_automatic();
+            if this
+                .restoration_file_choice
+                .borrow()
+                .as_ref()
+                .is_some_and(|(_, guard)| guard.validate().is_err())
+            {
+                this.cancel_sensitive();
+                this.status
+                    .set_label("File selection ended. Review the saved changes again.");
+            }
             let active_secret = this.view.visible()
                 || this.authorization.borrow().is_some()
-                || this.password_dialog.borrow().is_some();
+                || this.password_dialog.borrow().is_some()
+                || this.restoration_preparation.borrow().is_some();
             let expired = this.view.expired()
                 || this
                     .authorization
                     .borrow()
                     .as_ref()
-                    .is_some_and(|r| r.check().is_err());
+                    .is_some_and(|r| r.check().is_err())
+                || this
+                    .restoration_preparation
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|r| r.validate().is_err());
             if this.snapshot_dialog.borrow().is_some()
                 && (!this.window.is_active()
                     || this
@@ -1019,8 +1051,9 @@ impl AccountWindow {
                         .is_none_or(|m| m.snapshot().0 != SessionState::Unlocked))
             {
                 this.cancel_sensitive();
-                this.status
-                    .set_label("Authorization ended. Authorize again to show the pending code.");
+                this.status.set_label(
+                    "Review or authorization ended. Start again when the desktop is unlocked.",
+                );
             }
             if this.pairing_view.value.borrow().is_some() {
                 let remaining = this.pairing_view.remaining();
@@ -1179,6 +1212,20 @@ impl AccountWindow {
         self.gate.borrow_mut().cancel();
         self.generation.set(self.generation.get().wrapping_add(1));
         self.authorization.borrow_mut().take();
+        if let Some((cancellation, guard)) = self.restoration_file_choice.borrow_mut().take() {
+            guard.cancel();
+            cancellation.cancel();
+        }
+        if let Some(preparation) = self.restoration_preparation.borrow_mut().take() {
+            preparation.cancel();
+        }
+        let restoration_dialog = self.restoration_dialog.borrow_mut().take();
+        if let Some((dialog, entries)) = restoration_dialog {
+            for entry in entries {
+                entry.set_text("");
+            }
+            dialog.force_close();
+        }
         let dialog = self.password_dialog.borrow_mut().take();
         if let Some((dialog, password)) = dialog {
             password.set_text("");
@@ -1416,6 +1463,8 @@ impl AccountWindow {
             Reply::HandoverReview {..} => self.status.set_label("Review this library switch before authorizing it."),
             Reply::LocalHandoverReview {..} => self.status.set_label("Review the saved local switch before authorizing it."),
             Reply::RestorationReview {..} => self.status.set_label("Review the saved changes before authorizing restoration."),
+            Reply::RestorationAuthentication {..} => self.status.set_label("Unlock the vaults to review the saved secure changes."),
+            Reply::RestorationFile {..} => self.status.set_label("Previous vault file selected. Unlock it to review the saved changes."),
             Reply::Restored {failure,cancelled} => {
                 self.create_another.set_sensitive(false);
                 self.clear_pairing(); self.clear_candidate_pairing(); self.selected_role.set(None);
@@ -2043,70 +2092,6 @@ impl AccountWindow {
                     dialog.present(Some(&this.window));
                 }
                 Ok(_) => this.failure(Failure::InvalidState),
-                Err(failure) => this.failure(failure),
-            }
-        });
-    }
-    fn restore_saved(self: &Rc<Self>, selection: Option<restoration::Selection>, cancel: bool) {
-        if self.busy.get() {
-            return;
-        }
-        self.cancel_sensitive();
-        self.busy(true);
-        self.status.set_label("Checking the saved restoration…");
-        let generation = self.generation.get();
-        let this = self.clone();
-        glib::spawn_future_local(async move {
-            let result = async {
-                let reply = if let Some(selection) = selection {
-                    let first = this.execute(Command::PrepareRestoration { selection: selection.clone(), credential: None }).await;
-                    match first {
-                        Err(Failure::Restoration(restoration::Failure::Primary(crate::primary::Failure::VaultLocked))) => {
-                            if generation != this.generation.get() || !this.window.is_active() { return Ok(None); }
-                            let password = gtk::PasswordEntry::builder().show_peek_icon(false).build();
-                            let recovery = gtk::CheckButton::with_label("Use the vault recovery key");
-                            let fields = gtk::Box::new(gtk::Orientation::Vertical, 10);
-                            fields.append(&password); fields.append(&recovery);
-                            let dialog = adw::AlertDialog::builder().heading("Unlock the Vault for Restoration")
-                                .body("Enter the matching vault's passphrase or recovery key to verify the saved secure changes.")
-                                .extra_child(&fields).build();
-                            dialog.add_responses(&[("back", "Cancel"), ("unlock", "Verify Saved Changes")]);
-                            dialog.set_default_response(Some("back")); dialog.set_close_response("back");
-                            *this.password_dialog.borrow_mut() = Some((dialog.clone(), password.clone()));
-                            let response = dialog.choose_future(Some(&this.window)).await;
-                            this.password_dialog.borrow_mut().take();
-                            let credential = Zeroizing::new(password.text().to_string());
-                            password.set_text("");
-                            if response != "unlock" || generation != this.generation.get() || !this.window.is_active() { return Ok(None); }
-                            this.execute(Command::PrepareRestoration {selection, credential: Some((credential, recovery.is_active()))}).await?
-                        }
-                        other => other?,
-                    }
-                } else { this.execute(Command::PrepareRestorationResume(cancel)).await? };
-                let Reply::RestorationReview { token, summary, target, saved, current } = reply else { return Err(Failure::InvalidState); };
-                if generation != this.generation.get() || !this.window.is_active() { return Ok(None); }
-                let dialog = adw::AlertDialog::builder()
-                    .heading(if cancel { "Cancel the Saved Restoration?" } else if token.is_some() { "Restore the Saved Changes?" } else { "Finish the Saved Restoration?" })
-                    .body(format!("Saved library: {}\n{} · key version {}\n\nCurrent library: {}\n{} · key version {}\n\n{} saved records · {} preserved current versions · {} secure records\n\n{}", saved.server().for_secure_storage(), saved.id(), saved.epoch(), current.server().for_secure_storage(), current.id(), current.epoch(), summary.restored_records, summary.preserved_versions, summary.secure_records,
-                        if cancel { "Cancel before the file update begins. Current edits and saved states will be kept." }
-                        else { "Apply the reviewed changes locally and keep current versions. Saved pending versions will also synchronize in their recorded order. Previous keys remain saved. Reconnect and select a library afterward to verify access before syncing." })).build();
-                dialog.add_responses(&[("back", "Keep Current State"), ("proceed", if cancel { "Cancel Restoration" } else { "Restore Changes" })]);
-                dialog.set_default_response(Some("back")); dialog.set_close_response("back");
-                *this.snapshot_dialog.borrow_mut() = Some(dialog.clone());
-                let response = dialog.choose_future(Some(&this.window)).await;
-                this.snapshot_dialog.borrow_mut().take();
-                if response != "proceed" || generation != this.generation.get() || !this.window.is_active() { return Ok(None); }
-                let permit = this.authorize_target(target, generation).await?;
-                let command = if let Some(token) = token { Command::CommitRestoration {token, permit} }
-                    else { Command::FinishRestoration {cancel, permit} };
-                this.execute(command).await.map(Some)
-            }.await;
-            this.busy(false);
-            match result {
-                Ok(Some(reply)) => this.apply(reply),
-                Ok(None) => this
-                    .status
-                    .set_label("Restoration review closed. Current changes are kept."),
                 Err(failure) => this.failure(failure),
             }
         });

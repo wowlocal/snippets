@@ -84,8 +84,14 @@ New switch history also retains the vault's encrypted key wraps in Secret Servic
 without saving its catalogue records or unrelated metadata. These wraps remain
 available if the current vault is later replaced. Older history can lack them;
 the core can now authenticate the saved source vault independently and re-encrypt
-archived secure conflict graphs into the current vault. Native source-authentication
-controls and an explicit old-header workflow for legacy history remain pending.
+archived secure conflict graphs into the current vault. Native restoration now
+offers independent previous/current passphrase or recovery-key inputs. Explicit
+file selection also supports older history without retained wraps: choose the
+previous `vault.json` or `.snippetsbackup` file. A backup uses its own password;
+its records are not imported. The file and selected history must remain unchanged
+until confirmation. After durable consent, interrupted restoration can finish
+without that file or either vault key. Live verification of these native dialogs
+remains pending.
 
 The Rust core now implements the existing encrypted Cloud wire format and native
 HTTPS transport, with independent cryptographic/Swift number-format fixtures and
@@ -131,8 +137,9 @@ separate **Receive Cloud Changes** action remains available. Saved local changes
 have native restoration controls, including archived nested conflict groups and
 deleted/missing archived participants, restoration beside current pending groups
 and ordered archived generations.
-The native workflow for restoring archived secure records into a different vault
-remains pending. Startup stays offline unless automatic
+Restoring archived secure records into a different vault now uses separately
+authenticated source and current vaults. Its native dialog still needs live
+display verification. Startup stays offline unless automatic
 sync was explicitly enabled for a verified saved library.
 
 ## Account and library recovery
@@ -246,7 +253,15 @@ metadata reflects the last saved receipt; reconnecting checks current access.
 Viewing history exposes no recovery codes or snippet contents. Choose **Review…**
 under a verified saved switch to restore its saved local changes. Review the saved
 and current libraries and record counts, then authenticate with your computer
-password. Secure changes also need the matching vault's passphrase or recovery key.
+password. Secure changes also ask for the current vault's passphrase or recovery
+key. If the saved changes use a previous vault, enter its passphrase or recovery
+key separately; each vault can use a different authentication method. The dialog
+suggests the previous vault when its saved encryption scope differs. The
+confirmation explains that those records will use the current vault's encryption.
+Verification alone does not apply changes. Closing or backgrounding the window,
+a desktop lock, session change or two-minute deadline cancels that preparation.
+Both password fields clear on cancellation and submission. A separate computer
+password authorization follows the review.
 Current records remain; changed current versions are kept as disabled preservation
 copies. Historical tombstones do not delete current records. The operation creates
 fresh local edits and keeps the current synchronization journal's server facts.
@@ -273,16 +288,16 @@ before the final file update. Old server acknowledgements and offers are discard
 update starts and keeps later local edits and every retained image. After the file
 update begins, finish it instead. Reconnect and select a library before syncing
 restored records. A changed journal or unrecognized file generation remains halted.
-Restoration refuses incompatible vaults and unrelated occupants of reserved copy identifiers;
+Restoration refuses unauthenticated vaults and unrelated occupants of reserved copy identifiers;
 it never applies an ordinary-only subset of a secure restoration. Conflicting
 keywords require a separate review. Restoration history is bounded to eight receipts
 and 128 KiB; encrypted file images share the existing 32-file/512-MiB budget, with
 no automatic eviction. Pending restoration generations are also capped at eight;
 capacity exhaustion preserves the existing queue. Restoring multiple saved generations
 also uses this budget; a proposal that cannot fit changes no library files or keys.
-Capacity management and restoration of
-archived secure records into a different vault remain unfinished. The combined native GTK/keyring/PAM
-workflow still needs live verification.
+Capacity management, previous-vault header selection for older saved states and
+archives spanning multiple previous vaults remain unfinished. The combined native
+GTK/keyring/PAM workflow still needs live verification.
 
 **Create New Cloud Library…** explicitly creates an
 empty library in the displayed account and server. The worker saves its original
